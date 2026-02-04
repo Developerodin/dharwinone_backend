@@ -1,12 +1,13 @@
 import Joi from 'joi';
-import { password } from './custom.validation.js';
-
+import { password, objectId } from './custom.validation.js';
 
 const register = {
   body: Joi.object().keys({
     email: Joi.string().required().email(),
     password: Joi.string().required().custom(password),
     name: Joi.string().required(),
+    isEmailVerified: Joi.boolean().optional(),
+    roleIds: Joi.array().items(Joi.string().custom(objectId)).optional(),
   }),
 };
 

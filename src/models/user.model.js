@@ -25,6 +25,11 @@ const userSchema = mongoose.Schema(
         }
       },
     },
+    username: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
     password: {
       type: String,
       required: true,
@@ -89,6 +94,10 @@ userSchema.methods.isPasswordMatch = async function (password) {
 
 userSchema.pre('save', async function (next) {
   const user = this;
+  // Satisfy unique index on username: default to email so we never store null (multiple nulls violate unique)
+  if (!user.username) {
+    user.username = user.email;
+  }
   if (user.isModified('password')) {
     user.password = await bcrypt.hash(user.password, 8);
   }
