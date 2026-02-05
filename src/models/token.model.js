@@ -28,6 +28,14 @@ const tokenSchema = mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    userAgent: {
+      type: String,
+      default: null,
+    },
+    ip: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

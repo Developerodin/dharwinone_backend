@@ -26,6 +26,7 @@ const jwtVerify = async (payload, done) => {
     if (!user || user.status !== 'active') {
       return done(null, false);
     }
+    // Pass user to done; req.impersonation is set in auth middleware from payload
     done(null, user);
   } catch (error) {
     done(error, false);

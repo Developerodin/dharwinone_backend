@@ -1,14 +1,32 @@
 import passport from 'passport';
+import jwt from 'jsonwebtoken';
+import { ExtractJwt } from 'passport-jwt';
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { roleRights } from '../config/roles.js';
 
+const ACCESS_TOKEN_COOKIE = 'accessToken';
+
+const getAccessTokenFromRequest = (req) => {
+  if (req.cookies?.[ACCESS_TOKEN_COOKIE]) return req.cookies[ACCESS_TOKEN_COOKIE];
+  return ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+};
 
 const verifyCallback = (req, resolve, reject, requiredRights) => async (err, user, info) => {
   if (err || info || !user) {
     return reject(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
   }
   req.user = user;
+
+  const token = getAccessTokenFromRequest(req);
+  if (token) {
+    try {
+      const payload = jwt.decode(token);
+      if (payload?.impersonation) req.impersonation = payload.impersonation;
+    } catch (e) {
+      // ignore decode errors
+    }
+  }
 
   if (requiredRights.length) {
     const userRights = roleRights.get(user.role);

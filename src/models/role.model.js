@@ -28,6 +28,16 @@ const roleSchema = mongoose.Schema(
 roleSchema.plugin(toJSON);
 roleSchema.plugin(paginate);
 
+// Include createdAt (and updatedAt) in API response for roles
+const originalToJSON = roleSchema.options.toJSON?.transform;
+roleSchema.options.toJSON = roleSchema.options.toJSON || {};
+roleSchema.options.toJSON.transform = function (doc, ret, options) {
+  if (originalToJSON) originalToJSON(doc, ret, options);
+  ret.createdAt = doc.createdAt;
+  ret.updatedAt = doc.updatedAt;
+  return ret;
+};
+
 /**
  * Check if name is taken
  * @param {string} name - The role's name

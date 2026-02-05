@@ -49,11 +49,24 @@ const resetPassword = {
   }),
 };
 
+const changePassword = {
+  body: Joi.object().keys({
+    currentPassword: Joi.string().required(),
+    newPassword: Joi.string().required().custom(password),
+  }),
+};
+
 const verifyEmail = {
   query: Joi.object().keys({
     token: Joi.string().required(),
   }),
 };
 
-export { register, login, logout, refreshTokens, forgotPassword, resetPassword, verifyEmail };
+const impersonate = {
+  body: Joi.object().keys({
+    userId: Joi.string().required().custom(objectId),
+  }),
+};
+
+export { register, login, logout, refreshTokens, forgotPassword, resetPassword, changePassword, verifyEmail, impersonate };
 

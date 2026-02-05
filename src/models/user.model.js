@@ -61,6 +61,10 @@ const userSchema = mongoose.Schema(
       enum: ['active', 'pending', 'disabled', 'deleted'],
       default: 'active',
     },
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -70,6 +74,16 @@ const userSchema = mongoose.Schema(
 // add plugin that converts mongoose to json
 userSchema.plugin(toJSON);
 userSchema.plugin(paginate);
+
+// Include createdAt (and updatedAt) in API response for users
+const originalUserToJSON = userSchema.options.toJSON?.transform;
+userSchema.options.toJSON = userSchema.options.toJSON || {};
+userSchema.options.toJSON.transform = function (doc, ret, options) {
+  if (originalUserToJSON) originalUserToJSON(doc, ret, options);
+  ret.createdAt = doc.createdAt;
+  ret.updatedAt = doc.updatedAt;
+  return ret;
+};
 
 /**
  * Check if email is taken

@@ -2,11 +2,13 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import ApiError from '../utils/ApiError.js';
 import catchAsync from '../utils/catchAsync.js';
-import * as userService  from '../services/user.service.js';
-
+import * as userService from '../services/user.service.js';
+import * as activityLogService from '../services/activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const createUser = catchAsync(async (req, res) => {
   const user = await userService.createUser(req.body);
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { role: user.role }, req);
   res.status(httpStatus.CREATED).send(user);
 });
 
@@ -27,14 +29,22 @@ const getUser = catchAsync(async (req, res) => {
 
 const updateUser = catchAsync(async (req, res) => {
   const user = await userService.updateUserById(req.params.userId, req.body);
+  const metadata = {};
+  if (req.body.status !== undefined) {
+    metadata.field = 'status';
+    metadata.newValue = req.body.status;
+  }
+  const action =
+    req.body.status === 'disabled' || req.body.status === 'deleted'
+      ? ActivityActions.USER_DISABLE
+      : ActivityActions.USER_UPDATE;
+  await activityLogService.createActivityLog(req.user.id, action, EntityTypes.USER, user.id, metadata, req);
   res.send(user);
 });
 
 const deleteUser = catchAsync(async (req, res) => {
-  // Invalidate only the deleted user's tokens (see user.service.deleteUserById).
-  // Do not clear or overwrite the requester's cookies.
-  // Frontend should avoid offering "delete" on the currently logged-in user's row to prevent session loss.
   await userService.deleteUserById(req.params.userId);
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_DELETE, EntityTypes.USER, req.params.userId, {}, req);
   res.status(httpStatus.NO_CONTENT).send();
 });
 
