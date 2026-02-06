@@ -6,10 +6,11 @@ import User from '../models/user.model.js';
 const ACCESS_TOKEN_COOKIE = 'accessToken';
 
 const jwtFromRequest = (req) => {
-  if (req.cookies?.[ACCESS_TOKEN_COOKIE]) {
-    return req.cookies[ACCESS_TOKEN_COOKIE];
-  }
-  return ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+  // Prefer Authorization: Bearer header (for API clients like Postman),
+  // fall back to httpOnly cookie (for browser-based clients).
+  const headerToken = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+  if (headerToken) return headerToken;
+  return req.cookies?.[ACCESS_TOKEN_COOKIE] || null;
 };
 
 const jwtOptions = {
