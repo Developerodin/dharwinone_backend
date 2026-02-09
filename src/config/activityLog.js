@@ -15,10 +15,15 @@ export const ActivityActions = {
   // Impersonation
   IMPERSONATION_START: 'impersonation.start',
   IMPERSONATION_END: 'impersonation.end',
+  // Categories
+  CATEGORY_CREATE: 'category.create',
+  CATEGORY_UPDATE: 'category.update',
+  CATEGORY_DELETE: 'category.delete',
 };
 
 export const EntityTypes = {
   ROLE: 'Role',
   USER: 'User',
   IMPERSONATION: 'Impersonation',
+  CATEGORY: 'Category',
 };

@@ -3,6 +3,7 @@ import User from './user.model.js';
 import Role from './role.model.js';
 import Impersonation from './impersonation.model.js';
 import ActivityLog from './activityLog.model.js';
+import Category from './category.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog };
+export { Token, User, Role, Impersonation, ActivityLog, Category };
 
