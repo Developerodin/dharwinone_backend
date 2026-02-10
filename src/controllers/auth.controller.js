@@ -8,6 +8,8 @@ import { loginUserWithEmailAndPassword, logout as logout2, refreshAuth, resetPas
 import { sendResetPasswordEmail, sendVerificationEmail as sendVerificationEmail2 } from '../services/email.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { registerStudent as registerStudentService } from '../services/student.service.js';
+import { registerMentor as registerMentorService } from '../services/mentor.service.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
 
@@ -57,6 +59,74 @@ const publicRegister = catchAsync(async (req, res) => {
     user,
     message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
   });
+});
+
+/**
+ * Register a student
+ * Creates both User and Student profile records
+ * - If admin registers: status='active', isEmailVerified=true, no tokens issued
+ * - If student self-registers: status='active', isEmailVerified=false, tokens issued
+ */
+const registerStudent = catchAsync(async (req, res) => {
+  const isAdminRegistration = !!req.user; // If req.user exists, it's an admin registration
+  
+  const { user, student } = await registerStudentService(req.body, isAdminRegistration);
+  
+  // Log activity if admin registered the student
+  if (isAdminRegistration) {
+    await activityLogService.createActivityLog(
+      req.user.id,
+      ActivityActions.USER_CREATE,
+      EntityTypes.USER,
+      user.id,
+      { role: 'Student', studentProfile: true },
+      req
+    );
+  }
+  
+  // If student self-registers, issue tokens and set cookies
+  if (!isAdminRegistration) {
+    const tokens = await generateAuthTokens(user, req);
+    setAuthCookies(res, tokens);
+    res.status(httpStatus.CREATED).send({ user, student, tokens });
+  } else {
+    // Admin registration: no tokens, just return user and student
+    res.status(httpStatus.CREATED).send({ user, student });
+  }
+});
+
+/**
+ * Register a mentor
+ * Creates both User and Mentor profile records
+ * - If admin registers: status='active', isEmailVerified=true, no tokens issued
+ * - If mentor self-registers: status='active', isEmailVerified=false, tokens issued
+ */
+const registerMentor = catchAsync(async (req, res) => {
+  const isAdminRegistration = !!req.user; // If req.user exists, it's an admin registration
+  
+  const { user, mentor } = await registerMentorService(req.body, isAdminRegistration);
+  
+  // Log activity if admin registered the mentor
+  if (isAdminRegistration) {
+    await activityLogService.createActivityLog(
+      req.user.id,
+      ActivityActions.USER_CREATE,
+      EntityTypes.USER,
+      user.id,
+      { role: 'Mentor', mentorProfile: true },
+      req
+    );
+  }
+  
+  // If mentor self-registers, issue tokens and set cookies
+  if (!isAdminRegistration) {
+    const tokens = await generateAuthTokens(user, req);
+    setAuthCookies(res, tokens);
+    res.status(httpStatus.CREATED).send({ user, mentor, tokens });
+  } else {
+    // Admin registration: no tokens, just return user and mentor
+    res.status(httpStatus.CREATED).send({ user, mentor });
+  }
 });
 
 const login = catchAsync(async (req, res) => {
@@ -178,6 +248,8 @@ const stopImpersonation = catchAsync(async (req, res) => {
 export {
   register,
   publicRegister,
+  registerStudent,
+  registerMentor,
   login,
   logout,
   refreshTokens,

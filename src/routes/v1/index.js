@@ -5,6 +5,8 @@ import roleRoute from './role.route.js';
 import publicRoute from './public.route.js';
 import activityLogRoute from './activityLog.route.js';
 import categoryRoute from './category.route.js';
+import studentRoute from './student.route.js';
+import mentorRoute from './mentor.route.js';
 import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 
@@ -34,6 +36,14 @@ const defaultRoutes = [
   {
     path: '/training/categories',
     route: categoryRoute,
+  },
+  {
+    path: '/training/students',
+    route: studentRoute,
+  },
+  {
+    path: '/training/mentors',
+    route: mentorRoute,
   },
 ];
 

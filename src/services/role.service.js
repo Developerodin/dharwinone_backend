@@ -40,6 +40,15 @@ const getRoleById = async (roleId) => {
 };
 
 /**
+ * Get role by name (case-insensitive)
+ * @param {string} name
+ * @returns {Promise<Role>}
+ */
+const getRoleByName = async (name) => {
+  return Role.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
+};
+
+/**
  * Update role by id
  * @param {ObjectId} roleId
  * @param {Object} updateBody
@@ -86,6 +95,7 @@ export {
   createRole,
   queryRoles,
   getRoleById,
+  getRoleByName,
   updateRoleById,
   deleteRoleById,
 };

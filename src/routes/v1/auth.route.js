@@ -3,11 +3,14 @@ import validate from '../../middlewares/validate.js';
 import * as authValidation from '../../validations/auth.validation.js';
 import * as authController from '../../controllers/auth.controller.js';
 import auth from '../../middlewares/auth.js';
+import optionalAuth from '../../middlewares/optionalAuth.js';
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
 
 const router = express.Router();
 
 router.post('/register', validate(authValidation.register), authController.register);
+router.post('/register-student', optionalAuth(), validate(authValidation.registerStudent), authController.registerStudent);
+router.post('/register-mentor', optionalAuth(), validate(authValidation.registerMentor), authController.registerMentor);
 router.post('/login', validate(authValidation.login), authController.login);
 router.post('/logout', validate(authValidation.logout), authController.logout);
 router.post('/refresh-tokens', validate(authValidation.refreshTokens), authController.refreshTokens);

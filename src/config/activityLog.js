@@ -19,6 +19,12 @@ export const ActivityActions = {
   CATEGORY_CREATE: 'category.create',
   CATEGORY_UPDATE: 'category.update',
   CATEGORY_DELETE: 'category.delete',
+  // Students
+  STUDENT_UPDATE: 'student.update',
+  STUDENT_DELETE: 'student.delete',
+  // Mentors
+  MENTOR_UPDATE: 'mentor.update',
+  MENTOR_DELETE: 'mentor.delete',
 };
 
 export const EntityTypes = {
@@ -26,4 +32,6 @@ export const EntityTypes = {
   USER: 'User',
   IMPERSONATION: 'Impersonation',
   CATEGORY: 'Category',
+  STUDENT: 'Student',
+  MENTOR: 'Mentor',
 };
