@@ -4,11 +4,12 @@ RUN mkdir -p /usr/src/node-app && chown -R node:node /usr/src/node-app
 
 WORKDIR /usr/src/node-app
 
-COPY package.json yarn.lock ./
+# Use npm (project has package-lock.json, not yarn.lock)
+COPY package.json package-lock.json ./
 
 USER node
 
-RUN yarn install --pure-lockfile
+RUN npm ci --omit=dev
 
 COPY --chown=node:node . .
 
