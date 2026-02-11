@@ -20,7 +20,7 @@ const REFRESH_TOKEN_COOKIE = 'refreshToken';
 const cookieOptions = (expires) => ({
   httpOnly: true,
   secure: config.env === 'production',
-  sameSite: config.env === 'production' ? 'strict' : 'lax',
+  sameSite: config.env === 'production' ? 'none' : 'lax', // 'none' required for cross-origin cookies in production
   path: '/',
   ...(expires && { expires }),
 });

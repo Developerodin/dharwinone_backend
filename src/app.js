@@ -42,19 +42,31 @@ app.use(mongoSanitize());
 app.use(compression());
 
 // enable cors
-app.use(
-  cors({
-    origin: config.corsOrigin || true,
-    credentials: true,
-  })
-);
-app.options(
-  '*',
-  cors({
-    origin: config.corsOrigin || true,
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (config.corsOrigin === true) {
+      // Allow all origins in development
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (Array.isArray(config.corsOrigin) && config.corsOrigin.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // jwt authentication
 app.use(passport.initialize());

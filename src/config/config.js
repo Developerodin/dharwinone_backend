@@ -30,6 +30,10 @@ const envVarsSchema = Joi.object()
     AWS_SECRET_ACCESS_KEY: Joi.string().optional().allow('').description('AWS secret access key'),
     AWS_REGION: Joi.string().optional().allow('').description('AWS region for S3'),
     AWS_S3_BUCKET_NAME: Joi.string().optional().allow('').description('AWS S3 bucket name for document storage'),
+
+    // CORS / Frontend
+    CORS_ORIGIN: Joi.string().optional().description('Allowed CORS origin (comma-separated for multiple origins)'),
+    FRONTEND_BASE_URL: Joi.string().optional().description('Frontend base URL for email links'),
   })
   .unknown();
 
@@ -71,6 +75,8 @@ const config = {
     region: envVars.AWS_REGION || '',
     bucketName: envVars.AWS_S3_BUCKET_NAME || '',
   },
+  corsOrigin: envVars.CORS_ORIGIN ? envVars.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
+  frontendBaseUrl: envVars.FRONTEND_BASE_URL || 'http://localhost:3001',
 };
 
 export default config;
