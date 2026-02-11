@@ -5,7 +5,6 @@ import catchAsync from '../utils/catchAsync.js';
 import * as studentService from '../services/student.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
-import { getPresignedUploadUrl } from '../services/upload.service.js';
 
 const getStudents = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['status', 'search']);
@@ -48,36 +47,9 @@ const deleteStudent = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-/**
- * Generate a presigned S3 upload URL for a student's profile image.
- * The frontend should:
- * 1) Use the returned URL to PUT the image to S3
- * 2) Save the returned key back to the student via PATCH as profileImageUrl, if desired
- */
-const getStudentProfileImageUploadUrl = catchAsync(async (req, res) => {
-  const { studentId } = req.params;
-  const { fileName, contentType } = req.body;
-
-  // Ensure the student exists
-  const student = await studentService.getStudentById(studentId);
-  if (!student) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
-  }
-
-  const result = await getPresignedUploadUrl({
-    fileName,
-    contentType,
-    userId: student.user?.id || student.user,
-    folder: 'profile-images',
-  });
-
-  res.send(result);
-});
-
 export {
   getStudents,
   getStudent,
   updateStudent,
-  getStudentProfileImageUploadUrl,
   deleteStudent,
 };

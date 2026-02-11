@@ -63,9 +63,9 @@ const studentSchema = mongoose.Schema(
     documents: [
       {
         name: { type: String, required: true, trim: true },
-        type: { type: String, required: true, trim: true }, // e.g., 'resume', 'certificate', 'transcript'
+        type: { type: String, required: true, trim: true },
         fileUrl: { type: String, trim: true },
-        fileKey: { type: String, trim: true }, // S3 key if using S3
+        fileKey: { type: String, trim: true },
         uploadedAt: { type: Date, default: Date.now },
       },
     ],

@@ -17,13 +17,4 @@ router
   .patch(auth(), requirePermissions('students.manage'), validate(studentValidation.updateStudent), studentController.updateStudent)
   .delete(auth(), requirePermissions('students.manage'), validate(studentValidation.deleteStudent), studentController.deleteStudent);
 
-router
-  .route('/:studentId/profile-image/upload-url')
-  .post(
-    auth(),
-    requirePermissions('students.manage'),
-    validate(studentValidation.getStudentProfileImageUploadUrl),
-    studentController.getStudentProfileImageUploadUrl
-  );
-
 export default router;
