@@ -24,6 +24,12 @@ const envVarsSchema = Joi.object()
     SMTP_PASSWORD: Joi.string().description('password for email server'),
     EMAIL_FROM: Joi.string().description('the from field in the emails sent by the app'),
     EMAIL_REPLY_TO: Joi.string().optional().description('the reply-to field in the emails sent by the app'),
+
+    // AWS / S3 (optional – app starts without them; S3 features return 503 if missing)
+    AWS_ACCESS_KEY_ID: Joi.string().optional().allow('').description('AWS access key ID'),
+    AWS_SECRET_ACCESS_KEY: Joi.string().optional().allow('').description('AWS secret access key'),
+    AWS_REGION: Joi.string().optional().allow('').description('AWS region for S3'),
+    AWS_S3_BUCKET_NAME: Joi.string().optional().allow('').description('AWS S3 bucket name for document storage'),
   })
   .unknown();
 
@@ -62,6 +68,12 @@ const config = {
     },
     from: envVars.EMAIL_FROM,
     replyTo: envVars.EMAIL_REPLY_TO,
+  },
+  aws: {
+    accessKeyId: envVars.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: envVars.AWS_SECRET_ACCESS_KEY || '',
+    region: envVars.AWS_REGION || '',
+    bucketName: envVars.AWS_S3_BUCKET_NAME || '',
   },
 };
 

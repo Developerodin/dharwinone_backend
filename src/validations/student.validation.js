@@ -71,10 +71,22 @@ const updateStudent = {
     .min(1),
 };
 
+const getStudentProfileImageUploadUrl = {
+  params: Joi.object().keys({
+    studentId: Joi.string().required().custom(objectId),
+  }),
+  body: Joi.object()
+    .keys({
+      fileName: Joi.string().required(),
+      contentType: Joi.string().required(),
+    })
+    .required(),
+};
+
 const deleteStudent = {
   params: Joi.object().keys({
     studentId: Joi.string().custom(objectId),
   }),
 };
 
-export { getStudents, getStudent, updateStudent, deleteStudent };
+export { getStudents, getStudent, updateStudent, getStudentProfileImageUploadUrl, deleteStudent };
