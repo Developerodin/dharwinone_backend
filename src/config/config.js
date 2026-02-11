@@ -25,6 +25,12 @@ const envVarsSchema = Joi.object()
     EMAIL_FROM: Joi.string().description('the from field in the emails sent by the app'),
     EMAIL_REPLY_TO: Joi.string().optional().description('the reply-to field in the emails sent by the app'),
 
+    // AWS / S3 (mirrors candidate backend)
+    AWS_ACCESS_KEY_ID: Joi.string().description('AWS access key ID'),
+    AWS_SECRET_ACCESS_KEY: Joi.string().description('AWS secret access key'),
+    AWS_REGION: Joi.string().default('us-east-1').description('AWS region'),
+    AWS_S3_BUCKET_NAME: Joi.string().description('AWS S3 bucket name'),
+
     // CORS / Frontend
     CORS_ORIGIN: Joi.string().optional().description('Allowed CORS origin (comma-separated for multiple origins)'),
     FRONTEND_BASE_URL: Joi.string().optional().description('Frontend base URL for email links'),
@@ -65,6 +71,12 @@ const config = {
   },
   corsOrigin: envVars.CORS_ORIGIN ? envVars.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
   frontendBaseUrl: envVars.FRONTEND_BASE_URL || 'http://localhost:3001',
+  aws: {
+    accessKeyId: envVars.AWS_ACCESS_KEY_ID,
+    secretAccessKey: envVars.AWS_SECRET_ACCESS_KEY,
+    region: envVars.AWS_REGION,
+    bucketName: envVars.AWS_S3_BUCKET_NAME,
+  },
 };
 
 export default config;

@@ -1,6 +1,8 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import Student from '../models/student.model.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { uploadFileToS3 } from './upload.service.js';
 import { createUser } from './user.service.js';
 import { getRoleByName } from './role.service.js';
 
@@ -128,6 +130,61 @@ const deleteStudentById = async (studentId) => {
   return student;
 };
 
+/**
+ * Upload and set student profile image
+ * @param {ObjectId} studentId
+ * @param {Express.Multer.File} file
+ * @param {Object} currentUser
+ * @returns {Promise<Student>}
+ */
+const updateStudentProfileImage = async (studentId, file, currentUser) => {
+  const student = await getStudentById(studentId);
+  if (!student) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
+  }
+
+  // Upload to S3 under dedicated folder
+  const uploadResult = await uploadFileToS3(file, currentUser.id || currentUser._id, 'student-profile-images');
+
+  student.profileImage = {
+    key: uploadResult.key,
+    url: uploadResult.url,
+    originalName: uploadResult.originalName,
+    size: uploadResult.size,
+    mimeType: uploadResult.mimeType,
+    uploadedAt: new Date(),
+  };
+
+  // Optionally keep legacy field in sync for older clients
+  student.profileImageUrl = uploadResult.url;
+
+  await student.save();
+  return student;
+};
+
+/**
+ * Get a fresh presigned URL for student profile image
+ * @param {ObjectId} studentId
+ * @returns {Promise<{url: string, mimeType?: string}>}
+ */
+const getStudentProfileImageUrl = async (studentId) => {
+  const student = await getStudentById(studentId);
+  if (!student) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
+  }
+
+  const image = student.profileImage;
+  if (!image?.key) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Profile image not found');
+  }
+
+  const url = await generatePresignedDownloadUrl(image.key, 3600);
+  return {
+    url,
+    mimeType: image.mimeType,
+  };
+};
+
 export {
   registerStudent,
   queryStudents,
@@ -135,4 +192,6 @@ export {
   getStudentByUserId,
   updateStudentById,
   deleteStudentById,
+  updateStudentProfileImage,
+  getStudentProfileImageUrl,
 };
