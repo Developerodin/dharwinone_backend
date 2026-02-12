@@ -10,7 +10,7 @@ API reference for role management. All endpoints require authentication (JWT via
 /v1/roles
 ```
 
----
+--- 
 
 ## Role schema
 
