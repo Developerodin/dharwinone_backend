@@ -41,3 +41,4 @@ const generateFileKey = (originalName, userId, folder = 'documents') => {
 };
 
 export { s3Client, generatePresignedUploadUrl, generatePresignedDownloadUrl, generateFileKey };
+

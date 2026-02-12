@@ -1,22 +1,21 @@
-import { jest } from '@jest/globals';
 import request from 'supertest';
 import faker from 'faker';
 import httpStatus from 'http-status';
 import httpMocks from 'node-mocks-http';
 import moment from 'moment';
 import bcrypt from 'bcryptjs';
-import app from '../../src/app.js';
-import config from '../../src/config/config.js';
-import auth from '../../src/middlewares/auth.js';
-import * as tokenService from '../../src/services/token.service.js';
-import * as emailService from '../../src/services/email.service.js';
-import ApiError from '../../src/utils/ApiError.js';
-import setupTestDB from '../utils/setupTestDB.js';
-import { User, Token } from '../../src/models/index.js';
-import { roleRights } from '../../src/config/roles.js';
-import { tokenTypes } from '../../src/config/tokens.js';
-import { userOne, admin, insertUsers } from '../fixtures/user.fixture.js';
-import { userOneAccessToken, adminAccessToken } from '../fixtures/token.fixture.js';
+import app from '../../src/app';
+import config from '../../src/config/config';
+import auth from '../../src/middlewares/auth';
+import { tokenService, emailService } from '../../src/services';
+import ApiError from '../../src/utils/ApiError';
+import setupTestDB from '../utils/setupTestDB';
+import { User, Token } from '../../src/models';
+import { roleRights } from '../../src/config/roles';
+import { tokenTypes } from '../../src/config/tokens';
+import { userOne, admin, insertUsers } from '../fixtures/user.fixture';
+import { userOneAccessToken, adminAccessToken } from '../fixtures/token.fixture';
+
 
 setupTestDB();
 

@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import httpMocks from 'node-mocks-http';
@@ -6,6 +5,7 @@ import { errorConverter, errorHandler } from '../../../src/middlewares/error.js'
 import ApiError from '../../../src/utils/ApiError.js';
 import config from '../../../src/config/config.js';
 import logger from '../../../src/config/logger.js';
+
 
 describe('Error middlewares', () => {
   describe('Error converter', () => {

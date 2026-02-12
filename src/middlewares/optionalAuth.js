@@ -13,12 +13,12 @@ const getAccessTokenFromRequest = (req) => {
   return req.cookies?.[ACCESS_TOKEN_COOKIE] || null;
 };
 
-const verifyCallback = (req, resolve, _reject) => async (err, user, info) => {
+const verifyCallback = (req, resolve, reject) => async (err, user, info) => {
   // Optional auth: if no user or error, just continue without setting req.user
   if (err || info || !user) {
     return resolve(); // Continue without authentication
   }
-
+  
   req.user = user;
 
   const token = getAccessTokenFromRequest(req);

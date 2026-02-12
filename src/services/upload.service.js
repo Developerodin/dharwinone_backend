@@ -1,8 +1,8 @@
 import { PutObjectCommand } from '@aws-sdk/client-s3';
-import httpStatus from 'http-status';
 import { s3Client, generateFileKey, generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
+import httpStatus from 'http-status';
 
 // Upload single file directly to S3
 const uploadFileToS3 = async (file, userId, folder = 'documents') => {
@@ -40,3 +40,4 @@ const uploadFileToS3 = async (file, userId, folder = 'documents') => {
 };
 
 export { uploadFileToS3 };
+

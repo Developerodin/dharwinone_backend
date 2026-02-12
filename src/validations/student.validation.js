@@ -33,43 +33,37 @@ const updateStudent = {
         zipCode: Joi.string().optional().allow('', null),
         country: Joi.string().optional().allow('', null),
       }).optional(),
-      education: Joi.array()
-        .items(
-          Joi.object({
-            degree: Joi.string().optional().allow('', null),
-            institution: Joi.string().optional().allow('', null),
-            fieldOfStudy: Joi.string().optional().allow('', null),
-            startDate: Joi.date().optional().allow(null),
-            endDate: Joi.date().optional().allow(null),
-            isCurrent: Joi.boolean().optional(),
-            description: Joi.string().optional().allow('', null),
-          })
-        )
-        .optional(),
-      experience: Joi.array()
-        .items(
-          Joi.object({
-            title: Joi.string().optional().allow('', null),
-            company: Joi.string().optional().allow('', null),
-            location: Joi.string().optional().allow('', null),
-            startDate: Joi.date().optional().allow(null),
-            endDate: Joi.date().optional().allow(null),
-            isCurrent: Joi.boolean().optional(),
-            description: Joi.string().optional().allow('', null),
-          })
-        )
-        .optional(),
+      education: Joi.array().items(
+        Joi.object({
+          degree: Joi.string().optional().allow('', null),
+          institution: Joi.string().optional().allow('', null),
+          fieldOfStudy: Joi.string().optional().allow('', null),
+          startDate: Joi.date().optional().allow(null),
+          endDate: Joi.date().optional().allow(null),
+          isCurrent: Joi.boolean().optional(),
+          description: Joi.string().optional().allow('', null),
+        })
+      ).optional(),
+      experience: Joi.array().items(
+        Joi.object({
+          title: Joi.string().optional().allow('', null),
+          company: Joi.string().optional().allow('', null),
+          location: Joi.string().optional().allow('', null),
+          startDate: Joi.date().optional().allow(null),
+          endDate: Joi.date().optional().allow(null),
+          isCurrent: Joi.boolean().optional(),
+          description: Joi.string().optional().allow('', null),
+        })
+      ).optional(),
       skills: Joi.array().items(Joi.string()).optional(),
-      documents: Joi.array()
-        .items(
-          Joi.object({
-            name: Joi.string().required(),
-            type: Joi.string().required(),
-            fileUrl: Joi.string().optional().allow('', null),
-            fileKey: Joi.string().optional().allow('', null),
-          })
-        )
-        .optional(),
+      documents: Joi.array().items(
+        Joi.object({
+          name: Joi.string().required(),
+          type: Joi.string().required(),
+          fileUrl: Joi.string().optional().allow('', null),
+          fileKey: Joi.string().optional().allow('', null),
+        })
+      ).optional(),
       bio: Joi.string().optional().allow('', null),
       profileImageUrl: Joi.string().optional().allow('', null),
       status: Joi.string().valid('active', 'inactive').optional(),

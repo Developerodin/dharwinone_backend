@@ -4,9 +4,10 @@ import httpStatus from 'http-status';
 import app from '../../src/app.js';
 import setupTestDB from '../utils/setupTestDB.js';
 
-import { userOne, userTwo, admin, insertUsers } from '../fixtures/user.fixture.js';
-import { userOneAccessToken, adminAccessToken } from '../fixtures/token.fixture.js';
+import { userOne, userTwo, admin, insertUsers } from '../fixtures/user.fixture';
+import { userOneAccessToken, adminAccessToken } from '../fixtures/token.fixture';
 import User from '../../src/models/user.model.js';
+
 
 setupTestDB();
 

@@ -1,3 +1,4 @@
+import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as activityLogService from '../services/activityLog.service.js';

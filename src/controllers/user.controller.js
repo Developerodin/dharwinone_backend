@@ -8,14 +8,7 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const createUser = catchAsync(async (req, res) => {
   const user = await userService.createUser(req.body);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.USER_CREATE,
-    EntityTypes.USER,
-    user.id,
-    { role: user.role },
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { role: user.role }, req);
   res.status(httpStatus.CREATED).send(user);
 });
 
@@ -51,15 +44,15 @@ const updateUser = catchAsync(async (req, res) => {
 
 const deleteUser = catchAsync(async (req, res) => {
   await userService.deleteUserById(req.params.userId);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.USER_DELETE,
-    EntityTypes.USER,
-    req.params.userId,
-    {},
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_DELETE, EntityTypes.USER, req.params.userId, {}, req);
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { createUser, getUsers, getUser, updateUser, deleteUser };
+export {
+  createUser,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+};
+

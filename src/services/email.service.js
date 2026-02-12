@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 
+
 const transport = nodemailer.createTransport(config.email.smtp);
 /* istanbul ignore next */
 if (config.env !== 'test') {
@@ -22,7 +23,10 @@ if (config.env !== 'test') {
 const sendEmail = async (to, subject, text, html) => {
   // Show branded name before email address in email clients
   const fromAddress = config.email.from;
-  const from = fromAddress && fromAddress.includes('<') ? fromAddress : `Dharwin Business Solutions <${fromAddress}>`;
+  const from =
+    fromAddress && fromAddress.includes('<')
+      ? fromAddress
+      : `Dharwin Business Solutions <${fromAddress}>`;
   // Default reply-to to the admin support address, overrideable via EMAIL_REPLY_TO
   const replyTo = config.email.replyTo || 'admin@dharwinbusinesssolutions.com' || fromAddress;
 
@@ -208,4 +212,10 @@ If you did not create an account, then ignore this email.`;
   await sendEmail(to, subject, text, html);
 };
 
-export { transport, sendEmail, sendResetPasswordEmail, sendVerificationEmail };
+export {
+  transport,
+  sendEmail,
+  sendResetPasswordEmail,
+  sendVerificationEmail,
+};
+

@@ -1,8 +1,8 @@
-import { createRequire } from 'module';
+import packageJson from '../../package.json' with { type: 'json' };
+
+const { version } = packageJson;
 import config from '../config/config.js';
 
-const require = createRequire(import.meta.url);
-const { version } = require('../../package.json');
 
 const swaggerDef = {
   openapi: '3.0.0',
@@ -22,3 +22,4 @@ const swaggerDef = {
 };
 
 export default swaggerDef;
+

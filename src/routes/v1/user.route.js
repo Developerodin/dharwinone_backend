@@ -18,7 +18,7 @@ router
   .patch(auth(), requirePermissions('users.manage'), validate(userValidation.updateUser), userController.updateUser)
   .delete(auth(), requirePermissions('users.manage'), validate(userValidation.deleteUser), userController.deleteUser);
 
-export default router;
+  export default router;
 
 /**
  * @swagger

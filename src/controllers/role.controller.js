@@ -8,14 +8,7 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const createRole = catchAsync(async (req, res) => {
   const role = await roleService.createRole(req.body);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.ROLE_CREATE,
-    EntityTypes.ROLE,
-    role.id,
-    { name: role.name },
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.ROLE_CREATE, EntityTypes.ROLE, role.id, { name: role.name }, req);
   res.status(httpStatus.CREATED).send(role);
 });
 
@@ -39,28 +32,20 @@ const updateRole = catchAsync(async (req, res) => {
   const metadata = {};
   if (req.body.permissions !== undefined) metadata.permissionsChanged = true;
   if (req.body.status !== undefined) metadata.status = req.body.status;
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.ROLE_UPDATE,
-    EntityTypes.ROLE,
-    role.id,
-    Object.keys(metadata).length ? metadata : { name: role.name },
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.ROLE_UPDATE, EntityTypes.ROLE, role.id, Object.keys(metadata).length ? metadata : { name: role.name }, req);
   res.send(role);
 });
 
 const deleteRole = catchAsync(async (req, res) => {
   await roleService.deleteRoleById(req.params.roleId);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.ROLE_DELETE,
-    EntityTypes.ROLE,
-    req.params.roleId,
-    {},
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.ROLE_DELETE, EntityTypes.ROLE, req.params.roleId, {}, req);
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { createRole, getRoles, getRole, updateRole, deleteRole };
+export {
+  createRole,
+  getRoles,
+  getRole,
+  updateRole,
+  deleteRole,
+};

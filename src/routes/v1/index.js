@@ -1,5 +1,4 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import authRoute from './auth.route.js';
 import userRoute from './user.route.js';
 import roleRoute from './role.route.js';
@@ -14,14 +13,6 @@ import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 
 const router = express.Router();
-
-// Health check: MongoDB connection status (no auth required)
-router.get('/health', (req, res) => {
-  const state = mongoose.connection.readyState;
-  const states = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
-  const mongo = { status: states[state] ?? 'unknown', readyState: state };
-  res.json({ ok: state === 1, mongo });
-});
 
 const defaultRoutes = [
   {

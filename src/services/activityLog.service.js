@@ -53,13 +53,10 @@ const queryActivityLogs = async (filter, options) => {
     if (endDate) mongoFilter.createdAt.$lte = new Date(endDate);
   }
   const sortBy = options.sortBy || 'createdAt:desc';
-  const sort = sortBy
-    .split(',')
-    .map((s) => {
-      const [key, order] = s.split(':');
-      return order === 'desc' ? `-${key}` : key;
-    })
-    .join(' ');
+  const sort = sortBy.split(',').map((s) => {
+    const [key, order] = s.split(':');
+    return order === 'desc' ? `-${key}` : key;
+  }).join(' ');
   const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
   const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
   const skip = (page - 1) * limit;

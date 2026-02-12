@@ -8,14 +8,7 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const createCategory = catchAsync(async (req, res) => {
   const category = await categoryService.createCategory(req.body);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.CATEGORY_CREATE,
-    EntityTypes.CATEGORY,
-    category.id,
-    { name: category.name },
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.CATEGORY_CREATE, EntityTypes.CATEGORY, category.id, { name: category.name }, req);
   res.status(httpStatus.CREATED).send(category);
 });
 
@@ -36,28 +29,20 @@ const getCategory = catchAsync(async (req, res) => {
 
 const updateCategory = catchAsync(async (req, res) => {
   const category = await categoryService.updateCategoryById(req.params.categoryId, req.body);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.CATEGORY_UPDATE,
-    EntityTypes.CATEGORY,
-    category.id,
-    { name: category.name },
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.CATEGORY_UPDATE, EntityTypes.CATEGORY, category.id, { name: category.name }, req);
   res.send(category);
 });
 
 const deleteCategory = catchAsync(async (req, res) => {
   await categoryService.deleteCategoryById(req.params.categoryId);
-  await activityLogService.createActivityLog(
-    req.user.id,
-    ActivityActions.CATEGORY_DELETE,
-    EntityTypes.CATEGORY,
-    req.params.categoryId,
-    {},
-    req
-  );
+  await activityLogService.createActivityLog(req.user.id, ActivityActions.CATEGORY_DELETE, EntityTypes.CATEGORY, req.params.categoryId, {}, req);
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { createCategory, getCategories, getCategory, updateCategory, deleteCategory };
+export {
+  createCategory,
+  getCategories,
+  getCategory,
+  updateCategory,
+  deleteCategory,
+};

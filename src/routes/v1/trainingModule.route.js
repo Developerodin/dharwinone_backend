@@ -20,7 +20,9 @@ const upload = multer({
 const handleFileUploads = (req, res, next) => {
   // Use fields() to handle multiple file fields dynamically
   // This will handle coverImage and any playlist item files
-  const fields = [{ name: 'coverImage', maxCount: 1 }];
+  const fields = [
+    { name: 'coverImage', maxCount: 1 },
+  ];
 
   // Add dynamic fields for playlist items (up to 50 items)
   for (let i = 0; i < 50; i++) {

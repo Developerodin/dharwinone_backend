@@ -2,11 +2,12 @@ import jwt from 'jsonwebtoken';
 import moment from 'moment';
 import httpStatus from 'http-status';
 import config from '../config/config.js';
-import { getUserByEmail } from './user.service.js';
+import {getUserByEmail} from './user.service.js';
 
 import ApiError from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
 import Token from '../models/token.model.js';
+
 
 /**
  * Generate token
@@ -217,3 +218,4 @@ export {
   generateVerifyEmailToken,
   getSessionsForUser,
 };
+
