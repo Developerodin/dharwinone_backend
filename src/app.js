@@ -1,7 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
-import xss  from 'xss-clean';
+import xss from 'xss-clean';
 import mongoSanitize from 'express-mongo-sanitize';
 import compression from 'compression';
 import cors from 'cors';
@@ -46,17 +46,17 @@ const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
+
     if (config.corsOrigin === true) {
       // Allow all origins in development
       return callback(null, true);
     }
-    
+
     // Check if origin is in allowed list
     if (Array.isArray(config.corsOrigin) && config.corsOrigin.includes(origin)) {
       return callback(null, true);
     }
-    
+
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -71,6 +71,15 @@ app.options('*', cors(corsOptions));
 // jwt authentication
 app.use(passport.initialize());
 passport.use('jwt', jwtStrategy);
+
+// fix duplicate path: /v1/api/v1/* -> /v1/* (e.g. when frontend sends /api/v1 with baseURL that already has /v1)
+app.use((req, res, next) => {
+  const match = req.path.match(/^\/v1\/api\/v1(\/.*)$/);
+  if (match) {
+    req.url = `/v1${match[1]}`;
+  }
+  next();
+});
 
 // limit repeated failed requests to auth endpoints
 if (config.env === 'production') {
@@ -100,4 +109,3 @@ app.use(errorConverter);
 app.use(errorHandler);
 
 export default app;
-

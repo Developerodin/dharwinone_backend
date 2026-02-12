@@ -81,21 +81,11 @@ const deleteRoleById = async (roleId) => {
   // Prevent deleting roles that are currently assigned to active users
   const isAssignedToActiveUser = await User.exists({ roleIds: roleId, status: 'active' });
   if (isAssignedToActiveUser) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'Role cannot be deleted because it is assigned to one or more active users'
-    );
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Role cannot be deleted because it is assigned to one or more active users');
   }
 
   await role.deleteOne();
   return role;
 };
 
-export {
-  createRole,
-  queryRoles,
-  getRoleById,
-  getRoleByName,
-  updateRoleById,
-  deleteRoleById,
-};
+export { createRole, queryRoles, getRoleById, getRoleByName, updateRoleById, deleteRoleById };

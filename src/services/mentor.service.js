@@ -21,14 +21,26 @@ const registerMentor = async (mentorBody, isAdminRegistration = false) => {
   }
 
   // Extract user fields and mentor profile fields
-  const { phone, dateOfBirth, gender, address, expertise, experience, certifications, skills, bio, profileImageUrl, ...userFields } = mentorBody;
+  const {
+    phone,
+    dateOfBirth,
+    gender,
+    address,
+    expertise,
+    experience,
+    certifications,
+    skills,
+    bio,
+    profileImageUrl,
+    ...userFields
+  } = mentorBody;
 
   // Prepare user data
   const userData = {
     ...userFields,
     roleIds: [mentorRole.id], // Automatically assign Mentor role ID
     status: 'active', // Mentors are active by default
-    isEmailVerified: isAdminRegistration ? true : false, // Admin registration = verified, self-registration = not verified
+    isEmailVerified: !!isAdminRegistration, // Admin registration = verified, self-registration = not verified
   };
 
   // Create user
@@ -71,9 +83,7 @@ const queryMentors = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { phone: { $regex: searchRegex } },
-    ];
+    mongoFilter.$or = [{ phone: { $regex: searchRegex } }];
   }
   const mentors = await Mentor.paginate(mongoFilter, {
     ...options,

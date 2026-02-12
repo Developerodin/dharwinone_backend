@@ -71,11 +71,4 @@ const getProfileImage = catchAsync(async (req, res) => {
   return res.redirect(data.url);
 });
 
-export {
-  getMentors,
-  getMentor,
-  updateMentor,
-  deleteMentor,
-  uploadProfileImage,
-  getProfileImage,
-};
+export { getMentors, getMentor, updateMentor, deleteMentor, uploadProfileImage, getProfileImage };

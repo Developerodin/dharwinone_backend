@@ -106,7 +106,7 @@ userSchema.methods.isPasswordMatch = async function (password) {
   return bcrypt.compare(password, user.password);
 };
 
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
   const user = this;
   // Satisfy unique index on username: default to email so we never store null (multiple nulls violate unique)
   if (!user.username) {
@@ -115,7 +115,6 @@ userSchema.pre('save', async function (next) {
   if (user.isModified('password')) {
     user.password = await bcrypt.hash(user.password, 8);
   }
-  next();
 });
 
 /**
@@ -124,4 +123,3 @@ userSchema.pre('save', async function (next) {
 const User = mongoose.model('User', userSchema);
 
 export default User;
-

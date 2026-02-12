@@ -35,8 +35,13 @@ categorySchema.options.toJSON.transform = function (doc, ret, options) {
  * @returns {Promise<boolean>}
  */
 categorySchema.statics.isNameTaken = async function (name, excludeCategoryId) {
-  const escaped = String(name).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const category = await this.findOne({ name: { $regex: new RegExp(`^${escaped}$`, 'i') }, _id: { $ne: excludeCategoryId } });
+  const escaped = String(name)
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const category = await this.findOne({
+    name: { $regex: new RegExp(`^${escaped}$`, 'i') },
+    _id: { $ne: excludeCategoryId },
+  });
   return !!category;
 };
 

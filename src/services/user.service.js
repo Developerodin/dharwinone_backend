@@ -4,7 +4,6 @@ import ApiError from '../utils/ApiError.js';
 import User from '../models/user.model.js';
 import Token from '../models/token.model.js';
 
-
 /**
  * Create a user
  * @param {Object} userBody
@@ -32,10 +31,7 @@ const queryUsers = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { name: { $regex: searchRegex } },
-      { email: { $regex: searchRegex } },
-    ];
+    mongoFilter.$or = [{ name: { $regex: searchRegex } }, { email: { $regex: searchRegex } }];
   }
   const users = await User.paginate(mongoFilter, options);
   return users;
@@ -96,12 +92,4 @@ const deleteUserById = async (userId) => {
   return user;
 };
 
-export {
-  createUser,
-  queryUsers,
-  getUserById,
-  getUserByEmail,
-  updateUserById,
-  deleteUserById,
-};
-
+export { createUser, queryUsers, getUserById, getUserByEmail, updateUserById, deleteUserById };

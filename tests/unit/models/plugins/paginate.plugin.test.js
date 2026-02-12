@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
-import setupTestDB from '../../../utils/setupTestDB';
-import paginate from '../../../../src/models/plugins/paginate.plugin';
-
+import setupTestDB from '../../../utils/setupTestDB.js';
+import paginate from '../../../../src/models/plugins/paginate.plugin.js';
 
 const projectSchema = mongoose.Schema({
   name: {

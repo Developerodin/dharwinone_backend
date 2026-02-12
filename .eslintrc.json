@@ -1,19 +1,35 @@
 {
-  "env": {
-    "node": true,
-    "jest": true
-  },
+  "env": { "node": true, "jest": true },
   "extends": ["airbnb-base", "plugin:jest/recommended", "plugin:security/recommended", "plugin:prettier/recommended"],
   "plugins": ["jest", "security", "prettier"],
-  "parserOptions": {
-    "ecmaVersion": 2018
-  },
+  "parserOptions": { "ecmaVersion": 2020, "sourceType": "module" },
   "rules": {
     "no-console": "error",
     "func-names": "off",
     "no-underscore-dangle": "off",
     "consistent-return": "off",
     "jest/expect-expect": "off",
-    "security/detect-object-injection": "off"
-  }
+    "security/detect-object-injection": "off",
+    "security/detect-non-literal-fs-filename": "off",
+    "security/detect-non-literal-regexp": "off",
+    "security/detect-unsafe-regex": "off",
+    "import/extensions": ["error", "ignorePackages", { "js": "always" }],
+    "import/prefer-default-export": "off",
+    "no-param-reassign": ["error", { "props": false }],
+    "no-restricted-syntax": "off",
+    "no-await-in-loop": "off",
+    "no-plusplus": "off",
+    "default-case": "off",
+    "no-continue": "off",
+    "no-use-before-define": "off",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
+  },
+  "overrides": [
+    {
+      "files": ["tests/**/*.js"],
+      "rules": {
+        "import/no-extraneous-dependencies": ["error", { "devDependencies": true }]
+      }
+    }
+  ]
 }

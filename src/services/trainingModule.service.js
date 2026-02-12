@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
@@ -87,11 +88,7 @@ const createTrainingModule = async (moduleBody, currentUser) => {
 
         case 'pdf-document':
           if (item.pdfFile?.buffer && item.pdfFile?.originalname) {
-            const pdfUpload = await uploadFileToS3(
-              item.pdfFile,
-              currentUser.id || currentUser._id,
-              'training-module-pdfs'
-            );
+            const pdfUpload = await uploadFileToS3(item.pdfFile, currentUser.id || currentUser._id, 'training-module-pdfs');
             processedItem.pdfDocument = {
               key: pdfUpload.key,
               url: pdfUpload.url,
@@ -171,10 +168,7 @@ const queryTrainingModules = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { moduleName: { $regex: searchRegex } },
-      { shortDescription: { $regex: searchRegex } },
-    ];
+    mongoFilter.$or = [{ moduleName: { $regex: searchRegex } }, { shortDescription: { $regex: searchRegex } }];
   }
 
   if (category) {
@@ -199,7 +193,7 @@ const queryTrainingModules = async (filter, options) => {
           const url = await generatePresignedDownloadUrl(module.coverImage.key, 7 * 24 * 3600);
           module.coverImage.url = url;
         } catch (error) {
-          console.error('Failed to regenerate cover image URL:', error);
+          logger.error('Failed to regenerate cover image URL:', error);
         }
       }
     }
@@ -230,7 +224,7 @@ const getTrainingModuleById = async (id) => {
       const url = await generatePresignedDownloadUrl(module.coverImage.key, 7 * 24 * 3600);
       module.coverImage.url = url;
     } catch (error) {
-      console.error('Failed to regenerate cover image URL:', error);
+      logger.error('Failed to regenerate cover image URL:', error);
     }
   }
 
@@ -241,7 +235,7 @@ const getTrainingModuleById = async (id) => {
         const url = await generatePresignedDownloadUrl(item.videoFile.key, 7 * 24 * 3600);
         item.videoFile.url = url;
       } catch (error) {
-        console.error('Failed to regenerate video URL:', error);
+        logger.error('Failed to regenerate video URL:', error);
       }
     }
 
@@ -250,7 +244,7 @@ const getTrainingModuleById = async (id) => {
         const url = await generatePresignedDownloadUrl(item.pdfDocument.key, 7 * 24 * 3600);
         item.pdfDocument.url = url;
       } catch (error) {
-        console.error('Failed to regenerate PDF URL:', error);
+        logger.error('Failed to regenerate PDF URL:', error);
       }
     }
   }
@@ -343,11 +337,7 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
 
         case 'pdf-document':
           if (item.pdfFile?.buffer && item.pdfFile?.originalname) {
-            const pdfUpload = await uploadFileToS3(
-              item.pdfFile,
-              currentUser.id || currentUser._id,
-              'training-module-pdfs'
-            );
+            const pdfUpload = await uploadFileToS3(item.pdfFile, currentUser.id || currentUser._id, 'training-module-pdfs');
             processedItem.pdfDocument = {
               key: pdfUpload.key,
               url: pdfUpload.url,

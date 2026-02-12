@@ -3,8 +3,22 @@ import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import config from '../config/config.js';
 import { createUser, updateUserById } from '../services/user.service.js';
-import { generateAuthTokens, generateResetPasswordToken, generateVerifyEmailToken, getSessionsForUser } from '../services/token.service.js';
-import { loginUserWithEmailAndPassword, logout as logout2, refreshAuth, resetPassword as resetPassword2, changePassword as changePassword2, verifyEmail as verifyEmail2, startImpersonation, stopImpersonation as stopImpersonationService } from '../services/auth.service.js';
+import {
+  generateAuthTokens,
+  generateResetPasswordToken,
+  generateVerifyEmailToken,
+  getSessionsForUser,
+} from '../services/token.service.js';
+import {
+  loginUserWithEmailAndPassword,
+  logout as logout2,
+  refreshAuth,
+  resetPassword as resetPassword2,
+  changePassword as changePassword2,
+  verifyEmail as verifyEmail2,
+  startImpersonation,
+  stopImpersonation as stopImpersonationService,
+} from '../services/auth.service.js';
 import { sendResetPasswordEmail, sendVerificationEmail as sendVerificationEmail2 } from '../services/email.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -12,7 +26,6 @@ import { registerStudent as registerStudentService } from '../services/student.s
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
-
 
 const ACCESS_TOKEN_COOKIE = 'accessToken';
 const REFRESH_TOKEN_COOKIE = 'refreshToken';
@@ -43,7 +56,14 @@ const clearAuthCookies = (res) => {
 const register = catchAsync(async (req, res) => {
   const user = await createUser(req.body);
   if (req.user) {
-    await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { role: user.role }, req);
+    await activityLogService.createActivityLog(
+      req.user.id,
+      ActivityActions.USER_CREATE,
+      EntityTypes.USER,
+      user.id,
+      { role: user.role },
+      req
+    );
   }
   res.status(httpStatus.CREATED).send({ user });
 });
@@ -57,7 +77,8 @@ const publicRegister = catchAsync(async (req, res) => {
   const user = await createUser({ ...req.body, status: 'pending' });
   res.status(httpStatus.CREATED).send({
     user,
-    message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
+    message:
+      'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
   });
 });
 
@@ -69,9 +90,9 @@ const publicRegister = catchAsync(async (req, res) => {
  */
 const registerStudent = catchAsync(async (req, res) => {
   const isAdminRegistration = !!req.user; // If req.user exists, it's an admin registration
-  
+
   const { user, student } = await registerStudentService(req.body, isAdminRegistration);
-  
+
   // Log activity if admin registered the student
   if (isAdminRegistration) {
     await activityLogService.createActivityLog(
@@ -83,7 +104,7 @@ const registerStudent = catchAsync(async (req, res) => {
       req
     );
   }
-  
+
   // If student self-registers, issue tokens and set cookies
   if (!isAdminRegistration) {
     const tokens = await generateAuthTokens(user, req);
@@ -103,9 +124,9 @@ const registerStudent = catchAsync(async (req, res) => {
  */
 const registerMentor = catchAsync(async (req, res) => {
   const isAdminRegistration = !!req.user; // If req.user exists, it's an admin registration
-  
+
   const { user, mentor } = await registerMentorService(req.body, isAdminRegistration);
-  
+
   // Log activity if admin registered the mentor
   if (isAdminRegistration) {
     await activityLogService.createActivityLog(
@@ -117,7 +138,7 @@ const registerMentor = catchAsync(async (req, res) => {
       req
     );
   }
-  
+
   // If mentor self-registers, issue tokens and set cookies
   if (!isAdminRegistration) {
     const tokens = await generateAuthTokens(user, req);

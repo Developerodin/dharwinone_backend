@@ -29,9 +29,7 @@ const queryCategories = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { name: { $regex: searchRegex } },
-    ];
+    mongoFilter.$or = [{ name: { $regex: searchRegex } }];
   }
   const categories = await Category.paginate(mongoFilter, options);
   return categories;
@@ -79,10 +77,4 @@ const deleteCategoryById = async (categoryId) => {
   return category;
 };
 
-export {
-  createCategory,
-  queryCategories,
-  getCategoryById,
-  updateCategoryById,
-  deleteCategoryById,
-};
+export { createCategory, queryCategories, getCategoryById, updateCategoryById, deleteCategoryById };

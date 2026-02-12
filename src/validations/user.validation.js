@@ -1,7 +1,6 @@
 import Joi from 'joi';
 import { password, objectId } from './custom.validation.js';
 
-
 const createUser = {
   body: Joi.object().keys({
     email: Joi.string().required().email(),
@@ -53,4 +52,3 @@ const deleteUser = {
 };
 
 export { createUser, getUsers, getUser, updateUser, deleteUser };
-

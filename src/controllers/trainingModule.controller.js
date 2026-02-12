@@ -26,9 +26,7 @@ const createTrainingModule = catchAsync(async (req, res) => {
 
   // Handle cover image file
   if (req.files && req.files.coverImage) {
-    moduleData.coverImageFile = Array.isArray(req.files.coverImage)
-      ? req.files.coverImage[0]
-      : req.files.coverImage;
+    moduleData.coverImageFile = Array.isArray(req.files.coverImage) ? req.files.coverImage[0] : req.files.coverImage;
   }
 
   // Handle playlist item files
@@ -104,9 +102,7 @@ const updateTrainingModule = catchAsync(async (req, res) => {
 
   // Handle cover image file
   if (req.files && req.files.coverImage) {
-    moduleData.coverImageFile = Array.isArray(req.files.coverImage)
-      ? req.files.coverImage[0]
-      : req.files.coverImage;
+    moduleData.coverImageFile = Array.isArray(req.files.coverImage) ? req.files.coverImage[0] : req.files.coverImage;
   }
 
   // Handle playlist item files
@@ -134,11 +130,7 @@ const updateTrainingModule = catchAsync(async (req, res) => {
     });
   }
 
-  const module = await trainingModuleService.updateTrainingModuleById(
-    req.params.moduleId,
-    moduleData,
-    req.user
-  );
+  const module = await trainingModuleService.updateTrainingModuleById(req.params.moduleId, moduleData, req.user);
 
   await activityLogService.createActivityLog(
     req.user.id,
@@ -165,10 +157,4 @@ const deleteTrainingModule = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export {
-  createTrainingModule,
-  getTrainingModules,
-  getTrainingModule,
-  updateTrainingModule,
-  deleteTrainingModule,
-};
+export { createTrainingModule, getTrainingModules, getTrainingModule, updateTrainingModule, deleteTrainingModule };

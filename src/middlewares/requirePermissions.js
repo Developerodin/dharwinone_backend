@@ -10,27 +10,28 @@ import { getGrantingPermissions } from '../config/permissions.js';
  *
  * @param  {...string} requiredPermissions
  */
-const requirePermissions = (...requiredPermissions) => (req, res, next) => {
-  if (!req.user || !req.authContext) {
-    return next(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
-  }
-
-  const { permissions } = req.authContext;
-
-  if (!requiredPermissions.length) {
-    return next();
-  }
-
-  for (const required of requiredPermissions) {
-    const granting = getGrantingPermissions(required);
-    const hasAccess = granting.some((p) => permissions.has(p));
-    if (!hasAccess) {
-      return next(new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to perform this action'));
+const requirePermissions =
+  (...requiredPermissions) =>
+  (req, res, next) => {
+    if (!req.user || !req.authContext) {
+      return next(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
     }
-  }
 
-  return next();
-};
+    const { permissions } = req.authContext;
+
+    if (!requiredPermissions.length) {
+      return next();
+    }
+
+    for (const required of requiredPermissions) {
+      const granting = getGrantingPermissions(required);
+      const hasAccess = granting.some((p) => permissions.has(p));
+      if (!hasAccess) {
+        return next(new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to perform this action'));
+      }
+    }
+
+    return next();
+  };
 
 export default requirePermissions;
-

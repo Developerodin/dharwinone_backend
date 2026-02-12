@@ -15,7 +15,7 @@ const getAccessTokenFromRequest = (req) => {
   return req.cookies?.[ACCESS_TOKEN_COOKIE] || null;
 };
 
-const verifyCallback = (req, resolve, reject, requiredRights) => async (err, user, info) => {
+const verifyCallback = (req, resolve, reject, _requiredRights) => async (err, user, info) => {
   if (err || info || !user) {
     return reject(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
   }
@@ -43,13 +43,14 @@ const verifyCallback = (req, resolve, reject, requiredRights) => async (err, use
 };
 
 // requiredRights parameter is kept for backward compatibility but is no-op now.
-const auth = (...requiredRights) => async (req, res, next) => {
-  return new Promise((resolve, reject) => {
-    passport.authenticate('jwt', { session: false }, verifyCallback(req, resolve, reject, requiredRights))(req, res, next);
-  })
-    .then(() => next())
-    .catch((err) => next(err));
-};
+const auth =
+  (...requiredRights) =>
+  async (req, res, next) => {
+    return new Promise((resolve, reject) => {
+      passport.authenticate('jwt', { session: false }, verifyCallback(req, resolve, reject, requiredRights))(req, res, next);
+    })
+      .then(() => next())
+      .catch((err) => next(err));
+  };
 
 export default auth;
-

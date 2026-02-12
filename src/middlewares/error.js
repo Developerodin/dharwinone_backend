@@ -4,7 +4,6 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 
-
 const errorConverter = (err, req, res, next) => {
   let error = err;
   if (!(error instanceof ApiError)) {
@@ -39,8 +38,4 @@ const errorHandler = (err, req, res, next) => {
   res.status(statusCode).send(response);
 };
 
-export {
-  errorConverter,
-  errorHandler,
-};
-
+export { errorConverter, errorHandler };

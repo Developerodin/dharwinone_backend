@@ -11,7 +11,11 @@ export const permissionAliases = {
   'activityLogs.manage': ['activityLogs.manage', 'activity.manage'],
   // Training modules: map to permission format "training.modules:view,create,edit,delete"
   'training.modules.read': ['training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
-  'training.modules.manage': ['training.modules.manage', 'training.modules:create,edit,delete', 'training.modules:view,create,edit,delete'],
+  'training.modules.manage': [
+    'training.modules.manage',
+    'training.modules:create,edit,delete',
+    'training.modules:view,create,edit,delete',
+  ],
 };
 
 /**

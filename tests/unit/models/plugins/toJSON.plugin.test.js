@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
-import { toJSON } from '../../../../src/models/plugins.js';
-
+import toJSON from '../../../../src/models/plugins/toJSON.plugin.js';
 
 describe('toJSON plugin', () => {
   let connection;

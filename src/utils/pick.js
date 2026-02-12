@@ -4,7 +4,7 @@
  * @param {string[]} keys
  * @returns {Object}
  */
-const pick = (object, keys) => 
+const pick = (object, keys) =>
   keys.reduce((obj, key) => {
     if (object && Object.prototype.hasOwnProperty.call(object, key)) {
       obj[key] = object[key];

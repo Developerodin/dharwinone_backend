@@ -21,14 +21,26 @@ const registerStudent = async (studentBody, isAdminRegistration = false) => {
   }
 
   // Extract user fields and student profile fields
-  const { phone, dateOfBirth, gender, address, education, experience, skills, documents, bio, profileImageUrl, ...userFields } = studentBody;
+  const {
+    phone,
+    dateOfBirth,
+    gender,
+    address,
+    education,
+    experience,
+    skills,
+    documents,
+    bio,
+    profileImageUrl,
+    ...userFields
+  } = studentBody;
 
   // Prepare user data
   const userData = {
     ...userFields,
     roleIds: [studentRole.id], // Automatically assign Student role ID
     status: 'active', // Students are active by default
-    isEmailVerified: isAdminRegistration ? true : false, // Admin registration = verified, self-registration = not verified
+    isEmailVerified: !!isAdminRegistration, // Admin registration = verified, self-registration = not verified
   };
 
   // Create user
@@ -71,9 +83,7 @@ const queryStudents = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { phone: { $regex: searchRegex } },
-    ];
+    mongoFilter.$or = [{ phone: { $regex: searchRegex } }];
   }
   const students = await Student.paginate(mongoFilter, {
     ...options,

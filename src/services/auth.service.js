@@ -23,7 +23,10 @@ const loginUserWithEmailAndPassword = async (email, password) => {
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect email or password');
   }
   if (user.status === 'pending') {
-    throw new ApiError(httpStatus.UNAUTHORIZED, 'Your account is pending approval. An administrator must activate your account before you can sign in.');
+    throw new ApiError(
+      httpStatus.UNAUTHORIZED,
+      'Your account is pending approval. An administrator must activate your account before you can sign in.'
+    );
   }
   if (user.status !== 'active') {
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Account is disabled or deleted');
@@ -148,15 +151,16 @@ const stopImpersonation = async (impersonationId, currentRefreshToken) => {
 
   // Use findByIdAndUpdate so we don't run full schema validation (adminRefreshToken is required
   // on create but we intentionally unset it when ending impersonation).
-  await Impersonation.findByIdAndUpdate(impersonationId, {
-    $set: { endedAt: new Date() },
-    $unset: { adminRefreshToken: 1 },
-  }, { runValidators: false });
-
-  await Token.findOneAndUpdate(
-    { token: currentRefreshToken, type: tokenTypes.REFRESH },
-    { blacklisted: true }
+  await Impersonation.findByIdAndUpdate(
+    impersonationId,
+    {
+      $set: { endedAt: new Date() },
+      $unset: { adminRefreshToken: 1 },
+    },
+    { runValidators: false }
   );
+
+  await Token.findOneAndUpdate({ token: currentRefreshToken, type: tokenTypes.REFRESH }, { blacklisted: true });
 
   return {
     user: adminUser,
@@ -228,4 +232,3 @@ export {
   startImpersonation,
   stopImpersonation,
 };
-

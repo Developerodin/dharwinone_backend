@@ -12,9 +12,7 @@ const uploadedFileSchema = Joi.object({
 
 const playlistItemSchema = Joi.object({
   _id: Joi.string().custom(objectId).optional(),
-  contentType: Joi.string()
-    .valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test')
-    .required(),
+  contentType: Joi.string().valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test').required(),
   title: Joi.string().required().trim(),
   duration: Joi.number().integer().min(0).default(0),
   order: Joi.number().integer().min(0).optional(),
@@ -136,10 +134,4 @@ const deleteTrainingModule = {
   }),
 };
 
-export {
-  createTrainingModule,
-  getTrainingModules,
-  getTrainingModule,
-  updateTrainingModule,
-  deleteTrainingModule,
-};
+export { createTrainingModule, getTrainingModules, getTrainingModule, updateTrainingModule, deleteTrainingModule };

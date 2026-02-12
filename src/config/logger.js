@@ -1,7 +1,6 @@
 import winston from 'winston';
 import config from './config.js';
 
-
 const enumerateErrorFormat = winston.format((info) => {
   if (info instanceof Error) {
     Object.assign(info, { message: info.stack });

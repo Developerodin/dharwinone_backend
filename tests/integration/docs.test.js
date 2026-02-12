@@ -3,7 +3,6 @@ import httpStatus from 'http-status';
 import app from '../../src/app.js';
 import config from '../../src/config/config.js';
 
-
 describe('Auth routes', () => {
   describe('GET /v1/docs', () => {
     test('should return 404 when running in production', async () => {

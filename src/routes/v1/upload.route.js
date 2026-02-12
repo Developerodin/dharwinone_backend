@@ -12,4 +12,3 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.post('/single', auth(), upload.single('file'), uploadSingleDocument);
 
 export default router;
-

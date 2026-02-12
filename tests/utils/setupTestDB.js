@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
-import config from '../../src/config/config';
-
+import config from '../../src/config/config.js';
 
 const setupTestDB = () => {
   beforeAll(async () => {
@@ -17,4 +16,3 @@ const setupTestDB = () => {
 };
 
 export default setupTestDB;
-
