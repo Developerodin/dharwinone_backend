@@ -25,6 +25,11 @@ export const ActivityActions = {
   // Mentors
   MENTOR_UPDATE: 'mentor.update',
   MENTOR_DELETE: 'mentor.delete',
+  // Student Courses
+  STUDENT_COURSE_START: 'student.course.start',
+  STUDENT_COURSE_COMPLETE: 'student.course.complete',
+  STUDENT_QUIZ_ATTEMPT: 'student.quiz.attempt',
+  CERTIFICATE_ISSUED: 'certificate.issued',
 };
 
 export const EntityTypes = {
@@ -34,4 +39,7 @@ export const EntityTypes = {
   CATEGORY: 'Category',
   STUDENT: 'Student',
   MENTOR: 'Mentor',
+  STUDENT_COURSE_PROGRESS: 'StudentCourseProgress',
+  STUDENT_QUIZ_ATTEMPT: 'StudentQuizAttempt',
+  CERTIFICATE: 'Certificate',
 };

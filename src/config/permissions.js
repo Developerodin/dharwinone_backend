@@ -12,6 +12,10 @@ export const permissionAliases = {
   // Training modules: map to permission format "training.modules:view,create,edit,delete"
   'training.modules.read': ['training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
   'training.modules.manage': ['training.modules.manage', 'training.modules:create,edit,delete', 'training.modules:view,create,edit,delete'],
+  // Student courses
+  'students.courses.read': ['students.courses.read', 'students.read', 'students.manage'],
+  'students.courses.manage': ['students.courses.manage', 'students.manage'],
+  'students.quizzes.take': ['students.quizzes.take', 'students.courses.read', 'students.courses.manage'],
 };
 
 /**

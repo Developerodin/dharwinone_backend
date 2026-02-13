@@ -9,6 +9,9 @@ import studentRoute from './student.route.js';
 import mentorRoute from './mentor.route.js';
 import uploadRoute from './upload.route.js';
 import trainingModuleRoute from './trainingModule.route.js';
+import studentCourseRoute from './studentCourse.route.js';
+import studentQuizRoute from './studentQuiz.route.js';
+import certificateRoute from './certificate.route.js';
 import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
@@ -51,6 +54,18 @@ const defaultRoutes = [
   {
     path: '/training/modules',
     route: trainingModuleRoute,
+  },
+  {
+    path: '/training/students',
+    route: studentCourseRoute,
+  },
+  {
+    path: '/training/students',
+    route: studentQuizRoute,
+  },
+  {
+    path: '/certificates',
+    route: certificateRoute,
   },
   {
     path: '/upload',
