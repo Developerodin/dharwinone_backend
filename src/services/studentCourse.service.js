@@ -48,62 +48,91 @@ const getOrCreateProgress = async (studentId, moduleId) => {
 };
 
 /**
- * Query student courses (modules assigned to student)
+ * Default progress for a module when student has no progress record yet (so assigned courses still show in list).
+ */
+const defaultProgressRow = (moduleId) => ({
+  progress: { percentage: 0, completedItems: [], lastAccessedAt: null, lastAccessedItem: null },
+  quizScores: { totalQuizzes: 0, completedQuizzes: 0, averageScore: 0, totalScore: 0 },
+  enrolledAt: new Date(),
+  startedAt: null,
+  completedAt: null,
+  status: 'enrolled',
+  certificate: { issued: false, issuedAt: null, certificateId: null, certificateUrl: null },
+});
+
+/**
+ * Query student courses (all modules assigned to student, with or without progress).
+ * Ensures data is visible on the candidate "My Courses" list even before they start a course.
  * @param {ObjectId} studentId
  * @param {Object} filter - Filter options (status)
  * @param {Object} options - Query options (sortBy, limit, page)
  * @returns {Promise<QueryResult>}
  */
 const queryStudentCourses = async (studentId, filter, options) => {
-  const { status, ...restFilter } = filter;
-  
-  // Find all modules where student is assigned
-  const modules = await TrainingModule.find({ students: studentId });
-  const moduleIds = modules.map((m) => m._id);
-  
-  if (moduleIds.length === 0) {
+  const { status } = filter;
+  const limit = Math.min(Number(options.limit) || 10, 100);
+  const page = Number(options.page) || 1;
+  const sortBy = options.sortBy || 'enrolledAt:desc';
+
+  // Find all modules where student is assigned (with full populate)
+  const modules = await TrainingModule.find({ students: studentId })
+    .populate('categories')
+    .populate({ path: 'students', select: 'user', populate: { path: 'user', select: 'name email' } })
+    .populate({ path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name email' } })
+    .lean();
+
+  if (modules.length === 0) {
     return {
       results: [],
-      page: options.page || 1,
-      limit: options.limit || 10,
+      page,
+      limit,
       totalPages: 0,
       totalResults: 0,
     };
   }
-  
-  // Build progress filter
-  const progressFilter = {
+
+  const moduleIds = modules.map((m) => m._id);
+  const progressList = await StudentCourseProgress.find({
     student: studentId,
     module: { $in: moduleIds },
-    ...restFilter,
-  };
-  
-  if (status) {
-    progressFilter.status = status;
-  }
-  
-  // Get progress records with populated module
-  const progressRecords = await StudentCourseProgress.paginate(progressFilter, {
-    ...options,
-    populate: [
-      {
-        path: 'module',
-        populate: [
-          { path: 'categories' },
-          { path: 'students', select: 'user', populate: { path: 'user', select: 'name email' } },
-          { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name email' } },
-        ],
-      },
-    ],
-    sortBy: options.sortBy || 'enrolledAt:desc',
-  });
-  
-  // Transform results to combine module + progress
-  const results = progressRecords.results.map((progress) => {
-    const module = progress.module;
+  }).lean();
+
+  const progressByModule = new Map();
+  progressList.forEach((p) => progressByModule.set(p.module.toString(), p));
+
+  // Build one result per module (progress or default)
+  let results = modules.map((module) => {
+    const progress = progressByModule.get(module._id.toString());
+    if (progress) {
+      return {
+        module: {
+          id: module._id.toString(),
+          moduleName: module.moduleName,
+          shortDescription: module.shortDescription,
+          coverImage: module.coverImage,
+          categories: module.categories,
+          playlist: module.playlist,
+          status: module.status,
+          createdAt: module.createdAt,
+          updatedAt: module.updatedAt,
+        },
+        progress: {
+          percentage: progress.progress?.percentage ?? 0,
+          completedItems: progress.progress?.completedItems ?? [],
+          lastAccessedAt: progress.progress?.lastAccessedAt,
+          lastAccessedItem: progress.progress?.lastAccessedItem,
+        },
+        quizScores: progress.quizScores ?? {},
+        enrolledAt: progress.enrolledAt,
+        startedAt: progress.startedAt,
+        completedAt: progress.completedAt,
+        status: progress.status || 'enrolled',
+        certificate: progress.certificate ?? { issued: false, issuedAt: null, certificateId: null, certificateUrl: null },
+      };
+    }
     return {
       module: {
-        id: module.id,
+        id: module._id.toString(),
         moduleName: module.moduleName,
         shortDescription: module.shortDescription,
         coverImage: module.coverImage,
@@ -113,24 +142,38 @@ const queryStudentCourses = async (studentId, filter, options) => {
         createdAt: module.createdAt,
         updatedAt: module.updatedAt,
       },
-      progress: {
-        percentage: progress.progress.percentage,
-        completedItems: progress.progress.completedItems,
-        lastAccessedAt: progress.progress.lastAccessedAt,
-        lastAccessedItem: progress.progress.lastAccessedItem,
-      },
-      quizScores: progress.quizScores,
-      enrolledAt: progress.enrolledAt,
-      startedAt: progress.startedAt,
-      completedAt: progress.completedAt,
-      status: progress.status,
-      certificate: progress.certificate,
+      ...defaultProgressRow(module._id),
     };
   });
-  
+
+  // Filter by status if provided
+  if (status) {
+    results = results.filter((r) => r.status === status);
+  }
+
+  // Sort: by lastAccessedAt desc, then enrolledAt desc, then by module name
+  const [sortField, sortOrder] = (sortBy || 'enrolledAt:desc').split(':');
+  const desc = sortOrder === 'desc';
+  results.sort((a, b) => {
+    const aVal = sortField === 'enrolledAt' ? (a.enrolledAt ? new Date(a.enrolledAt).getTime() : 0) : (a.progress?.lastAccessedAt ? new Date(a.progress.lastAccessedAt).getTime() : 0);
+    const bVal = sortField === 'enrolledAt' ? (b.enrolledAt ? new Date(b.enrolledAt).getTime() : 0) : (b.progress?.lastAccessedAt ? new Date(b.progress.lastAccessedAt).getTime() : 0);
+    if (aVal !== bVal) return desc ? bVal - aVal : aVal - bVal;
+    const aName = a.module.moduleName || '';
+    const bName = b.module.moduleName || '';
+    return aName.localeCompare(bName);
+  });
+
+  const totalResults = results.length;
+  const totalPages = Math.ceil(totalResults / limit) || 1;
+  const start = (page - 1) * limit;
+  const paginatedResults = results.slice(start, start + limit);
+
   return {
-    ...progressRecords,
-    results,
+    results: paginatedResults,
+    page,
+    limit,
+    totalPages,
+    totalResults,
   };
 };
 
@@ -157,10 +200,12 @@ const getStudentCourse = async (studentId, moduleId) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
   
-  const isAssigned = module.students.some(
-    (id) => id.toString() === studentId.toString()
-  );
-  
+  // When populated, module.students are documents with _id; when not, they are ObjectIds
+  const isAssigned = module.students.some((s) => {
+    const sid = s && (s._id != null ? s._id : s);
+    return sid && sid.toString() === studentId.toString();
+  });
+
   if (!isAssigned) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Student is not assigned to this module');
   }

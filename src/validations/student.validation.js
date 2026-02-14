@@ -77,4 +77,10 @@ const deleteStudent = {
   }),
 };
 
-export { getStudents, getStudent, updateStudent, deleteStudent };
+const createStudentFromUser = {
+  body: Joi.object().keys({
+    userId: Joi.string().required().custom(objectId),
+  }),
+};
+
+export { getStudents, getStudent, updateStudent, deleteStudent, createStudentFromUser };

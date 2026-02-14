@@ -12,10 +12,11 @@ export const permissionAliases = {
   // Training modules: map to permission format "training.modules:view,create,edit,delete"
   'training.modules.read': ['training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
   'training.modules.manage': ['training.modules.manage', 'training.modules:create,edit,delete', 'training.modules:view,create,edit,delete'],
-  // Student courses
-  'students.courses.read': ['students.courses.read', 'students.read', 'students.manage'],
-  'students.courses.manage': ['students.courses.manage', 'students.manage'],
-  'students.quizzes.take': ['students.quizzes.take', 'students.courses.read', 'students.courses.manage'],
+  // Student courses: permission.service derives candidate.courses:view → courses.read (resource = "courses").
+  // So authContext.permissions has "courses.read" / "courses.manage", not "candidate.courses:view".
+  'students.courses.read': ['students.courses.read', 'students.read', 'students.manage', 'courses.read', 'courses.manage'],
+  'students.courses.manage': ['students.courses.manage', 'students.manage', 'courses.manage', 'courses.read'],
+  'students.quizzes.take': ['students.quizzes.take', 'students.courses.read', 'students.courses.manage', 'courses.read', 'courses.manage'],
 };
 
 /**

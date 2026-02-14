@@ -13,6 +13,18 @@ const getStudents = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+/**
+ * Get the current user's student profile (for use with student courses API).
+ * Returns 404 if the user has no linked student record.
+ */
+const getMyProfile = catchAsync(async (req, res) => {
+  const student = await studentService.getStudentByUserId(req.user.id);
+  if (!student) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Student profile not found for this user');
+  }
+  res.send(student);
+});
+
 const getStudent = catchAsync(async (req, res) => {
   const student = await studentService.getStudentById(req.params.studentId);
   if (!student) {
@@ -71,11 +83,32 @@ const getProfileImage = catchAsync(async (req, res) => {
   return res.redirect(data.url);
 });
 
+/**
+ * Create a student profile for an existing user who has the Student role.
+ * That user will then appear in course assignment dropdowns.
+ */
+const createStudentFromUser = catchAsync(async (req, res) => {
+  const student = await studentService.createStudentFromUser(req.body.userId);
+  res.status(httpStatus.CREATED).send(student);
+});
+
+/**
+ * List users with Student role who do not yet have a Training student profile.
+ * These users do not appear in course assignment until a profile is created.
+ */
+const getUsersWithoutStudentProfile = catchAsync(async (req, res) => {
+  const users = await studentService.getUsersWithStudentRoleWithoutProfile();
+  res.send({ results: users });
+});
+
 export {
   getStudents,
   getStudent,
+  getMyProfile,
   updateStudent,
   deleteStudent,
   uploadProfileImage,
   getProfileImage,
+  createStudentFromUser,
+  getUsersWithoutStudentProfile,
 };

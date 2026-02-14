@@ -13,6 +13,26 @@ router
   .route('/')
   .get(auth(), requirePermissions('students.read'), validate(studentValidation.getStudents), studentController.getStudents);
 
+// Users with Student role but no Training student profile (so they don't appear in assignment)
+router.get(
+  '/users-without-profile',
+  auth(),
+  requirePermissions('students.read'),
+  studentController.getUsersWithoutStudentProfile
+);
+
+// Create student profile for an existing user (so they appear in assignment)
+router.post(
+  '/from-user',
+  auth(),
+  requirePermissions('students.manage'),
+  validate(studentValidation.createStudentFromUser),
+  studentController.createStudentFromUser
+);
+
+// Must be before /:studentId so "me" is not captured as studentId
+router.get('/me', auth(), requirePermissions('students.courses.read'), studentController.getMyProfile);
+
 // Upload / fetch student profile image
 router
   .route('/:studentId/profile-image')

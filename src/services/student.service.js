@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import Student from '../models/student.model.js';
+import User from '../models/user.model.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { createUser } from './user.service.js';
@@ -185,6 +186,77 @@ const getStudentProfileImageUrl = async (studentId) => {
   };
 };
 
+/**
+ * Create a Student profile for an existing User who has the Student role.
+ * Use this when a user was created via User Management with the Student role
+ * but has no Training student profile yet (so they don't appear in course assignment).
+ * @param {ObjectId} userId
+ * @returns {Promise<Student>}
+ */
+const createStudentFromUser = async (userId) => {
+  const studentRole = await getRoleByName('Student');
+  if (!studentRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found.');
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const hasStudentRole = (user.roleIds || []).some(
+    (id) => id && id.toString() === studentRole._id.toString()
+  );
+  if (!hasStudentRole) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'User does not have the Student role. Assign the Student role in User Management first.'
+    );
+  }
+
+  const existing = await Student.findOne({ user: userId });
+  if (existing) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'This user already has a student profile.');
+  }
+
+  const student = await Student.create({
+    user: userId,
+    status: 'active',
+  });
+  return getStudentById(student.id);
+};
+
+/**
+ * List users who have the Student role but no Training student profile.
+ * These users will not appear in course assignment until a profile is created.
+ * @returns {Promise<Array<{id: string, name: string, email: string}>>}
+ */
+const getUsersWithStudentRoleWithoutProfile = async () => {
+  const studentRole = await getRoleByName('Student');
+  if (!studentRole) {
+    return [];
+  }
+
+  const users = await User.find({
+    roleIds: studentRole._id,
+    status: 'active',
+  })
+    .select('_id name email')
+    .lean();
+
+  if (users.length === 0) return [];
+
+  const userIds = users.map((u) => u._id);
+  const existingStudentUserIds = await Student.find({ user: { $in: userIds } })
+    .select('user')
+    .lean();
+  const set = new Set(existingStudentUserIds.map((s) => s.user.toString()));
+
+  return users
+    .filter((u) => !set.has(u._id.toString()))
+    .map((u) => ({ id: u._id.toString(), name: u.name, email: u.email }));
+};
+
 export {
   registerStudent,
   queryStudents,
@@ -194,4 +266,6 @@ export {
   deleteStudentById,
   updateStudentProfileImage,
   getStudentProfileImageUrl,
+  createStudentFromUser,
+  getUsersWithStudentRoleWithoutProfile,
 };
