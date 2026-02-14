@@ -12,6 +12,8 @@ import trainingModuleRoute from './trainingModule.route.js';
 import studentCourseRoute from './studentCourse.route.js';
 import studentQuizRoute from './studentQuiz.route.js';
 import certificateRoute from './certificate.route.js';
+import evaluationRoute from './evaluation.route.js';
+import analyticsRoute from './analytics.route.js';
 import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
@@ -54,6 +56,14 @@ const defaultRoutes = [
   {
     path: '/training/modules',
     route: trainingModuleRoute,
+  },
+  {
+    path: '/training/evaluation',
+    route: evaluationRoute,
+  },
+  {
+    path: '/training/analytics',
+    route: analyticsRoute,
   },
   {
     path: '/training/students',

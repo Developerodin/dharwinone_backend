@@ -9,6 +9,7 @@ const router = express.Router();
 router.use(auth());
 
 router.post('/generate', validate(blogValidation.generate), blogController.generate);
+router.post('/generate-stream', validate(blogValidation.generate), blogController.generateStream);
 router.post('/generate-from-theme', validate(blogValidation.generateFromTheme), blogController.generateFromTheme);
 router.post('/suggestions', validate(blogValidation.suggestions), blogController.getSuggestions);
 

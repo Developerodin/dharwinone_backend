@@ -213,15 +213,15 @@ const submitQuizAttempt = async (studentId, moduleId, playlistItemId, attemptDat
     status: 'graded',
   });
   
-  // Update student course progress
+  // Update student course progress – mark quiz item complete only when score >= 90%
   const progress = await StudentCourseProgress.findOne({ student: studentId, module: moduleId });
   if (progress) {
-    // Mark quiz item as completed if not already
     const isQuizCompleted = progress.progress.completedItems.some(
       (item) => item.playlistItemId === playlistItemId
     );
-    
-    if (!isQuizCompleted) {
+    const passed = scoreResult.percentage >= 90;
+
+    if (!isQuizCompleted && passed) {
       progress.progress.completedItems.push({
         playlistItemId,
         completedAt: new Date(),
