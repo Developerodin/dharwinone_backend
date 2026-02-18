@@ -11,6 +11,16 @@ const register = {
   }),
 };
 
+/** Public candidate onboarding: creates User (pending) + Candidate so they appear in ATS list. */
+const registerCandidate = {
+  body: Joi.object().keys({
+    email: Joi.string().required().email(),
+    password: Joi.string().required().custom(password),
+    name: Joi.string().required(),
+    phoneNumber: Joi.string().allow('').optional(),
+  }),
+};
+
 const login = {
   body: Joi.object().keys({
     email: Joi.string().required(),
@@ -66,6 +76,35 @@ const impersonate = {
   body: Joi.object().keys({
     userId: Joi.string().required().custom(objectId),
   }),
+};
+
+const sendCandidateInvitation = {
+  body: Joi.alternatives()
+    .try(
+      Joi.object().keys({
+        email: Joi.string().email().required(),
+        onboardUrl: Joi.string().uri().required(),
+      }),
+      Joi.object().keys({
+        invitations: Joi.array()
+          .items(
+            Joi.object().keys({
+              email: Joi.string().email().required(),
+              onboardUrl: Joi.string().uri().required(),
+            })
+          )
+          .min(1)
+          .max(50)
+          .required()
+          .messages({
+            'array.min': 'At least one invitation is required',
+            'array.max': 'Maximum 50 invitations can be sent at once',
+          }),
+      })
+    )
+    .messages({
+      'alternatives.match': 'Request body must contain either single invitation (email, onboardUrl) or bulk invitations (invitations array)',
+    }),
 };
 
 const registerStudent = {
@@ -173,5 +212,5 @@ const registerMentor = {
   }),
 };
 
-export { register, registerStudent, registerMentor, login, logout, refreshTokens, forgotPassword, resetPassword, changePassword, verifyEmail, impersonate };
+export { register, registerCandidate, registerStudent, registerMentor, login, logout, refreshTokens, forgotPassword, resetPassword, changePassword, verifyEmail, impersonate, sendCandidateInvitation };
 

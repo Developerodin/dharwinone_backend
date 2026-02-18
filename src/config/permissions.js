@@ -29,6 +29,11 @@ export const permissionAliases = {
   ],
   // Training analytics: allow modules.read / training.modules so analytics page is available to training users
   'training.analytics': ['training.analytics', 'training.analytics:view', 'training.modules.read', 'modules.read'],
+  // Attendance: students access their own via requireAttendanceAccess (ownership); grant so Student role can see attendance nav
+  'training.attendance.read': ['training.attendance.read', 'training.attendance:view', 'students.read', 'students.manage'],
+  // ATS candidates: ats.candidates:view -> candidates.read, ats.candidates:create,edit,delete -> candidates.manage
+  'candidates.read': ['candidates.read', 'ats.candidates:view', 'ats.candidates:view,create,edit,delete'],
+  'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
 };
 
 /**

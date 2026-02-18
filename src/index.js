@@ -2,8 +2,11 @@ import mongoose from 'mongoose';
 import app from './app.js';
 import config from './config/config.js';
 import logger from './config/logger.js';
+import { startAttendanceScheduler } from './services/attendance.scheduler.js';
+import { startCandidateScheduler } from './services/candidate.scheduler.js';
 
 let server;
+let candidateSchedulerId;
 const port = config.port || process.env.PORT || 3000;
 
 mongoose
@@ -12,6 +15,10 @@ mongoose
     logger.info('Connected to MongoDB');
     server = app.listen(port, '0.0.0.0', () => {
       logger.info(`Listening on port ${port}`);
+      if (config.env !== 'test') {
+        startAttendanceScheduler();
+        candidateSchedulerId = startCandidateScheduler(config.candidate?.schedulerIntervalMinutes ?? 60);
+      }
     });
   })
   .catch((err) => {

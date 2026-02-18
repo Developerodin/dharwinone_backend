@@ -13,4 +13,11 @@ const router = express.Router();
  */
 router.post('/register', validate(authValidation.register), authController.publicRegister);
 
+/**
+ * POST /v1/public/register-candidate
+ * Public candidate onboarding (no auth). Creates user with status 'pending' and a Candidate
+ * linked to that user so they appear in the ATS candidate list.
+ */
+router.post('/register-candidate', validate(authValidation.registerCandidate), authController.publicRegisterCandidate);
+
 export default router;

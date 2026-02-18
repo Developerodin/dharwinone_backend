@@ -20,6 +20,7 @@ import studentGroupRoute from './studentGroup.route.js';
 import shiftRoute from './shift.route.js';
 import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
+import candidateRoute from './candidate.route.js';
 import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
@@ -94,6 +95,10 @@ const defaultRoutes = [
   {
     path: '/backdated-attendance-requests',
     route: backdatedAttendanceRequestRoute,
+  },
+  {
+    path: '/candidates',
+    route: candidateRoute,
   },
   {
     path: '/training/students',

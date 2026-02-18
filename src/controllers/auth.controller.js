@@ -2,14 +2,16 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import config from '../config/config.js';
-import { createUser, updateUserById } from '../services/user.service.js';
+import { createUser, getUserByEmail, updateUserById } from '../services/user.service.js';
 import { generateAuthTokens, generateResetPasswordToken, generateVerifyEmailToken, getSessionsForUser } from '../services/token.service.js';
 import { loginUserWithEmailAndPassword, logout as logout2, refreshAuth, resetPassword as resetPassword2, changePassword as changePassword2, verifyEmail as verifyEmail2, startImpersonation, stopImpersonation as stopImpersonationService } from '../services/auth.service.js';
-import { sendResetPasswordEmail, sendVerificationEmail as sendVerificationEmail2 } from '../services/email.service.js';
+import { sendResetPasswordEmail, sendVerificationEmail as sendVerificationEmail2, sendCandidateInvitationEmail } from '../services/email.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { registerStudent as registerStudentService } from '../services/student.service.js';
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
+import { createCandidate } from '../services/candidate.service.js';
+import { getRoleByName } from '../services/role.service.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
 
@@ -58,6 +60,65 @@ const publicRegister = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send({
     user,
     message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
+  });
+});
+
+/**
+ * Public candidate onboarding: no auth required.
+ * Creates User (status 'pending') and a Candidate linked to that user so they appear in the ATS candidate list.
+ * Assigns Student role by default. If the email is already registered, creates only the missing Candidate and ensures Student role.
+ */
+const publicRegisterCandidate = catchAsync(async (req, res) => {
+  const studentRole = await getRoleByName('Student');
+  if (!studentRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
+  }
+
+  const { name, email, password, phoneNumber } = req.body;
+  const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
+  let user;
+  try {
+    user = await createUser({
+      name,
+      email,
+      password,
+      status: 'pending',
+      roleIds: [studentRole._id],
+    });
+  } catch (err) {
+    if (err.statusCode !== httpStatus.BAD_REQUEST || err.message !== 'Email already taken') throw err;
+    user = await getUserByEmail(email);
+    if (!user) throw err;
+    // Ensure existing user has Student role
+    const existingRoleIds = (user.roleIds || []).map((id) => id.toString());
+    if (!existingRoleIds.includes(studentRole._id.toString())) {
+      await updateUserById(user._id, { roleIds: [...(user.roleIds || []), studentRole._id] });
+      user.roleIds = [...(user.roleIds || []), studentRole._id];
+    }
+  }
+  let candidate;
+  try {
+    candidate = await createCandidate(user._id, {
+      fullName: name,
+      email,
+      phoneNumber: phone,
+      adminId: user._id,
+    });
+  } catch (err) {
+    if (err.statusCode === httpStatus.CONFLICT && err.message?.includes('already exists')) {
+      return res.status(httpStatus.OK).send({
+        user,
+        message: 'You are already registered and in the candidate list. You can sign in when your account is active.',
+      });
+    }
+    throw err;
+  }
+  res.status(httpStatus.CREATED).send({
+    user,
+    candidate,
+    message: user.status === 'pending'
+      ? 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.'
+      : 'You were already registered. You have been added to the candidate list.',
   });
 });
 
@@ -186,6 +247,30 @@ const verifyEmail = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+const sendCandidateInvitation = catchAsync(async (req, res) => {
+  const { email, onboardUrl, invitations } = req.body;
+
+  if (invitations && Array.isArray(invitations)) {
+    const results = { successful: [], failed: [], total: invitations.length };
+    const emailPromises = invitations.map(async (invitation) => {
+      try {
+        await sendCandidateInvitationEmail(invitation.email, invitation.onboardUrl);
+        results.successful.push({ email: invitation.email, onboardUrl: invitation.onboardUrl });
+      } catch (error) {
+        results.failed.push({ email: invitation.email, onboardUrl: invitation.onboardUrl, error: error.message });
+      }
+    });
+    await Promise.allSettled(emailPromises);
+    res.status(httpStatus.OK).json({
+      message: `Bulk invitation completed. ${results.successful.length} successful, ${results.failed.length} failed.`,
+      results,
+    });
+  } else {
+    await sendCandidateInvitationEmail(email, onboardUrl);
+    res.status(httpStatus.OK).json({ message: 'Candidate invitation email sent successfully', email });
+  }
+});
+
 const getMe = catchAsync(async (req, res) => {
   const sessions = await getSessionsForUser(req.user.id);
   const response = { user: req.user, sessions };
@@ -248,6 +333,7 @@ const stopImpersonation = catchAsync(async (req, res) => {
 export {
   register,
   publicRegister,
+  publicRegisterCandidate,
   registerStudent,
   registerMentor,
   login,
@@ -258,6 +344,7 @@ export {
   changePassword,
   sendVerificationEmail,
   verifyEmail,
+  sendCandidateInvitation,
   getMe,
   impersonate,
   stopImpersonation,

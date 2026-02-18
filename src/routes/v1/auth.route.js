@@ -22,6 +22,7 @@ router.post('/reset-password', validate(authValidation.resetPassword), authContr
 router.post('/change-password', auth(), validate(authValidation.changePassword), authController.changePassword);
 router.post('/send-verification-email', auth(), authController.sendVerificationEmail);
 router.post('/verify-email', validate(authValidation.verifyEmail), authController.verifyEmail);
+router.post('/send-candidate-invitation', auth(), validate(authValidation.sendCandidateInvitation), authController.sendCandidateInvitation);
 
 export default router;
 
