@@ -11,6 +11,7 @@ import Holiday from './holiday.model.js';
 import StudentGroup from './studentGroup.model.js';
 import Shift from './shift.model.js';
 import Candidate from './candidate.model.js';
+import Meeting from './meeting.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting };
 

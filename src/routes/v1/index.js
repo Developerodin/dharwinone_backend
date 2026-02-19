@@ -28,6 +28,7 @@ import docsRoute from './docs.route.js';
 import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
 import livekitRoute from './livekit.route.js';
+import meetingRoute from './meeting.route.js';
 import atsAnalyticsRoute from './atsAnalytics.route.js';
 import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
@@ -154,6 +155,10 @@ const defaultRoutes = [
   {
     path: '/webhooks',
     route: webhookRoute,
+  },
+  {
+    path: '/meetings',
+    route: meetingRoute,
   },
 ];
 

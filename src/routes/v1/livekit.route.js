@@ -58,4 +58,40 @@ router
     livekitController.getRecordingStatus
   );
 
+/**
+ * Get waiting participants for a room
+ * Requires authentication (hosts only)
+ */
+router
+  .route('/waiting-participants/:roomName')
+  .get(
+    auth(),
+    validate(livekitValidation.getWaitingParticipants),
+    livekitController.getWaitingParticipants
+  );
+
+/**
+ * Admit a waiting participant
+ * Requires authentication (hosts only)
+ */
+router
+  .route('/admit-participant')
+  .post(
+    auth(),
+    validate(livekitValidation.admitParticipant),
+    livekitController.admitParticipant
+  );
+
+/**
+ * Remove/deny a waiting participant
+ * Requires authentication (hosts only)
+ */
+router
+  .route('/remove-participant')
+  .post(
+    auth(),
+    validate(livekitValidation.removeParticipant),
+    livekitController.removeParticipant
+  );
+
 export default router;

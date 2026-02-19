@@ -10,6 +10,7 @@ import {
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
+import { getMeetingByMeetingId } from './meeting.service.js';
 
 // Initialize LiveKit clients
 // Convert ws:// to http:// for SDK clients (they use HTTP, not WebSocket)
@@ -29,6 +30,9 @@ if (!apiKey || !apiSecret) {
 let egressClient = null;
 let roomService = null;
 
+// Track admitted participants: roomName -> Set of participant identities
+const admittedParticipants = new Map();
+
 if (apiKey && apiSecret) {
   try {
     egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
@@ -40,14 +44,38 @@ if (apiKey && apiSecret) {
 }
 
 /**
+ * Check if a participant is a host for a meeting
+ * @param {string} roomName - Room name (same as meetingId)
+ * @param {string} participantEmail - Participant email
+ * @returns {Promise<boolean>} True if participant is a host
+ */
+const isParticipantHost = async (roomName, participantEmail) => {
+  try {
+    const meeting = await getMeetingByMeetingId(roomName);
+    if (!meeting) {
+      return false;
+    }
+    
+    // Check if participant email is in hosts array
+    const emailLower = participantEmail?.toLowerCase().trim();
+    return meeting.hosts?.some(host => host.email?.toLowerCase().trim() === emailLower) || false;
+  } catch (error) {
+    console.error('Error checking host status:', error);
+    return false;
+  }
+};
+
+/**
  * Generate LiveKit access token for a participant
  * @param {Object} options - Token generation options
  * @param {string} options.roomName - Room name
  * @param {string} options.participantName - Display name
  * @param {string} options.participantIdentity - Unique identity (usually user ID)
- * @returns {Promise<string>} JWT token
+ * @param {string} options.participantEmail - Participant email (optional, for host check)
+ * @param {boolean} options.forceFullPermissions - Force full permissions (for admitted participants)
+ * @returns {Promise<{token: string, isHost: boolean}>} JWT token and host status
  */
-const generateAccessToken = async ({ roomName, participantName, participantIdentity }) => {
+const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false }) => {
   if (!apiKey || !apiSecret) {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'LiveKit credentials not configured');
   }
@@ -56,22 +84,29 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and participantName are required');
   }
 
+  // Check if participant is a host, has been admitted, or forcing full permissions
+  const roomAdmitted = admittedParticipants.get(roomName);
+  const isAdmitted = roomAdmitted?.has(participantIdentity) || false;
+  const isHost = forceFullPermissions || isAdmitted || (participantEmail ? await isParticipantHost(roomName, participantEmail) : false);
+
   const token = new AccessToken(apiKey, apiSecret, {
     identity: participantIdentity || participantName,
     name: participantName,
   });
 
-  // Grant permissions
+  // Grant permissions based on host status
+  // Hosts get full permissions, non-hosts can only subscribe (waiting room)
   token.addGrant({
     room: roomName,
     roomJoin: true,
-    canPublish: true,
-    canSubscribe: true,
-    canPublishData: true,
+    canPublish: isHost, // Only hosts can publish initially
+    canSubscribe: true, // All participants can subscribe (see/hear)
+    canPublishData: isHost, // Only hosts can publish data initially
     canUpdateOwnMetadata: true,
   });
 
-  return await token.toJwt();
+  const jwt = await token.toJwt();
+  return { token: jwt, isHost };
 };
 
 /**
@@ -277,4 +312,179 @@ const getRecordingStatus = async (roomName) => {
   }
 };
 
-export { generateAccessToken, startRecording, stopRecording, getRecordingStatus };
+/**
+ * Get waiting participants (participants who can subscribe but not publish)
+ * Uses listParticipants() which returns ParticipantInfo with permission.canPublish
+ * @param {string} roomName - Room name
+ * @returns {Promise<Array>} List of waiting participants
+ */
+const getWaitingParticipants = async (roomName) => {
+  if (!roomService) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
+  }
+
+  try {
+    const participants = await roomService.listParticipants(roomName);
+    if (!participants || participants.length === 0) {
+      return [];
+    }
+
+    // Filter participants who cannot publish (waiting room)
+    // ParticipantInfo has permission.canPublish (from LiveKit protocol)
+    const waitingParticipants = participants
+      .filter(p => {
+        const permission = p.permission;
+        if (!permission) {
+          return true; // No permission = treat as waiting
+        }
+        const canPublish = permission.canPublish === true;
+        return !canPublish;
+      })
+      .map(p => {
+        let joinedAt = new Date().toISOString();
+        if (p.joinedAt != null) {
+          if (typeof p.joinedAt === 'number') {
+            joinedAt = p.joinedAt < 1e12 ? new Date(p.joinedAt).toISOString() : new Date(p.joinedAt / 1000).toISOString();
+          } else {
+            joinedAt = String(p.joinedAt);
+          }
+        }
+        return {
+          identity: p.identity,
+          name: p.name || p.identity,
+          joinedAt,
+        };
+      });
+
+    return waitingParticipants;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    if (errorMessage.includes('room not found') || errorMessage.includes('not found')) {
+      return [];
+    }
+    throw new ApiError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      `Failed to get waiting participants: ${errorMessage}`
+    );
+  }
+};
+
+/**
+ * Admit a waiting participant (generate new token with full permissions)
+ * Note: LiveKit doesn't allow changing permissions after join, so we generate a new token
+ * The participant will need to reconnect with this new token
+ * @param {string} roomName - Room name
+ * @param {string} participantIdentity - Participant identity
+ * @param {string} participantName - Participant name (optional, will try to get from room)
+ * @param {string} participantEmail - Participant email (optional, for host check)
+ * @returns {Promise<Object>} New token and participant info
+ */
+const admitParticipant = async (roomName, participantIdentity, participantName = null, participantEmail = null) => {
+  if (!roomService) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
+  }
+
+  try {
+    // Get participant details from LiveKit
+    let participant;
+    try {
+      participant = await roomService.getParticipant(roomName, participantIdentity);
+    } catch (err) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Participant not found in room');
+    }
+
+    const name = participantName || participant.name || participantIdentity;
+    const email = participantEmail || (participant.metadata && typeof participant.metadata === 'string' ? null : participant.metadata?.email) || null;
+
+    // Mark participant as admitted
+    if (!admittedParticipants.has(roomName)) {
+      admittedParticipants.set(roomName, new Set());
+    }
+    admittedParticipants.get(roomName).add(participantIdentity);
+
+    // Generate new token with full permissions (force full permissions for admitted participants)
+    const { token } = await generateAccessToken({
+      roomName,
+      participantName: name,
+      participantIdentity,
+      participantEmail: email,
+      forceFullPermissions: true, // Admitted participants get full permissions
+    });
+
+    // Note: We can't directly update permissions in LiveKit
+    // The participant needs to disconnect and reconnect with the new token
+    // This will be handled by the frontend
+
+    return {
+      identity: participantIdentity,
+      name,
+      token,
+      admitted: true,
+    };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new ApiError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      `Failed to admit participant: ${errorMessage}`
+    );
+  }
+};
+
+/**
+ * Remove/deny a waiting participant
+ * @param {string} roomName - Room name
+ * @param {string} participantIdentity - Participant identity
+ * @returns {Promise<Object>} Removal result
+ */
+const removeParticipant = async (roomName, participantIdentity) => {
+  if (!roomService) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
+  }
+
+  try {
+    await roomService.removeParticipant(roomName, participantIdentity);
+    
+    // Remove from admitted list if present
+    const roomAdmitted = admittedParticipants.get(roomName);
+    if (roomAdmitted) {
+      roomAdmitted.delete(participantIdentity);
+    }
+    
+    return {
+      identity: participantIdentity,
+      removed: true,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new ApiError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      `Failed to remove participant: ${errorMessage}`
+    );
+  }
+};
+
+/**
+ * Check if a participant has been admitted
+ * @param {string} roomName - Room name
+ * @param {string} participantIdentity - Participant identity
+ * @returns {boolean} True if participant has been admitted
+ */
+const isParticipantAdmitted = (roomName, participantIdentity) => {
+  const roomAdmitted = admittedParticipants.get(roomName);
+  return roomAdmitted?.has(participantIdentity) || false;
+};
+
+export { 
+  generateAccessToken, 
+  startRecording, 
+  stopRecording, 
+  getRecordingStatus,
+  getWaitingParticipants,
+  admitParticipant,
+  removeParticipant,
+  isParticipantHost,
+  isParticipantAdmitted,
+};
