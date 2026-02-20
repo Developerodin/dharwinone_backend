@@ -48,6 +48,9 @@ export const permissionAliases = {
   ],
   // LiveKit meetings: allow mentors and admins to record meetings
   'meetings.record': ['meetings.record', 'meetings:record', 'mentors.manage', 'training.manage'],
+  // ATS offers: map ats.offers:* to candidates (offers are part of ATS pipeline)
+  'offers.read': ['offers.read', 'ats.offers:view', 'ats.offers:view,create,edit,delete', 'candidates.read', 'candidates.manage'],
+  'offers.manage': ['offers.manage', 'ats.offers:create,edit,delete', 'ats.offers:view,create,edit,delete', 'candidates.manage'],
 };
 
 /**

@@ -12,6 +12,9 @@ import StudentGroup from './studentGroup.model.js';
 import Shift from './shift.model.js';
 import Candidate from './candidate.model.js';
 import Meeting from './meeting.model.js';
+import JobApplication from './jobApplication.model.js';
+import Offer from './offer.model.js';
+import Placement from './placement.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting, JobApplication, Offer, Placement };
 

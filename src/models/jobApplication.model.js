@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
+import paginate from './plugins/paginate.plugin.js';
 
 const jobApplicationSchema = new mongoose.Schema(
   {
@@ -20,6 +21,7 @@ const jobApplicationSchema = new mongoose.Schema(
 jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 
 jobApplicationSchema.plugin(toJSON);
+jobApplicationSchema.plugin(paginate);
 
 const JobApplication = mongoose.model('JobApplication', jobApplicationSchema);
 

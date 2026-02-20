@@ -30,6 +30,9 @@ import blogRoute from './blog.route.js';
 import livekitRoute from './livekit.route.js';
 import meetingRoute from './meeting.route.js';
 import atsAnalyticsRoute from './atsAnalytics.route.js';
+import jobApplicationRoute from './jobApplication.route.js';
+import offerRoute from './offer.route.js';
+import placementRoute from './placement.route.js';
 import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
 
@@ -123,6 +126,18 @@ const defaultRoutes = [
   {
     path: '/ats/analytics',
     route: atsAnalyticsRoute,
+  },
+  {
+    path: '/job-applications',
+    route: jobApplicationRoute,
+  },
+  {
+    path: '/offers',
+    route: offerRoute,
+  },
+  {
+    path: '/placements',
+    route: placementRoute,
   },
   {
     path: '/training/students',

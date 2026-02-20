@@ -26,8 +26,11 @@ const experienceSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const DOCUMENT_TYPES = ['Aadhar', 'PAN', 'Bank', 'Passport', 'Other'];
+
 const documentSchema = new mongoose.Schema(
   {
+    type: { type: String, enum: DOCUMENT_TYPES, default: 'Other', trim: true },
     label: { type: String, trim: true },
     url: { type: String, trim: true },
     key: { type: String, trim: true },
@@ -147,6 +150,9 @@ const candidateSchema = new mongoose.Schema(
       },
     ],
     shift: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift', default: null, index: true },
+    department: { type: String, trim: true, index: true },
+    designation: { type: String, trim: true, index: true },
+    reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   },
   { timestamps: true }
 );

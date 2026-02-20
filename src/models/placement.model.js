@@ -1,0 +1,89 @@
+import mongoose from 'mongoose';
+import toJSON from './plugins/toJSON.plugin.js';
+import paginate from './plugins/paginate.plugin.js';
+
+/**
+ * Placement - created when an offer is Accepted. Tracks the placed candidate.
+ */
+const placementSchema = new mongoose.Schema(
+  {
+    offer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Offer',
+      required: true,
+      unique: true,
+      index: true,
+    },
+    candidate: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Candidate',
+      required: true,
+      index: true,
+    },
+    job: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Job',
+      required: true,
+      index: true,
+    },
+    joiningDate: {
+      type: Date,
+      required: true,
+      index: true,
+    },
+    employeeId: { type: String, trim: true, index: true },
+    status: {
+      type: String,
+      enum: ['Pending', 'Joined', 'Deferred', 'Cancelled'],
+      default: 'Pending',
+      index: true,
+    },
+    preBoardingStatus: {
+      type: String,
+      enum: ['Pending', 'In Progress', 'Completed'],
+      default: 'Pending',
+      index: true,
+    },
+    backgroundVerification: {
+      status: { type: String, enum: ['Pending', 'In Progress', 'Completed', 'Verified'], default: 'Pending' },
+      requestedAt: { type: Date },
+      completedAt: { type: Date },
+      verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      agency: { type: String, trim: true },
+      notes: { type: String, trim: true },
+    },
+    assetAllocation: [
+      {
+        name: { type: String, required: true, trim: true },
+        type: { type: String, trim: true },
+        serialNumber: { type: String, trim: true },
+        allocatedAt: { type: Date, default: Date.now },
+        notes: { type: String, trim: true },
+      },
+    ],
+    itAccess: [
+      {
+        system: { type: String, required: true, trim: true },
+        accessLevel: { type: String, trim: true },
+        provisionedAt: { type: Date, default: Date.now },
+        notes: { type: String, trim: true },
+      },
+    ],
+    notes: { type: String, trim: true },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
+  },
+  { timestamps: true }
+);
+
+placementSchema.index({ status: 1, createdAt: -1 });
+
+placementSchema.plugin(toJSON);
+placementSchema.plugin(paginate);
+
+const Placement = mongoose.model('Placement', placementSchema);
+export default Placement;

@@ -2,6 +2,7 @@ import Joi from 'joi';
 import { objectId, password as passwordValidator } from './custom.validation.js';
 
 const document = Joi.object({
+  type: Joi.string().valid('Aadhar', 'PAN', 'Bank', 'Passport', 'Other').optional().default('Other'),
   label: Joi.string().optional().trim(),
   url: Joi.string().uri().optional(),
   key: Joi.string().optional().trim(),
@@ -184,6 +185,9 @@ const updateCandidate = {
         zipCode: Joi.string().optional().trim(),
         country: Joi.string().optional().trim(),
       }).optional(),
+      department: Joi.string().trim().optional().allow('', null),
+      designation: Joi.string().trim().optional().allow('', null),
+      reportingManager: Joi.string().custom(objectId).optional().allow(null),
       qualifications: Joi.array().items(qualification),
       experiences: Joi.array().items(experience),
       documents: Joi.array().items(document),
