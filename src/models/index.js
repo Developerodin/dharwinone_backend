@@ -12,6 +12,7 @@ import StudentGroup from './studentGroup.model.js';
 import Shift from './shift.model.js';
 import Candidate from './candidate.model.js';
 import Meeting from './meeting.model.js';
+import Recording from './recording.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting, Recording };
 

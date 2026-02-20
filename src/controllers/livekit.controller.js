@@ -36,14 +36,20 @@ const getToken = catchAsync(async (req, res) => {
 });
 
 /**
- * Start recording for a room
+ * Start recording for a room (authenticated – host only)
  * POST /v1/livekit/recording/start
  */
 const startRecording = catchAsync(async (req, res) => {
   const { roomName } = req.body;
+  const participantEmail = req.user?.email;
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
+  }
+
+  const isHost = await livekitService.isParticipantHost(roomName, participantEmail);
+  if (!isHost) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can start recording');
   }
 
   const result = await livekitService.startRecording(roomName);
@@ -56,14 +62,23 @@ const startRecording = catchAsync(async (req, res) => {
 });
 
 /**
- * Stop recording
+ * Stop recording (authenticated – host only)
  * POST /v1/livekit/recording/stop
  */
 const stopRecording = catchAsync(async (req, res) => {
-  const { egressId } = req.body;
+  const { egressId, roomName } = req.body;
+  const participantEmail = req.user?.email;
 
   if (!egressId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'egressId is required');
+  }
+  if (!roomName) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required to verify host');
+  }
+
+  const isHost = await livekitService.isParticipantHost(roomName, participantEmail);
+  if (!isHost) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can stop recording');
   }
 
   const result = await livekitService.stopRecording(egressId);
@@ -275,6 +290,74 @@ const removeParticipantPublic = catchAsync(async (req, res) => {
   });
 });
 
+/**
+ * Start recording (public – host only, no auth)
+ * POST /v1/public/recording/start
+ * Body: { roomName, hostEmail }
+ */
+const startRecordingPublic = catchAsync(async (req, res) => {
+  const { roomName, hostEmail } = req.body;
+
+  if (!roomName || !hostEmail) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and hostEmail are required');
+  }
+
+  const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
+  if (!isHost) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can start recording');
+  }
+
+  const result = await livekitService.startRecording(roomName);
+
+  res.status(httpStatus.OK).json({
+    success: true,
+    ...result,
+    message: 'Recording started',
+  });
+});
+
+/**
+ * Stop recording (public – host only, no auth)
+ * POST /v1/public/recording/stop
+ * Body: { egressId, roomName, hostEmail }
+ */
+const stopRecordingPublic = catchAsync(async (req, res) => {
+  const { egressId, roomName, hostEmail } = req.body;
+
+  if (!egressId || !roomName || !hostEmail) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'egressId, roomName and hostEmail are required');
+  }
+
+  const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
+  if (!isHost) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can stop recording');
+  }
+
+  const result = await livekitService.stopRecording(egressId);
+
+  res.status(httpStatus.OK).json({
+    success: true,
+    ...result,
+    message: 'Recording stopped',
+  });
+});
+
+/**
+ * Get recording status (public – no auth, anyone in room can check)
+ * GET /v1/public/recording/status/:roomName
+ */
+const getRecordingStatusPublic = catchAsync(async (req, res) => {
+  const { roomName } = req.params;
+
+  if (!roomName) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
+  }
+
+  const result = await livekitService.getRecordingStatus(roomName);
+
+  res.status(httpStatus.OK).json(result);
+});
+
 export { 
   getToken, 
   startRecording, 
@@ -287,4 +370,7 @@ export {
   getWaitingParticipantsPublic,
   admitParticipantPublic,
   removeParticipantPublic,
+  startRecordingPublic,
+  stopRecordingPublic,
+  getRecordingStatusPublic,
 };

@@ -12,6 +12,7 @@ import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import { getMeetingByMeetingId } from './meeting.service.js';
+import Recording from '../models/recording.model.js';
 
 // Initialize LiveKit clients
 // Convert ws:// to http:// for SDK clients (they use HTTP, not WebSocket)
@@ -141,6 +142,8 @@ const startRecording = async (roomName) => {
   }
 
   // Determine if using local MinIO or production S3
+  // Defaults to local MinIO unless explicitly in production with AWS credentials
+  // For local development: don't set AWS_ACCESS_KEY_ID or set NODE_ENV=development
   const isLocalDev =
     config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey;
 
@@ -162,8 +165,10 @@ const startRecording = async (roomName) => {
         bucket: config.livekit?.s3Bucket || config.aws.bucketName || 'recordings',
       };
 
+  // Use prefix so recordings live under recordings/ in the bucket (same key used for playback)
+  const filepath = `recordings/${roomName}-${Date.now()}.mp4`;
   const fileOutput = new EncodedFileOutput({
-    filepath: `${roomName}-${Date.now()}.mp4`,
+    filepath,
     output: {
       case: 's3',
       value: new S3Upload(s3Config),
@@ -176,6 +181,14 @@ const startRecording = async (roomName) => {
       layout: 'grid',
       audioOnly: false,
       videoOnly: false,
+    });
+
+    await Recording.create({
+      meetingId: roomName,
+      egressId: egressInfo.egressId,
+      filePath: filepath,
+      status: 'recording',
+      startedAt: new Date(),
     });
 
     return {
@@ -227,6 +240,11 @@ const stopRecording = async (egressId) => {
 
   try {
     const egressInfo = await egressClient.stopEgress(egressId);
+    await Recording.findOneAndUpdate(
+      { egressId },
+      { status: 'completed', completedAt: new Date() },
+      { new: true }
+    );
     return {
       egressId,
       status: egressInfo.status,

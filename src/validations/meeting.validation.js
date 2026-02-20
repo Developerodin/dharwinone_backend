@@ -98,4 +98,19 @@ const resendInvitations = {
   }),
 };
 
-export { createMeeting, getMeetings, getMeeting, updateMeeting, deleteMeeting, resendInvitations };
+// id can be meetingId string or MongoDB ObjectId
+const getMeetingRecordings = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim(),
+  }),
+};
+
+export {
+  createMeeting,
+  getMeetings,
+  getMeeting,
+  getMeetingRecordings,
+  updateMeeting,
+  deleteMeeting,
+  resendInvitations,
+};
