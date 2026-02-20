@@ -43,11 +43,12 @@ const envVarsSchema = Joi.object()
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
     LIVEKIT_API_KEY: Joi.string().optional().description('LiveKit API key'),
     LIVEKIT_API_SECRET: Joi.string().optional().description('LiveKit API secret'),
-    MINIO_ENDPOINT: Joi.string().optional().default('http://minio:9000').description('MinIO endpoint for local recordings'),
+    MINIO_ENDPOINT: Joi.string().optional().default('http://minio:9000').description('MinIO endpoint for local recordings (server-side)'),
+    MINIO_PUBLIC_ENDPOINT: Joi.string().optional().default('http://localhost:9000').description('MinIO endpoint for presigned URLs (browser must reach this, e.g. localhost:9000)'),
     MINIO_ACCESS_KEY: Joi.string().optional().default('minioadmin').description('MinIO access key'),
     MINIO_SECRET_KEY: Joi.string().optional().default('minioadmin123').description('MinIO secret key'),
     MINIO_BUCKET: Joi.string().optional().default('recordings').description('MinIO bucket for recordings'),
-    LIVEKIT_S3_BUCKET: Joi.string().optional().description('S3 bucket for recordings (production)'),
+    LIVEKIT_S3_BUCKET: Joi.string().optional().description('S3 bucket for recordings (production); must match where Egress uploads'),
 
     // Bolna Calling
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
@@ -108,6 +109,7 @@ const config = {
     apiSecret: envVars.LIVEKIT_API_SECRET,
     minio: {
       endpoint: envVars.MINIO_ENDPOINT || 'http://minio:9000',
+      publicEndpoint: envVars.MINIO_PUBLIC_ENDPOINT || 'http://localhost:9000',
       accessKey: envVars.MINIO_ACCESS_KEY || 'minioadmin',
       secretKey: envVars.MINIO_SECRET_KEY || 'minioadmin123',
       bucket: envVars.MINIO_BUCKET || 'recordings',

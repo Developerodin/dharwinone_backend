@@ -18,6 +18,28 @@ const startRecording = {
 const stopRecording = {
   body: Joi.object().keys({
     egressId: Joi.string().required().trim(),
+    roomName: Joi.string().required().trim(),
+  }),
+};
+
+const startRecordingPublic = {
+  body: Joi.object().keys({
+    roomName: Joi.string().required().trim(),
+    hostEmail: Joi.string().required().email().trim(),
+  }),
+};
+
+const stopRecordingPublic = {
+  body: Joi.object().keys({
+    egressId: Joi.string().required().trim(),
+    roomName: Joi.string().required().trim(),
+    hostEmail: Joi.string().required().email().trim(),
+  }),
+};
+
+const getRecordingStatusPublic = {
+  params: Joi.object().keys({
+    roomName: Joi.string().required().trim(),
   }),
 };
 
@@ -54,11 +76,14 @@ const removeParticipant = {
   }),
 };
 
-export { 
-  getToken, 
-  startRecording, 
-  stopRecording, 
+export {
+  getToken,
+  startRecording,
+  stopRecording,
   getRecordingStatus,
+  startRecordingPublic,
+  stopRecordingPublic,
+  getRecordingStatusPublic,
   getWaitingParticipants,
   admitParticipant,
   removeParticipant,

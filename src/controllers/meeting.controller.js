@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as meetingService from '../services/meeting.service.js';
+import recordingService from '../services/recording.service.js';
 
 const create = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
@@ -39,4 +40,9 @@ const resendInvitations = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { create, list, get, update, remove, resendInvitations };
+const getRecordings = catchAsync(async (req, res) => {
+  const list = await recordingService.listByMeetingId(req.params.id);
+  res.send(list);
+});
+
+export { create, list, get, update, remove, resendInvitations, getRecordings };

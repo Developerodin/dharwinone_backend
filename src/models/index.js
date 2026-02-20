@@ -15,6 +15,7 @@ import Meeting from './meeting.model.js';
 import JobApplication from './jobApplication.model.js';
 import Offer from './offer.model.js';
 import Placement from './placement.model.js';
+import Recording from './recording.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting, JobApplication, Offer, Placement };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting, JobApplication, Offer, Placement, Recording };
 

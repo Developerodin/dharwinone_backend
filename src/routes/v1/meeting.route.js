@@ -16,6 +16,10 @@ router
   .post(auth(), validate(meetingValidation.resendInvitations), meetingController.resendInvitations);
 
 router
+  .route('/:id/recordings')
+  .get(auth(), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
+
+router
   .route('/:id')
   .get(auth(), validate(meetingValidation.getMeeting), meetingController.get)
   .patch(auth(), validate(meetingValidation.updateMeeting), meetingController.update)
