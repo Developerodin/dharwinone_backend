@@ -1,0 +1,105 @@
+# LiveKit stack with Egress, Redis, MinIO
+# Run from project root: docker compose -f livekit/docker-compose.yml up -d
+#
+# .env credentials (already in uat.dharwin.backend/.env):
+#   LIVEKIT_URL=ws://localhost:7880
+#   LIVEKIT_API_KEY=devkey
+#   LIVEKIT_API_SECRET=devsecret123456789012345678901234
+#   MINIO_ENDPOINT=http://minio:9000 (for Egress; backend passes this in S3 config)
+#   MINIO_ACCESS_KEY=minioadmin
+#   MINIO_SECRET_KEY=minioadmin123
+#   MINIO_BUCKET=recordings
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: livekit-redis
+    # No port mapping - Redis is internal only (LiveKit/Egress use it via docker network)
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    command: --config /etc/livekit/server.yaml --bind 0.0.0.0
+    ports:
+      - '7880:7880'
+      - '7881:7881'
+    # UDP 50000-60000 omitted: Windows often blocks large port ranges.
+    # WebRTC will fall back to TCP (7881); meetings work for local dev.
+    volumes:
+      - ./server.yaml:/etc/livekit/server.yaml:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+  egress:
+    image: livekit/egress:latest
+    container_name: livekit-egress
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress/egress.yaml
+    volumes:
+      - ./egress.yaml:/etc/egress/egress.yaml:ro
+    depends_on:
+      - livekit
+      - redis
+      - minio
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: livekit-minio
+    command: server /data
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: livekit-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for MinIO..."
+        sleep 10
+        for i in 1 2 3 4 5; do
+          if mc alias set myminio http://minio:9000 minioadmin minioadmin123 2>/dev/null; then
+            echo "MinIO connected"
+            break
+          fi
+          echo "Retry $i/5..."
+          sleep 3
+        done
+        mc mb myminio/recordings --ignore-existing 2>/dev/null || true
+        mc anonymous set download myminio/recordings 2>/dev/null || true
+        echo "Bucket recordings ready"
+    networks:
+      - livekit-network
+
+networks:
+  livekit-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  minio-data:

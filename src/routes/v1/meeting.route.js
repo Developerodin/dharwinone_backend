@@ -16,6 +16,10 @@ router
   .post(auth(), validate(meetingValidation.resendInvitations), meetingController.resendInvitations);
 
 router
+  .route('/:id/move-to-preboarding')
+  .post(auth(), validate(meetingValidation.getMeeting), meetingController.moveToPreboarding);
+
+router
   .route('/:id/recordings')
   .get(auth(), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
 

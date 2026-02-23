@@ -29,6 +29,7 @@ import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
 import livekitRoute from './livekit.route.js';
 import meetingRoute from './meeting.route.js';
+import recordingRoute from './recording.route.js';
 import atsAnalyticsRoute from './atsAnalytics.route.js';
 import jobApplicationRoute from './jobApplication.route.js';
 import offerRoute from './offer.route.js';
@@ -174,6 +175,10 @@ const defaultRoutes = [
   {
     path: '/meetings',
     route: meetingRoute,
+  },
+  {
+    path: '/recordings',
+    route: recordingRoute,
   },
 ];
 

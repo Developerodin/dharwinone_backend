@@ -1,0 +1,20 @@
+# LiveKit Egress config - must match LiveKit server keys and use same Redis
+# Egress connects to LiveKit via ws_url and uses Redis for coordination
+
+api_key: devkey
+api_secret: devsecret123456789012345678901234
+ws_url: ws://livekit:7880
+log_level: info
+health_port: 8080
+enable_chrome_sandbox: false
+
+redis:
+  address: redis:6379
+
+# Default S3/MinIO for recordings (backend can override per-request)
+s3:
+  access_key: minioadmin
+  secret: minioadmin123
+  region: us-east-1
+  endpoint: http://minio:9000
+  bucket: recordings

@@ -79,13 +79,19 @@ const getOfferById = async (id, currentUser = null) => {
 
 /**
  * Update offer (only Draft can be fully edited)
+ * @param {string} id - Offer id
+ * @param {Object} updateBody - Fields to update
+ * @param {Object} currentUser - User performing the update
+ * @param {Object} [options] - { skipAccessCheck: true } for internal flows (e.g. move from interview)
  */
-const updateOfferById = async (id, updateBody, currentUser) => {
+const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   const offer = await Offer.findById(id);
   if (!offer) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
   }
-  await ensureAccess(currentUser, offer);
+  if (!options.skipAccessCheck && currentUser) {
+    await ensureAccess(currentUser, offer);
+  }
 
   if (offer.status !== 'Draft') {
     const allowed = ['status', 'notes', 'rejectionReason'];
@@ -203,29 +209,34 @@ const queryOffers = async (filter, options, currentUser) => {
   });
 
   // Attach placement data for Accepted offers (Pre-boarding/Onboarding: status, preBoardingStatus, BGV, assets, IT access)
+  // Must convert to plain objects so placement fields survive JSON serialization (toJSON only includes schema paths)
   const acceptedIds = result.results.filter((o) => o.status === 'Accepted').map((o) => o._id);
+  let placementByOffer = {};
   if (acceptedIds.length > 0) {
     const placements = await Placement.find({ offer: { $in: acceptedIds } })
       .select('offer status preBoardingStatus backgroundVerification assetAllocation itAccess')
       .lean();
-    const placementByOffer = Object.fromEntries(placements.map((p) => [p.offer.toString(), p]));
-    for (const offer of result.results) {
-      if (offer.status === 'Accepted') {
-        const pl = placementByOffer[offer._id.toString()];
-        if (pl) {
-          offer.placementStatus = pl.status;
-          offer.placement = {
-            preBoardingStatus: pl.preBoardingStatus,
-            backgroundVerification: pl.backgroundVerification,
-            assetAllocation: pl.assetAllocation || [],
-            itAccess: pl.itAccess || [],
-          };
-        } else {
-          offer.placementStatus = null;
-        }
+    placementByOffer = Object.fromEntries(placements.map((p) => [p.offer.toString(), p]));
+  }
+
+  result.results = result.results.map((offer) => {
+    const plain = offer.toObject ? offer.toObject() : (typeof offer.toJSON === 'function' ? offer.toJSON() : { ...offer });
+    if (plain.status === 'Accepted') {
+      const pl = placementByOffer[String(plain._id || plain.id)];
+      if (pl) {
+        plain.placementStatus = pl.status;
+        plain.placement = {
+          preBoardingStatus: pl.preBoardingStatus,
+          backgroundVerification: pl.backgroundVerification,
+          assetAllocation: pl.assetAllocation || [],
+          itAccess: pl.itAccess || [],
+        };
+      } else {
+        plain.placementStatus = null;
       }
     }
-  }
+    return plain;
+  });
 
   return result;
 };

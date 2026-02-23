@@ -20,13 +20,19 @@ const livekitUrl = config.livekit?.url?.replace(/^ws/, 'http') || 'http://localh
 const apiKey = config.livekit?.apiKey;
 const apiSecret = config.livekit?.apiSecret;
 
-// Debug logging (remove in production)
+// Log config on load (never log apiSecret)
+logger.info('[LiveKit] Config loaded', {
+  url: config.livekit?.url,
+  livekitUrl,
+  hasApiKey: !!apiKey,
+  apiKey: apiKey || '(empty)',
+  hasApiSecret: !!apiSecret,
+  minioEndpoint: config.livekit?.minio?.endpoint,
+  minioBucket: config.livekit?.minio?.bucket,
+});
+
 if (!apiKey || !apiSecret) {
-  logger.warn('LiveKit credentials not configured:', {
-    hasApiKey: !!apiKey,
-    hasApiSecret: !!apiSecret,
-    livekitConfig: config.livekit,
-  });
+  logger.warn('[LiveKit] Credentials not configured - token/recording endpoints will fail');
 }
 
 let egressClient = null;
@@ -39,9 +45,9 @@ if (apiKey && apiSecret) {
   try {
     egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
     roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
-    logger.info('LiveKit clients initialized successfully');
+    logger.info('[LiveKit] Clients initialized', { url: livekitUrl, egress: !!egressClient, roomService: !!roomService });
   } catch (error) {
-    logger.warn('Failed to initialize LiveKit clients:', error);
+    logger.warn('[LiveKit] Failed to initialize clients', { error: error.message, url: livekitUrl });
   }
 }
 
@@ -78,7 +84,10 @@ const isParticipantHost = async (roomName, participantEmail) => {
  * @returns {Promise<{token: string, isHost: boolean}>} JWT token and host status
  */
 const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false }) => {
+  logger.info('[LiveKit] generateAccessToken', { roomName, participantName, participantIdentity: participantIdentity || '(none)' });
+
   if (!apiKey || !apiSecret) {
+    logger.error('[LiveKit] generateAccessToken failed: credentials not configured');
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'LiveKit credentials not configured');
   }
 
@@ -91,9 +100,12 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   const isAdmitted = roomAdmitted?.has(participantIdentity) || false;
   const isHost = forceFullPermissions || isAdmitted || (participantEmail ? await isParticipantHost(roomName, participantEmail) : false);
 
+  logger.info('[LiveKit] Token grants', { roomName, isHost, isAdmitted, forceFullPermissions });
+
   const token = new AccessToken(apiKey, apiSecret, {
     identity: participantIdentity || participantName,
     name: participantName,
+    ttl: '6h', // Explicit TTL to avoid premature expiry and reconnects
   });
 
   // Grant permissions based on host status
@@ -108,6 +120,7 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   });
 
   const jwt = await token.toJwt();
+  logger.info('[LiveKit] Token generated successfully', { roomName, isHost });
   return { token: jwt, isHost };
 };
 
@@ -117,7 +130,10 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
  * @returns {Promise<Object>} Egress info with egressId
  */
 const startRecording = async (roomName) => {
+  logger.info('[LiveKit] startRecording', { roomName });
+
   if (!egressClient) {
+    logger.warn('[LiveKit] startRecording failed: egressClient not available');
     throw new ApiError(
       httpStatus.SERVICE_UNAVAILABLE,
       'Recording service not available. Please configure LiveKit Egress.'
@@ -142,10 +158,12 @@ const startRecording = async (roomName) => {
   }
 
   // Determine if using local MinIO or production S3
-  // Defaults to local MinIO unless explicitly in production with AWS credentials
-  // For local development: don't set AWS_ACCESS_KEY_ID or set NODE_ENV=development
+  // LiveKit Cloud: always use AWS S3 (Egress runs on LiveKit's side)
+  // Local Docker: use MinIO in dev, AWS S3 in production
+  const isLiveKitCloud = (config.livekit?.url || '').includes('livekit.cloud');
   const isLocalDev =
-    config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey;
+    !isLiveKitCloud &&
+    (config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey);
 
   const s3Config = isLocalDev
     ? {
@@ -167,6 +185,7 @@ const startRecording = async (roomName) => {
 
   // Use prefix so recordings live under recordings/ in the bucket (same key used for playback)
   const filepath = `recordings/${roomName}-${Date.now()}.mp4`;
+  logger.info('[LiveKit] Starting egress', { roomName, filepath, endpoint: s3Config.endpoint || '(AWS)' });
   const fileOutput = new EncodedFileOutput({
     filepath,
     output: {
@@ -191,6 +210,7 @@ const startRecording = async (roomName) => {
       startedAt: new Date(),
     });
 
+    logger.info('[LiveKit] Recording started', { roomName, egressId: egressInfo.egressId });
     return {
       egressId: egressInfo.egressId,
       roomName,
@@ -198,6 +218,7 @@ const startRecording = async (roomName) => {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[LiveKit] startRecording failed', { roomName, error: errorMessage });
 
     // Provide helpful error messages
     if (errorMessage.includes('no response from servers') || errorMessage.includes('connection refused')) {
@@ -230,6 +251,8 @@ const startRecording = async (roomName) => {
  * @returns {Promise<Object>} Updated egress info
  */
 const stopRecording = async (egressId) => {
+  logger.info('[LiveKit] stopRecording', { egressId });
+
   if (!egressClient) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Recording service not available');
   }
@@ -240,6 +263,7 @@ const stopRecording = async (egressId) => {
 
   try {
     const egressInfo = await egressClient.stopEgress(egressId);
+    logger.info('[LiveKit] Recording stopped', { egressId, status: egressInfo.status });
     await Recording.findOneAndUpdate(
       { egressId },
       { status: 'completed', completedAt: new Date() },
@@ -251,14 +275,13 @@ const stopRecording = async (egressId) => {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
+    logger.error('[LiveKit] stopRecording failed', { egressId, error: errorMessage });
     if (errorMessage.includes('no response from servers') || errorMessage.includes('connection refused')) {
       throw new ApiError(
         httpStatus.SERVICE_UNAVAILABLE,
         'LiveKit Egress service is not running. Please start the Egress service.'
       );
     }
-
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, `Failed to stop recording: ${errorMessage}`);
   }
 };
@@ -269,6 +292,8 @@ const stopRecording = async (egressId) => {
  * @returns {Promise<Object>} Recording status and list
  */
 const getRecordingStatus = async (roomName) => {
+  logger.info('[LiveKit] getRecordingStatus', { roomName });
+
   if (!egressClient) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Recording service not available');
   }
@@ -316,14 +341,13 @@ const getRecordingStatus = async (roomName) => {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
+    logger.error('[LiveKit] getRecordingStatus failed', { roomName, error: errorMessage });
     if (errorMessage.includes('no response from servers') || errorMessage.includes('connection refused')) {
       throw new ApiError(
         httpStatus.SERVICE_UNAVAILABLE,
         'LiveKit Egress service is not running. Please start the Egress service.'
       );
     }
-
     throw new ApiError(
       httpStatus.INTERNAL_SERVER_ERROR,
       `Failed to get recording status: ${errorMessage}`
@@ -338,6 +362,8 @@ const getRecordingStatus = async (roomName) => {
  * @returns {Promise<Array>} List of waiting participants
  */
 const getWaitingParticipants = async (roomName) => {
+  logger.info('[LiveKit] getWaitingParticipants', { roomName });
+
   if (!roomService) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
   }
@@ -375,12 +401,19 @@ const getWaitingParticipants = async (roomName) => {
         };
       });
 
+    logger.info('[LiveKit] getWaitingParticipants result', { roomName, total: participants.length, waiting: waitingParticipants.length });
     return waitingParticipants;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    if (errorMessage.includes('room not found') || errorMessage.includes('not found')) {
+    const roomMissing =
+      errorMessage.includes('room not found') ||
+      errorMessage.includes('not found') ||
+      errorMessage.toLowerCase().includes('does not exist');
+    if (roomMissing) {
+      logger.debug('[LiveKit] getWaitingParticipants room not found', { roomName });
       return [];
     }
+    logger.warn('[LiveKit] getWaitingParticipants', { roomName, error: errorMessage });
     throw new ApiError(
       httpStatus.INTERNAL_SERVER_ERROR,
       `Failed to get waiting participants: ${errorMessage}`
@@ -399,6 +432,8 @@ const getWaitingParticipants = async (roomName) => {
  * @returns {Promise<Object>} New token and participant info
  */
 const admitParticipant = async (roomName, participantIdentity, participantName = null, participantEmail = null) => {
+  logger.info('[LiveKit] admitParticipant', { roomName, participantIdentity });
+
   if (!roomService) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
   }
@@ -434,6 +469,7 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
     // The participant needs to disconnect and reconnect with the new token
     // This will be handled by the frontend
 
+    logger.info('[LiveKit] Participant admitted', { roomName, participantIdentity });
     return {
       identity: participantIdentity,
       name,
@@ -445,6 +481,7 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
       throw error;
     }
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[LiveKit] admitParticipant failed', { roomName, participantIdentity, error: errorMessage });
     throw new ApiError(
       httpStatus.INTERNAL_SERVER_ERROR,
       `Failed to admit participant: ${errorMessage}`
@@ -459,13 +496,16 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
  * @returns {Promise<Object>} Removal result
  */
 const removeParticipant = async (roomName, participantIdentity) => {
+  logger.info('[LiveKit] removeParticipant', { roomName, participantIdentity });
+
   if (!roomService) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
   }
 
   try {
     await roomService.removeParticipant(roomName, participantIdentity);
-    
+    logger.info('[LiveKit] Participant removed', { roomName, participantIdentity });
+
     // Remove from admitted list if present
     const roomAdmitted = admittedParticipants.get(roomName);
     if (roomAdmitted) {
@@ -478,6 +518,7 @@ const removeParticipant = async (roomName, participantIdentity) => {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[LiveKit] removeParticipant failed', { roomName, participantIdentity, error: errorMessage });
     throw new ApiError(
       httpStatus.INTERNAL_SERVER_ERROR,
       `Failed to remove participant: ${errorMessage}`

@@ -11,3 +11,6 @@ yarn-error.log
 # Code coverage
 coverage
 
+# Local webhook payload backups (LiveKit Egress)
+recordings/
+

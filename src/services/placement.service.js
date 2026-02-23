@@ -16,17 +16,22 @@ const queryPlacements = async (filter, options, currentUser) => {
   if (filter.preBoardingStatus) query.preBoardingStatus = filter.preBoardingStatus;
 
   const isAdmin = await userIsAdmin(currentUser);
-  if (!isAdmin && currentUser?.id) {
+  const rawUserId = currentUser?.id ?? currentUser?._id;
+  const userId = rawUserId && String(rawUserId).match(/^[0-9a-fA-F]{24}$/) ? rawUserId : null;
+  if (!isAdmin && userId) {
     const Job = (await import('../models/job.model.js')).default;
-    const myJobs = await Job.find({ createdBy: currentUser.id }, { _id: 1 }).lean();
+    const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
     const myJobIds = myJobs.map((j) => j._id);
     if (query.job) {
-      if (!myJobIds.some((jid) => jid.toString() === String(query.job))) {
-        const limit = options.limit || 10;
-        return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+      const jobAllowed = myJobIds.some((jid) => jid.toString() === String(query.job));
+      if (!jobAllowed) {
+        query.createdBy = userId;
       }
     } else {
-      query.job = { $in: myJobIds };
+      query.$or = [
+        { job: { $in: myJobIds } },
+        { createdBy: userId },
+      ];
     }
   }
 
@@ -53,11 +58,14 @@ const getPlacementById = async (id, currentUser = null) => {
     .populate('candidate', 'fullName email phoneNumber employeeId department designation reportingManager')
     .populate('createdBy', 'name email');
   if (!placement) return null;
-  if (currentUser && placement.job) {
-    const canAccess = await isOwnerOrAdmin(currentUser, placement.job);
-    if (!canAccess) {
-      const ApiError = (await import('../utils/ApiError.js')).default;
-      throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+  if (currentUser) {
+    const createdByMe = String(placement.createdBy) === String(currentUser.id ?? currentUser._id);
+    if (!createdByMe && placement.job) {
+      const canAccess = await isOwnerOrAdmin(currentUser, placement.job);
+      if (!canAccess) {
+        const ApiError = (await import('../utils/ApiError.js')).default;
+        throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+      }
     }
   }
   return placement;
@@ -71,7 +79,8 @@ const updatePlacementStatus = async (id, updateBody, currentUser) => {
   if (!placement) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Placement not found');
   }
-  const canAccess = await isOwnerOrAdmin(currentUser, placement.job);
+  const createdByMe = String(placement.createdBy) === String(currentUser?.id ?? currentUser?._id);
+  const canAccess = createdByMe || (placement.job && (await isOwnerOrAdmin(currentUser, placement.job)));
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }

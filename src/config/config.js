@@ -1,8 +1,14 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import Joi from 'joi';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = path.resolve(__dirname, '../../.env');
+dotenv.config({ path: envPath, override: true });
+if (!process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) {
+  dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
+}
 
 const envVarsSchema = Joi.object()
   .keys({
@@ -104,9 +110,9 @@ const config = {
     bucketName: envVars.AWS_S3_BUCKET_NAME,
   },
   livekit: {
-    url: envVars.LIVEKIT_URL || 'ws://localhost:7880',
-    apiKey: envVars.LIVEKIT_API_KEY,
-    apiSecret: envVars.LIVEKIT_API_SECRET,
+    url: (envVars.LIVEKIT_URL || 'ws://localhost:7880').trim(),
+    apiKey: envVars.LIVEKIT_API_KEY ? String(envVars.LIVEKIT_API_KEY).trim() : undefined,
+    apiSecret: envVars.LIVEKIT_API_SECRET ? String(envVars.LIVEKIT_API_SECRET).trim() : undefined,
     minio: {
       endpoint: envVars.MINIO_ENDPOINT || 'http://minio:9000',
       publicEndpoint: envVars.MINIO_PUBLIC_ENDPOINT || 'http://localhost:9000',

@@ -2,11 +2,12 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import config from './config.js';
 
-// Same logic as livekit.service: Egress uses MinIO in dev, AWS S3 in production
-// Defaults to local MinIO unless explicitly in production with AWS credentials
-// For local development: don't set AWS_ACCESS_KEY_ID or set NODE_ENV=development
-const isRecordingStorageLocal = () =>
-  config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey;
+// Same logic as livekit.service: Egress uses MinIO in dev, AWS S3 in production/Cloud
+// LiveKit Cloud: always use AWS S3; Local Docker: MinIO in dev, AWS S3 in prod
+const isRecordingStorageLocal = () => {
+  if ((config.livekit?.url || '').includes('livekit.cloud')) return false;
+  return config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey;
+};
 
 // Create S3 client (used for documents/profile uploads and AWS recording playback)
 const s3Client = new S3Client({

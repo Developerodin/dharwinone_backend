@@ -26,7 +26,8 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
-  const result = await meetingService.updateMeetingById(req.params.id, req.body);
+  const userId = req.user?._id?.toString() || req.user?.id;
+  const result = await meetingService.updateMeetingById(req.params.id, req.body, userId);
   res.send(result);
 });
 
@@ -51,4 +52,10 @@ const endMeetingByRoomPublic = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { create, list, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic };
+const moveToPreboarding = catchAsync(async (req, res) => {
+  const userId = req.user?._id?.toString() || req.user?.id;
+  const result = await meetingService.moveMeetingToPreboarding(req.params.id, userId);
+  res.send(result);
+});
+
+export { create, list, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding };

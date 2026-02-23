@@ -1,0 +1,46 @@
+# LiveKit local development stack
+# Run: docker compose -f docker-compose.livekit-local.yml up -d
+# Stop: docker compose -f docker-compose.livekit-local.yml down
+#
+# Backend .env for dev:
+#   LIVEKIT_URL=ws://localhost:7880
+#   LIVEKIT_API_KEY=devkey
+#   LIVEKIT_API_SECRET=secret
+
+version: '3.8'
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-local
+    command: --dev --bind 0.0.0.0
+    ports:
+      - '7880:7880'   # HTTP/WebSocket signal
+      - '7881:7881'   # WebRTC TCP
+      - '7882:7882/udp'  # WebRTC UDP
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: livekit-minio
+    command: server /data
+    ports:
+      - '9000:9000'   # API
+      - '9001:9001'   # Console (optional)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    networks:
+      - livekit-network
+
+networks:
+  livekit-network:
+    driver: bridge
+
+volumes:
+  minio-data:

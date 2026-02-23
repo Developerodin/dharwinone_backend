@@ -2,6 +2,8 @@
 
 This guide explains how to set up and use LiveKit video meetings in the dharwin_new backend.
 
+> **Using LiveKit Cloud instead of Docker?** See [LIVEKIT_CLOUD_MIGRATION.md](./LIVEKIT_CLOUD_MIGRATION.md) for switching to the hosted API.
+
 ## Overview
 
 LiveKit integration provides Google Meet-like video conferencing functionality. The backend handles:

@@ -1,0 +1,17 @@
+# LiveKit server config - keys match .env (LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+# Used when running with: livekit-server --config /etc/livekit/server.yaml
+
+port: 7880
+
+redis:
+  address: redis:6379
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  tcp_port: 7881
+  use_external_ip: false
+
+# API keys - must match .env: LIVEKIT_API_KEY=devkey, LIVEKIT_API_SECRET=devsecret...
+keys:
+  devkey: devsecret123456789012345678901234
