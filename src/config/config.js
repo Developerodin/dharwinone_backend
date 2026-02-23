@@ -98,8 +98,8 @@ const config = {
     replyTo: envVars.EMAIL_REPLY_TO,
   },
   corsOrigin: envVars.CORS_ORIGIN ? envVars.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
-  frontendBaseUrl: envVars.FRONTEND_BASE_URL || 'uat-dharwin-frontend.vercel.app',
-  backendPublicUrl: envVars.BACKEND_PUBLIC_URL || `https://uat-dharwin-backend.onrender.com`,
+  frontendBaseUrl: envVars.FRONTEND_BASE_URL || 'http://localhost:3001',
+  backendPublicUrl: envVars.BACKEND_PUBLIC_URL || `http://localhost:${envVars.PORT}`,
   openai: {
     apiKey: envVars.OPENAI_API_KEY || '',
   },

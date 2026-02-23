@@ -17,7 +17,7 @@ import * as offerService from './offer.service.js';
  */
 const getPublicMeetingUrl = (meetingId) => {
   const base = (config.frontendBaseUrl || '').replace(/\/$/, '');
-  return `${base}/join/room/${encodeURIComponent(meetingId)}`;
+  return `${base}/join/room?room=${encodeURIComponent(meetingId)}`;
 };
 
 /**
