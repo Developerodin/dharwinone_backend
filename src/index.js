@@ -12,6 +12,7 @@ import {
   startCallRecordSyncScheduler,
   stopCallRecordSyncScheduler,
 } from './services/callRecordSync.scheduler.js';
+import { startMeetingScheduler, stopMeetingScheduler } from './services/meeting.scheduler.js';
 
 let server;
 let candidateSchedulerId;
@@ -30,6 +31,7 @@ mongoose
         candidateSchedulerId = startCandidateScheduler(config.candidate?.schedulerIntervalMinutes ?? 60);
         jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
         callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
+        startMeetingScheduler();
       }
     });
   })
@@ -43,6 +45,7 @@ const exitHandler = () => {
   stopCandidateScheduler(candidateSchedulerId);
   stopJobVerificationCallScheduler(jobVerificationSchedulerId);
   stopCallRecordSyncScheduler(callRecordSyncSchedulerId);
+  stopMeetingScheduler();
 
   if (server) {
     server.close(() => {

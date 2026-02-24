@@ -95,6 +95,12 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and participantName are required');
   }
 
+  // Reject token for cancelled meetings
+  const meeting = await getMeetingByMeetingId(roomName);
+  if (meeting && meeting.status === 'cancelled') {
+    throw new ApiError(httpStatus.GONE, 'This meeting has been cancelled');
+  }
+
   // Check if participant is a host, has been admitted, or forcing full permissions
   const roomAdmitted = admittedParticipants.get(roomName);
   const isAdmitted = roomAdmitted?.has(participantIdentity) || false;

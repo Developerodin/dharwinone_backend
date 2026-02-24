@@ -50,8 +50,10 @@ const getInvitationEmails = (meeting) => {
  */
 const createMeeting = async (body, userId) => {
   const meetingId = await Meeting.generateMeetingId();
+  const durationMinutes = Number(body.durationMinutes) || 60;
   const meeting = await Meeting.create({
     ...body,
+    durationMinutes,
     meetingId,
     roomName: meetingId, // same as meetingId for LiveKit; satisfies legacy index roomName_1
     createdBy: userId,
@@ -289,7 +291,14 @@ const updateMeetingById = async (id, updateBody, userId) => {
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
-  Object.assign(meeting, updateBody);
+  const safeBody = { ...updateBody };
+  const dur = Number(safeBody.durationMinutes);
+  if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
+    safeBody.durationMinutes = dur;
+  } else if ('durationMinutes' in safeBody) {
+    delete safeBody.durationMinutes;
+  }
+  Object.assign(meeting, safeBody);
   await meeting.save();
 
   let moveError = null;
@@ -410,6 +419,36 @@ const endMeetingByRoomPublic = async (roomName, hostEmail) => {
   return doc;
 };
 
+/**
+ * Auto-end meetings that have passed their scheduled end time (scheduledAt + durationMinutes).
+ * Called by the meeting scheduler.
+ * @returns {Promise<number>} Number of meetings auto-ended
+ */
+const autoEndExpiredMeetings = async () => {
+  const now = new Date();
+  const meetings = await Meeting.find({
+    status: 'scheduled',
+    $expr: {
+      $lte: [
+        { $add: ['$scheduledAt', { $multiply: ['$durationMinutes', 60000] }] },
+        now,
+      ],
+    },
+  }).lean();
+
+  let count = 0;
+  for (const m of meetings) {
+    try {
+      await Meeting.updateOne({ _id: m._id }, { status: 'ended' });
+      count += 1;
+      logger.info(`[autoEndExpiredMeetings] Auto-ended meeting ${m.meetingId} (${m.title})`);
+    } catch (err) {
+      logger.warn(`[autoEndExpiredMeetings] Failed to end meeting ${m.meetingId}:`, err?.message || err);
+    }
+  }
+  return count;
+};
+
 export {
   createMeeting,
   queryMeetings,
@@ -421,4 +460,5 @@ export {
   moveMeetingToPreboarding,
   getPublicMeetingUrl,
   endMeetingByRoomPublic,
+  autoEndExpiredMeetings,
 };
