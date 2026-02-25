@@ -34,6 +34,10 @@ import atsAnalyticsRoute from './atsAnalytics.route.js';
 import jobApplicationRoute from './jobApplication.route.js';
 import offerRoute from './offer.route.js';
 import placementRoute from './placement.route.js';
+import projectRoute from './project.route.js';
+import taskRoute from './task.route.js';
+import teamRoute from './team.route.js';
+import teamGroupRoute from './teamGroup.route.js';
 import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
 
@@ -139,6 +143,22 @@ const defaultRoutes = [
   {
     path: '/placements',
     route: placementRoute,
+  },
+  {
+    path: '/projects',
+    route: projectRoute,
+  },
+  {
+    path: '/tasks',
+    route: taskRoute,
+  },
+  {
+    path: '/teams',
+    route: teamRoute,
+  },
+  {
+    path: '/project-teams',
+    route: teamGroupRoute,
   },
   {
     path: '/training/students',
