@@ -1,9 +1,11 @@
 import rateLimit from 'express-rate-limit';
+import config from '../config/config.js';
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
+  windowMs: (config.rateLimit?.authWindowMinutes ?? 15) * 60 * 1000,
+  max: config.rateLimit?.authMax ?? 200,
   skipSuccessfulRequests: true,
+  message: { message: 'Too many sign-in attempts. Please try again later.' },
 });
 
 const attendancePunchLimiter = rateLimit({

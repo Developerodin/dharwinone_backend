@@ -65,6 +65,10 @@ const envVarsSchema = Joi.object()
     BOLNA_FROM_PHONE_NUMBER: Joi.string().optional().description('Bolna caller ID in E.164 format'),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
+
+    // Auth rate limit (deployed apps often share IPs; increase to avoid 429 on sign-in)
+    RATE_LIMIT_AUTH_WINDOW_MINUTES: Joi.number().optional().default(15).description('Auth rate limit window in minutes'),
+    RATE_LIMIT_AUTH_MAX: Joi.number().optional().default(200).description('Max failed auth requests per window per IP'),
   })
   .unknown();
 
@@ -137,6 +141,10 @@ const config = {
     agentId: envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
     fromPhoneNumber: envVars.BOLNA_FROM_PHONE_NUMBER || envVars.CALLER_ID || '',
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
+  },
+  rateLimit: {
+    authWindowMinutes: envVars.RATE_LIMIT_AUTH_WINDOW_MINUTES ?? 15,
+    authMax: envVars.RATE_LIMIT_AUTH_MAX ?? 200,
   },
 };
 
