@@ -47,7 +47,7 @@ const studentCourseProgressSchema = mongoose.Schema(
           },
           contentType: {
             type: String,
-            enum: ['upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test'],
+            enum: ['upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'essay'],
           },
         },
       ],

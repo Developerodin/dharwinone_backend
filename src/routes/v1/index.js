@@ -11,6 +11,7 @@ import uploadRoute from './upload.route.js';
 import trainingModuleRoute from './trainingModule.route.js';
 import studentCourseRoute from './studentCourse.route.js';
 import studentQuizRoute from './studentQuiz.route.js';
+import studentEssayRoute from './studentEssay.route.js';
 import certificateRoute from './certificate.route.js';
 import evaluationRoute from './evaluation.route.js';
 import analyticsRoute from './analytics.route.js';
@@ -147,6 +148,10 @@ const defaultRoutes = [
   {
     path: '/training/students',
     route: studentQuizRoute,
+  },
+  {
+    path: '/training/students',
+    route: studentEssayRoute,
   },
   {
     path: '/certificates',

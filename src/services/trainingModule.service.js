@@ -14,6 +14,12 @@ const normalizeQuizQuestions = (questions = []) =>
     })),
   }));
 
+const normalizeEssayQuestions = (questions = []) =>
+  questions.map((q) => ({
+    questionText: q.questionText,
+    expectedAnswer: q.expectedAnswer || undefined,
+  }));
+
 /**
  * Create a training module
  * @param {Object} moduleBody - Training module data
@@ -50,6 +56,8 @@ const createTrainingModule = async (moduleBody, currentUser) => {
         duration: item.duration || 0,
         order: i,
       };
+      if (item.sectionTitle != null) processedItem.sectionTitle = item.sectionTitle;
+      if (item.sectionIndex != null) processedItem.sectionIndex = item.sectionIndex;
 
       // Handle content-specific fields
       switch (item.contentType) {
@@ -118,7 +126,7 @@ const createTrainingModule = async (moduleBody, currentUser) => {
           break;
 
         case 'quiz':
-          // Inline quiz questions in training module schema
+          if (item.difficulty) processedItem.difficulty = item.difficulty;
           if (item.quizData?.questions) {
             processedItem.quiz = {
               questions: normalizeQuizQuestions(item.quizData.questions),
@@ -130,8 +138,12 @@ const createTrainingModule = async (moduleBody, currentUser) => {
           }
           break;
 
-        case 'test':
-          processedItem.testLinkOrReference = item.testLinkOrReference;
+        case 'essay':
+          if (item.essayData?.questions) {
+            processedItem.essay = { questions: normalizeEssayQuestions(item.essayData.questions) };
+          } else if (item.essay?.questions) {
+            processedItem.essay = { questions: normalizeEssayQuestions(item.essay.questions) };
+          }
           break;
       }
 
@@ -149,6 +161,7 @@ const createTrainingModule = async (moduleBody, currentUser) => {
     mentorsAssigned: moduleBody.mentorsAssigned || [],
     playlist: processedPlaylist,
     status: moduleBody.status || 'draft',
+    ...(moduleBody.estimatedDuration != null && { estimatedDuration: moduleBody.estimatedDuration }),
   });
 
   return trainingModule.populate([
@@ -300,6 +313,8 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
         duration: item.duration || 0,
         order: i,
       };
+      if (item.sectionTitle != null) processedItem.sectionTitle = item.sectionTitle;
+      if (item.sectionIndex != null) processedItem.sectionIndex = item.sectionIndex;
 
       // Handle content-specific fields
       switch (item.contentType) {
@@ -380,6 +395,7 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
           break;
 
         case 'quiz':
+          if (item.difficulty) processedItem.difficulty = item.difficulty;
           if (item.quizData?.questions) {
             processedItem.quiz = {
               questions: normalizeQuizQuestions(item.quizData.questions),
@@ -389,7 +405,6 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
               questions: normalizeQuizQuestions(item.quiz.questions),
             };
           } else if (item._id) {
-            // Keep existing inline quiz if frontend didn't resend it
             const existingItem = module.playlist.find((p) => p._id.toString() === String(item._id));
             if (existingItem?.quiz?.questions) {
               processedItem.quiz = existingItem.quiz;
@@ -397,8 +412,17 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
           }
           break;
 
-        case 'test':
-          processedItem.testLinkOrReference = item.testLinkOrReference;
+        case 'essay':
+          if (item.essayData?.questions) {
+            processedItem.essay = { questions: normalizeEssayQuestions(item.essayData.questions) };
+          } else if (item.essay?.questions) {
+            processedItem.essay = { questions: normalizeEssayQuestions(item.essay.questions) };
+          } else if (item._id) {
+            const existingItem = module.playlist.find((p) => p._id.toString() === String(item._id));
+            if (existingItem?.essay?.questions) {
+              processedItem.essay = existingItem.essay;
+            }
+          }
           break;
       }
 

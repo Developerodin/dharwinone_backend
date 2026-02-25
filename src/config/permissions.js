@@ -9,7 +9,14 @@ export const permissionAliases = {
   // Activity logs API: derived permission is "activity.read" (from logs.activity)
   'activityLogs.read': ['activityLogs.read', 'activity.read'],
   'activityLogs.manage': ['activityLogs.manage', 'activity.manage'],
-  // Training modules: map to permission format "training.modules:view,create,edit,delete"
+  // Training modules / modules: route uses "modules.manage", permission may be "training.modules.manage"
+  'modules.read': ['modules.read', 'training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
+  'modules.manage': [
+    'modules.manage',
+    'training.modules.manage',
+    'training.modules:create,edit,delete',
+    'training.modules:view,create,edit,delete',
+  ],
   'training.modules.read': ['training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
   'training.modules.manage': [
     'training.modules.manage',

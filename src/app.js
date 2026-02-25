@@ -39,8 +39,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(xss());
 app.use(mongoSanitize());
 
-// gzip compression
-app.use(compression());
+// gzip compression — skip for SSE streams so events flush immediately
+app.use(compression({
+  filter: (req, res) => {
+    if (res.getHeader('Content-Type') === 'text/event-stream') return false;
+    return compression.filter(req, res);
+  },
+}));
 
 // enable cors
 const corsOptions = {

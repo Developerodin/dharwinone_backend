@@ -76,7 +76,7 @@ const trainingModuleSchema = mongoose.Schema(
       {
         contentType: {
           type: String,
-          enum: ['upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test'],
+          enum: ['upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'essay'],
           required: true,
         },
         title: {
@@ -127,10 +127,33 @@ const trainingModuleSchema = mongoose.Schema(
           type: String,
           trim: true,
         },
+        // For essay
+        essay: {
+          questions: [
+            {
+              questionText: {
+                type: String,
+                trim: true,
+              },
+              expectedAnswer: {
+                type: String,
+                trim: true,
+              },
+            },
+          ],
+        },
         // Order/position in playlist
         order: {
           type: Number,
           default: 0,
+        },
+        // Nested module/section (from document with multiple modules)
+        sectionTitle: { type: String, trim: true },
+        sectionIndex: { type: Number },
+        difficulty: {
+          type: String,
+          enum: ['easy', 'medium', 'hard'],
+          default: 'medium',
         },
       },
     ],
@@ -139,6 +162,10 @@ const trainingModuleSchema = mongoose.Schema(
       type: String,
       enum: ['draft', 'published', 'archived'],
       default: 'draft',
+    },
+    estimatedDuration: {
+      type: Number,
+      default: 0,
     },
   },
   {

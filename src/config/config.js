@@ -42,8 +42,11 @@ const envVarsSchema = Joi.object()
     FRONTEND_BASE_URL: Joi.string().optional().description('Frontend base URL for email links'),
     BACKEND_PUBLIC_URL: Joi.string().optional().description('Backend public URL for share links (e.g. https://api.example.com)'),
 
-    // OpenAI (blog AI)
-    OPENAI_API_KEY: Joi.string().optional().description('OpenAI API key for blog generation'),
+    // OpenAI (blog AI, Create Module with AI, cover image generation)
+    OPENAI_API_KEY: Joi.string().optional().description('OpenAI API key for blog, module AI, and DALL-E cover images'),
+
+    // YouTube (Create Module with AI)
+    YOUTUBE_API_KEY: Joi.string().optional().description('YouTube Data API v3 key'),
 
     // LiveKit
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
@@ -102,6 +105,9 @@ const config = {
   backendPublicUrl: envVars.BACKEND_PUBLIC_URL || `http://localhost:${envVars.PORT}`,
   openai: {
     apiKey: envVars.OPENAI_API_KEY || '',
+  },
+  youtube: {
+    apiKey: envVars.YOUTUBE_API_KEY || '',
   },
   aws: {
     accessKeyId: envVars.AWS_ACCESS_KEY_ID,

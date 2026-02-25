@@ -13,11 +13,21 @@ const uploadedFileSchema = Joi.object({
 const playlistItemSchema = Joi.object({
   _id: Joi.string().custom(objectId).optional(),
   contentType: Joi.string()
-    .valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test')
+    .valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'essay')
     .required(),
   title: Joi.string().required().trim(),
   duration: Joi.number().integer().min(0).default(0),
   order: Joi.number().integer().min(0).optional(),
+  sectionTitle: Joi.string().trim().optional(),
+  sectionIndex: Joi.number().integer().min(0).optional(),
+  difficulty: Joi.string()
+    .valid('easy', 'medium', 'hard')
+    .default('medium')
+    .when('contentType', {
+      is: 'quiz',
+      then: Joi.optional(),
+      otherwise: Joi.forbidden(),
+    }),
   // Content-specific fields
   videoFile: uploadedFileSchema.optional(),
   pdfDocument: uploadedFileSchema.optional(),
@@ -28,11 +38,6 @@ const playlistItemSchema = Joi.object({
   }),
   blogContent: Joi.string().when('contentType', {
     is: 'blog',
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
-  testLinkOrReference: Joi.string().when('contentType', {
-    is: 'test',
     then: Joi.required(),
     otherwise: Joi.optional(),
   }),
@@ -79,6 +84,34 @@ const playlistItemSchema = Joi.object({
       .min(1),
   }).when('contentType', {
     is: 'quiz',
+    then: Joi.optional(),
+    otherwise: Joi.optional(),
+  }),
+  essayData: Joi.object({
+    questions: Joi.array()
+      .items(
+        Joi.object({
+          questionText: Joi.string().required(),
+          expectedAnswer: Joi.string().allow('').optional(),
+        })
+      )
+      .min(1),
+  }).when('contentType', {
+    is: 'essay',
+    then: Joi.optional(),
+    otherwise: Joi.optional(),
+  }),
+  essay: Joi.object({
+    questions: Joi.array()
+      .items(
+        Joi.object({
+          questionText: Joi.string().required(),
+          expectedAnswer: Joi.string().allow('').optional(),
+        })
+      )
+      .min(1),
+  }).when('contentType', {
+    is: 'essay',
     then: Joi.optional(),
     otherwise: Joi.optional(),
   }),
