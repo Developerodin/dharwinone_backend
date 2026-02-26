@@ -5,6 +5,25 @@ import TrainingModule from '../models/trainingModule.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Student from '../models/student.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
+import { explainQuizCorrectAnswer } from './essayGrade.service.js';
+
+/**
+ * Deduplicate question options by text (keep first occurrence; if any duplicate is correct, mark kept as correct).
+ * @param {Array<{ text: string, isCorrect?: boolean }>} options
+ * @returns {Array<{ text: string, isCorrect: boolean }>}
+ */
+const deduplicateQuestionOptions = (options) => {
+  const result = [];
+  for (const opt of options || []) {
+    const existing = result.find((o) => o.text === (opt.text || '').trim());
+    if (existing) {
+      if (opt.isCorrect) existing.isCorrect = true;
+    } else {
+      result.push({ text: (opt.text || '').trim(), isCorrect: Boolean(opt.isCorrect) });
+    }
+  }
+  return result;
+};
 
 /**
  * Get quiz for student (sanitized - no correct answers shown)
@@ -47,21 +66,21 @@ const getQuiz = async (studentId, moduleId, playlistItemId) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Quiz has no questions');
   }
   
-  // Sanitize quiz: remove correct answer indicators
+  // Sanitize quiz: remove correct answer indicators and deduplicate options by text
   const sanitizedQuiz = {
     playlistItemId: playlistItemId,
     title: playlistItem.title,
     duration: playlistItem.duration,
-    questions: playlistItem.quiz.questions.map((q) => ({
-      questionText: q.questionText,
-      allowMultipleAnswers: q.allowMultipleAnswers,
-      options: q.options.map((opt) => ({
-        text: opt.text,
-        // Don't include isCorrect - student shouldn't see this
-      })),
-    })),
+    questions: playlistItem.quiz.questions.map((q) => {
+      const deduped = deduplicateQuestionOptions(q.options);
+      return {
+        questionText: q.questionText,
+        allowMultipleAnswers: q.allowMultipleAnswers,
+        options: deduped.map((opt) => ({ text: opt.text })),
+      };
+    }),
   };
-  
+
   return sanitizedQuiz;
 };
 
@@ -72,10 +91,9 @@ const getQuiz = async (studentId, moduleId, playlistItemId) => {
  * @returns {Object} Score object
  */
 const calculateScore = (questions, studentAnswers) => {
-  let correctCount = 0;
   let totalPoints = 0;
   const maxPoints = questions.length;
-  
+
   const gradedAnswers = studentAnswers.map((answer) => {
     const question = questions[answer.questionIndex];
     if (!question) {
@@ -86,51 +104,61 @@ const calculateScore = (questions, studentAnswers) => {
         pointsEarned: 0,
       };
     }
-    
-    // Get correct option indices
+
+    // Get correct option indices (ensure numbers for comparison)
     const correctOptions = question.options
       .map((opt, idx) => (opt.isCorrect ? idx : null))
       .filter((idx) => idx !== null)
+      .map((idx) => Number(idx))
       .sort((a, b) => a - b);
-    
-    // Sort student's selected options for comparison
-    const selectedSorted = [...answer.selectedOptions].sort((a, b) => a - b);
-    
-    // Check if answer is correct
+
+    // Sort student's selected options for comparison (coerce to numbers - can come as strings from JSON)
+    const selectedSorted = [...(answer.selectedOptions || [])]
+      .map((o) => Number(o))
+      .filter((n) => !Number.isNaN(n))
+      .sort((a, b) => a - b);
+    const correctSet = new Set(correctOptions);
+
     let isCorrect = false;
+    let pointsEarned = 0;
+
     if (question.allowMultipleAnswers) {
-      // Multiple choice: all correct options must be selected, no incorrect ones
-      isCorrect =
-        selectedSorted.length === correctOptions.length &&
-        selectedSorted.every((idx, i) => idx === correctOptions[i]);
+      // Multiple choice: partial credit – reward correct selections, penalize wrong ones
+      const correctlySelected = selectedSorted.filter((idx) => correctSet.has(idx)).length;
+      const wrongSelected = selectedSorted.filter((idx) => !correctSet.has(idx)).length;
+      const totalCorrect = correctOptions.length;
+      if (totalCorrect > 0) {
+        pointsEarned = correctlySelected / totalCorrect - wrongSelected * 0.25;
+        pointsEarned = Math.min(1, Math.max(0, Math.round(pointsEarned * 100) / 100));
+      }
+      isCorrect = pointsEarned >= 1;
     } else {
-      // Single choice: exact match
+      // Single choice: exact match only
       isCorrect =
         selectedSorted.length === 1 &&
         correctOptions.length === 1 &&
         selectedSorted[0] === correctOptions[0];
+      pointsEarned = isCorrect ? 1 : 0;
     }
-    
-    if (isCorrect) {
-      correctCount++;
-      totalPoints++;
-    }
-    
+
+    totalPoints += pointsEarned;
+
     return {
       questionIndex: answer.questionIndex,
-      selectedOptions: answer.selectedOptions,
+      selectedOptions: selectedSorted,
       isCorrect,
-      pointsEarned: isCorrect ? 1 : 0,
+      pointsEarned,
     };
   });
-  
-  const percentage = maxPoints > 0 ? Math.round((correctCount / maxPoints) * 100) : 0;
-  
+
+  const percentage = maxPoints > 0 ? Math.round((totalPoints / maxPoints) * 100) : 0;
+  const correctCount = gradedAnswers.filter((a) => a.isCorrect).length;
+
   return {
     totalQuestions: maxPoints,
     correctAnswers: correctCount,
     percentage,
-    totalPoints,
+    totalPoints: Math.round(totalPoints * 100) / 100,
     maxPoints,
     gradedAnswers,
   };
@@ -179,28 +207,50 @@ const submitQuizAttempt = async (studentId, moduleId, playlistItemId, attemptDat
   if (!playlistItem.quiz || !playlistItem.quiz.questions) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Quiz has no questions');
   }
-  
+
+  const questionsDeduped = playlistItem.quiz.questions.map((q) => ({
+    questionText: q.questionText,
+    allowMultipleAnswers: q.allowMultipleAnswers,
+    options: deduplicateQuestionOptions(q.options),
+  }));
+
   // Get previous attempts to determine attempt number
   const previousAttempts = await StudentQuizAttempt.find({
     student: studentId,
     module: moduleId,
     playlistItemId,
   }).sort({ attemptNumber: -1 });
-  
-  const attemptNumber = previousAttempts.length > 0 
-    ? previousAttempts[0].attemptNumber + 1 
+
+  const attemptNumber = previousAttempts.length > 0
+    ? previousAttempts[0].attemptNumber + 1
     : 1;
-  
-  // Calculate score
-  const scoreResult = calculateScore(playlistItem.quiz.questions, answers);
-  
+
+  // Calculate score using deduplicated questions (same structure as getQuiz)
+  const scoreResult = calculateScore(questionsDeduped, answers);
+  const questions = questionsDeduped;
+
+  // Add AI explanations for wrong answers
+  const gradedWithExplanations = await Promise.all(
+    scoreResult.gradedAnswers.map(async (graded) => {
+      if (graded.isCorrect) return { ...graded, explanation: undefined };
+      const question = questions[graded.questionIndex];
+      if (!question?.options?.length) return { ...graded, explanation: undefined };
+      const explanation = await explainQuizCorrectAnswer(
+        question.questionText,
+        question.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+        graded.selectedOptions
+      );
+      return { ...graded, explanation: explanation || undefined };
+    })
+  );
+
   // Create quiz attempt
   const quizAttempt = await StudentQuizAttempt.create({
     student: studentId,
     module: moduleId,
     playlistItemId,
     attemptNumber,
-    answers: scoreResult.gradedAnswers,
+    answers: gradedWithExplanations,
     score: {
       totalQuestions: scoreResult.totalQuestions,
       correctAnswers: scoreResult.correctAnswers,
@@ -336,25 +386,29 @@ const getQuizResults = async (studentId, moduleId, playlistItemId) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'No quiz attempt found');
   }
   
-  // Return quiz with correct answers and student's attempt
+  // Return quiz with correct answers and student's attempt (same deduplication as getQuiz)
   return {
     quiz: {
       playlistItemId,
       title: playlistItem.title,
       questions: playlistItem.quiz.questions.map((q, qIdx) => {
         const attemptAnswer = latestAttempt.answers.find(
-          (a) => a.questionIndex === qIdx
+          (a) => Number(a.questionIndex) === qIdx
         );
+        const selectedOpts = (attemptAnswer?.selectedOptions || []).map((o) => Number(o));
+        const deduped = deduplicateQuestionOptions(q.options);
+        const options = deduped.map((opt, optIdx) => ({
+          text: opt.text,
+          isCorrect: opt.isCorrect,
+          isSelected: selectedOpts.includes(optIdx),
+        }));
         return {
           questionText: q.questionText,
           allowMultipleAnswers: q.allowMultipleAnswers,
-          options: q.options.map((opt, optIdx) => ({
-            text: opt.text,
-            isCorrect: opt.isCorrect,
-            isSelected: attemptAnswer?.selectedOptions.includes(optIdx) || false,
-          })),
-          studentAnswer: attemptAnswer?.selectedOptions || [],
-          isCorrect: attemptAnswer?.isCorrect || false,
+          options,
+          studentAnswer: selectedOpts,
+          isCorrect: Boolean(attemptAnswer?.isCorrect),
+          explanation: attemptAnswer?.explanation || undefined,
         };
       }),
     },

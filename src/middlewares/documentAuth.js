@@ -4,22 +4,18 @@ import ApiError from '../utils/ApiError.js';
 
 /**
  * Document download authentication middleware.
- * Supports Bearer token (header) or query param ?token= for direct browser access.
+ * Supports: 1) Cookie (accessToken), 2) Bearer header, 3) Query param ?token= for direct browser access.
  */
 const documentAuth = async (req, res, next) => {
   return new Promise((resolve, reject) => {
-    const authHeader = req.headers.authorization;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      passport.authenticate('jwt', { session: false }, (err, user, info) => {
+    function tryWithReq(request) {
+      passport.authenticate('jwt', { session: false }, (err, user, _info) => {
         if (user) {
           req.user = user;
           return resolve();
         }
         tryQueryToken();
-      })(req, res, next);
-    } else {
-      tryQueryToken();
+      })(request, res, next);
     }
 
     function tryQueryToken() {
@@ -42,6 +38,9 @@ const documentAuth = async (req, res, next) => {
         resolve();
       })(fakeReq, res, next);
     }
+
+    // Try passport with original req first (covers Bearer header and accessToken cookie)
+    tryWithReq(req);
   })
     .then(() => next())
     .catch((err) => next(err));

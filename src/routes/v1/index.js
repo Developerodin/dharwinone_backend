@@ -23,6 +23,7 @@ import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
 import candidateRoute from './candidate.route.js';
 import jobRoute from './job.route.js';
+import externalJobRoute from './externalJob.route.js';
 import recruiterActivityRoute from './recruiterActivity.route.js';
 import recruiterExcelRoute from './recruiterExcel.route.js';
 import docsRoute from './docs.route.js';
@@ -121,6 +122,10 @@ const defaultRoutes = [
   {
     path: '/jobs',
     route: jobRoute,
+  },
+  {
+    path: '/external-jobs',
+    route: externalJobRoute,
   },
   {
     path: '/recruiter-activities',

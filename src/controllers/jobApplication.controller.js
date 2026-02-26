@@ -2,6 +2,8 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
+import Candidate from '../models/candidate.model.js';
+import JobApplication from '../models/jobApplication.model.js';
 import {
   getJobApplicationById,
   updateJobApplicationStatus,
@@ -34,6 +36,51 @@ const list = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const getMyApplications = catchAsync(async (req, res) => {
+  const candidate = await Candidate.findOne({ owner: req.user._id });
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found');
+  }
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const filter = { candidate: candidate._id };
+  if (req.query.status) filter.status = req.query.status;
+
+  const result = await JobApplication.paginate(filter, {
+    ...options,
+    sortBy: options.sortBy || 'createdAt:desc',
+    populate: [
+      { path: 'job', select: 'title organisation status location jobType' },
+      { path: 'candidate', select: 'fullName email' },
+      { path: 'appliedBy', select: 'name email' },
+    ],
+  });
+  res.send(result);
+});
+
+const WITHDRAWABLE_STATUSES = ['Applied', 'Screening'];
+
+const withdrawApplication = catchAsync(async (req, res) => {
+  const candidate = await Candidate.findOne({ owner: req.user._id });
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found');
+  }
+  const application = await JobApplication.findById(req.params.applicationId);
+  if (!application) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Application not found');
+  }
+  if (String(application.candidate) !== String(candidate._id)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Not your application');
+  }
+  if (!WITHDRAWABLE_STATUSES.includes(application.status)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Cannot withdraw application in "${application.status}" status`
+    );
+  }
+  await JobApplication.findByIdAndDelete(application._id);
+  res.status(httpStatus.NO_CONTENT).send();
+});
+
 const create = catchAsync(async (req, res) => {
   const application = await createJobApplication(req.body, req.user);
   res.status(httpStatus.CREATED).send(application);
@@ -44,4 +91,4 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { get, updateStatus, list, create, remove };
+export { get, updateStatus, list, getMyApplications, withdrawApplication, create, remove };

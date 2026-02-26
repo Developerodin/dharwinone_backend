@@ -52,6 +52,7 @@ const list = catchAsync(async (req, res) => {
     'experienceLevel',
     'createdBy',
     'search',
+    'forCandidates',
   ]);
 
   filter.userRoleIds = req.user.roleIds || [];
@@ -70,7 +71,8 @@ const get = catchAsync(async (req, res) => {
 
   const isAdmin = await userIsAdmin(req.user);
   const isOwner = String(job.createdBy?._id || job.createdBy) === String(req.user.id || req.user._id);
-  if (!isAdmin && !isOwner) {
+  const isActiveJob = job.status === 'Active';
+  if (!isAdmin && !isOwner && !isActiveJob) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 

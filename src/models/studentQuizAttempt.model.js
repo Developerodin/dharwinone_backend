@@ -43,6 +43,9 @@ const studentQuizAttemptSchema = mongoose.Schema(
           type: Number,
           default: 0,
         },
+        explanation: {
+          type: String, // AI-generated explanation for wrong answers (why correct option is right)
+        },
       },
     ],
     // Scoring

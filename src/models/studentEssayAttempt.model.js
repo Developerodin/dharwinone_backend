@@ -36,6 +36,11 @@ const studentEssayAttemptSchema = mongoose.Schema(
         },
         score: { type: Number },
         feedback: { type: String },
+        rubric: {
+          type: mongoose.Schema.Types.Mixed,
+          description: 'Breakdown: accuracy, completeness, clarity, criticalThinking (0-25 each)',
+        },
+        suggestions: { type: String, description: 'AI improvement tips' },
       },
     ],
     score: {

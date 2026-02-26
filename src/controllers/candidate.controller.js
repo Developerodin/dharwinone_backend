@@ -31,6 +31,7 @@ import {
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
+import { getUserPermissionContext } from '../services/permission.service.js';
 
 const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
 
@@ -383,8 +384,11 @@ const getCandidateDocuments = catchAsync(async (req, res) => {
 
 const downloadDocument = catchAsync(async (req, res) => {
   const { candidateId, documentIndex } = req.params;
-  
-  // User is set by documentAuth middleware (supports both Bearer token and query param token)
+
+  // documentAuth sets req.user but not req.authContext; compute canManageCandidates for isOwnerOrAdmin check
+  const authContext = await getUserPermissionContext(req.user);
+  req.user.canManageCandidates = authContext?.permissions?.has('candidates.manage') ?? false;
+
   const documentData = await getDocumentDownloadUrl(candidateId, parseInt(documentIndex, 10), req.user);
   
   // Check if client wants JSON response (for programmatic access)

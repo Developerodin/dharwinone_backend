@@ -3,7 +3,6 @@ import ApiError from '../utils/ApiError.js';
 import StudentEssayAttempt from '../models/studentEssayAttempt.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
-import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import { markItemComplete } from './studentCourse.service.js';
 import { gradeEssayAttempt } from './essayGrade.service.js';
 
@@ -69,6 +68,8 @@ const submitEssayAttempt = async (studentId, moduleId, playlistItemId, body) => 
         typedAnswer: g.typedAnswer || '',
         score: g.score,
         feedback: g.feedback,
+        rubric: g.rubric,
+        suggestions: g.suggestions,
       }))
     : answers.map((a) => ({
         questionIndex: a.questionIndex,

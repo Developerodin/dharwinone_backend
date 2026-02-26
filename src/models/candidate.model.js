@@ -26,7 +26,7 @@ const experienceSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const DOCUMENT_TYPES = ['Aadhar', 'PAN', 'Bank', 'Passport', 'Other'];
+const DOCUMENT_TYPES = ['Resume', 'Aadhar', 'PAN', 'Bank', 'Passport', 'Other'];
 
 const documentSchema = new mongoose.Schema(
   {

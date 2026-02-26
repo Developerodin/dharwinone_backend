@@ -85,6 +85,16 @@ jobSchema.index({ createdAt: -1 });
 jobSchema.plugin(toJSON);
 jobSchema.plugin(paginate);
 
+// Include createdAt (and updatedAt) in API response so Posted Date is available in the UI
+const originalJobToJSON = jobSchema.options.toJSON?.transform;
+jobSchema.options.toJSON = jobSchema.options.toJSON || {};
+jobSchema.options.toJSON.transform = function (doc, ret, options) {
+  if (originalJobToJSON) originalJobToJSON(doc, ret, options);
+  ret.createdAt = doc.createdAt;
+  ret.updatedAt = doc.updatedAt;
+  return ret;
+};
+
 const Job = mongoose.model('Job', jobSchema);
 
 export default Job;

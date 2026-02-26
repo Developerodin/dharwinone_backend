@@ -134,7 +134,7 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
       type: 'job_application',
       title: `Application status: ${application.status}`,
       message: `Your application for "${jobTitle}" is now ${application.status}.`,
-      link: '/ats/my-profile',
+      link: '/ats/my-applications',
     }).catch(() => {});
   }
 

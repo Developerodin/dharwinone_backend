@@ -3,6 +3,7 @@ import XLSX from 'xlsx';
 import Job from '../models/job.model.js';
 import JobTemplate from '../models/jobTemplate.model.js';
 import JobApplication from '../models/jobApplication.model.js';
+import Candidate from '../models/candidate.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
@@ -33,6 +34,25 @@ const queryJobs = async (filter, options) => {
       { skillTags: { $in: [searchRegex] } },
     ];
     delete filter.search;
+  }
+
+  // Candidate-facing: return all active jobs, no createdBy filter
+  if (filter.forCandidates) {
+    delete filter.forCandidates;
+    delete filter.userRoleIds;
+    delete filter.userId;
+    filter.status = 'Active';
+
+    const result = await Job.paginate(filter, options);
+    if (result.results && result.results.length > 0) {
+      for (const doc of result.results) {
+        await doc.populate([
+          { path: 'createdBy', select: 'name email' },
+          { path: 'templateId', select: 'name' },
+        ]);
+      }
+    }
+    return result;
   }
 
   // If user is not admin, filter by createdBy
@@ -385,8 +405,16 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
-  const canAccess = await isOwnerOrAdmin(currentUser, job);
-  if (!canAccess) {
+  if (job.status !== 'Active') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot apply to a job that is not active');
+  }
+  const canAccessJob = await isOwnerOrAdmin(currentUser, job);
+  const candidate = await Candidate.findById(candidateId);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  const isSelfApply = String(candidate.owner) === String(currentUser.id || currentUser._id);
+  if (!canAccessJob && !isSelfApply) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const existing = await JobApplication.findOne({ job: jobId, candidate: candidateId });

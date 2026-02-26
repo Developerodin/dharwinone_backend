@@ -65,10 +65,29 @@ const getJobApplications = {
   }),
 };
 
+const getMyApplications = {
+  query: Joi.object().keys({
+    status: Joi.string()
+      .valid(...STATUS_VALUES)
+      .optional(),
+    sortBy: Joi.string().optional(),
+    limit: Joi.number().integer().optional(),
+    page: Joi.number().integer().optional(),
+  }),
+};
+
+const withdrawMyApplication = {
+  params: Joi.object().keys({
+    applicationId: Joi.string().custom(objectId).required(),
+  }),
+};
+
 export {
   getJobApplication,
   updateJobApplicationStatus,
   getJobApplications,
+  getMyApplications,
+  withdrawMyApplication,
   createJobApplication,
   deleteJobApplication,
 };

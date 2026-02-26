@@ -8,6 +8,22 @@ import * as jobApplicationController from '../../controllers/jobApplication.cont
 const router = express.Router();
 
 router
+  .route('/my-applications')
+  .get(
+    auth(),
+    validate(jobApplicationValidation.getMyApplications),
+    jobApplicationController.getMyApplications
+  );
+
+router
+  .route('/my-applications/:applicationId')
+  .delete(
+    auth(),
+    validate(jobApplicationValidation.withdrawMyApplication),
+    jobApplicationController.withdrawApplication
+  );
+
+router
   .route('/')
   .get(
     auth(),
