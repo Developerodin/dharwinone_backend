@@ -1296,7 +1296,7 @@ export const generateModuleFromTitle = async (req, res) => {
       level: ['beginner', 'intermediate', 'advanced'].includes(level) ? level : 'intermediate',
       sections: Array.isArray(sections) ? sections : [],
       numBlogs: Math.max(0, Number(numBlogs) || 2),
-      numVideos: Math.max(0, Number(numVideos) || 0),
+      numVideos: Math.max(0, Number(numVideos) || 2),
       numQuizzes: Math.max(0, Number(numQuizzes) || 1),
       questionsPerQuiz: Math.min(10, Math.max(2, Number(questionsPerQuiz) || 4)),
       numEssays: Math.max(0, Number(numEssays) || 1),

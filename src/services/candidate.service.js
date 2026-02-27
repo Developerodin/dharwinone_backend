@@ -702,6 +702,40 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   candidate.isCompleted = candidate.isProfileCompleted === 100;
   
   await candidate.save();
+  
+  // Sync critical fields to the linked User model
+  if (candidate.owner) {
+    try {
+      const userUpdateData = {};
+      
+      // Sync name if fullName changed
+      if (updateBody.fullName) {
+        userUpdateData.name = updateBody.fullName;
+      }
+      
+      // Sync email if changed
+      if (updateBody.email) {
+        userUpdateData.email = updateBody.email;
+      }
+      
+      // Sync phone if changed
+      if (updateBody.phoneNumber) {
+        userUpdateData.phoneNumber = updateBody.phoneNumber;
+      }
+      
+      // Only update if there are fields to sync
+      if (Object.keys(userUpdateData).length > 0) {
+        console.log('Syncing candidate data to user:', candidate.owner, userUpdateData);
+        await updateUserById(candidate.owner, userUpdateData);
+        console.log('User synced successfully');
+      }
+    } catch (error) {
+      // Log error but don't fail the candidate update
+      console.error('Failed to sync candidate data to user:', error.message);
+      console.error('Error stack:', error.stack);
+    }
+  }
+  
   return candidate;
 };
 

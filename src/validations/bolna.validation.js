@@ -16,6 +16,21 @@ const initiateCall = {
     .required(),
 };
 
+const initiateCandidateCall = {
+  body: Joi.object()
+    .keys({
+      candidateId: Joi.string().custom(objectId).required(),
+      candidateName: Joi.string().required().trim(),
+      email: Joi.string().email().required().trim(),
+      phoneNumber: Joi.string().required().trim(),
+      countryCode: Joi.string().required().trim(),
+      jobId: Joi.string().custom(objectId).required(),
+      jobTitle: Joi.string().required().trim(),
+      companyName: Joi.string().required().trim(),
+    })
+    .required(),
+};
+
 const getCallStatus = {
   params: Joi.object().keys({
     executionId: Joi.string().required().trim(),
@@ -40,5 +55,5 @@ const deleteCallRecord = {
   }),
 };
 
-export { initiateCall, getCallStatus, getCallRecords, deleteCallRecord };
+export { initiateCall, initiateCandidateCall, getCallStatus, getCallRecords, deleteCallRecord };
 

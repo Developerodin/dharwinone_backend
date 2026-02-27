@@ -2,6 +2,7 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import documentAuth from '../../middlewares/documentAuth.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
+import { uploadSingle } from '../../middlewares/upload.js';
 import validate from '../../middlewares/validate.js';
 import * as candidateValidation from '../../validations/candidate.validation.js';
 import * as candidateController from '../../controllers/candidate.controller.js';
@@ -25,6 +26,10 @@ router
 router
   .route('/export')
   .post(...canManage, validate(candidateValidation.exportAllCandidates), candidateController.exportAll);
+
+router
+  .route('/import/excel')
+  .post(...canManage, uploadSingle('file'), candidateController.importExcel);
 
 router
   .route('/salary-slips/:candidateId')

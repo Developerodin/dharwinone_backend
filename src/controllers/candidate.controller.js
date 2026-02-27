@@ -28,6 +28,7 @@ import {
   getCandidateWeekOff,
   assignShiftToCandidates
 } from '../services/candidate.service.js';
+import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
@@ -1286,4 +1287,52 @@ const assignShift = catchAsync(async (req, res) => {
 
 export { updateJoining, updateResign, updateWeekOff, getWeekOff, assignShift };
 
+// Excel Import controller
+const importExcel = catchAsync(async (req, res) => {
+  console.log('Import Excel Request received');
+  console.log('Has file:', !!req.file);
+  console.log('File details:', req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : 'No file');
+  
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can import candidates from Excel');
+  }
+  
+  if (!req.file) {
+    console.error('No file in request');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Excel file is required. Please upload an Excel file.');
+  }
+  
+  const createdBy = req.user.id || req.user._id;
+  console.log('Created by:', createdBy);
+  
+  try {
+    console.log('Starting import...');
+    const result = await importCandidatesFromExcel(req.file.buffer, createdBy);
+    console.log('Import result:', result.summary);
+    
+    if (result.summary.failed === 0) {
+      res.status(httpStatus.CREATED).send({
+        message: 'All candidates imported successfully',
+        ...result,
+      });
+    } else if (result.summary.successful === 0) {
+      res.status(httpStatus.BAD_REQUEST).send({
+        message: 'Failed to import any candidates',
+        ...result,
+      });
+    } else {
+      res.status(httpStatus.MULTI_STATUS).send({
+        message: 'Some candidates imported successfully, some failed',
+        ...result,
+      });
+    }
+  } catch (error) {
+    console.error('Excel import error:', error);
+    console.error('Error stack:', error.stack);
+    throw new ApiError(httpStatus.BAD_REQUEST, error.message || 'Failed to import candidates from Excel');
+  }
+});
+
+export { importExcel };
 

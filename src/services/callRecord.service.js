@@ -340,52 +340,68 @@ function executionToCallRecordDoc(exec) {
 
 async function backfillFromBolna(options = {}) {
   const bolnaService = (await import('./bolna.service.js')).default;
+  const config = (await import('../config/config.js')).default;
   const maxPages = Math.min(Number(options.maxPages) || 2, 10);
   let backfilled = 0;
   let errors = 0;
-  for (let page = 1; page <= maxPages; page += 1) {
-    const result = await bolnaService.getAgentExecutions({ page_number: page, page_size: 50 });
-    if (!result.success || !result.data || !Array.isArray(result.data)) {
-      errors += 1;
-      break;
-    }
-    for (const exec of result.data) {
-      const doc = executionToCallRecordDoc(exec);
-      if (!doc) continue;
-      try {
-        const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
-        if (existing) {
-          await CallRecord.updateOne(
-            { executionId: doc.executionId },
-            {
-              $set: {
-                status: doc.status,
-                ...(doc.toPhoneNumber && {
-                  toPhoneNumber: doc.toPhoneNumber,
-                  recipientPhoneNumber: doc.recipientPhoneNumber,
-                  phone: doc.phone,
-                }),
-                ...(doc.fromPhoneNumber && {
-                  fromPhoneNumber: doc.fromPhoneNumber,
-                  userNumber: doc.userNumber,
-                }),
-                ...(doc.transcript && { transcript: doc.transcript }),
-                ...(doc.duration != null && { duration: doc.duration }),
-                ...(doc.recordingUrl && { recordingUrl: doc.recordingUrl }),
-                ...(doc.errorMessage != null && { errorMessage: doc.errorMessage }),
-                ...(doc.completedAt && { completedAt: doc.completedAt }),
-              },
-            }
-          );
-        } else {
-          await CallRecord.create(doc);
-          backfilled += 1;
-        }
-      } catch (_) {
+
+  // Backfill from both job recruiter agent and candidate agent
+  const agentIds = [
+    config.bolna?.agentId,
+    config.bolna?.candidateAgentId,
+  ].filter(Boolean);
+  const uniqueAgentIds = [...new Set(agentIds)];
+
+  for (const agentId of uniqueAgentIds) {
+    if (!agentId) continue;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const result = await bolnaService.getAgentExecutions({
+        agentId,
+        page_number: page,
+        page_size: 50,
+      });
+      if (!result.success || !result.data || !Array.isArray(result.data)) {
         errors += 1;
+        break;
       }
-    }
+      for (const exec of result.data) {
+        const doc = executionToCallRecordDoc(exec);
+        if (!doc) continue;
+        try {
+          const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
+          if (existing) {
+            await CallRecord.updateOne(
+              { executionId: doc.executionId },
+              {
+                $set: {
+                  status: doc.status,
+                  ...(doc.toPhoneNumber && {
+                    toPhoneNumber: doc.toPhoneNumber,
+                    recipientPhoneNumber: doc.recipientPhoneNumber,
+                    phone: doc.phone,
+                  }),
+                  ...(doc.fromPhoneNumber && {
+                    fromPhoneNumber: doc.fromPhoneNumber,
+                    userNumber: doc.userNumber,
+                  }),
+                  ...(doc.transcript && { transcript: doc.transcript }),
+                  ...(doc.duration != null && { duration: doc.duration }),
+                  ...(doc.recordingUrl && { recordingUrl: doc.recordingUrl }),
+                  ...(doc.errorMessage != null && { errorMessage: doc.errorMessage }),
+                  ...(doc.completedAt && { completedAt: doc.completedAt }),
+                },
+              }
+            );
+          } else {
+            await CallRecord.create(doc);
+            backfilled += 1;
+          }
+        } catch (_) {
+          errors += 1;
+        }
+      }
     if (!result.has_more) break;
+  }
   }
   return { backfilled, errors };
 }

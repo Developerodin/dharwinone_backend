@@ -236,6 +236,56 @@ const createJobFromTemplate = {
   }).required(),
 };
 
+// Public job validations
+const listPublicJobs = {
+  query: Joi.object().keys({
+    title: Joi.string().optional().trim(),
+    location: Joi.string().optional().trim(),
+    jobType: Joi.string()
+      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+      .optional(),
+    experienceLevel: Joi.string()
+      .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
+      .optional(),
+    limit: Joi.number().integer().min(1).max(100).default(10),
+    page: Joi.number().integer().min(1).default(1),
+  }),
+};
+
+const getPublicJob = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const publicApplyToJob = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    fullName: Joi.string().required().trim().min(2).messages({
+      'any.required': 'Full name is required',
+      'string.empty': 'Full name cannot be empty',
+      'string.min': 'Full name must be at least 2 characters',
+    }),
+    email: Joi.string().email().required().trim().messages({
+      'any.required': 'Email is required',
+      'string.email': 'Email must be valid',
+    }),
+    password: Joi.string().required().min(8).messages({
+      'any.required': 'Password is required',
+      'string.min': 'Password must be at least 8 characters',
+    }),
+    phoneNumber: Joi.string().required().trim().messages({
+      'any.required': 'Phone number is required',
+    }),
+    countryCode: Joi.string().required().trim().default('US').messages({
+      'any.required': 'Country code is required',
+    }),
+    coverLetter: Joi.string().optional().trim().allow('', null),
+  }).required(),
+};
+
 export {
   createJob,
   getJobs,
@@ -252,4 +302,7 @@ export {
   updateJobTemplate,
   deleteJobTemplate,
   createJobFromTemplate,
+  listPublicJobs,
+  getPublicJob,
+  publicApplyToJob,
 };

@@ -62,10 +62,10 @@ const singleCandidateSchema = Joi.object().keys({
   fullName: Joi.string().required(),
   email: Joi.string().email().required(),
   phoneNumber: Joi.string()
-    .pattern(/^[2-9]\d{9}$/)
+    .pattern(/^\d{6,15}$/)
     .required()
     .messages({
-      'string.pattern.base': 'Phone number must be a valid 10-digit number (US or Indian format)',
+      'string.pattern.base': 'Phone number must be 6-15 digits',
       'any.required': 'Phone number is required',
     }),
   password: Joi.string().custom(passwordValidator),
@@ -156,8 +156,8 @@ const updateCandidate = {
     .keys({
       fullName: Joi.string(),
       email: Joi.string().email(),
-      phoneNumber: Joi.string().pattern(/^[2-9]\d{9}$/).messages({
-        'string.pattern.base': 'Phone number must be a valid 10-digit number (US or Indian format)',
+      phoneNumber: Joi.string().pattern(/^\d{6,15}$/).messages({
+        'string.pattern.base': 'Phone number must be 6-15 digits',
       }),
       profilePicture: Joi.object({
         url: Joi.string().uri().optional(),

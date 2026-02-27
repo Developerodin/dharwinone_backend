@@ -21,11 +21,11 @@ function getConfig() {
 
 /**
  * Initiate a call via Bolna.
- * @param {Object} params - { phone, candidateName, jobTitle, organisation, jobType, location?, experienceLevel?, salaryRange?, fromPhoneNumber? }
+ * @param {Object} params - { phone, candidateName, jobTitle, organisation, jobType, location?, experienceLevel?, salaryRange?, fromPhoneNumber?, agentId? }
  * @returns {Promise<{ success: boolean, executionId?: string, error?: string }>}
  */
 async function initiateCall(params) {
-  const { apiKey, agentId, apiBase } = getConfig();
+  const { apiKey, agentId: defaultAgentId, apiBase } = getConfig();
   if (!apiKey) {
     return { success: false, error: 'BOLNA_API_KEY is not set. Add it to .env to use Bolna calling.' };
   }
@@ -39,6 +39,8 @@ async function initiateCall(params) {
     location,
     experienceLevel,
     salaryRange,
+    agentId,
+    userData: extraUserData,
   } = params;
 
   if (!phone) {
@@ -64,8 +66,13 @@ async function initiateCall(params) {
   if (experienceLevel) userData.experience_level = experienceLevel;
   if (salaryRange) userData.salary_range = salaryRange;
 
+  // Merge any extra user_data fields (for rich candidate/job context)
+  if (extraUserData && typeof extraUserData === 'object') {
+    Object.assign(userData, extraUserData);
+  }
+
   const payload = {
-    agent_id: agentId,
+    agent_id: agentId || defaultAgentId,
     recipient_phone_number: recipientPhone,
     user_data: userData,
   };
@@ -252,10 +259,63 @@ async function getAgentExecutions(options = {}) {
   }
 }
 
+/**
+ * Update an agent's system prompt via the Bolna PATCH API.
+ * @param {string} agentId
+ * @param {string} systemPrompt - The full prompt text (variables already interpolated)
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+async function updateAgentPrompt(agentId, systemPrompt) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) {
+    return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  }
+  if (!agentId || !systemPrompt) {
+    return { success: false, error: 'agentId and systemPrompt are required.' };
+  }
+
+  try {
+    const res = await fetch(`${apiBase}/v2/agent/${agentId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        agent_prompts: {
+          task_1: {
+            system_prompt: systemPrompt,
+          },
+        },
+      }),
+    });
+
+    const text = await res.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch { /* ignore */ }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error)) || text || res.statusText;
+      logger.error(`Bolna PATCH prompt error (${res.status}): ${message}`);
+      return { success: false, error: message };
+    }
+
+    logger.info(`Bolna agent prompt updated for ${agentId}`);
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Bolna PATCH prompt exception: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
 export default {
   initiateCall,
   getExecutionDetails,
   getAgentExecutions,
   getConfig,
+  updateAgentPrompt,
 };
 

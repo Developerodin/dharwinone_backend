@@ -6,6 +6,9 @@ import * as livekitValidation from '../../validations/livekit.validation.js';
 import * as livekitController from '../../controllers/livekit.controller.js';
 import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
+import * as jobValidation from '../../validations/job.validation.js';
+import * as jobController from '../../controllers/job.controller.js';
+import { uploadJobApplicationFiles } from '../../middlewares/upload.js';
 
 const router = express.Router();
 
@@ -101,6 +104,30 @@ router.post(
   '/meetings/end',
   validate(meetingValidation.endMeetingByRoomPublic),
   meetingController.endMeetingByRoomPublic
+);
+
+/**
+ * GET /v1/public/jobs
+ * Public job listing (no auth). Returns only Active jobs with pagination and filters.
+ */
+router.get('/jobs', validate(jobValidation.listPublicJobs), jobController.listPublicJobs);
+
+/**
+ * GET /v1/public/jobs/:jobId
+ * Public job details (no auth). Returns job if status is Active.
+ */
+router.get('/jobs/:jobId', validate(jobValidation.getPublicJob), jobController.getPublicJob);
+
+/**
+ * POST /v1/public/jobs/:jobId/apply
+ * Public job application (no auth). Creates user, candidate with resume, and job application.
+ * Returns auth tokens for auto-login.
+ */
+router.post(
+  '/jobs/:jobId/apply',
+  uploadJobApplicationFiles,
+  validate(jobValidation.publicApplyToJob),
+  jobController.publicApplyToJob
 );
 
 export default router;

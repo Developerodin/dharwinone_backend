@@ -152,6 +152,7 @@ const punchIn = async (studentId, body = {}) => {
   const attendance = await Attendance.create({
     student: studentId,
     studentEmail: student.user?.email ?? student.email ?? '',
+    studentName: student.user?.name ?? '',
     date: attendanceDate,
     day,
     punchIn: punchInTime,
@@ -389,6 +390,7 @@ const getTrackList = async () => {
         punchOut: { $first: '$punchOut' },
         timezone: { $first: '$timezone' },
         duration: { $first: '$duration' },
+        studentEmail: { $first: '$studentEmail' },
         hasOpen: { $max: { $cond: [{ $eq: ['$punchOut', null] }, 1, 0] } },
       },
     },
@@ -400,6 +402,7 @@ const getTrackList = async () => {
   const byStudent = new Map(students.map((s) => [s._id.toString(), s]));
   const results = latestPerStudent.map((row) => {
     const student = byStudent.get(row._id?.toString?.());
+    const user = student?.user;
     const punchIn = row.punchIn ? new Date(row.punchIn) : null;
     const punchOut = row.punchOut ? new Date(row.punchOut) : null;
     const durationMs =
@@ -410,8 +413,8 @@ const getTrackList = async () => {
           : null;
     return {
       studentId: row._id?.toString?.(),
-      studentName: student?.user?.name ?? student?.user?.email ?? '—',
-      email: student?.user?.email ?? '—',
+      studentName: user?.name ?? '—',
+      email: user?.email ?? row.studentEmail ?? '—',
       isPunchedIn: row.hasOpen === 1,
       punchIn: row.punchIn != null ? row.punchIn : null,
       punchOut: row.punchOut != null ? row.punchOut : null,
@@ -425,7 +428,7 @@ const getTrackList = async () => {
   studentsWithNoAttendance.forEach((s) => {
     results.push({
       studentId: s._id?.toString?.(),
-      studentName: s?.user?.name ?? s?.user?.email ?? '—',
+      studentName: s?.user?.name ?? '—',
       email: s?.user?.email ?? '—',
       isPunchedIn: false,
       punchIn: null,
@@ -468,7 +471,7 @@ const getTrackHistory = async (options = {}) => {
     return {
       id: r._id?.toString?.(),
       studentId: r.student?._id?.toString?.() ?? r.student?.toString?.(),
-      studentName: user?.name ?? user?.email ?? r.studentEmail ?? '—',
+      studentName: user?.name ?? '—',
       email: user?.email ?? r.studentEmail ?? '—',
       date: r.date,
       day: r.day,

@@ -14,7 +14,7 @@ const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 
 const getJobApplicationById = async (id) => {
   const application = await JobApplication.findById(id)
     .populate('job', 'title organisation status createdBy')
-    .populate('candidate', 'fullName email phoneNumber')
+    .populate('candidate', 'fullName email phoneNumber countryCode')
     .populate('appliedBy', 'name email');
   return application;
 };
@@ -202,7 +202,7 @@ const queryJobApplications = async (filter, options, currentUser) => {
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber' },
+      { path: 'candidate', select: 'fullName email phoneNumber countryCode' },
       { path: 'appliedBy', select: 'name email' },
     ],
   });

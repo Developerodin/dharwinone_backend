@@ -14,6 +14,16 @@ const attendanceSchema = mongoose.Schema(
       trim: true,
       index: true,
     },
+    studentName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    studentName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     date: {
       type: Date,
       required: true,

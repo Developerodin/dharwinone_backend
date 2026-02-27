@@ -221,6 +221,27 @@ const getJobsTemplateBuffer = () => {
   }];
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.json_to_sheet(headers);
+  
+  // Add data validation notes as a second row
+  const notes = {
+    'Job Title': '(Required)',
+    'Organisation Name': '(Required)',
+    'Organisation Website': '',
+    'Organisation Email': '',
+    'Organisation Phone': '',
+    'Organisation Address': '',
+    'Job Type': 'Full-time | Part-time | Contract | Temporary | Internship | Freelance',
+    'Location': '(Required)',
+    'Skill Tags': 'Separate with semicolons (;)',
+    'Job Description': '(Required)',
+    'Salary Min': 'Number',
+    'Salary Max': 'Number',
+    'Salary Currency': 'USD, EUR, GBP, etc.',
+    'Experience Level': 'Entry Level | Mid Level | Senior Level | Executive (or Junior, Mid, Senior)',
+    'Status': 'Active | Draft | Closed | Archived',
+  };
+  XLSX.utils.sheet_add_json(worksheet, [notes], { skipHeader: true, origin: -1 });
+  
   worksheet['!cols'] = [
     { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 20 },
     { wch: 30 }, { wch: 15 }, { wch: 20 }, { wch: 30 }, { wch: 50 },
@@ -251,6 +272,28 @@ const importJobsFromExcel = async (fileBuffer, createdById) => {
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       try {
+        // Normalize experience level to match enum values
+        const normalizeExperienceLevel = (level) => {
+          if (!level) return null;
+          const normalized = String(level).trim();
+          const mapping = {
+            'junior': 'Entry Level',
+            'entry': 'Entry Level',
+            'entry level': 'Entry Level',
+            'mid': 'Mid Level',
+            'mid level': 'Mid Level',
+            'middle': 'Mid Level',
+            'senior': 'Senior Level',
+            'senior level': 'Senior Level',
+            'sr': 'Senior Level',
+            'executive': 'Executive',
+            'exec': 'Executive',
+            'lead': 'Senior Level',
+            'principal': 'Senior Level',
+          };
+          return mapping[normalized.toLowerCase()] || normalized;
+        };
+
         const jobData = {
           title: row['Job Title'] || row.Title || '',
           organisation: {
@@ -272,7 +315,7 @@ const importJobsFromExcel = async (fileBuffer, createdById) => {
             max: row['Salary Max'] || row['Max Salary'] || null,
             currency: row['Salary Currency'] || row.Currency || 'USD',
           },
-          experienceLevel: row['Experience Level'] || row.Experience || null,
+          experienceLevel: normalizeExperienceLevel(row['Experience Level'] || row.Experience),
           status: row.Status || 'Active',
         };
 
@@ -282,12 +325,17 @@ const importJobsFromExcel = async (fileBuffer, createdById) => {
 
         const validJobTypes = ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'];
         if (!validJobTypes.includes(jobData.jobType)) {
-          throw new Error(`Invalid job type: ${jobData.jobType}`);
+          throw new Error(`Invalid job type: ${jobData.jobType}. Must be one of: ${validJobTypes.join(', ')}`);
+        }
+
+        const validExperienceLevels = ['Entry Level', 'Mid Level', 'Senior Level', 'Executive'];
+        if (jobData.experienceLevel && !validExperienceLevels.includes(jobData.experienceLevel)) {
+          throw new Error(`Invalid experience level: ${jobData.experienceLevel}. Must be one of: ${validExperienceLevels.join(', ')}, or common variations like Junior, Senior, Mid, etc.`);
         }
 
         const validStatuses = ['Draft', 'Active', 'Closed', 'Archived'];
         if (!validStatuses.includes(jobData.status)) {
-          throw new Error(`Invalid status: ${jobData.status}`);
+          throw new Error(`Invalid status: ${jobData.status}. Must be one of: ${validStatuses.join(', ')}`);
         }
 
         const job = await createJob(createdById, jobData);
@@ -452,6 +500,312 @@ const createJobFromTemplate = async (templateId, createdById, jobData) => {
   return job;
 };
 
+/**
+ * Public apply to job service
+ * Creates user, candidate with resume, and job application in one transaction
+ * Returns auth tokens for auto-login
+ */
+const publicApplyToJobService = async (jobId, applicationData, files) => {
+  // Import necessary services
+  const User = (await import('../models/user.model.js')).default;
+  const { generateAuthTokens } = await import('./token.service.js');
+
+  // Validate job exists and is Active
+  const job = await getJobById(jobId);
+  if (!job) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  if (job.status !== 'Active') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'This job is no longer accepting applications');
+  }
+
+  const { fullName, email, password, phoneNumber, countryCode, coverLetter } = applicationData;
+
+  // Check if user with this email already exists
+  const existingUser = await User.findOne({ email: email.toLowerCase() });
+  if (existingUser) {
+    throw new ApiError(
+      httpStatus.CONFLICT,
+      'An account with this email already exists. Please login to apply.'
+    );
+  }
+
+  // Get Student role for auto-assignment
+  const { getRoleByName } = await import('./role.service.js');
+  const studentRole = await getRoleByName('Student');
+  if (!studentRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
+  }
+
+  // Create new user with Student role (active status for auto-login)
+  const user = await User.create({
+    name: fullName,
+    email: email.toLowerCase(),
+    password,
+    phoneNumber,
+    countryCode,
+    role: 'user', // Keep base role as 'user'
+    roleIds: [studentRole._id], // Assign Student role
+    status: 'active',
+  });
+
+  // Handle file uploads to S3
+  let resumeUrl = null;
+  const documentUrls = [];
+
+  if (files?.resume && files.resume[0]) {
+    const { uploadFileToS3 } = await import('./upload.service.js');
+    const resumeFile = files.resume[0];
+    const uploadResult = await uploadFileToS3(resumeFile, user._id, 'candidate-resumes');
+    resumeUrl = uploadResult.fileUrl;
+  }
+
+  if (files?.documents && files.documents.length > 0) {
+    const { uploadFileToS3 } = await import('./upload.service.js');
+    for (const doc of files.documents) {
+      const uploadResult = await uploadFileToS3(doc, user._id, 'candidate-documents');
+      documentUrls.push({
+        name: doc.originalname,
+        url: uploadResult.fileUrl,
+      });
+    }
+  }
+
+  // Create candidate profile with minimal info + resume
+  // For public applications, assign to the job creator (admin) so they're visible in candidates list
+  const jobCreatorId = job.createdBy || job.owner;
+  
+  // Check if candidate with this email already exists
+  let candidate = await Candidate.findOne({ email: email.toLowerCase() });
+  
+  if (!candidate) {
+    const candidateData = {
+      owner: jobCreatorId || user._id, // Assign to job creator/owner, fallback to self
+      adminId: jobCreatorId || user._id, // Use same for adminId
+      fullName,
+      email: email.toLowerCase(),
+      phoneNumber,
+      countryCode,
+      // Default empty arrays for required fields
+      qualifications: [],
+      experiences: [],
+      skills: [],
+      socialLinks: [],
+    };
+
+    if (resumeUrl) {
+      candidateData.documents = [{ name: 'Resume', url: resumeUrl }];
+    }
+
+    if (documentUrls.length > 0) {
+      candidateData.documents = [...(candidateData.documents || []), ...documentUrls];
+    }
+
+    candidate = await Candidate.create(candidateData);
+    console.log('✅ New candidate created:', { _id: candidate._id, fullName: candidate.fullName, email: candidate.email });
+  } else {
+    console.log('✅ Existing candidate found:', { _id: candidate._id, fullName: candidate.fullName, email: candidate.email });
+    
+    // Update phone number if it changed
+    if (candidate.phoneNumber !== phoneNumber || candidate.countryCode !== countryCode) {
+      candidate.phoneNumber = phoneNumber;
+      candidate.countryCode = countryCode;
+      await candidate.save();
+      console.log('✅ Candidate phone updated');
+    }
+    
+    // Add new documents if provided
+    if (resumeUrl || documentUrls.length > 0) {
+      const newDocs = [];
+      if (resumeUrl) newDocs.push({ name: 'Resume', url: resumeUrl });
+      if (documentUrls.length > 0) newDocs.push(...documentUrls);
+      
+      candidate.documents = [...(candidate.documents || []), ...newDocs];
+      await candidate.save();
+      console.log('✅ Candidate documents updated');
+    }
+  }
+
+  // Create job application
+  const application = await JobApplication.create({
+    job: jobId,
+    candidate: candidate._id,
+    appliedBy: user._id,
+    status: 'Applied',
+    coverLetter: coverLetter || '',
+  });
+  console.log('✅ Job application created:', { _id: application._id, candidate: application.candidate, job: application.job });
+
+  await application.populate([
+    { path: 'candidate', select: 'fullName email phoneNumber' },
+    { path: 'job', select: 'title organisation' },
+  ]);
+  console.log('✅ Job application populated:', { 
+    _id: application._id, 
+    candidateData: application.candidate ? { 
+      _id: application.candidate._id, 
+      fullName: application.candidate.fullName, 
+      email: application.candidate.email 
+    } : null 
+  });
+
+  // Generate auth tokens for auto-login
+  const tokens = await generateAuthTokens(user);
+
+  // Send welcome email with login credentials (async, don't wait)
+  const config = (await import('../config/config.js')).default;
+  const { sendJobApplicationWelcomeEmail } = await import('./email.service.js');
+  const loginUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/authentication/sign-in/`;
+  
+  sendJobApplicationWelcomeEmail(user.email, {
+    fullName,
+    email: user.email,
+    password, // Plain password before hashing
+    jobTitle: job.title,
+    companyName: job.organisation?.name || 'Company',
+    loginUrl,
+  }).catch((err) => {
+    console.error('Failed to send welcome email:', err);
+    // Don't fail the application if email fails
+  });
+
+  // Initiate verification call via Bolna (async, don't wait)
+  if (phoneNumber && countryCode) {
+    try {
+      const bolnaService = (await import('./bolna.service.js')).default;
+      const { numberToWords, currencyToWords } = await import('../utils/numberToWords.js');
+      
+      console.log(`Processing phone for ${fullName}: Raw="${phoneNumber}", Country="${countryCode}"`);
+      
+      // Format phone number to E.164 - more robust handling
+      let formattedPhone = String(phoneNumber).replace(/\D/g, ''); // Remove all non-digits
+      
+      console.log(`After digit extraction: "${formattedPhone}"`);
+      
+      // If phone already starts with country code digits, use as is
+      // Otherwise, add country prefix
+      if (!formattedPhone.startsWith('91') && !formattedPhone.startsWith('1') && 
+          !formattedPhone.startsWith('44') && !formattedPhone.startsWith('61')) {
+        const countryPrefix = countryCode === 'IN' ? '91' : 
+                             countryCode === 'US' ? '1' : 
+                             countryCode === 'GB' ? '44' : 
+                             countryCode === 'AU' ? '61' : '1';
+        formattedPhone = countryPrefix + formattedPhone;
+        console.log(`Added country prefix: "${formattedPhone}"`);
+      }
+      
+      // Add '+' prefix for E.164 format
+      formattedPhone = '+' + formattedPhone;
+      
+      console.log(`Final formatted phone: "${formattedPhone}" (length: ${formattedPhone.length})`);
+      
+      // Validate phone number length (check digits only, not the + sign)
+      const digitsOnly = formattedPhone.replace(/\D/g, '');
+      if (digitsOnly.length < 10 || digitsOnly.length > 15) {
+        console.warn(`⚠️ Invalid phone number format for ${fullName}: ${formattedPhone} (digits: ${digitsOnly.length})`);
+        // Skip call but don't fail the application
+      } else {
+        // Format salary range for voice
+        let salaryRange = '';
+        if (job.salaryRange) {
+          const { min, max, currency } = job.salaryRange;
+          const curr = currencyToWords(currency || 'USD');
+          if (min != null && max != null) {
+            salaryRange = `${numberToWords(min)} to ${numberToWords(max)} ${curr} per year`;
+          } else if (min != null) {
+            salaryRange = `From ${numberToWords(min)} ${curr} per year`;
+          } else if (max != null) {
+            salaryRange = `Up to ${numberToWords(max)} ${curr} per year`;
+          }
+        }
+
+        // Prepare context for Bolna agent
+        const callContext = {
+          phone: formattedPhone,
+          agentId: config.bolna.candidateAgentId, // Use candidate agent ID
+          candidate_name: fullName,
+          candidate_email: email,
+          job_title: job.title,
+          job_type: job.employmentType || 'Full-time',
+          location: `${job.location || 'Remote'}${job.workMode ? ` - ${job.workMode}` : ''}`,
+          experience_level: job.experienceLevel || 'Not specified',
+          salary_range: salaryRange || 'Competitive salary based on experience',
+          company_name: job.organisation?.name || 'Our Company',
+          application_date: new Date(application.createdAt).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          }),
+        };
+
+        // Initiate call
+        bolnaService.initiateCall(callContext).then((result) => {
+          if (result.success && result.executionId) {
+            // Update application with call details
+            JobApplication.updateOne(
+              { _id: application._id },
+              {
+                $set: {
+                  verificationCallExecutionId: result.executionId,
+                  verificationCallInitiatedAt: new Date(),
+                  verificationCallStatus: 'pending',
+                },
+              }
+            ).catch((err) => {
+              console.error('Failed to update application with call details:', err);
+            });
+
+            // Create call record
+            const callRecordService = require('./callRecord.service.js').default;
+            callRecordService.createRecord({
+              executionId: result.executionId,
+              recipientPhone: formattedPhone,
+              recipientName: fullName,
+              recipientEmail: email,
+              purpose: 'job_application_verification',
+              relatedJobApplication: application._id,
+              relatedJob: job._id,
+              relatedCandidate: candidate._id,
+              status: 'initiated',
+            }).catch((err) => {
+              console.error('Failed to create call record:', err);
+            });
+
+            console.log(`✅ Verification call initiated for ${fullName} (${formattedPhone}) - Execution: ${result.executionId}`);
+          } else {
+            console.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
+          }
+        }).catch((err) => {
+          console.error('Failed to initiate verification call:', err);
+          // Don't fail the application if call fails
+        });
+      }
+    } catch (err) {
+      console.error(`Error in call initiation for ${fullName}:`, err);
+      // Don't fail the application if call fails
+    }
+  }
+
+  return {
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+    candidate: {
+      id: candidate._id,
+      fullName: candidate.fullName,
+    },
+    application: {
+      id: application._id,
+      status: application.status,
+      jobTitle: application.job?.title,
+    },
+    tokens,
+  };
+};
+
 export {
   createJob,
   queryJobs,
@@ -469,4 +823,5 @@ export {
   createJobFromTemplate,
   applyCandidateToJob,
   isOwnerOrAdmin,
+  publicApplyToJobService,
 };

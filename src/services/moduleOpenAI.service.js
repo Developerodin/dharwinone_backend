@@ -696,7 +696,7 @@ export async function generateFullPlaylistFromTitleAndConfig({
   level = 'intermediate',
   sections = [],
   numBlogs = 2,
-  numVideos = 0,
+  numVideos = 2,
   numQuizzes = 1,
   questionsPerQuiz = 4,
   numEssays = 1,
@@ -739,15 +739,23 @@ export async function generateFullPlaylistFromTitleAndConfig({
       });
     }
 
-    for (let i = 0; i < numVideos; i++) {
-      playlist.push({
-        contentType: 'youtube-link',
-        title: titlesByType['youtube-link']?.[i] || `Video ${i + 1}`,
-        duration: 5,
-        youtubeUrl: '',
-        sectionTitle,
-        sectionIndex: sIdx,
-      });
+    if (numVideos > 0) {
+      const { searchVideos } = await import('./youtubeSearch.service.js');
+      const searchQuery = `${sectionTitle} ${docName} tutorial`.trim();
+      send(`Searching YouTube for: ${sectionTitle}`);
+      const foundVideos = await searchVideos(searchQuery, numVideos);
+      
+      for (let i = 0; i < numVideos; i++) {
+        const video = foundVideos[i];
+        playlist.push({
+          contentType: 'youtube-link',
+          title: video?.title || titlesByType['youtube-link']?.[i] || `${sectionTitle} – Video ${i + 1}`,
+          duration: video?.duration || 5,
+          youtubeUrl: video?.youtubeUrl || '',
+          sectionTitle,
+          sectionIndex: sIdx,
+        });
+      }
     }
 
     for (let i = 0; i < numQuizzes; i++) {

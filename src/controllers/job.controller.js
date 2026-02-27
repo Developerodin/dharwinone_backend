@@ -231,9 +231,82 @@ const shareJobEmail = catchAsync(async (req, res) => {
     type: 'general',
     title: `Job shared: ${job.title}`,
     message: `${job.organisation?.name || 'Company'}${job.location ? ` - ${job.location}` : ''}`,
-    link: `${frontendBase}/ats/jobs`,
+    link: `${frontendBase}/public-job/${job._id || job.id}`,
   }).catch(() => {});
   res.send({ message: 'Job shared successfully' });
+});
+
+// Public job controllers (no auth required)
+const listPublicJobs = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['title', 'location', 'jobType', 'experienceLevel']);
+  // Only show Active jobs publicly
+  filter.status = 'Active';
+  
+  const options = pick(req.query, ['limit', 'page']);
+  const result = await queryJobs(filter, options);
+  
+  // Strip internal fields from public response
+  const publicJobs = result.results.map(job => ({
+    id: job._id || job.id,
+    title: job.title,
+    organisation: job.organisation,
+    jobDescription: job.jobDescription,
+    jobType: job.jobType,
+    location: job.location,
+    skillTags: job.skillTags,
+    salaryRange: job.salaryRange,
+    experienceLevel: job.experienceLevel,
+    createdAt: job.createdAt,
+  }));
+  
+  res.send({
+    results: publicJobs,
+    page: result.page,
+    limit: result.limit,
+    totalPages: result.totalPages,
+    totalResults: result.totalResults,
+  });
+});
+
+const getPublicJob = catchAsync(async (req, res) => {
+  const job = await getJobById(req.params.jobId);
+  if (!job) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  
+  // Only allow viewing Active jobs publicly
+  if (job.status !== 'Active') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  
+  // Strip internal fields
+  const publicJob = {
+    id: job._id || job.id,
+    title: job.title,
+    organisation: job.organisation,
+    jobDescription: job.jobDescription,
+    jobType: job.jobType,
+    location: job.location,
+    skillTags: job.skillTags,
+    salaryRange: job.salaryRange,
+    experienceLevel: job.experienceLevel,
+    createdAt: job.createdAt,
+  };
+  
+  res.send(publicJob);
+});
+
+const publicApplyToJob = catchAsync(async (req, res) => {
+  // Import publicApplyToJobService dynamically
+  const { publicApplyToJobService } = await import('../services/job.service.js');
+  
+  const result = await publicApplyToJobService(
+    req.params.jobId,
+    req.body,
+    req.files
+  );
+  
+  res.status(httpStatus.CREATED).send(result);
 });
 
 export {
@@ -253,4 +326,7 @@ export {
   createFromTemplate,
   applyToJob,
   shareJobEmail,
+  listPublicJobs,
+  getPublicJob,
+  publicApplyToJob,
 };

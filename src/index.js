@@ -13,11 +13,13 @@ import {
   stopCallRecordSyncScheduler,
 } from './services/callRecordSync.scheduler.js';
 import { startMeetingScheduler, stopMeetingScheduler } from './services/meeting.scheduler.js';
+import applicationVerificationCallScheduler from './services/applicationVerificationCall.scheduler.js';
 
 let server;
 let candidateSchedulerId;
 let jobVerificationSchedulerId;
 let callRecordSyncSchedulerId;
+let applicationVerificationSchedulerId;
 const port = config.port || process.env.PORT || 3000;
 
 mongoose
@@ -31,6 +33,7 @@ mongoose
         candidateSchedulerId = startCandidateScheduler(config.candidate?.schedulerIntervalMinutes ?? 60);
         jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
         callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
+        applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(2);
         startMeetingScheduler();
       }
     });
@@ -45,6 +48,9 @@ const exitHandler = () => {
   stopCandidateScheduler(candidateSchedulerId);
   stopJobVerificationCallScheduler(jobVerificationSchedulerId);
   stopCallRecordSyncScheduler(callRecordSyncSchedulerId);
+  if (applicationVerificationSchedulerId) {
+    clearInterval(applicationVerificationSchedulerId);
+  }
   stopMeetingScheduler();
 
   if (server) {
@@ -71,3 +77,4 @@ process.on('SIGTERM', () => {
     server.close();
   }
 });
+

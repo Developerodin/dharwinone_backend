@@ -14,6 +14,13 @@ const jobApplicationSchema = new mongoose.Schema(
     coverLetter: { type: String, trim: true },
     appliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     notes: { type: String, trim: true },
+    // Bolna verification call fields
+    verificationCallExecutionId: { type: String, trim: true, index: true, sparse: true },
+    verificationCallInitiatedAt: { type: Date },
+    verificationCallStatus: { 
+      type: String, 
+      enum: ['pending', 'initiated', 'completed', 'failed', 'no_answer'],
+    },
   },
   { timestamps: true }
 );

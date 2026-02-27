@@ -62,6 +62,7 @@ const envVarsSchema = Joi.object()
     // Bolna Calling
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
     BOLNA_AGENT_ID: Joi.string().optional().description('Bolna agent ID'),
+    BOLNA_CANDIDATE_AGENT_ID: Joi.string().optional().description('Bolna agent ID for candidate verification calls'),
     BOLNA_FROM_PHONE_NUMBER: Joi.string().optional().description('Bolna caller ID in E.164 format'),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
@@ -139,6 +140,7 @@ const config = {
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',
     agentId: envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
+    candidateAgentId: envVars.BOLNA_CANDIDATE_AGENT_ID || envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
     fromPhoneNumber: envVars.BOLNA_FROM_PHONE_NUMBER || envVars.CALLER_ID || '',
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
   },

@@ -11,6 +11,10 @@ router
   .post(auth(), validate(bolnaValidation.initiateCall), bolnaController.initiateCall);
 
 router
+  .route('/candidate-call')
+  .post(auth(), validate(bolnaValidation.initiateCandidateCall), bolnaController.initiateCandidateCall);
+
+router
   .route('/call-status/:executionId')
   .get(auth(), validate(bolnaValidation.getCallStatus), bolnaController.getCallStatus);
 

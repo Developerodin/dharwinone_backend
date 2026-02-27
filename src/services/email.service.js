@@ -442,13 +442,14 @@ Dharwin Business Solutions`;
 /**
  * Send job share email
  * @param {string} to
- * @param {Object} job - { title, organisation, location, jobDescription }
+ * @param {Object} job - { _id, title, organisation, location, jobDescription }
  * @param {string} [customMessage]
  */
 const sendJobShareEmail = async (to, job, customMessage = '') => {
   const subject = `Job Opportunity: ${job.title} at ${job.organisation?.name || 'Company'}`;
-  const jobUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/ats/jobs`;
-  const text = `You have been shared a job opportunity:\n\n${job.title}\n${job.organisation?.name || ''}\n${job.location || ''}\n\n${job.jobDescription || ''}\n\nView jobs: ${jobUrl}`;
+  const jobId = job._id || job.id;
+  const jobUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/public-job/${jobId}`;
+  const text = `You have been shared a job opportunity:\n\n${job.title}\n${job.organisation?.name || ''}\n${job.location || ''}\n\n${job.jobDescription || ''}\n\nView and apply: ${jobUrl}`;
   const html = `
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5fb;padding:24px 0;font-family:Arial,sans-serif;">
     <tr><td align="center">
@@ -459,11 +460,271 @@ const sendJobShareEmail = async (to, job, customMessage = '') => {
           <p style="margin:0 0 8px 0;color:#6b7280;">${job.organisation?.name || ''} &bull; ${job.location || ''}</p>
           ${customMessage ? `<p style="margin:0 0 16px 0;">${customMessage}</p>` : ''}
           <div style="margin:16px 0;padding:12px;background:#f9fafb;border-radius:6px;">${(job.jobDescription || '').substring(0, 500)}${(job.jobDescription || '').length > 500 ? '...' : ''}</div>
-          <a href="${jobUrl}" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">View Job</a>
+          <a href="${jobUrl}" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">View & Apply</a>
         </td></tr>
       </table>
     </td></tr>
   </table>`;
+  await sendEmail(to, subject, text, html);
+};
+
+/**
+ * Send welcome email after successful job application
+ * @param {string} to - Applicant email
+ * @param {Object} data - { fullName, email, password, jobTitle, companyName, loginUrl }
+ */
+const sendJobApplicationWelcomeEmail = async (to, data) => {
+  const { fullName, email, password, jobTitle, companyName, loginUrl } = data;
+  
+  const subject = `Welcome! Your application for ${jobTitle} has been submitted`;
+  
+  const text = `
+Hello ${fullName},
+
+Thank you for applying to ${jobTitle} at ${companyName}!
+
+Your application has been successfully submitted and your account has been created.
+
+Login Credentials:
+Email: ${email}
+Password: ${password}
+
+You can now login to complete your profile and track your application status.
+
+Login here: ${loginUrl}
+
+Important: Please keep your login credentials safe. We recommend changing your password after your first login.
+
+Best regards,
+The Recruitment Team
+  `.trim();
+
+  const html = `
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5fb;padding:24px 0;font-family:Arial,sans-serif;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(90deg,#0f766e,#0ea5e9);padding:32px 24px;text-align:center;">
+            <h1 style="margin:0;color:#fff;font-size:24px;font-weight:600;">🎉 Application Submitted!</h1>
+          </td>
+        </tr>
+        
+        <!-- Content -->
+        <tr>
+          <td style="padding:32px 24px;">
+            <p style="margin:0 0 16px 0;font-size:16px;line-height:1.6;color:#1f2937;">
+              Hello <strong>${fullName}</strong>,
+            </p>
+            
+            <p style="margin:0 0 24px 0;font-size:16px;line-height:1.6;color:#1f2937;">
+              Thank you for applying to <strong style="color:#0ea5e9;">${jobTitle}</strong> at <strong>${companyName}</strong>! 
+              Your application has been successfully submitted and your account has been created.
+            </p>
+            
+            <!-- Login Credentials Box -->
+            <div style="background:#f9fafb;border:2px solid #e5e7eb;border-radius:8px;padding:20px;margin:0 0 24px 0;">
+              <h2 style="margin:0 0 16px 0;font-size:18px;color:#1f2937;">Your Login Credentials</h2>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding:8px 0;">
+                    <strong style="color:#6b7280;font-size:14px;">Email:</strong><br>
+                    <span style="color:#1f2937;font-size:16px;font-family:monospace;">${email}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;">
+                    <strong style="color:#6b7280;font-size:14px;">Password:</strong><br>
+                    <span style="color:#1f2937;font-size:16px;font-family:monospace;background:#fff;padding:4px 8px;border-radius:4px;display:inline-block;">${password}</span>
+                  </td>
+                </tr>
+              </table>
+            </div>
+            
+            <!-- CTA Button -->
+            <div style="text-align:center;margin:0 0 24px 0;">
+              <a href="${loginUrl}" style="display:inline-block;padding:14px 32px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;">Login to Your Account</a>
+            </div>
+            
+            <!-- Next Steps -->
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:16px;margin:0 0 24px 0;border-radius:4px;">
+              <p style="margin:0;font-size:14px;color:#92400e;line-height:1.6;">
+                <strong>📋 Next Steps:</strong><br>
+                1. Login to your account<br>
+                2. Complete your profile<br>
+                3. Track your application status<br>
+                4. Explore other opportunities
+              </p>
+            </div>
+            
+            <!-- Security Note -->
+            <p style="margin:0;font-size:14px;color:#6b7280;line-height:1.6;">
+              <strong>🔒 Security Note:</strong> Please keep your login credentials safe. 
+              We recommend changing your password after your first login from your profile settings.
+            </p>
+          </td>
+        </tr>
+        
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f9fafb;padding:20px 24px;text-align:center;border-top:1px solid #e5e7eb;">
+            <p style="margin:0;font-size:14px;color:#6b7280;">
+              Best regards,<br>
+              <strong>The Recruitment Team</strong>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>`;
+  
+  await sendEmail(to, subject, text, html);
+};
+
+const sendPostCallThankYouEmail = async (to, data) => {
+  const {
+    candidateName,
+    jobTitle,
+    companyName,
+    jobType,
+    jobLocation,
+    loginUrl,
+    callDuration,
+    otherJobsCount,
+    portalUrl,
+  } = data;
+
+  const subject = `Thank you for your time, ${candidateName}! - Dharwin`;
+
+  const durationText = callDuration
+    ? `${Math.ceil(callDuration / 60)} minute${Math.ceil(callDuration / 60) > 1 ? 's' : ''}`
+    : 'a few minutes';
+
+  const text = `
+Hi ${candidateName},
+
+Thank you for taking the time to speak with us regarding your application for ${jobTitle} at ${companyName}!
+
+We appreciate your interest in joining our team. Your responses have been recorded and our recruitment team will review them shortly.
+
+What Happens Next:
+- Our team will review your call and application details
+- If shortlisted, you will be contacted for the next round
+- You can track your application status anytime by logging into your Dharwin account
+
+${otherJobsCount > 0 ? `We also have ${otherJobsCount} other open position${otherJobsCount > 1 ? 's' : ''} that might interest you. Login to explore more opportunities!` : ''}
+
+Login to your account: ${loginUrl}
+
+If you have any questions, feel free to reply to this email.
+
+Best regards,
+The Dharwin Recruitment Team
+  `.trim();
+
+  const html = `
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5fb;padding:24px 0;font-family:Arial,sans-serif;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(90deg,#7c3aed,#6d28d9);padding:32px 24px;text-align:center;">
+            <h1 style="margin:0;color:#fff;font-size:22px;font-weight:600;">Thank You, ${candidateName}!</h1>
+            <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">We appreciate your time and interest</p>
+          </td>
+        </tr>
+        
+        <!-- Content -->
+        <tr>
+          <td style="padding:32px 24px;">
+            <p style="margin:0 0 16px 0;font-size:16px;line-height:1.6;color:#1f2937;">
+              Hi <strong>${candidateName}</strong>,
+            </p>
+            
+            <p style="margin:0 0 24px 0;font-size:16px;line-height:1.6;color:#1f2937;">
+              Thank you for taking <strong>${durationText}</strong> to speak with us about your application for 
+              <strong style="color:#7c3aed;">${jobTitle}</strong> at <strong>${companyName}</strong>! 
+              Your responses have been recorded and our recruitment team will review them shortly.
+            </p>
+            
+            <!-- Job Summary Box -->
+            <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:20px;margin:0 0 24px 0;">
+              <h3 style="margin:0 0 12px 0;font-size:16px;color:#5b21b6;">Position Applied For</h3>
+              <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#374151;">
+                <tr>
+                  <td style="padding:4px 0;"><strong>Role:</strong></td>
+                  <td style="padding:4px 0;">${jobTitle}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;"><strong>Company:</strong></td>
+                  <td style="padding:4px 0;">${companyName}</td>
+                </tr>
+                ${jobType ? `<tr><td style="padding:4px 0;"><strong>Type:</strong></td><td style="padding:4px 0;">${jobType}</td></tr>` : ''}
+                ${jobLocation ? `<tr><td style="padding:4px 0;"><strong>Location:</strong></td><td style="padding:4px 0;">${jobLocation}</td></tr>` : ''}
+              </table>
+            </div>
+
+            <!-- What's Next -->
+            <div style="background:#f0fdf4;border-left:4px solid #22c55e;padding:16px;margin:0 0 24px 0;border-radius:4px;">
+              <h3 style="margin:0 0 10px 0;font-size:15px;color:#166534;">What Happens Next?</h3>
+              <ol style="margin:0;padding:0 0 0 20px;font-size:14px;color:#374151;line-height:1.8;">
+                <li>Our recruitment team will review your call recording and responses</li>
+                <li>If shortlisted, you'll be contacted for the next interview round</li>
+                <li>You can track your application status in real-time from your dashboard</li>
+                <li>Complete your profile to improve your chances of selection</li>
+              </ol>
+            </div>
+
+            ${otherJobsCount > 0 ? `
+            <!-- Other Opportunities -->
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;margin:0 0 24px 0;">
+              <p style="margin:0;font-size:14px;color:#1e40af;line-height:1.6;">
+                <strong>Explore More Opportunities!</strong><br>
+                We have <strong>${otherJobsCount} other open position${otherJobsCount > 1 ? 's' : ''}</strong> that might interest you. 
+                Login to your account to browse and apply!
+              </p>
+            </div>` : ''}
+
+            <!-- CTA Buttons -->
+            <div style="text-align:center;margin:0 0 24px 0;">
+              <a href="${loginUrl}" style="display:inline-block;padding:14px 32px;background:#7c3aed;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;margin:0 8px 8px 0;">Track My Application</a>
+              ${portalUrl ? `<a href="${portalUrl}" style="display:inline-block;padding:14px 32px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;margin:0 0 8px 0;">Browse More Jobs</a>` : ''}
+            </div>
+
+            <!-- Tips -->
+            <div style="background:#fefce8;border-left:4px solid #eab308;padding:16px;margin:0 0 24px 0;border-radius:4px;">
+              <p style="margin:0;font-size:14px;color:#854d0e;line-height:1.6;">
+                <strong>Tips to Improve Your Chances:</strong><br>
+                - Complete your profile with education, experience, and skills<br>
+                - Upload your latest resume and relevant documents<br>
+                - Keep your phone available for follow-up calls<br>
+                - Check your email regularly for updates
+              </p>
+            </div>
+            
+            <p style="margin:0;font-size:14px;color:#6b7280;line-height:1.6;">
+              If you have any questions about your application or the hiring process, feel free to reply to this email. 
+              We're here to help!
+            </p>
+          </td>
+        </tr>
+        
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f9fafb;padding:20px 24px;text-align:center;border-top:1px solid #e5e7eb;">
+            <p style="margin:0 0 8px 0;font-size:14px;color:#6b7280;">
+              Best regards,<br>
+              <strong style="color:#7c3aed;">The Dharwin Recruitment Team</strong>
+            </p>
+            <p style="margin:0;font-size:12px;color:#9ca3af;">
+              Dharwin - Smart Recruitment Platform
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>`;
+
   await sendEmail(to, subject, text, html);
 };
 
@@ -478,5 +739,7 @@ export {
   sendCandidateAccountActivationEmail,
   sendMeetingInvitationEmail,
   sendJobShareEmail,
+  sendJobApplicationWelcomeEmail,
+  sendPostCallThankYouEmail,
 };
 

@@ -29,6 +29,9 @@ const callRecordSchema = mongoose.Schema(
     completedAt: { type: Date, default: null },
     extractedData: mongoose.Schema.Types.Mixed,
     telephonyData: mongoose.Schema.Types.Mixed,
+    purpose: { type: String, trim: true, default: null },
+    candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate', default: null },
+    job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
     raw: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
