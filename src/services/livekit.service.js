@@ -543,6 +543,43 @@ const isParticipantAdmitted = (roomName, participantIdentity) => {
   return roomAdmitted?.has(participantIdentity) || false;
 };
 
+/**
+ * Get number of participants currently in a LiveKit room
+ * @param {string} roomName - Room name
+ * @returns {Promise<number>} Participant count, 0 if room empty or error
+ */
+const getRoomParticipantCount = async (roomName) => {
+  if (!roomService) return 0;
+  try {
+    const participants = await roomService.listParticipants(roomName);
+    return participants?.length ?? 0;
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Disconnect all participants in a room (e.g. when ending a 1-on-1 chat call)
+ * @param {string} roomName - Room name
+ */
+const disconnectAllParticipants = async (roomName) => {
+  if (!roomService) return;
+  try {
+    const participants = await roomService.listParticipants(roomName);
+    if (!participants || participants.length === 0) return;
+    for (const p of participants) {
+      try {
+        await roomService.removeParticipant(roomName, p.identity);
+        logger.info('[LiveKit] Disconnected participant (call ended)', { roomName, identity: p.identity });
+      } catch (e) {
+        logger.warn(`[LiveKit] Failed to disconnect ${p.identity}: ${e?.message}`);
+      }
+    }
+  } catch (err) {
+    logger.warn(`[LiveKit] disconnectAllParticipants failed for ${roomName}: ${err?.message}`);
+  }
+};
+
 export { 
   generateAccessToken, 
   startRecording, 
@@ -551,6 +588,8 @@ export {
   getWaitingParticipants,
   admitParticipant,
   removeParticipant,
+  getRoomParticipantCount,
+  disconnectAllParticipants,
   isParticipantHost,
   isParticipantAdmitted,
 };

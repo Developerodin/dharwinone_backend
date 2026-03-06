@@ -43,6 +43,7 @@ import teamRoute from './team.route.js';
 import teamGroupRoute from './teamGroup.route.js';
 import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
+import chatRoute from './chat.route.js';
 
 const router = express.Router();
 
@@ -214,6 +215,10 @@ const defaultRoutes = [
   {
     path: '/recordings',
     route: recordingRoute,
+  },
+  {
+    path: '/chats',
+    route: chatRoute,
   },
 ];
 

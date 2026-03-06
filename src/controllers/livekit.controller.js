@@ -1,14 +1,22 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import * as livekitService from '../services/livekit.service.js';
+import * as chatService from '../services/chat.service.js';
 import ApiError from '../utils/ApiError.js';
+
+const parseChatRoomConversationId = (roomName) => {
+  if (!roomName || !roomName.startsWith('chat-')) return null;
+  const parts = roomName.split('-');
+  if (parts.length >= 2) return parts[1];
+  return null;
+};
 
 /**
  * Generate LiveKit access token
  * POST /v1/livekit/token
  */
 const getToken = catchAsync(async (req, res) => {
-  const { roomName, participantName, participantEmail } = req.body;
+  const { roomName, participantName, participantEmail, forChatCall } = req.body;
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
@@ -19,11 +27,21 @@ const getToken = catchAsync(async (req, res) => {
   const name = participantName || req.user?.name || req.user?.email || 'Anonymous';
   const email = participantEmail || req.user?.email || null;
 
+  // Chat calls: only conversation participants can join (1:1 or group)
+  if (roomName.startsWith('chat-')) {
+    const conversationId = parseChatRoomConversationId(roomName);
+    if (!conversationId) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid chat room name');
+    }
+    await chatService.ensureParticipant(conversationId, participantIdentity);
+  }
+
   const { token, isHost } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
     participantEmail: email,
+    forceFullPermissions: forChatCall || roomName.startsWith('chat-'),
   });
 
   res.status(httpStatus.OK).json({
@@ -116,6 +134,11 @@ const getTokenPublic = catchAsync(async (req, res) => {
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
+  }
+
+  // Chat calls require authentication – only conversation participants can join
+  if (roomName.startsWith('chat-')) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Chat calls require authentication. Please sign in to join.');
   }
 
   const name = participantName?.trim() || 'Guest';

@@ -1,7 +1,9 @@
+import http from 'http';
 import mongoose from 'mongoose';
 import app from './app.js';
 import config from './config/config.js';
 import logger from './config/logger.js';
+import { initSocket } from './services/chatSocket.service.js';
 import { startAttendanceScheduler, stopAttendanceScheduler } from './services/attendance.scheduler.js';
 import { startCandidateScheduler, stopCandidateScheduler } from './services/candidate.scheduler.js';
 import {
@@ -26,7 +28,9 @@ mongoose
   .connect(config.mongoose.url, config.mongoose.options)
   .then(() => {
     logger.info('Connected to MongoDB');
-    server = app.listen(port, '0.0.0.0', () => {
+    const httpServer = http.createServer(app);
+    if (config.env !== 'test') initSocket(httpServer);
+    server = httpServer.listen(port, '0.0.0.0', () => {
       logger.info(`Listening on port ${port}`);
       if (config.env !== 'test') {
         startAttendanceScheduler();

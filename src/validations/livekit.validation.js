@@ -6,6 +6,7 @@ const getToken = {
     participantName: Joi.string().optional().trim(),
     participantEmail: Joi.string().optional().email().trim(),
     participantIdentity: Joi.string().optional().trim(),
+    forChatCall: Joi.boolean().optional(), // When true, grants full permissions (for chat audio/video)
   }),
 };
 
