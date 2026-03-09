@@ -1,6 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
+import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
 
@@ -8,25 +9,25 @@ const router = express.Router();
 
 router
   .route('/')
-  .post(auth(), validate(meetingValidation.createMeeting), meetingController.create)
-  .get(auth(), validate(meetingValidation.getMeetings), meetingController.list);
+  .post(auth(), requirePermissions('meetings.manage'), validate(meetingValidation.createMeeting), meetingController.create)
+  .get(auth(), requirePermissions('meetings.read'), validate(meetingValidation.getMeetings), meetingController.list);
 
 router
   .route('/:id/resend-invitations')
-  .post(auth(), validate(meetingValidation.resendInvitations), meetingController.resendInvitations);
+  .post(auth(), requirePermissions('meetings.manage'), validate(meetingValidation.resendInvitations), meetingController.resendInvitations);
 
 router
   .route('/:id/move-to-preboarding')
-  .post(auth(), validate(meetingValidation.getMeeting), meetingController.moveToPreboarding);
+  .post(auth(), requirePermissions('meetings.manage'), validate(meetingValidation.getMeeting), meetingController.moveToPreboarding);
 
 router
   .route('/:id/recordings')
-  .get(auth(), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
+  .get(auth(), requirePermissions('meetings.read'), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
 
 router
   .route('/:id')
-  .get(auth(), validate(meetingValidation.getMeeting), meetingController.get)
-  .patch(auth(), validate(meetingValidation.updateMeeting), meetingController.update)
-  .delete(auth(), validate(meetingValidation.deleteMeeting), meetingController.remove);
+  .get(auth(), requirePermissions('meetings.read'), validate(meetingValidation.getMeeting), meetingController.get)
+  .patch(auth(), requirePermissions('meetings.manage'), validate(meetingValidation.updateMeeting), meetingController.update)
+  .delete(auth(), requirePermissions('meetings.manage'), validate(meetingValidation.deleteMeeting), meetingController.remove);
 
 export default router;

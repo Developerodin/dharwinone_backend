@@ -3,7 +3,7 @@ import toJSON from './plugins/toJSON.plugin.js';
 
 const recordingSchema = mongoose.Schema(
   {
-    /** Meeting ID (same as roomName in LiveKit) */
+    /** Room name in LiveKit (meetingId for meetings, or livekitRoom for chat calls) */
     meetingId: {
       type: String,
       required: true,

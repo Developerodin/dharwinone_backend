@@ -57,6 +57,15 @@ async function runJobVerificationCalls() {
             },
           }
         );
+        await callRecordService.updateCallRecordByExecutionId(
+          result.executionId,
+          {
+            purpose: 'job_posting_verification',
+            job: job._id,
+            status: 'initiated',
+          },
+          { upsert: true }
+        );
         logger.info(`Job verification call initiated for job ${job._id}, executionId ${result.executionId}`);
       } else {
         logger.warn(`Job verification call failed for job ${job._id}: ${result.error || 'unknown'}`);

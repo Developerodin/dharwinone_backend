@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 import * as chatService from '../services/chat.service.js';
 import { emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated } from '../services/chatSocket.service.js';
 import { queryUsers } from '../services/user.service.js';
@@ -109,7 +110,8 @@ const listCalls = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
-  const result = await chatService.listCalls(userId, { page, limit });
+  const isAdmin = await userIsAdmin(req.user);
+  const result = await chatService.listCalls(userId, { page, limit, isAdmin });
   res.send(result);
 });
 
@@ -140,6 +142,12 @@ const initiateCall = catchAsync(async (req, res) => {
   });
 
   res.status(httpStatus.CREATED).send(result);
+});
+
+const startChatCallRecording = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const result = await chatService.startChatCallRecording(req.params.id, userId);
+  res.status(httpStatus.OK).send(result);
 });
 
 const updateCall = catchAsync(async (req, res) => {
@@ -213,6 +221,7 @@ export {
   getActiveCallForConversation,
   initiateCall,
   updateCall,
+  startChatCallRecording,
   endCallByRoom,
   searchUsers,
   getSocketToken,

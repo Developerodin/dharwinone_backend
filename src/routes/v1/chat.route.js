@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
+import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as chatValidation from '../../validations/chat.validation.js';
 import * as chatController from '../../controllers/chat.controller.js';
 
@@ -11,7 +12,7 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-router.use(auth());
+router.use(auth(), requirePermissions('chats.read'));
 
 router.get('/socket-token', chatController.getSocketToken);
 router.get('/users/search', validate(chatValidation.searchUsers), chatController.searchUsers);
@@ -92,6 +93,11 @@ router.patch(
   '/calls/:id',
   validate(chatValidation.updateCall),
   chatController.updateCall
+);
+router.post(
+  '/calls/:id/recording/start',
+  validate(chatValidation.startChatCallRecording),
+  chatController.startChatCallRecording
 );
 router.post('/calls/end-by-room', chatController.endCallByRoom);
 

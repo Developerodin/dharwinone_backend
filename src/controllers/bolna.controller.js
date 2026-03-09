@@ -1,9 +1,11 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 import bolnaService from '../services/bolna.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import { getJobById } from '../services/job.service.js';
+import Job from '../models/job.model.js';
 import { numberToWords, currencyToWords } from '../utils/numberToWords.js';
 
 function jobContextFromDoc(job) {
@@ -51,6 +53,27 @@ const initiateCall = catchAsync(async (req, res) => {
   });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to initiate call');
+  }
+  if (result.executionId) {
+    await Job.updateOne(
+      { _id: job._id },
+      {
+        $set: {
+          verificationCallExecutionId: result.executionId,
+          verificationCallInitiatedAt: new Date(),
+        },
+      }
+    );
+    // Seed a minimal record immediately so recruiter/job calls never remain uncategorized.
+    await callRecordService.updateCallRecordByExecutionId(
+      result.executionId,
+      {
+        purpose: 'job_posting_verification',
+        job: job._id,
+        status: 'initiated',
+      },
+      { upsert: true }
+    );
   }
   res.status(httpStatus.OK).send({
     success: true,
@@ -356,6 +379,8 @@ const getCallStatus = catchAsync(async (req, res) => {
 });
 
 const getCallRecords = catchAsync(async (req, res) => {
+  const userId = req.user?.id || req.user?._id?.toString();
+  const isAdmin = await userIsAdmin(req.user);
   const options = {
     page: req.query.page,
     limit: req.query.limit,
@@ -364,6 +389,8 @@ const getCallRecords = catchAsync(async (req, res) => {
     language: req.query.language,
     sortBy: req.query.sortBy,
     order: req.query.order,
+    userId,
+    isAdmin,
   };
   const data = await callRecordService.listCallRecords(options);
   res.status(httpStatus.OK).send({

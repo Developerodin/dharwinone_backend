@@ -15,11 +15,11 @@ router
     validate(shiftValidation.createShift),
     shiftController.create
   )
-  .get(auth(), validate(shiftValidation.getShifts), shiftController.list);
+  .get(auth(), requirePermissions('students.read'), validate(shiftValidation.getShifts), shiftController.list);
 
 router
   .route('/:shiftId')
-  .get(auth(), validate(shiftValidation.getShift), shiftController.get)
+  .get(auth(), requirePermissions('students.read'), validate(shiftValidation.getShift), shiftController.get)
   .patch(
     auth(),
     requirePermissions('students.manage'),

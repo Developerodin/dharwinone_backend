@@ -1,6 +1,12 @@
 import CallRecord from '../models/callRecord.model.js';
 import Job from '../models/job.model.js';
+import Candidate from '../models/candidate.model.js';
+import config from '../config/config.js';
 import { normalizePhone } from '../utils/phone.js';
+
+function normalizeKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
 
 function normalizeStatus(status) {
   if (!status) return 'unknown';
@@ -76,6 +82,8 @@ function normalizePayload(payload) {
     payload.candidate_name ??
     data.candidate_name;
   const language = payload.language ?? data.language ?? userData.language ?? null;
+  const agentId = payload.agent_id ?? data.agent_id ?? payload.agentId ?? data.agentId;
+  const purpose = payload.purpose ?? data.purpose;
 
   return {
     executionId: executionId ? String(executionId) : undefined,
@@ -91,6 +99,8 @@ function normalizePayload(payload) {
     conversationTranscript: payload.conversation_transcript ?? data.conversation_transcript,
     duration: !Number.isNaN(durationNum) ? durationNum : undefined,
     recordingUrl: recordingUrl || undefined,
+    agentId: agentId ? String(agentId).trim() : undefined,
+    purpose: purpose ? String(purpose).trim() : undefined,
     extractedData: payload.extracted_data ?? data.extracted_data,
     telephonyData: Object.keys(telephony).length ? telephony : undefined,
     raw: payload,
@@ -126,54 +136,178 @@ async function listCallRecords(options = {}) {
   const order = options.order === 'asc' ? 1 : -1;
   const sort = { [sortBy]: order };
 
-  const filter = {};
+  const andConditions = [];
   if (options.search && String(options.search).trim()) {
     const term = String(options.search).trim();
-    filter.$or = [
-      { phone: new RegExp(term, 'i') },
-      { recipientPhoneNumber: new RegExp(term, 'i') },
-      { toPhoneNumber: new RegExp(term, 'i') },
-      { fromPhoneNumber: new RegExp(term, 'i') },
-      { userNumber: new RegExp(term, 'i') },
-      { businessName: new RegExp(term, 'i') },
-    ];
+    andConditions.push({
+      $or: [
+        { phone: new RegExp(term, 'i') },
+        { recipientPhoneNumber: new RegExp(term, 'i') },
+        { toPhoneNumber: new RegExp(term, 'i') },
+        { fromPhoneNumber: new RegExp(term, 'i') },
+        { userNumber: new RegExp(term, 'i') },
+        { businessName: new RegExp(term, 'i') },
+      ],
+    });
   }
   if (options.status && String(options.status).trim() && String(options.status).toLowerCase() !== 'all') {
-    filter.status = String(options.status).trim();
+    andConditions.push({ status: String(options.status).trim() });
   }
   if (options.language && String(options.language).trim() && String(options.language).toLowerCase() !== 'all') {
-    filter.language = String(options.language).trim();
+    andConditions.push({ language: String(options.language).trim() });
   }
+
+  if (!options.isAdmin && options.userId) {
+    const [jobIds, candidateIds] = await Promise.all([
+      Job.distinct('_id', { createdBy: options.userId }),
+      Candidate.distinct('_id', { owner: options.userId }),
+    ]);
+    andConditions.push({
+      $or: [
+        { job: { $in: jobIds } },
+        { candidate: { $in: candidateIds } },
+      ],
+    });
+  }
+
+  const filter = andConditions.length === 0 ? {} : andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
 
   const [results, total] = await Promise.all([
     CallRecord.find(filter).sort(sort).skip(skip).limit(limit).lean(),
     CallRecord.countDocuments(filter),
   ]);
 
-  const needBusinessName = results.filter(
-    (r) => !(r.businessName && r.businessName.trim()) && (r.toPhoneNumber || r.recipientPhoneNumber || r.phone)
+  // executionId -> Job (job post verification) or JobApplication (candidate verification)
+  const executionIds = results.map((r) => String(r.executionId || '')).filter(Boolean);
+  const executionIdVariants = [...new Set(executionIds.flatMap((id) => [id, id.trim()]).filter(Boolean))];
+  const [jobsWithExecutionId, jobAppsWithExecutionId] = await Promise.all([
+    executionIdVariants.length
+      ? Job.find({ verificationCallExecutionId: { $in: executionIdVariants } })
+          .select('verificationCallExecutionId organisation.name organisation.phone')
+          .lean()
+      : Promise.resolve([]),
+    executionIdVariants.length
+      ? (await import('../models/jobApplication.model.js')).default
+          .find({ verificationCallExecutionId: { $in: executionIdVariants } })
+          .select('verificationCallExecutionId')
+          .lean()
+      : Promise.resolve([]),
+  ]);
+  const executionIdToJob = new Map(
+    jobsWithExecutionId.map((j) => [normalizeKey(j.verificationCallExecutionId), j])
   );
-  if (needBusinessName.length > 0) {
-    const jobs = await Job.find({ 'organisation.phone': { $exists: true, $nin: [null, ''] } })
-      .select('organisation.name organisation.phone')
-      .limit(500)
-      .lean();
-    const phoneToOrgName = new Map();
-    for (const j of jobs) {
-      const p = j.organisation?.phone;
-      if (!p || !j.organisation?.name) continue;
-      const normalized = normalizePhone(p);
-      if (normalized) phoneToOrgName.set(normalized, j.organisation.name.trim());
+  const executionIdToJobApp = new Set(
+    jobAppsWithExecutionId.map((a) => normalizeKey(a.verificationCallExecutionId))
+  );
+
+  const jobOrgPhones = new Map();
+  const allJobsWithPhone = await Job.find({ 'organisation.phone': { $exists: true, $nin: [null, ''] } })
+    .select('organisation.name organisation.phone')
+    .limit(2000)
+    .lean();
+  for (const j of allJobsWithPhone) {
+    const p = j.organisation?.phone;
+    if (p && j.organisation?.name) {
+      const norm = normalizePhone(p);
+      if (norm) jobOrgPhones.set(norm, j.organisation.name.trim());
     }
-    for (const r of results) {
-      if (r.businessName && r.businessName.trim()) continue;
+  }
+
+  const toPhoneMatchesJobOrg = new Set();
+  for (const r of results) {
+    const execId = normalizeKey(r.executionId);
+    if (executionIdToJob.has(execId)) {
+      toPhoneMatchesJobOrg.add(r._id?.toString());
+      const job = executionIdToJob.get(execId);
+      if (!(r.businessName && r.businessName.trim()) && job?.organisation?.name) {
+        r.businessName = job.organisation.name.trim();
+      }
+    } else {
       const toPhone = r.toPhoneNumber || r.recipientPhoneNumber || r.phone;
-      if (!toPhone) continue;
-      const normalized = normalizePhone(toPhone);
-      if (normalized && phoneToOrgName.has(normalized)) {
-        r.businessName = phoneToOrgName.get(normalized);
+      if (toPhone) {
+        const normalized = normalizePhone(toPhone);
+        let matchedOrgName = normalized ? jobOrgPhones.get(normalized) : null;
+        if (!matchedOrgName && normalized) {
+          const digits = normalized.replace(/\D/g, '');
+          const last10 = digits.length >= 10 ? digits.slice(-10) : null;
+          for (const [orgNorm, name] of jobOrgPhones) {
+            const orgDigits = orgNorm.replace(/\D/g, '');
+            if (last10 && orgDigits.slice(-10) === last10) {
+              matchedOrgName = name;
+              break;
+            }
+          }
+        }
+        if (matchedOrgName) {
+          toPhoneMatchesJobOrg.add(r._id?.toString());
+          if (!(r.businessName && r.businessName.trim())) {
+            r.businessName = matchedOrgName;
+          }
+        }
       }
     }
+  }
+  const executionIdToJobAppSet = executionIdToJobApp;
+
+  // Fetch candidate names for records with candidate ref but no businessName
+  const needCandidateName = results.filter((r) => r.candidate && !(r.businessName && r.businessName.trim()));
+  if (needCandidateName.length > 0) {
+    const candidateIds = [...new Set(needCandidateName.map((r) => r.candidate?.toString()).filter(Boolean))];
+    const candidates = await Candidate.find({ _id: { $in: candidateIds } })
+      .select('_id fullName')
+      .lean();
+    const candidateNameMap = new Map(candidates.map((c) => [c._id?.toString(), c.fullName || '']));
+    for (const r of needCandidateName) {
+      const cid = r.candidate?.toString();
+      if (cid && candidateNameMap.has(cid)) {
+        r.businessName = candidateNameMap.get(cid) || r.businessName;
+      }
+    }
+  }
+
+  const jobAgentId = normalizeKey(config.bolna?.agentId);
+  const candidateAgentId = normalizeKey(config.bolna?.candidateAgentId);
+  const useAgentRouting = Boolean(jobAgentId && candidateAgentId && jobAgentId !== candidateAgentId);
+
+  // Add displayCategory and displayName for frontend - use agentId first (each call type has its own agent)
+  for (const r of results) {
+    const purpose = (r.purpose || '').toLowerCase().trim();
+    const execId = normalizeKey(r.executionId);
+    const aid = normalizeKey(r.agentId || r.raw?.agent_id || r.raw?.agentId);
+    const isCandidateByLink = Boolean(r.candidate) || executionIdToJobAppSet.has(execId);
+    const isJobByLink = Boolean(r.job) || executionIdToJob.has(execId) || toPhoneMatchesJobOrg.has(r._id?.toString());
+
+    let displayCategory = 'Other';
+
+    if (useAgentRouting && aid === candidateAgentId) {
+      displayCategory = 'Student/Candidate';
+    } else if (useAgentRouting && aid === jobAgentId) {
+      displayCategory = 'Job/Recruiter';
+    } else if (
+      isCandidateByLink ||
+      purpose.includes('job_application_verification') ||
+      purpose.includes('application_verification')
+    ) {
+      displayCategory = 'Student/Candidate';
+    } else if (
+      isJobByLink ||
+      purpose.includes('job_verification') ||
+      purpose.includes('job_posting_verification') ||
+      purpose.includes('recruiter')
+    ) {
+      displayCategory = 'Job/Recruiter';
+    } else if (
+      displayCategory === 'Other' &&
+      !purpose.includes('job_application_verification') &&
+      !purpose.includes('application_verification') &&
+      !isCandidateByLink &&
+      Boolean(r.executionId || r.toPhoneNumber || r.recipientPhoneNumber || r.phone)
+    ) {
+      // Last fallback for legacy recruiter records with sparse metadata.
+      displayCategory = 'Job/Recruiter';
+    }
+    r.displayCategory = displayCategory;
+    r.displayName = (r.businessName && r.businessName.trim()) || r.toPhoneNumber || r.recipientPhoneNumber || r.phone || null;
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -195,6 +329,8 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
   if (details.user_data?.organisation) update.businessName = String(details.user_data.organisation).trim();
   else if (details.user_data?.name) update.businessName = String(details.user_data.name).trim();
   else if (details.user_data?.candidate_name) update.businessName = String(details.user_data.candidate_name).trim();
+  const agentId = details.agent_id ?? details.agentId;
+  if (agentId) update.agentId = String(agentId).trim();
   if (details.extracted_data && typeof details.extracted_data === 'object') {
     update.extractedData = details.extracted_data;
   }
@@ -239,12 +375,12 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
   return record;
 }
 
-async function updateCallRecordByExecutionId(executionId, updateData) {
+async function updateCallRecordByExecutionId(executionId, updateData, options = {}) {
   if (!executionId || !updateData || Object.keys(updateData).length === 0) return null;
   const record = await CallRecord.findOneAndUpdate(
     { executionId: String(executionId) },
-    { $set: updateData },
-    { new: true }
+    { $set: updateData, $setOnInsert: { executionId: String(executionId) } },
+    { new: true, upsert: Boolean(options.upsert) }
   ).lean();
   return record;
 }
@@ -303,7 +439,7 @@ async function syncMissingData(limit = 20) {
   return { synced, errors };
 }
 
-function executionToCallRecordDoc(exec) {
+function executionToCallRecordDoc(exec, agentId) {
   const executionId = exec.id ?? exec.execution_id;
   if (!executionId) return null;
   const telephony = exec.telephony_data || {};
@@ -320,6 +456,7 @@ function executionToCallRecordDoc(exec) {
         : undefined;
   const doc = {
     executionId: String(executionId),
+    agentId: (exec.agent_id ?? exec.agentId ?? agentId) ? String(exec.agent_id ?? exec.agentId ?? agentId).trim() : undefined,
     status: normalizeStatus(exec.status),
     toPhoneNumber: telephony.to_number || undefined,
     recipientPhoneNumber: telephony.to_number || undefined,
@@ -365,32 +502,33 @@ async function backfillFromBolna(options = {}) {
         break;
       }
       for (const exec of result.data) {
-        const doc = executionToCallRecordDoc(exec);
+        const doc = executionToCallRecordDoc(exec, agentId);
         if (!doc) continue;
         try {
           const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
           if (existing) {
             await CallRecord.updateOne(
               { executionId: doc.executionId },
-              {
-                $set: {
-                  status: doc.status,
-                  ...(doc.toPhoneNumber && {
-                    toPhoneNumber: doc.toPhoneNumber,
-                    recipientPhoneNumber: doc.recipientPhoneNumber,
-                    phone: doc.phone,
-                  }),
-                  ...(doc.fromPhoneNumber && {
-                    fromPhoneNumber: doc.fromPhoneNumber,
-                    userNumber: doc.userNumber,
-                  }),
-                  ...(doc.transcript && { transcript: doc.transcript }),
-                  ...(doc.duration != null && { duration: doc.duration }),
-                  ...(doc.recordingUrl && { recordingUrl: doc.recordingUrl }),
-                  ...(doc.errorMessage != null && { errorMessage: doc.errorMessage }),
-                  ...(doc.completedAt && { completedAt: doc.completedAt }),
-                },
-              }
+            {
+              $set: {
+                status: doc.status,
+                ...(doc.agentId && { agentId: doc.agentId }),
+                ...(doc.toPhoneNumber && {
+                  toPhoneNumber: doc.toPhoneNumber,
+                  recipientPhoneNumber: doc.recipientPhoneNumber,
+                  phone: doc.phone,
+                }),
+                ...(doc.fromPhoneNumber && {
+                  fromPhoneNumber: doc.fromPhoneNumber,
+                  userNumber: doc.userNumber,
+                }),
+                ...(doc.transcript && { transcript: doc.transcript }),
+                ...(doc.duration != null && { duration: doc.duration }),
+                ...(doc.recordingUrl && { recordingUrl: doc.recordingUrl }),
+                ...(doc.errorMessage != null && { errorMessage: doc.errorMessage }),
+                ...(doc.completedAt && { completedAt: doc.completedAt }),
+              },
+            }
             );
           } else {
             await CallRecord.create(doc);

@@ -44,6 +44,7 @@ import teamGroupRoute from './teamGroup.route.js';
 import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
+import communicationRoute from './communication.route.js';
 
 const router = express.Router();
 
@@ -219,6 +220,10 @@ const defaultRoutes = [
   {
     path: '/chats',
     route: chatRoute,
+  },
+  {
+    path: '/communication',
+    route: communicationRoute,
   },
 ];
 

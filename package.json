@@ -26,6 +26,7 @@
     "seed:offers": "node scripts/seed-offers-placements.js",
     "seed:managers": "node scripts/seed-managers.js",
     "seed:preboarding": "node scripts/seed-preboarding.js",
+    "seed:candidate-role": "node scripts/seed-candidate-role.js",
     "clean:import": "node scripts/clean-and-import-db.js",
     "cleanup:offers-placements": "node scripts/cleanup-offers-placements.js",
     "docker:livekit": "docker compose -f docker-compose.livekit-local.yml up -d",

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import Recording from '../models/recording.model.js';
+import ChatCall from '../models/chatCall.model.js';
 import logger from '../config/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,20 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
         status: 'completed',
         completedAt: update.completedAt,
       });
+      // If this was a chat call room, link Recording to ChatCall
+      if (recording.meetingId && String(recording.meetingId).startsWith('chat-')) {
+        const chatCall = await ChatCall.findOneAndUpdate(
+          { livekitRoom: recording.meetingId },
+          { $set: { recordingId: recording._id } },
+          { new: true }
+        );
+        if (chatCall) {
+          logger.info('[LiveKit Webhook] ChatCall linked to recording', {
+            chatCallId: chatCall._id?.toString(),
+            roomName: recording.meetingId,
+          });
+        }
+      }
     } else {
       logger.warn('[LiveKit Webhook] No Recording found for egressId', { egressId });
     }

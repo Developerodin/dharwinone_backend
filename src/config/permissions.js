@@ -58,6 +58,19 @@ export const permissionAliases = {
   // ATS offers: map ats.offers:* to candidates (offers are part of ATS pipeline)
   'offers.read': ['offers.read', 'ats.offers:view', 'ats.offers:view,create,edit,delete', 'candidates.read', 'candidates.manage'],
   'offers.manage': ['offers.manage', 'ats.offers:create,edit,delete', 'ats.offers:view,create,edit,delete', 'candidates.manage'],
+  // Meetings (communication.meetings)
+  'meetings.read': ['meetings.read', 'communication.meetings:view', 'communication.meetings:view,create,edit,delete'],
+  'meetings.manage': ['meetings.manage', 'communication.meetings:create,edit,delete', 'communication.meetings:view,create,edit,delete'],
+  // Calls (bolna, communication) - from communication.calling
+  'calls.read': ['calls.read', 'communication.calling:view', 'communication.calling:view,create,edit,delete'],
+  'calls.manage': ['calls.manage', 'communication.calling:create,edit,delete', 'communication.calling:view,create,edit,delete'],
+  // Teams (project.teams covers team + teamGroup)
+  'teams.read': ['teams.read', 'project.teams:view', 'project.teams:view,create,edit,delete'],
+  'teams.manage': ['teams.manage', 'project.teams:create,edit,delete', 'project.teams:view,create,edit,delete'],
+  // Recruiters
+  'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
+  'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],
+  'chats.manage': ['chats.manage', 'communication.chats:create,edit,delete', 'communication.chats:view,create,edit,delete'],
 };
 
 /**

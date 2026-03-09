@@ -1,6 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
+import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as taskValidation from '../../validations/task.validation.js';
 import * as taskController from '../../controllers/task.controller.js';
 
@@ -8,17 +9,17 @@ const router = express.Router();
 
 router
   .route('/')
-  .post(auth(), validate(taskValidation.createTask), taskController.create)
-  .get(auth(), validate(taskValidation.getTasks), taskController.list);
+  .post(auth(), requirePermissions('tasks.manage'), validate(taskValidation.createTask), taskController.create)
+  .get(auth(), requirePermissions('tasks.read'), validate(taskValidation.getTasks), taskController.list);
 
 router
   .route('/:taskId')
-  .get(auth(), validate(taskValidation.getTask), taskController.get)
-  .patch(auth(), validate(taskValidation.updateTask), taskController.update)
-  .delete(auth(), validate(taskValidation.deleteTask), taskController.remove);
+  .get(auth(), requirePermissions('tasks.read'), validate(taskValidation.getTask), taskController.get)
+  .patch(auth(), requirePermissions('tasks.manage'), validate(taskValidation.updateTask), taskController.update)
+  .delete(auth(), requirePermissions('tasks.manage'), validate(taskValidation.deleteTask), taskController.remove);
 
 router
   .route('/:taskId/status')
-  .patch(auth(), validate(taskValidation.updateTaskStatus), taskController.updateStatus);
+  .patch(auth(), requirePermissions('tasks.manage'), validate(taskValidation.updateTaskStatus), taskController.updateStatus);
 
 export default router;

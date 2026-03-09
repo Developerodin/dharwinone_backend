@@ -5,7 +5,8 @@ import Conversation from '../models/conversation.model.js';
 import Message from '../models/message.model.js';
 import ChatCall from '../models/chatCall.model.js';
 import * as livekitService from './livekit.service.js';
-import { generatePresignedDownloadUrl } from '../config/s3.js';
+import Recording from '../models/recording.model.js';
+import { generatePresignedDownloadUrl, generatePresignedRecordingPlaybackUrl } from '../config/s3.js';
 
 const ensureParticipant = async (conversationId, userId) => {
   const conv = await Conversation.findById(conversationId).lean();
@@ -293,11 +294,10 @@ const listCallsForConversation = async (conversationId, userId, { limit = 50 } =
   return calls.map((c) => ({ ...c, id: c._id?.toString() }));
 };
 
-const listCalls = async (userId, { page = 1, limit = 20 }) => {
+const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
   const skip = (page - 1) * limit;
-  const calls = await ChatCall.find({
-    $or: [{ caller: userId }, { participants: userId }],
-  })
+  const filter = isAdmin ? {} : { $or: [{ caller: userId }, { participants: userId }] };
+  const calls = await ChatCall.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
@@ -305,9 +305,24 @@ const listCalls = async (userId, { page = 1, limit = 20 }) => {
     .populate('participants', 'name email')
     .populate('conversation')
     .lean();
-  const total = await ChatCall.countDocuments({ $or: [{ caller: userId }, { participants: userId }] });
+  const total = await ChatCall.countDocuments(filter);
+  const results = [];
+  for (const c of calls) {
+    const item = { ...c, id: c._id?.toString() };
+    if (c.recordingId) {
+      try {
+        const rec = await Recording.findById(c.recordingId).lean();
+        if (rec && rec.status === 'completed' && rec.filePath) {
+          item.recordingUrl = await generatePresignedRecordingPlaybackUrl(rec.filePath, 3600);
+        }
+      } catch {
+        item.recordingUrl = null;
+      }
+    }
+    results.push(item);
+  }
   return {
-    results: calls.map((c) => ({ ...c, id: c._id?.toString() })),
+    results,
     page,
     limit,
     totalPages: Math.ceil(total / limit),
@@ -345,6 +360,22 @@ const updateCall = async (callId, userId, { status, duration }) => {
   }
   const updated = await ChatCall.findByIdAndUpdate(callId, { $set: update }, { new: true }).populate('caller participants');
   return updated;
+};
+
+/**
+ * Start LiveKit Egress recording for an in-app chat call.
+ * User must be a participant. Call must have livekitRoom and be ongoing.
+ */
+const startChatCallRecording = async (callId, userId) => {
+  const call = await ChatCall.findById(callId).lean();
+  if (!call) throw new ApiError(httpStatus.NOT_FOUND, 'Call not found');
+  const isParticipant = call.caller.toString() === userId || call.participants?.some((p) => p?.toString?.() === userId);
+  if (!isParticipant) throw new ApiError(httpStatus.FORBIDDEN, 'Not a participant');
+  if (!call.livekitRoom || !call.livekitRoom.trim()) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Call has no LiveKit room');
+  }
+  const result = await livekitService.startRecording(call.livekitRoom);
+  return result;
 };
 
 /**
@@ -491,6 +522,7 @@ export {
   endCallByRoom,
   createCall,
   updateCall,
+  startChatCallRecording,
   ensureParticipant,
   addParticipants,
   removeParticipant,

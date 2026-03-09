@@ -15,11 +15,11 @@ router
     validate(holidayValidation.createHoliday),
     holidayController.create
   )
-  .get(auth(), validate(holidayValidation.getHolidays), holidayController.list);
+  .get(auth(), requirePermissions('students.read'), validate(holidayValidation.getHolidays), holidayController.list);
 
 router
   .route('/:holidayId')
-  .get(auth(), validate(holidayValidation.getHoliday), holidayController.get)
+  .get(auth(), requirePermissions('students.read'), validate(holidayValidation.getHoliday), holidayController.get)
   .patch(
     auth(),
     requirePermissions('students.manage'),

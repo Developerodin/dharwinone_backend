@@ -66,14 +66,18 @@ const initiateCall = {
 const listCalls = {
   query: Joi.object().keys({
     page: Joi.number().integer().min(1),
-    limit: Joi.number().integer().min(1).max(50),
+    limit: Joi.number().integer().min(1).max(500),
+  }),
+};
+
+const callIdParam = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
   }),
 };
 
 const updateCall = {
-  params: Joi.object().keys({
-    id: Joi.string().custom(objectId).required(),
-  }),
+  params: callIdParam.params,
   body: Joi.object().keys({
     status: Joi.string().valid('initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined'),
     duration: Joi.number().min(0),
@@ -142,8 +146,13 @@ const updateGroupName = {
   }),
 };
 
+const startChatCallRecording = {
+  params: callIdParam.params,
+};
+
 export {
   conversationIdParam,
+  callIdParam,
   deleteMessage,
   reactToMessage,
   listConversations,
@@ -158,4 +167,5 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  startChatCallRecording,
 };

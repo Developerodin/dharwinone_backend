@@ -13,6 +13,8 @@ const chatCallSchema = new mongoose.Schema(
       default: 'initiated',
     },
     livekitRoom: { type: String, trim: true },
+    /** Reference to Recording when in-app call was recorded via LiveKit Egress */
+    recordingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recording', default: null },
     startedAt: { type: Date },
     endedAt: { type: Date },
     duration: { type: Number },

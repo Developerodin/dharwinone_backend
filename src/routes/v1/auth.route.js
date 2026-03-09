@@ -1,5 +1,6 @@
 import express from 'express';
 import validate from '../../middlewares/validate.js';
+import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as authValidation from '../../validations/auth.validation.js';
 import * as authController from '../../controllers/auth.controller.js';
 import auth from '../../middlewares/auth.js';
@@ -21,9 +22,9 @@ router.post('/stop-impersonation', auth(), authController.stopImpersonation);
 router.post('/forgot-password', validate(authValidation.forgotPassword), authController.forgotPassword);
 router.post('/reset-password', validate(authValidation.resetPassword), authController.resetPassword);
 router.post('/change-password', auth(), validate(authValidation.changePassword), authController.changePassword);
-router.post('/send-verification-email', auth(), authController.sendVerificationEmail);
+router.post('/send-verification-email', auth(), requirePermissions('users.manage'), authController.sendVerificationEmail);
 router.post('/verify-email', validate(authValidation.verifyEmail), authController.verifyEmail);
-router.post('/send-candidate-invitation', auth(), validate(authValidation.sendCandidateInvitation), authController.sendCandidateInvitation);
+router.post('/send-candidate-invitation', auth(), requirePermissions('candidates.manage'), validate(authValidation.sendCandidateInvitation), authController.sendCandidateInvitation);
 
 export default router;
 

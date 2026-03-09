@@ -145,6 +145,10 @@ async function runCallHistorySync() {
             if (executionData.extracted_data && typeof executionData.extracted_data === 'object') {
               updateData.extractedData = executionData.extracted_data;
             }
+            const execAgentId = executionData.agent_id ?? executionData.agentId;
+            if (execAgentId && (!record.agentId || record.agentId !== execAgentId)) {
+              updateData.agentId = String(execAgentId).trim();
+            }
 
             if (Object.keys(updateData).length > 0) {
               await callRecordService.updateCallRecordByExecutionId(executionId, updateData);
