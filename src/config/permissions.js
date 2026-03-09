@@ -62,11 +62,15 @@ export const permissionAliases = {
   'meetings.read': ['meetings.read', 'communication.meetings:view', 'communication.meetings:view,create,edit,delete'],
   'meetings.manage': ['meetings.manage', 'communication.meetings:create,edit,delete', 'communication.meetings:view,create,edit,delete'],
   // Calls (bolna, communication) - from communication.calling
-  'calls.read': ['calls.read', 'communication.calling:view', 'communication.calling:view,create,edit,delete'],
-  'calls.manage': ['calls.manage', 'communication.calling:create,edit,delete', 'communication.calling:view,create,edit,delete'],
+  // permission.service derives communication.calling:view → calling.read; we must grant calls.* via calling.* too
+  'calls.read': ['calls.read', 'calling.read', 'communication.calling:view', 'communication.calling:view,create,edit,delete'],
+  'calls.manage': ['calls.manage', 'calling.manage', 'communication.calling:create,edit,delete', 'communication.calling:view,create,edit,delete'],
   // Teams (project.teams covers team + teamGroup)
   'teams.read': ['teams.read', 'project.teams:view', 'project.teams:view,create,edit,delete'],
   'teams.manage': ['teams.manage', 'project.teams:create,edit,delete', 'project.teams:view,create,edit,delete'],
+  // Tasks: project.tasks -> tasks.read; project.kanban -> kanban.read (Kanban board, also needs task API)
+  'tasks.read': ['tasks.read', 'kanban.read'],
+  'tasks.manage': ['tasks.manage', 'kanban.manage'],
   // Recruiters
   'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
   'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],

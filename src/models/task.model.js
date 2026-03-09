@@ -3,6 +3,19 @@ import toJSON from './plugins/toJSON.plugin.js';
 
 const TASK_STATUSES = ['new', 'todo', 'on_going', 'in_review', 'completed'];
 
+const taskCommentSchema = new mongoose.Schema(
+  {
+    content: { type: String, required: true, trim: true },
+    commentedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
+  },
+  { timestamps: true }
+);
+
 const taskSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -27,6 +40,10 @@ const taskSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
       index: true,
+    },
+    comments: {
+      type: [taskCommentSchema],
+      default: [],
     },
   },
   { timestamps: true }

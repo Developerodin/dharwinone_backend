@@ -203,4 +203,11 @@ const emitConversationUpdated = async (conversationId) => {
   }
 };
 
-export { initSocket, emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated, isUserOnline, getIO };
+const emitConversationDeleted = (conversationId, participantIds) => {
+  if (!io || !participantIds?.length) return;
+  participantIds.forEach((uid) => {
+    io.to(`user:${uid}`).emit('conversation_deleted', { conversationId });
+  });
+};
+
+export { initSocket, emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated, emitConversationDeleted, isUserOnline, getIO };

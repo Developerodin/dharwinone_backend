@@ -20,6 +20,11 @@ router
 
 router
   .route('/:taskId/status')
-  .patch(auth(), requirePermissions('tasks.manage'), validate(taskValidation.updateTaskStatus), taskController.updateStatus);
+  .patch(auth(), requirePermissions('tasks.read'), validate(taskValidation.updateTaskStatus), taskController.updateStatus);
+
+router
+  .route('/:taskId/comments')
+  .get(auth(), requirePermissions('tasks.read'), validate(taskValidation.getTask), taskController.listComments)
+  .post(auth(), requirePermissions('tasks.read'), validate(taskValidation.addTaskComment), taskController.createComment);
 
 export default router;

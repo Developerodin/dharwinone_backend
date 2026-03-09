@@ -21,6 +21,7 @@ router.get('/conversations', validate(chatValidation.listConversations), chatCon
 router.post('/conversations', validate(chatValidation.createConversation), chatController.createConversation);
 
 router.get('/conversations/:id', validate(chatValidation.conversationIdParam), chatController.getConversation);
+router.delete('/conversations/:id', validate(chatValidation.conversationIdParam), chatController.deleteConversation);
 router.patch(
   '/conversations/:id',
   validate(chatValidation.updateGroupName),

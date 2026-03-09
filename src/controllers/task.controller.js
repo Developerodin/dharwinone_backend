@@ -9,6 +9,8 @@ import {
   updateTaskById,
   updateTaskStatusById,
   deleteTaskById,
+  getTaskComments,
+  addTaskComment,
 } from '../services/task.service.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
@@ -59,4 +61,14 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { create, list, get, update, updateStatus, remove };
+const listComments = catchAsync(async (req, res) => {
+  const comments = await getTaskComments(req.params.taskId, req.user);
+  res.send(comments);
+});
+
+const createComment = catchAsync(async (req, res) => {
+  const comment = await addTaskComment(req.params.taskId, req.body.content, req.user);
+  res.status(httpStatus.CREATED).send(comment);
+});
+
+export { create, list, get, update, updateStatus, remove, listComments, createComment };

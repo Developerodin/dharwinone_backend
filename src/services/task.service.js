@@ -19,6 +19,21 @@ const createTask = async (createdById, payload) => {
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
   ]);
+  const assignedIds = (task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean);
+  const creatorStr = String(createdById);
+  if (assignedIds.length > 0) {
+    const { notify } = await import('./notification.service.js');
+    for (const uid of assignedIds) {
+      if (uid !== creatorStr) {
+        notify(uid, {
+          type: 'task',
+          title: 'Task assigned to you',
+          message: `"${task.title || 'Task'}" has been assigned to you.`,
+          link: '/task/my-tasks',
+        }).catch(() => {});
+      }
+    }
+  }
   return task;
 };
 
@@ -82,6 +97,7 @@ const getTaskById = async (id) => {
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
+    { path: 'comments.commentedBy', select: 'name email' },
   ]);
   return task;
 };
@@ -95,12 +111,28 @@ const updateTaskById = async (id, updateBody, currentUser) => {
   if (!canUpdate) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
+  const prevAssigned = new Set((task.assignedTo || []).map((u) => String(u._id || u)));
   Object.assign(task, updateBody);
   await task.save();
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
   ]);
+  const newAssigned = new Set((task.assignedTo || []).map((u) => String(u._id || u)));
+  const creatorStr = String(task.createdBy?._id || task.createdBy);
+  const currentStr = String(currentUser.id || currentUser._id);
+  const newlyAssigned = [...newAssigned].filter((uid) => !prevAssigned.has(uid) && uid !== currentStr);
+  if (newlyAssigned.length > 0) {
+    const { notify } = await import('./notification.service.js');
+    for (const uid of newlyAssigned) {
+      notify(uid, {
+        type: 'task',
+        title: 'Task assigned to you',
+        message: `"${task.title || 'Task'}" has been assigned to you.`,
+        link: '/task/my-tasks',
+      }).catch(() => {});
+    }
+  }
   return task;
 };
 
@@ -126,14 +158,26 @@ const updateTaskStatusById = async (id, status, order, currentUser) => {
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
   ]);
-  if (creatorId && String(creatorId) !== String(currentUser.id || currentUser._id)) {
-    const { notify } = await import('./notification.service.js');
+  const { notify } = await import('./notification.service.js');
+  const currentStr = String(currentUser.id || currentUser._id);
+  if (creatorId && String(creatorId) !== currentStr) {
     notify(creatorId, {
       type: 'task',
       title: 'Task status updated',
       message: `"${task.title || 'Task'}" is now ${status}.`,
       link: '/task/kanban-board',
     }).catch(() => {});
+  }
+  const assignedIds = (task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean);
+  for (const uid of assignedIds) {
+    if (uid !== currentStr && uid !== String(creatorId)) {
+      notify(uid, {
+        type: 'task',
+        title: 'Task status updated',
+        message: `"${task.title || 'Task'}" is now ${status}.`,
+        link: '/task/my-tasks',
+      }).catch(() => {});
+    }
   }
   return task;
 };
@@ -151,6 +195,65 @@ const deleteTaskById = async (id, currentUser) => {
   return task;
 };
 
+const canCommentOnTask = (task, userId) => {
+  if (!task || !userId) return false;
+  const uid = String(userId);
+  const creatorId = String(task.createdBy?._id || task.createdBy);
+  if (uid === creatorId) return true;
+  const assignedIds = (task.assignedTo || []).map((u) => String(u._id || u));
+  return assignedIds.includes(uid);
+};
+
+const getTaskComments = async (taskId, currentUser) => {
+  const task = await Task.findById(taskId)
+    .populate({
+      path: 'comments.commentedBy',
+      select: 'name email',
+    })
+    .lean();
+  if (!task) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Task not found');
+  }
+  const admin = await userIsAdmin(currentUser);
+  const allowed = admin || canCommentOnTask(task, currentUser.id || currentUser._id);
+  if (!allowed) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+  }
+  return task.comments || [];
+};
+
+const addTaskComment = async (taskId, content, currentUser) => {
+  const task = await Task.findById(taskId).exec();
+  if (!task) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Task not found');
+  }
+  const userId = currentUser.id || currentUser._id;
+  const admin = await userIsAdmin(currentUser);
+  const allowed = admin || canCommentOnTask(task, userId);
+  if (!allowed) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+  }
+  const comment = {
+    content: (content || '').trim(),
+    commentedBy: userId,
+  };
+  if (!comment.content) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Comment content is required');
+  }
+  task.comments = task.comments || [];
+  task.comments.push(comment);
+  task.commentsCount = (task.commentsCount || 0) + 1;
+  await task.save();
+  const populated = await Task.findById(taskId)
+    .populate({
+      path: 'comments.commentedBy',
+      select: 'name email',
+    })
+    .lean();
+  const lastComment = (populated.comments || []).pop();
+  return lastComment;
+};
+
 export {
   createTask,
   queryTasks,
@@ -158,4 +261,6 @@ export {
   updateTaskById,
   updateTaskStatusById,
   deleteTaskById,
+  getTaskComments,
+  addTaskComment,
 };

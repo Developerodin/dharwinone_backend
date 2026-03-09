@@ -94,6 +94,21 @@ const deleteTask = {
     .required(),
 };
 
+const addTaskComment = {
+  params: Joi.object()
+    .keys({
+      taskId: Joi.string().custom(objectId).required(),
+    })
+    .required(),
+  body: Joi.object()
+    .keys({
+      content: Joi.string().required().trim().min(1).max(2000).messages({
+        'string.empty': 'Comment content is required',
+      }),
+    })
+    .required(),
+};
+
 export {
   createTask,
   getTasks,
@@ -101,4 +116,5 @@ export {
   updateTask,
   updateTaskStatus,
   deleteTask,
+  addTaskComment,
 };

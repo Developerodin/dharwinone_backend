@@ -2,7 +2,7 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import * as chatService from '../services/chat.service.js';
-import { emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated } from '../services/chatSocket.service.js';
+import { emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated, emitConversationDeleted } from '../services/chatSocket.service.js';
 import { queryUsers } from '../services/user.service.js';
 import { uploadFileToS3 } from '../services/upload.service.js';
 
@@ -36,6 +36,13 @@ const getConversation = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const conv = await chatService.getConversation(req.params.id, userId);
   res.send(conv);
+});
+
+const deleteConversation = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const { participantIds } = await chatService.deleteConversation(req.params.id, userId);
+  emitConversationDeleted(req.params.id, participantIds);
+  res.status(httpStatus.NO_CONTENT).end();
 });
 
 const getMessages = catchAsync(async (req, res) => {
@@ -229,4 +236,5 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  deleteConversation,
 };

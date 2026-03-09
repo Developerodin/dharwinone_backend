@@ -58,12 +58,12 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     }
 
     const lastMsg = await Message.findOne({ conversation: c._id }).sort({ createdAt: -1 }).populate('sender', 'name').lean();
-    const myParticipant = c.participants?.find((p) => p.user._id.toString() === userId);
+    const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === userId);
     const unreadCount = myParticipant?.lastReadAt
       ? await Message.countDocuments({ conversation: c._id, createdAt: { $gt: myParticipant.lastReadAt }, sender: { $ne: userId } })
       : await Message.countDocuments({ conversation: c._id, sender: { $ne: userId } });
 
-    const otherParticipants = (c.participants || []).filter((p) => p.user._id.toString() !== userId);
+    const otherParticipants = (c.participants || []).filter((p) => p?.user?._id?.toString() !== userId);
     const displayName = c.type === 'group' ? (c.name || 'Group') : otherParticipants[0]?.user?.name || 'Unknown';
 
     result.push({
@@ -506,6 +506,21 @@ const updateGroupName = async (conversationId, userId, { name }) => {
   return getConversation(conversationId, userId);
 };
 
+const deleteConversation = async (conversationId, userId) => {
+  const conv = await ensureParticipant(conversationId, userId);
+  if (conv.type === 'group') {
+    const creatorId = conv.createdBy?.toString?.();
+    if (creatorId !== userId) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'Only the group creator can delete the chat. You can leave the group instead.');
+    }
+  }
+  const participantIds = (conv.participants || [])
+    .map((p) => (p?.user?._id ? p.user._id.toString() : p?.user?.toString?.()))
+    .filter(Boolean);
+  await Conversation.findByIdAndDelete(conversationId);
+  return { deleted: true, participantIds };
+};
+
 export {
   listConversations,
   createConversation,
@@ -528,4 +543,5 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  deleteConversation,
 };
