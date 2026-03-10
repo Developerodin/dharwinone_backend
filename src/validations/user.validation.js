@@ -7,7 +7,7 @@ const createUser = {
     email: Joi.string().required().email(),
     password: Joi.string().required().custom(password),
     name: Joi.string().required(),
-    role: Joi.string().required().valid('user', 'admin'),
+    role: Joi.string().required().valid('user', 'recruiter', 'supervisor', 'admin', 'Administrator', 'agent', 'Candidate', 'Manager', 'Mentor', 'Student'),
     roleIds: Joi.array().items(Joi.string().custom(objectId)).default([]),
     status: Joi.string().valid('active', 'pending', 'disabled', 'deleted').default('active'),
   }),
