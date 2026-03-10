@@ -45,8 +45,11 @@ const envVarsSchema = Joi.object()
     // OpenAI (blog AI, Create Module with AI, cover image generation)
     OPENAI_API_KEY: Joi.string().optional().description('OpenAI API key for blog, module AI, and DALL-E cover images'),
 
-    // YouTube (Create Module with AI)
-    YOUTUBE_API_KEY: Joi.string().optional().description('YouTube Data API v3 key'),
+    // GCP (YouTube + Gmail OAuth)
+    GCP_YOUTUBE_API_KEY: Joi.string().optional().description('YouTube Data API v3 key'),
+    GCP_GOOGLE_CLIENT_ID: Joi.string().optional().description('Google OAuth client ID (for Gmail)'),
+    GCP_GOOGLE_CLIENT_SECRET: Joi.string().optional().description('Google OAuth client secret (for Gmail)'),
+    GCP_GOOGLE_REDIRECT_URI: Joi.string().optional().description('Google OAuth redirect URI'),
 
     // LiveKit
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
@@ -116,7 +119,12 @@ const config = {
     apiKey: envVars.OPENAI_API_KEY || '',
   },
   youtube: {
-    apiKey: envVars.YOUTUBE_API_KEY || '',
+    apiKey: envVars.GCP_YOUTUBE_API_KEY || envVars.YOUTUBE_API_KEY || '',
+  },
+  google: {
+    clientId: envVars.GCP_GOOGLE_CLIENT_ID || '',
+    clientSecret: envVars.GCP_GOOGLE_CLIENT_SECRET || '',
+    redirectUri: envVars.GCP_GOOGLE_REDIRECT_URI || `http://localhost:${envVars.PORT}/v1/email/auth/google/callback`,
   },
   aws: {
     accessKeyId: envVars.AWS_ACCESS_KEY_ID,

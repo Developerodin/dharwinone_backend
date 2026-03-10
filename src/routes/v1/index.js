@@ -45,6 +45,7 @@ import bolnaRoute from './bolna.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
 import communicationRoute from './communication.route.js';
+import emailRoute from './email.route.js';
 
 const router = express.Router();
 
@@ -224,6 +225,10 @@ const defaultRoutes = [
   {
     path: '/communication',
     route: communicationRoute,
+  },
+  {
+    path: '/email',
+    route: emailRoute,
   },
 ];
 
