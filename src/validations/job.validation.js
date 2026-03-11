@@ -236,6 +236,29 @@ const createJobFromTemplate = {
   }).required(),
 };
 
+const browseJobs = {
+  query: Joi.object().keys({
+    title: Joi.string().optional(),
+    jobType: Joi.string()
+      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+      .optional(),
+    location: Joi.string().optional(),
+    experienceLevel: Joi.string()
+      .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
+      .optional(),
+    search: Joi.string().optional(),
+    sortBy: Joi.string().optional(),
+    limit: Joi.number().integer().min(1).max(100).default(12),
+    page: Joi.number().integer().min(1).default(1),
+  }),
+};
+
+const browseJob = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+  }),
+};
+
 // Public job validations
 const listPublicJobs = {
   query: Joi.object().keys({
@@ -302,6 +325,8 @@ export {
   updateJobTemplate,
   deleteJobTemplate,
   createJobFromTemplate,
+  browseJobs,
+  browseJob,
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,

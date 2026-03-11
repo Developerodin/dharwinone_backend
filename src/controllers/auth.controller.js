@@ -12,6 +12,8 @@ import { registerStudent as registerStudentService } from '../services/student.s
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
 import { createCandidate } from '../services/candidate.service.js';
 import { getRoleByName } from '../services/role.service.js';
+import { getMyPermissionsForFrontend } from '../services/permission.service.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
 
@@ -36,6 +38,20 @@ const clearAuthCookies = (res) => {
   const options = cookieOptions();
   res.clearCookie(ACCESS_TOKEN_COOKIE, options);
   res.clearCookie(REFRESH_TOKEN_COOKIE, options);
+};
+
+/** Enrich user object with fresh profile picture URL (S3 presigned URLs expire after ~1h). */
+const enrichUserWithFreshProfilePictureUrl = async (user) => {
+  const userObj = user.toJSON ? user.toJSON() : { ...user };
+  if (userObj.profilePicture?.key) {
+    try {
+      const freshUrl = await generatePresignedDownloadUrl(userObj.profilePicture.key, 7 * 24 * 3600);
+      userObj.profilePicture = { ...userObj.profilePicture, url: freshUrl };
+    } catch (err) {
+      /* keep existing url if regeneration fails */
+    }
+  }
+  return userObj;
 };
 
 /**
@@ -255,7 +271,8 @@ const login = catchAsync(async (req, res) => {
   user.lastLoginAt = new Date();
   const tokens = await generateAuthTokens(user, req);
   setAuthCookies(res, tokens);
-  res.send({ user, tokens });
+  const userObj = await enrichUserWithFreshProfilePictureUrl(user);
+  res.send({ user: userObj, tokens });
 });
 
 const logout = catchAsync(async (req, res) => {
@@ -345,11 +362,17 @@ const sendCandidateInvitation = catchAsync(async (req, res) => {
 
 const getMe = catchAsync(async (req, res) => {
   const sessions = await getSessionsForUser(req.user.id);
-  const response = { user: req.user, sessions };
+  const userObj = await enrichUserWithFreshProfilePictureUrl(req.user);
+  const response = { user: userObj, sessions };
   if (req.impersonation) {
     response.impersonation = req.impersonation;
   }
   res.send(response);
+});
+
+const getMyPermissions = catchAsync(async (req, res) => {
+  const ctx = await getMyPermissionsForFrontend(req.user);
+  res.send(ctx);
 });
 
 /**
@@ -419,6 +442,7 @@ export {
   verifyEmail,
   sendCandidateInvitation,
   getMe,
+  getMyPermissions,
   impersonate,
   stopImpersonation,
 };

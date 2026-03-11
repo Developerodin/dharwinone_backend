@@ -22,9 +22,6 @@ function getDateRange(range) {
   return { start, end, previousStart, previousEnd, days };
 }
 
-/**
- * Build time-series aggregation pipeline for a date field grouped by month.
- */
 function timeSeriesPipeline(dateField, extraMatch = {}, dateRange = null) {
   const match = { [dateField]: { $exists: true, $ne: null } };
   if (dateRange) {
@@ -58,11 +55,6 @@ function timeSeriesPipeline(dateField, extraMatch = {}, dateRange = null) {
   ];
 }
 
-/**
- * Get ATS analytics with optional date range, period comparison, and recruiter scoping.
- * @param {Object} options - { range?: '7d'|'30d'|'3m'|'12m' }
- * @param {Object} user - authenticated user
- */
 const getAtsAnalytics = async (options = {}, user = {}) => {
   const dateRange = getDateRange(options.range);
   const isRecruiter = await userHasRecruiterRole(user);
@@ -71,12 +63,25 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     ? (await Job.find({ createdBy: user._id }, { _id: 1 }).lean()).map((j) => j._id)
     : null;
 
-  const candidateMatch = isRecruiter ? { assignedRecruiter: user._id } : {};
+  const candidateMatch = isRecruiter
+    ? { assignedRecruiter: user._id, isActive: { $ne: false } }
+    : { isActive: { $ne: false } };
   const jobMatch = isRecruiter ? { createdBy: user._id } : {};
-  const appMatch = isRecruiter ? { job: { $in: recruiterJobIds } } : {};
   const activityFilter = isRecruiter ? { recruiterId: user._id } : {};
 
   const appDateMatch = dateRange ? { createdAt: { $gte: dateRange.start, $lte: dateRange.end } } : {};
+
+  // Use $in with active candidate IDs — excludes both soft-deleted AND hard-deleted candidates
+  const activeCandidateIds = (
+    await Candidate.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
+  ).map((c) => c._id);
+
+  const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
+
+  const appMatch = {
+    candidate: { $in: activeCandidateIds },
+    job: { $in: isRecruiter ? recruiterJobIds : existingJobIds },
+  };
 
   const [
     totalCandidates,
@@ -131,7 +136,7 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
       { $project: { status: '$_id', count: 1, _id: 0 } },
     ]),
     JobApplication.aggregate([
-      { $match: appMatch },
+      { $match: { ...appMatch, ...appDateMatch } },
       { $group: { _id: '$job', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 10 },
@@ -209,21 +214,23 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
   };
 };
 
-/**
- * Drill-down: return paginated records for a specific chart segment.
- * @param {Object} params - { type, value, page, limit }
- * @param {Object} user - authenticated user
- */
 const getDrillDown = async (params, user = {}) => {
   const { type, value, page = 1, limit = 20 } = params;
   const isRecruiter = await userHasRecruiterRole(user);
   const skip = (page - 1) * limit;
 
   if (type === 'applicationStatus' || type === 'applicationFunnel') {
-    const query = { status: value };
+    const activeCandidateIds = (
+      await Candidate.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
+    ).map((c) => c._id);
+
+    const query = { status: value, candidate: { $in: activeCandidateIds } };
     if (isRecruiter) {
       const recruiterJobIds = (await Job.find({ createdBy: user._id }, { _id: 1 }).lean()).map((j) => j._id);
       query.job = { $in: recruiterJobIds };
+    } else {
+      const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
+      query.job = { $in: existingJobIds };
     }
     const [results, total] = await Promise.all([
       JobApplication.find(query)

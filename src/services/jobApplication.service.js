@@ -181,6 +181,14 @@ const queryJobApplications = async (filter, options, currentUser) => {
     query.status = filter.status;
   }
 
+  // Only include applications from active, existing candidates (excludes soft-deleted AND hard-deleted)
+  if (filter.includeInactive !== true && !query.candidate) {
+    const activeCandidateIds = (
+      await Candidate.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
+    ).map((c) => c._id);
+    query.candidate = { $in: activeCandidateIds };
+  }
+
   const isAdmin = await userIsAdmin(currentUser);
   if (!isAdmin && currentUser?.id) {
     const Job = (await import('../models/job.model.js')).default;
@@ -202,7 +210,7 @@ const queryJobApplications = async (filter, options, currentUser) => {
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber countryCode' },
+      { path: 'candidate', select: 'fullName email phoneNumber countryCode isActive' },
       { path: 'appliedBy', select: 'name email' },
     ],
   });

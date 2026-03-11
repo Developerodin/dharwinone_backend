@@ -1,4 +1,5 @@
 import express from 'express';
+import config from '../../config/config.js';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import * as emailValidation from '../../validations/email.validation.js';
@@ -7,7 +8,13 @@ import * as emailController from '../../controllers/email.controller.js';
 const router = express.Router();
 
 // Google OAuth callback - no auth (redirect from Google)
-router.get('/auth/google/callback', validate(emailValidation.googleCallback), emailController.googleCallback);
+// If opened without code/state (e.g. direct visit), redirect to frontend instead of 400
+router.get('/auth/google/callback', (req, res, next) => {
+  if (!req.query?.code || !req.query?.state) {
+    return res.redirect(`${config.frontendBaseUrl}/communication/email?error=missing_callback_params`);
+  }
+  next();
+}, validate(emailValidation.googleCallback), emailController.googleCallback);
 
 router.use(auth());
 

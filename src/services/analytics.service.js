@@ -29,9 +29,15 @@ function getDateRange(range) {
 const getTrainingAnalytics = async (options = {}) => {
   const dateRange = getDateRange(options.range);
 
-  const baseProgressMatch = dateRange
-    ? { enrolledAt: { $gte: dateRange.start, $lte: dateRange.end } }
-    : {};
+  // Only count active students; exclude inactive ones from progress queries
+  const activeStudentIds = (
+    await Student.find({ status: 'active' }, { _id: 1 }).lean()
+  ).map((s) => s._id);
+
+  const baseProgressMatch = {
+    student: { $in: activeStudentIds },
+    ...(dateRange ? { enrolledAt: { $gte: dateRange.start, $lte: dateRange.end } } : {}),
+  };
 
   const [
     totalStudents,
@@ -57,7 +63,7 @@ const getTrainingAnalytics = async (options = {}) => {
     previousEnrollments,
     previousCompletions,
   ] = await Promise.all([
-    Student.countDocuments({}),
+    Student.countDocuments({ status: 'active' }),
     Mentor.countDocuments({}),
     TrainingModule.find({}, { moduleName: 1, students: 1, categories: 1 }).lean(),
     StudentCourseProgress.countDocuments(baseProgressMatch),
@@ -80,18 +86,18 @@ const getTrainingAnalytics = async (options = {}) => {
       ...baseProgressMatch,
       $or: [{ status: 'completed' }, { 'progress.percentage': { $gte: 100 } }],
     }),
-    StudentCourseProgress.find({ completedAt: { $exists: true, $ne: null } })
+    StudentCourseProgress.find({ completedAt: { $exists: true, $ne: null }, student: { $in: activeStudentIds } })
       .sort({ completedAt: -1 })
       .limit(10)
       .populate({ path: 'student', select: 'user', populate: { path: 'user', select: 'name' } })
       .populate({ path: 'module', select: 'moduleName' })
       .lean(),
     StudentQuizAttempt.aggregate([
-      { $match: { status: 'graded' } },
+      { $match: { status: 'graded', student: { $in: activeStudentIds } } },
       { $group: { _id: null, avg: { $avg: '$score.percentage' } } },
     ]),
     StudentCourseProgress.aggregate([
-      { $match: { enrolledAt: { $exists: true, $ne: null }, ...(dateRange ? { enrolledAt: { $gte: dateRange.start, $lte: dateRange.end } } : {}) } },
+      { $match: { student: { $in: activeStudentIds }, enrolledAt: { $exists: true, $ne: null }, ...(dateRange ? { enrolledAt: { $gte: dateRange.start, $lte: dateRange.end } } : {}) } },
       {
         $group: {
           _id: { year: { $year: '$enrolledAt' }, month: { $month: '$enrolledAt' } },
@@ -115,7 +121,7 @@ const getTrainingAnalytics = async (options = {}) => {
       },
     ]),
     StudentCourseProgress.aggregate([
-      { $match: { completedAt: { $exists: true, $ne: null }, ...(dateRange ? { completedAt: { $gte: dateRange.start, $lte: dateRange.end } } : {}) } },
+      { $match: { student: { $in: activeStudentIds }, completedAt: { $exists: true, $ne: null }, ...(dateRange ? { completedAt: { $gte: dateRange.start, $lte: dateRange.end } } : {}) } },
       {
         $group: {
           _id: { year: { $year: '$completedAt' }, month: { $month: '$completedAt' } },
@@ -139,7 +145,7 @@ const getTrainingAnalytics = async (options = {}) => {
       },
     ]),
     StudentQuizAttempt.aggregate([
-      { $match: { status: 'graded' } },
+      { $match: { status: 'graded', student: { $in: activeStudentIds } } },
       { $addFields: { bucketDate: { $cond: [{ $ne: ['$submittedAt', null] }, '$submittedAt', '$createdAt'] } } },
       { $match: { bucketDate: { $exists: true, $ne: null }, ...(dateRange ? { bucketDate: { $gte: dateRange.start, $lte: dateRange.end } } : {}) } },
       { $group: { _id: { year: { $year: '$bucketDate' }, month: { $month: '$bucketDate' } }, averageScore: { $avg: '$score.percentage' } } },
@@ -167,7 +173,7 @@ const getTrainingAnalytics = async (options = {}) => {
       { $project: { moduleId: '$_id', moduleName: '$mod.moduleName', enrolled: '$total', completed: 1, _id: 0 } },
     ]),
     StudentQuizAttempt.aggregate([
-      { $match: { status: 'graded' } },
+      { $match: { status: 'graded', student: { $in: activeStudentIds } } },
       { $group: { _id: '$module', averageScore: { $avg: '$score.percentage' } } },
       { $lookup: { from: 'trainingmodules', localField: '_id', foreignField: '_id', as: 'mod' } },
       { $unwind: { path: '$mod', preserveNullAndEmptyArrays: true } },
@@ -188,7 +194,7 @@ const getTrainingAnalytics = async (options = {}) => {
       .populate({ path: 'module', select: 'moduleName' })
       .lean(),
     StudentCourseProgress.aggregate([
-      { $match: { completedAt: { $exists: true, $ne: null } } },
+      { $match: { completedAt: { $exists: true, $ne: null }, student: { $in: activeStudentIds } } },
       { $project: { days: { $divide: [{ $subtract: ['$completedAt', '$enrolledAt'] }, 24 * 60 * 60 * 1000] } } },
       { $group: { _id: null, avgDays: { $avg: '$days' } } },
     ]),
@@ -200,11 +206,13 @@ const getTrainingAnalytics = async (options = {}) => {
       .lean(),
     dateRange
       ? StudentCourseProgress.countDocuments({
+          student: { $in: activeStudentIds },
           enrolledAt: { $gte: dateRange.previousStart, $lte: dateRange.previousEnd },
         })
       : Promise.resolve(null),
     dateRange
       ? StudentCourseProgress.countDocuments({
+          student: { $in: activeStudentIds },
           completedAt: { $exists: true, $ne: null, $gte: dateRange.previousStart, $lte: dateRange.previousEnd },
         })
       : Promise.resolve(null),

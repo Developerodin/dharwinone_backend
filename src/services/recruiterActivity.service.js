@@ -1,4 +1,5 @@
 import RecruiterActivityLog from '../models/recruiterActivityLog.model.js';
+import User from '../models/user.model.js';
 
 /**
  * Log a recruiter activity
@@ -21,7 +22,9 @@ const logActivity = async (recruiterId, activityType, data = {}) => {
  * Note: meeting populate skipped - DHARWIN NEW has no Meeting model yet
  */
 const getActivityLogs = async (filter = {}, options = {}) => {
-  const query = {};
+  const activeUserIds = (await User.find({ status: 'active' }, { _id: 1 }).lean()).map((u) => u._id);
+
+  const query = { recruiter: { $in: activeUserIds } };
 
   if (filter.recruiterId) {
     query.recruiter = filter.recruiterId;
@@ -96,7 +99,10 @@ const getActivityLogs = async (filter = {}, options = {}) => {
  * Get activity logs summary by recruiter (Admin only)
  */
 const getActivityLogsSummary = async (filter = {}) => {
-  const matchQuery = {};
+  // Only include logs from active, existing users
+  const activeUserIds = (await User.find({ status: 'active' }, { _id: 1 }).lean()).map((u) => u._id);
+
+  const matchQuery = { recruiter: { $in: activeUserIds } };
 
   if (filter.recruiterId) {
     matchQuery.recruiter = filter.recruiterId;
@@ -171,7 +177,9 @@ const getActivityLogsSummary = async (filter = {}) => {
  * Get activity statistics (Admin only)
  */
 const getActivityStatistics = async (filter = {}) => {
-  const matchQuery = {};
+  const activeUserIds = (await User.find({ status: 'active' }, { _id: 1 }).lean()).map((u) => u._id);
+
+  const matchQuery = { recruiter: { $in: activeUserIds } };
 
   if (filter.recruiterId) {
     matchQuery.recruiter = filter.recruiterId;

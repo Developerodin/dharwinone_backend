@@ -3,9 +3,22 @@ import ApiError from '../utils/ApiError.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import Student from '../models/student.model.js';
 import Attendance from '../models/attendance.model.js';
+import Role from '../models/role.model.js';
 import pick from '../utils/pick.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Sync check: user.role indicates admin */
+const isAdminByRole = (user) => user.role === 'admin' || user.role === 'Administrator';
+
+/** Async: check if user is admin (role field OR has Administrator role via roleIds) */
+const isAdminUser = async (user) => {
+  if (isAdminByRole(user)) return true;
+  const roleIds = user.roleIds || [];
+  if (roleIds.length === 0) return false;
+  const adminRole = await Role.findOne({ _id: { $in: roleIds }, name: 'Administrator', status: 'active' });
+  return !!adminRole;
+};
 
 /**
  * Create a backdated attendance request
@@ -20,7 +33,7 @@ const createBackdatedAttendanceRequest = async (studentId, attendanceEntries, no
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (user.role !== 'admin' && String(student.user?._id || student.user) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(student.user?._id || student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only create backdated attendance requests for yourself');
   }
 
@@ -35,8 +48,8 @@ const createBackdatedAttendanceRequest = async (studentId, attendanceEntries, no
 
   for (let i = 0; i < attendanceEntries.length; i++) {
     const entry = attendanceEntries[i];
-    if (!entry.date || !entry.punchIn) {
-      throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: date and punchIn are required`);
+    if (!entry.date || !entry.punchIn || !entry.punchOut) {
+      throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: date, punchIn, and punchOut are required`);
     }
 
     const dateObj = new Date(entry.date);
@@ -140,14 +153,18 @@ const createBackdatedAttendanceRequest = async (studentId, attendanceEntries, no
     requestedBy: user.id,
   });
 
-  return request.populate('student', 'user').populate('requestedBy', 'name email');
+  await BackdatedAttendanceRequest.populate(request, [
+    { path: 'student', select: 'user', populate: { path: 'user', select: 'name email' } },
+    { path: 'requestedBy', select: 'name email' },
+  ]);
+  return request;
 };
 
 /**
  * Query backdated attendance requests (non-admin: only students owned by user)
  */
 const queryBackdatedAttendanceRequests = async (filter, options, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     const students = await Student.find({ user: user.id }).select('_id');
     const studentIds = students.map((s) => s._id);
     if (studentIds.length === 0) {
@@ -192,7 +209,7 @@ const getBackdatedAttendanceRequestById = async (id, user) => {
   }
 
   const studentUserId = request.student?.user?._id ?? request.student?.user;
-  if (user.role !== 'admin' && String(studentUserId) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
@@ -203,7 +220,7 @@ const getBackdatedAttendanceRequestById = async (id, user) => {
  * Approve backdated attendance request and create/update Attendance records
  */
 const approveBackdatedAttendanceRequest = async (requestId, adminComment, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can approve backdated attendance requests');
   }
 
@@ -303,11 +320,15 @@ const approveBackdatedAttendanceRequest = async (requestId, adminComment, user) 
     link: '/settings/attendance/backdated-attendance-requests',
   }).catch(() => {});
 
+  await BackdatedAttendanceRequest.populate(request, [
+    { path: 'requestedBy', select: 'name email' },
+    { path: 'reviewedBy', select: 'name email' },
+  ]);
   return {
     success: true,
     message: `Backdated attendance request approved. ${createdOrUpdatedAttendances.length} attendance record(s) created/updated successfully${errors.length > 0 ? `, ${errors.length} failed` : ''}`,
     data: {
-      request: await request.populate('requestedBy', 'name email').populate('reviewedBy', 'name email'),
+      request,
       attendances: createdOrUpdatedAttendances,
       errors: errors.length > 0 ? errors : undefined,
     },
@@ -318,7 +339,7 @@ const approveBackdatedAttendanceRequest = async (requestId, adminComment, user) 
  * Reject backdated attendance request
  */
 const rejectBackdatedAttendanceRequest = async (requestId, adminComment, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can reject backdated attendance requests');
   }
 
@@ -349,17 +370,19 @@ const rejectBackdatedAttendanceRequest = async (requestId, adminComment, user) =
     link: '/settings/attendance/backdated-attendance-requests',
   }).catch(() => {});
 
-  return request
-    .populate('student', 'user')
-    .populate('requestedBy', 'name email')
-    .populate('reviewedBy', 'name email');
+  await BackdatedAttendanceRequest.populate(request, [
+    { path: 'student', select: 'user' },
+    { path: 'requestedBy', select: 'name email' },
+    { path: 'reviewedBy', select: 'name email' },
+  ]);
+  return request;
 };
 
 /**
  * Update backdated attendance request (admin only, pending only)
  */
 const updateBackdatedAttendanceRequest = async (requestId, updateData, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can update backdated attendance requests');
   }
 
@@ -388,8 +411,8 @@ const updateBackdatedAttendanceRequest = async (requestId, updateData, user) => 
 
     for (let i = 0; i < updateData.attendanceEntries.length; i++) {
       const entry = updateData.attendanceEntries[i];
-      if (!entry.date || !entry.punchIn) {
-        throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: date and punchIn are required`);
+      if (!entry.date || !entry.punchIn || !entry.punchOut) {
+        throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: date, punchIn, and punchOut are required`);
       }
 
       const dateObj = new Date(entry.date);
@@ -467,7 +490,11 @@ const updateBackdatedAttendanceRequest = async (requestId, updateData, user) => 
 
   await request.save();
 
-  return request.populate('student', 'user').populate('requestedBy', 'name email');
+  await BackdatedAttendanceRequest.populate(request, [
+    { path: 'student', select: 'user' },
+    { path: 'requestedBy', select: 'name email' },
+  ]);
+  return request;
 };
 
 /**
@@ -481,7 +508,7 @@ const cancelBackdatedAttendanceRequest = async (requestId, user) => {
   }
 
   const studentUserId = request.student?.user?._id ?? request.student?.user;
-  if (user.role !== 'admin' && String(studentUserId) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only cancel your own backdated attendance requests');
   }
 
@@ -495,7 +522,8 @@ const cancelBackdatedAttendanceRequest = async (requestId, user) => {
   request.status = 'cancelled';
   await request.save();
 
-  return request.populate('requestedBy', 'name email');
+  await BackdatedAttendanceRequest.populate(request, [{ path: 'requestedBy', select: 'name email' }]);
+  return request;
 };
 
 /**
@@ -507,7 +535,7 @@ const getBackdatedAttendanceRequestsByStudentId = async (studentId, options = {}
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (user.role !== 'admin' && String(student.user) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 

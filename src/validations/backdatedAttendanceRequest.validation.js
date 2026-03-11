@@ -10,7 +10,8 @@ const attendanceEntrySchema = Joi.object().keys({
     'any.required': 'Punch in time is required',
     'date.base': 'Punch in time must be a valid date',
   }),
-  punchOut: Joi.date().iso().optional().allow(null).messages({
+  punchOut: Joi.date().iso().required().messages({
+    'any.required': 'Punch out time is required',
     'date.base': 'Punch out time must be a valid date',
   }),
   timezone: Joi.string().optional().trim().messages({

@@ -68,6 +68,13 @@ const userSchema = mongoose.Schema(
     domain: { type: [String], default: [] },
     location: { type: String, trim: true },
     profileSummary: { type: String, trim: true },
+    profilePicture: {
+      url: { type: String, trim: true },
+      key: { type: String, trim: true },
+      originalName: { type: String, trim: true },
+      size: { type: Number },
+      mimeType: { type: String, trim: true },
+    },
     lastLoginAt: {
       type: Date,
       default: null,

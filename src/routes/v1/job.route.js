@@ -46,6 +46,18 @@ router
   );
 
 router
+  .route('/browse')
+  .get(auth(), validate(jobValidation.browseJobs), jobController.browseJobs);
+
+router
+  .route('/browse/:jobId')
+  .get(auth(), validate(jobValidation.browseJob), jobController.browseJobById);
+
+router
+  .route('/browse/:jobId/apply')
+  .post(auth(), validate(jobValidation.browseJob), jobController.browseApply);
+
+router
   .route('/:jobId/apply')
   .post(auth(), validate(jobValidation.applyToJob), jobController.applyToJob);
 

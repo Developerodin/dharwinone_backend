@@ -362,6 +362,13 @@ const buildAdvancedFilter = (filter) => {
 const queryCandidates = async (filter, options) => {
   // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
+
+  // Only show active candidates unless explicitly requesting inactive
+  if (filter.isActive === undefined) {
+    mongoFilter.isActive = { $ne: false };
+  } else {
+    mongoFilter.isActive = filter.isActive;
+  }
   
   // Check if we need aggregation pipeline for experience-based filtering
   const needsAggregation = filter.experienceLevel || 
@@ -553,8 +560,10 @@ const queryCandidates = async (filter, options) => {
       totalResults: total
     };
   }
-  // Use simple pagination for non-experience-based filters
-  const result = await Candidate.paginate(mongoFilter, options);
+  // Use simple pagination for non-experience-based filters (lean + select for faster load)
+  const listFields = 'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId';
+  const paginateOptions = { ...options, lean: true, select: listFields };
+  const result = await Candidate.paginate(mongoFilter, paginateOptions);
     
     // Manually populate with field selection including isEmailVerified
     if (result.results && result.results.length > 0) {
@@ -572,12 +581,10 @@ const queryCandidates = async (filter, options) => {
         : [];
       const userMap = new Map(users.map(u => [String(u._id), { isEmailVerified: u.isEmailVerified || false, countryCode: u.countryCode || null }]));
       
-      for (const candidate of result.results) {
-        await candidate.populate([
-          { path: 'owner', select: 'name email isEmailVerified countryCode' },
-          { path: 'adminId', select: 'name email' }
-        ]);
-      }
+      await Candidate.populate(result.results, [
+        { path: 'owner', select: 'name email isEmailVerified countryCode' },
+        { path: 'adminId', select: 'name email' }
+      ]);
       
       // Convert to plain objects and add isEmailVerified and countryCode
       result.results = result.results.map(candidate => {
@@ -744,33 +751,27 @@ const deleteCandidateById = async (id) => {
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
-  
-  // Get the owner user account
+
+  candidate.isActive = false;
+  await candidate.save();
+
   const ownerUser = await User.findById(candidate.owner);
-  
-  // Check if this user has any other candidates before deleting the candidate
-  // This check must happen before deleting the candidate
-  let hasOtherCandidates = false;
-  if (ownerUser && ownerUser.email === candidate.email) {
-    const otherCandidates = await Candidate.findOne({ 
-      owner: ownerUser._id,
-      _id: { $ne: id } // Exclude the current candidate
-    });
-    hasOtherCandidates = !!otherCandidates;
-  }
-  
-  // Delete the candidate
-  await candidate.deleteOne();
-  
-  // If owner user exists, email matches candidate email, and no other candidates exist,
-  // delete the user account and all associated tokens to prevent login
-  if (ownerUser && ownerUser.email === candidate.email && !hasOtherCandidates) {
-    // Delete all tokens associated with this user to invalidate all sessions
+  if (ownerUser) {
+    const { getRoleByName } = await import('./role.service.js');
+    const candidateRole = await getRoleByName('Candidate');
+
+    if (candidateRole) {
+      ownerUser.roleIds = (ownerUser.roleIds || []).filter(
+        (rid) => rid.toString() !== candidateRole._id.toString()
+      );
+    }
+
+    ownerUser.status = 'disabled';
+    await ownerUser.save();
+
     await Token.deleteMany({ user: ownerUser._id });
-    // Delete the user account
-    await ownerUser.deleteOne();
   }
-  
+
   return candidate;
 };
 
@@ -1639,6 +1640,47 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
   };
 };
 
+/**
+ * Ensure a Candidate profile exists for a user who has the Candidate role.
+ * Creates one if missing. No-op if user lacks Candidate role or already has a profile.
+ * @param {ObjectId} userId
+ * @returns {Promise<Candidate|null>}
+ */
+const ensureCandidateProfileForUser = async (userId) => {
+  const { getRoleByName } = await import('./role.service.js');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!candidateRole) return null;
+
+  const user = await User.findById(userId);
+  if (!user) return null;
+
+  const hasCandidateRole = (user.roleIds || []).some(
+    (id) => id && id.toString() === candidateRole._id.toString()
+  );
+  if (!hasCandidateRole) return null;
+
+  const existing = await Candidate.findOne({ owner: userId });
+  if (existing) {
+    if (existing.isActive === false) {
+      existing.isActive = true;
+      await existing.save();
+    }
+    return existing;
+  }
+
+  const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
+
+  const candidate = await Candidate.create({
+    owner: userId,
+    adminId: adminUser?._id || userId,
+    fullName: user.name || user.email,
+    email: user.email,
+    phoneNumber: user.phoneNumber || '0000000000',
+    isProfileCompleted: 10,
+  });
+  return candidate;
+};
+
 export {
   createCandidate,
   queryCandidates,
@@ -1676,6 +1718,7 @@ export {
   getCandidateWeekOff,
   // Shift assignment
   assignShiftToCandidates,
+  ensureCandidateProfileForUser,
 };
 
 

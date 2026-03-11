@@ -72,6 +72,11 @@ const registerStudent = async (studentBody, isAdminRegistration = false) => {
 const queryStudents = async (filter, options) => {
   const { search, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
+
+  if (!mongoFilter.status) {
+    mongoFilter.status = 'active';
+  }
+
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -132,7 +137,30 @@ const deleteStudentById = async (studentId) => {
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-  await student.deleteOne();
+
+  student.status = 'inactive';
+  await student.save();
+
+  const userId = student.user?._id || student.user;
+  if (userId) {
+    const user = await User.findById(userId);
+    if (user) {
+      const studentRole = await getRoleByName('Student');
+
+      if (studentRole) {
+        user.roleIds = (user.roleIds || []).filter(
+          (rid) => rid.toString() !== studentRole._id.toString()
+        );
+      }
+
+      user.status = 'disabled';
+      await user.save();
+
+      const Token = (await import('../models/token.model.js')).default;
+      await Token.deleteMany({ user: user._id });
+    }
+  }
+
   return student;
 };
 
@@ -204,6 +232,49 @@ const deleteStudentByUserId = async (userId) => {
 };
 
 /**
+ * Get or create a Student profile for attendance. Used for Candidate, Agent, and other non-admin roles
+ * who need to fill attendance but may not have a Student profile yet.
+ * Admins are excluded (they manage others' attendance, not their own).
+ * @param {Object} user - req.user
+ * @returns {Promise<Student|null>} Student or null if user is admin
+ */
+const getOrCreateStudentForAttendance = async (user) => {
+  if (!user?.id && !user?._id) return null;
+  const userId = user.id || user._id;
+
+  const userDoc = await User.findById(userId).select('role roleIds').lean();
+  if (!userDoc) return null;
+
+  let isAdmin = userDoc.role === 'admin' || userDoc.role === 'Administrator';
+  if (!isAdmin && userDoc.roleIds?.length > 0) {
+    const Role = (await import('../models/role.model.js')).default;
+    const adminRoles = await Role.find({ name: { $in: ['admin', 'Administrator'] }, status: 'active' }).select('_id').lean();
+    const adminIds = new Set(adminRoles.map((r) => r._id.toString()));
+    isAdmin = userDoc.roleIds.some((id) => id && adminIds.has(id.toString()));
+  }
+  if (isAdmin) return null;
+
+  let student = await Student.findOne({ user: userId });
+  if (student) {
+    if (student.status === 'inactive') {
+      student.status = 'active';
+      await student.save();
+    }
+    return getStudentById(student.id);
+  }
+
+  const candidate = await Candidate.findOne({ owner: userId }).select('joiningDate').lean();
+  const joiningDate = candidate?.joiningDate || null;
+
+  student = await Student.create({
+    user: userId,
+    status: 'active',
+    joiningDate,
+  });
+  return getStudentById(student.id);
+};
+
+/**
  * Ensure a Student profile exists for a user who has the Student role.
  * Creates one if missing. No-op if user lacks Student role or already has a profile.
  * @param {ObjectId} userId
@@ -222,7 +293,13 @@ const ensureStudentProfileForUser = async (userId) => {
   if (!hasStudentRole) return null;
 
   const existing = await Student.findOne({ user: userId });
-  if (existing) return existing;
+  if (existing) {
+    if (existing.status === 'inactive') {
+      existing.status = 'active';
+      await existing.save();
+    }
+    return existing;
+  }
 
   const student = await Student.create({
     user: userId,
@@ -261,6 +338,11 @@ const createStudentFromUser = async (userId) => {
 
   const existing = await Student.findOne({ user: userId });
   if (existing) {
+    if (existing.status === 'inactive') {
+      existing.status = 'active';
+      await existing.save();
+      return getStudentById(existing.id);
+    }
     throw new ApiError(httpStatus.BAD_REQUEST, 'This user already has a student profile.');
   }
 
@@ -474,6 +556,7 @@ export {
   queryStudents,
   getStudentById,
   getStudentByUserId,
+  getOrCreateStudentForAttendance,
   updateStudentById,
   deleteStudentById,
   deleteStudentByUserId,

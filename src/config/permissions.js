@@ -71,6 +71,9 @@ export const permissionAliases = {
   // Tasks: project.tasks -> tasks.read; project.kanban -> kanban.read (Kanban board, also needs task API)
   'tasks.read': ['tasks.read', 'kanban.read'],
   'tasks.manage': ['tasks.manage', 'kanban.manage'],
+  // My Profile (ats.my-profile:view → my-profile.read)
+  'my-profile.read': ['my-profile.read', 'ats.my-profile:view', 'ats.my-profile:view,create,edit,delete'],
+  'my-profile.manage': ['my-profile.manage', 'ats.my-profile:create,edit,delete', 'ats.my-profile:view,create,edit,delete'],
   // Recruiters
   'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
   'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],

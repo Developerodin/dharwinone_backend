@@ -16,11 +16,14 @@ const createUser = async (userBody) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
   const user = await User.create(userBody);
-  // Auto-create Student profile when user has Student role (avoids 404 on /training/students/me)
+  // Auto-create Student / Candidate profiles when user has those roles
   if (user.roleIds?.length) {
     // eslint-disable-next-line import/no-cycle
     const { ensureStudentProfileForUser } = await import('./student.service.js');
     await ensureStudentProfileForUser(user.id).catch(() => {});
+    // eslint-disable-next-line import/no-cycle
+    const { ensureCandidateProfileForUser } = await import('./candidate.service.js');
+    await ensureCandidateProfileForUser(user.id).catch(() => {});
   }
   return user;
 };
@@ -101,20 +104,22 @@ const updateUserById = async (userId, updateBody) => {
       link: signInUrl,
     }).catch(() => {});
   }
-  // Auto-create Student profile when user gains Student role (avoids 404 on /training/students/me)
+  // Auto-create Student / Candidate profiles when user gains those roles
   if (user.roleIds?.length) {
     // eslint-disable-next-line import/no-cycle
     const { ensureStudentProfileForUser } = await import('./student.service.js');
     await ensureStudentProfileForUser(user.id).catch(() => {});
+    // eslint-disable-next-line import/no-cycle
+    const { ensureCandidateProfileForUser } = await import('./candidate.service.js');
+    await ensureCandidateProfileForUser(user.id).catch(() => {});
   }
   return user;
 };
 
 /**
- * Delete user by id.
- * Also deletes linked Student profile (cascade).
- * Invalidates only the deleted user's sessions/tokens (Token documents for that user).
- * Does not touch the requester's session or cookies.
+ * Delete user by id — hard delete.
+ * Cascade-deletes ALL related data: Student, Candidate, Attendance, JobApplications,
+ * LeaveRequests, BackdatedAttendanceRequests, EmailAccounts, Notifications, Tokens, etc.
  * @param {ObjectId} userId
  * @returns {Promise<User>}
  */
@@ -123,13 +128,65 @@ const deleteUserById = async (userId) => {
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
-  // Cascade delete Student profile when user has Student role
-  // eslint-disable-next-line import/no-cycle
-  const { deleteStudentByUserId } = await import('./student.service.js');
-  await deleteStudentByUserId(userId).catch(() => {});
+
+  // --- Cascade delete Student and all student-linked data ---
+  const Student = (await import('../models/student.model.js')).default;
+  const student = await Student.findOne({ user: userId });
+  if (student) {
+    const studentId = student._id;
+    const Attendance = (await import('../models/attendance.model.js')).default;
+    const LeaveRequest = (await import('../models/leaveRequest.model.js')).default;
+    const BackdatedAttendanceRequest = (await import('../models/backdatedAttendanceRequest.model.js')).default;
+    const StudentCourseProgress = (await import('../models/studentCourseProgress.model.js')).default;
+    const StudentQuizAttempt = (await import('../models/studentQuizAttempt.model.js')).default;
+    const StudentEssayAttempt = (await import('../models/studentEssayAttempt.model.js')).default;
+    const Certificate = (await import('../models/certificate.model.js')).default;
+
+    await Promise.all([
+      Attendance.deleteMany({ student: studentId }),
+      LeaveRequest.deleteMany({ student: studentId }),
+      BackdatedAttendanceRequest.deleteMany({ student: studentId }),
+      StudentCourseProgress.deleteMany({ student: studentId }).catch(() => {}),
+      StudentQuizAttempt.deleteMany({ student: studentId }).catch(() => {}),
+      StudentEssayAttempt.deleteMany({ student: studentId }).catch(() => {}),
+      Certificate.deleteMany({ student: studentId }).catch(() => {}),
+    ]);
+
+    await student.deleteOne();
+  }
+
+  // --- Cascade delete Candidate and candidate-linked data ---
+  const Candidate = (await import('../models/candidate.model.js')).default;
+  const candidates = await Candidate.find({ owner: userId }).select('_id');
+  if (candidates.length) {
+    const candidateIds = candidates.map((c) => c._id);
+    const JobApplication = (await import('../models/jobApplication.model.js')).default;
+    await JobApplication.deleteMany({ candidate: { $in: candidateIds } });
+    await Candidate.deleteMany({ owner: userId });
+  }
+
+  // --- Delete job applications submitted by this user directly ---
+  const JobApplication = (await import('../models/jobApplication.model.js')).default;
+  await JobApplication.deleteMany({ appliedBy: userId }).catch(() => {});
+
+  // --- Delete other user-owned data ---
+  const EmailAccount = (await import('../models/emailAccount.model.js')).default;
+  const Notification = (await import('../models/notification.model.js')).default;
+  const Mentor = (await import('../models/mentor.model.js')).default;
+  const Impersonation = (await import('../models/impersonation.model.js')).default;
+
+  await Promise.all([
+    EmailAccount.deleteMany({ user: userId }),
+    Notification.deleteMany({ user: userId }),
+    Mentor.deleteMany({ user: userId }).catch(() => {}),
+    Impersonation.deleteMany({ $or: [{ adminUser: userId }, { impersonatedUser: userId }] }).catch(() => {}),
+    Token.deleteMany({ user: userId }),
+  ]);
+
+  // --- Delete the user ---
   await user.deleteOne();
-  // Invalidate only this user's tokens (refresh, reset, verify). Do not touch the requester's tokens.
-  await Token.deleteMany({ user: userId });
+
+  logger.info(`User ${userId} hard-deleted with all related data`);
   return user;
 };
 

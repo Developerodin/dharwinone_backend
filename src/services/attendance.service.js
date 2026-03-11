@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import Attendance from '../models/attendance.model.js';
 import Student from '../models/student.model.js';
+import User from '../models/user.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
 
@@ -105,7 +106,7 @@ const getHolidayDates = (holiday) => {
  * @param {Object} body - { punchInTime?, notes?, timezone? }
  */
 const punchIn = async (studentId, body = {}) => {
-  const student = await Student.findById(studentId).populate('user', 'email').select('joiningDate');
+  const student = await Student.findById(studentId).populate('user', 'name email').select('joiningDate');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
@@ -145,6 +146,8 @@ const punchIn = async (studentId, body = {}) => {
     existing.timezone = timezone;
     if (notes) existing.notes = notes;
     existing.status = 'Absent';
+    if (!existing.studentName && student.user?.name) existing.studentName = student.user.name;
+    if (!existing.studentEmail && (student.user?.email ?? student.email)) existing.studentEmail = student.user?.email ?? student.email;
     await existing.save();
     return existing;
   }
@@ -258,16 +261,17 @@ const listByStudent = async (studentId, query = {}) => {
 
   const { startDate, endDate, limit = 100, page = 1 } = query;
   const filter = { student: studentId, isActive: true };
-  if (startDate || endDate || student.joiningDate) {
-    filter.date = {};
-    const effectiveStart = startDate
-      ? getUtcMidnight(startDate)
-      : student.joiningDate
-        ? getUtcMidnight(student.joiningDate)
-        : null;
-    if (effectiveStart) filter.date.$gte = effectiveStart;
-    if (endDate) filter.date.$lte = getUtcMidnight(endDate);
-  }
+
+  filter.date = {};
+  const effectiveStart = startDate
+    ? getUtcMidnight(startDate)
+    : student.joiningDate
+      ? getUtcMidnight(student.joiningDate)
+      : null;
+  if (effectiveStart) filter.date.$gte = effectiveStart;
+  filter.date.$lte = endDate ? getUtcMidnight(endDate) : getUtcMidnight(new Date());
+
+  if (Object.keys(filter.date).length === 0) delete filter.date;
 
   const skip = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(500, Math.max(1, parseInt(limit, 10)));
   const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10)));
@@ -381,7 +385,7 @@ const getStatistics = async (studentId, query = {}) => {
  */
 const getTrackList = async () => {
   const latestPerStudent = await Attendance.aggregate([
-    { $match: { isActive: true, status: { $nin: ['Holiday', 'Leave'] } } },
+    { $match: { isActive: true, status: { $nin: ['Holiday', 'Leave'] }, student: { $ne: null } } },
     { $sort: { student: 1, punchIn: -1 } },
     {
       $group: {
@@ -391,18 +395,30 @@ const getTrackList = async () => {
         timezone: { $first: '$timezone' },
         duration: { $first: '$duration' },
         studentEmail: { $first: '$studentEmail' },
+        studentName: { $first: '$studentName' },
         hasOpen: { $max: { $cond: [{ $eq: ['$punchOut', null] }, 1, 0] } },
       },
     },
   ]);
-  const studentIds = latestPerStudent.map((s) => s._id);
+  const studentIds = latestPerStudent.map((s) => s._id).filter(Boolean);
   const students = await Student.find({ _id: { $in: studentIds } })
     .populate('user', 'name email')
     .lean();
   const byStudent = new Map(students.map((s) => [s._id.toString(), s]));
+
+  // For deleted students, try to find User by stored email
+  const orphanEmails = latestPerStudent
+    .filter((row) => !byStudent.has(row._id?.toString?.()) && row.studentEmail)
+    .map((row) => row.studentEmail);
+  const usersByEmail = orphanEmails.length > 0
+    ? await User.find({ email: { $in: orphanEmails } }).select('name email').lean()
+    : [];
+  const emailToUser = new Map(usersByEmail.map((u) => [u.email, u]));
+
   const results = latestPerStudent.map((row) => {
     const student = byStudent.get(row._id?.toString?.());
     const user = student?.user;
+    const fallbackUser = !user && row.studentEmail ? emailToUser.get(row.studentEmail) : null;
     const punchIn = row.punchIn ? new Date(row.punchIn) : null;
     const punchOut = row.punchOut ? new Date(row.punchOut) : null;
     const durationMs =
@@ -413,8 +429,8 @@ const getTrackList = async () => {
           : null;
     return {
       studentId: row._id?.toString?.(),
-      studentName: user?.name ?? '—',
-      email: user?.email ?? row.studentEmail ?? '—',
+      studentName: user?.name ?? fallbackUser?.name ?? row.studentName ?? '—',
+      email: user?.email ?? fallbackUser?.email ?? row.studentEmail ?? '—',
       isPunchedIn: row.hasOpen === 1,
       punchIn: row.punchIn != null ? row.punchIn : null,
       punchOut: row.punchOut != null ? row.punchOut : null,
@@ -443,21 +459,68 @@ const getTrackList = async () => {
 /**
  * Get full attendance history: one row per completed attendance record (student has punched out).
  * Only shows records after the student has timed out; in-progress sessions are excluded.
+ * Uses aggregation to preserve studentId even when Student is deleted, and resolve name/email from
+ * User, or fall back to stored studentName/studentEmail on the record.
  * @param {Object} options - { startDate?, endDate?, limit? }
  */
 const getTrackHistory = async (options = {}) => {
   const { startDate, endDate, limit = 500 } = options;
-  const filter = { isActive: true, punchOut: { $ne: null }, status: { $nin: ['Holiday', 'Leave'] } };
+  const match = { isActive: true, punchOut: { $ne: null }, status: { $nin: ['Holiday', 'Leave'] }, student: { $ne: null } };
   if (startDate || endDate) {
-    filter.date = {};
-    if (startDate) filter.date.$gte = getUtcMidnight(startDate);
-    if (endDate) filter.date.$lte = getUtcMidnight(endDate);
+    match.date = {};
+    if (startDate) match.date.$gte = getUtcMidnight(startDate);
+    if (endDate) match.date.$lte = getUtcMidnight(endDate);
   }
-  const records = await Attendance.find(filter)
-    .sort({ date: -1, punchIn: -1 })
-    .limit(Math.min(1000, Math.max(1, Number(limit) || 500)))
-    .populate({ path: 'student', select: 'user', populate: { path: 'user', select: 'name email' } })
-    .lean();
+  const limitNum = Math.min(1000, Math.max(1, Number(limit) || 500));
+  const studentsColl = Student.collection?.name || 'students';
+  const usersColl = User.collection?.name || 'users';
+  const pipeline = [
+    { $match: match },
+    { $sort: { date: -1, punchIn: -1 } },
+    { $limit: limitNum },
+    // Primary path: Attendance → Student → User
+    { $lookup: { from: studentsColl, localField: 'student', foreignField: '_id', as: 'studentDoc' } },
+    { $unwind: { path: '$studentDoc', preserveNullAndEmptyArrays: true } },
+    { $lookup: { from: usersColl, localField: 'studentDoc.user', foreignField: '_id', as: 'userDoc' } },
+    { $unwind: { path: '$userDoc', preserveNullAndEmptyArrays: true } },
+    // Fallback path: look up User by stored studentEmail (for deleted students)
+    { $lookup: { from: usersColl, localField: 'studentEmail', foreignField: 'email', as: 'userByEmail' } },
+    { $unwind: { path: '$userByEmail', preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        id: { $toString: '$_id' },
+        studentId: { $ifNull: [{ $toString: '$student' }, ''] },
+        studentExists: { $ne: ['$studentDoc', null] },
+        studentName: {
+          $switch: {
+            branches: [
+              { case: { $and: [{ $ne: ['$userDoc.name', null] }, { $ne: ['$userDoc.name', ''] }] }, then: '$userDoc.name' },
+              { case: { $and: [{ $ne: ['$userByEmail.name', null] }, { $ne: ['$userByEmail.name', ''] }] }, then: '$userByEmail.name' },
+              { case: { $and: [{ $ne: ['$studentName', null] }, { $ne: ['$studentName', ''] }] }, then: '$studentName' },
+            ],
+            default: '—',
+          },
+        },
+        email: {
+          $switch: {
+            branches: [
+              { case: { $and: [{ $ne: ['$userDoc.email', null] }, { $ne: ['$userDoc.email', ''] }] }, then: '$userDoc.email' },
+              { case: { $and: [{ $ne: ['$userByEmail.email', null] }, { $ne: ['$userByEmail.email', ''] }] }, then: '$userByEmail.email' },
+              { case: { $and: [{ $ne: ['$studentEmail', null] }, { $ne: ['$studentEmail', ''] }] }, then: '$studentEmail' },
+            ],
+            default: '—',
+          },
+        },
+        date: 1,
+        day: 1,
+        punchIn: 1,
+        punchOut: 1,
+        duration: 1,
+        timezone: { $ifNull: ['$timezone', 'UTC'] },
+      },
+    },
+  ];
+  const records = await Attendance.aggregate(pipeline);
   const results = records.map((r) => {
     const punchIn = r.punchIn ? new Date(r.punchIn) : null;
     const punchOut = r.punchOut ? new Date(r.punchOut) : null;
@@ -467,12 +530,12 @@ const getTrackHistory = async (options = {}) => {
         : punchIn && punchOut
           ? punchOut.getTime() - punchIn.getTime()
           : null;
-    const user = r.student?.user;
     return {
-      id: r._id?.toString?.(),
-      studentId: r.student?._id?.toString?.() ?? r.student?.toString?.(),
-      studentName: user?.name ?? '—',
-      email: user?.email ?? r.studentEmail ?? '—',
+      id: r.id,
+      studentId: r.studentId || null,
+      studentExists: !!r.studentExists,
+      studentName: r.studentName || '—',
+      email: r.email || '—',
       date: r.date,
       day: r.day,
       punchIn: r.punchIn,
@@ -808,13 +871,14 @@ const DAY_NAMES_ATTENDANCE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thurs
  */
 const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
   const student = await Student.findById(studentId)
-    .populate('user', 'email')
+    .populate('user', 'name email')
     .populate('shift', 'name timezone startTime endTime')
     .select('joiningDate');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
   const studentEmail = student.user?.email ?? student.email ?? '';
+  const studentName = student.user?.name ?? '';
   const shift = student.shift && (student.shift.startTime || student.shift.timezone) ? student.shift : null;
   const joiningMidnight = student.joiningDate ? getUtcMidnight(student.joiningDate) : null;
 
@@ -893,12 +957,15 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
         attendance.status = status;
         attendance.isActive = true;
         attendance.day = day;
+        if (!attendance.studentName && studentName) attendance.studentName = studentName;
+        if (!attendance.studentEmail && studentEmail) attendance.studentEmail = studentEmail;
         await attendance.save();
         createdOrUpdated.push(attendance);
       } else {
         attendance = await Attendance.create({
           student: studentId,
           studentEmail,
+          studentName,
           date: normalizedDate,
           day,
           punchIn,

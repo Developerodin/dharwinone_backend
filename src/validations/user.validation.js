@@ -60,6 +60,13 @@ const updateUser = {
       domain: Joi.array().items(Joi.string().trim()).allow(null),
       location: Joi.string().trim().allow('', null),
       profileSummary: Joi.string().trim().allow('', null),
+      profilePicture: Joi.object({
+        url: Joi.string().uri().optional(),
+        key: Joi.string().optional().trim(),
+        originalName: Joi.string().optional().trim(),
+        size: Joi.number().optional().integer().min(0),
+        mimeType: Joi.string().optional().trim(),
+      }).optional().allow(null),
       notificationPreferences: notificationPreferencesSchema,
     })
     .min(1),

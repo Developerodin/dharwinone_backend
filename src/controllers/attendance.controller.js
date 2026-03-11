@@ -1,9 +1,26 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import attendanceService from '../services/attendance.service.js';
+import * as studentService from '../services/student.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import Student from '../models/student.model.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+
+/**
+ * Get current user's student profile for attendance (punch in/out).
+ * Auto-creates Student for Candidate, Agent, and other non-admin roles who don't have one.
+ * Admins return 404 (they manage others' attendance, not their own).
+ */
+const getMyStudentForAttendance = catchAsync(async (req, res) => {
+  const student = await studentService.getOrCreateStudentForAttendance(req.user);
+  if (!student) {
+    return res.status(httpStatus.NOT_FOUND).send({
+      success: false,
+      message: 'Admins do not fill attendance for themselves. Use Track Attendance to manage others.',
+    });
+  }
+  res.send(student);
+});
 
 const punchIn = catchAsync(async (req, res) => {
   const record = await attendanceService.punchIn(req.params.studentId, req.body);
@@ -90,6 +107,7 @@ const regularize = catchAsync(async (req, res) => {
 });
 
 export default {
+  getMyStudentForAttendance,
   punchIn,
   punchOut,
   getStatus,

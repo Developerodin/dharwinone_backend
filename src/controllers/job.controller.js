@@ -22,6 +22,8 @@ import {
 import { sendJobShareEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
+import Candidate from '../models/candidate.model.js';
+import User from '../models/user.model.js';
 
 // Job CRUD
 const create = catchAsync(async (req, res) => {
@@ -236,6 +238,50 @@ const shareJobEmail = catchAsync(async (req, res) => {
   res.send({ message: 'Job shared successfully' });
 });
 
+const browseApply = catchAsync(async (req, res) => {
+  const { jobId } = req.params;
+  const userId = req.user.id || req.user._id;
+
+  let candidate = await Candidate.findOne({ owner: userId });
+  if (!candidate) {
+    const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
+    if (!adminUser) {
+      throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'No admin user found to assign candidate');
+    }
+    candidate = await Candidate.create({
+      owner: userId,
+      adminId: adminUser._id,
+      fullName: req.user.name || req.user.email,
+      email: req.user.email,
+      phoneNumber: '0000000000',
+      isProfileCompleted: 10,
+    });
+  }
+
+  const application = await applyCandidateToJob(jobId, candidate._id, userId, req.user);
+  res.status(httpStatus.CREATED).send({ application, candidateId: candidate._id });
+});
+
+const browseJobs = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['title', 'jobType', 'location', 'experienceLevel', 'search']);
+  filter.status = 'Active';
+  filter.forCandidates = true;
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const result = await queryJobs(filter, options);
+  res.send(result);
+});
+
+const browseJobById = catchAsync(async (req, res) => {
+  const job = await getJobById(req.params.jobId);
+  if (!job) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  if (job.status !== 'Active') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  res.send(job);
+});
+
 // Public job controllers (no auth required)
 const listPublicJobs = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['title', 'location', 'jobType', 'experienceLevel']);
@@ -326,6 +372,9 @@ export {
   createFromTemplate,
   applyToJob,
   shareJobEmail,
+  browseApply,
+  browseJobs,
+  browseJobById,
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,

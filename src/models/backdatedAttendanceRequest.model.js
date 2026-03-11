@@ -65,6 +65,16 @@ backdatedAttendanceRequestSchema.index({ studentEmail: 1, status: 1 });
 backdatedAttendanceRequestSchema.plugin(toJSON);
 backdatedAttendanceRequestSchema.plugin(paginate);
 
+// Preserve createdAt/updatedAt in API response (toJSON plugin strips them by default)
+const originalToJSON = backdatedAttendanceRequestSchema.options.toJSON?.transform;
+backdatedAttendanceRequestSchema.options.toJSON = backdatedAttendanceRequestSchema.options.toJSON || {};
+backdatedAttendanceRequestSchema.options.toJSON.transform = function (doc, ret, options) {
+  if (originalToJSON) originalToJSON(doc, ret, options);
+  if (doc.createdAt != null) ret.createdAt = doc.createdAt;
+  if (doc.updatedAt != null) ret.updatedAt = doc.updatedAt;
+  return ret;
+};
+
 const BackdatedAttendanceRequest = mongoose.model('BackdatedAttendanceRequest', backdatedAttendanceRequestSchema);
 
 export default BackdatedAttendanceRequest;

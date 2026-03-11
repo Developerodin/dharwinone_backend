@@ -73,5 +73,45 @@ const getUserPermissionContext = async (user) => {
   return { isAdmin: false, permissions: apiPermissions };
 };
 
-export { getUserPermissionContext };
+/**
+ * Returns the current user's permissions for frontend use (raw domain format).
+ * Used by GET /auth/my-permissions to avoid requiring roles.read to list roles.
+ *
+ * @param {import('../models/user.model.js').default} user
+ * @returns {Promise<{ permissions: string[], roleNames: string[], isAdministrator: boolean }>}
+ */
+const getMyPermissionsForFrontend = async (user) => {
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) {
+    return { permissions: [], roleNames: [], isAdministrator: false };
+  }
+
+  const roles = await Role.find({ _id: { $in: roleIds }, status: 'active' }).lean();
+  if (!roles.length) {
+    return { permissions: [], roleNames: [], isAdministrator: false };
+  }
+
+  const rawPermissions = new Set();
+  const roleNames = [];
+  let isAdministrator = false;
+
+  for (const role of roles) {
+    roleNames.push(role.name);
+    if (role.name === 'Administrator') isAdministrator = true;
+    if (!role.permissions || !Array.isArray(role.permissions)) continue;
+    for (const p of role.permissions) {
+      if (typeof p === 'string' && p.trim()) {
+        rawPermissions.add(p.trim());
+      }
+    }
+  }
+
+  return {
+    permissions: Array.from(rawPermissions),
+    roleNames,
+    isAdministrator,
+  };
+};
+
+export { getUserPermissionContext, getMyPermissionsForFrontend };
 
