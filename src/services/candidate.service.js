@@ -588,7 +588,7 @@ const queryCandidates = async (filter, options) => {
     };
   }
   // Use simple pagination for non-experience-based filters (lean + select for faster load)
-  const listFields = 'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId';
+  const listFields = 'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate';
   const paginateOptions = { ...options, lean: true, select: listFields };
   const result = await Candidate.paginate(mongoFilter, paginateOptions);
     

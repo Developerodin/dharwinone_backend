@@ -50,11 +50,18 @@ const getStatistics = {
   }),
 };
 
+const trackList = {
+  query: Joi.object().keys({
+    search: Joi.string().trim().allow('').optional(),
+  }),
+};
+
 const trackHistory = {
   query: Joi.object().keys({
     startDate: Joi.date().iso(),
     endDate: Joi.date().iso(),
     limit: Joi.number().integer().min(1).max(1000),
+    search: Joi.string().trim().allow('').optional(),
   }),
 };
 
@@ -155,6 +162,7 @@ export {
   punchOut,
   listAttendance,
   getStatistics,
+  trackList,
   trackHistory,
   addHolidaysToStudents,
   removeHolidaysFromStudents,

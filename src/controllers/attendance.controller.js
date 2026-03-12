@@ -66,12 +66,14 @@ const getStatistics = catchAsync(async (req, res) => {
 });
 
 const getTrackList = catchAsync(async (req, res) => {
-  const result = await attendanceService.getTrackList();
+  const { search } = req.query;
+  const result = await attendanceService.getTrackList({ search });
   res.send(result);
 });
 
 const getTrackHistory = catchAsync(async (req, res) => {
-  const result = await attendanceService.getTrackHistory(req.query);
+  const { search, ...rest } = req.query;
+  const result = await attendanceService.getTrackHistory({ ...rest, search });
   res.send(result);
 });
 

@@ -48,7 +48,7 @@ router
 router.post(
   '/week-off/import',
   auth(),
-  requirePermissions('students.manage'),
+  requirePermissions('attendance.assign'),
   validate(studentValidation.importWeekOff),
   studentController.importWeekOff
 );
@@ -57,7 +57,7 @@ router
   .route('/week-off')
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(studentValidation.updateWeekOff),
     studentController.updateWeekOff
   );

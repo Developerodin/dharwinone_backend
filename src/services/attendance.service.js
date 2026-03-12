@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import Attendance from '../models/attendance.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
+import Candidate from '../models/candidate.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
 
@@ -382,8 +383,9 @@ const getStatistics = async (studentId, query = {}) => {
 /**
  * Get track list: all students with their current/latest punch status (punch in, punch out, timezone).
  * For use on admin "Track Attendance" page. Requires students to be listed separately (caller has students.read).
+ * @param {Object} options - { search?: string } - optional filter by name, email, employeeId
  */
-const getTrackList = async () => {
+const getTrackList = async (options = {}) => {
   const latestPerStudent = await Attendance.aggregate([
     { $match: { isActive: true, status: { $nin: ['Holiday', 'Leave'] }, student: { $ne: null } } },
     { $sort: { student: 1, punchIn: -1 } },
@@ -406,6 +408,13 @@ const getTrackList = async () => {
     .lean();
   const byStudent = new Map(students.map((s) => [s._id.toString(), s]));
 
+  // Fetch Candidate by owner (User) to get employeeId for each student
+  const userIds = students.map((s) => s.user?._id).filter(Boolean);
+  const candidates = userIds.length > 0
+    ? await Candidate.find({ owner: { $in: userIds } }).select('owner employeeId').lean()
+    : [];
+  const ownerToEmployeeId = new Map(candidates.map((c) => [c.owner?.toString?.(), c.employeeId || '']));
+
   // For deleted students, try to find User by stored email
   const orphanEmails = latestPerStudent
     .filter((row) => !byStudent.has(row._id?.toString?.()) && row.studentEmail)
@@ -415,7 +424,7 @@ const getTrackList = async () => {
     : [];
   const emailToUser = new Map(usersByEmail.map((u) => [u.email, u]));
 
-  const results = latestPerStudent.map((row) => {
+  let results = latestPerStudent.map((row) => {
     const student = byStudent.get(row._id?.toString?.());
     const user = student?.user;
     const fallbackUser = !user && row.studentEmail ? emailToUser.get(row.studentEmail) : null;
@@ -427,10 +436,14 @@ const getTrackList = async () => {
         : punchIn && punchOut
           ? punchOut.getTime() - punchIn.getTime()
           : null;
+    const email = user?.email ?? fallbackUser?.email ?? row.studentEmail ?? '—';
+    const studentName = user?.name ?? fallbackUser?.name ?? row.studentName ?? '—';
+    const employeeId = user?._id ? (ownerToEmployeeId.get(user._id?.toString?.()) || '') : '';
     return {
       studentId: row._id?.toString?.(),
-      studentName: user?.name ?? fallbackUser?.name ?? row.studentName ?? '—',
-      email: user?.email ?? fallbackUser?.email ?? row.studentEmail ?? '—',
+      studentName,
+      email,
+      employeeId: employeeId || undefined,
       isPunchedIn: row.hasOpen === 1,
       punchIn: row.punchIn != null ? row.punchIn : null,
       punchOut: row.punchOut != null ? row.punchOut : null,
@@ -438,14 +451,25 @@ const getTrackList = async () => {
       durationMs: durationMs != null ? durationMs : null,
     };
   });
-  const studentsWithNoAttendance = await Student.find({ _id: { $nin: studentIds } })
+  const noAttendanceStudents = await Student.find({ _id: { $nin: studentIds } })
     .populate('user', 'name email')
     .lean();
-  studentsWithNoAttendance.forEach((s) => {
+  const noAttendanceUserIds = noAttendanceStudents.map((s) => s.user?._id).filter(Boolean);
+  const noAttendanceCandidates =
+    noAttendanceUserIds.length > 0
+      ? await Candidate.find({ owner: { $in: noAttendanceUserIds } }).select('owner employeeId').lean()
+      : [];
+  const noAttendanceOwnerToEmployeeId = new Map(noAttendanceCandidates.map((c) => [c.owner?.toString?.(), c.employeeId || '']));
+
+  noAttendanceStudents.forEach((s) => {
+    const studentName = s?.user?.name ?? '—';
+    const email = s?.user?.email ?? '—';
+    const employeeId = s?.user?._id ? (noAttendanceOwnerToEmployeeId.get(s.user._id?.toString?.()) || '') : '';
     results.push({
       studentId: s._id?.toString?.(),
-      studentName: s?.user?.name ?? '—',
-      email: s?.user?.email ?? '—',
+      studentName,
+      email,
+      employeeId: employeeId || undefined,
       isPunchedIn: false,
       punchIn: null,
       punchOut: null,
@@ -453,18 +477,33 @@ const getTrackList = async () => {
       durationMs: null,
     });
   });
+
+  const { search } = options;
+  if (search && typeof search === 'string' && search.trim()) {
+    const term = search.trim().toLowerCase();
+    results = results.filter((r) => {
+      const name = (r.studentName || '').toLowerCase();
+      const em = (r.email || '').toLowerCase();
+      const empId = (r.employeeId || '').toLowerCase();
+      return name.includes(term) || em.includes(term) || empId.includes(term);
+    });
+  }
+
   return { results };
 };
+
+/** Escape special regex chars in a string for safe $regex use */
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Get full attendance history: one row per completed attendance record (student has punched out).
  * Only shows records after the student has timed out; in-progress sessions are excluded.
  * Uses aggregation to preserve studentId even when Student is deleted, and resolve name/email from
  * User, or fall back to stored studentName/studentEmail on the record.
- * @param {Object} options - { startDate?, endDate?, limit? }
+ * @param {Object} options - { startDate?, endDate?, limit?, search? }
  */
 const getTrackHistory = async (options = {}) => {
-  const { startDate, endDate, limit = 500 } = options;
+  const { startDate, endDate, limit = 500, search } = options;
   const match = { isActive: true, punchOut: { $ne: null }, status: { $nin: ['Holiday', 'Leave'] }, student: { $ne: null } };
   if (startDate || endDate) {
     match.date = {};
@@ -474,6 +513,8 @@ const getTrackHistory = async (options = {}) => {
   const limitNum = Math.min(1000, Math.max(1, Number(limit) || 500));
   const studentsColl = Student.collection?.name || 'students';
   const usersColl = User.collection?.name || 'users';
+  const candidatesColl = Candidate.collection?.name || 'candidates';
+
   const pipeline = [
     { $match: match },
     { $sort: { date: -1, punchIn: -1 } },
@@ -486,8 +527,29 @@ const getTrackHistory = async (options = {}) => {
     // Fallback path: look up User by stored studentEmail (for deleted students)
     { $lookup: { from: usersColl, localField: 'studentEmail', foreignField: 'email', as: 'userByEmail' } },
     { $unwind: { path: '$userByEmail', preserveNullAndEmptyArrays: true } },
-    {
-      $project: {
+    // Candidate lookup for employeeId (preserveNullAndEmptyArrays - many students have no Candidate)
+    { $lookup: { from: candidatesColl, localField: 'studentDoc.user', foreignField: 'owner', as: 'candidateDoc' } },
+    { $unwind: { path: '$candidateDoc', preserveNullAndEmptyArrays: true } },
+  ];
+
+  const searchTerm = search && typeof search === 'string' ? search.trim() : '';
+  if (searchTerm) {
+    const regex = { $regex: escapeRegex(searchTerm), $options: 'i' };
+    pipeline.push({
+      $match: {
+        $or: [
+          { 'userDoc.name': regex },
+          { 'userDoc.email': regex },
+          { studentName: regex },
+          { studentEmail: regex },
+          { 'candidateDoc.employeeId': regex },
+        ],
+      },
+    });
+  }
+
+  pipeline.push({
+    $project: {
         id: { $toString: '$_id' },
         studentId: { $ifNull: [{ $toString: '$student' }, ''] },
         studentExists: { $ne: ['$studentDoc', null] },
@@ -511,15 +573,15 @@ const getTrackHistory = async (options = {}) => {
             default: '—',
           },
         },
+        employeeId: { $ifNull: ['$candidateDoc.employeeId', ''] },
         date: 1,
         day: 1,
         punchIn: 1,
         punchOut: 1,
         duration: 1,
         timezone: { $ifNull: ['$timezone', 'UTC'] },
-      },
-    },
-  ];
+    }
+  });
   const records = await Attendance.aggregate(pipeline);
   const results = records.map((r) => {
     const punchIn = r.punchIn ? new Date(r.punchIn) : null;
@@ -536,6 +598,7 @@ const getTrackHistory = async (options = {}) => {
       studentExists: !!r.studentExists,
       studentName: r.studentName || '—',
       email: r.email || '—',
+      employeeId: r.employeeId || undefined,
       date: r.date,
       day: r.day,
       punchIn: r.punchIn,

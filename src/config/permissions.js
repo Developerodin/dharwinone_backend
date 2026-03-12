@@ -38,6 +38,8 @@ export const permissionAliases = {
   'training.analytics': ['training.analytics', 'training.analytics:view', 'training.modules.read', 'modules.read'],
   // Attendance: students access their own via requireAttendanceAccess (ownership); grant so Student role can see attendance nav
   'training.attendance.read': ['training.attendance.read', 'training.attendance:view', 'students.read', 'students.manage'],
+  // Attendance assignment (holidays, leave, regularize, week-off): admins (students.manage) OR agents (attendance.manage)
+  'attendance.assign': ['students.manage', 'attendance.manage'],
   // ATS candidates: ats.candidates:view -> candidates.read, ats.candidates:create,edit,delete -> candidates.manage
   'candidates.read': ['candidates.read', 'ats.candidates:view', 'ats.candidates:view,create,edit,delete'],
   'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
