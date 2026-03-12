@@ -23,4 +23,12 @@ router.get(
   atsAnalyticsController.drillDown
 );
 
+router.get(
+  '/applications-over-time-by-candidates',
+  auth(),
+  requirePermissions('ats.analytics'),
+  validate(atsAnalyticsValidation.applicationsOverTimeByCandidates),
+  atsAnalyticsController.applicationsOverTimeByCandidates
+);
+
 export default router;

@@ -118,6 +118,13 @@ const studentSchema = mongoose.Schema(
       default: null,
       index: true,
     },
+    // Position (Java Developer, Data Analyst, etc.) - for filtering students in training assignment
+    position: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Position',
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,

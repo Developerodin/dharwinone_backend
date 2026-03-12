@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Job from '../models/job.model.js';
 import Candidate from '../models/candidate.model.js';
 import JobApplication from '../models/jobApplication.model.js';
@@ -308,7 +309,64 @@ const getDrillDown = async (params, user = {}) => {
   return { results: [], page, limit, totalResults: 0, totalPages: 0 };
 };
 
+/**
+ * Get applications-over-time (last 5 weeks) per candidate for sparkline charts.
+ * @param {string[]} candidateIds - Candidate ObjectIds
+ * @returns {Promise<Record<string, number[]>>} Map of candidateId -> [count_week4_ago, ..., count_this_week]
+ */
+const getApplicationsOverTimeByCandidates = async (candidateIds = []) => {
+  if (!candidateIds || candidateIds.length === 0) return {};
+  const ids = candidateIds.filter(Boolean).map((id) => String(id));
+  if (ids.length === 0) return {};
+
+  const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id);
+  if (validIds.length === 0) return {};
+
+  const thirtyFiveDaysAgo = new Date();
+  thirtyFiveDaysAgo.setDate(thirtyFiveDaysAgo.getDate() - 35);
+
+  const agg = await JobApplication.aggregate([
+    {
+      $match: {
+        candidate: { $in: validIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        createdAt: { $gte: thirtyFiveDaysAgo, $lte: new Date() },
+      },
+    },
+    {
+      $addFields: {
+        daysAgo: { $divide: [{ $subtract: [new Date(), '$createdAt'] }, 86400000] },
+      },
+    },
+    {
+      $addFields: {
+        weekBucket: { $floor: { $divide: ['$daysAgo', 7] } },
+      },
+    },
+    { $match: { weekBucket: { $gte: 0, $lt: 5 } } },
+    {
+      $group: {
+        _id: { candidate: '$candidate', week: '$weekBucket' },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const result = {};
+  for (const id of validIds) {
+    result[String(id)] = [0, 0, 0, 0, 0];
+  }
+  for (const row of agg) {
+    const cid = String(row._id.candidate);
+    const w = Number(row._id.week);
+    if (result[cid] && w >= 0 && w < 5) {
+      result[cid][4 - w] = row.count;
+    }
+  }
+  return result;
+};
+
 export default {
   getAtsAnalytics,
   getDrillDown,
+  getApplicationsOverTimeByCandidates,
 };

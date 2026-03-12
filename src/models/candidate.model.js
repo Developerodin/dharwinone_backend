@@ -152,6 +152,8 @@ const candidateSchema = new mongoose.Schema(
     shift: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift', default: null, index: true },
     department: { type: String, trim: true, index: true },
     designation: { type: String, trim: true, index: true },
+    // Position (ref to Position - Java Developer, Data Analyst, etc.) - used during onboarding
+    position: { type: mongoose.Schema.Types.ObjectId, ref: 'Position', default: null, index: true },
     reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   },
   { timestamps: true }
@@ -194,6 +196,7 @@ candidateSchema.pre('save', function (next) {
   next();
 });
 
+candidateSchema.index({ 'skills.name': 'text' });
 candidateSchema.plugin(toJSON);
 candidateSchema.plugin(paginate);
 

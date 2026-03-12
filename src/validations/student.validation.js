@@ -4,6 +4,7 @@ import { objectId } from './custom.validation.js';
 const getStudents = {
   query: Joi.object().keys({
     status: Joi.string().valid('active', 'inactive'),
+    position: Joi.string().custom(objectId).optional(),
     search: Joi.string().allow('').optional(),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
@@ -67,6 +68,7 @@ const updateStudent = {
       bio: Joi.string().optional().allow('', null),
       profileImageUrl: Joi.string().optional().allow('', null),
       status: Joi.string().valid('active', 'inactive').optional(),
+      position: Joi.string().custom(objectId).optional().allow(null),
     })
     .min(1),
 };

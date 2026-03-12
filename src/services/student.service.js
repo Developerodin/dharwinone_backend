@@ -70,8 +70,9 @@ const registerStudent = async (studentBody, isAdminRegistration = false) => {
  * @returns {Promise<QueryResult>}
  */
 const queryStudents = async (filter, options) => {
-  const { search, ...restFilter } = filter;
+  const { search, position, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
+  if (position) mongoFilter.position = position;
 
   if (!mongoFilter.status) {
     mongoFilter.status = 'active';
@@ -86,7 +87,7 @@ const queryStudents = async (filter, options) => {
   }
   const students = await Student.paginate(mongoFilter, {
     ...options,
-    populate: 'user',
+    populate: 'user,position',
   });
   return students;
 };
@@ -99,7 +100,8 @@ const queryStudents = async (filter, options) => {
 const getStudentById = async (id) => {
   return Student.findById(id)
     .populate('user', 'name email role roleIds status isEmailVerified')
-    .populate('shift', 'name description timezone startTime endTime isActive');
+    .populate('shift', 'name description timezone startTime endTime isActive')
+    .populate('position', 'name');
 };
 
 /**

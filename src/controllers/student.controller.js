@@ -7,7 +7,7 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const getStudents = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'search']);
+  const filter = pick(req.query, ['status', 'position', 'search']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await studentService.queryStudents(filter, options);
   res.send(result);

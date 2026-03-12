@@ -24,7 +24,18 @@ const drillDown = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const applicationsOverTimeByCandidates = catchAsync(async (req, res) => {
+  const candidateIdsStr = req.query.candidateIds || '';
+  const candidateIds = candidateIdsStr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const result = await atsAnalyticsService.getApplicationsOverTimeByCandidates(candidateIds);
+  res.send(result);
+});
+
 export default {
   getAtsAnalytics,
   drillDown,
+  applicationsOverTimeByCandidates,
 };

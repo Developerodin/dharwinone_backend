@@ -19,6 +19,7 @@ import attendanceRoute from './attendance.route.js';
 import holidayRoute from './holiday.route.js';
 import studentGroupRoute from './studentGroup.route.js';
 import shiftRoute from './shift.route.js';
+import positionRoute from './position.route.js';
 import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
 import candidateRoute from './candidate.route.js';
@@ -110,6 +111,10 @@ const defaultRoutes = [
   {
     path: '/shifts',
     route: shiftRoute,
+  },
+  {
+    path: '/positions',
+    route: positionRoute,
   },
   {
     path: '/leave-requests',

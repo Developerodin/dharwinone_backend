@@ -17,4 +17,10 @@ const drillDown = {
   }),
 };
 
-export { getAtsAnalytics, drillDown };
+const applicationsOverTimeByCandidates = {
+  query: Joi.object().keys({
+    candidateIds: Joi.string().required(), // comma-separated ObjectIds
+  }),
+};
+
+export { getAtsAnalytics, drillDown, applicationsOverTimeByCandidates };

@@ -29,6 +29,7 @@
     "seed:candidate-role": "node scripts/seed-candidate-role.js",
     "clean:import": "node scripts/clean-and-import-db.js",
     "cleanup:offers-placements": "node scripts/cleanup-offers-placements.js",
+    "simulate:email-links": "node scripts/simulate-email-links.mjs",
     "docker:livekit": "docker compose -f docker-compose.livekit-local.yml up -d",
     "docker:livekit:down": "docker compose -f docker-compose.livekit-local.yml down",
     "docker:livekit:full": "docker compose -f livekit/docker-compose.yml up -d",

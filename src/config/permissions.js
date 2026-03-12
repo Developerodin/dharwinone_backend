@@ -41,6 +41,9 @@ export const permissionAliases = {
   // ATS candidates: ats.candidates:view -> candidates.read, ats.candidates:create,edit,delete -> candidates.manage
   'candidates.read': ['candidates.read', 'ats.candidates:view', 'ats.candidates:view,create,edit,delete'],
   'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
+  // Positions: used in candidates (onboarding) and training (student assignment)
+  'positions.read': ['positions.read', 'students.read', 'candidates.read', 'users.manage'],
+  'positions.manage': ['positions.manage', 'students.manage', 'candidates.manage', 'users.manage'],
   // ATS analytics: derived permission is analytics.read; admins/recruiters with ATS access also get in
   'ats.analytics': [
     'ats.analytics',

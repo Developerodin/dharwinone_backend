@@ -102,6 +102,7 @@ const singleCandidateSchema = Joi.object().keys({
   socialLinks: Joi.array().items(socialLink),
   salarySlips: Joi.array().items(salarySlip),
   joiningDate: Joi.date().optional(),
+  position: Joi.string().custom(objectId).optional().allow(null),
 });
 
 const createCandidate = {
@@ -187,6 +188,7 @@ const updateCandidate = {
       }).optional(),
       department: Joi.string().trim().optional().allow('', null),
       designation: Joi.string().trim().optional().allow('', null),
+      position: Joi.string().custom(objectId).optional().allow(null),
       reportingManager: Joi.string().custom(objectId).optional().allow(null),
       qualifications: Joi.array().items(qualification),
       experiences: Joi.array().items(experience),

@@ -1,6 +1,18 @@
 import Joi from 'joi';
 import { password, objectId } from './custom.validation.js';
 
+const notificationPreferencesSchema = Joi.object({
+  leaveUpdates: Joi.boolean(),
+  taskAssignments: Joi.boolean(),
+  applicationUpdates: Joi.boolean(),
+  offerUpdates: Joi.boolean(),
+  meetingInvitations: Joi.boolean(),
+  meetingReminders: Joi.boolean(),
+  certificates: Joi.boolean(),
+  courseUpdates: Joi.boolean(),
+  recruiterUpdates: Joi.boolean(),
+});
+
 const register = {
   body: Joi.object().keys({
     email: Joi.string().required().email(),
@@ -235,6 +247,25 @@ const registerMentor = {
   }),
 };
 
+/** Self-profile update: name, notificationPreferences, profilePicture. No email. */
+const updateMe = {
+  body: Joi.object()
+    .keys({
+      name: Joi.string().min(1).trim(),
+      notificationPreferences: notificationPreferencesSchema,
+      profilePicture: Joi.object({
+        url: Joi.string().uri().optional(),
+        key: Joi.string().optional().trim(),
+        originalName: Joi.string().optional().trim(),
+        size: Joi.number().optional().integer().min(0),
+        mimeType: Joi.string().optional().trim(),
+      })
+        .optional()
+        .allow(null),
+    })
+    .min(1),
+};
+
 export {
   register,
   registerCandidate,
@@ -250,5 +281,6 @@ export {
   verifyEmail,
   impersonate,
   sendCandidateInvitation,
+  updateMe,
 };
 

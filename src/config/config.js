@@ -113,8 +113,21 @@ const config = {
     replyTo: envVars.EMAIL_REPLY_TO,
   },
   corsOrigin: envVars.CORS_ORIGIN ? envVars.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
-  frontendBaseUrl: envVars.FRONTEND_BASE_URL || 'http://localhost:3001',
-  backendPublicUrl: envVars.BACKEND_PUBLIC_URL || `http://localhost:${envVars.PORT}`,
+  // Email/share links: use public URLs. In production set FRONTEND_BASE_URL and BACKEND_PUBLIC_URL.
+  // Fallbacks: SITE_URL/APP_URL for frontend; RENDER_EXTERNAL_URL, VERCEL_URL, RAILWAY_PUBLIC_DOMAIN for backend.
+  frontendBaseUrl: (
+    envVars.FRONTEND_BASE_URL ||
+    envVars.SITE_URL ||
+    envVars.APP_URL ||
+    'http://localhost:3001'
+  ).replace(/\/$/, ''),
+  backendPublicUrl: (
+    envVars.BACKEND_PUBLIC_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
+    `http://localhost:${envVars.PORT}`
+  ).replace(/\/$/, ''),
   openai: {
     apiKey: envVars.OPENAI_API_KEY || '',
   },
@@ -157,5 +170,17 @@ const config = {
     authMax: envVars.RATE_LIMIT_AUTH_MAX ?? 500,
   },
 };
+
+// Production: warn if email/share links would use localhost
+if (config.env === 'production') {
+  const f = config.frontendBaseUrl || '';
+  const b = config.backendPublicUrl || '';
+  if (f.includes('localhost') || b.includes('localhost')) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[Config] Email and share links will use localhost. Set FRONTEND_BASE_URL and BACKEND_PUBLIC_URL in your deployment env.'
+    );
+  }
+}
 
 export default config;

@@ -80,7 +80,7 @@ const register = catchAsync(async (req, res) => {
       isProfileCompleted: completionPercentage,
     });
     const verifyEmailToken = await generateVerifyEmailToken(user);
-    await sendVerificationEmail2(user.email, verifyEmailToken);
+    await sendVerificationEmail2(user.email, verifyEmailToken, { req });
     res.status(httpStatus.CREATED).send({
       user,
       message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
@@ -297,7 +297,7 @@ const refreshTokens = catchAsync(async (req, res) => {
 
 const forgotPassword = catchAsync(async (req, res) => {
   const resetPasswordToken = await generateResetPasswordToken(req.body.email);
-  await sendResetPasswordEmail(req.body.email, resetPasswordToken);
+  await sendResetPasswordEmail(req.body.email, resetPasswordToken, { req });
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -313,7 +313,7 @@ const changePassword = catchAsync(async (req, res) => {
 
 const sendVerificationEmail = catchAsync(async (req, res) => {
   const verifyEmailToken = await generateVerifyEmailToken(req.user);
-  await sendVerificationEmail2(req.user.email, verifyEmailToken);
+  await sendVerificationEmail2(req.user.email, verifyEmailToken, { req });
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -368,6 +368,28 @@ const getMe = catchAsync(async (req, res) => {
     response.impersonation = req.impersonation;
   }
   res.send(response);
+});
+
+/**
+ * Update own profile (PATCH /auth/me).
+ * Allows any authenticated user to update name, notificationPreferences, profilePicture.
+ * Email cannot be changed via this route; only admins can change email via PATCH /users/:userId.
+ */
+const updateMe = catchAsync(async (req, res) => {
+  const allowedFields = ['name', 'notificationPreferences', 'profilePicture'];
+  const payload = {};
+  for (const key of allowedFields) {
+    if (req.body[key] !== undefined) {
+      payload[key] = req.body[key];
+    }
+  }
+  if (Object.keys(payload).length === 0) {
+    const userObj = await enrichUserWithFreshProfilePictureUrl(req.user);
+    return res.send(userObj);
+  }
+  const user = await updateUserById(req.user.id, payload);
+  const userObj = await enrichUserWithFreshProfilePictureUrl(user);
+  res.send(userObj);
 });
 
 const getMyPermissions = catchAsync(async (req, res) => {
@@ -442,6 +464,7 @@ export {
   verifyEmail,
   sendCandidateInvitation,
   getMe,
+  updateMe,
   getMyPermissions,
   impersonate,
   stopImpersonation,

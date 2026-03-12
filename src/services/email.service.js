@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import EmailLog from '../models/emailLog.model.js';
+import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 
 
 const transport = nodemailer.createTransport(config.email.smtp);
@@ -155,11 +156,12 @@ const queueEmail = (to, subject, text, html, templateName = null, metadata = {})
  * Send reset password email
  * @param {string} to
  * @param {string} token
+ * @param {{ req?: Object, frontendBaseUrl?: string }} [options] - Optional: req for dynamic URL detection, or explicit frontendBaseUrl
  * @returns {Promise}
  */
-const sendResetPasswordEmail = async (to, token) => {
+const sendResetPasswordEmail = async (to, token, options = {}) => {
   const subject = 'Reset Your Password - Dharwin Business Solutions';
-  const frontendBase = (config.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '');
+  const frontendBase = getFrontendBaseUrl(options.req, options.frontendBaseUrl);
   const resetPasswordUrl = `${frontendBase}/reset-password?token=${token}`;
   const text = `Dear user,
 
@@ -195,11 +197,12 @@ If you did not request any password resets, then ignore this email.`;
  * Send verification email
  * @param {string} to
  * @param {string} token
+ * @param {{ req?: Object, frontendBaseUrl?: string }} [options] - Optional: req for dynamic URL detection, or explicit frontendBaseUrl
  * @returns {Promise}
  */
-const sendVerificationEmail = async (to, token) => {
+const sendVerificationEmail = async (to, token, options = {}) => {
   const subject = 'Email Verification';
-  const frontendBase = (config.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '');
+  const frontendBase = getFrontendBaseUrl(options.req, options.frontendBaseUrl);
   const verificationEmailUrl = `${frontendBase}/verify-email?token=${token}`;
   const text = `Dear user,
 
@@ -357,7 +360,7 @@ Dharwin Team`;
  * @returns {Promise}
  */
 const sendCandidateAccountActivationEmail = async (to, name) => {
-  const signInUrl = `${(config.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '')}/authentication/sign-in/`;
+  const signInUrl = `${getFrontendBaseUrl()}/authentication/sign-in/`;
   const subject = 'Your Account Has Been Activated - Dharwin Business Solutions';
   const displayName = name || 'there';
   const text = `Dear ${displayName},
@@ -448,7 +451,7 @@ Dharwin Business Solutions`;
 const sendJobShareEmail = async (to, job, customMessage = '') => {
   const subject = `Job Opportunity: ${job.title} at ${job.organisation?.name || 'Company'}`;
   const jobId = job._id || job.id;
-  const jobUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/public-job/${jobId}`;
+  const jobUrl = `${getFrontendBaseUrl()}/public-job/${jobId}`;
   const text = `You have been shared a job opportunity:\n\n${job.title}\n${job.organisation?.name || ''}\n${job.location || ''}\n\n${job.jobDescription || ''}\n\nView and apply: ${jobUrl}`;
   const html = `
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5fb;padding:24px 0;font-family:Arial,sans-serif;">

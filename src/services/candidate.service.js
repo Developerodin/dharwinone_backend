@@ -22,8 +22,7 @@ const isOwnerOrAdmin = (user, candidate) => {
 // Helper function to generate document API endpoint URL (never expires)
 // Optionally accepts a token parameter to include in the URL for direct browser access
 const getDocumentApiUrl = (candidateId, documentIndex, token = null) => {
-  // Use backend API URL - construct from environment or use default
-  const backendUrl = process.env.BACKEND_URL || config.frontendBaseUrl || `http://localhost:${config.port}`;
+  const backendUrl = config.backendPublicUrl || `http://localhost:${config.port}`;
   const baseUrl = `${backendUrl}/v1/candidates/documents/${candidateId}/${documentIndex}/download`;
   // Include token in query parameter if provided (for direct browser access)
   return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
@@ -188,10 +187,11 @@ const createCandidate = async (ownerId, payload) => {
         await updateUserById(resolvedOwnerId, { isEmailVerified: true });
       }
 
-      // Sync joiningDate to Student if user has a Student profile (for attendance)
+      // Sync joiningDate and position to Student if user has a Student profile (attendance, training assignment)
       const student = await Student.findOne({ user: resolvedOwnerId });
       if (student) {
         student.joiningDate = candidate.joiningDate;
+        student.position = candidate.position || null;
         await student.save();
       }
       
@@ -267,7 +267,7 @@ const mapExperienceLevel = (years) => {
 const buildAdvancedFilter = (filter) => {
   const mongoFilter = {};
   const orConditions = [];
-  
+
   // Basic filters
   if (filter.owner) mongoFilter.owner = filter.owner;
   if (filter.fullName) {
@@ -280,21 +280,13 @@ const buildAdvancedFilter = (filter) => {
     mongoFilter.employeeId = { $regex: filter.employeeId, $options: 'i' };
   }
   
-  // Skills matching
-  if (filter.skills) {
-    const skillsArray = Array.isArray(filter.skills) ? filter.skills : [filter.skills];
-    const skillNames = skillsArray.map(s => s.trim());
-    
-    if (filter.skillMatchMode === 'all') {
-      // All skills must match - use $all with regex
-      mongoFilter['skills.name'] = {
-        $all: skillNames.map(name => new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
-      };
-    } else {
-      // At least one skill must match (default)
-      mongoFilter['skills.name'] = {
-        $in: skillNames.map(name => new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
-      };
+  // Skills matching - use MongoDB text index for faster search
+  if (filter.skills && filter.skills.length > 0) {
+    const skillNames = (Array.isArray(filter.skills) ? filter.skills : [filter.skills])
+      .map((s) => String(s).trim())
+      .filter(Boolean);
+    if (skillNames.length > 0) {
+      mongoFilter.$text = { $search: skillNames.join(' ') };
     }
   }
   
@@ -327,12 +319,29 @@ const buildAdvancedFilter = (filter) => {
     mongoFilter['address.country'] = { $regex: filter.country, $options: 'i' };
   }
   
-  // Degree matching (can match top-level degree or qualifications)
-  if (filter.degree) {
-    orConditions.push(
-      { degree: { $regex: filter.degree, $options: 'i' } },
-      { 'qualifications.degree': { $regex: filter.degree, $options: 'i' } }
-    );
+  // Degree matching - frontend sends "Degree - Institute" (e.g. "Masters - Southern Arkansas University")
+  // Backend stores degree and institute separately in qualifications[]
+  if (filter.degree && filter.degree.trim()) {
+    const parts = filter.degree.split(/\s*-\s*/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      // Match qualification where degree AND institute both match the selected "Degree - Institute"
+      orConditions.push({
+        qualifications: {
+          $elemMatch: {
+            degree: { $regex: parts[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+            institute: { $regex: parts[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' }
+          }
+        }
+      });
+    } else {
+      // Single term - match degree or institute
+      const term = filter.degree.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      orConditions.push(
+        { degree: { $regex: term, $options: 'i' } },
+        { 'qualifications.degree': { $regex: term, $options: 'i' } },
+        { 'qualifications.institute': { $regex: term, $options: 'i' } }
+      );
+    }
   }
   
   // Visa type matching
@@ -369,7 +378,25 @@ const queryCandidates = async (filter, options) => {
   } else {
     mongoFilter.isActive = filter.isActive;
   }
-  
+
+  // Only show candidates whose owner (User) has the Candidate role – exclude Students, Recruiters, etc. who have a candidate record but not the role
+  const { getRoleByName } = await import('./role.service.js');
+  const candidateRole = await getRoleByName('Candidate');
+  if (candidateRole) {
+    const usersWithCandidateRole = await User.find(
+      { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    const ownerIdsWithCandidateRole = usersWithCandidateRole.map((u) => u._id);
+    if (filter.owner) {
+      const ownerStr = String(filter.owner);
+      const hasRole = ownerIdsWithCandidateRole.some((id) => String(id) === ownerStr);
+      mongoFilter.owner = hasRole ? filter.owner : { $in: [] };
+    } else {
+      mongoFilter.owner = ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
+    }
+  }
+
   // Check if we need aggregation pipeline for experience-based filtering
   const needsAggregation = filter.experienceLevel || 
                           filter.minYearsOfExperience !== undefined || 
@@ -622,6 +649,7 @@ const getCandidateById = async (id) => {
     await candidate.populate([
       { path: 'owner', select: 'name email countryCode' },
       { path: 'adminId', select: 'name email' },
+      { path: 'position', select: 'name' },
       { path: 'assignedRecruiter', select: 'name email role' },
       { path: 'recruiterNotes.addedBy', select: 'name email role' },
     ]);
@@ -741,8 +769,17 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
       console.error('Failed to sync candidate data to user:', error.message);
       console.error('Error stack:', error.stack);
     }
+
+    // Sync position to Student if user has a Student profile (for training module assignment)
+    if ('position' in updateBody) {
+      const student = await Student.findOne({ user: candidate.owner });
+      if (student) {
+        student.position = updateBody.position ?? null;
+        await student.save();
+      }
+    }
   }
-  
+
   return candidate;
 };
 
@@ -1311,7 +1348,7 @@ const getPublicCandidateProfile = async (candidateId, token, data) => {
  * @param {string} candidateId
  * @returns {Promise<Object>}
  */
-const resendCandidateVerificationEmail = async (candidateId) => {
+const resendCandidateVerificationEmail = async (candidateId, options = {}) => {
   // Get the candidate
   const candidate = await Candidate.findById(candidateId);
   if (!candidate) {
@@ -1339,7 +1376,7 @@ const resendCandidateVerificationEmail = async (candidateId) => {
 
   // Generate verification token and send email
   const verifyEmailToken = await generateVerifyEmailToken(user);
-  await sendVerificationEmail(candidate.email, verifyEmailToken);
+  await sendVerificationEmail(candidate.email, verifyEmailToken, options);
 
   return {
     success: true,

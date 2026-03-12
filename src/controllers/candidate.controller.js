@@ -1136,7 +1136,7 @@ const resendVerificationEmail = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can resend verification emails');
   }
   const { candidateId } = req.params;
-  const result = await resendCandidateVerificationEmail(candidateId);
+  const result = await resendCandidateVerificationEmail(candidateId, { req });
   res.status(httpStatus.OK).send(result);
 });
 
