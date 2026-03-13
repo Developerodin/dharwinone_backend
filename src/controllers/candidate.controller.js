@@ -6,6 +6,7 @@ import {
   createCandidate, 
   queryCandidates, 
   getCandidateById, 
+  getCandidateByOwnerForMe,
   updateCandidateById, 
   deleteCandidateById, 
   exportAllCandidates,
@@ -33,6 +34,7 @@ import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.ser
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
 import { getUserPermissionContext } from '../services/permission.service.js';
+import logger from '../config/logger.js';
 
 const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
 
@@ -129,14 +131,13 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-/** Get current user's own candidate (auth only, no candidates.read). Used by my-profile for role 'user'. */
+/** Get current user's own candidate (auth only, no candidates.read). Returns full candidate including documents & salarySlips. */
 const getMyCandidate = catchAsync(async (req, res) => {
-  const result = await queryCandidates({ owner: req.user._id }, { limit: 1, page: 1 });
-  const candidate = result.results?.[0] || null;
+  const candidate = await getCandidateByOwnerForMe(req.user._id);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
   }
-  res.send(candidate);
+  res.send(candidate.toJSON ? candidate.toJSON() : { ...candidate });
 });
 
 /** Update current user's own candidate (auth only, no candidates.read). */
@@ -1289,27 +1290,27 @@ export { updateJoining, updateResign, updateWeekOff, getWeekOff, assignShift };
 
 // Excel Import controller
 const importExcel = catchAsync(async (req, res) => {
-  console.log('Import Excel Request received');
-  console.log('Has file:', !!req.file);
-  console.log('File details:', req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : 'No file');
-  
+  logger.debug('Import Excel Request received');
+  logger.debug('Has file:', !!req.file);
+  logger.debug('File details:', req.file ? { name: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype } : 'No file');
+
   req.user.canManageCandidates = canManageCandidates(req);
   if (!req.user.canManageCandidates) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can import candidates from Excel');
   }
-  
+
   if (!req.file) {
-    console.error('No file in request');
+    logger.error('No file in request');
     throw new ApiError(httpStatus.BAD_REQUEST, 'Excel file is required. Please upload an Excel file.');
   }
-  
+
   const createdBy = req.user.id || req.user._id;
-  console.log('Created by:', createdBy);
-  
+  logger.debug('Created by:', createdBy);
+
   try {
-    console.log('Starting import...');
+    logger.debug('Starting import...');
     const result = await importCandidatesFromExcel(req.file.buffer, createdBy);
-    console.log('Import result:', result.summary);
+    logger.debug('Import result:', result.summary);
     
     if (result.summary.failed === 0) {
       res.status(httpStatus.CREATED).send({
@@ -1328,8 +1329,8 @@ const importExcel = catchAsync(async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Excel import error:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Excel import error:', error);
+    logger.error('Error stack:', error.stack);
     throw new ApiError(httpStatus.BAD_REQUEST, error.message || 'Failed to import candidates from Excel');
   }
 });

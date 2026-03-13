@@ -5,6 +5,7 @@ import catchAsync from '../utils/catchAsync.js';
 import * as userService from '../services/user.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 
 const createUser = catchAsync(async (req, res) => {
   const user = await userService.createUser(req.body);
@@ -28,7 +29,22 @@ const getUser = catchAsync(async (req, res) => {
 });
 
 const updateUser = catchAsync(async (req, res) => {
-  const user = await userService.updateUserById(req.params.userId, req.body);
+  const updateBody = { ...req.body };
+  const isAdmin = await userIsAdmin(req.user);
+  const isAgent = await userIsAgent(req.user);
+  if (!isAdmin && 'username' in updateBody) {
+    delete updateBody.username;
+  }
+  if (isAgent && !isAdmin && Array.isArray(updateBody.roleIds)) {
+    const validation = await validateRoleIdsForAgent(updateBody.roleIds);
+    if (!validation.allowed) {
+      throw new ApiError(
+        httpStatus.FORBIDDEN,
+        `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Candidate, Student, and Mentor are allowed.`
+      );
+    }
+  }
+  const user = await userService.updateUserById(req.params.userId, updateBody);
   const metadata = {};
   if (req.body.status !== undefined) {
     metadata.field = 'status';

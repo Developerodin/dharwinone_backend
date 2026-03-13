@@ -69,7 +69,13 @@ function computeDurationMs(punchIn, punchOut, shift) {
   const { startUtc, endUtc } = getShiftWindowUtc(punchIn, shift.startTime, shift.endTime, shift.timezone);
   const overlapStart = Math.max(punchIn.getTime(), startUtc.getTime());
   const overlapEnd = Math.min(punchOut.getTime(), endUtc.getTime());
-  return Math.max(0, overlapEnd - overlapStart);
+  const overlapMs = Math.max(0, overlapEnd - overlapStart);
+  // Fallback: if shift overlap is 0 but we have valid punch in/out (e.g. timezone mismatch
+  // when admin adds backdated attendance from different TZ), use raw duration so hours show.
+  if (overlapMs === 0 && rawMs > 0) {
+    return rawMs;
+  }
+  return overlapMs;
 }
 
 /** Get UTC midnight for a given date (used as attendance "date") */
@@ -282,10 +288,21 @@ const listByStudent = async (studentId, query = {}) => {
     Attendance.countDocuments(filter),
   ]);
 
-  const results = rawResults.map((r) => ({
-    ...r,
-    id: r._id?.toString?.() ?? r.id,
-  }));
+  const results = rawResults.map((r) => {
+    let duration = r.duration;
+    if ((duration == null || duration === 0) && r.punchOut && r.punchIn) {
+      const computed = new Date(r.punchOut).getTime() - new Date(r.punchIn).getTime();
+      if (computed > 0) {
+        duration = computed;
+        Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
+      }
+    }
+    return {
+      ...r,
+      duration: duration != null ? duration : r.duration,
+      id: r._id?.toString?.() ?? r.id,
+    };
+  });
 
   return {
     results,

@@ -13,6 +13,48 @@ export const userIsAdmin = async (user) => {
 };
 
 /**
+ * Check if user has Agent role (by roleIds).
+ * @param {Object} user - User object with roleIds
+ * @returns {Promise<boolean>}
+ */
+export const userIsAgent = async (user) => {
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Agent', status: 'active' });
+  return !!hasRole;
+};
+
+/** Role names that Agents are not allowed to assign (Administrator, Agent, Manager). */
+const RESTRICTED_ROLE_NAMES_FOR_AGENT = ['Administrator', 'Agent', 'Manager'];
+
+/**
+ * When the requester is an Agent, roleIds must not include Administrator, Agent, or Manager.
+ * @param {string[]} roleIds - Role IDs being assigned
+ * @returns {Promise<{ allowed: boolean, restrictedNames?: string[] }>}
+ */
+export const validateRoleIdsForAgent = async (roleIds) => {
+  if (!Array.isArray(roleIds) || roleIds.length === 0) return { allowed: true };
+  const roles = await Role.find({ _id: { $in: roleIds }, status: 'active' }).select('name').lean();
+  const restricted = roles.filter((r) => RESTRICTED_ROLE_NAMES_FOR_AGENT.includes(r.name)).map((r) => r.name);
+  if (restricted.length === 0) return { allowed: true };
+  return { allowed: false, restrictedNames: [...new Set(restricted)] };
+};
+
+/**
+ * Check if user has Candidate role (by roleIds or legacy role string).
+ * @param {Object} user - User object with roleIds and optionally role
+ * @returns {Promise<boolean>}
+ */
+export const userHasCandidateRole = async (user) => {
+  if (!user) return false;
+  if (user.role === 'user' || user.role === 'candidate') return true;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Candidate', status: 'active' });
+  return !!hasRole;
+};
+
+/**
  * Check if user has Recruiter role (by roleIds or legacy role string).
  * @param {Object} user - User object with roleIds and optionally role
  * @returns {Promise<boolean>}

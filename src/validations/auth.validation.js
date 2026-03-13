@@ -266,6 +266,107 @@ const updateMe = {
     .min(1),
 };
 
+/** Combined User + Candidate self-update for PATCH /auth/me/with-candidate. */
+const updateMeWithCandidate = {
+  body: Joi.object()
+    .keys({
+      // User fields
+      name: Joi.string().min(1).trim(),
+      notificationPreferences: notificationPreferencesSchema,
+      profilePicture: Joi.object({
+        url: Joi.string().uri().optional(),
+        key: Joi.string().optional().trim(),
+        originalName: Joi.string().optional().trim(),
+        size: Joi.number().optional().integer().min(0),
+        mimeType: Joi.string().optional().trim(),
+      })
+        .optional()
+        .allow(null),
+      // Candidate fields (from candidate.validation updateCandidate)
+      fullName: Joi.string().trim(),
+      email: Joi.string().email(),
+      phoneNumber: Joi.string()
+        .pattern(/^\d{6,15}$/)
+        .messages({ 'string.pattern.base': 'Phone number must be 6-15 digits' }),
+      shortBio: Joi.string().allow('', null),
+      sevisId: Joi.string().allow('', null),
+      ead: Joi.string().allow('', null),
+      visaType: Joi.string().optional().trim(),
+      customVisaType: Joi.string().allow('', null),
+      countryCode: Joi.string().allow('', null),
+      degree: Joi.string().allow('', null),
+      supervisorName: Joi.string().allow('', null),
+      supervisorContact: Joi.string().allow('', null),
+      supervisorCountryCode: Joi.string().allow('', null),
+      salaryRange: Joi.string().optional().trim(),
+      address: Joi.object({
+        streetAddress: Joi.string().optional().trim(),
+        streetAddress2: Joi.string().allow('', null),
+        city: Joi.string().optional().trim(),
+        state: Joi.string().optional().trim(),
+        zipCode: Joi.string().optional().trim(),
+        country: Joi.string().optional().trim(),
+      }).optional(),
+      qualifications: Joi.array().items(
+        Joi.object({
+          degree: Joi.string().required(),
+          institute: Joi.string().required(),
+          location: Joi.string().allow('', null),
+          startYear: Joi.number().integer().min(1900).max(3000).allow(null),
+          endYear: Joi.number().integer().min(1900).max(3000).allow(null),
+          description: Joi.string().allow('', null),
+        })
+      ),
+      experiences: Joi.array().items(
+        Joi.object({
+          company: Joi.string().required(),
+          role: Joi.string().required(),
+          startDate: Joi.date().allow(null),
+          endDate: Joi.date().allow(null),
+          currentlyWorking: Joi.boolean().default(false),
+          description: Joi.string().allow('', null),
+        })
+      ),
+      documents: Joi.array().items(
+        Joi.object({
+          type: Joi.string().valid('Aadhar', 'PAN', 'Bank', 'Passport', 'Other').optional().default('Other'),
+          label: Joi.string().optional().trim(),
+          url: Joi.string().trim().optional().allow(''),
+          key: Joi.string().optional().trim(),
+          originalName: Joi.string().optional().trim(),
+          size: Joi.number().optional().integer().min(0),
+          mimeType: Joi.string().optional().trim(),
+          status: Joi.number().optional().integer().default(0),
+        })
+      ),
+      skills: Joi.array().items(
+        Joi.object({
+          name: Joi.string().required(),
+          level: Joi.string().valid('Beginner', 'Intermediate', 'Advanced', 'Expert').default('Beginner'),
+          category: Joi.string().allow('', null),
+        })
+      ),
+      socialLinks: Joi.array().items(
+        Joi.object({
+          platform: Joi.string().required(),
+          url: Joi.string().uri().required(),
+        })
+      ),
+      salarySlips: Joi.array().items(
+        Joi.object({
+          month: Joi.string().optional().trim(),
+          year: Joi.number().integer().min(1900).max(2100).optional(),
+          documentUrl: Joi.string().trim().optional().allow(''),
+          key: Joi.string().optional().trim(),
+          originalName: Joi.string().optional().trim(),
+          size: Joi.number().optional().integer().min(0),
+          mimeType: Joi.string().optional().trim(),
+        })
+      ),
+    })
+    .min(1),
+};
+
 export {
   register,
   registerCandidate,
@@ -282,5 +383,6 @@ export {
   impersonate,
   sendCandidateInvitation,
   updateMe,
+  updateMeWithCandidate,
 };
 

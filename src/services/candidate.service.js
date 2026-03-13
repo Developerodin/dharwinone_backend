@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import Candidate from '../models/candidate.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
@@ -643,6 +644,47 @@ const queryCandidates = async (filter, options) => {
     return result;
 };
 
+/** Get full candidate by owner (for GET /auth/me/with-candidate). Includes documents & salarySlips with presigned URLs. */
+const getCandidateByOwnerForMe = async (userId) => {
+  const candidate = await Candidate.findOne({ owner: userId });
+  if (!candidate) return null;
+  await candidate.populate([{ path: 'owner', select: 'name email countryCode' }, { path: 'adminId', select: 'name email' }]);
+  if (candidate.profilePicture?.key) {
+    try {
+      candidate.profilePicture.url = await generatePresignedDownloadUrl(candidate.profilePicture.key, 7 * 24 * 3600);
+    } catch (_) {
+      /* ignore presigned URL errors */
+    }
+  }
+  if (candidate.documents?.length) {
+    await Promise.all(
+      candidate.documents.map(async (doc) => {
+        if (doc.key) {
+          try {
+            doc.url = await generatePresignedDownloadUrl(doc.key, 7 * 24 * 3600);
+          } catch (_) {
+            /* ignore presigned URL errors */
+          }
+        }
+      })
+    );
+  }
+  if (candidate.salarySlips?.length) {
+    await Promise.all(
+      candidate.salarySlips.map(async (slip) => {
+        if (slip.key) {
+          try {
+            slip.documentUrl = await generatePresignedDownloadUrl(slip.key, 7 * 24 * 3600);
+          } catch (_) {
+            /* ignore presigned URL errors */
+          }
+        }
+      })
+    );
+  }
+  return candidate;
+};
+
 const getCandidateById = async (id) => {
   const candidate = await Candidate.findById(id);
   if (candidate) {
@@ -757,17 +799,22 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
       if (updateBody.phoneNumber) {
         userUpdateData.phoneNumber = updateBody.phoneNumber;
       }
-      
+
+      // Sync profile picture if changed (single image for both User and Candidate)
+      if (updateBody.profilePicture !== undefined) {
+        userUpdateData.profilePicture = updateBody.profilePicture;
+      }
+
       // Only update if there are fields to sync
       if (Object.keys(userUpdateData).length > 0) {
-        console.log('Syncing candidate data to user:', candidate.owner, userUpdateData);
+        logger.debug('Syncing candidate data to user:', candidate.owner, userUpdateData);
         await updateUserById(candidate.owner, userUpdateData);
-        console.log('User synced successfully');
+        logger.debug('User synced successfully');
       }
     } catch (error) {
       // Log error but don't fail the candidate update
-      console.error('Failed to sync candidate data to user:', error.message);
-      console.error('Error stack:', error.stack);
+      logger.error('Failed to sync candidate data to user:', error.message);
+      logger.error('Error stack:', error.stack);
     }
 
     // Sync position to Student if user has a Student profile (for training module assignment)
@@ -1718,6 +1765,104 @@ const ensureCandidateProfileForUser = async (userId) => {
   return candidate;
 };
 
+/** User fields allowed for self-update via PATCH /auth/me/with-candidate */
+const USER_ME_FIELDS = ['name', 'notificationPreferences', 'profilePicture'];
+
+/** Candidate fields (excludes User fields). Sync name→fullName and profilePicture to candidate. */
+const CANDIDATE_ME_FIELDS = [
+  'fullName',
+  'email',
+  'phoneNumber',
+  'shortBio',
+  'sevisId',
+  'ead',
+  'visaType',
+  'customVisaType',
+  'countryCode',
+  'degree',
+  'supervisorName',
+  'supervisorContact',
+  'supervisorCountryCode',
+  'salaryRange',
+  'address',
+  'qualifications',
+  'experiences',
+  'documents',
+  'skills',
+  'socialLinks',
+  'salarySlips',
+];
+
+/**
+ * Atomically update User and Candidate for PATCH /auth/me/with-candidate.
+ * Syncs name→fullName and profilePicture to candidate. Returns { user, candidate }.
+ */
+const updateUserAndCandidateForMe = async (userId, body) => {
+  const result = await queryCandidates({ owner: userId }, { limit: 1, page: 1 });
+  const candidateDoc = result.results?.[0];
+  if (!candidateDoc) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
+  }
+
+  const userPayload = {};
+  for (const key of USER_ME_FIELDS) {
+    if (body[key] !== undefined) userPayload[key] = body[key];
+  }
+
+  const candidatePayload = {};
+  for (const key of CANDIDATE_ME_FIELDS) {
+    if (body[key] !== undefined) candidatePayload[key] = body[key];
+  }
+  if (body.name !== undefined) candidatePayload.fullName = body.name;
+  if (body.profilePicture !== undefined) candidatePayload.profilePicture = body.profilePicture;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const user = await User.findById(userId).session(session);
+    if (!user) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+    }
+    if (userPayload.email !== undefined && (await User.isEmailTaken(userPayload.email, userId))) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
+    }
+    if (candidatePayload.email !== undefined && (await User.isEmailTaken(candidatePayload.email, userId))) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
+    }
+    if (Object.keys(userPayload).length > 0) {
+      Object.assign(user, userPayload);
+      await user.save({ session });
+    }
+
+    const candidate = await Candidate.findById(candidateDoc.id || candidateDoc._id).session(session);
+    if (!candidate) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+    }
+    if (Object.keys(candidatePayload).length > 0) {
+      Object.assign(candidate, candidatePayload);
+      if (candidatePayload.documents !== undefined) candidate.markModified('documents');
+      if (candidatePayload.salarySlips !== undefined) candidate.markModified('salarySlips');
+      candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+      candidate.isCompleted = candidate.isProfileCompleted === 100;
+      await candidate.save({ session });
+      if (candidatePayload.fullName) user.name = candidatePayload.fullName;
+      if (candidatePayload.email) user.email = candidatePayload.email;
+      if (candidatePayload.phoneNumber) user.phoneNumber = candidatePayload.phoneNumber;
+      if (Object.keys(candidatePayload).some((k) => ['fullName', 'email', 'phoneNumber'].includes(k))) {
+        await user.save({ session });
+      }
+    }
+
+    await session.commitTransaction();
+    return { user: await User.findById(userId), candidate: await Candidate.findById(candidate._id) };
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
+};
+
 export {
   createCandidate,
   queryCandidates,
@@ -1756,6 +1901,8 @@ export {
   // Shift assignment
   assignShiftToCandidates,
   ensureCandidateProfileForUser,
+  updateUserAndCandidateForMe,
+  getCandidateByOwnerForMe,
 };
 
 

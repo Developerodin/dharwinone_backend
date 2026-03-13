@@ -50,6 +50,7 @@ const updateUser = {
   body: Joi.object()
     .keys({
       email: Joi.string().email(),
+      username: Joi.string().trim().lowercase().allow('', null),
       password: Joi.string().custom(password),
       name: Joi.string(),
       roleIds: Joi.array().items(Joi.string().custom(objectId)),

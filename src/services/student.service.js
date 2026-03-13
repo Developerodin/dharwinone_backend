@@ -81,8 +81,25 @@ const queryStudents = async (filter, options) => {
   if (search && search.trim()) {
     const trimmed = search.trim();
     const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const [matchingUsers, matchingCandidatesByEmployeeId] = await Promise.all([
+      User.find({
+        $or: [{ name: { $regex: searchRegex } }, { email: { $regex: searchRegex } }],
+      })
+        .select('_id')
+        .lean(),
+      Candidate.find({ employeeId: { $regex: searchRegex } })
+        .select('owner')
+        .lean(),
+    ]);
+    const matchingUserIds = new Set();
+    matchingUsers.forEach((u) => matchingUserIds.add(u._id.toString()));
+    matchingCandidatesByEmployeeId.forEach((c) => {
+      if (c.owner) matchingUserIds.add(c.owner.toString());
+    });
+    const userIdsArray = Array.from(matchingUserIds);
     mongoFilter.$or = [
       { phone: { $regex: searchRegex } },
+      ...(userIdsArray.length > 0 ? [{ user: { $in: userIdsArray } }] : []),
     ];
   }
   const students = await Student.paginate(mongoFilter, {

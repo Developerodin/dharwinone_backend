@@ -18,6 +18,8 @@ router.post('/logout', validate(authValidation.logout), authController.logout);
 router.post('/refresh-tokens', validate(authValidation.refreshTokens), authController.refreshTokens);
 router.get('/me', auth(), authController.getMe);
 router.patch('/me', auth(), validate(authValidation.updateMe), authController.updateMe);
+router.get('/me/with-candidate', auth(), authController.getMeWithCandidate);
+router.patch('/me/with-candidate', auth(), validate(authValidation.updateMeWithCandidate), authController.updateMeWithCandidate);
 router.get('/my-permissions', auth(), authController.getMyPermissions);
 router.post('/impersonate', auth(), requireAdministratorRole(), validate(authValidation.impersonate), authController.impersonate);
 router.post('/stop-impersonation', auth(), authController.stopImpersonation);

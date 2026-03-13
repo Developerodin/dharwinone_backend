@@ -11,13 +11,15 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 /** Sync check: user.role indicates admin */
 const isAdminByRole = (user) => user.role === 'admin' || user.role === 'Administrator';
 
-/** Async: check if user is admin (role field OR has Administrator role via roleIds) */
+/** Async: check if user can manage backdated attendance (Administrator or Agent via roleIds) */
 const isAdminUser = async (user) => {
   if (isAdminByRole(user)) return true;
   const roleIds = user.roleIds || [];
   if (roleIds.length === 0) return false;
-  const adminRole = await Role.findOne({ _id: { $in: roleIds }, name: 'Administrator', status: 'active' });
-  return !!adminRole;
+  const role = await Role.findOne(
+    { _id: { $in: roleIds }, name: { $in: ['Administrator', 'Agent'] }, status: 'active' }
+  );
+  return !!role;
 };
 
 /**

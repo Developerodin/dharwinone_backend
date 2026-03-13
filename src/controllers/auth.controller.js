@@ -10,8 +10,9 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { registerStudent as registerStudentService } from '../services/student.service.js';
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
-import { createCandidate } from '../services/candidate.service.js';
+import { createCandidate, getCandidateByOwnerForMe, updateUserAndCandidateForMe } from '../services/candidate.service.js';
 import { getRoleByName } from '../services/role.service.js';
+import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
@@ -86,6 +87,20 @@ const register = catchAsync(async (req, res) => {
       message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
     });
     return;
+  }
+
+  if (req.user && Array.isArray(req.body.roleIds) && req.body.roleIds.length > 0) {
+    const isAdmin = await userIsAdmin(req.user);
+    const isAgent = await userIsAgent(req.user);
+    if (isAgent && !isAdmin) {
+      const validation = await validateRoleIdsForAgent(req.body.roleIds);
+      if (!validation.allowed) {
+        throw new ApiError(
+          httpStatus.FORBIDDEN,
+          `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Candidate, Student, and Mentor are allowed.`
+        );
+      }
+    }
   }
 
   const user = await createUser(req.body);
@@ -371,6 +386,47 @@ const getMe = catchAsync(async (req, res) => {
 });
 
 /**
+ * GET /auth/me/with-candidate
+ * Returns User + Candidate merged when user has Candidate role. Single source for Personal Information and My Profile.
+ */
+const getMeWithCandidate = catchAsync(async (req, res) => {
+  const sessions = await getSessionsForUser(req.user.id);
+  const userObj = await enrichUserWithFreshProfilePictureUrl(req.user);
+  const response = { user: userObj, candidate: null, sessions };
+  if (req.impersonation) {
+    response.impersonation = req.impersonation;
+  }
+  const hasCandidateRole = await userHasCandidateRole(req.user);
+  if (!hasCandidateRole) {
+    return res.send(response);
+  }
+  const candidate = await getCandidateByOwnerForMe(req.user._id);
+  if (candidate) {
+    response.candidate = candidate.toJSON ? candidate.toJSON() : { ...candidate };
+  }
+  res.send(response);
+});
+
+/**
+ * PATCH /auth/me/with-candidate
+ * Atomically updates both User and Candidate in one transaction.
+ */
+const updateMeWithCandidate = catchAsync(async (req, res) => {
+  const { user, candidate } = await updateUserAndCandidateForMe(req.user.id, req.body);
+  const userObj = await enrichUserWithFreshProfilePictureUrl(user);
+  const candidateObj = candidate ? (candidate.toJSON ? candidate.toJSON() : { ...candidate }) : null;
+  if (candidateObj?.profilePicture?.key) {
+    try {
+      const freshUrl = await generatePresignedDownloadUrl(candidateObj.profilePicture.key, 7 * 24 * 3600);
+      candidateObj.profilePicture = { ...candidateObj.profilePicture, url: freshUrl };
+    } catch (_) {
+      /* ignore presigned URL errors */
+    }
+  }
+  res.send({ user: userObj, candidate: candidateObj });
+});
+
+/**
  * Update own profile (PATCH /auth/me).
  * Allows any authenticated user to update name, notificationPreferences, profilePicture.
  * Email cannot be changed via this route; only admins can change email via PATCH /users/:userId.
@@ -465,6 +521,8 @@ export {
   sendCandidateInvitation,
   getMe,
   updateMe,
+  getMeWithCandidate,
+  updateMeWithCandidate,
   getMyPermissions,
   impersonate,
   stopImpersonation,
