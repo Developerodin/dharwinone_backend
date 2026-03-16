@@ -622,7 +622,8 @@ Return valid JSON:
 - "level": "${lev}"
 - "sections": array of ${n} sections. Each section: { "title": "Module 1: Introduction to ...", "items": [ { "contentType": "blog"|"quiz"|"essay"|"youtube-link", "title": "..." }, ... ] }
 
-Per-section structure: ${hasBlog ? '1-2 blogs (intro/explanation), ' : ''}${hasQuiz ? '1 quiz, ' : ''}${hasEssay ? '1 essay (Q&A)' : ''}${hasVideo ? ', video placeholders if relevant' : ''}. Order within section: blog(s) first, then quiz, then essay. Use only contentTypes: blog, quiz, essay${hasVideo ? ', youtube-link' : ''}.
+Per-section structure: ${hasBlog ? '1-2 blogs (intro/explanation), ' : ''}${hasVideo ? '1-2 youtube-link items (video placeholders with descriptive titles, e.g. "Introduction to X - Video"), ' : ''}${hasQuiz ? '1 quiz, ' : ''}${hasEssay ? '1 essay (Q&A)' : ''}. Order within section: blog(s) first${hasVideo ? ', then video(s) (youtube-link)' : ''}, then quiz, then essay.
+IMPORTANT: Use only these contentTypes: blog, quiz, essay${hasVideo ? ', youtube-link' : ''}. ${hasVideo ? 'When "video" is requested, EVERY section MUST include at least one item with "contentType": "youtube-link" and a short "title" (e.g. "Overview video", "Deep dive: Topic X").' : ''}
 
 Return ONLY valid JSON (no markdown):
 {
@@ -633,7 +634,8 @@ Return ONLY valid JSON (no markdown):
     { "title": "Module 1: Introduction to ...", "items": [ { "contentType": "blog", "title": "..." }, ... ] },
     { "title": "Module 2: ...", "items": [ ... ] }
   ]
-}`;
+}
+${hasVideo ? 'Include at least one { "contentType": "youtube-link", "title": "..." } in each section\'s items array.' : ''}`;
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -686,6 +688,7 @@ Return ONLY valid JSON (no markdown):
  *   questionsPerQuiz: number,
  *   numEssays: number,
  *   questionsPerEssay: number,
+ *   videoLanguage?: string,
  *   onProgress?: (message: string) => void
  * }} params
  * @returns {Promise<{ moduleName: string, shortDescription: string, playlist: Array }>}
@@ -701,6 +704,7 @@ export async function generateFullPlaylistFromTitleAndConfig({
   questionsPerQuiz = 4,
   numEssays = 1,
   questionsPerEssay = 3,
+  videoLanguage = 'en',
   onProgress,
 }) {
   const send = (msg) => onProgress && onProgress(msg);
@@ -743,7 +747,7 @@ export async function generateFullPlaylistFromTitleAndConfig({
       const { searchVideos } = await import('./youtubeSearch.service.js');
       const searchQuery = `${sectionTitle} ${docName} tutorial`.trim();
       send(`Searching YouTube for: ${sectionTitle}`);
-      const foundVideos = await searchVideos(searchQuery, numVideos);
+      const foundVideos = await searchVideos(searchQuery, numVideos, videoLanguage);
       
       for (let i = 0; i < numVideos; i++) {
         const video = foundVideos[i];

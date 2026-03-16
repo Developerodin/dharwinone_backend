@@ -20,7 +20,11 @@ export const userIsAdmin = async (user) => {
 export const userIsAgent = async (user) => {
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;
-  const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Agent', status: 'active' });
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    $or: [{ name: 'Agent' }, { name: 'agent' }],
+    status: 'active',
+  });
   return !!hasRole;
 };
 

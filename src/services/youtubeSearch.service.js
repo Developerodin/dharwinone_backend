@@ -3,16 +3,42 @@ import logger from '../config/logger.js';
 
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
-export async function searchVideos(topic, maxResults = 4) {
+/** Language code -> search suffix to get videos in that language (relevanceLanguage alone is only a bias). */
+const LANGUAGE_SEARCH_SUFFIX = {
+  hi: ' hindi',
+  es: ' español',
+  fr: ' français',
+  de: ' deutsch',
+  pt: ' português',
+  ar: ' عربي',
+  zh: ' 中文',
+  ja: ' 日本語',
+  te: ' తెలుగు',
+  ta: ' தமிழ்',
+  mr: ' मराठी',
+  bn: ' বাংলা',
+  kn: ' ಕನ್ನಡ',
+  ml: ' മലയാളം',
+};
+
+/**
+ * @param {string} topic - Search query
+ * @param {number} maxResults - Max videos to return
+ * @param {string} [relevanceLanguage='en'] - ISO 639-1 two-letter language code for YouTube relevanceLanguage (e.g. 'en', 'hi', 'es')
+ */
+export async function searchVideos(topic, maxResults = 4, relevanceLanguage = 'en') {
   const apiKey = config.youtube?.apiKey;
   if (!apiKey) {
     logger.warn('GCP_YOUTUBE_API_KEY not set — skipping video search. Add GCP_YOUTUBE_API_KEY to .env');
     return [];
   }
 
+  const lang = (relevanceLanguage || 'en').trim().toLowerCase().slice(0, 2) || 'en';
+  const suffix = lang === 'en' ? '' : (LANGUAGE_SEARCH_SUFFIX[lang] || ` ${lang}`);
+  const searchQuery = (topic + suffix).trim();
   try {
-    const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&maxResults=${maxResults}&q=${encodeURIComponent(topic)}&key=${apiKey}&relevanceLanguage=en&videoEmbeddable=true`;
-    logger.debug(`[YouTube] Searching: "${topic}" (max ${maxResults})`);
+    const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&maxResults=${maxResults}&q=${encodeURIComponent(searchQuery)}&key=${apiKey}&relevanceLanguage=${encodeURIComponent(lang)}&videoEmbeddable=true`;
+    logger.debug(`[YouTube] Searching: "${searchQuery}" (max ${maxResults}, language: ${lang})`);
     const res = await fetch(url);
     if (!res.ok) {
       const errorText = await res.text().catch(() => '');

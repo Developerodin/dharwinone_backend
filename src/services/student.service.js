@@ -104,7 +104,7 @@ const queryStudents = async (filter, options) => {
   }
   const students = await Student.paginate(mongoFilter, {
     ...options,
-    populate: 'user,position',
+    populate: 'user,position,shift',
   });
   return students;
 };
@@ -264,8 +264,8 @@ const getOrCreateStudentForAttendance = async (user) => {
   const userDoc = await User.findById(userId).select('role roleIds').lean();
   if (!userDoc) return null;
 
-  let isAdmin = userDoc.role === 'admin' || userDoc.role === 'Administrator';
-  if (!isAdmin && userDoc.roleIds?.length > 0) {
+  let isAdmin = false;
+  if (userDoc.roleIds?.length > 0) {
     const Role = (await import('../models/role.model.js')).default;
     const adminRoles = await Role.find({ name: { $in: ['admin', 'Administrator'] }, status: 'active' }).select('_id').lean();
     const adminIds = new Set(adminRoles.map((r) => r._id.toString()));
@@ -291,6 +291,52 @@ const getOrCreateStudentForAttendance = async (user) => {
     joiningDate,
   });
   return getStudentById(student.id);
+};
+
+/**
+ * Get attendance identity for the current user. Used by GET /training/attendance/me.
+ * - Admins: null (no self-attendance).
+ * - User has a Student: returns that Student (or creates one for Candidate/Student role via getOrCreateStudentForAttendance).
+ * - User has no Student and is Agent: returns user identity only { type: 'user', id, user } — no Student created.
+ * @param {Object} user - req.user
+ * @returns {Promise<{ type: 'student' } & import('./student.model.js').default|null|{ type: 'user', id: string, user: { id: string, name: string, email: string } }>}
+ */
+const getAttendanceIdentity = async (user) => {
+  const userId = user?._id ?? user?.id;
+  if (!userId) return null;
+
+  const userDoc = await User.findById(userId).select('roleIds name email').lean();
+  if (!userDoc) return null;
+
+  // Admin detection uses ONLY roleIds (RBAC), not the legacy `role` field.
+  let isAdmin = false;
+  if (userDoc.roleIds?.length > 0) {
+    const Role = (await import('../models/role.model.js')).default;
+    const adminRoles = await Role.find({ name: { $in: ['admin', 'Administrator'] }, status: 'active' }).select('_id').lean();
+    const adminIds = new Set(adminRoles.map((r) => r._id.toString()));
+    isAdmin = userDoc.roleIds.some((id) => id && adminIds.has(id.toString()));
+  }
+  if (isAdmin) return null;
+
+  const student = await Student.findOne({ user: userId });
+  if (student) {
+    if (student.status === 'inactive') {
+      student.status = 'active';
+      await student.save();
+    }
+    return getStudentById(student.id);
+  }
+
+  // No Student: return user-based identity so any non-admin (Candidate, Agent, Manager, etc.) can access attendance via /me APIs without creating a Student.
+  return {
+    type: 'user',
+    id: userId.toString(),
+    user: {
+      id: userId.toString(),
+      name: userDoc.name ?? '',
+      email: userDoc.email ?? '',
+    },
+  };
 };
 
 /**
@@ -576,6 +622,7 @@ export {
   getStudentById,
   getStudentByUserId,
   getOrCreateStudentForAttendance,
+  getAttendanceIdentity,
   updateStudentById,
   deleteStudentById,
   deleteStudentByUserId,

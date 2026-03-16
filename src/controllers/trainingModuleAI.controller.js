@@ -892,7 +892,8 @@ export const generateWithAI = async (req, res) => {
   initSSE(res);
 
   try {
-    const { topic, description, pdfText, videoLinks, skillLevel, contentTypes, extractedByModule } = req.body;
+    const { topic, description, pdfText, videoLinks, skillLevel, contentTypes, extractedByModule, videoLanguage: videoLanguageParam } = req.body;
+    const videoLanguage = (videoLanguageParam && String(videoLanguageParam).trim().toLowerCase().slice(0, 2)) || 'en';
     const idsFromLinksUser = (videoLinks || [])
       .map((url) => {
         const m = String(url).match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -968,7 +969,7 @@ export const generateWithAI = async (req, res) => {
       }
     } else {
       sendSSE(res, 'searching_youtube', 'started', 'Searching YouTube for videos...');
-      videos = await searchVideos(topic, 3);
+      videos = await searchVideos(topic, 3, videoLanguage);
       sendSSE(res, 'searching_youtube', 'completed', `Done — found ${videos.length} relevant videos`);
     }
 
@@ -1008,7 +1009,7 @@ export const generateWithAI = async (req, res) => {
           return await generateEssayForModule({ documentName: docName, moduleName });
         },
         searchVideosForModule: async (docName, moduleName) => {
-          return await searchVideos([docName, moduleName].filter(Boolean).join(' '), 3);
+          return await searchVideos([docName, moduleName].filter(Boolean).join(' '), 3, videoLanguage);
         },
         sendSSE,
         res,
@@ -1302,7 +1303,9 @@ export const generateModuleFromTitle = async (req, res) => {
       questionsPerQuiz = 4,
       numEssays = 1,
       questionsPerEssay = 3,
+      videoLanguage: videoLanguageParam = 'en',
     } = req.body || {};
+    const videoLanguage = (videoLanguageParam && String(videoLanguageParam).trim().toLowerCase().slice(0, 2)) || 'en';
 
     if (!moduleName?.trim()) {
       send('error', 'error', 'Module name is required');
@@ -1322,6 +1325,7 @@ export const generateModuleFromTitle = async (req, res) => {
       questionsPerQuiz: Math.min(10, Math.max(2, Number(questionsPerQuiz) || 4)),
       numEssays: Math.max(0, Number(numEssays) || 1),
       questionsPerEssay: Math.min(8, Math.max(1, Number(questionsPerEssay) || 3)),
+      videoLanguage,
       onProgress: (msg) => send('generating', 'started', msg),
     });
 

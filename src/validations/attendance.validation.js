@@ -28,6 +28,37 @@ const punchOut = {
   }),
 };
 
+const punchInMe = {
+  body: Joi.object().keys({
+    punchInTime: Joi.date().iso(),
+    notes: Joi.string().allow(''),
+    timezone: Joi.string().trim(),
+  }),
+};
+
+const punchOutMe = {
+  body: Joi.object().keys({
+    punchOutTime: Joi.date().iso(),
+    notes: Joi.string().allow(''),
+  }),
+};
+
+const listAttendanceMe = {
+  query: Joi.object().keys({
+    startDate: Joi.date().iso(),
+    endDate: Joi.date().iso(),
+    limit: Joi.number().integer().min(1).max(500),
+    page: Joi.number().integer().min(1),
+  }),
+};
+
+const getStatisticsMe = {
+  query: Joi.object().keys({
+    startDate: Joi.date().iso(),
+    endDate: Joi.date().iso(),
+  }),
+};
+
 const listAttendance = {
   params: Joi.object().keys({
     studentId: Joi.string().required().custom(objectId),
@@ -162,6 +193,10 @@ export {
   punchOut,
   listAttendance,
   getStatistics,
+  punchInMe,
+  punchOutMe,
+  listAttendanceMe,
+  getStatisticsMe,
   trackList,
   trackHistory,
   addHolidaysToStudents,

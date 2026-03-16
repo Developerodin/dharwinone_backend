@@ -7,19 +7,25 @@ import Student from '../models/student.model.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 /**
- * Get current user's student profile for attendance (punch in/out).
- * Auto-creates Student for Candidate, Agent, and other non-admin roles who don't have one.
- * Admins return 404 (they manage others' attendance, not their own).
+ * Get current user's attendance identity (student or user).
+ * Students/Candidates: return Student (type: 'student'), creating one if needed.
+ * Agents without a Student: return user identity only (type: 'user') — no Student created.
+ * Admins: 404.
  */
 const getMyStudentForAttendance = catchAsync(async (req, res) => {
-  const student = await studentService.getOrCreateStudentForAttendance(req.user);
-  if (!student) {
+  const identity = await studentService.getAttendanceIdentity(req.user);
+  if (!identity) {
     return res.status(httpStatus.NOT_FOUND).send({
       success: false,
       message: 'Admins do not fill attendance for themselves. Use Track Attendance to manage others.',
     });
   }
-  res.send(student);
+  if (identity.type === 'user') {
+    return res.send(identity);
+  }
+  const out = identity.toJSON ? identity.toJSON() : (identity.toObject ? identity.toObject() : identity);
+  if (typeof out === 'object' && out !== null) out.type = 'student';
+  res.send(out);
 });
 
 const punchIn = catchAsync(async (req, res) => {
@@ -53,6 +59,93 @@ const punchOut = catchAsync(async (req, res) => {
 const getStatus = catchAsync(async (req, res) => {
   const result = await attendanceService.getCurrentPunchStatus(req.params.studentId);
   res.send({ success: true, ...result });
+});
+
+/** Ensure current user is allowed to use /me routes (Agent without Student). Returns 403 otherwise. */
+const requireMeIdentity = async (req) => {
+  const identity = await studentService.getAttendanceIdentity(req.user);
+  return identity && identity.type === 'user';
+};
+
+const punchInMe = catchAsync(async (req, res) => {
+  const allowed = await requireMeIdentity(req);
+  if (!allowed) {
+    return res.status(httpStatus.FORBIDDEN).send({
+      success: false,
+      message: 'This endpoint is only for agents using user-based attendance. Use punch-in with your student ID if you have a student profile.',
+    });
+  }
+  const userId = req.user.id || req.user._id?.toString?.();
+  const record = await attendanceService.punchInByUser(userId, req.body);
+  await activityLogService.createActivityLog(
+    req.user.id,
+    ActivityActions.ATTENDANCE_PUNCH_IN,
+    EntityTypes.ATTENDANCE,
+    record.id || record._id?.toString?.(),
+    { userId, punchIn: record.punchIn },
+    req
+  );
+  res.status(httpStatus.OK).send({ success: true, data: record });
+});
+
+const punchOutMe = catchAsync(async (req, res) => {
+  const allowed = await requireMeIdentity(req);
+  if (!allowed) {
+    return res.status(httpStatus.FORBIDDEN).send({
+      success: false,
+      message: 'This endpoint is only for agents using user-based attendance. Use punch-out with your student ID if you have a student profile.',
+    });
+  }
+  const userId = req.user.id || req.user._id?.toString?.();
+  const record = await attendanceService.punchOutByUser(userId, req.body);
+  await activityLogService.createActivityLog(
+    req.user.id,
+    ActivityActions.ATTENDANCE_PUNCH_OUT,
+    EntityTypes.ATTENDANCE,
+    record.id || record._id?.toString?.(),
+    { userId, punchOut: record.punchOut, performedBy: 'self' },
+    req
+  );
+  res.status(httpStatus.OK).send({ success: true, data: record });
+});
+
+const getStatusMe = catchAsync(async (req, res) => {
+  const allowed = await requireMeIdentity(req);
+  if (!allowed) {
+    return res.status(httpStatus.FORBIDDEN).send({
+      success: false,
+      message: 'This endpoint is only for agents using user-based attendance.',
+    });
+  }
+  const userId = req.user.id || req.user._id?.toString?.();
+  const result = await attendanceService.getCurrentPunchStatusByUser(userId);
+  res.send({ success: true, ...result });
+});
+
+const getStudentAttendanceMe = catchAsync(async (req, res) => {
+  const allowed = await requireMeIdentity(req);
+  if (!allowed) {
+    return res.status(httpStatus.FORBIDDEN).send({
+      success: false,
+      message: 'This endpoint is only for agents using user-based attendance.',
+    });
+  }
+  const userId = req.user.id || req.user._id?.toString?.();
+  const result = await attendanceService.listByUser(userId, req.query);
+  res.send(result);
+});
+
+const getStatisticsMe = catchAsync(async (req, res) => {
+  const allowed = await requireMeIdentity(req);
+  if (!allowed) {
+    return res.status(httpStatus.FORBIDDEN).send({
+      success: false,
+      message: 'This endpoint is only for agents using user-based attendance.',
+    });
+  }
+  const userId = req.user.id || req.user._id?.toString?.();
+  const result = await attendanceService.getStatisticsByUser(userId, req.query);
+  res.send(result);
 });
 
 const getStudentAttendance = catchAsync(async (req, res) => {
@@ -112,9 +205,14 @@ export default {
   getMyStudentForAttendance,
   punchIn,
   punchOut,
+  punchInMe,
+  punchOutMe,
   getStatus,
+  getStatusMe,
   getStudentAttendance,
+  getStudentAttendanceMe,
   getStatistics,
+  getStatisticsMe,
   getTrackList,
   getTrackHistory,
   addHolidays,

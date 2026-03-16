@@ -6,7 +6,13 @@ const attendanceSchema = mongoose.Schema(
     student: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Student',
-      required: true,
+      required: false,
+      index: true,
+    },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false,
       index: true,
     },
     studentEmail: {
@@ -55,6 +61,12 @@ const attendanceSchema = mongoose.Schema(
       enum: ['Present', 'Absent', 'Holiday', 'Leave'],
       default: 'Present',
     },
+    /** When status is 'Leave', type of leave: casual, sick, or unpaid */
+    leaveType: {
+      type: String,
+      enum: ['casual', 'sick', 'unpaid'],
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -67,8 +79,15 @@ const attendanceSchema = mongoose.Schema(
 
 attendanceSchema.index({ student: 1, date: 1 });
 attendanceSchema.index({ student: 1, punchOut: 1 });
+attendanceSchema.index({ user: 1, date: 1 });
+attendanceSchema.index({ user: 1, punchOut: 1 });
 
 attendanceSchema.pre('save', function (next) {
+  const hasStudent = this.student != null;
+  const hasUser = this.user != null;
+  if (hasStudent === hasUser) {
+    return next(new Error('Exactly one of student or user must be set'));
+  }
   if (this.punchOut != null && this.punchIn != null && (this.duration == null || this.duration === undefined)) {
     this.duration = this.punchOut.getTime() - this.punchIn.getTime();
   }

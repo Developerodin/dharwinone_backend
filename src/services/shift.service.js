@@ -45,7 +45,11 @@ const createShift = async (shiftBody, user) => {
 };
 
 const queryShifts = async (filter, options) => {
-  return await Shift.paginate(filter, options);
+  const query = { ...filter };
+  if (query.name && typeof query.name === 'string' && query.name.trim()) {
+    query.name = { $regex: query.name.trim(), $options: 'i' };
+  }
+  return await Shift.paginate(query, options);
 };
 
 const getShiftById = async (id) => {

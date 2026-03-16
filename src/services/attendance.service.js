@@ -398,6 +398,257 @@ const getStatistics = async (studentId, query = {}) => {
 };
 
 /**
+ * Punch in for a user (agent; no Student). Creates Attendance with user set, student null.
+ * @param {string} userId
+ * @param {Object} body - { punchInTime?, notes?, timezone? }
+ */
+const punchInByUser = async (userId, body = {}) => {
+  const user = await User.findById(userId).select('name email').lean();
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const punchInTime = body.punchInTime ? new Date(body.punchInTime) : new Date();
+  const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
+  const notes = body.notes != null ? String(body.notes) : '';
+
+  const attendanceDate = getUtcMidnight(punchInTime);
+  const day = getDayName(attendanceDate);
+
+  const existing = await Attendance.findOne({
+    user: userId,
+    date: attendanceDate,
+    isActive: true,
+    punchOut: null,
+  })
+    .sort({ punchIn: -1 })
+    .lean();
+
+  if (existing) {
+    if (existing.status === 'Holiday' || existing.status === 'Leave') {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot punch in on Holiday or Leave day', true, '', 'HOLIDAY_BLOCKED');
+    }
+    const doc = await Attendance.findById(existing._id);
+    doc.punchIn = punchInTime;
+    doc.timezone = timezone;
+    if (notes) doc.notes = notes;
+    doc.status = 'Absent';
+    doc.studentEmail = doc.studentEmail || user.email || '';
+    doc.studentName = doc.studentName || user.name || '';
+    await doc.save();
+    return doc;
+  }
+
+  const attendance = await Attendance.create({
+    user: userId,
+    studentEmail: user.email || '',
+    studentName: user.name || '',
+    date: attendanceDate,
+    day,
+    punchIn: punchInTime,
+    punchOut: null,
+    timezone,
+    notes,
+    status: 'Absent',
+    isActive: true,
+  });
+  return attendance;
+};
+
+/**
+ * Punch out for a user (agent). Finds active punch in by user.
+ */
+const punchOutByUser = async (userId, body = {}) => {
+  const user = await User.findById(userId).select('email').lean();
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const punchOutTime = body.punchOutTime ? new Date(body.punchOutTime) : new Date();
+  const notes = body.notes != null ? String(body.notes) : '';
+
+  const now = new Date();
+  const today = getUtcMidnight(now);
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const dayBefore = new Date(today);
+  dayBefore.setUTCDate(dayBefore.getUTCDate() - 2);
+
+  const active = await Attendance.findOne({
+    user: userId,
+    date: { $in: [today, yesterday, dayBefore] },
+    punchOut: null,
+    isActive: true,
+    status: { $nin: ['Holiday', 'Leave'] },
+  }).sort({ punchIn: -1 });
+
+  if (!active) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'No active punch-in found to punch out', true, '', 'NO_ACTIVE_PUNCH');
+  }
+  if (punchOutTime <= active.punchIn) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Punch out time must be after punch in time');
+  }
+
+  active.punchOut = punchOutTime;
+  if (notes) active.notes = notes;
+  active.status = 'Present';
+  active.duration = punchOutTime.getTime() - active.punchIn.getTime();
+  await active.save();
+  return active;
+};
+
+/**
+ * Get current punch status for a user (agent). Active record if any.
+ */
+const getCurrentPunchStatusByUser = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const now = new Date();
+  const today = getUtcMidnight(now);
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const dayBefore = new Date(today);
+  dayBefore.setUTCDate(dayBefore.getUTCDate() - 2);
+
+  const active = await Attendance.findOne({
+    user: userId,
+    date: { $in: [today, yesterday, dayBefore] },
+    punchOut: null,
+    isActive: true,
+    status: { $nin: ['Holiday', 'Leave'] },
+  })
+    .sort({ punchIn: -1 })
+    .lean();
+
+  return {
+    isPunchedIn: !!active,
+    record: active
+      ? {
+          id: active._id?.toString?.(),
+          punchIn: active.punchIn,
+          timezone: active.timezone,
+          date: active.date,
+        }
+      : null,
+  };
+};
+
+/**
+ * List attendance records for a user (agent). No joining-date filter.
+ */
+const listByUser = async (userId, query = {}) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const { startDate, endDate, limit = 100, page = 1 } = query;
+  const filter = { user: userId, isActive: true };
+
+  filter.date = {};
+  if (startDate) filter.date.$gte = getUtcMidnight(startDate);
+  filter.date.$lte = endDate ? getUtcMidnight(endDate) : getUtcMidnight(new Date());
+
+  const skip = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(500, Math.max(1, parseInt(limit, 10)));
+  const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10)));
+
+  const [rawResults, total] = await Promise.all([
+    Attendance.find(filter).sort({ date: -1, punchIn: -1 }).skip(skip).limit(limitNum).lean(),
+    Attendance.countDocuments(filter),
+  ]);
+
+  const results = rawResults.map((r) => {
+    let duration = r.duration;
+    if ((duration == null || duration === 0) && r.punchOut && r.punchIn) {
+      const computed = new Date(r.punchOut).getTime() - new Date(r.punchIn).getTime();
+      if (computed > 0) {
+        duration = computed;
+        Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
+      }
+    }
+    return {
+      ...r,
+      student: r.user,
+      duration: duration != null ? duration : r.duration,
+      id: r._id?.toString?.() ?? r.id,
+    };
+  });
+
+  return {
+    results,
+    page: parseInt(page, 10),
+    limit: limitNum,
+    totalPages: Math.ceil(total / limitNum),
+    totalResults: total,
+  };
+};
+
+/**
+ * Get statistics for a user (agent). Same shape as getStatistics.
+ */
+const getStatisticsByUser = async (userId, query = {}) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  const { startDate, endDate } = query;
+  const filter = { user: userId, isActive: true, punchOut: { $ne: null } };
+  if (startDate || endDate) {
+    filter.date = {};
+    if (startDate) filter.date.$gte = getUtcMidnight(startDate);
+    if (endDate) filter.date.$lte = getUtcMidnight(endDate);
+  }
+
+  const records = await Attendance.find(filter).select('duration punchIn punchOut timezone').lean();
+  const totalMs = records.reduce((sum, r) => sum + (r.duration || 0), 0);
+  const totalHours = Math.round((totalMs / (1000 * 60 * 60)) * 100) / 100;
+
+  const now = new Date();
+  const weekStart = getUtcMidnight(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
+  const monthStart = getUtcMidnight(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
+  const weekMs = records.filter((r) => r.date >= weekStart).reduce((s, r) => s + (r.duration || 0), 0);
+  const monthMs = records.filter((r) => r.date >= monthStart).reduce((s, r) => s + (r.duration || 0), 0);
+  const totalHoursWeek = Math.round((weekMs / (1000 * 60 * 60)) * 100) / 100;
+  const totalHoursMonth = Math.round((monthMs / (1000 * 60 * 60)) * 100) / 100;
+
+  const sessionsWithDuration = records.filter((r) => r.duration != null && r.duration > 0);
+  const averageSessionMinutes = sessionsWithDuration.length
+    ? Math.round(sessionsWithDuration.reduce((s, r) => s + r.duration, 0) / sessionsWithDuration.length / 60000)
+    : null;
+
+  const workStartHour = Number(process.env.ATTENDANCE_WORK_START_HOUR) || DEFAULT_WORK_START_HOUR;
+  const workEndHour = Number(process.env.ATTENDANCE_WORK_END_HOUR) || DEFAULT_WORK_END_HOUR;
+  let latePunchInCount = 0;
+  let earlyPunchOutCount = 0;
+  for (const r of records) {
+    const tz = r.timezone || 'UTC';
+    if (r.punchIn) {
+      const hour = getLocalHourInTz(r.punchIn, tz);
+      if (hour > workStartHour) latePunchInCount += 1;
+    }
+    if (r.punchOut) {
+      const hour = getLocalHourInTz(r.punchOut, tz);
+      if (hour < workEndHour) earlyPunchOutCount += 1;
+    }
+  }
+
+  return {
+    totalDays: records.length,
+    totalHours,
+    totalMinutes: Math.round(totalMs / (1000 * 60)),
+    totalHoursWeek,
+    totalHoursMonth,
+    averageSessionMinutes,
+    latePunchInCount,
+    earlyPunchOutCount,
+  };
+};
+
+/**
  * Get track list: all students with their current/latest punch status (punch in, punch out, timezone).
  * For use on admin "Track Attendance" page. Requires students to be listed separately (caller has students.read).
  * @param {Object} options - { search?: string } - optional filter by name, email, employeeId
@@ -916,6 +1167,7 @@ const assignLeavesToStudents = async (studentIds, dates, leaveType, notes, _user
         timezone: 'UTC',
         notes: noteText,
         status: 'Leave',
+        leaveType,
         isActive: true,
       });
       createdRecords.push({
@@ -1084,6 +1336,11 @@ export default {
   punchIn,
   punchOut,
   getCurrentPunchStatus,
+  punchInByUser,
+  punchOutByUser,
+  getCurrentPunchStatusByUser,
+  listByUser,
+  getStatisticsByUser,
   listByStudent,
   getStatistics,
   getTrackList,

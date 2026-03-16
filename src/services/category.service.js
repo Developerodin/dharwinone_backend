@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import Category from '../models/category.model.js';
+import TrainingModule from '../models/trainingModule.model.js';
 
 /**
  * Create a category
@@ -15,7 +16,7 @@ const createCategory = async (categoryBody) => {
 };
 
 /**
- * Query for categories
+ * Query for categories (with module count per category)
  * @param {Object} filter - Mongo filter (name, search)
  * @param {Object} options - Query options
  * @param {string} [options.sortBy] - Sort option in the format: sortField:(desc|asc)
@@ -34,6 +35,32 @@ const queryCategories = async (filter, options) => {
     ];
   }
   const categories = await Category.paginate(mongoFilter, options);
+  if (!categories.results || categories.results.length === 0) {
+    return categories;
+  }
+  try {
+    const categoryIds = categories.results.map((c) => c._id ?? c.id).filter(Boolean);
+    if (categoryIds.length === 0) return categories;
+    const counts = await TrainingModule.aggregate([
+      { $match: { categories: { $in: categoryIds } } },
+      { $unwind: '$categories' },
+      { $match: { categories: { $in: categoryIds } } },
+      { $group: { _id: '$categories', count: { $sum: 1 } } },
+    ]);
+    const countByCategoryId = new Map(counts.map((r) => [String(r._id), r.count]));
+    categories.results = categories.results.map((cat) => {
+      const id = cat._id ?? cat.id;
+      const moduleCount = id ? (countByCategoryId.get(String(id)) ?? 0) : 0;
+      const plain = typeof cat.toJSON === 'function' ? cat.toJSON() : { id: cat.id ?? cat._id, name: cat.name, createdAt: cat.createdAt, updatedAt: cat.updatedAt };
+      return { ...plain, moduleCount };
+    });
+  } catch (_err) {
+    // If module count fails, return plain category objects without moduleCount (frontend shows 0)
+    categories.results = categories.results.map((cat) => {
+      const plain = typeof cat.toJSON === 'function' ? cat.toJSON() : { id: cat.id ?? cat._id, name: cat.name, createdAt: cat.createdAt, updatedAt: cat.updatedAt };
+      return { ...plain, moduleCount: 0 };
+    });
+  }
   return categories;
 };
 

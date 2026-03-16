@@ -9,8 +9,27 @@ import attendanceController from '../../controllers/attendance.controller.js';
 
 const router = express.Router();
 
-// Get current user's student for attendance (Candidate, Agent, Student, etc. - auto-creates if needed). Admins get 404.
+// Get current user's attendance identity (Student or user for Agent). Admins get 404.
 router.get('/me', auth(), attendanceController.getMyStudentForAttendance);
+
+// User-based attendance (Agent without Student): /me endpoints — auth only; 403 if not allowed
+router.post(
+  '/punch-in/me',
+  auth(),
+  attendancePunchLimiter,
+  validate(attendanceValidation.punchInMe),
+  attendanceController.punchInMe
+);
+router.post(
+  '/punch-out/me',
+  auth(),
+  attendancePunchLimiter,
+  validate(attendanceValidation.punchOutMe),
+  attendanceController.punchOutMe
+);
+router.get('/status/me', auth(), attendanceController.getStatusMe);
+router.get('/student/me', auth(), validate(attendanceValidation.listAttendanceMe), attendanceController.getStudentAttendanceMe);
+router.get('/statistics/me', auth(), validate(attendanceValidation.getStatisticsMe), attendanceController.getStatisticsMe);
 
 // Track list and history: admin only (students.manage) - agents see punch UI only
 router.get('/track', auth(), requirePermissions('students.manage'), validate(attendanceValidation.trackList), attendanceController.getTrackList);

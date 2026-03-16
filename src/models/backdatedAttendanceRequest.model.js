@@ -17,12 +17,25 @@ const backdatedAttendanceRequestSchema = mongoose.Schema(
     student: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Student',
-      required: true,
+      required: false,
+      index: true,
+    },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false,
       index: true,
     },
     studentEmail: {
       type: String,
-      required: true,
+      required: false,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    userEmail: {
+      type: String,
+      required: false,
       lowercase: true,
       trim: true,
       index: true,
@@ -59,8 +72,20 @@ const backdatedAttendanceRequestSchema = mongoose.Schema(
 
 backdatedAttendanceRequestSchema.index({ student: 1, status: 1 });
 backdatedAttendanceRequestSchema.index({ student: 1, createdAt: -1 });
+backdatedAttendanceRequestSchema.index({ user: 1, status: 1 });
+backdatedAttendanceRequestSchema.index({ user: 1, createdAt: -1 });
 backdatedAttendanceRequestSchema.index({ status: 1, createdAt: -1 });
 backdatedAttendanceRequestSchema.index({ studentEmail: 1, status: 1 });
+backdatedAttendanceRequestSchema.index({ userEmail: 1, status: 1 });
+
+backdatedAttendanceRequestSchema.pre('save', function (next) {
+  const hasStudent = this.student != null;
+  const hasUser = this.user != null;
+  if (hasStudent === hasUser) {
+    return next(new Error('Exactly one of student or user must be set'));
+  }
+  next();
+});
 
 backdatedAttendanceRequestSchema.plugin(toJSON);
 backdatedAttendanceRequestSchema.plugin(paginate);

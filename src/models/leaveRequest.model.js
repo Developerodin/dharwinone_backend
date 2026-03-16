@@ -72,6 +72,16 @@ leaveRequestSchema.index({ studentEmail: 1, status: 1 });
 leaveRequestSchema.plugin(toJSON);
 leaveRequestSchema.plugin(paginate);
 
+// Restore createdAt/updatedAt in API response (toJSON plugin removes them by default)
+const leaveRequestToJSON = leaveRequestSchema.options.toJSON?.transform;
+leaveRequestSchema.options.toJSON = leaveRequestSchema.options.toJSON || {};
+leaveRequestSchema.options.toJSON.transform = function (doc, ret, options) {
+  if (leaveRequestToJSON) leaveRequestToJSON(doc, ret, options);
+  ret.createdAt = doc.createdAt;
+  ret.updatedAt = doc.updatedAt;
+  return ret;
+};
+
 const LeaveRequest = mongoose.model('LeaveRequest', leaveRequestSchema);
 
 export default LeaveRequest;

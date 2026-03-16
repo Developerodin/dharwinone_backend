@@ -3,6 +3,7 @@ import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import {
   createBackdatedAttendanceRequest,
+  createBackdatedAttendanceRequestForUser,
   queryBackdatedAttendanceRequests,
   getBackdatedAttendanceRequestById,
   approveBackdatedAttendanceRequest,
@@ -10,6 +11,7 @@ import {
   updateBackdatedAttendanceRequest,
   cancelBackdatedAttendanceRequest,
   getBackdatedAttendanceRequestsByStudentId,
+  getBackdatedAttendanceRequestsByUserId,
 } from '../services/backdatedAttendanceRequest.service.js';
 
 const create = catchAsync(async (req, res) => {
@@ -115,8 +117,34 @@ const getByStudent = catchAsync(async (req, res) => {
   });
 });
 
+const createMe = catchAsync(async (req, res) => {
+  const { attendanceEntries, notes } = req.body;
+  const userId = req.user.id || req.user._id?.toString?.();
+
+  const request = await createBackdatedAttendanceRequestForUser(userId, attendanceEntries, notes, req.user);
+
+  res.status(httpStatus.CREATED).send({
+    success: true,
+    message: 'Backdated attendance request created successfully',
+    data: request,
+  });
+});
+
+const getByUserMe = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id?.toString?.();
+  const options = pick(req.query, ['sortBy', 'limit', 'page', 'status']);
+
+  const result = await getBackdatedAttendanceRequestsByUserId(userId, options, req.user);
+
+  res.status(httpStatus.OK).send({
+    success: true,
+    data: result,
+  });
+});
+
 export {
   create,
+  createMe,
   list,
   get,
   approve,
@@ -124,4 +152,5 @@ export {
   update,
   cancel,
   getByStudent,
+  getByUserMe,
 };

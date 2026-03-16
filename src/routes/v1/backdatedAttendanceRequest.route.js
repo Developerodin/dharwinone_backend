@@ -8,6 +8,19 @@ import * as backdatedAttendanceRequestController from '../../controllers/backdat
 const router = express.Router();
 
 router
+  .route('/me')
+  .post(
+    auth(),
+    validate(backdatedAttendanceRequestValidation.createBackdatedAttendanceRequestMe),
+    backdatedAttendanceRequestController.createMe
+  )
+  .get(
+    auth(),
+    validate(backdatedAttendanceRequestValidation.getBackdatedAttendanceRequestsByUserMe),
+    backdatedAttendanceRequestController.getByUserMe
+  );
+
+router
   .route('/student/:studentId')
   .post(
     auth(),

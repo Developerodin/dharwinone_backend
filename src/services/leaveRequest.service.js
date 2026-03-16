@@ -2,8 +2,23 @@ import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import LeaveRequest from '../models/leaveRequest.model.js';
 import Student from '../models/student.model.js';
+import Role from '../models/role.model.js';
 import attendanceService from './attendance.service.js';
 import pick from '../utils/pick.js';
+
+/** Sync check: legacy user.role field */
+const isAdminByRole = (user) => user.role === 'admin' || user.role === 'Administrator';
+
+/** Async: user can manage leave requests (Administrator or Agent via roleIds, or legacy admin role) */
+const isAdminUser = async (user) => {
+  if (isAdminByRole(user)) return true;
+  const roleIds = user.roleIds || [];
+  if (roleIds.length === 0) return false;
+  const role = await Role.findOne(
+    { _id: { $in: roleIds }, name: { $in: ['Administrator', 'Agent'] }, status: 'active' }
+  );
+  return !!role;
+};
 
 /**
  * Create a leave request
@@ -20,7 +35,7 @@ const createLeaveRequest = async (studentId, dates, leaveType, notes, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (user.role !== 'admin' && String(student.user?._id || student.user) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(student.user?._id || student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only create leave requests for yourself');
   }
 
@@ -76,14 +91,14 @@ const createLeaveRequest = async (studentId, dates, leaveType, notes, user) => {
     requestedBy: user.id,
   });
 
-  return leaveRequest.populate('student', 'user').populate('requestedBy', 'name email');
+  return leaveRequest.populate([{ path: 'student', select: 'user' }, { path: 'requestedBy', select: 'name email' }]);
 };
 
 /**
  * Query leave requests (non-admin: only students owned by user)
  */
 const queryLeaveRequests = async (filter, options, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     const students = await Student.find({ user: user.id }).select('_id');
     const studentIds = students.map((s) => s._id);
     if (studentIds.length === 0) {
@@ -101,15 +116,12 @@ const queryLeaveRequests = async (filter, options, user) => {
   const leaveRequests = await LeaveRequest.paginate(filter, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
-  });
-
-  if (leaveRequests.results?.length > 0) {
-    await LeaveRequest.populate(leaveRequests.results, [
+    populate: [
       { path: 'student', select: 'user', populate: { path: 'user', select: 'name email' } },
       { path: 'requestedBy', select: 'name email' },
       { path: 'reviewedBy', select: 'name email' },
-    ]);
-  }
+    ],
+  });
 
   return leaveRequests;
 };
@@ -131,7 +143,7 @@ const getLeaveRequestById = async (id, user) => {
   }
 
   const studentUserId = leaveRequest.student?.user?._id || leaveRequest.student?.user;
-  if (user.role !== 'admin' && String(studentUserId) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
@@ -142,7 +154,7 @@ const getLeaveRequestById = async (id, user) => {
  * Approve leave request and assign leave via attendance service
  */
 const approveLeaveRequest = async (requestId, adminComment, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can approve leave requests');
   }
 
@@ -186,7 +198,7 @@ const approveLeaveRequest = async (requestId, adminComment, user) => {
       success: true,
       message: 'Leave request approved and leave assigned successfully',
       data: {
-        leaveRequest: await leaveRequest.populate('requestedBy', 'name email').populate('reviewedBy', 'name email'),
+        leaveRequest: await leaveRequest.populate([{ path: 'requestedBy', select: 'name email' }, { path: 'reviewedBy', select: 'name email' }]),
         leaveAssignment: assignResult,
       },
     };
@@ -204,7 +216,7 @@ const approveLeaveRequest = async (requestId, adminComment, user) => {
  * Reject leave request
  */
 const rejectLeaveRequest = async (requestId, adminComment, user) => {
-  if (user.role !== 'admin') {
+  if (!(await isAdminUser(user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can reject leave requests');
   }
 
@@ -235,10 +247,11 @@ const rejectLeaveRequest = async (requestId, adminComment, user) => {
     link: '/settings/attendance/leave-requests',
   }).catch(() => {});
 
-  return leaveRequest
-    .populate('student', 'user')
-    .populate('requestedBy', 'name email')
-    .populate('reviewedBy', 'name email');
+  return leaveRequest.populate([
+    { path: 'student', select: 'user' },
+    { path: 'requestedBy', select: 'name email' },
+    { path: 'reviewedBy', select: 'name email' },
+  ]);
 };
 
 /**
@@ -252,7 +265,7 @@ const cancelLeaveRequest = async (requestId, user) => {
   }
 
   const studentUserId = leaveRequest.student?.user?._id ?? leaveRequest.student?.user;
-  if (user.role !== 'admin' && String(studentUserId) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only cancel your own leave requests');
   }
 
@@ -263,10 +276,18 @@ const cancelLeaveRequest = async (requestId, user) => {
     );
   }
 
-  leaveRequest.status = 'cancelled';
-  await leaveRequest.save();
+  // Update only status so we don't re-run full document validation (avoids errors when
+  // required fields like studentEmail are missing on legacy docs or altered by populate)
+  const updated = await LeaveRequest.findByIdAndUpdate(
+    requestId,
+    { status: 'cancelled' },
+    { new: true, runValidators: false }
+  );
 
-  return leaveRequest.populate('requestedBy', 'name email');
+  return updated.populate([
+    { path: 'student', select: 'user' },
+    { path: 'requestedBy', select: 'name email' },
+  ]);
 };
 
 /**
@@ -278,7 +299,7 @@ const getLeaveRequestsByStudentId = async (studentId, options = {}, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (user.role !== 'admin' && String(student.user) !== String(user.id)) {
+  if (!(await isAdminUser(user)) && String(student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
