@@ -37,6 +37,7 @@ router
 
 router
   .route('/salary-slips/:candidateId/:salarySlipIndex')
+  .get(...canRead, validate(candidateValidation.downloadSalarySlip), candidateController.downloadSalarySlip)
   .patch(...canRead, validate(candidateValidation.updateSalarySlip), candidateController.updateSalarySlip)
   .delete(...canRead, validate(candidateValidation.deleteSalarySlip), candidateController.deleteSalarySlip);
 

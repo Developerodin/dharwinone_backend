@@ -54,6 +54,14 @@
 - **User-based:** `punchInByUser`, `punchOutByUser`, `getCurrentPunchStatusByUser`, `listByUser`, `getStatisticsByUser` (filter by `user`).
 - **Model:** `Attendance` has optional `student` and `user`; validation ensures exactly one of them is set.
 
+### 2.3.1 Timer vs stored duration (student punch)
+
+- **Shift overlap math:** [`src/utils/attendanceDuration.js`](../src/utils/attendanceDuration.js) exports `computeDurationMs(punchIn, punchOut, shift)`. Used on student **punch-out** and for **live preview** on status.
+- **Live UI “Session” timer:** Wall time since `punchIn`, shown with seconds; corrects when the tab becomes visible again (timers are throttled in background tabs).
+- **Stored `duration`:** Same overlap as above when the student has a shift; otherwise full `punchOut − punchIn`. User-based punch-out uses the same helper with `shift: null` (raw ms).
+- **GET `/training/attendance/status/:studentId` (and `/status/me`):** While punched in, includes `elapsedPreview: { sessionMs, eligibleMs }` and `shift` (students). `eligibleMs` matches what punch-out would record up to “now”. Clients poll status every ~15s while punched in so `eligibleMs` stays fresh.
+- **Tests:** `npm run test:attendance-duration` runs Node tests on `computeDurationMs` (raw vs shift-clipped overlap).
+
 ### 2.4 Backdated Attendance Requests
 
 - **Student-based:** `POST/GET /backdated-attendance-requests/student/:studentId` — create/list by studentId (Student / Candidate with Student).

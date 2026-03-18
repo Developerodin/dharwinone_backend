@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import config from '../../config/config.js';
 import EmailAccount from '../../models/emailAccount.model.js';
-import logger from '../../config/logger.js';
+import { MAX_GMAIL_ACCOUNTS_PER_USER } from '../../constants/emailAccountLimits.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -59,6 +59,17 @@ export async function handleCallback(code, userId) {
     existing.status = 'active';
     await existing.save();
     return existing;
+  }
+
+  const activeGmailCount = await EmailAccount.countDocuments({
+    user: userId,
+    provider: 'gmail',
+    status: 'active',
+  });
+  if (activeGmailCount >= MAX_GMAIL_ACCOUNTS_PER_USER) {
+    throw new Error(
+      `Maximum of ${MAX_GMAIL_ACCOUNTS_PER_USER} Gmail accounts allowed. Disconnect one to add another.`
+    );
   }
 
   return EmailAccount.create({
@@ -181,7 +192,7 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
       return {
         id: t.id,
         threadId: t.id,
-        snippet: t.snippet || '',
+        snippet: stripTags(t.snippet || ''),
         from: lastH.from || firstH.from || '',
         to: lastH.to || firstH.to || '',
         subject: firstH.subject || '(No subject)',
@@ -365,7 +376,7 @@ export async function getMessage(account, messageId) {
     id: msg.id,
     threadId: msg.threadId,
     labelIds: msg.labelIds || [],
-    snippet: msg.snippet || '',
+    snippet: stripTags(msg.snippet || ''),
     from: headers.from || '',
     to: headers.to || '',
     cc: headers.cc || '',
@@ -397,6 +408,14 @@ export async function getAttachment(account, messageId, attachmentId) {
   return res.data.data;
 }
 
+function stripTags(str) {
+  if (!str) return '';
+  return str
+    .replace(/<[^>]*>?/gm, '')
+    .replace(/&lt;[^&]*&gt;/gm, '')
+    .replace(/&[a-z0-9#]+;/gi, ' ');
+}
+
 /** Wrap a base64 string at 76 chars per line (RFC 2045). */
 function wrapBase64(b64) {
   return b64.replace(/.{76}/g, '$&\r\n');
@@ -416,12 +435,14 @@ function unescapeHtml(s) {
 /** Strip HTML tags for plain-text fallback. */
 function htmlToPlainText(html) {
   if (!html || typeof html !== 'string') return '';
-  return unescapeHtml(html)
+  return html
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
+    .replace(/<[^>]*>?/gm, '')           // Strip actual tags
+    .replace(/&lt;[^&]*&gt;/gm, '')      // Strip encoded tags
     .replace(/&nbsp;/g, ' ')
+    .replace(/&[a-z0-9#]+;/gi, ' ')      // Other entities
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

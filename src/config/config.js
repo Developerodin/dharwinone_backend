@@ -4,10 +4,12 @@ import { fileURLToPath } from 'url';
 import Joi from 'joi';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Load backend root .env (always relative to this file, not process.cwd())
 const envPath = path.resolve(__dirname, '../../.env');
 dotenv.config({ path: envPath, override: true });
+// If LiveKit keys still missing, merge cwd .env without overriding (avoids parent-folder .env wiping GCP_* etc.)
 if (!process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) {
-  dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
+  dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: false });
 }
 
 const envVarsSchema = Joi.object()
@@ -70,6 +72,12 @@ const envVarsSchema = Joi.object()
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
 
+    // Microsoft / Outlook OAuth
+    MICROSOFT_CLIENT_ID: Joi.string().optional().description('Microsoft OAuth client ID (for Outlook)'),
+    MICROSOFT_CLIENT_SECRET: Joi.string().optional().description('Microsoft OAuth client secret'),
+    MICROSOFT_REDIRECT_URI: Joi.string().optional().description('Microsoft OAuth redirect URI'),
+    MICROSOFT_TENANT_ID: Joi.string().optional().default('common').description('Microsoft tenant ID (common for multi-tenant)'),
+
     // Auth rate limit (deployed apps often share IPs; increase to avoid 429 on sign-in)
     RATE_LIMIT_AUTH_WINDOW_MINUTES: Joi.number().optional().default(15).description('Auth rate limit window in minutes'),
     RATE_LIMIT_AUTH_MAX: Joi.number().optional().default(500).description('Max failed auth requests per window per IP'),
@@ -81,6 +89,14 @@ const { value: envVars, error } = envVarsSchema.prefs({ errors: { label: 'key' }
 if (error) {
   throw new Error(`Config validation error: ${error.message}`);
 }
+
+const resolvedBackendPublicUrl = (
+  envVars.BACKEND_PUBLIC_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
+  `http://localhost:${envVars.PORT}`
+).replace(/\/$/, '');
 
 const config = {
   env: envVars.NODE_ENV,
@@ -121,13 +137,7 @@ const config = {
     envVars.APP_URL ||
     'http://localhost:3001'
   ).replace(/\/$/, ''),
-  backendPublicUrl: (
-    envVars.BACKEND_PUBLIC_URL ||
-    process.env.RENDER_EXTERNAL_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
-    `http://localhost:${envVars.PORT}`
-  ).replace(/\/$/, ''),
+  backendPublicUrl: resolvedBackendPublicUrl,
   openai: {
     apiKey: envVars.OPENAI_API_KEY || '',
   },
@@ -137,7 +147,38 @@ const config = {
   google: {
     clientId: envVars.GCP_GOOGLE_CLIENT_ID || '',
     clientSecret: envVars.GCP_GOOGLE_CLIENT_SECRET || '',
-    redirectUri: envVars.GCP_GOOGLE_REDIRECT_URI || `http://localhost:${envVars.PORT}/v1/email/auth/google/callback`,
+    redirectUri: (() => {
+      const fromEnv = (envVars.GCP_GOOGLE_REDIRECT_URI || '').trim();
+      const fallback = `http://localhost:${envVars.PORT}/v1/email/auth/google/callback`;
+      if (!fromEnv && (envVars.GCP_GOOGLE_CLIENT_ID || '').trim()) {
+        // eslint-disable-next-line no-console -- startup OAuth redirect hint
+        console.warn(
+          `[config] GCP_GOOGLE_REDIRECT_URI is missing or empty — Gmail OAuth will use ${fallback}. ` +
+            `Set GCP_GOOGLE_REDIRECT_URI in ${envPath}`
+        );
+      }
+      return fromEnv || fallback;
+    })(),
+  },
+  microsoft: {
+    clientId: envVars.MICROSOFT_CLIENT_ID || '',
+    clientSecret: envVars.MICROSOFT_CLIENT_SECRET || '',
+    redirectUri: (() => {
+      const fromEnv = (envVars.MICROSOFT_REDIRECT_URI || '').trim();
+      const fallback = `${resolvedBackendPublicUrl}/v1/outlook/auth/microsoft/callback`;
+      if (!fromEnv && (envVars.MICROSOFT_CLIENT_ID || '').trim()) {
+        // eslint-disable-next-line no-console -- startup OAuth redirect hint
+        console.warn(
+          `[config] MICROSOFT_REDIRECT_URI is missing or empty — Outlook OAuth will use ${fallback} (Outlook API). ` +
+            `Set MICROSOFT_REDIRECT_URI in ${envPath} or BACKEND_PUBLIC_URL.`
+        );
+      }
+      return fromEnv || fallback;
+    })(),
+    tenantId: (() => {
+      const t = (envVars.MICROSOFT_TENANT_ID || 'common').trim();
+      return t || 'common';
+    })(),
   },
   aws: {
     accessKeyId: envVars.AWS_ACCESS_KEY_ID,

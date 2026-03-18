@@ -1,13 +1,7 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
-const accountIdParam = {
-  params: Joi.object().keys({
-    id: Joi.string().custom(objectId).required(),
-  }),
-};
-
-const listAccounts = {};
+const listGmailAccounts = {};
 
 const getGoogleAuthUrl = {};
 
@@ -17,7 +11,7 @@ const googleCallback = {
       code: Joi.string().required(),
       state: Joi.string().required(),
     })
-    .unknown(true), // Allow extra params from Google: iss, scope, authuser, hd, prompt, etc.
+    .unknown(true),
 };
 
 const listMessages = {
@@ -190,7 +184,7 @@ const disconnectAccount = {
 };
 
 export {
-  listAccounts,
+  listGmailAccounts,
   getGoogleAuthUrl,
   googleCallback,
   disconnectAccount,

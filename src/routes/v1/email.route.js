@@ -3,24 +3,49 @@ import config from '../../config/config.js';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import * as emailValidation from '../../validations/email.validation.js';
+import * as outlookValidation from '../../validations/outlook.validation.js';
 import * as emailController from '../../controllers/email.controller.js';
+import * as outlookController from '../../controllers/outlook.controller.js';
+import logger from '../../config/logger.js';
 
 const router = express.Router();
 
 // Google OAuth callback - no auth (redirect from Google)
 // If opened without code/state (e.g. direct visit), redirect to frontend instead of 400
 router.get('/auth/google/callback', (req, res, next) => {
+  logger.info('[Gmail] Callback received query: %o', req.query);
   if (!req.query?.code || !req.query?.state) {
+    if (req.query?.error) {
+      logger.error('[Gmail] Google returned error: %s (%s)', req.query.error, req.query.error_description || 'no description');
+    }
     return res.redirect(`${config.frontendBaseUrl}/communication/email?error=missing_callback_params`);
   }
   next();
 }, validate(emailValidation.googleCallback), emailController.googleCallback);
 
+/** @deprecated Prefer `/v1/outlook/auth/microsoft/callback` in Azure; same OAuth handler. */
+function outlookMicrosoftCallbackGuard(req, res, next) {
+  logger.info('[Outlook-Legacy] Callback received query: %o', req.query);
+  if (!req.query?.code || !req.query?.state) {
+    if (req.query?.error) {
+       logger.error('[Outlook-Legacy] Microsoft returned error: %s (%s)', req.query.error, req.query.error_description || 'no description');
+    }
+    return res.redirect(`${config.frontendBaseUrl}/communication/email?error=missing_callback_params`);
+  }
+  next();
+}
+router.get(
+  ['/auth/microsoft/callback', '/auth/microsoft/callback/'],
+  outlookMicrosoftCallbackGuard,
+  validate(outlookValidation.microsoftCallback),
+  outlookController.microsoftCallback
+);
+
 router.use(auth());
 
-router.get('/accounts', validate(emailValidation.listAccounts), emailController.listAccounts);
+router.get('/accounts', validate(emailValidation.listGmailAccounts), emailController.listGmailAccounts);
 router.get('/auth/google', validate(emailValidation.getGoogleAuthUrl), emailController.getGoogleAuthUrl);
-router.delete('/accounts/:id', validate(emailValidation.disconnectAccount), emailController.disconnectAccount);
+router.delete('/accounts/:id', validate(emailValidation.disconnectAccount), emailController.disconnectGmailAccount);
 
 router.get('/messages', validate(emailValidation.listMessages), emailController.listMessages);
 router.get('/threads', validate(emailValidation.listThreads), emailController.listThreads);

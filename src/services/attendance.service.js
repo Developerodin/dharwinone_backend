@@ -6,77 +6,9 @@ import User from '../models/user.model.js';
 import Candidate from '../models/candidate.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
+import { computeDurationMs } from '../utils/attendanceDuration.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-/**
- * Get UTC timestamps for shift start and end on the given date in shift timezone.
- * @param {Date} refDate - Reference date (e.g. punch-in or attendance date)
- * @param {string} startTime - "HH:mm" (24h)
- * @param {string} endTime - "HH:mm" (24h); if < startTime, end is next day
- * @param {string} shiftTimezone - IANA timezone (e.g. "Asia/Kolkata")
- * @returns {{ startUtc: Date, endUtc: Date }}
- */
-function getShiftWindowUtc(refDate, startTime, endTime, shiftTimezone) {
-  const tz = shiftTimezone && shiftTimezone.trim() ? shiftTimezone.trim() : 'UTC';
-  const [startH = 0, startM = 0] = (startTime || '00:00').toString().split(':').map(Number);
-  const [endH = 0, endM = 0] = (endTime || '23:59').toString().split(':').map(Number);
-
-  const dateFmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-  const parts = dateFmt.formatToParts(refDate);
-  const getPart = (name) => parts.find((p) => p.type === name)?.value;
-  const y = parseInt(getPart('year'), 10);
-  const m = parseInt(getPart('month'), 10) - 1;
-  const d = parseInt(getPart('day'), 10);
-
-  const toUtcForLocalTime = (yy, mm, dd, hour, minute) => {
-    let guess = new Date(Date.UTC(yy, mm, dd, hour, minute, 0, 0));
-    for (let i = 0; i < 3; i++) {
-      const fmt = new Intl.DateTimeFormat('en', { timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false });
-      const str = fmt.format(guess);
-      const [gH, gM] = str.split(':').map(Number);
-      const diffMs = ((gH - hour) * 60 + (gM - minute)) * 60 * 1000;
-      guess = new Date(guess.getTime() - diffMs);
-    }
-    return guess;
-  };
-
-  const startUtc = toUtcForLocalTime(y, m, d, startH, startM);
-  let endUtc = toUtcForLocalTime(y, m, d, endH, endM);
-  if (endUtc.getTime() <= startUtc.getTime()) {
-    const nextRef = new Date(Date.UTC(y, m, d + 1, 12, 0, 0));
-    const nextParts = dateFmt.formatToParts(nextRef);
-    const ny = parseInt(nextParts.find((p) => p.type === 'year')?.value, 10);
-    const nm = parseInt(nextParts.find((p) => p.type === 'month')?.value, 10) - 1;
-    const nd = parseInt(nextParts.find((p) => p.type === 'day')?.value, 10);
-    endUtc = toUtcForLocalTime(ny, nm, nd, endH, endM);
-  }
-  return { startUtc, endUtc };
-}
-
-/**
- * Compute attendance duration in ms. If student has a shift, only time within shift window counts.
- * @param {Date} punchIn
- * @param {Date} punchOut
- * @param {{ startTime: string, endTime: string, timezone: string } | null} shift
- * @returns {number} duration in milliseconds
- */
-function computeDurationMs(punchIn, punchOut, shift) {
-  const rawMs = punchOut.getTime() - punchIn.getTime();
-  if (!shift || !shift.startTime || !shift.endTime || !shift.timezone) {
-    return rawMs;
-  }
-  const { startUtc, endUtc } = getShiftWindowUtc(punchIn, shift.startTime, shift.endTime, shift.timezone);
-  const overlapStart = Math.max(punchIn.getTime(), startUtc.getTime());
-  const overlapEnd = Math.min(punchOut.getTime(), endUtc.getTime());
-  const overlapMs = Math.max(0, overlapEnd - overlapStart);
-  // Fallback: if shift overlap is 0 but we have valid punch in/out (e.g. timezone mismatch
-  // when admin adds backdated attendance from different TZ), use raw duration so hours show.
-  if (overlapMs === 0 && rawMs > 0) {
-    return rawMs;
-  }
-  return overlapMs;
-}
 
 /** Get UTC midnight for a given date (used as attendance "date") */
 const getUtcMidnight = (d) => {
@@ -222,10 +154,20 @@ const punchOut = async (studentId, body = {}) => {
  * Get current punch status for a student (active record if any).
  */
 const getCurrentPunchStatus = async (studentId) => {
-  const student = await Student.findById(studentId);
+  const student = await Student.findById(studentId).populate('shift', 'name timezone startTime endTime');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
+
+  const shiftMeta =
+    student.shift?.startTime && student.shift?.endTime && student.shift?.timezone
+      ? {
+          startTime: student.shift.startTime,
+          endTime: student.shift.endTime,
+          timezone: student.shift.timezone,
+          name: student.shift.name || undefined,
+        }
+      : null;
 
   const now = new Date();
   const today = getUtcMidnight(now);
@@ -244,16 +186,29 @@ const getCurrentPunchStatus = async (studentId) => {
     .sort({ punchIn: -1 })
     .lean();
 
+  if (!active) {
+    return {
+      isPunchedIn: false,
+      record: null,
+      elapsedPreview: null,
+      shift: shiftMeta,
+    };
+  }
+
+  const punchIn = new Date(active.punchIn);
+  const sessionMs = Math.max(0, now.getTime() - punchIn.getTime());
+  const eligibleMs = computeDurationMs(punchIn, now, shiftMeta);
+
   return {
-    isPunchedIn: !!active,
-    record: active
-      ? {
-          id: active._id?.toString?.(),
-          punchIn: active.punchIn,
-          timezone: active.timezone,
-          date: active.date,
-        }
-      : null,
+    isPunchedIn: true,
+    record: {
+      id: active._id?.toString?.(),
+      punchIn: active.punchIn,
+      timezone: active.timezone,
+      date: active.date,
+    },
+    elapsedPreview: { sessionMs, eligibleMs },
+    shift: shiftMeta,
   };
 };
 
@@ -492,7 +447,8 @@ const punchOutByUser = async (userId, body = {}) => {
   active.punchOut = punchOutTime;
   if (notes) active.notes = notes;
   active.status = 'Present';
-  active.duration = punchOutTime.getTime() - active.punchIn.getTime();
+  // Same helper as student punch-out; User has no shift today → null → raw ms.
+  active.duration = computeDurationMs(active.punchIn, punchOutTime, null);
   await active.save();
   return active;
 };
@@ -523,16 +479,23 @@ const getCurrentPunchStatusByUser = async (userId) => {
     .sort({ punchIn: -1 })
     .lean();
 
+  if (!active) {
+    return { isPunchedIn: false, record: null, elapsedPreview: null, shift: null };
+  }
+
+  const punchIn = new Date(active.punchIn);
+  const sessionMs = Math.max(0, now.getTime() - punchIn.getTime());
+
   return {
-    isPunchedIn: !!active,
-    record: active
-      ? {
-          id: active._id?.toString?.(),
-          punchIn: active.punchIn,
-          timezone: active.timezone,
-          date: active.date,
-        }
-      : null,
+    isPunchedIn: true,
+    record: {
+      id: active._id?.toString?.(),
+      punchIn: active.punchIn,
+      timezone: active.timezone,
+      date: active.date,
+    },
+    elapsedPreview: { sessionMs, eligibleMs: sessionMs },
+    shift: null,
   };
 };
 

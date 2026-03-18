@@ -29,11 +29,14 @@ const errorHandler = (err, req, res, next) => {
   const response = {
     code: statusCode,
     message,
+    ...(err.subCode && { error: err.subCode }),
+    ...(err.details && { details: err.details }),
     ...(config.env === 'development' && { stack: err.stack }),
   };
 
   if (config.env === 'development') {
-    logger.error(err);
+    logger.error(err?.message || String(err));
+    if (err?.stack) logger.error(err.stack);
   }
 
   res.status(statusCode).send(response);

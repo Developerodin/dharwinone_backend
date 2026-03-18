@@ -278,7 +278,21 @@ const buildAdvancedFilter = (filter) => {
     mongoFilter.email = { $regex: filter.email, $options: 'i' };
   }
   if (filter.employeeId) {
-    mongoFilter.employeeId = { $regex: filter.employeeId, $options: 'i' };
+    const trimmed = String(filter.employeeId).trim();
+    const dbsMatch = trimmed.match(/^DBS(\d+)$/i);
+    if (dbsMatch) {
+      const numStr = dbsMatch[1];
+      const num = parseInt(numStr, 10);
+      if (num >= 1 && num <= 9 && numStr.length === 1) {
+        mongoFilter.employeeId = { $regex: `^DBS0?${num}$`, $options: 'i' };
+      } else {
+        const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        mongoFilter.employeeId = { $regex: escaped, $options: 'i' };
+      }
+    } else {
+      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      mongoFilter.employeeId = { $regex: escaped, $options: 'i' };
+    }
   }
   
   // Skills matching - use MongoDB text index for faster search
@@ -579,6 +593,17 @@ const queryCandidates = async (filter, options) => {
       }
       return candidateObj;
     });
+
+    // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
+    await Promise.all(candidatesWithEmailStatus.map(async (c) => {
+      if (c.profilePicture?.key) {
+        try {
+          c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
+        } catch (e) {
+          logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+        }
+      }
+    }));
     
     return {
       results: candidatesWithEmailStatus,
@@ -639,6 +664,17 @@ const queryCandidates = async (filter, options) => {
         }
         return candidateObj;
       });
+
+      // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
+      await Promise.all(result.results.map(async (c) => {
+        if (c.profilePicture?.key) {
+          try {
+            c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
+          } catch (e) {
+            logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+          }
+        }
+      }));
     }
     
     return result;
@@ -1214,6 +1250,64 @@ const getDocumentDownloadUrl = async (candidateId, documentIndex, user) => {
   
   // No key and no URL - document is invalid
   throw new ApiError(httpStatus.BAD_REQUEST, 'Document key and URL not found. Document may be corrupted.');
+};
+
+/** Get salary slip download URL (generates fresh presigned URL on-demand). */
+const getSalarySlipDownloadUrl = async (candidateId, salarySlipIndex, user) => {
+  const candidate = await Candidate.findById(candidateId);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  if (!isOwnerOrAdmin(user, candidate)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Access denied');
+  }
+  if (salarySlipIndex < 0 || salarySlipIndex >= (candidate.salarySlips?.length ?? 0)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid salary slip index');
+  }
+  const slip = candidate.salarySlips[salarySlipIndex];
+  if (slip.key) {
+    const url = await generatePresignedDownloadUrl(slip.key, 7 * 24 * 3600);
+    return {
+      url,
+      fileName: slip.originalName || `Salary-Slip-${slip.month || 'Unknown'}-${slip.year || 'Unknown'}`,
+      mimeType: slip.mimeType,
+      size: slip.size
+    };
+  }
+  if (slip.documentUrl) {
+    let extractedKey = null;
+    const pattern1 = /https?:\/\/[^/]+\.s3[.-][^/]+\.amazonaws\.com\/([^?]+)/;
+    const match1 = slip.documentUrl.match(pattern1);
+    if (match1) {
+      extractedKey = decodeURIComponent(match1[1]);
+    } else {
+      const pattern2 = /https?:\/\/s3[.-][^/]+\.amazonaws\.com\/[^/]+\/([^?]+)/;
+      const match2 = slip.documentUrl.match(pattern2);
+      if (match2) extractedKey = decodeURIComponent(match2[1]);
+    }
+    if (extractedKey) {
+      try {
+        const url = await generatePresignedDownloadUrl(extractedKey, 7 * 24 * 3600);
+        slip.key = extractedKey;
+        await candidate.save();
+        return {
+          url,
+          fileName: slip.originalName || `Salary-Slip-${slip.month || 'Unknown'}-${slip.year || 'Unknown'}`,
+          mimeType: slip.mimeType,
+          size: slip.size
+        };
+      } catch (e) {
+        logger.warn(`Failed to generate presigned URL for salary slip: ${e?.message}`);
+      }
+    }
+    return {
+      url: slip.documentUrl,
+      fileName: slip.originalName || `Salary-Slip-${slip.month || 'Unknown'}-${slip.year || 'Unknown'}`,
+      mimeType: slip.mimeType,
+      size: slip.size
+    };
+  }
+  throw new ApiError(httpStatus.BAD_REQUEST, 'Salary slip has no file.');
 };
 
 const shareCandidateProfile = async (candidateId, shareData, currentUser) => {
@@ -1882,6 +1976,7 @@ export {
   getDocumentStatus,
   getDocuments,
   getDocumentDownloadUrl,
+  getSalarySlipDownloadUrl,
   getDocumentApiUrl,
   // Profile sharing
   shareCandidateProfile,

@@ -120,8 +120,8 @@ const createCandidate = {
 const getCandidates = {
   query: Joi.object().keys({
     owner: Joi.string().custom(objectId),
-    fullName: Joi.string(),
-    email: Joi.string().email(),
+    fullName: Joi.string().trim(),
+    email: Joi.string().trim(),
     employeeId: Joi.string().trim(),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
@@ -265,6 +265,13 @@ const updateSalarySlip = {
 };
 
 const deleteSalarySlip = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    salarySlipIndex: Joi.number().integer().min(0).required(),
+  }),
+};
+
+const downloadSalarySlip = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
     salarySlipIndex: Joi.number().integer().min(0).required(),
@@ -429,6 +436,7 @@ export {
   addSalarySlip,
   updateSalarySlip,
   deleteSalarySlip,
+  downloadSalarySlip,
   verifyDocument,
   getDocumentStatus,
   getDocuments,

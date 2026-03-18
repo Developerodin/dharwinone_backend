@@ -17,6 +17,7 @@ import {
   getDocumentStatus,
   getDocuments,
   getDocumentDownloadUrl,
+  getSalarySlipDownloadUrl,
   shareCandidateProfile,
   getPublicCandidateProfile,
   resendCandidateVerificationEmail,
@@ -413,7 +414,22 @@ const downloadDocument = catchAsync(async (req, res) => {
   }
 });
 
-export { verifyDocumentStatus, getCandidateDocumentStatus, getCandidateDocuments, downloadDocument };
+const downloadSalarySlip = catchAsync(async (req, res) => {
+  const { candidateId, salarySlipIndex } = req.params;
+  const authContext = await getUserPermissionContext(req.user);
+  req.user.canManageCandidates = authContext?.permissions?.has('candidates.manage') ?? false;
+
+  const data = await getSalarySlipDownloadUrl(candidateId, parseInt(salarySlipIndex, 10), req.user);
+  const acceptsJson = req.headers.accept && req.headers.accept.includes('application/json');
+
+  if (acceptsJson) {
+    res.status(httpStatus.OK).json({ success: true, data: { url: data.url, fileName: data.fileName, mimeType: data.mimeType, size: data.size } });
+  } else {
+    res.redirect(data.url);
+  }
+});
+
+export { verifyDocumentStatus, getCandidateDocumentStatus, getCandidateDocuments, downloadDocument, downloadSalarySlip };
 
 // Share candidate profile controller (per SHARE_CANDIDATE_FORM.md)
 const shareProfile = catchAsync(async (req, res) => {

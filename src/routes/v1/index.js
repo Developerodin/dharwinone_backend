@@ -47,7 +47,9 @@ import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
 import communicationRoute from './communication.route.js';
 import emailRoute from './email.route.js';
+import outlookRoute from './outlook.route.js';
 import supportTicketRoute from './supportTicket.route.js';
+import fileStorageRoute from './fileStorage.route.js';
 
 const router = express.Router();
 
@@ -237,8 +239,16 @@ const defaultRoutes = [
     route: emailRoute,
   },
   {
+    path: '/outlook',
+    route: outlookRoute,
+  },
+  {
     path: '/support-tickets',
     route: supportTicketRoute,
+  },
+  {
+    path: '/file-storage',
+    route: fileStorageRoute,
   },
 ];
 
