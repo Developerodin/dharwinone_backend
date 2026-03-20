@@ -545,7 +545,6 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
     password,
     phoneNumber,
     countryCode,
-    role: 'user', // Keep base role as 'user'
     roleIds: [studentRole._id], // Assign Student role
     status: 'active',
   });
@@ -791,7 +790,6 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
       id: user._id,
       name: user.name,
       email: user.email,
-      role: user.role,
     },
     candidate: {
       id: candidate._id,

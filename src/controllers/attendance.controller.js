@@ -1,9 +1,11 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
+import ApiError from '../utils/ApiError.js';
 import attendanceService from '../services/attendance.service.js';
 import * as studentService from '../services/student.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import Student from '../models/student.model.js';
+import Candidate from '../models/candidate.model.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 /**
@@ -153,6 +155,31 @@ const getStudentAttendance = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+/** User-based attendance (Attendance.user) — e.g. agents without a Student profile */
+const getUserAttendance = catchAsync(async (req, res) => {
+  const result = await attendanceService.listByUser(req.params.userId, req.query);
+  res.send(result);
+});
+
+/** List attendance for a candidate: uses Student records when present, otherwise user-based Attendance.user */
+const getAttendanceByCandidate = catchAsync(async (req, res) => {
+  const candidate = await Candidate.findById(req.params.candidateId).select('owner').lean();
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  const ownerId = candidate.owner?.toString?.();
+  if (!ownerId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Candidate has no owner');
+  }
+  const student = await Student.findOne({ user: ownerId }).select('_id').lean();
+  if (student?._id) {
+    const result = await attendanceService.listByStudent(student._id.toString(), req.query);
+    return res.send(result);
+  }
+  const result = await attendanceService.listByUser(ownerId, req.query);
+  res.send(result);
+});
+
 const getStatistics = catchAsync(async (req, res) => {
   const result = await attendanceService.getStatistics(req.params.studentId, req.query);
   res.send(result);
@@ -210,6 +237,8 @@ export default {
   getStatus,
   getStatusMe,
   getStudentAttendance,
+  getUserAttendance,
+  getAttendanceByCandidate,
   getStudentAttendanceMe,
   getStatistics,
   getStatisticsMe,

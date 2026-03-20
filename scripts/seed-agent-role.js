@@ -23,7 +23,12 @@ if (!MONGODB_URL) {
 }
 
 const AGENT_ROLE_NAME = 'Agent';
-const AGENT_PERMISSIONS = ['training.attendance:view,create,edit'];
+/** Attendance + edit candidate joining / resign dates (syncs with Student for punch eligibility). */
+const AGENT_PERMISSIONS = [
+  'training.attendance:view,create,edit',
+  'ats.candidates.joiningDate:view,edit',
+  'ats.candidates.resignDate:view,edit',
+];
 
 async function run() {
   await mongoose.connect(MONGODB_URL);

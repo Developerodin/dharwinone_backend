@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { getGrantingPermissions } from '../config/permissions.js';
 import Student from '../models/student.model.js';
+import Candidate from '../models/candidate.model.js';
 
 /**
  * Require that the current user is either the student owner (student.user === req.user.id)
@@ -45,6 +46,23 @@ const requireAttendanceAccess = async (req, res, next) => {
   const permissions = req.authContext?.permissions;
   if (permissions && granting.some((p) => permissions.has(p))) {
     return next();
+  }
+
+  /**
+   * Align with GET /candidates/:candidateId/attendance (requireCandidateAttendanceList):
+   * users with candidates.read / candidates.manage may view attendance for the Student profile
+   * whose user is the candidate owner — same person, without requiring students.read.
+   */
+  if (permissions && studentUserId) {
+    const grantingCandidates = getGrantingPermissions('candidates.read').concat(
+      getGrantingPermissions('candidates.manage')
+    );
+    if (grantingCandidates.some((p) => permissions.has(p))) {
+      const linkedCandidate = await Candidate.findOne({ owner: studentUserId }).select('_id').lean();
+      if (linkedCandidate) {
+        return next();
+      }
+    }
   }
 
   return next(new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to access this student\'s attendance'));

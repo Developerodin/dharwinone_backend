@@ -4,10 +4,14 @@ import { createUser } from './user.service.js';
 import { getRoleByName } from './role.service.js';
 
 /**
- * Export recruiters (users with role=recruiter) to Excel
+ * Export recruiters (users with Recruiter role via roleIds) to Excel
  */
 const exportRecruitersToExcel = async () => {
-  const users = await User.find({ role: 'recruiter', status: { $nin: ['deleted'] } })
+  const recruiterRole = await getRoleByName('Recruiter');
+  const query = recruiterRole
+    ? { roleIds: recruiterRole._id, status: { $nin: ['deleted'] } }
+    : { status: 'impossible-match' }; // no recruiter role = no results
+  const users = await User.find(query)
     .select('name email phoneNumber countryCode education domain location profileSummary status createdAt')
     .sort({ createdAt: -1 });
 
@@ -101,7 +105,6 @@ const importRecruitersFromExcel = async (fileBuffer) => {
         name: name.toString().trim(),
         email,
         password,
-        role: 'recruiter',
         isEmailVerified: true,
         status: 'active',
         roleIds: recruiterRole ? [recruiterRole._id] : [],

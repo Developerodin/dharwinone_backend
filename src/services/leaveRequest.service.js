@@ -5,19 +5,11 @@ import Student from '../models/student.model.js';
 import Role from '../models/role.model.js';
 import attendanceService from './attendance.service.js';
 import pick from '../utils/pick.js';
+import { userIsAdminOrAgent } from '../utils/roleHelpers.js';
 
-/** Sync check: legacy user.role field */
-const isAdminByRole = (user) => user.role === 'admin' || user.role === 'Administrator';
-
-/** Async: user can manage leave requests (Administrator or Agent via roleIds, or legacy admin role) */
+/** Async: user can manage leave requests (Administrator or Agent via roleIds) */
 const isAdminUser = async (user) => {
-  if (isAdminByRole(user)) return true;
-  const roleIds = user.roleIds || [];
-  if (roleIds.length === 0) return false;
-  const role = await Role.findOne(
-    { _id: { $in: roleIds }, name: { $in: ['Administrator', 'Agent'] }, status: 'active' }
-  );
-  return !!role;
+  return userIsAdminOrAgent(user);
 };
 
 /**

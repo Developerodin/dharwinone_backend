@@ -127,6 +127,8 @@ const candidateSchema = new mongoose.Schema(
     recruiterFeedback: { type: String, trim: true },
     recruiterRating: { type: Number, min: 1, max: 5 },
     assignedRecruiter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    /** Training staff (Agent role) responsible for this student — Settings → Agents. */
+    assignedAgent: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     joiningDate: { type: Date, index: true },
     resignDate: { type: Date, index: true },
     isActive: { type: Boolean, default: true, index: true },
@@ -192,6 +194,18 @@ candidateSchema.pre('save', function (next) {
     this.isActive = resignDate > now;
   } else if (this.isModified('resignDate') && !this.resignDate) {
     this.isActive = true;
+  }
+  next();
+});
+
+// Resigned candidates must keep their employee ID for records; do not allow clearing or changing it.
+candidateSchema.pre('save', async function (next) {
+  if (this.isNew || !this.resignDate || !this.isModified('employeeId')) return next();
+  try {
+    const existing = await this.constructor.findById(this._id).select('employeeId').lean();
+    if (existing?.employeeId) this.employeeId = existing.employeeId;
+  } catch (err) {
+    return next(err);
   }
   next();
 });

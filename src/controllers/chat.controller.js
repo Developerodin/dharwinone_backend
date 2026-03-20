@@ -1,6 +1,5 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
 import * as chatService from '../services/chat.service.js';
 import { emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated, emitConversationDeleted } from '../services/chatSocket.service.js';
 import { queryUsers } from '../services/user.service.js';
@@ -117,8 +116,7 @@ const listCalls = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
-  const isAdmin = await userIsAdmin(req.user);
-  const result = await chatService.listCalls(userId, { page, limit, isAdmin });
+  const result = await chatService.listCallsForUser(userId, { page, limit });
   res.send(result);
 });
 
@@ -140,12 +138,23 @@ const initiateCall = catchAsync(async (req, res) => {
   const { callType } = req.body;
   const result = await chatService.createCall(req.params.id, userId, { callType });
 
+  const conv = result.call?.conversation;
+  const isPopulated =
+    conv && typeof conv === 'object' && (conv.type === 'group' || conv.type === 'direct');
+  const conversationType = isPopulated ? conv.type : 'direct';
+  const groupName =
+    conversationType === 'group'
+      ? String(conv.name || 'Group').trim() || 'Group'
+      : undefined;
+
   emitIncomingCall(req.params.id, {
     conversationId: req.params.id,
     callId: result.call?.id || result.call?._id?.toString(),
     roomName: result.roomName,
     callType: callType || 'audio',
     caller: { id: userId, name: req.user?.name, email: req.user?.email },
+    conversationType,
+    ...(groupName !== undefined && { groupName }),
   });
 
   res.status(httpStatus.CREATED).send(result);
@@ -213,6 +222,23 @@ const updateGroupName = catchAsync(async (req, res) => {
   res.send(conv);
 });
 
+const GROUP_AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+const uploadGroupAvatar = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const file = req.file;
+  if (!file) {
+    return res.status(httpStatus.BAD_REQUEST).json({ message: 'No image provided' });
+  }
+  if (!GROUP_AVATAR_MIMES.includes(file.mimetype)) {
+    return res.status(httpStatus.BAD_REQUEST).json({ message: 'Image must be JPEG, PNG, WebP, or GIF' });
+  }
+  const uploadResult = await uploadFileToS3(file, userId, 'chat-group-avatars');
+  const conv = await chatService.setGroupConversationAvatar(req.params.id, userId, uploadResult);
+  await emitConversationUpdated(req.params.id);
+  res.send(conv);
+});
+
 export {
   listConversations,
   createConversation,
@@ -236,5 +262,6 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  uploadGroupAvatar,
   deleteConversation,
 };

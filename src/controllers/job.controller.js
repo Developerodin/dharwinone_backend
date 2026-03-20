@@ -244,7 +244,12 @@ const browseApply = catchAsync(async (req, res) => {
 
   let candidate = await Candidate.findOne({ owner: userId });
   if (!candidate) {
-    const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
+    // Find admin user via roleIds
+    const Role = (await import('../models/role.model.js')).default;
+    const adminRole = await Role.findOne({ name: 'Administrator', status: 'active' }).select('_id').lean();
+    const adminUser = adminRole
+      ? await User.findOne({ roleIds: adminRole._id }).select('_id').lean()
+      : null;
     if (!adminUser) {
       throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'No admin user found to assign candidate');
     }

@@ -9,7 +9,7 @@ import requireAdministratorRole from '../../middlewares/requireAdministratorRole
 
 const router = express.Router();
 
-router.post('/register', validate(authValidation.register), authController.register);
+router.post('/register', optionalAuth(), validate(authValidation.register), authController.register);
 router.post('/register-student', optionalAuth(), validate(authValidation.registerStudent), authController.registerStudent);
 router.post('/register-mentor', optionalAuth(), validate(authValidation.registerMentor), authController.registerMentor);
 router.post('/register-recruiter', auth(), requireAdministratorRole(), validate(authValidation.registerRecruiter), authController.registerRecruiter);
@@ -20,6 +20,7 @@ router.get('/me', auth(), authController.getMe);
 router.patch('/me', auth(), validate(authValidation.updateMe), authController.updateMe);
 router.get('/me/with-candidate', auth(), authController.getMeWithCandidate);
 router.patch('/me/with-candidate', auth(), validate(authValidation.updateMeWithCandidate), authController.updateMeWithCandidate);
+router.post('/me/send-verification-email', auth(), authController.sendMyVerificationEmail);
 router.get('/my-permissions', auth(), authController.getMyPermissions);
 router.post('/impersonate', auth(), requireAdministratorRole(), validate(authValidation.impersonate), authController.impersonate);
 router.post('/stop-impersonation', auth(), authController.stopImpersonation);

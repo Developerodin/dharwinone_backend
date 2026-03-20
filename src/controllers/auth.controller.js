@@ -10,7 +10,13 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { registerStudent as registerStudentService } from '../services/student.service.js';
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
-import { createCandidate, getCandidateByOwnerForMe, updateUserAndCandidateForMe } from '../services/candidate.service.js';
+import {
+  createCandidate,
+  getCandidateByOwnerForMe,
+  getResignStatusByOwnerId,
+  updateUserAndCandidateForMe,
+  applyInitialCandidateProfileFromAdmin,
+} from '../services/candidate.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
@@ -41,6 +47,16 @@ const clearAuthCookies = (res) => {
   res.clearCookie(REFRESH_TOKEN_COOKIE, options);
 };
 
+/** Whitelist fields for User.create — keeps profile-only fields off the User document. */
+const pickCreateUserBody = (body) => {
+  const keys = ['name', 'email', 'password', 'isEmailVerified', 'roleIds', 'phoneNumber', 'countryCode', 'status'];
+  const out = {};
+  for (const k of keys) {
+    if (body[k] !== undefined) out[k] = body[k];
+  }
+  return out;
+};
+
 /** Enrich user object with fresh profile picture URL (S3 presigned URLs expire after ~1h). */
 const enrichUserWithFreshProfilePictureUrl = async (user) => {
   const userObj = user.toJSON ? user.toJSON() : { ...user };
@@ -61,12 +77,11 @@ const enrichUserWithFreshProfilePictureUrl = async (user) => {
  * - Admin registration (req.user present): create user, no tokens, activity log.
  */
 const register = catchAsync(async (req, res) => {
-  const { role, adminId, phoneNumber, countryCode } = req.body;
+  const { adminId, phoneNumber, countryCode } = req.body;
 
-  if (role === 'user' && adminId) {
+  if (adminId) {
     const user = await createUser({
       ...req.body,
-      role: 'user',
       adminId,
       status: 'pending',
       phoneNumber: phoneNumber || undefined,
@@ -103,9 +118,35 @@ const register = catchAsync(async (req, res) => {
     }
   }
 
-  const user = await createUser(req.body);
+  const { employeeId, shortBio, joiningDate, department, designation, degree, salaryRange } = req.body;
+  const bodyForCreate = pickCreateUserBody(req.body);
+  if (!req.user) {
+    delete bodyForCreate.status;
+  } else {
+    const isAdmin = await userIsAdmin(req.user);
+    if (!isAdmin && bodyForCreate.status !== undefined) {
+      delete bodyForCreate.status;
+    }
+  }
+  const user = await createUser(bodyForCreate);
   if (req.user) {
-    await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { role: user.role }, req);
+    await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { roleIds: user.roleIds }, req);
+    try {
+      await applyInitialCandidateProfileFromAdmin(user.id, {
+        employeeId,
+        shortBio,
+        joiningDate,
+        department,
+        designation,
+        degree,
+        salaryRange,
+      });
+    } catch (e) {
+      if (e && (e.code === 11000 || String(e.message || '').includes('duplicate'))) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Employee ID is already in use. Choose a different value or leave it blank to auto-assign.');
+      }
+      throw e;
+    }
   }
   res.status(httpStatus.CREATED).send({ user });
 });
@@ -188,12 +229,14 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
  */
 const registerRecruiter = catchAsync(async (req, res) => {
   const recruiterRole = await getRoleByName('Recruiter');
+  if (!recruiterRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Recruiter role not found. Please contact administrator.');
+  }
   const userData = {
     ...req.body,
-    role: 'recruiter',
     isEmailVerified: true,
     status: 'active',
-    roleIds: recruiterRole ? [recruiterRole._id] : [],
+    roleIds: [recruiterRole._id],
     phoneNumber: req.body.phoneNumber || undefined,
     countryCode: req.body.countryCode || undefined,
   };
@@ -282,6 +325,19 @@ const registerMentor = catchAsync(async (req, res) => {
 const login = catchAsync(async (req, res) => {
   const { email, password } = req.body;
   const user = await loginUserWithEmailAndPassword(email, password);
+  const hasCandidateRole = await userHasCandidateRole(user);
+  if (hasCandidateRole) {
+    const { resigned } = await getResignStatusByOwnerId(user._id);
+    if (resigned) {
+      throw new ApiError(
+        httpStatus.UNAUTHORIZED,
+        'You have resigned and cannot sign in. Please contact an administrator for more information.',
+        true,
+        '',
+        { errorCode: 'CANDIDATE_RESIGNED' }
+      );
+    }
+  }
   await updateUserById(user.id, { lastLoginAt: new Date() });
   user.lastLoginAt = new Date();
   const tokens = await generateAuthTokens(user, req);
@@ -332,6 +388,13 @@ const sendVerificationEmail = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+/** Send verification email to the currently logged-in user (self-service). No permission required. */
+const sendMyVerificationEmail = catchAsync(async (req, res) => {
+  const verifyEmailToken = await generateVerifyEmailToken(req.user);
+  await sendVerificationEmail2(req.user.email, verifyEmailToken, { req });
+  res.status(httpStatus.NO_CONTENT).send();
+});
+
 const verifyEmail = catchAsync(async (req, res) => {
   await verifyEmail2(req.query.token);
   res.status(httpStatus.NO_CONTENT).send();
@@ -376,6 +439,16 @@ const sendCandidateInvitation = catchAsync(async (req, res) => {
 });
 
 const getMe = catchAsync(async (req, res) => {
+  const hasCandidateRole = await userHasCandidateRole(req.user);
+  if (hasCandidateRole) {
+    const { resigned } = await getResignStatusByOwnerId(req.user._id);
+    if (resigned) {
+      return res.status(httpStatus.FORBIDDEN).json({
+        message: 'You have resigned and cannot use this account. Please contact an administrator for more information.',
+        code: 'CANDIDATE_RESIGNED',
+      });
+    }
+  }
   const sessions = await getSessionsForUser(req.user.id);
   const userObj = await enrichUserWithFreshProfilePictureUrl(req.user);
   const response = { user: userObj, sessions };
@@ -402,6 +475,18 @@ const getMeWithCandidate = catchAsync(async (req, res) => {
   }
   const candidate = await getCandidateByOwnerForMe(req.user._id);
   if (candidate) {
+    const rd = candidate.resignDate ? new Date(candidate.resignDate) : null;
+    if (rd) {
+      rd.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (rd <= today) {
+        return res.status(httpStatus.FORBIDDEN).json({
+          message: 'You have resigned and cannot use this account. Please contact an administrator for more information.',
+          code: 'CANDIDATE_RESIGNED',
+        });
+      }
+    }
     response.candidate = candidate.toJSON ? candidate.toJSON() : { ...candidate };
   }
   res.send(response);
@@ -432,7 +517,17 @@ const updateMeWithCandidate = catchAsync(async (req, res) => {
  * Email cannot be changed via this route; only admins can change email via PATCH /users/:userId.
  */
 const updateMe = catchAsync(async (req, res) => {
-  const allowedFields = ['name', 'notificationPreferences', 'profilePicture'];
+  const allowedFields = [
+    'name',
+    'notificationPreferences',
+    'profilePicture',
+    'phoneNumber',
+    'countryCode',
+    'education',
+    'domain',
+    'location',
+    'profileSummary',
+  ];
   const payload = {};
   for (const key of allowedFields) {
     if (req.body[key] !== undefined) {
@@ -517,6 +612,7 @@ export {
   resetPassword,
   changePassword,
   sendVerificationEmail,
+  sendMyVerificationEmail,
   verifyEmail,
   sendCandidateInvitation,
   getMe,

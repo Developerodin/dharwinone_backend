@@ -6,21 +6,73 @@ import Attendance from '../models/attendance.model.js';
 import User from '../models/user.model.js';
 import Role from '../models/role.model.js';
 import pick from '../utils/pick.js';
+import { userIsAdminOrAgent } from '../utils/roleHelpers.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-/** Sync check: user.role indicates admin */
-const isAdminByRole = (user) => user.role === 'admin' || user.role === 'Administrator';
-
 /** Async: check if user can manage backdated attendance (Administrator or Agent via roleIds) */
 const isAdminUser = async (user) => {
-  if (isAdminByRole(user)) return true;
-  const roleIds = user.roleIds || [];
-  if (roleIds.length === 0) return false;
-  const role = await Role.findOne(
-    { _id: { $in: roleIds }, name: { $in: ['Administrator', 'Agent'] }, status: 'active' }
-  );
-  return !!role;
+  return userIsAdminOrAgent(user);
+};
+
+/**
+ * Legacy-data guard:
+ * Some old requests may have both `student` and `user` set (or neither), which breaks
+ * the model pre-save invariant. Normalize to exactly one identity before save.
+ */
+const normalizeRequestIdentity = async (requestDoc) => {
+  const hasStudent = requestDoc.student != null;
+  const hasUser = requestDoc.user != null;
+  if (hasStudent !== hasUser) return requestDoc;
+
+  if (hasStudent && hasUser) {
+    // Prefer student-based request when student exists (historical default flow).
+    requestDoc.user = undefined;
+    requestDoc.userEmail = undefined;
+    if (!requestDoc.studentEmail && requestDoc.student?.user?.email) {
+      requestDoc.studentEmail = requestDoc.student.user.email;
+    }
+    return requestDoc;
+  }
+
+  // Neither set: infer from requester.
+  const requesterId = requestDoc.requestedBy?._id ?? requestDoc.requestedBy;
+  if (requesterId) {
+    const student = await Student.findOne({ user: requesterId }).select('_id user email').populate('user', 'email');
+    if (student?._id) {
+      requestDoc.student = student._id;
+      requestDoc.studentEmail = student.user?.email || student.email || requestDoc.studentEmail || '';
+      requestDoc.user = undefined;
+      requestDoc.userEmail = undefined;
+      return requestDoc;
+    }
+    requestDoc.user = requesterId;
+    if (!requestDoc.userEmail) {
+      const u = await User.findById(requesterId).select('email').lean();
+      requestDoc.userEmail = u?.email || '';
+    }
+    requestDoc.student = undefined;
+    requestDoc.studentEmail = undefined;
+  }
+
+  // Final safety: ensure invariant before save even if requester/student lookups failed.
+  const nowHasStudent = requestDoc.student != null;
+  const nowHasUser = requestDoc.user != null;
+  if (nowHasStudent === nowHasUser) {
+    if (requesterId) {
+      requestDoc.student = undefined;
+      requestDoc.studentEmail = undefined;
+      requestDoc.user = requesterId;
+      if (!requestDoc.userEmail) {
+        const u = await User.findById(requesterId).select('email').lean();
+        requestDoc.userEmail = u?.email || requestDoc.userEmail || '';
+      }
+    } else {
+      // No way to infer owner; fail with actionable message instead of pre-save generic 500.
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid backdated request identity: missing student/user owner');
+    }
+  }
+  return requestDoc;
 };
 
 /**
@@ -382,6 +434,7 @@ const approveBackdatedAttendanceRequest = async (requestId, adminComment, user) 
     );
   }
 
+  await normalizeRequestIdentity(request);
   request.status = 'approved';
   request.adminComment = adminComment || null;
   request.reviewedBy = user.id;
@@ -540,6 +593,7 @@ const rejectBackdatedAttendanceRequest = async (requestId, adminComment, user) =
     );
   }
 
+  await normalizeRequestIdentity(request);
   request.status = 'rejected';
   request.adminComment = adminComment || null;
   request.reviewedBy = user.id;
@@ -720,6 +774,7 @@ const cancelBackdatedAttendanceRequest = async (requestId, user) => {
     );
   }
 
+  await normalizeRequestIdentity(request);
   request.status = 'cancelled';
   await request.save();
 

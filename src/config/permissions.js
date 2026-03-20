@@ -43,6 +43,20 @@ export const permissionAliases = {
   // ATS candidates: ats.candidates:view -> candidates.read, ats.candidates:create,edit,delete -> candidates.manage
   'candidates.read': ['candidates.read', 'ats.candidates:view', 'ats.candidates:view,create,edit,delete'],
   'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
+  // Joining date PATCH: full manage OR granular ats.candidates.joiningDate:view,edit → candidates.joiningDate.manage
+  'candidates.joiningDate': [
+    'candidates.manage',
+    'candidates.joiningDate.read',
+    'candidates.joiningDate.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
+  // Resign date PATCH: full manage OR granular ats.candidates.resignDate:view,edit → candidates.resignDate.manage
+  'candidates.resignDate': [
+    'candidates.manage',
+    'candidates.resignDate.read',
+    'candidates.resignDate.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
   // Positions: used in candidates (onboarding) and training (student assignment)
   'positions.read': ['positions.read', 'students.read', 'candidates.read', 'users.manage'],
   'positions.manage': ['positions.manage', 'students.manage', 'candidates.manage', 'users.manage'],

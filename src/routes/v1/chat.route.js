@@ -12,6 +12,15 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
+const groupAvatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.mimetype);
+    cb(ok ? null : new Error('Invalid file type'), ok);
+  },
+});
+
 router.use(auth(), requirePermissions('chats.read'));
 
 router.get('/socket-token', chatController.getSocketToken);
@@ -26,6 +35,12 @@ router.patch(
   '/conversations/:id',
   validate(chatValidation.updateGroupName),
   chatController.updateGroupName
+);
+router.post(
+  '/conversations/:id/avatar',
+  validate(chatValidation.conversationIdParam),
+  groupAvatarUpload.single('avatar'),
+  chatController.uploadGroupAvatar
 );
 router.post(
   '/conversations/:id/participants',

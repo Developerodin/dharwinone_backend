@@ -168,7 +168,13 @@ const emitIncomingCall = async (conversationId, callData) => {
   io.to(`conversation:${conversationId}`).emit('incoming_call', callData);
   try {
     const ids = await chatService.getConversationParticipantIds(conversationId);
-    if (ids) ids.forEach((uid) => io.to(`user:${uid}`).emit('incoming_call', callData));
+    const callerStr = callData.caller?.id != null ? String(callData.caller.id) : '';
+    if (ids?.length) {
+      ids.forEach((uid) => {
+        if (callerStr && String(uid) === callerStr) return;
+        io.to(`user:${uid}`).emit('incoming_call', callData);
+      });
+    }
   } catch (err) {
     logger.warn(`incoming_call emit to user rooms failed: ${err.message}`);
   }

@@ -334,7 +334,6 @@ const importCandidatesFromExcel = async (fileBuffer, createdBy) => {
         
         // Format for createCandidate service
         const candidateData = {
-          role: 'user',
           fullName: candidate.fullName,
           email: candidate.email,
           phoneNumber: candidate.phoneNumber,

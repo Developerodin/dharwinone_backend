@@ -366,6 +366,25 @@ const buildAdvancedFilter = (filter) => {
       { customVisaType: { $regex: filter.visaType, $options: 'i' } }
     );
   }
+
+  // Employment status: current (no resign or resign in future), resigned (resign date on or in past), all (no filter)
+  if (filter.employmentStatus === 'resigned') {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    mongoFilter.resignDate = { $exists: true, $ne: null, $lte: todayStart };
+  } else if (filter.employmentStatus === 'current') {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    mongoFilter.$and = mongoFilter.$and || [];
+    mongoFilter.$and.push({
+      $or: [
+        { resignDate: null },
+        { resignDate: { $exists: false } },
+        { resignDate: { $gt: todayStart } },
+      ],
+    });
+  }
+  // 'all' or undefined: no employmentStatus filter
   
   // Combine $or conditions if any exist
   if (orConditions.length > 0) {
@@ -387,8 +406,13 @@ const queryCandidates = async (filter, options) => {
   // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
 
-  // Only show active candidates unless explicitly requesting inactive
-  if (filter.isActive === undefined) {
+  // Employment status drives isActive: current = active only, resigned = show resigned (isActive false), all = both
+  if (filter.employmentStatus === 'resigned') {
+    // Resigned: show candidates with resign date on or in past (do not filter by isActive)
+  } else if (filter.employmentStatus === 'all') {
+    // All: show current and resigned (do not filter by isActive)
+  } else if (filter.isActive === undefined) {
+    // current or undefined employment: only show active (current) candidates
     mongoFilter.isActive = { $ne: false };
   } else {
     mongoFilter.isActive = filter.isActive;
@@ -409,6 +433,42 @@ const queryCandidates = async (filter, options) => {
       mongoFilter.owner = hasRole ? filter.owner : { $in: [] };
     } else {
       mongoFilter.owner = ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
+    }
+  }
+
+  // Filter by assigned training agent: explicit IDs (from checklist) or name/email substring `filter.agent`
+  if (filter.agentIds?.trim()) {
+    const raw = filter.agentIds.split(',').map((s) => s.trim()).filter(Boolean);
+    const agentRole = await getRoleByName('Agent');
+    if (!agentRole || raw.length === 0) {
+      mongoFilter.assignedAgent = { $in: [] };
+    } else {
+      const oids = raw.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id));
+      const valid = await User.find({
+        _id: { $in: oids },
+        roleIds: agentRole._id,
+        status: { $in: ['active', 'pending'] },
+      })
+        .select('_id')
+        .lean();
+      mongoFilter.assignedAgent = { $in: valid.map((u) => u._id) };
+    }
+  } else if (filter.agent?.trim()) {
+    const term = filter.agent.trim();
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(escaped, 'i');
+    const agentRole = await getRoleByName('Agent');
+    if (!agentRole) {
+      mongoFilter.assignedAgent = { $in: [] };
+    } else {
+      const agentUsers = await User.find({
+        roleIds: agentRole._id,
+        status: { $in: ['active', 'pending'] },
+        $or: [{ name: re }, { email: re }],
+      })
+        .select('_id')
+        .lean();
+      mongoFilter.assignedAgent = { $in: agentUsers.map((u) => u._id) };
     }
   }
 
@@ -561,6 +621,14 @@ const queryCandidates = async (filter, options) => {
       ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified countryCode').lean()
       : [];
     const userMap = new Map(users.map(u => [String(u._id), { isEmailVerified: u.isEmailVerified || false, countryCode: u.countryCode || null }]));
+
+    const studentsForOwners =
+      ownerIds.length > 0
+        ? await Student.find({ user: { $in: ownerIds } })
+            .select('_id user')
+            .lean()
+        : [];
+    const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
     
     // Populate owner and adminId
     const populatedCandidates = await Candidate.populate(candidates, [
@@ -587,9 +655,13 @@ const queryCandidates = async (filter, options) => {
         const userData = userMap.get(ownerId) || { isEmailVerified: false, countryCode: null };
         candidateObj.isEmailVerified = userData.isEmailVerified;
         candidateObj.countryCode = userData.countryCode;
+        candidateObj.studentId = studentIdByOwnerId.get(ownerId) || null;
+        candidateObj.ownerId = ownerId;
       } else {
         candidateObj.isEmailVerified = false;
         candidateObj.countryCode = null;
+        candidateObj.studentId = null;
+        candidateObj.ownerId = null;
       }
       return candidateObj;
     });
@@ -633,6 +705,14 @@ const queryCandidates = async (filter, options) => {
         ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified countryCode').lean()
         : [];
       const userMap = new Map(users.map(u => [String(u._id), { isEmailVerified: u.isEmailVerified || false, countryCode: u.countryCode || null }]));
+
+      const studentsForOwners =
+        ownerIds.length > 0
+          ? await Student.find({ user: { $in: ownerIds } })
+              .select('_id user')
+              .lean()
+          : [];
+      const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
       
       await Candidate.populate(result.results, [
         { path: 'owner', select: 'name email isEmailVerified countryCode' },
@@ -658,9 +738,13 @@ const queryCandidates = async (filter, options) => {
           const userData = userMap.get(ownerId) || { isEmailVerified: false, countryCode: null };
           candidateObj.isEmailVerified = userData.isEmailVerified;
           candidateObj.countryCode = userData.countryCode;
+          candidateObj.studentId = studentIdByOwnerId.get(ownerId) || null;
+          candidateObj.ownerId = ownerId;
         } else {
           candidateObj.isEmailVerified = false;
           candidateObj.countryCode = null;
+          candidateObj.studentId = null;
+          candidateObj.ownerId = null;
         }
         return candidateObj;
       });
@@ -678,6 +762,22 @@ const queryCandidates = async (filter, options) => {
     }
     
     return result;
+};
+
+/**
+ * Check if a candidate (by owner user id) is resigned (resignDate set and on or in the past).
+ * Used by auth to block resigned candidates from portal access.
+ * @param {mongoose.Types.ObjectId} ownerId - User id (candidate owner)
+ * @returns {Promise<{ resigned: boolean }>}
+ */
+const getResignStatusByOwnerId = async (ownerId) => {
+  const candidate = await Candidate.findOne({ owner: ownerId }).select('resignDate').lean();
+  if (!candidate?.resignDate) return { resigned: false };
+  const rd = new Date(candidate.resignDate);
+  rd.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return { resigned: rd <= today };
 };
 
 /** Get full candidate by owner (for GET /auth/me/with-candidate). Includes documents & salarySlips with presigned URLs. */
@@ -729,6 +829,7 @@ const getCandidateById = async (id) => {
       { path: 'adminId', select: 'name email' },
       { path: 'position', select: 'name' },
       { path: 'assignedRecruiter', select: 'name email role' },
+      { path: 'assignedAgent', select: 'name email' },
       { path: 'recruiterNotes.addedBy', select: 'name email role' },
     ]);
     
@@ -831,9 +932,12 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
         userUpdateData.email = updateBody.email;
       }
       
-      // Sync phone if changed
-      if (updateBody.phoneNumber) {
-        userUpdateData.phoneNumber = updateBody.phoneNumber;
+      // Sync phone / country if changed (keep User and Candidate identical)
+      if (updateBody.phoneNumber !== undefined) {
+        userUpdateData.phoneNumber = candidate.phoneNumber;
+      }
+      if (updateBody.countryCode !== undefined) {
+        userUpdateData.countryCode = candidate.countryCode;
       }
 
       // Sync profile picture if changed (single image for both User and Candidate)
@@ -1620,6 +1724,198 @@ const assignRecruiterToCandidate = async (candidateId, recruiterId) => {
 };
 
 /**
+ * Users with Agent role (for student assignment UI).
+ */
+const listAgentUsersForAssignment = async () => {
+  const { getRoleByName } = await import('./role.service.js');
+  const agentRole = await getRoleByName('Agent');
+  if (!agentRole) {
+    return [];
+  }
+  return User.find({ roleIds: agentRole._id, status: { $in: ['active', 'pending'] } })
+    .select('name email')
+    .sort({ name: 1 })
+    .lean();
+};
+
+/**
+ * Assignable people: Candidate records whose owner has Student and/or Candidate role.
+ * Each candidate has at most one assignedAgent; many candidates may share the same agent.
+ */
+const listStudentAgentAssignments = async () => {
+  const { getRoleByName } = await import('./role.service.js');
+  const Role = (await import('../models/role.model.js')).default;
+  const studentRole = await getRoleByName('Student');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!studentRole && !candidateRole) {
+    const agents = await listAgentUsersForAssignment();
+    return {
+      students: [],
+      agents: agents.map((u) => ({ id: String(u._id), name: u.name, email: u.email })),
+    };
+  }
+
+  const ownerIdSet = new Set();
+  const addOwnersWithRole = async (roleDoc) => {
+    if (!roleDoc) return;
+    const rows = await User.find(
+      { roleIds: roleDoc._id, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    rows.forEach((u) => ownerIdSet.add(u._id));
+  };
+  await addOwnersWithRole(studentRole);
+  await addOwnersWithRole(candidateRole);
+
+  const ownerIds = [...ownerIdSet];
+  if (ownerIds.length === 0) {
+    const agents = await listAgentUsersForAssignment();
+    return {
+      students: [],
+      agents: agents.map((u) => ({ id: String(u._id), name: u.name, email: u.email })),
+    };
+  }
+
+  const candidates = await Candidate.find({ owner: { $in: ownerIds } })
+    .select('fullName email employeeId owner assignedAgent')
+    .populate({ path: 'assignedAgent', select: 'name email' })
+    .sort({ fullName: 1 })
+    .lean();
+
+  const studentsForOwners =
+    ownerIds.length > 0
+      ? await Student.find({ user: { $in: ownerIds } })
+          .select('_id user')
+          .lean()
+      : [];
+  const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
+
+  const ownerUsers =
+    ownerIds.length > 0
+      ? await User.find({ _id: { $in: ownerIds } })
+          .select('roleIds')
+          .lean()
+      : [];
+  const allRoleIds = [...new Set(ownerUsers.flatMap((u) => u.roleIds || []).map((id) => String(id)))];
+  const roleDocs =
+    allRoleIds.length > 0 ? await Role.find({ _id: { $in: allRoleIds } }).select('name').lean() : [];
+  const roleNameById = new Map(roleDocs.map((r) => [String(r._id), r.name]));
+
+  const ownerRoleLabelByOwnerId = new Map();
+  ownerUsers.forEach((u) => {
+    const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
+    const tags = [];
+    if (names.includes('Student')) tags.push('Student');
+    if (names.includes('Candidate')) tags.push('Candidate');
+    ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
+  });
+
+  const students = candidates.map((c) => {
+    const ownerId = c.owner ? String(c.owner) : '';
+    const ag = c.assignedAgent;
+    return {
+      id: String(c._id),
+      fullName: c.fullName,
+      email: c.email,
+      employeeId: c.employeeId ?? null,
+      ownerId,
+      ownerRoleLabel: ownerRoleLabelByOwnerId.get(ownerId) ?? '—',
+      studentId: studentIdByOwnerId.get(ownerId) ?? null,
+      assignedAgent: ag
+        ? {
+            id: String(ag._id),
+            name: ag.name,
+            email: ag.email,
+          }
+        : null,
+    };
+  });
+
+  const agents = await listAgentUsersForAssignment();
+  return {
+    students,
+    agents: agents.map((u) => ({ id: String(u._id), name: u.name, email: u.email })),
+  };
+};
+
+/**
+ * Assign or unassign an Agent to a candidate profile whose owner has Student and/or Candidate role.
+ * @param {string} candidateId
+ * @param {string|null|undefined} agentId - null clears assignment
+ */
+const assignAgentToCandidate = async (candidateId, agentId) => {
+  const { getRoleByName } = await import('./role.service.js');
+  const candidate = await Candidate.findById(candidateId);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+
+  const studentRole = await getRoleByName('Student');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!studentRole && !candidateRole) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Candidate role must be configured');
+  }
+  const ownerOr = [];
+  if (studentRole) ownerOr.push({ roleIds: studentRole._id });
+  if (candidateRole) ownerOr.push({ roleIds: candidateRole._id });
+  const ownerEligible =
+    ownerOr.length > 0
+      ? await User.exists({
+          _id: candidate.owner,
+          status: { $in: ['active', 'pending'] },
+          $or: ownerOr,
+        })
+      : false;
+  if (!ownerEligible) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Agent assignment applies only to users with the Student or Candidate role'
+    );
+  }
+
+  if (agentId === null || agentId === undefined || agentId === '') {
+    candidate.set('assignedAgent', null);
+    await candidate.save();
+    await candidate.populate([
+      { path: 'owner', select: 'name email' },
+      { path: 'assignedAgent', select: 'name email' },
+    ]);
+    return candidate;
+  }
+
+  const agentRole = await getRoleByName('Agent');
+  if (!agentRole) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Agent role is not configured');
+  }
+  const agentUser = await User.findOne({
+    _id: agentId,
+    roleIds: agentRole._id,
+    status: { $in: ['active', 'pending'] },
+  });
+  if (!agentUser) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Agent user not found or does not have the Agent role');
+  }
+
+  candidate.assignedAgent = agentId;
+  await candidate.save();
+
+  const { notify } = await import('./notification.service.js');
+  const studentLabel = candidate.fullName || candidate.email || 'a person';
+  notify(agentId, {
+    type: 'assignment',
+    title: 'Assignee added',
+    message: `You are now the assigned agent for ${studentLabel}.`,
+    link: '/settings/agents/',
+  }).catch(() => {});
+
+  await candidate.populate([
+    { path: 'owner', select: 'name email' },
+    { path: 'assignedAgent', select: 'name email' },
+  ]);
+  return candidate;
+};
+
+/**
  * Update candidate joining date
  * @param {string} candidateId - Candidate ID
  * @param {Date} joiningDate - Joining date (can be null to clear)
@@ -1632,8 +1928,8 @@ const updateJoiningDate = async (candidateId, joiningDate, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
-  if (!user?.canManageCandidates) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can update joining date');
+  if (!user?.canUpdateJoiningDate) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to update joining date');
   }
 
   // Validate that joining date is before resign date if both exist
@@ -1674,8 +1970,8 @@ const updateResignDate = async (candidateId, resignDate, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
-  if (!user?.canManageCandidates) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can update resign date');
+  if (!user?.canUpdateResignDate) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to update resign date');
   }
 
   // Validate that resign date is after joining date if both exist
@@ -1683,7 +1979,8 @@ const updateResignDate = async (candidateId, resignDate, user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Resign date cannot be before joining date');
   }
 
-  // Allow clearing resign date (setting to null) to reactivate candidate
+  // Allow clearing resign date (setting to null) to reactivate candidate.
+  // Employee ID is never changed here; resigned candidates keep their ID for records.
   candidate.resignDate = resignDate ? new Date(resignDate) : null;
   // isActive will be automatically set by pre-save hook based on resignDate
   await candidate.save();
@@ -1846,7 +2143,12 @@ const ensureCandidateProfileForUser = async (userId) => {
     return existing;
   }
 
-  const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
+  // Find an admin user by looking for users with the Administrator role in their roleIds
+  const Role = (await import('../models/role.model.js')).default;
+  const adminRole = await Role.findOne({ name: 'Administrator', status: 'active' }).select('_id').lean();
+  const adminUser = adminRole
+    ? await User.findOne({ roleIds: adminRole._id }).select('_id').lean()
+    : null;
 
   const candidate = await Candidate.create({
     owner: userId,
@@ -1857,6 +2159,77 @@ const ensureCandidateProfileForUser = async (userId) => {
     isProfileCompleted: 10,
   });
   return candidate;
+};
+
+/**
+ * After admin creates a user with the Candidate role, apply optional ATS fields.
+ * Runs after ensureCandidateProfileForUser (auto employee ID may be replaced if provided).
+ * @param {import('mongoose').Types.ObjectId} userId
+ * @param {{ employeeId?: string, shortBio?: string, joiningDate?: Date|string|null, department?: string, designation?: string, degree?: string, salaryRange?: string }} fields
+ * @returns {Promise<import('mongoose').Document|null>}
+ */
+const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
+  const { employeeId, shortBio, joiningDate, department, designation, degree, salaryRange } = fields || {};
+  const hasEmployee = employeeId !== undefined && employeeId !== null && String(employeeId).trim() !== '';
+  const hasBio = shortBio !== undefined && shortBio !== null && String(shortBio).trim() !== '';
+  const hasJoin =
+    joiningDate !== undefined && joiningDate !== null && joiningDate !== '';
+  const hasDept = department !== undefined && department !== null && String(department).trim() !== '';
+  const hasDesig = designation !== undefined && designation !== null && String(designation).trim() !== '';
+  const hasDegree = degree !== undefined && degree !== null && String(degree).trim() !== '';
+  const hasSalary = salaryRange !== undefined && salaryRange !== null && String(salaryRange).trim() !== '';
+  if (!hasEmployee && !hasBio && !hasJoin && !hasDept && !hasDesig && !hasDegree && !hasSalary) return null;
+
+  const candidate = await Candidate.findOne({ owner: userId });
+  if (!candidate) return null;
+
+  if (hasEmployee) {
+    candidate.employeeId = String(employeeId).trim();
+  }
+  if (hasBio) {
+    candidate.shortBio = String(shortBio).trim();
+  }
+  if (hasJoin) {
+    const d = new Date(joiningDate);
+    if (!Number.isNaN(d.getTime())) {
+      candidate.joiningDate = d;
+    }
+  }
+  if (hasDept) candidate.department = String(department).trim();
+  if (hasDesig) candidate.designation = String(designation).trim();
+  if (hasDegree) candidate.degree = String(degree).trim();
+  if (hasSalary) candidate.salaryRange = String(salaryRange).trim();
+  await candidate.save();
+  return candidate;
+};
+
+/**
+ * Mirror User phone fields onto the linked Candidate (owner).
+ * Called after User is updated (admin or PATCH /auth/me) so ATS and User stay aligned.
+ * Does not call updateUserById (avoids loops). Candidate.phoneNumber is required — if User clears phone, candidate keeps existing digits.
+ * @param {import('mongoose').Types.ObjectId} ownerUserId
+ * @param {{ phoneNumber?: string | null, countryCode?: string | null }} fields - omit key to skip that field
+ */
+const syncPhoneFromUserToCandidate = async (ownerUserId, fields) => {
+  const { phoneNumber, countryCode } = fields;
+  if (phoneNumber === undefined && countryCode === undefined) return;
+
+  const candidate = await Candidate.findOne({ owner: ownerUserId });
+  if (!candidate) return;
+
+  if (phoneNumber !== undefined) {
+    const v = phoneNumber === null || phoneNumber === '' ? '' : String(phoneNumber).trim();
+    if (v === '') {
+      logger.debug('syncPhoneFromUserToCandidate: preserving candidate phone; user phone cleared');
+    } else {
+      candidate.phoneNumber = v;
+    }
+  }
+  if (countryCode !== undefined) {
+    const cc = countryCode === null || countryCode === '' ? undefined : String(countryCode).trim();
+    candidate.countryCode = cc;
+  }
+  await candidate.save();
 };
 
 /** User fields allowed for self-update via PATCH /auth/me/with-candidate */
@@ -1939,10 +2312,15 @@ const updateUserAndCandidateForMe = async (userId, body) => {
       candidate.isProfileCompleted = calculateProfileCompletion(candidate);
       candidate.isCompleted = candidate.isProfileCompleted === 100;
       await candidate.save({ session });
-      if (candidatePayload.fullName) user.name = candidatePayload.fullName;
-      if (candidatePayload.email) user.email = candidatePayload.email;
-      if (candidatePayload.phoneNumber) user.phoneNumber = candidatePayload.phoneNumber;
-      if (Object.keys(candidatePayload).some((k) => ['fullName', 'email', 'phoneNumber'].includes(k))) {
+      if (candidatePayload.fullName !== undefined) user.name = candidatePayload.fullName;
+      if (candidatePayload.email !== undefined) user.email = candidatePayload.email;
+      if (candidatePayload.phoneNumber !== undefined) user.phoneNumber = candidatePayload.phoneNumber;
+      if (candidatePayload.countryCode !== undefined) user.countryCode = candidatePayload.countryCode;
+      if (
+        Object.keys(candidatePayload).some((k) =>
+          ['fullName', 'email', 'phoneNumber', 'countryCode'].includes(k)
+        )
+      ) {
         await user.save({ session });
       }
     }
@@ -1987,6 +2365,9 @@ export {
   addRecruiterNote,
   addRecruiterFeedback,
   assignRecruiterToCandidate,
+  listStudentAgentAssignments,
+  listAgentUsersForAssignment,
+  assignAgentToCandidate,
   // Joining and resign dates
   updateJoiningDate,
   updateResignDate,
@@ -1996,8 +2377,11 @@ export {
   // Shift assignment
   assignShiftToCandidates,
   ensureCandidateProfileForUser,
+  applyInitialCandidateProfileFromAdmin,
   updateUserAndCandidateForMe,
+  syncPhoneFromUserToCandidate,
   getCandidateByOwnerForMe,
+  getResignStatusByOwnerId,
 };
 
 

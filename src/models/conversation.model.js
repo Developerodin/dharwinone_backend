@@ -15,6 +15,17 @@ const conversationSchema = new mongoose.Schema(
     type: { type: String, enum: ['direct', 'group'], required: true },
     participants: [participantSchema],
     name: { type: String, trim: true },
+    /**
+     * Group photo — same shape as User.profilePicture: S3 key + metadata; url refreshed on read (presigned).
+     * Direct chats omit this field.
+     */
+    avatar: {
+      url: { type: String, trim: true },
+      key: { type: String, trim: true },
+      originalName: { type: String, trim: true },
+      size: { type: Number },
+      mimeType: { type: String, trim: true },
+    },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     lastMessageAt: { type: Date, default: null },
   },

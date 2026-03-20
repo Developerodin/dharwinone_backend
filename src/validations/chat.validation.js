@@ -78,10 +78,13 @@ const callIdParam = {
 
 const updateCall = {
   params: callIdParam.params,
-  body: Joi.object().keys({
-    status: Joi.string().valid('initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined'),
-    duration: Joi.number().min(0),
-  }),
+  body: Joi.object()
+    .keys({
+      status: Joi.string().valid('initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined'),
+      duration: Joi.number().min(0),
+      recordRoomJoin: Joi.boolean().valid(true),
+    })
+    .or('status', 'duration', 'recordRoomJoin'),
 };
 
 const deleteMessage = {

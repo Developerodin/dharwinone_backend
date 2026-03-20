@@ -109,7 +109,13 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     Job.countDocuments({ ...jobMatch, status: 'Active' }),
     JobApplication.countDocuments({ ...appMatch, ...appDateMatch }),
     JobApplication.countDocuments({ ...appMatch, ...appDateMatch, status: 'Hired' }),
-    isRecruiter ? Promise.resolve(1) : User.countDocuments({ role: 'recruiter' }),
+    isRecruiter
+      ? Promise.resolve(1)
+      : (async () => {
+          const Role = (await import('../models/role.model.js')).default;
+          const recruiterRole = await Role.findOne({ name: 'Recruiter', status: 'active' }).select('_id').lean();
+          return recruiterRole ? User.countDocuments({ roleIds: recruiterRole._id }) : 0;
+        })(),
     Candidate.aggregate([
       { $match: candidateMatch },
       { $group: { _id: null, avg: { $avg: '$isProfileCompleted' } } },

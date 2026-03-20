@@ -3,6 +3,7 @@ import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import requireAttendanceAccess from '../../middlewares/requireAttendanceAccess.js';
+import requireUserAttendanceView from '../../middlewares/requireUserAttendanceView.js';
 import { attendancePunchLimiter } from '../../middlewares/rateLimiter.js';
 import * as attendanceValidation from '../../validations/attendance.validation.js';
 import attendanceController from '../../controllers/attendance.controller.js';
@@ -73,10 +74,20 @@ router.post(
   attendanceController.regularize
 );
 
-router.use(auth(), requireAttendanceAccess);
+/** List attendance for a User (user-based punch) — used when candidate has no Student but owner has attendance */
+router.get(
+  '/user/:userId',
+  auth(),
+  requireUserAttendanceView,
+  validate(attendanceValidation.listAttendanceUser),
+  attendanceController.getUserAttendance
+);
 
+/** Student-scoped routes: auth + access check per route (avoid global router.use matching /user and /candidate) */
 router.post(
   '/punch-in/:studentId',
+  auth(),
+  requireAttendanceAccess,
   attendancePunchLimiter,
   validate(attendanceValidation.punchIn),
   attendanceController.punchIn
@@ -84,6 +95,8 @@ router.post(
 
 router.post(
   '/punch-out/:studentId',
+  auth(),
+  requireAttendanceAccess,
   attendancePunchLimiter,
   validate(attendanceValidation.punchOut),
   attendanceController.punchOut
@@ -91,18 +104,24 @@ router.post(
 
 router.get(
   '/status/:studentId',
+  auth(),
+  requireAttendanceAccess,
   validate(attendanceValidation.studentIdParam),
   attendanceController.getStatus
 );
 
 router.get(
   '/student/:studentId',
+  auth(),
+  requireAttendanceAccess,
   validate(attendanceValidation.listAttendance),
   attendanceController.getStudentAttendance
 );
 
 router.get(
   '/statistics/:studentId',
+  auth(),
+  requireAttendanceAccess,
   validate(attendanceValidation.getStatistics),
   attendanceController.getStatistics
 );

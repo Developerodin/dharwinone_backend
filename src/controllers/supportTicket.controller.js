@@ -10,11 +10,12 @@ import {
   addCommentToTicket,
   deleteSupportTicketById,
 } from '../services/supportTicket.service.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 
 const create = catchAsync(async (req, res) => {
   const files = req.files || (req.file ? [req.file] : []);
 
-  if (req.body.candidateId && req.user.role !== 'admin') {
+  if (req.body.candidateId && !(await userIsAdmin(req.user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admins can create tickets on behalf of candidates');
   }
 

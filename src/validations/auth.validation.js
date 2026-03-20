@@ -24,6 +24,16 @@ const register = {
     role: Joi.string().valid('user', 'admin', 'supervisor', 'recruiter').optional(),
     phoneNumber: Joi.string().allow('').optional(),
     countryCode: Joi.string().allow('').optional(),
+    /** Applied to linked Candidate after admin creates user (optional). */
+    employeeId: Joi.string().trim().allow('').optional(),
+    shortBio: Joi.string().trim().allow('').optional().max(10000),
+    joiningDate: Joi.date().optional().allow(null, ''),
+    department: Joi.string().trim().allow('').optional().max(500),
+    designation: Joi.string().trim().allow('').optional().max(500),
+    degree: Joi.string().trim().allow('').optional().max(500),
+    salaryRange: Joi.string().trim().allow('').optional().max(500),
+    /** Only honored for authenticated administrators; others are stripped in controller. */
+    status: Joi.string().valid('active', 'pending').optional(),
     adminId: Joi.when('role', {
       is: 'user',
       then: Joi.string().custom(objectId),
@@ -247,7 +257,7 @@ const registerMentor = {
   }),
 };
 
-/** Self-profile update: name, notificationPreferences, profilePicture. No email. */
+/** Self-profile update: name, notificationPreferences, profilePicture, and User profile fields. No email. */
 const updateMe = {
   body: Joi.object()
     .keys({
@@ -262,6 +272,12 @@ const updateMe = {
       })
         .optional()
         .allow(null),
+      phoneNumber: Joi.string().trim().allow('').optional(),
+      countryCode: Joi.string().trim().allow('').optional(),
+      education: Joi.string().trim().allow('').optional().max(2000),
+      domain: Joi.array().items(Joi.string().trim().max(200)).max(50).optional(),
+      location: Joi.string().trim().allow('').optional().max(1000),
+      profileSummary: Joi.string().trim().allow('').optional().max(10000),
     })
     .min(1),
 };

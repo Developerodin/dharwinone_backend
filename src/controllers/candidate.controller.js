@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
+import Student from '../models/student.model.js';
 import { 
   createCandidate, 
   queryCandidates, 
@@ -24,11 +25,14 @@ import {
   addRecruiterNote,
   addRecruiterFeedback,
   assignRecruiterToCandidate,
+  listStudentAgentAssignments,
+  assignAgentToCandidate,
   updateJoiningDate,
   updateResignDate,
   updateWeekOffForCandidates,
   getCandidateWeekOff,
-  assignShiftToCandidates
+  assignShiftToCandidates,
+  listAgentUsersForAssignment
 } from '../services/candidate.service.js';
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
@@ -38,6 +42,24 @@ import { getUserPermissionContext } from '../services/permission.service.js';
 import logger from '../config/logger.js';
 
 const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
+
+/** Full manage OR granular joining-date permission (agents). */
+const canUpdateJoiningDate = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  if (p.has('candidates.manage')) return true;
+  if (p.has('candidates.joiningDate.manage')) return true;
+  return false;
+};
+
+/** Full manage OR granular resign-date permission (agents). */
+const canUpdateResignDate = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  if (p.has('candidates.manage')) return true;
+  if (p.has('candidates.resignDate.manage')) return true;
+  return false;
+};
 
 const create = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
@@ -84,6 +106,9 @@ const list = catchAsync(async (req, res) => {
     'fullName',
     'email',
     'employeeId',
+    'agent',
+    'agentIds',
+    'employmentStatus',
     'skills',
     'skillLevel',
     'experienceLevel',
@@ -114,7 +139,15 @@ const get = catchAsync(async (req, res) => {
   if (!req.user.canManageCandidates && String(candidate.owner) !== String(req.user._id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
-  res.send(candidate);
+  const obj = candidate.toJSON ? candidate.toJSON() : candidate;
+  const ownerId = obj.owner?.id ?? obj.owner;
+  const ownerIdStr = ownerId ? String(ownerId) : null;
+  let studentId = null;
+  if (ownerId) {
+    const st = await Student.findOne({ user: ownerId }).select('_id').lean();
+    studentId = st?._id?.toString() ?? null;
+  }
+  res.send({ ...obj, studentId, ownerId: ownerIdStr });
 });
 
 const update = catchAsync(async (req, res) => {
@@ -1211,13 +1244,41 @@ const assignRecruiter = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(candidate);
 });
 
-export { addNote, addFeedback, assignRecruiter };
+const listAgentsForFilter = catchAsync(async (req, res) => {
+  const rows = await listAgentUsersForAssignment();
+  res.send({
+    agents: rows.map((u) => ({ id: String(u._id), name: u.name, email: u.email })),
+  });
+});
+
+const listStudentAgentAssignmentsHandler = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can manage agent assignments');
+  }
+  const data = await listStudentAgentAssignments();
+  res.send(data);
+});
+
+const assignAgent = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can assign agents');
+  }
+  const { candidateId } = req.params;
+  const { agentId } = req.body;
+  const candidate = await assignAgentToCandidate(candidateId, agentId);
+  res.status(httpStatus.OK).send(candidate);
+});
+
+export { addNote, addFeedback, assignRecruiter, listAgentsForFilter, listStudentAgentAssignmentsHandler, assignAgent };
 
 /**
  * Update candidate joining date
  */
 const updateJoining = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canUpdateJoiningDate = canUpdateJoiningDate(req);
   const { candidateId } = req.params;
   const { joiningDate } = req.body;
 
@@ -1235,6 +1296,7 @@ const updateJoining = catchAsync(async (req, res) => {
  */
 const updateResign = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canUpdateResignDate = canUpdateResignDate(req);
   const { candidateId } = req.params;
   const { resignDate } = req.body;
 

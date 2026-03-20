@@ -71,6 +71,32 @@ const listAttendance = {
   }),
 };
 
+/** List attendance stored on User (agent / user-based punch), not Student */
+const listAttendanceUser = {
+  params: Joi.object().keys({
+    userId: Joi.string().required().custom(objectId),
+  }),
+  query: Joi.object().keys({
+    startDate: Joi.date().iso(),
+    endDate: Joi.date().iso(),
+    limit: Joi.number().integer().min(1).max(500),
+    page: Joi.number().integer().min(1),
+  }),
+};
+
+/** List attendance by ATS candidate id (resolves Student vs User attendance server-side) */
+const listAttendanceCandidate = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().required().custom(objectId),
+  }),
+  query: Joi.object().keys({
+    startDate: Joi.date().iso(),
+    endDate: Joi.date().iso(),
+    limit: Joi.number().integer().min(1).max(500),
+    page: Joi.number().integer().min(1),
+  }),
+};
+
 const getStatistics = {
   params: Joi.object().keys({
     studentId: Joi.string().required().custom(objectId),
@@ -192,6 +218,8 @@ export {
   punchIn,
   punchOut,
   listAttendance,
+  listAttendanceUser,
+  listAttendanceCandidate,
   getStatistics,
   punchInMe,
   punchOutMe,

@@ -5,6 +5,7 @@ import catchAsync from '../utils/catchAsync.js';
 import * as studentCourseService from '../services/studentCourse.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 
 /**
  * Get student's courses
@@ -15,7 +16,8 @@ const getStudentCourses = catchAsync(async (req, res) => {
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   
   // Check if student can view own courses or has permission
-  if (req.user.role !== 'admin' && req.user.role !== 'superAdmin') {
+  const isAdmin = await userIsAdmin(req.user);
+  if (!isAdmin) {
     // For students, only allow viewing their own courses
     const studentUserId = req.user.id;
     // TODO: Verify studentId matches student's user ID

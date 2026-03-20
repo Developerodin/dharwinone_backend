@@ -88,6 +88,16 @@ const updateUserById = async (userId, updateBody) => {
   Object.assign(user, updateBody);
   await user.save();
 
+  // Keep linked Candidate phone/country in sync with User (admin PATCH /users, etc.)
+  if (updateBody.phoneNumber !== undefined || updateBody.countryCode !== undefined) {
+    // eslint-disable-next-line import/no-cycle -- candidate.service imports user.service; sync is runtime-only
+    const { syncPhoneFromUserToCandidate } = await import('./candidate.service.js');
+    await syncPhoneFromUserToCandidate(userId, {
+      ...(updateBody.phoneNumber !== undefined && { phoneNumber: user.phoneNumber }),
+      ...(updateBody.countryCode !== undefined && { countryCode: user.countryCode }),
+    });
+  }
+
   // Send confirmation email when candidate account is activated by admin (pending -> active)
   if (updateBody.status === 'active' && previousStatus === 'pending' && user.email) {
     const { sendCandidateAccountActivationEmail } = await import('./email.service.js');

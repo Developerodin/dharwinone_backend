@@ -4,6 +4,7 @@ import Candidate from '../models/candidate.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { uploadMultipleFilesToS3 } from './upload.service.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 
 /**
  * Create a support ticket
@@ -18,7 +19,8 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
   let candidateId = null;
 
   // Check if admin is creating ticket on behalf of a candidate
-  if (user && user.role === 'admin' && ticketData.candidateId) {
+  const isAdmin = user ? await userIsAdmin(user) : false;
+  if (isAdmin && ticketData.candidateId) {
     candidate = await Candidate.findById(ticketData.candidateId);
     if (!candidate) {
       throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
@@ -56,7 +58,7 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
   });
 
   await ticket.populate([
-    { path: 'createdBy', select: 'name email role' },
+    { path: 'createdBy', select: 'name email' },
     { path: 'candidate', select: 'fullName email' },
   ]);
 
@@ -70,27 +72,26 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
  * Query support tickets with filters
  */
 const querySupportTickets = async (filter, options, user) => {
-  if (user.role !== 'admin') {
+  const isAdmin = await userIsAdmin(user);
+  if (!isAdmin) {
     const candidate = await Candidate.findOne({ owner: user.id });
     if (candidate) {
       filter.$or = [{ createdBy: user.id }, { candidate: candidate._id }];
     } else {
       filter.createdBy = user.id;
     }
-  } else if (user.role === 'admin' && user.subRole && user.subRole !== 'Admin') {
-    filter.assignedTo = user.id;
   }
 
   const result = await SupportTicket.paginate(filter, options);
 
   if (result.results && result.results.length > 0) {
     await SupportTicket.populate(result.results, [
-      { path: 'createdBy', select: 'name email role subRole' },
+      { path: 'createdBy', select: 'name email' },
       { path: 'candidate', select: 'fullName email' },
-      { path: 'assignedTo', select: 'name email role subRole' },
+      { path: 'assignedTo', select: 'name email' },
       { path: 'resolvedBy', select: 'name email' },
       { path: 'closedBy', select: 'name email' },
-      { path: 'comments.commentedBy', select: 'name email role subRole' },
+      { path: 'comments.commentedBy', select: 'name email' },
     ]);
 
     const processedTickets = await Promise.all(
@@ -111,14 +112,12 @@ const querySupportTickets = async (filter, options, user) => {
                   typeof comment.commentedBy === 'string'
                     ? comment.commentedBy
                     : comment.commentedBy._id?.toString() || comment.commentedBy.toString();
-                const commenter = await User.findById(commenterId).select('name email role subRole').lean();
+                const commenter = await User.findById(commenterId).select('name email').lean();
                 if (commenter) {
                   comment.commentedBy = {
                     id: commenter._id.toString(),
                     name: commenter.name,
                     email: commenter.email,
-                    role: commenter.role,
-                    subRole: commenter.subRole || null,
                   };
                 }
               } else if (comment.commentedBy?._id) {
@@ -149,7 +148,8 @@ const getSupportTicketById = async (ticketId, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Support ticket not found');
   }
 
-  if (user.role !== 'admin') {
+  const isAdmin = await userIsAdmin(user);
+  if (!isAdmin) {
     const candidate = await Candidate.findOne({ owner: user.id });
     const canView =
       String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
@@ -157,19 +157,15 @@ const getSupportTicketById = async (ticketId, user) => {
     if (!canView) {
       throw new ApiError(httpStatus.FORBIDDEN, 'You can only view your own tickets');
     }
-  } else if (user.role === 'admin' && user.subRole && user.subRole !== 'Admin') {
-    if (!ticket.assignedTo || String(ticket.assignedTo) !== String(user.id)) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'You can only view tickets assigned to you');
-    }
   }
 
   await ticket.populate([
-    { path: 'createdBy', select: 'name email role subRole' },
+    { path: 'createdBy', select: 'name email' },
     { path: 'candidate', select: 'fullName email' },
-    { path: 'assignedTo', select: 'name email role subRole' },
+    { path: 'assignedTo', select: 'name email' },
     { path: 'resolvedBy', select: 'name email' },
     { path: 'closedBy', select: 'name email' },
-    { path: 'comments.commentedBy', select: 'name email role subRole' },
+    { path: 'comments.commentedBy', select: 'name email' },
   ]);
 
   const ticketObj = ticket.toObject ? ticket.toObject() : ticket;
@@ -189,14 +185,12 @@ const getSupportTicketById = async (ticketId, user) => {
             typeof comment.commentedBy === 'string'
               ? comment.commentedBy
               : comment.commentedBy._id?.toString() || comment.commentedBy.toString();
-          const commenter = await User.findById(commenterId).select('name email role subRole').lean();
+          const commenter = await User.findById(commenterId).select('name email').lean();
           if (commenter) {
             comment.commentedBy = {
               id: commenter._id.toString(),
               name: commenter.name,
               email: commenter.email,
-              role: commenter.role,
-              subRole: commenter.subRole || null,
             };
           }
         } else if (comment.commentedBy?._id) {
@@ -220,7 +214,8 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Support ticket not found');
   }
 
-  if (user.role !== 'admin') {
+  const isAdmin = await userIsAdmin(user);
+  if (!isAdmin) {
     const candidate = await Candidate.findOne({ owner: user.id });
     const canUpdate =
       String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
@@ -228,13 +223,9 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
     if (!canUpdate) {
       throw new ApiError(httpStatus.FORBIDDEN, 'You can only update your own tickets');
     }
-  } else if (user.role === 'admin' && user.subRole && user.subRole !== 'Admin') {
-    if (!ticket.assignedTo || String(ticket.assignedTo) !== String(user.id)) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'You can only update tickets assigned to you');
-    }
   }
 
-  if (user.role !== 'admin') {
+  if (!isAdmin) {
     if (updateData.status && updateData.status !== 'Closed') {
       throw new ApiError(httpStatus.FORBIDDEN, 'You can only close your own tickets');
     }
@@ -243,26 +234,11 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
     delete updateData.category;
   }
 
-  if (updateData.assignedTo && user.role === 'admin') {
-    const assignedUser = await User.findById(updateData.assignedTo).select('role subRole');
+  if (updateData.assignedTo && isAdmin) {
+    const assignedUser = await User.findById(updateData.assignedTo).select('roleIds');
 
     if (!assignedUser) {
       throw new ApiError(httpStatus.NOT_FOUND, 'User to assign ticket to not found');
-    }
-
-    if (user.subRole) {
-      if (!assignedUser.subRole) {
-        throw new ApiError(
-          httpStatus.BAD_REQUEST,
-          'Cannot assign ticket to a user without a subRole. Only users with subRoles can be assigned tickets by subRole admins.'
-        );
-      }
-      if (assignedUser.role !== 'admin') {
-        throw new ApiError(
-          httpStatus.BAD_REQUEST,
-          'Cannot assign ticket to a non-admin user. Tickets can only be assigned to admin users with subRoles.'
-        );
-      }
     }
   }
 
@@ -275,12 +251,12 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
   await ticket.save();
 
   await ticket.populate([
-    { path: 'createdBy', select: 'name email role subRole' },
+    { path: 'createdBy', select: 'name email' },
     { path: 'candidate', select: 'fullName email' },
-    { path: 'assignedTo', select: 'name email role subRole' },
+    { path: 'assignedTo', select: 'name email' },
     { path: 'resolvedBy', select: 'name email' },
     { path: 'closedBy', select: 'name email' },
-    { path: 'comments.commentedBy', select: 'name email role subRole' },
+    { path: 'comments.commentedBy', select: 'name email' },
   ]);
 
   const ticketObj = ticket.toObject ? ticket.toObject() : ticket;
@@ -300,14 +276,12 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
             typeof comment.commentedBy === 'string'
               ? comment.commentedBy
               : comment.commentedBy._id?.toString() || comment.commentedBy.toString();
-          const commenter = await User.findById(commenterId).select('name email role subRole').lean();
+          const commenter = await User.findById(commenterId).select('name email').lean();
           if (commenter) {
             comment.commentedBy = {
               id: commenter._id.toString(),
               name: commenter.name,
               email: commenter.email,
-              role: commenter.role,
-              subRole: commenter.subRole || null,
             };
           }
         } else if (comment.commentedBy?._id) {
@@ -331,17 +305,14 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Support ticket not found');
   }
 
-  if (user.role !== 'admin') {
+  const isAdmin = await userIsAdmin(user);
+  if (!isAdmin) {
     const candidate = await Candidate.findOne({ owner: user.id });
     const canComment =
       String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
 
     if (!canComment) {
       throw new ApiError(httpStatus.FORBIDDEN, 'You can only comment on your own tickets');
-    }
-  } else if (user.role === 'admin' && user.subRole && user.subRole !== 'Admin') {
-    if (!ticket.assignedTo || String(ticket.assignedTo) !== String(user.id)) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'You can only comment on tickets assigned to you');
     }
   }
 
@@ -366,16 +337,16 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
     }
   }
 
-  const isAdminComment = user.role === 'admin';
+  const isAdminComment = isAdmin;
   await ticket.addComment(content, user.id, isAdminComment, attachments);
 
   await ticket.populate([
-    { path: 'createdBy', select: 'name email role subRole' },
+    { path: 'createdBy', select: 'name email' },
     { path: 'candidate', select: 'fullName email' },
-    { path: 'assignedTo', select: 'name email role subRole' },
+    { path: 'assignedTo', select: 'name email' },
     { path: 'resolvedBy', select: 'name email' },
     { path: 'closedBy', select: 'name email' },
-    { path: 'comments.commentedBy', select: 'name email role subRole' },
+    { path: 'comments.commentedBy', select: 'name email' },
   ]);
 
   const ticketObj = ticket.toObject ? ticket.toObject() : ticket;
@@ -395,14 +366,12 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
             typeof comment.commentedBy === 'string'
               ? comment.commentedBy
               : comment.commentedBy._id?.toString() || comment.commentedBy.toString();
-          const commenter = await User.findById(commenterId).select('name email role subRole').lean();
+          const commenter = await User.findById(commenterId).select('name email').lean();
           if (commenter) {
             comment.commentedBy = {
               id: commenter._id.toString(),
               name: commenter.name,
               email: commenter.email,
-              role: commenter.role,
-              subRole: commenter.subRole || null,
             };
           }
         } else if (comment.commentedBy?._id) {
@@ -426,7 +395,8 @@ const deleteSupportTicketById = async (ticketId, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Support ticket not found');
   }
 
-  if (user.role !== 'admin') {
+  const isAdmin = await userIsAdmin(user);
+  if (!isAdmin) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can delete tickets');
   }
 

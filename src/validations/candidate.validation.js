@@ -123,6 +123,9 @@ const getCandidates = {
     fullName: Joi.string().trim(),
     email: Joi.string().trim(),
     employeeId: Joi.string().trim(),
+    agent: Joi.string().trim().allow(''),
+    /** Comma-separated agent User ids (assignedAgent filter) */
+    agentIds: Joi.string().trim().allow(''),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
     page: Joi.number().integer(),
@@ -140,6 +143,7 @@ const getCandidates = {
     degree: Joi.string().trim(),
     visaType: Joi.string().trim(),
     skillMatchMode: Joi.string().valid('all', 'any').default('any'),
+    employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
   }),
 };
 
@@ -357,6 +361,25 @@ const assignRecruiter = {
   }),
 };
 
+const listStudentAgentAssignments = {
+  query: Joi.object().keys({}),
+};
+
+const listAgentsForFilter = {
+  query: Joi.object().keys({}),
+};
+
+const assignAgent = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      agentId: Joi.alternatives().try(Joi.string().custom(objectId), Joi.valid(null)).required(),
+    })
+    .required(),
+};
+
 const updateJoiningDate = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
@@ -445,6 +468,9 @@ export {
   addRecruiterNote,
   addRecruiterFeedback,
   assignRecruiter,
+  listStudentAgentAssignments,
+  listAgentsForFilter,
+  assignAgent,
   updateJoiningDate,
   updateResignDate,
   updateWeekOff,

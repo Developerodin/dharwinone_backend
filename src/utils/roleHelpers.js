@@ -28,6 +28,21 @@ export const userIsAgent = async (user) => {
   return !!hasRole;
 };
 
+/**
+ * Check if user has Administrator or Agent role (by roleIds).
+ * Common helper for services that grant access to both admins and agents.
+ * @param {Object} user - User object with roleIds
+ * @returns {Promise<boolean>}
+ */
+export const userIsAdminOrAgent = async (user) => {
+  const roleIds = user?.roleIds || [];
+  if (roleIds.length === 0) return false;
+  const role = await Role.findOne(
+    { _id: { $in: roleIds }, name: { $in: ['Administrator', 'Agent'] }, status: 'active' }
+  );
+  return !!role;
+};
+
 /** Role names that Agents are not allowed to assign (Administrator, Agent, Manager). */
 const RESTRICTED_ROLE_NAMES_FOR_AGENT = ['Administrator', 'Agent', 'Manager'];
 
@@ -45,13 +60,12 @@ export const validateRoleIdsForAgent = async (roleIds) => {
 };
 
 /**
- * Check if user has Candidate role (by roleIds or legacy role string).
- * @param {Object} user - User object with roleIds and optionally role
+ * Check if user has Candidate role (by roleIds).
+ * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}
  */
 export const userHasCandidateRole = async (user) => {
   if (!user) return false;
-  if (user.role === 'user' || user.role === 'candidate') return true;
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;
   const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Candidate', status: 'active' });
@@ -59,13 +73,12 @@ export const userHasCandidateRole = async (user) => {
 };
 
 /**
- * Check if user has Recruiter role (by roleIds or legacy role string).
- * @param {Object} user - User object with roleIds and optionally role
+ * Check if user has Recruiter role (by roleIds).
+ * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}
  */
 export const userHasRecruiterRole = async (user) => {
   if (!user) return false;
-  if (user.role === 'recruiter') return true;
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;
   const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Recruiter', status: 'active' });

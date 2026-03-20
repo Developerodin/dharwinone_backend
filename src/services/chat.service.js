@@ -8,6 +8,44 @@ import * as livekitService from './livekit.service.js';
 import Recording from '../models/recording.model.js';
 import { generatePresignedDownloadUrl, generatePresignedRecordingPlaybackUrl } from '../config/s3.js';
 
+/** Same presigned TTL as user profilePicture (auth.controller, candidate.service). */
+const PROFILE_PICTURE_PRESIGN_TTL_SEC = 7 * 24 * 3600;
+
+/**
+ * Strip internal fields; for groups with an avatar key, attach fresh presigned URLs (same pattern as profile pic).
+ * Supports legacy `avatarKey` in DB until migrated by a new upload.
+ */
+const formatConversationForClient = async (conv) => {
+  if (!conv) return conv;
+  const out = { ...conv, id: conv.id || conv._id?.toString() };
+  delete out._id;
+  delete out.avatarKey;
+
+  if (conv.type === 'group') {
+    const key = conv.avatar?.key || conv.avatarKey;
+    if (key) {
+      try {
+        const freshUrl = await generatePresignedDownloadUrl(key, PROFILE_PICTURE_PRESIGN_TTL_SEC);
+        out.avatar = {
+          key,
+          url: freshUrl,
+          originalName: conv.avatar?.originalName,
+          size: conv.avatar?.size,
+          mimeType: conv.avatar?.mimeType,
+        };
+        out.avatarUrl = freshUrl;
+      } catch {
+        // Same as profile pic: no public URL without a successful presign
+      }
+    } else {
+      delete out.avatar;
+    }
+  } else {
+    delete out.avatar;
+  }
+  return out;
+};
+
 const ensureParticipant = async (conversationId, userId) => {
   const conv = await Conversation.findById(conversationId).lean();
   if (!conv) throw new ApiError(httpStatus.NOT_FOUND, 'Conversation not found');
@@ -31,6 +69,70 @@ const getConversationParticipantIds = async (conversationId) => {
   const conv = await Conversation.findById(conversationId).lean();
   if (!conv) return [];
   return (conv.participants || []).map((p) => p.user.toString());
+};
+
+/** Normalize Mongo id / populated user / string for comparisons */
+const toIdString = (x) => {
+  if (x == null || x === '') return '';
+  if (typeof x === 'string') return x;
+  if (typeof x === 'object') {
+    if (x._id != null) return String(x._id);
+    if (x.id != null) return String(x.id);
+  }
+  return String(x);
+};
+
+/**
+ * Personal call log fields: direction relative to viewer, peer = other party (or group label).
+ * Keeps existing caller, participants, conversation on the object.
+ */
+const enrichCallForViewer = (call, viewerUserId) => {
+  const viewer = toIdString(viewerUserId);
+  const callerId = toIdString(call.caller);
+  const direction = callerId && viewer && callerId === viewer ? 'outgoing' : 'incoming';
+
+  const conv = call.conversation;
+  const isGroup =
+    conv && typeof conv === 'object' && conv.type === 'group';
+
+  const participantUsers = (call.participants || []).map((p) => ({
+    id: toIdString(p),
+    name: (p && p.name) || 'Unknown',
+    email: p && p.email,
+  }));
+
+  const others = participantUsers.filter((p) => p.id && p.id !== viewer);
+
+  let peer = { name: 'Unknown' };
+
+  if (isGroup) {
+    const name = conv && typeof conv.name === 'string' && conv.name.trim() ? conv.name.trim() : 'Group';
+    peer = { name, isGroup: true };
+  } else if (others.length === 1) {
+    peer = { id: others[0].id, name: others[0].name, email: others[0].email };
+  } else if (others.length > 1) {
+    peer = {
+      name: others
+        .map((o) => o.name)
+        .filter(Boolean)
+        .join(', ') || 'Unknown',
+      isGroup: true,
+    };
+  } else if (direction === 'incoming' && call.caller && typeof call.caller === 'object') {
+    peer = {
+      id: callerId,
+      name: call.caller.name || 'Unknown',
+      email: call.caller.email,
+    };
+  } else if (direction === 'outgoing' && call.caller && typeof call.caller === 'object' && callerId !== viewer) {
+    peer = {
+      id: callerId,
+      name: call.caller.name || 'Unknown',
+      email: call.caller.email,
+    };
+  }
+
+  return { direction, peer };
 };
 
 const listConversations = async (userId, { page = 1, limit = 20 }) => {
@@ -81,7 +183,8 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     });
   }
   const total = await Conversation.countDocuments({ 'participants.user': new mongoose.Types.ObjectId(userId) });
-  return { results: result, page, limit, totalPages: Math.ceil(total / limit) };
+  const enrichedResults = await Promise.all(result.map((r) => formatConversationForClient({ ...r })));
+  return { results: enrichedResults, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
 const createConversation = async (userId, { type, participantIds, name }) => {
@@ -101,7 +204,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     })
       .populate('participants.user', 'name email')
       .lean();
-    if (existing) return { ...existing, id: existing._id?.toString() };
+    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() });
   }
 
   if (type === 'group') {
@@ -117,7 +220,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
       const gIds = (g.participants || []).map((p) => p.user?._id?.toString?.()).filter(Boolean);
       return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
     });
-    if (existing) return { ...existing, id: existing._id?.toString() };
+    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() });
   }
 
   const participants = allParticipantIds.map((id, idx) => ({
@@ -131,7 +234,9 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     name: type === 'group' ? name || 'Group' : undefined,
     createdBy: userId,
   });
-  return conv.populate(['participants.user', 'createdBy']);
+  const populated = await conv.populate(['participants.user', 'createdBy']);
+  const plain = populated.toObject();
+  return formatConversationForClient({ ...plain, id: plain._id?.toString() });
 };
 
 const getConversation = async (conversationId, userId) => {
@@ -140,8 +245,8 @@ const getConversation = async (conversationId, userId) => {
     .populate('participants.user', 'name email')
     .populate('createdBy', 'name email')
     .lean();
-  const result = { ...conv, id: conv._id?.toString() };
-  return result;
+  if (!conv) throw new ApiError(httpStatus.NOT_FOUND, 'Conversation not found');
+  return formatConversationForClient({ ...conv, id: conv._id?.toString() });
 };
 
 const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
@@ -290,8 +395,15 @@ const listCallsForConversation = async (conversationId, userId, { limit = 50 } =
     .sort({ createdAt: -1 })
     .limit(limit)
     .populate('caller', 'name email')
+    .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email')
+    .populate('conversation')
     .lean();
-  return calls.map((c) => ({ ...c, id: c._id?.toString() }));
+  return calls.map((c) => {
+    const item = { ...c, id: c._id?.toString() };
+    Object.assign(item, enrichCallForViewer(item, userId));
+    return item;
+  });
 };
 
 const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
@@ -303,6 +415,7 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
     .limit(limit)
     .populate('caller', 'name email')
     .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email')
     .populate('conversation')
     .lean();
   const total = await ChatCall.countDocuments(filter);
@@ -329,6 +442,44 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
   };
 };
 
+/** In-app Calls tab: always scoped to viewer participations; adds direction + peer */
+const listCallsForUser = async (userId, { page = 1, limit = 20 } = {}) => {
+  const skip = (page - 1) * limit;
+  const filter = { $or: [{ caller: userId }, { participants: userId }] };
+  const calls = await ChatCall.find(filter)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('caller', 'name email')
+    .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email')
+    .populate('conversation')
+    .lean();
+  const total = await ChatCall.countDocuments(filter);
+  const results = [];
+  for (const c of calls) {
+    const item = { ...c, id: c._id?.toString() };
+    if (c.recordingId) {
+      try {
+        const rec = await Recording.findById(c.recordingId).lean();
+        if (rec && rec.status === 'completed' && rec.filePath) {
+          item.recordingUrl = await generatePresignedRecordingPlaybackUrl(rec.filePath, 3600);
+        }
+      } catch {
+        item.recordingUrl = null;
+      }
+    }
+    Object.assign(item, enrichCallForViewer(item, userId));
+    results.push(item);
+  }
+  return {
+    results,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+};
+
 const createCall = async (conversationId, userId, { callType }) => {
   const conv = await ensureParticipant(conversationId, userId);
   const roomName = `chat-${conversationId}-${Date.now()}`;
@@ -342,11 +493,11 @@ const createCall = async (conversationId, userId, { callType }) => {
     livekitRoom: roomName,
     startedAt: new Date(),
   });
-  const populated = await call.populate(['caller', 'participants', 'conversation']);
+  const populated = await call.populate(['caller', 'participants', 'roomJoinedUserIds', 'conversation']);
   return { call: populated, roomName };
 };
 
-const updateCall = async (callId, userId, { status, duration }) => {
+const updateCall = async (callId, userId, { status, duration, recordRoomJoin }) => {
   const call = await ChatCall.findById(callId).lean();
   if (!call) throw new ApiError(httpStatus.NOT_FOUND, 'Call not found');
   const isParticipant = call.caller.toString() === userId || call.participants?.some((p) => p.toString() === userId);
@@ -358,7 +509,20 @@ const updateCall = async (callId, userId, { status, duration }) => {
   if (status === 'completed' || status === 'missed' || status === 'declined' || status === 'ended') {
     update.endedAt = new Date();
   }
-  const updated = await ChatCall.findByIdAndUpdate(callId, { $set: update }, { new: true }).populate('caller participants');
+
+  const mongoUpdate = {};
+  if (Object.keys(update).length) mongoUpdate.$set = update;
+  if (recordRoomJoin === true) {
+    mongoUpdate.$addToSet = { roomJoinedUserIds: new mongoose.Types.ObjectId(userId) };
+  }
+  if (!mongoUpdate.$set && !mongoUpdate.$addToSet) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'No valid updates');
+  }
+
+  const updated = await ChatCall.findByIdAndUpdate(callId, mongoUpdate, { new: true })
+    .populate('caller', 'name email')
+    .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email');
   return updated;
 };
 
@@ -393,6 +557,7 @@ const getActiveCallForConversation = async (conversationId, userId) => {
     .limit(5)
     .populate('caller', 'name email')
     .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email')
     .populate('conversation')
     .lean();
 
@@ -506,6 +671,23 @@ const updateGroupName = async (conversationId, userId, { name }) => {
   return getConversation(conversationId, userId);
 };
 
+/** Persist full upload result like User.profilePicture (see uploadFileToS3 + personal-information flow). */
+const setGroupConversationAvatar = async (conversationId, userId, uploadResult) => {
+  await ensureAdmin(conversationId, userId);
+  const avatar = {
+    key: uploadResult.key,
+    url: uploadResult.url,
+    originalName: uploadResult.originalName,
+    size: uploadResult.size,
+    mimeType: uploadResult.mimeType,
+  };
+  await Conversation.findByIdAndUpdate(conversationId, {
+    $set: { avatar },
+    $unset: { avatarKey: '' },
+  });
+  return getConversation(conversationId, userId);
+};
+
 const deleteConversation = async (conversationId, userId) => {
   const conv = await ensureParticipant(conversationId, userId);
   if (conv.type === 'group') {
@@ -532,6 +714,7 @@ export {
   reactToMessage,
   markAsRead,
   listCalls,
+  listCallsForUser,
   listCallsForConversation,
   getActiveCallForConversation,
   endCallByRoom,
@@ -543,5 +726,6 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  setGroupConversationAvatar,
   deleteConversation,
 };

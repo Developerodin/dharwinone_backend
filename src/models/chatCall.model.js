@@ -6,6 +6,8 @@ const chatCallSchema = new mongoose.Schema(
     conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true },
     caller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    /** Users who actually connected to the LiveKit room (subset of participants). */
+    roomJoinedUserIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     callType: { type: String, enum: ['audio', 'video'], required: true },
     status: {
       type: String,

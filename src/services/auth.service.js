@@ -7,6 +7,8 @@ import Token from '../models/token.model.js';
 import Impersonation from '../models/impersonation.model.js';
 import ApiError from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
+import { userHasCandidateRole } from '../utils/roleHelpers.js';
+import { getResignStatusByOwnerId } from './candidate.service.js';
 
 /**
  * Login with username and password
@@ -67,6 +69,20 @@ const refreshAuth = async (refreshToken, req = null) => {
     const user = await getUserById(payload.sub);
     if (!user || user.status !== 'active') throw new Error();
 
+    const hasCandidateRole = await userHasCandidateRole(user);
+    if (hasCandidateRole) {
+      const { resigned } = await getResignStatusByOwnerId(user._id);
+      if (resigned) {
+        throw new ApiError(
+          httpStatus.FORBIDDEN,
+          'You have resigned and cannot sign in. Please contact an administrator for more information.',
+          true,
+          '',
+          { errorCode: 'CANDIDATE_RESIGNED' }
+        );
+      }
+    }
+
     await refreshTokenDoc.deleteOne();
 
     if (payload.impersonation) {
@@ -77,6 +93,9 @@ const refreshAuth = async (refreshToken, req = null) => {
     }
     return generateAuthTokens(user, req);
   } catch (error) {
+    if (error instanceof ApiError && error.errorCode === 'CANDIDATE_RESIGNED') {
+      throw error;
+    }
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate');
   }
 };

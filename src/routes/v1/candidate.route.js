@@ -2,15 +2,20 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import documentAuth from '../../middlewares/documentAuth.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
+import requireCandidateAttendanceList from '../../middlewares/requireCandidateAttendanceList.js';
 import { uploadSingle } from '../../middlewares/upload.js';
 import validate from '../../middlewares/validate.js';
 import * as candidateValidation from '../../validations/candidate.validation.js';
+import * as attendanceValidation from '../../validations/attendance.validation.js';
+import attendanceController from '../../controllers/attendance.controller.js';
 import * as candidateController from '../../controllers/candidate.controller.js';
 
 const router = express.Router();
 
 const canRead = [auth(), requirePermissions('candidates.read')];
 const canManage = [auth(), requirePermissions('candidates.manage')];
+const canUpdateJoiningDate = [auth(), requirePermissions('candidates.joiningDate')];
+const canUpdateResignDate = [auth(), requirePermissions('candidates.resignDate')];
 
 router
   .route('/')
@@ -22,6 +27,22 @@ router
   .route('/me')
   .get(auth(), candidateController.getMyCandidate)
   .patch(auth(), validate(candidateValidation.updateMyCandidate), candidateController.updateMyCandidate);
+
+/** All Agent-role users for ATS candidate filter (checklist) — candidates.read */
+router.get(
+  '/agents',
+  ...canRead,
+  validate(candidateValidation.listAgentsForFilter),
+  candidateController.listAgentsForFilter
+);
+
+/** Training students ↔ agents — must be before /:candidateId */
+router.get(
+  '/student-agent-assignments',
+  ...canManage,
+  validate(candidateValidation.listStudentAgentAssignments),
+  candidateController.listStudentAgentAssignmentsHandler
+);
 
 router
   .route('/export')
@@ -62,6 +83,10 @@ router
   .post(...canManage, validate(candidateValidation.assignRecruiter), candidateController.assignRecruiter);
 
 router
+  .route('/:candidateId/assign-agent')
+  .post(...canManage, validate(candidateValidation.assignAgent), candidateController.assignAgent);
+
+router
   .route('/week-off')
   .post(...canManage, validate(candidateValidation.updateWeekOff), candidateController.updateWeekOff);
 
@@ -75,11 +100,20 @@ router
 
 router
   .route('/:candidateId/joining-date')
-  .patch(...canManage, validate(candidateValidation.updateJoiningDate), candidateController.updateJoining);
+  .patch(...canUpdateJoiningDate, validate(candidateValidation.updateJoiningDate), candidateController.updateJoining);
 
 router
   .route('/:candidateId/resign-date')
-  .patch(...canManage, validate(candidateValidation.updateResignDate), candidateController.updateResign);
+  .patch(...canUpdateResignDate, validate(candidateValidation.updateResignDate), candidateController.updateResign);
+
+/** Training attendance for this candidate (Student or user-based punch) — must be before generic /:candidateId */
+router.get(
+  '/:candidateId/attendance',
+  auth(),
+  requireCandidateAttendanceList,
+  validate(attendanceValidation.listAttendanceCandidate),
+  attendanceController.getAttendanceByCandidate
+);
 
 router
   .route('/:candidateId')

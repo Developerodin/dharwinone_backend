@@ -30,6 +30,7 @@ const errorHandler = (err, req, res, next) => {
     code: statusCode,
     message,
     ...(err.subCode && { error: err.subCode }),
+    ...(err.errorCode && { errorCode: err.errorCode }),
     ...(err.details && { details: err.details }),
     ...(config.env === 'development' && { stack: err.stack }),
   };
