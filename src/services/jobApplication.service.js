@@ -128,13 +128,18 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
   ]);
 
   if (status != null && status !== undefined && application.candidate?.email) {
-    const { notifyByEmail } = await import('./notification.service.js');
+    const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
     const jobTitle = application.job?.title || 'Job';
+    const msg = `Your application for "${jobTitle}" is now ${application.status}.`;
     notifyByEmail(application.candidate.email, {
       type: 'job_application',
       title: `Application status: ${application.status}`,
-      message: `Your application for "${jobTitle}" is now ${application.status}.`,
+      message: msg,
       link: '/ats/my-applications',
+      email: {
+        subject: `Application status: ${application.status} — ${jobTitle}`,
+        text: plainTextEmailBody(msg, '/ats/my-applications'),
+      },
     }).catch(() => {});
   }
 

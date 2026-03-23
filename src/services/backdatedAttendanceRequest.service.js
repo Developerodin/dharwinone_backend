@@ -549,12 +549,19 @@ const approveBackdatedAttendanceRequest = async (requestId, adminComment, user) 
     );
   }
 
-  const { notifyByEmail } = await import('./notification.service.js');
+  const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
+  const approvedBdMsg = adminComment
+    ? `Your request was approved. Comment: ${adminComment}`
+    : 'Your backdated attendance request was approved.';
   notifyByEmail(emailForNotify, {
     type: 'leave',
     title: 'Backdated attendance request approved',
-    message: adminComment ? `Your request was approved. Comment: ${adminComment}` : 'Your backdated attendance request was approved.',
+    message: approvedBdMsg,
     link: '/settings/attendance/backdated-attendance-requests',
+    email: {
+      subject: 'Backdated attendance request approved',
+      text: plainTextEmailBody(approvedBdMsg, '/settings/attendance/backdated-attendance-requests'),
+    },
   }).catch(() => {});
 
   await BackdatedAttendanceRequest.populate(request, [
@@ -601,12 +608,19 @@ const rejectBackdatedAttendanceRequest = async (requestId, adminComment, user) =
   await request.save();
 
   const emailForNotify = request.user != null ? (request.userEmail || '') : request.studentEmail;
-  const { notifyByEmail } = await import('./notification.service.js');
+  const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
+  const rejectedBdMsg = adminComment
+    ? `Your request was not approved. Comment: ${adminComment}`
+    : 'Your backdated attendance request was rejected.';
   notifyByEmail(emailForNotify, {
     type: 'leave',
     title: 'Backdated attendance request rejected',
-    message: adminComment ? `Your request was not approved. Comment: ${adminComment}` : 'Your backdated attendance request was rejected.',
+    message: rejectedBdMsg,
     link: '/settings/attendance/backdated-attendance-requests',
+    email: {
+      subject: 'Backdated attendance request rejected',
+      text: plainTextEmailBody(rejectedBdMsg, '/settings/attendance/backdated-attendance-requests'),
+    },
   }).catch(() => {});
 
   await BackdatedAttendanceRequest.populate(request, [

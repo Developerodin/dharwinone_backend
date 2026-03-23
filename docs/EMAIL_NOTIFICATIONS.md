@@ -19,8 +19,8 @@ All emails are sent via **nodemailer** using the SMTP config in `config.email` (
 |------|-----|
 | **A)** User registers as candidate (with invite) | **Trigger:** `POST /v1/auth/register` with `role: 'user'` and `adminId`. **Flow:** `auth.controller.register` → creates User (pending) + Candidate → `generateVerifyEmailToken` → `sendVerificationEmail(user.email, token)`. |
 | **B)** Logged-in user requests verification email | **Trigger:** `POST /v1/auth/send-verification-email` (auth required). **Flow:** `auth.controller.sendVerificationEmail` → `generateVerifyEmailToken(req.user)` → `sendVerificationEmail(req.user.email, token)`. |
-| **C)** Recruiter resends verification for a candidate | **Trigger:** `POST /v1/candidates/:candidateId/resend-verification-email` (candidates.manage). **Flow:** `candidate.controller.resendVerificationEmail` → `candidate.service.resendCandidateVerificationEmail` → `sendVerificationEmail(candidate.email, token)`. |
-| **Content** | Subject: "Email Verification". Body: link to frontend `/verify-email?token=...`. HTML + plain text. |
+| **C)** Recruiter resends verification for a candidate | **Trigger:** `POST /v1/candidates/:candidateId/resend-verification-email` (candidates.manage). **Flow:** `candidate.controller.resendVerificationEmail` → `candidate.service.resendCandidateVerificationEmail` → resolve **owner User** (fallback: user by `candidate.email`) → `generateVerifyEmailToken(user)` → `sendVerificationEmail(user.email, token, { req })`. Response includes `sentToEmail` (actual inbox). |
+| **Content** | Subject: "Email Verification". Body: link to frontend `/authentication/verify-email/?token=...` (from `getFrontendBaseUrl`). HTML + plain text. |
 
 ---
 
@@ -103,3 +103,9 @@ All emails are sent via **nodemailer** using the SMTP config in `config.email` (
 - **Frontend base URL** (for links in emails): `config.frontendBaseUrl` (e.g. reset, verify, sign-in, onboarding, meeting join).
 
 All sending goes through `email.service.sendEmail(to, subject, text, html)`; templates that support it include both `text` and `html` for compatibility.
+
+---
+
+## See also
+
+- **[NOTIFICATION_TRIGGERS.md](./NOTIFICATION_TRIGGERS.md)** — in-app notification entry points, `type` → email preference mapping, and idempotency (e.g. Bolna post-call).

@@ -55,6 +55,7 @@ const list = catchAsync(async (req, res) => {
     'createdBy',
     'search',
     'forCandidates',
+    'jobOrigin',
   ]);
 
   filter.userRoleIds = req.user.roleIds || [];
@@ -268,7 +269,7 @@ const browseApply = catchAsync(async (req, res) => {
 });
 
 const browseJobs = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'jobType', 'location', 'experienceLevel', 'search']);
+  const filter = pick(req.query, ['title', 'jobType', 'location', 'experienceLevel', 'search', 'jobOrigin']);
   filter.status = 'Active';
   filter.forCandidates = true;
   const options = pick(req.query, ['sortBy', 'limit', 'page']);

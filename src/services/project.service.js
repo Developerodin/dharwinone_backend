@@ -20,7 +20,7 @@ const createProject = async (createdById, payload) => {
     { path: 'assignedTo', select: 'name email' },
     { path: 'assignedTeams', select: 'name' },
   ]);
-  const assigneeIds = (project.assignedTo || []).map((u) => u._id).filter(Boolean);
+  const assigneeIds = [...new Set((project.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
   if (assigneeIds.length) {
     const { notify } = await import('./notification.service.js');
     const link = `/projects/${project._id}`;
@@ -102,8 +102,8 @@ const updateProjectById = async (id, updateBody, currentUser) => {
     { path: 'assignedTeams', select: 'name' },
   ]);
 
-  const newAssigneeIds = (project.assignedTo || []).map((u) => u._id).filter(Boolean);
-  const addedIds = newAssigneeIds.filter((uid) => !oldAssigneeIds.has(String(uid)));
+  const newAssigneeIds = [...new Set((project.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
+  const addedIds = newAssigneeIds.filter((uid) => !oldAssigneeIds.has(uid));
   if (addedIds.length) {
     const { notify } = await import('./notification.service.js');
     const link = `/projects/${project._id}`;

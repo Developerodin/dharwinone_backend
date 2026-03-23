@@ -203,7 +203,7 @@ If you did not request any password resets, then ignore this email.`;
 const sendVerificationEmail = async (to, token, options = {}) => {
   const subject = 'Email Verification';
   const frontendBase = getFrontendBaseUrl(options.req, options.frontendBaseUrl);
-  const verificationEmailUrl = `${frontendBase}/verify-email?token=${token}`;
+  const verificationEmailUrl = `${frontendBase}/authentication/verify-email/?token=${encodeURIComponent(token)}`;
   const text = `Dear user,
 
 To verify your email, click on this link: ${verificationEmailUrl}
@@ -401,6 +401,11 @@ If you have any questions, please contact support.`;
  * @returns {Promise}
  */
 const sendMeetingInvitationEmail = async (to, payload) => {
+  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    logger.debug(`Skipping meeting invitation email to ${to} (notification preferences)`);
+    return;
+  }
   const { title, scheduledAt, durationMinutes, publicMeetingUrl } = payload;
   const subject = `Meeting Invitation: ${title || 'Dharwin Meeting'}`;
   const scheduled = scheduledAt ? new Date(scheduledAt).toLocaleString() : 'TBD';

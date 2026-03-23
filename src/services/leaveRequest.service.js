@@ -178,12 +178,19 @@ const approveLeaveRequest = async (requestId, adminComment, user) => {
       user
     );
 
-    const { notifyByEmail } = await import('./notification.service.js');
+    const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
+    const approvedMsg = adminComment
+      ? `Your leave request has been approved. Comment: ${adminComment}`
+      : 'Your leave request has been approved.';
     notifyByEmail(leaveRequest.studentEmail, {
       type: 'leave',
       title: 'Leave request approved',
-      message: adminComment ? `Your leave request has been approved. Comment: ${adminComment}` : 'Your leave request has been approved.',
+      message: approvedMsg,
       link: '/settings/attendance/leave-requests',
+      email: {
+        subject: 'Leave request approved',
+        text: plainTextEmailBody(approvedMsg, '/settings/attendance/leave-requests'),
+      },
     }).catch(() => {});
 
     return {
@@ -231,12 +238,19 @@ const rejectLeaveRequest = async (requestId, adminComment, user) => {
   leaveRequest.reviewedAt = new Date();
   await leaveRequest.save();
 
-  const { notifyByEmail } = await import('./notification.service.js');
+  const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
+  const rejectedMsg = adminComment
+    ? `Your leave request was not approved. Comment: ${adminComment}`
+    : 'Your leave request was not approved.';
   notifyByEmail(leaveRequest.studentEmail, {
     type: 'leave',
     title: 'Leave request rejected',
-    message: adminComment ? `Your leave request was not approved. Comment: ${adminComment}` : 'Your leave request was not approved.',
+    message: rejectedMsg,
     link: '/settings/attendance/leave-requests',
+    email: {
+      subject: 'Leave request rejected',
+      text: plainTextEmailBody(rejectedMsg, '/settings/attendance/leave-requests'),
+    },
   }).catch(() => {});
 
   return leaveRequest.populate([

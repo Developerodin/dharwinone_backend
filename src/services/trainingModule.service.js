@@ -452,30 +452,58 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
 
   const moduleName = updated.moduleName || module.moduleName || 'Training module';
   const link = '/training/curriculum/modules';
-  const { notify } = await import('./notification.service.js');
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
 
   for (const studentId of addedStudents) {
     const student = await Student.findById(studentId).select('user').lean();
     if (student?.user) {
-      notify(student.user, { type: 'course', title: 'Course assigned', message: `You have been assigned to "${moduleName}".`, link }).catch(() => {});
+      const msg = `You have been assigned to "${moduleName}".`;
+      notify(student.user, {
+        type: 'course',
+        title: 'Course assigned',
+        message: msg,
+        link,
+        email: { subject: `Course assigned: ${moduleName}`, text: plainTextEmailBody(msg, link) },
+      }).catch(() => {});
     }
   }
   for (const studentId of removedStudents) {
     const student = await Student.findById(studentId).select('user').lean();
     if (student?.user) {
-      notify(student.user, { type: 'course', title: 'Removed from course', message: `You have been removed from "${moduleName}".`, link }).catch(() => {});
+      const msg = `You have been removed from "${moduleName}".`;
+      notify(student.user, {
+        type: 'course',
+        title: 'Removed from course',
+        message: msg,
+        link,
+        email: { subject: `Removed from course: ${moduleName}`, text: plainTextEmailBody(msg, link) },
+      }).catch(() => {});
     }
   }
   for (const mentorId of addedMentors) {
     const mentor = await Mentor.findById(mentorId).select('user').lean();
     if (mentor?.user) {
-      notify(mentor.user, { type: 'course', title: 'Mentor assigned', message: `You have been assigned as mentor to "${moduleName}".`, link }).catch(() => {});
+      const msg = `You have been assigned as mentor to "${moduleName}".`;
+      notify(mentor.user, {
+        type: 'course',
+        title: 'Mentor assigned',
+        message: msg,
+        link,
+        email: { subject: `Mentor assigned: ${moduleName}`, text: plainTextEmailBody(msg, link) },
+      }).catch(() => {});
     }
   }
   for (const mentorId of removedMentors) {
     const mentor = await Mentor.findById(mentorId).select('user').lean();
     if (mentor?.user) {
-      notify(mentor.user, { type: 'course', title: 'Mentor removed', message: `You have been removed as mentor from "${moduleName}".`, link }).catch(() => {});
+      const msg = `You have been removed as mentor from "${moduleName}".`;
+      notify(mentor.user, {
+        type: 'course',
+        title: 'Mentor removed',
+        message: msg,
+        link,
+        email: { subject: `Mentor removed: ${moduleName}`, text: plainTextEmailBody(msg, link) },
+      }).catch(() => {});
     }
   }
 

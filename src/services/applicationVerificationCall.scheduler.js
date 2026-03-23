@@ -73,13 +73,14 @@ async function findApplicationsNeedingCalls() {
       })
       .populate({
         path: 'job',
-        select: 'title organisation jobType location experienceLevel salaryRange',
+        select: 'title organisation jobType location experienceLevel salaryRange jobOrigin',
       })
       .limit(10)
       .lean();
     
-    // Filter to only those with valid phone numbers
+    // Filter to only those with valid phone numbers; skip applications to external mirrored jobs
     return applications.filter((app) => {
+      if (app.job?.jobOrigin === 'external') return false;
       const phone = app.candidate?.phoneNumber;
       const countryCode = app.candidate?.countryCode;
       return phone && countryCode;

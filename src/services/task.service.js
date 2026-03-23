@@ -19,17 +19,23 @@ const createTask = async (createdById, payload) => {
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
   ]);
-  const assignedIds = (task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean);
+  const assignedIds = [...new Set((task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
   const creatorStr = String(createdById);
   if (assignedIds.length > 0) {
-    const { notify } = await import('./notification.service.js');
+    const { notify, plainTextEmailBody } = await import('./notification.service.js');
+    const linkPath = '/task/my-tasks';
+    const taskMsg = `"${task.title || 'Task'}" has been assigned to you.`;
     for (const uid of assignedIds) {
       if (uid !== creatorStr) {
         notify(uid, {
           type: 'task',
           title: 'Task assigned to you',
-          message: `"${task.title || 'Task'}" has been assigned to you.`,
-          link: '/task/my-tasks',
+          message: taskMsg,
+          link: linkPath,
+          email: {
+            subject: `Task assigned: ${task.title || 'Task'}`,
+            text: plainTextEmailBody(taskMsg, linkPath),
+          },
         }).catch(() => {});
       }
     }
@@ -119,17 +125,22 @@ const updateTaskById = async (id, updateBody, currentUser) => {
     { path: 'projectId', select: 'name' },
   ]);
   const newAssigned = new Set((task.assignedTo || []).map((u) => String(u._id || u)));
-  const creatorStr = String(task.createdBy?._id || task.createdBy);
   const currentStr = String(currentUser.id || currentUser._id);
   const newlyAssigned = [...newAssigned].filter((uid) => !prevAssigned.has(uid) && uid !== currentStr);
   if (newlyAssigned.length > 0) {
-    const { notify } = await import('./notification.service.js');
+    const { notify, plainTextEmailBody } = await import('./notification.service.js');
+    const linkPath = '/task/my-tasks';
+    const taskMsg = `"${task.title || 'Task'}" has been assigned to you.`;
     for (const uid of newlyAssigned) {
       notify(uid, {
         type: 'task',
         title: 'Task assigned to you',
-        message: `"${task.title || 'Task'}" has been assigned to you.`,
-        link: '/task/my-tasks',
+        message: taskMsg,
+        link: linkPath,
+        email: {
+          subject: `Task assigned: ${task.title || 'Task'}`,
+          text: plainTextEmailBody(taskMsg, linkPath),
+        },
       }).catch(() => {});
     }
   }
@@ -158,24 +169,35 @@ const updateTaskStatusById = async (id, status, order, currentUser) => {
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
   ]);
-  const { notify } = await import('./notification.service.js');
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
   const currentStr = String(currentUser.id || currentUser._id);
+  const statusMsg = `"${task.title || 'Task'}" is now ${status}.`;
   if (creatorId && String(creatorId) !== currentStr) {
+    const boardPath = '/task/kanban-board';
     notify(creatorId, {
       type: 'task',
       title: 'Task status updated',
-      message: `"${task.title || 'Task'}" is now ${status}.`,
-      link: '/task/kanban-board',
+      message: statusMsg,
+      link: boardPath,
+      email: {
+        subject: `Task update: ${task.title || 'Task'}`,
+        text: plainTextEmailBody(statusMsg, boardPath),
+      },
     }).catch(() => {});
   }
-  const assignedIds = (task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean);
+  const assignedIds = [...new Set((task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
+  const myTasksPath = '/task/my-tasks';
   for (const uid of assignedIds) {
     if (uid !== currentStr && uid !== String(creatorId)) {
       notify(uid, {
         type: 'task',
         title: 'Task status updated',
-        message: `"${task.title || 'Task'}" is now ${status}.`,
-        link: '/task/my-tasks',
+        message: statusMsg,
+        link: myTasksPath,
+        email: {
+          subject: `Task update: ${task.title || 'Task'}`,
+          text: plainTextEmailBody(statusMsg, myTasksPath),
+        },
       }).catch(() => {});
     }
   }

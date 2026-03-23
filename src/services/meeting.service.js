@@ -497,12 +497,24 @@ export const sendUpcomingMeetingReminders = async () => {
     const publicUrl = getPublicMeetingUrl(m.meetingId);
     const title = m.title || 'Meeting';
     const message = `Your meeting "${title}" starts in 15 minutes.`;
+    const remindedUserIds = new Set();
     for (const email of emails) {
       const user = await User.findOne({ email: new RegExp(`^${String(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
         .select('_id')
         .lean();
-      if (user) {
-        notify(user._id, { type: 'meeting_reminder', title: 'Meeting reminder', message, link: publicUrl }).catch(() => {});
+      const uid = user?._id ? String(user._id) : '';
+      if (user && uid && !remindedUserIds.has(uid)) {
+        remindedUserIds.add(uid);
+        notify(user._id, {
+          type: 'meeting_reminder',
+          title: 'Meeting reminder',
+          message,
+          link: publicUrl,
+          email: {
+            subject: `Reminder: ${title} starts soon`,
+            text: `${message}\n\n${publicUrl}`,
+          },
+        }).catch(() => {});
       }
     }
   }

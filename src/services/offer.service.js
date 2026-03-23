@@ -153,27 +153,38 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     }
     delete updateBody.status;
 
-    const { notifyByEmail, notify } = await import('./notification.service.js');
+    const { notifyByEmail, notify, plainTextEmailBody } = await import('./notification.service.js');
     const jobObj = offer.job && typeof offer.job === 'object' && offer.job.title ? offer.job : await getJobById(offer.job);
     const jobTitle = jobObj?.title || 'Job';
     if (newStatus === 'Sent') {
       const cand = await Candidate.findById(offer.candidate).select('email').lean();
       if (cand?.email) {
+        const msg = `An offer for "${jobTitle}" has been sent to you.`;
         notifyByEmail(cand.email, {
           type: 'offer',
           title: 'Offer sent to you',
-          message: `An offer for "${jobTitle}" has been sent to you.`,
+          message: msg,
           link: '/ats/offers-placement',
+          email: {
+            subject: `Offer: ${jobTitle}`,
+            text: plainTextEmailBody(msg, '/ats/offers-placement'),
+          },
         }).catch(() => {});
       }
     } else if (newStatus === 'Accepted' || newStatus === 'Rejected') {
       const creatorId = offer.createdBy?._id || offer.createdBy;
       if (creatorId) {
+        const offersPath = '/ats/offers-placement';
+        const offerUpdMsg = `The offer for "${jobTitle}" was ${newStatus.toLowerCase()} by the candidate.`;
         notify(creatorId, {
           type: 'offer',
           title: `Offer ${newStatus.toLowerCase()}`,
-          message: `The offer for "${jobTitle}" was ${newStatus.toLowerCase()} by the candidate.`,
-          link: '/ats/offers-placement',
+          message: offerUpdMsg,
+          link: offersPath,
+          email: {
+            subject: `Offer ${newStatus}: ${jobTitle}`,
+            text: plainTextEmailBody(offerUpdMsg, offersPath),
+          },
         }).catch(() => {});
       }
     }

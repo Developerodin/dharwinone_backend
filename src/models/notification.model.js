@@ -23,6 +23,7 @@ const notificationSchema = mongoose.Schema(
         'project',
         'account',
         'recruiter',
+        'assignment',
         'general',
       ],
       default: 'general',

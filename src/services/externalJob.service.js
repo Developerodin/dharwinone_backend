@@ -1,6 +1,9 @@
 import httpStatus from 'http-status';
 import ExternalJob from '../models/externalJob.model.js';
+import Job from '../models/job.model.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
+import { syncPublishedJobForExternal, archivePublishedJobIfOrphaned } from './externalJobPublishedJob.service.js';
 
 const SOURCES = {
   'active-jobs-db': {
@@ -199,6 +202,7 @@ async function saveJob(userId, jobData) {
     },
     { upsert: true, new: true }
   );
+  await syncPublishedJobForExternal(doc);
   return doc;
 }
 
@@ -210,11 +214,31 @@ async function getSavedJobs(userId, options = {}) {
     page: options.page || 1,
     ...options,
   });
+
+  // Repair: create/update mirrored Job if missing, or publishedJobId points at a removed Job
+  if (result.results?.length) {
+    for (const doc of result.results) {
+      let needsMirror = !doc.publishedJobId;
+      if (!needsMirror && doc.publishedJobId) {
+        const stillThere = await Job.exists({ _id: doc.publishedJobId });
+        if (!stillThere) needsMirror = true;
+      }
+      if (!needsMirror) continue;
+      try {
+        await syncPublishedJobForExternal(doc);
+      } catch (err) {
+        logger.error(
+          `Mirror Job sync failed for saved external ${doc.externalId} (${doc.source}): ${err?.message || err}`
+        );
+      }
+    }
+  }
+
   return result;
 }
 
 async function unsaveJob(userId, externalId, source) {
-  const doc = await ExternalJob.findOneAndDelete({
+  const doc = await ExternalJob.findOne({
     externalId,
     source: source || { $in: ['active-jobs-db', 'linkedin-jobs-api'] },
     savedBy: userId,
@@ -222,6 +246,10 @@ async function unsaveJob(userId, externalId, source) {
   if (!doc) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Saved job not found.');
   }
+  const extId = doc.externalId;
+  const src = doc.source;
+  await doc.deleteOne();
+  await archivePublishedJobIfOrphaned(extId, src);
   return doc;
 }
 

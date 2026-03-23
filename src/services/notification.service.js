@@ -1,8 +1,54 @@
 import Notification from '../models/notification.model.js';
 import User from '../models/user.model.js';
-import ApiError from '../utils/ApiError.js';
-import httpStatus from 'http-status';
 import logger from '../config/logger.js';
+import { getFrontendBaseUrl } from '../utils/emailLinks.js';
+
+/**
+ * In-app + queued notification entry points: `notify`, `notifyByEmail`, `createNotification`.
+ * Maintainer inventory (triggers, types, prefs, idempotency): `docs/NOTIFICATION_TRIGGERS.md`.
+ */
+
+/** Maps notification `type` to User.notificationPreferences keys (Settings → notifications). */
+export const NOTIFICATION_TYPE_TO_PREF_KEY = {
+  leave: 'leaveUpdates',
+  task: 'taskAssignments',
+  job_application: 'applicationUpdates',
+  offer: 'offerUpdates',
+  meeting: 'meetingInvitations',
+  meeting_reminder: 'meetingReminders',
+  certificate: 'certificates',
+  course: 'courseUpdates',
+  recruiter: 'recruiterUpdates',
+};
+
+export const isNotificationEmailAllowedForPreferences = (notificationType, notificationPreferences) => {
+  const prefs = notificationPreferences || {};
+  const prefKey = NOTIFICATION_TYPE_TO_PREF_KEY[notificationType];
+  if (!prefKey) return true;
+  return prefs[prefKey] !== false;
+};
+
+/**
+ * Whether an email for this notification category may be sent to an address.
+ * No matching user → allow (e.g. external meeting guests who are not in the system).
+ */
+export const shouldSendNotificationEmailToAddress = async (toEmail, notificationType) => {
+  if (!toEmail || !notificationType) return true;
+  const user = await User.findOne({ email: String(toEmail).trim().toLowerCase() })
+    .select('notificationPreferences')
+    .lean();
+  if (!user) return true;
+  return isNotificationEmailAllowedForPreferences(notificationType, user.notificationPreferences);
+};
+
+/** Append absolute frontend URL for a relative or absolute `link` (for plain-text emails). */
+export const plainTextEmailBody = (message, link) => {
+  if (!link) return message;
+  const abs = /^https?:\/\//i.test(String(link))
+    ? String(link)
+    : `${getFrontendBaseUrl().replace(/\/$/, '')}${String(link).startsWith('/') ? link : `/${link}`}`;
+  return `${message}\n\n${abs}`;
+};
 
 /** SSE: userId -> Set of response objects for real-time push */
 const sseClients = new Map();
@@ -138,15 +184,37 @@ export const getUnreadCount = async (userId) => {
 
 /**
  * Create in-app notification for a user identified by email (looks up user by email).
- * Use when sending an email to a recipient and you want the same user to see an in-app notification.
+ * Optional `email: { subject, text, html }` queues a message when the user has not opted out.
  * @param {string} email - Recipient email
- * @param {Object} options - { type, title, message, link }
+ * @param {Object} options - { type, title, message, link, email?: { subject, text, html } }
  * @returns {Promise<Notification|null>}
  */
 export const notifyByEmail = async (email, options) => {
-  const user = await User.findOne({ email: String(email).trim().toLowerCase() }).select('_id').lean();
+  const { type, title, message, link, email: emailBody } = options;
+  const normalized = String(email).trim().toLowerCase();
+  const user = await User.findOne({ email: normalized }).select('_id email notificationPreferences').lean();
   if (!user?._id) return null;
-  return createNotification(user._id, options);
+  const doc = await createNotification(user._id, { type, title, message, link });
+
+  if (emailBody?.subject && (emailBody.text || emailBody.html)) {
+    if (!isNotificationEmailAllowedForPreferences(type, user.notificationPreferences)) {
+      return doc;
+    }
+    try {
+      const { queueEmail } = await import('./email.service.js');
+      queueEmail(
+        user.email,
+        emailBody.subject,
+        emailBody.text || '',
+        emailBody.html || undefined,
+        `notification_${type}`,
+        { notificationId: doc._id?.toString?.() }
+      );
+    } catch (e) {
+      logger.warn(`notifyByEmail: queue email failed: ${e?.message || e}`);
+    }
+  }
+  return doc;
 };
 
 /**
@@ -167,21 +235,8 @@ export const notify = async (userId, options) => {
       const user = await User.findById(userId).select('email notificationPreferences').lean();
       if (!user || !user.email) return doc;
       to = user.email;
-      // When notificationPreferences exists, check the relevant key by type (we add this in phase 4)
       const prefs = user.notificationPreferences || {};
-      const typeToPref = {
-        leave: 'leaveUpdates',
-        task: 'taskAssignments',
-        job_application: 'applicationUpdates',
-        offer: 'offerUpdates',
-        meeting: 'meetingInvitations',
-        meeting_reminder: 'meetingReminders',
-        certificate: 'certificates',
-        course: 'courseUpdates',
-        recruiter: 'recruiterUpdates',
-      };
-      const prefKey = typeToPref[type];
-      if (prefKey && prefs[prefKey] === false) return doc;
+      if (!isNotificationEmailAllowedForPreferences(type, prefs)) return doc;
     } catch (e) {
       logger.warn(`notify: could not get user email for ${userId}: ${e?.message || e}`);
       return doc;

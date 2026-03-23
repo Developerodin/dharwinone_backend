@@ -43,6 +43,9 @@ const initiateCall = catchAsync(async (req, res) => {
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
+  if (job.jobOrigin === 'external') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Job posting verification calls are not available for external listings.');
+  }
   const jobContext = jobContextFromDoc(job);
 
   const result = await bolnaService.initiateCall({
@@ -452,6 +455,20 @@ async function sendPostCallEmailAndNotification(record, application) {
     return;
   }
 
+  const CallRecord = (await import('../models/callRecord.model.js')).default;
+  const recordId = record._id;
+  if (!recordId) {
+    console.warn('📧 Post-call email skipped: call record has no _id');
+    return;
+  }
+  const claim = await CallRecord.updateOne(
+    { _id: recordId, postCallFollowUpSent: { $ne: true } },
+    { $set: { postCallFollowUpSent: true } }
+  );
+  if (claim.modifiedCount === 0) {
+    return;
+  }
+
   try {
     const config = (await import('../config/config.js')).default;
     const loginUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/authentication/sign-in/`;
@@ -484,6 +501,7 @@ async function sendPostCallEmailAndNotification(record, application) {
       console.log(`🔔 Post-call notification sent to ${candidate.fullName}`);
     }
   } catch (err) {
+    await CallRecord.updateOne({ _id: recordId }, { $set: { postCallFollowUpSent: false } });
     console.error('Failed to send post-call email/notification:', err);
   }
 }

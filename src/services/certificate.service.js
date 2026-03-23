@@ -98,12 +98,18 @@ const generateCertificate = async (studentId, moduleId) => {
   const studentDoc = await Student.findById(studentId).select('user').lean();
   const userId = studentDoc?.user;
   if (userId) {
-    const { notify } = await import('./notification.service.js');
+    const { notify, plainTextEmailBody } = await import('./notification.service.js');
+    const certLink = '/training/curriculum/modules';
+    const certMsg = `You have earned a certificate for "${module.moduleName}".`;
     notify(userId, {
       type: 'certificate',
       title: 'Certificate issued',
-      message: `You have earned a certificate for "${module.moduleName}".`,
-      link: '/training/curriculum/modules',
+      message: certMsg,
+      link: certLink,
+      email: {
+        subject: `Certificate: ${module.moduleName}`,
+        text: plainTextEmailBody(certMsg, certLink),
+      },
     }).catch(() => {});
   }
 

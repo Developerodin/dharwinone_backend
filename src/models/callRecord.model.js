@@ -37,6 +37,8 @@ const callRecordSchema = mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    /** Set after post-call thank-you email + in-app notification sent (Bolna webhook idempotency). */
+    postCallFollowUpSent: { type: Boolean, default: false },
   },
   {
     timestamps: true,

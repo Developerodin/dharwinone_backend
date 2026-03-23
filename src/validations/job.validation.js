@@ -74,6 +74,7 @@ const getJobs = {
     createdBy: Joi.string().custom(objectId).optional(),
     search: Joi.string().optional(),
     forCandidates: Joi.boolean().optional(),
+    jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().optional(),
     page: Joi.number().integer().optional(),
@@ -247,6 +248,7 @@ const browseJobs = {
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
       .optional(),
     search: Joi.string().optional(),
+    jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(100).default(12),
     page: Joi.number().integer().min(1).default(1),

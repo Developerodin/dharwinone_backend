@@ -56,9 +56,10 @@ router
   .route('/salary-slips/:candidateId')
   .post(...canRead, validate(candidateValidation.addSalarySlip), candidateController.addSalarySlip);
 
+/** Salary slip download: auth only (like /documents/.../download). Owner access is enforced in getSalarySlipDownloadUrl — not candidates.read (so profile owners can view their own slips). */
 router
   .route('/salary-slips/:candidateId/:salarySlipIndex')
-  .get(...canRead, validate(candidateValidation.downloadSalarySlip), candidateController.downloadSalarySlip)
+  .get(documentAuth, validate(candidateValidation.downloadSalarySlip), candidateController.downloadSalarySlip)
   .patch(...canRead, validate(candidateValidation.updateSalarySlip), candidateController.updateSalarySlip)
   .delete(...canRead, validate(candidateValidation.deleteSalarySlip), candidateController.deleteSalarySlip);
 

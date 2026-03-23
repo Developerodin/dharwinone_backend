@@ -70,6 +70,19 @@ const jobSchema = new mongoose.Schema(
     // Job posting verification call (Bolna)
     verificationCallExecutionId: { type: String, default: null, index: true },
     verificationCallInitiatedAt: { type: Date, default: null },
+
+    // Internal vs mirrored external listing (browse)
+    jobOrigin: {
+      type: String,
+      enum: ['internal', 'external'],
+      default: 'internal',
+      index: true,
+    },
+    externalRef: {
+      externalId: { type: String, trim: true },
+      source: { type: String, trim: true },
+    },
+    externalPlatformUrl: { type: String, trim: true },
   },
   { timestamps: true }
 );
@@ -81,6 +94,20 @@ jobSchema.index({ location: 1 });
 jobSchema.index({ status: 1 });
 jobSchema.index({ skillTags: 1 });
 jobSchema.index({ createdAt: -1 });
+jobSchema.index({ status: 1, jobOrigin: 1 });
+
+// One published Job per external listing (global)
+jobSchema.index(
+  { 'externalRef.externalId': 1, 'externalRef.source': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      jobOrigin: 'external',
+      'externalRef.externalId': { $exists: true, $type: 'string' },
+      'externalRef.source': { $exists: true, $type: 'string' },
+    },
+  }
+);
 
 jobSchema.plugin(toJSON);
 jobSchema.plugin(paginate);

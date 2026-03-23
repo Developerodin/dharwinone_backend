@@ -1600,35 +1600,37 @@ const resendCandidateVerificationEmail = async (candidateId, options = {}) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
-  // Find the user associated with this candidate
-  // First try to find by email (most common case)
-  let user = await getUserByEmail(candidate.email);
-  
-  // If not found by email, try to find by owner ID
-  if (!user && candidate.owner) {
+  // Resolve the User account that owns this candidate (token + verification apply to this user).
+  // Prefer owner — avoids mismatches when candidate.email was edited but User.email is canonical.
+  let user = null;
+  if (candidate.owner) {
     user = await getUserById(candidate.owner);
   }
+  if (!user) {
+    user = await getUserByEmail(candidate.email);
+  }
 
-  // If user doesn't exist, throw error
   if (!user) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'No user account found for this candidate. Cannot send verification email.');
   }
 
-  // Check if email is already verified
   if (user.isEmailVerified) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email is already verified for this candidate.');
   }
 
-  // Generate verification token and send email
   const verifyEmailToken = await generateVerifyEmailToken(user);
-  await sendVerificationEmail(candidate.email, verifyEmailToken, options);
+  // Always send to the login email for `user`; the JWT verifies this same account.
+  await sendVerificationEmail(user.email, verifyEmailToken, options);
 
   return {
     success: true,
     message: 'Verification email sent successfully',
     candidateId: candidate._id,
+    /** Profile / list email on the candidate record (may differ from login email). */
     candidateEmail: candidate.email,
-    candidateName: candidate.fullName
+    /** Inbox the message was sent to — always the User account email (JWT + login). */
+    sentToEmail: user.email,
+    candidateName: candidate.fullName,
   };
 };
 
@@ -1703,13 +1705,19 @@ const assignRecruiterToCandidate = async (candidateId, recruiterId) => {
   candidate.assignedRecruiter = recruiterId;
   await candidate.save();
 
-  const { notify } = await import('./notification.service.js');
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
   const candidateName = candidate.fullName || candidate.email || 'a candidate';
+  const candLink = `/candidates/${candidateId}`;
+  const recMsg = `You have been assigned as recruiter to ${candidateName}.`;
   notify(recruiterId, {
     type: 'recruiter',
     title: 'Candidate assigned',
-    message: `You have been assigned as recruiter to ${candidateName}.`,
-    link: `/candidates/${candidateId}`,
+    message: recMsg,
+    link: candLink,
+    email: {
+      subject: 'Candidate assigned to you',
+      text: plainTextEmailBody(recMsg, candLink),
+    },
   }).catch(() => {});
 
   // Populate recruiter information

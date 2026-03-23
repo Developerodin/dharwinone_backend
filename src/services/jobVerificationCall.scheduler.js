@@ -32,6 +32,7 @@ async function runJobVerificationCalls() {
       verificationCallExecutionId: { $in: [null, ''] },
       'organisation.phone': { $exists: true, $nin: [null, ''] },
       createdAt: { $gte: fiveMinutesAgo },
+      jobOrigin: { $ne: 'external' },
     })
       .limit(10)
       .lean();

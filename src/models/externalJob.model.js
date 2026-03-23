@@ -33,6 +33,12 @@ const externalJobSchema = new mongoose.Schema(
       index: true,
     },
     savedAt: { type: Date, default: Date.now, index: true },
+    publishedJobId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Job',
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

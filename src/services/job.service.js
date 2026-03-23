@@ -4,9 +4,133 @@ import Job from '../models/job.model.js';
 import JobTemplate from '../models/jobTemplate.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Candidate from '../models/candidate.model.js';
+import ExternalJob from '../models/externalJob.model.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import callRecordService from './callRecord.service.js';
+import { syncPublishedJobForExternal } from './externalJobPublishedJob.service.js';
+
+/** Matches mirrored external listings in Job (explicit origin or legacy externalRef-only rows). */
+const MIRROR_EXTERNAL_OR = {
+  $or: [
+    { jobOrigin: 'external' },
+    {
+      'externalRef.externalId': { $exists: true, $nin: [null, ''] },
+      'externalRef.source': { $exists: true, $nin: [null, ''] },
+    },
+  ],
+};
+
+/** Single write; keeps listing queries correct for legacy Job rows. */
+async function backfillExternalJobOrigin() {
+  try {
+    const r = await Job.updateMany(
+      {
+        jobOrigin: { $ne: 'external' },
+        'externalRef.externalId': { $exists: true, $nin: [null, ''] },
+        'externalRef.source': { $exists: true, $nin: [null, ''] },
+      },
+      { $set: { jobOrigin: 'external' } }
+    );
+    if (r.modifiedCount > 0) {
+      logger.info(`backfillExternalJobOrigin: set jobOrigin=external on ${r.modifiedCount} job(s)`);
+    }
+  } catch (e) {
+    logger.warn(`backfillExternalJobOrigin: ${e?.message || e}`);
+  }
+}
+
+/**
+ * Sync ExternalJob → Job for orphans / broken publishedJobId (slow; many sequential writes).
+ * Not run on every GET /jobs when listing “all” — see throttle below.
+ */
+async function syncExternalJobMirrors({ cap = 200 }) {
+  try {
+    const orphans = await ExternalJob.find({
+      $or: [{ publishedJobId: null }, { publishedJobId: { $exists: false } }],
+    })
+      .limit(cap)
+      .exec();
+
+    for (const doc of orphans) {
+      try {
+        await syncPublishedJobForExternal(doc);
+      } catch (err) {
+        logger.error(
+          `syncExternalJobMirrors orphan ${doc.externalId} (${doc.source}): ${err?.message || err}`
+        );
+      }
+    }
+
+    const pinned = await ExternalJob.find({
+      publishedJobId: { $exists: true, $ne: null },
+    })
+      .limit(cap)
+      .exec();
+
+    for (const doc of pinned) {
+      const stillThere = await Job.exists({ _id: doc.publishedJobId });
+      if (!stillThere) {
+        await ExternalJob.updateOne({ _id: doc._id }, { $unset: { publishedJobId: 1 } }).exec();
+        const fresh = await ExternalJob.findById(doc._id).exec();
+        if (fresh) {
+          try {
+            await syncPublishedJobForExternal(fresh);
+          } catch (err) {
+            logger.error(`syncExternalJobMirrors resync ${fresh.externalId}: ${err?.message || err}`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn(`syncExternalJobMirrors: ${e?.message || e}`);
+  }
+}
+
+/**
+ * Full orphan/pinned repair is expensive (sequential writes). Throttle so initial load + rapid
+ * listing-type toggles (all ↔ external ↔ internal) stay fast when mirrors are already healthy.
+ */
+let lastFullMirrorSyncAt = 0;
+const FULL_MIRROR_SYNC_INTERVAL_MS = 90 * 1000;
+
+const LIST_JOBS_POPULATE = [
+  { path: 'createdBy', select: 'name email' },
+  { path: 'templateId', select: 'name' },
+];
+
+async function maybeRepairMirrorsForList(jobOriginMode) {
+  if (jobOriginMode !== 'external' && jobOriginMode !== 'all') return;
+
+  await backfillExternalJobOrigin();
+
+  const anyOrphan = await ExternalJob.exists({
+    $or: [{ publishedJobId: null }, { publishedJobId: { $exists: false } }],
+  });
+  if (!anyOrphan) return;
+
+  const now = Date.now();
+  const allowFullBatch = now - lastFullMirrorSyncAt >= FULL_MIRROR_SYNC_INTERVAL_MS;
+  if (allowFullBatch) lastFullMirrorSyncAt = now;
+
+  const cap = allowFullBatch
+    ? jobOriginMode === 'external'
+      ? 220
+      : 90
+    : 20;
+
+  await syncExternalJobMirrors({ cap });
+}
+
+const CLIENT_FORBIDDEN_JOB_FIELDS = ['jobOrigin', 'externalRef', 'externalPlatformUrl'];
+
+function stripForbiddenJobFields(body) {
+  if (!body || typeof body !== 'object') return;
+  CLIENT_FORBIDDEN_JOB_FIELDS.forEach((k) => {
+    delete body[k];
+  });
+}
 
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
@@ -16,6 +140,7 @@ const isOwnerOrAdmin = async (user, resource) => {
 };
 
 const createJob = async (createdById, payload) => {
+  stripForbiddenJobFields(payload);
   const job = await Job.create({
     createdBy: createdById,
     ...payload,
@@ -24,6 +149,13 @@ const createJob = async (createdById, payload) => {
 };
 
 const queryJobs = async (filter, options) => {
+  let jobOriginMode = 'all';
+  if (filter.jobOrigin === 'internal') jobOriginMode = 'internal';
+  else if (filter.jobOrigin === 'external') jobOriginMode = 'external';
+  delete filter.jobOrigin;
+
+  await maybeRepairMirrorsForList(jobOriginMode);
+
   // Handle search query
   if (filter.search) {
     const searchRegex = new RegExp(filter.search, 'i');
@@ -44,56 +176,68 @@ const queryJobs = async (filter, options) => {
     delete filter.userId;
     filter.status = 'Active';
 
-    const result = await Job.paginate(filter, options);
-    if (result.results && result.results.length > 0) {
-      for (const doc of result.results) {
-        await doc.populate([
-          { path: 'createdBy', select: 'name email' },
-          { path: 'templateId', select: 'name' },
-        ]);
-      }
+    if (jobOriginMode === 'internal') {
+      filter.jobOrigin = { $ne: 'external' };
+    } else if (jobOriginMode === 'external') {
+      const status = filter.status;
+      delete filter.status;
+      filter.$and = [{ status }, MIRROR_EXTERNAL_OR];
     }
+
+    const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
     return result;
   }
 
-  // If user is not admin, filter by createdBy
+  // If user is not admin: own internal jobs + all mirrored external jobs (tenant-wide listings)
   const isAdmin = await userIsAdmin({ roleIds: filter.userRoleIds || [] });
   if (!isAdmin && filter.userId) {
     const userId = filter.userId;
-    const userFilter = { createdBy: userId };
 
     delete filter.userRoleIds;
     delete filter.userId;
 
-    const finalFilter = { ...filter, ...userFilter };
-    const result = await Job.paginate(finalFilter, options);
+    const searchOr = filter.$or;
+    const rest = { ...filter };
+    if (searchOr) delete rest.$or;
 
-    if (result.results && result.results.length > 0) {
-      for (const doc of result.results) {
-        await doc.populate([
-          { path: 'createdBy', select: 'name email' },
-          { path: 'templateId', select: 'name' },
-        ]);
-      }
+    const searchClause = searchOr ? { $or: searchOr } : null;
+
+    let finalFilter;
+    if (jobOriginMode === 'internal') {
+      const mineInternal = { ...rest, createdBy: userId, jobOrigin: { $ne: 'external' } };
+      finalFilter = searchClause ? { $and: [searchClause, mineInternal] } : mineInternal;
+    } else if (jobOriginMode === 'external') {
+      const clauses = [MIRROR_EXTERNAL_OR];
+      if (Object.keys(rest).length > 0) clauses.unshift(rest);
+      if (searchClause) clauses.unshift(searchClause);
+      finalFilter = clauses.length === 1 ? clauses[0] : { $and: clauses };
+    } else {
+      const visibilityClause = {
+        $or: [{ createdBy: userId }, MIRROR_EXTERNAL_OR],
+      };
+      finalFilter = searchClause
+        ? { ...rest, $and: [searchClause, visibilityClause] }
+        : { ...rest, ...visibilityClause };
     }
 
+    const result = await Job.paginate(finalFilter, { ...options, populate: LIST_JOBS_POPULATE });
     return result;
   }
 
   delete filter.userRoleIds;
   delete filter.userId;
 
-  const result = await Job.paginate(filter, options);
-
-  if (result.results && result.results.length > 0) {
-    for (const doc of result.results) {
-      await doc.populate([
-        { path: 'createdBy', select: 'name email' },
-        { path: 'templateId', select: 'name' },
-      ]);
-    }
+  if (jobOriginMode === 'internal') {
+    filter.jobOrigin = { $ne: 'external' };
+  } else if (jobOriginMode === 'external') {
+    const base = { ...filter };
+    Object.keys(filter).forEach((k) => delete filter[k]);
+    const clauses = [MIRROR_EXTERNAL_OR];
+    if (Object.keys(base).length > 0) clauses.unshift(base);
+    filter.$and = clauses;
   }
 
+  const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
   return result;
 };
 
@@ -116,11 +260,15 @@ const updateJobById = async (id, updateBody, currentUser) => {
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
+  if (job.jobOrigin === 'external') {
+    throw new ApiError(httpStatus.FORBIDDEN, 'External jobs cannot be edited in ATS. Manage them from External jobs.');
+  }
   const canUpdate = await isOwnerOrAdmin(currentUser, job);
   if (!canUpdate) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
+  stripForbiddenJobFields(updateBody);
   Object.assign(job, updateBody);
   await job.save();
 
@@ -136,6 +284,12 @@ const deleteJobById = async (id, currentUser) => {
   const job = await getJobById(id);
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  if (job.jobOrigin === 'external') {
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'External mirrored jobs cannot be deleted here. Remove the listing from External jobs instead.'
+    );
   }
   const canDelete = await isOwnerOrAdmin(currentUser, job);
   if (!canDelete) {
@@ -669,8 +823,8 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
     // Don't fail the application if email fails
   });
 
-  // Initiate verification call via Bolna (async, don't wait)
-  if (phoneNumber && countryCode) {
+  // Initiate verification call via Bolna (async, don't wait) — skip for external listings
+  if (phoneNumber && countryCode && job.jobOrigin !== 'external') {
     try {
       const bolnaService = (await import('./bolna.service.js')).default;
       const { numberToWords, currencyToWords } = await import('../utils/numberToWords.js');
