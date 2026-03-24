@@ -146,13 +146,34 @@ const getTrainingModule = {
   }),
 };
 
+/** Multipart PATCH may send categories as a JSON string (e.g. "[]"). */
+const updateCategoriesField = Joi.alternatives()
+  .try(
+    Joi.array().items(Joi.custom(objectId)),
+    Joi.string().custom((value, helpers) => {
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+          return helpers.error('any.invalid');
+        }
+        const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate(parsed);
+        if (error) {
+          return helpers.error('any.invalid');
+        }
+        return coerced;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    })
+  );
+
 const updateTrainingModule = {
   params: Joi.object().keys({
     moduleId: Joi.custom(objectId).required(),
   }),
   body: Joi.object()
     .keys({
-      categories: Joi.array().items(Joi.custom(objectId)),
+      categories: updateCategoriesField,
       moduleName: Joi.string().trim(),
       shortDescription: Joi.string().trim(),
       students: Joi.array().items(Joi.custom(objectId)),

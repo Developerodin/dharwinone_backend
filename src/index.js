@@ -16,6 +16,7 @@ import {
 } from './services/callRecordSync.scheduler.js';
 import { startMeetingScheduler, stopMeetingScheduler } from './services/meeting.scheduler.js';
 import applicationVerificationCallScheduler from './services/applicationVerificationCall.scheduler.js';
+import { logBolnaAgentConfigHealth } from './utils/bolnaAgentConfig.js';
 
 let server;
 let candidateSchedulerId;
@@ -28,6 +29,7 @@ mongoose
   .connect(config.mongoose.url, config.mongoose.options)
   .then(() => {
     logger.info('Connected to MongoDB');
+    logBolnaAgentConfigHealth();
     const httpServer = http.createServer(app);
     if (config.env !== 'test') initSocket(httpServer);
     server = httpServer.listen(port, '0.0.0.0', () => {

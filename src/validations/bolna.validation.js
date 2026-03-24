@@ -55,5 +55,22 @@ const deleteCallRecord = {
   }),
 };
 
-export { initiateCall, initiateCandidateCall, getCallStatus, getCallRecords, deleteCallRecord };
+const patchBolnaCandidateAgentSettings = {
+  body: Joi.object()
+    .keys({
+      extraSystemInstructions: Joi.string().allow('').max(8000),
+      greetingOverride: Joi.string().allow('').max(500),
+    })
+    .min(1)
+    .required(),
+};
+
+export {
+  initiateCall,
+  initiateCandidateCall,
+  getCallStatus,
+  getCallRecords,
+  deleteCallRecord,
+  patchBolnaCandidateAgentSettings,
+};
 

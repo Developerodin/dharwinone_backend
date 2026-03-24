@@ -28,8 +28,8 @@ https://your-ngrok-url.ngrok-free.dev/api/v1/webhooks/bolna-calls
 
 ### 1. Immediate Call (On Application Submit)
 When a candidate applies through the public portal:
-- Call is initiated **immediately** in `job.service.js` (line ~625)
-- Uses `BOLNA_CANDIDATE_AGENT_ID`
+- Call is initiated **immediately** in `job.service.js` (`publicApplyToJobService`)
+- Uses `initiateCandidateVerificationCall` → **PATCH** full system prompt on `BOLNA_CANDIDATE_AGENT_ID`, then `POST /call`
 - Creates `CallRecord` with purpose: `job_application_verification`
 - Updates `JobApplication` with call execution ID
 
@@ -42,7 +42,7 @@ A cron job runs every 2 minutes to catch any missed calls:
 
 **What it does**:
 1. Finds applications created in last 10 minutes without call
-2. Initiates calls using `BOLNA_CANDIDATE_AGENT_ID`
+2. Initiates calls using `BOLNA_CANDIDATE_AGENT_ID` (same **patch-then-call** path as manual ATS and public apply)
 3. Creates call records
 4. Updates application status
 
@@ -248,6 +248,61 @@ console.log(result);
 
 ---
 
+## System prompt, concurrency, admin overrides
+
+- **Two Bolna agents required**: `BOLNA_AGENT_ID` = job **posting / recruiter** verification (prompt from Bolna dashboard only; not PATCHed by this app). `BOLNA_CANDIDATE_AGENT_ID` = **applicant** verification (receives a full system prompt PATCH before each call). If both env vars resolve to the **same** agent ID, applicant PATCHes overwrite the recruiter agent and the two flows **mix**. The backend **refuses** applicant verification calls until the IDs differ; check server logs on startup for `[Bolna] BOLNA_AGENT_ID and BOLNA_CANDIDATE_AGENT_ID are identical`.
+- **Prompt builder**: `src/services/candidateVerificationPrompt.service.js` — intro names **Dharwin** as the platform and **hiring company** from the job; edge cases for wrong name / different role.
+- **Orchestration**: `src/services/bolnaCandidateVerification.service.js` — loads optional DB overrides, builds prompt, **serializes** PATCH + outbound call per agent ID (in-process queue) to reduce prompt races when two calls overlap.
+- **Admin text fields**: MongoDB `BolnaCandidateAgentSettings` (singleton `key: default`). **API**: `GET` / `PATCH /v1/bolna/candidate-agent-settings` (requires `users.manage`). **UI**: Settings → **Voice agent (Bolna)**.
+- **Observability**: Successful PATCH logs a short **SHA-256 prefix** of the system prompt (`promptHash` in logs) for correlating with Bolna executions.
+
+---
+
+## Prompt changelog (candidate verification)
+
+Updates below apply to `src/services/candidateVerificationPrompt.service.js` (system prompt PATCH before each call).
+
+- **Application date** — Shown under Candidate knowledge as `Application submitted`; Step 2 references it when the application record has `createdAt`.
+- **Priority tiers** — **Tier A:** email (3a) + location (3f) after job confirmation. **Tier B:** motivation, experience, skills, availability, salary. **Busy path:** email only, then short Step 4 + Step 7.
+- **Voice / TTS** — Do not read full job description or long skill lists; summarize role in ≤2 short sentences; cap spoken skills/experience to brief themes.
+- **Email correction** — After spell-out, read back the address once and confirm before continuing.
+- **Other openings** — Described as examples of active listings on the platform, not personalized “fits.”
+- **GUARDRAILS vs timeline** — Follow-up timing comes **only** from Step 4 wording (standard vs busy quick path); no extra invented deadlines.
+
+## Legal / compliance placeholders
+
+- **Recording and region-specific disclosure** — Any mandatory recording notice or AI/disclosure line must be **legal-reviewed** before production. Do not add fixed compliance strings in code without sign-off.
+- **Future option** — If product later supplies a short notice string (e.g. via Bolna user data), the prompt can instruct the agent to speak it after the greeting; that is not wired in the current Phase 1 scope.
+
+---
+
+## Operations: ASR, latency, mid-call drops
+
+Use this when candidates report **wrong transcription**, **slow replies**, or **calls ending after ~2–3 minutes**.
+
+### Bolna dashboard / agent
+
+1. **Speech / language** — Set STT locale to match candidates (e.g. Indian English vs US English) if configurable.
+2. **Max call duration / silence** — In the Bolna dashboard, open the **Call** tab on **each** agent (job-posting `BOLNA_AGENT_ID` and candidate `BOLNA_CANDIDATE_AGENT_ID`) and set **maximum call duration** in **seconds**. Backend defaults to **900** (15 minutes) via `BOLNA_MAX_CALL_DURATION_SECONDS` and sends `max_call_duration_seconds` on `POST /call` when the value is > 0; **dashboard and API should match** so behavior is predictable. Official guide: [Terminate Bolna Voice AI calls](https://www.bolna.ai/docs/disconnect-calls). Also check **silence timeout** and **hangup prompts** vs the hard time limit.
+3. **Execution record** — Open the execution for the `executionId` stored on `JobApplication.verificationCallExecutionId` or `CallRecord.executionId`. Inspect **status**, **end_reason** (or equivalent), **error_message**, and linked **recording** duration.
+4. **Billing / trial** — Trial or credit limits can end calls early; confirm account status if drops correlate with time/credits.
+
+### Plivo / telephony
+
+1. **SIP / hangup cause** — For disconnects, check Plivo **debug** or **call detail** for **SIP BYE** reason, **media timeout**, or **max duration** on the number/trunk.
+2. **Caller ID** — `BOLNA_FROM_PHONE_NUMBER` / `CALLER_ID` must be valid; misconfiguration can cause failed or short calls in some regions.
+
+### Application layer (this repo)
+
+- **HTTP timeout** — `bolna.service.js` uses a **30s** timeout only for the **REST** request that *starts* the call, not for live call duration.
+- **Concurrency** — Multiple simultaneous verification calls share one Bolna agent ID; the **serialized** patch+call reduces wrong-prompt races but does not increase capacity; for high volume consider a **second agent** (duplicate Bolna agent + env ID).
+
+### Product / compliance
+
+- Outbound recruiting may require **consent / disclosure** depending on region; confirm with legal/product before changing scripts.
+
+---
+
 ## 📂 Related Files
 
 ### Scheduler
@@ -256,12 +311,16 @@ console.log(result);
 
 ### Services
 - `src/services/job.service.js` - Immediate call on application
-- `src/services/bolna.service.js` - Bolna API client
+- `src/services/bolna.service.js` - Bolna API client (`initiateCall`, `updateAgentPrompt`, execution fetch)
+- `src/services/bolnaCandidateVerification.service.js` - Patch + serialized call for candidate verification
+- `src/services/candidateVerificationPrompt.service.js` - Shared prompt context + system prompt text
+- `src/services/bolnaCandidateAgentSettings.service.js` - Admin prompt overrides
 - `src/services/callRecord.service.js` - Call record management
 
 ### Models
 - `src/models/jobApplication.model.js` - Application with call tracking
 - `src/models/callRecord.model.js` - Call records
+- `src/models/bolnaCandidateAgentSettings.model.js` - Singleton settings for extra instructions / greeting override
 
 ### Webhooks
 - `src/routes/v1/webhook.route.js` - Webhook routes

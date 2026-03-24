@@ -44,7 +44,7 @@ async function runCallHistorySync() {
     }
 
     const executionIds = [...new Set(recordsToSync.map((r) => r.executionId).filter(Boolean))];
-    const limitIds = executionIds.slice(0, 50);
+    const limitIds = executionIds.slice(0, 100);
 
     let syncedCount = 0;
     let updatedCount = 0;
@@ -58,22 +58,22 @@ async function runCallHistorySync() {
           continue;
         }
         const executionData = result.details;
+        const data = executionData.data || executionData.execution || {};
+        const norm = callRecordService.normalizePayload({
+          ...executionData,
+          id: executionData.id ?? executionData.execution_id ?? executionId,
+        });
 
-        const status = normalizeStatus(executionData.status || executionData.smart_status);
-        const telephonyData = executionData.telephony_data || {};
-        let conversationDuration =
-          executionData.conversation_time ??
-          executionData.duration ??
-          telephonyData.duration ??
-          telephonyData.conversation_duration;
-        if (conversationDuration != null) {
-          conversationDuration = parseInt(conversationDuration, 10);
-          if (Number.isNaN(conversationDuration)) conversationDuration = null;
-        }
-        const recordingUrl = telephonyData.recording_url || executionData.recording_url;
-        const transcript = executionData.transcript || executionData.transcription;
-        const fromPhoneNumber = telephonyData.from_number || executionData.agent_number || null;
-        let errorMessage = executionData.error_message;
+        const status = norm.status || normalizeStatus(executionData.status || executionData.smart_status);
+        let conversationDuration = norm.duration != null ? Number(norm.duration) : null;
+        if (conversationDuration != null && Number.isNaN(conversationDuration)) conversationDuration = null;
+        const recordingUrl = norm.recordingUrl || null;
+        const transcript =
+          norm.transcript ||
+          (norm.conversationTranscript && String(norm.conversationTranscript).trim()) ||
+          null;
+        const fromPhoneNumber = norm.fromPhoneNumber || null;
+        let errorMessage = executionData.error_message ?? data.error_message;
         if (errorMessage && typeof errorMessage === 'string') {
           try {
             const parsed = JSON.parse(errorMessage);
@@ -92,13 +92,17 @@ async function runCallHistorySync() {
           'call_disconnected',
           'balance-low',
         ];
-        const completedAt = endedStatuses.includes(status)
-          ? executionData.updated_at
-            ? new Date(executionData.updated_at)
-            : executionData.initiated_at
-              ? new Date(executionData.initiated_at)
+        const updatedAtRaw = executionData.updated_at ?? data.updated_at;
+        const initiatedAtRaw = executionData.initiated_at ?? data.initiated_at;
+        const completedAt = status && endedStatuses.includes(status)
+          ? updatedAtRaw
+            ? new Date(updatedAtRaw)
+            : initiatedAtRaw
+              ? new Date(initiatedAtRaw)
               : new Date()
           : null;
+
+        const userData = executionData.user_data ?? data.user_data ?? {};
 
         const recordsWithThisExecution = recordsToSync.filter((r) => r.executionId === executionId);
         for (const record of recordsWithThisExecution) {
@@ -135,17 +139,18 @@ async function runCallHistorySync() {
             if (endedStatuses.includes(status || record.status) && !record.completedAt && completedAt) {
               updateData.completedAt = completedAt;
             }
-            if (executionData.user_data?.organisation) {
-              updateData.businessName = String(executionData.user_data.organisation).trim();
-            } else if (executionData.user_data?.name) {
-              updateData.businessName = String(executionData.user_data.name).trim();
-            } else if (executionData.user_data?.candidate_name) {
-              updateData.businessName = String(executionData.user_data.candidate_name).trim();
+            if (userData.organisation) {
+              updateData.businessName = String(userData.organisation).trim();
+            } else if (userData.name) {
+              updateData.businessName = String(userData.name).trim();
+            } else if (userData.candidate_name) {
+              updateData.businessName = String(userData.candidate_name).trim();
             }
-            if (executionData.extracted_data && typeof executionData.extracted_data === 'object') {
-              updateData.extractedData = executionData.extracted_data;
+            const extracted = executionData.extracted_data ?? data.extracted_data;
+            if (extracted && typeof extracted === 'object') {
+              updateData.extractedData = extracted;
             }
-            const execAgentId = executionData.agent_id ?? executionData.agentId;
+            const execAgentId = norm.agentId ?? executionData.agent_id ?? executionData.agentId ?? data.agent_id;
             if (execAgentId && (!record.agentId || record.agentId !== execAgentId)) {
               updateData.agentId = String(execAgentId).trim();
             }

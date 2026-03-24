@@ -2,9 +2,12 @@ import express from 'express';
 import config from '../../config/config.js';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
+import requirePermissions from '../../middlewares/requirePermissions.js';
+import requireRoleByName from '../../middlewares/requireRoleByName.js';
 import * as emailValidation from '../../validations/email.validation.js';
 import * as outlookValidation from '../../validations/outlook.validation.js';
 import * as emailController from '../../controllers/email.controller.js';
+import * as emailPreferencesController from '../../controllers/emailPreferences.controller.js';
 import * as outlookController from '../../controllers/outlook.controller.js';
 import logger from '../../config/logger.js';
 
@@ -79,5 +82,80 @@ router.delete('/messages/:id', validate(emailValidation.deleteMessage), emailCon
 
 router.get('/labels', validate(emailValidation.listLabels), emailController.listLabels);
 router.post('/labels', validate(emailValidation.createLabel), emailController.createLabel);
+
+// Agent-only: personal email templates & signature (Gmail + Outlook compose use same prefs)
+router.get(
+  '/templates',
+  requireRoleByName('Agent'),
+  validate(emailValidation.listEmailTemplates),
+  emailPreferencesController.listTemplates
+);
+router.post(
+  '/templates',
+  requireRoleByName('Agent'),
+  validate(emailValidation.createEmailTemplate),
+  emailPreferencesController.createTemplate
+);
+router.patch(
+  '/templates/:templateId',
+  requireRoleByName('Agent'),
+  validate(emailValidation.updateEmailTemplate),
+  emailPreferencesController.updateTemplate
+);
+router.delete(
+  '/templates/:templateId',
+  requireRoleByName('Agent'),
+  validate(emailValidation.deleteEmailTemplate),
+  emailPreferencesController.deleteTemplate
+);
+router.get(
+  '/signature',
+  requireRoleByName('Agent'),
+  validate(emailValidation.getEmailSignature),
+  emailPreferencesController.getSignature
+);
+router.patch(
+  '/signature',
+  requireRoleByName('Agent'),
+  validate(emailValidation.patchEmailSignature),
+  emailPreferencesController.patchSignature
+);
+
+router.get(
+  '/admin/templates',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminListEmailTemplates),
+  emailPreferencesController.adminListTemplates
+);
+router.post(
+  '/admin/templates',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminCreateEmailTemplate),
+  emailPreferencesController.adminCreateTemplate
+);
+router.get(
+  '/admin/signature',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminGetEmailSignature),
+  emailPreferencesController.adminGetSignature
+);
+router.patch(
+  '/admin/templates/:templateId',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminUpdateEmailTemplate),
+  emailPreferencesController.adminUpdateTemplate
+);
+router.delete(
+  '/admin/templates/:templateId',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminDeleteEmailTemplate),
+  emailPreferencesController.adminDeleteTemplate
+);
+router.patch(
+  '/admin/signature',
+  requirePermissions('users.manage'),
+  validate(emailValidation.adminPatchEmailSignature),
+  emailPreferencesController.adminPatchSignature
+);
 
 export default router;

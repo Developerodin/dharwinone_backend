@@ -1,7 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
-import xss  from 'xss-clean';
+import xss from 'xss-clean';
 import mongoSanitize from 'express-mongo-sanitize';
 import compression from 'compression';
 import cors from 'cors';
@@ -35,8 +35,21 @@ app.use(cookieParser());
 // parse urlencoded request body
 app.use(express.urlencoded({ extended: true }));
 
-// sanitize request data
-app.use(xss());
+// sanitize request data (skip routes that carry intentional HTML — xss-clean entity-encodes < > and breaks Tiptap + providers)
+const xssMiddleware = xss();
+function shouldSkipGlobalXss(req) {
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (/^\/v1\/email\/(templates|signature|admin\/templates|admin\/signature)(\/|$)/.test(path)) return true;
+  if (/^\/v1\/email\/messages\/send(\/|$)/.test(path)) return true;
+  if (/^\/v1\/email\/messages\/[^/]+\/(reply|forward)(\/|$)/.test(path)) return true;
+  if (/^\/v1\/outlook\/messages\/send(\/|$)/.test(path)) return true;
+  if (/^\/v1\/outlook\/messages\/[^/]+\/reply(\/|$)/.test(path)) return true;
+  return false;
+}
+app.use((req, res, next) => {
+  if (shouldSkipGlobalXss(req)) return next();
+  return xssMiddleware(req, res, next);
+});
 app.use(mongoSanitize());
 
 // gzip compression — skip for SSE streams so events flush immediately

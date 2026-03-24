@@ -183,6 +183,99 @@ const disconnectAccount = {
   }),
 };
 
+const MAX_EMAIL_HTML = 65536;
+const htmlBodyField = Joi.string().max(MAX_EMAIL_HTML).allow('');
+
+const listEmailTemplates = {};
+
+const createEmailTemplate = {
+  body: Joi.object().keys({
+    title: Joi.string().trim().min(1).max(200).required(),
+    subject: Joi.string().trim().max(500).allow(''),
+    bodyHtml: htmlBodyField.required(),
+    isShared: Joi.boolean(),
+  }),
+};
+
+const updateEmailTemplate = {
+  params: Joi.object().keys({
+    templateId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      title: Joi.string().trim().min(1).max(200),
+      subject: Joi.string().trim().max(500).allow(''),
+      bodyHtml: htmlBodyField,
+      isShared: Joi.boolean(),
+    })
+    .min(1),
+};
+
+const deleteEmailTemplate = {
+  params: Joi.object().keys({
+    templateId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const getEmailSignature = {};
+
+const patchEmailSignature = {
+  body: Joi.object()
+    .keys({
+      html: htmlBodyField,
+      enabled: Joi.boolean(),
+    })
+    .min(1),
+};
+
+const adminListEmailTemplates = {
+  query: Joi.object().keys({
+    userId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const adminCreateEmailTemplate = {
+  body: Joi.object().keys({
+    userId: Joi.string().custom(objectId).required(),
+    title: Joi.string().trim().min(1).max(200).required(),
+    subject: Joi.string().trim().max(500).allow(''),
+    bodyHtml: htmlBodyField.required(),
+    isShared: Joi.boolean(),
+  }),
+};
+
+const adminGetEmailSignature = adminListEmailTemplates;
+
+const adminUpdateEmailTemplate = {
+  params: Joi.object().keys({
+    templateId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      title: Joi.string().trim().min(1).max(200),
+      subject: Joi.string().trim().max(500).allow(''),
+      bodyHtml: htmlBodyField,
+      isShared: Joi.boolean(),
+    })
+    .min(1),
+};
+
+const adminDeleteEmailTemplate = {
+  params: Joi.object().keys({
+    templateId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const adminPatchEmailSignature = {
+  body: Joi.object()
+    .keys({
+      userId: Joi.string().custom(objectId).required(),
+      html: htmlBodyField,
+      enabled: Joi.boolean(),
+    })
+    .min(1),
+};
+
 export {
   listGmailAccounts,
   getGoogleAuthUrl,
@@ -203,4 +296,16 @@ export {
   deleteMessage,
   listLabels,
   createLabel,
+  listEmailTemplates,
+  createEmailTemplate,
+  updateEmailTemplate,
+  deleteEmailTemplate,
+  getEmailSignature,
+  patchEmailSignature,
+  adminListEmailTemplates,
+  adminCreateEmailTemplate,
+  adminGetEmailSignature,
+  adminUpdateEmailTemplate,
+  adminDeleteEmailTemplate,
+  adminPatchEmailSignature,
 };

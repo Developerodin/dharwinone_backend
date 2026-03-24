@@ -16,16 +16,17 @@ function getConfig() {
     apiKey: config.bolna.apiKey || '',
     agentId: config.bolna.agentId || '6afbccea-0495-4892-937c-6a5c9af12440',
     apiBase: config.bolna.apiBase || 'https://api.bolna.ai',
+    maxCallDurationSeconds: config.bolna.maxCallDurationSeconds,
   };
 }
 
 /**
  * Initiate a call via Bolna.
- * @param {Object} params - { phone, candidateName, jobTitle, organisation, jobType, location?, experienceLevel?, salaryRange?, fromPhoneNumber?, agentId? }
+ * @param {Object} params - { phone, candidateName, jobTitle, organisation, jobType, location?, experienceLevel?, salaryRange?, fromPhoneNumber?, agentId?, maxCallDurationSeconds? }
  * @returns {Promise<{ success: boolean, executionId?: string, error?: string }>}
  */
 async function initiateCall(params) {
-  const { apiKey, agentId: defaultAgentId, apiBase } = getConfig();
+  const { apiKey, agentId: defaultAgentId, apiBase, maxCallDurationSeconds } = getConfig();
   if (!apiKey) {
     return { success: false, error: 'BOLNA_API_KEY is not set. Add it to .env to use Bolna calling.' };
   }
@@ -43,6 +44,14 @@ async function initiateCall(params) {
     userData: extraUserData,
   } = params;
 
+  // Callers may pass snake_case aliases alongside camelCase (legacy Bolna user_data shape)
+  const resolvedCandidateName = candidateName || params.candidate_name;
+  const resolvedJobTitle = jobTitle || params.job_title;
+  const resolvedOrganisation = organisation || params.company_name;
+  const resolvedJobType = jobType || params.job_type;
+  const resolvedExperienceLevel = experienceLevel || params.experience_level;
+  const resolvedSalaryRange = salaryRange || params.salary_range;
+
   if (!phone) {
     return { success: false, error: 'Missing required field: phone' };
   }
@@ -56,15 +65,15 @@ async function initiateCall(params) {
   }
 
   const userData = {
-    name: candidateName,
-    candidate_name: candidateName,
+    name: resolvedCandidateName,
+    candidate_name: resolvedCandidateName,
   };
-  if (jobTitle) userData.job_title = jobTitle;
-  if (organisation) userData.organisation = organisation;
-  if (jobType) userData.job_type = jobType;
+  if (resolvedJobTitle) userData.job_title = resolvedJobTitle;
+  if (resolvedOrganisation) userData.organisation = resolvedOrganisation;
+  if (resolvedJobType) userData.job_type = resolvedJobType;
   if (location) userData.location = location;
-  if (experienceLevel) userData.experience_level = experienceLevel;
-  if (salaryRange) userData.salary_range = salaryRange;
+  if (resolvedExperienceLevel) userData.experience_level = resolvedExperienceLevel;
+  if (resolvedSalaryRange) userData.salary_range = resolvedSalaryRange;
 
   // Merge any extra user_data fields (for rich candidate/job context)
   if (extraUserData && typeof extraUserData === 'object') {
@@ -76,6 +85,17 @@ async function initiateCall(params) {
     recipient_phone_number: recipientPhone,
     user_data: userData,
   };
+
+  const durationCap =
+    params.maxCallDurationSeconds != null
+      ? Number(params.maxCallDurationSeconds)
+      : maxCallDurationSeconds != null
+        ? Number(maxCallDurationSeconds)
+        : null;
+  if (durationCap != null && Number.isFinite(durationCap) && durationCap > 0) {
+    payload.max_call_duration_seconds = Math.round(durationCap);
+    logger.debug(`Bolna POST /call max_call_duration_seconds=${payload.max_call_duration_seconds}`);
+  }
 
   const callerIdRaw = getCallerId(params);
   if (callerIdRaw) {
@@ -263,15 +283,29 @@ async function getAgentExecutions(options = {}) {
  * Update an agent's system prompt via the Bolna PATCH API.
  * @param {string} agentId
  * @param {string} systemPrompt - The full prompt text (variables already interpolated)
+ * @param {{ agentWelcomeMessage?: string }} [options] - If set, patches `agent_config.agent_welcome_message` so the dashboard welcome does not override at call connect.
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
-async function updateAgentPrompt(agentId, systemPrompt) {
+async function updateAgentPrompt(agentId, systemPrompt, options = {}) {
   const { apiKey, apiBase } = getConfig();
   if (!apiKey) {
     return { success: false, error: 'BOLNA_API_KEY is not set.' };
   }
   if (!agentId || !systemPrompt) {
     return { success: false, error: 'agentId and systemPrompt are required.' };
+  }
+
+  const body = {
+    agent_prompts: {
+      task_1: {
+        system_prompt: systemPrompt,
+      },
+    },
+  };
+  if (options.agentWelcomeMessage != null && String(options.agentWelcomeMessage).length > 0) {
+    body.agent_config = {
+      agent_welcome_message: String(options.agentWelcomeMessage),
+    };
   }
 
   try {
@@ -281,13 +315,7 @@ async function updateAgentPrompt(agentId, systemPrompt) {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        agent_prompts: {
-          task_1: {
-            system_prompt: systemPrompt,
-          },
-        },
-      }),
+      body: JSON.stringify(body),
     });
 
     const text = await res.text();

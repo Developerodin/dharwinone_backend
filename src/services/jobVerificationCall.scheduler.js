@@ -1,29 +1,9 @@
 import Job from '../models/job.model.js';
 import logger from '../config/logger.js';
+import config from '../config/config.js';
 import bolnaService from './bolna.service.js';
 import callRecordService from './callRecord.service.js';
-import { numberToWords, currencyToWords } from '../utils/numberToWords.js';
-
-function jobContextFromDoc(job) {
-  if (!job) return {};
-  const orgName = job.organisation?.name || job.organisation || '';
-  let salaryRange = '';
-  if (job.salaryRange) {
-    const { min, max, currency } = job.salaryRange;
-    const curr = currencyToWords(currency);
-    if (min != null && max != null) salaryRange = `${numberToWords(min)} to ${numberToWords(max)} ${curr}`;
-    else if (min != null) salaryRange = `From ${numberToWords(min)} ${curr}`;
-    else if (max != null) salaryRange = `Up to ${numberToWords(max)} ${curr}`;
-  }
-  return {
-    jobTitle: job.title,
-    organisation: orgName,
-    jobType: job.jobType,
-    location: job.location,
-    experienceLevel: job.experienceLevel,
-    salaryRange: salaryRange || undefined,
-  };
-}
+import { initiateJobPostingVerificationCall } from './bolnaJobPostingVerification.service.js';
 
 async function runJobVerificationCalls() {
   try {
@@ -38,15 +18,12 @@ async function runJobVerificationCalls() {
       .lean();
 
     for (const job of jobs) {
-      const phone = job.organisation?.phone;
-      if (!phone) continue;
-      const candidateName = job.organisation?.name || job.title || 'Candidate';
-      const context = jobContextFromDoc(job);
-      const result = await bolnaService.initiateCall({
-        phone,
-        candidateName,
-        jobId: job._id?.toString?.() || job._id,
-        ...context,
+      if (!job.organisation?.phone) continue;
+      const contactLabel = job.organisation?.name || job.title || 'Organisation contact';
+      const result = await initiateJobPostingVerificationCall({
+        agentId: config.bolna.agentId,
+        job,
+        contactLabel,
       });
       if (result.success && result.executionId) {
         await Job.updateOne(

@@ -8,6 +8,28 @@ function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+/** Avoid mixing applicant names into job-post rows when Bolna user_data is stale or shared-agent polluted. */
+function businessNameFromBolnaUserData(userData, purposeLower) {
+  if (!userData || typeof userData !== 'object') return null;
+  const ud = userData;
+  const p = purposeLower || '';
+  if (p.includes('job_posting_verification') || p.includes('job_verification') || p.includes('recruiter')) {
+    if (ud.organisation != null && String(ud.organisation).trim()) return String(ud.organisation).trim();
+    if (ud.name != null && String(ud.name).trim()) return String(ud.name).trim();
+    return null;
+  }
+  if (p.includes('job_application') || p.includes('application_verification')) {
+    if (ud.candidate_name != null && String(ud.candidate_name).trim()) return String(ud.candidate_name).trim();
+    if (ud.name != null && String(ud.name).trim()) return String(ud.name).trim();
+    if (ud.organisation != null && String(ud.organisation).trim()) return String(ud.organisation).trim();
+    return null;
+  }
+  if (ud.organisation != null && String(ud.organisation).trim()) return String(ud.organisation).trim();
+  if (ud.name != null && String(ud.name).trim()) return String(ud.name).trim();
+  if (ud.candidate_name != null && String(ud.candidate_name).trim()) return String(ud.candidate_name).trim();
+  return null;
+}
+
 function normalizeStatus(status) {
   if (!status) return 'unknown';
   const s = String(status).toLowerCase().trim();
@@ -73,17 +95,16 @@ function normalizePayload(payload) {
   const recordingUrl = telephony.recording_url ?? payload.recording_url ?? data.recording_url;
 
   const userData = payload.user_data ?? data.user_data ?? {};
+  const purpose = payload.purpose ?? data.purpose;
+  const purposeLower = String(purpose || '').toLowerCase();
   const businessName =
-    userData.organisation ??
-    userData.name ??
-    userData.candidate_name ??
-    payload.business_name ??
-    data.business_name ??
-    payload.candidate_name ??
+    businessNameFromBolnaUserData(userData, purposeLower) ||
+    payload.business_name ||
+    data.business_name ||
+    payload.candidate_name ||
     data.candidate_name;
   const language = payload.language ?? data.language ?? userData.language ?? null;
   const agentId = payload.agent_id ?? data.agent_id ?? payload.agentId ?? data.agentId;
-  const purpose = payload.purpose ?? data.purpose;
 
   return {
     executionId: executionId ? String(executionId) : undefined,
@@ -189,7 +210,8 @@ async function listCallRecords(options = {}) {
     executionIdVariants.length
       ? (await import('../models/jobApplication.model.js')).default
           .find({ verificationCallExecutionId: { $in: executionIdVariants } })
-          .select('verificationCallExecutionId')
+          .select('verificationCallExecutionId candidate')
+          .populate('candidate', 'fullName')
           .lean()
       : Promise.resolve([]),
   ]);
@@ -199,6 +221,12 @@ async function listCallRecords(options = {}) {
   const executionIdToJobApp = new Set(
     jobAppsWithExecutionId.map((a) => normalizeKey(a.verificationCallExecutionId))
   );
+  const executionIdToCandidateName = new Map(
+    jobAppsWithExecutionId
+      .filter((a) => a.verificationCallExecutionId && a.candidate?.fullName)
+      .map((a) => [normalizeKey(a.verificationCallExecutionId), String(a.candidate.fullName).trim()])
+  );
+  const executionIdToJobAppSet = executionIdToJobApp;
 
   const jobOrgPhones = new Map();
   const allJobsWithPhone = await Job.find({ 'organisation.phone': { $exists: true, $nin: [null, ''] } })
@@ -219,8 +247,13 @@ async function listCallRecords(options = {}) {
     if (executionIdToJob.has(execId)) {
       toPhoneMatchesJobOrg.add(r._id?.toString());
       const job = executionIdToJob.get(execId);
-      if (!(r.businessName && r.businessName.trim()) && job?.organisation?.name) {
+      if (job?.organisation?.name) {
         r.businessName = job.organisation.name.trim();
+      }
+    } else if (executionIdToJobAppSet.has(execId)) {
+      const candName = executionIdToCandidateName.get(execId);
+      if (candName) {
+        r.businessName = candName;
       }
     } else {
       const toPhone = r.toPhoneNumber || r.recipientPhoneNumber || r.phone;
@@ -247,7 +280,6 @@ async function listCallRecords(options = {}) {
       }
     }
   }
-  const executionIdToJobAppSet = executionIdToJobApp;
 
   // Fetch candidate names for records with candidate ref but no businessName
   const needCandidateName = results.filter((r) => r.candidate && !(r.businessName && r.businessName.trim()));
@@ -316,26 +348,70 @@ async function listCallRecords(options = {}) {
 
 async function updateFromExecutionDetails(executionId, details, options = {}) {
   if (!executionId || !details) return null;
-  const telephony = details.telephony_data || details.telephonyData || {};
+
+  const payload = {
+    ...details,
+    id: details.id ?? details.execution_id ?? executionId,
+  };
+  const norm = normalizePayload(payload);
+  const data = payload.data || payload.execution || {};
+  const telephony = payload.telephony_data || payload.telephonyData || data.telephony_data || {};
+  const userData = payload.user_data ?? data.user_data ?? {};
+
   const update = {};
-  if (details.transcript) update.transcript = details.transcript;
-  if (details.conversation_transcript) update.conversationTranscript = details.conversation_transcript;
-  if (details.transcription) update.transcript = details.transcription;
-  if (details.status) update.status = normalizeStatus(details.status);
-  if (telephony.recording_url) update.recordingUrl = telephony.recording_url;
-  if (telephony.duration != null) update.duration = telephony.duration;
-  if (details.conversation_duration != null) update.duration = details.conversation_duration;
-  if (telephony.from_number) update.fromPhoneNumber = String(telephony.from_number);
-  if (details.user_data?.organisation) update.businessName = String(details.user_data.organisation).trim();
-  else if (details.user_data?.name) update.businessName = String(details.user_data.name).trim();
-  else if (details.user_data?.candidate_name) update.businessName = String(details.user_data.candidate_name).trim();
-  const agentId = details.agent_id ?? details.agentId;
-  if (agentId) update.agentId = String(agentId).trim();
-  if (details.extracted_data && typeof details.extracted_data === 'object') {
-    update.extractedData = details.extracted_data;
+
+  if (norm.transcript && String(norm.transcript).trim()) {
+    update.transcript = String(norm.transcript).trim();
   }
-  if (options.setErrorMessage && details.error_message) {
-    let msg = details.error_message;
+  if (norm.conversationTranscript && String(norm.conversationTranscript).trim()) {
+    update.conversationTranscript = String(norm.conversationTranscript).trim();
+  }
+  if (!update.transcript && norm.conversationTranscript && String(norm.conversationTranscript).trim()) {
+    update.transcript = String(norm.conversationTranscript).trim();
+  }
+
+  if (norm.recordingUrl) update.recordingUrl = norm.recordingUrl;
+  if (norm.duration != null && !Number.isNaN(Number(norm.duration))) {
+    update.duration = Number(norm.duration);
+  }
+  if (telephony.duration != null && update.duration == null) {
+    const d = parseInt(telephony.duration, 10);
+    if (!Number.isNaN(d)) update.duration = d;
+  }
+
+  const hadExplicitStatus =
+    payload.status != null ||
+    payload.smart_status != null ||
+    data.status != null ||
+    data.smart_status != null;
+  if (hadExplicitStatus && norm.status) {
+    update.status = norm.status;
+  }
+
+  if (norm.fromPhoneNumber) update.fromPhoneNumber = String(norm.fromPhoneNumber);
+  if (telephony.from_number && !update.fromPhoneNumber) {
+    update.fromPhoneNumber = String(telephony.from_number);
+  }
+
+  const existingForPurpose = await CallRecord.findOne({ executionId: String(executionId) })
+    .select('purpose')
+    .lean();
+  const purposeLower = String(existingForPurpose?.purpose || '').toLowerCase();
+  const fromUserData = businessNameFromBolnaUserData(userData, purposeLower);
+  if (fromUserData) update.businessName = fromUserData;
+
+  const agentId = norm.agentId ?? payload.agent_id ?? payload.agentId ?? data.agent_id ?? data.agentId;
+  if (agentId) update.agentId = String(agentId).trim();
+
+  const extracted =
+    payload.extracted_data ?? data.extracted_data ?? details.extracted_data;
+  if (extracted && typeof extracted === 'object') {
+    update.extractedData = extracted;
+  }
+
+  const errRaw = payload.error_message ?? data.error_message ?? details.error_message;
+  if (options.setErrorMessage && errRaw) {
+    let msg = errRaw;
     if (typeof msg === 'string') {
       try {
         const parsed = JSON.parse(msg);
@@ -346,8 +422,9 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
     }
     update.errorMessage = String(msg);
   }
+
   if (options.setCompletedAt) {
-    const status = update.status || details.status;
+    const statusForEnd = update.status || norm.status;
     const ended = [
       'completed',
       'failed',
@@ -357,22 +434,51 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
       'error',
       'call_disconnected',
       'balance-low',
-    ].includes(normalizeStatus(status));
+    ].includes(normalizeStatus(statusForEnd));
     if (ended) {
-      update.completedAt = details.updated_at
-        ? new Date(details.updated_at)
-        : details.initiated_at
-          ? new Date(details.initiated_at)
+      const updatedAt = payload.updated_at ?? data.updated_at;
+      const initiatedAt = payload.initiated_at ?? data.initiated_at;
+      update.completedAt = updatedAt
+        ? new Date(updatedAt)
+        : initiatedAt
+          ? new Date(initiatedAt)
           : new Date();
     }
   }
-  if (Object.keys(update).length === 0) return null;
+
+  if (Object.keys(update).length === 0) {
+    return CallRecord.findOne({ executionId: String(executionId) }).lean();
+  }
   const record = await CallRecord.findOneAndUpdate(
     { executionId: String(executionId) },
     { $set: update },
     { new: true }
   ).lean();
   return record;
+}
+
+/**
+ * Seed a call row after initiating a Bolna call (applicant flow). Maps legacy related* keys to schema refs.
+ */
+async function createRecord(body) {
+  if (!body?.executionId) return null;
+  const doc = {
+    executionId: String(body.executionId),
+    recipientPhoneNumber: body.recipientPhone ? String(body.recipientPhone) : undefined,
+    toPhoneNumber: body.recipientPhone ? String(body.recipientPhone) : undefined,
+    phone: body.recipientPhone ? String(body.recipientPhone) : undefined,
+    businessName: body.recipientName ? String(body.recipientName).trim() : undefined,
+    purpose: body.purpose ? String(body.purpose).trim() : undefined,
+    job: body.relatedJob || undefined,
+    candidate: body.relatedCandidate || undefined,
+    status: body.status ? normalizeStatus(body.status) : 'initiated',
+  };
+  const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
+  if (existing) {
+    const { executionId: _skip, ...rest } = doc;
+    return CallRecord.findOneAndUpdate({ executionId: doc.executionId }, { $set: rest }, { new: true }).lean();
+  }
+  return CallRecord.create(doc);
 }
 
 async function updateCallRecordByExecutionId(executionId, updateData, options = {}) {
@@ -444,10 +550,19 @@ function executionToCallRecordDoc(exec, agentId) {
   if (!executionId) return null;
   const telephony = exec.telephony_data || {};
   const userData = exec.user_data || {};
+  const execAgentKey = normalizeKey(exec.agent_id ?? exec.agentId ?? agentId);
+  const jobAgentKey = normalizeKey(config.bolna.agentId);
+  const candAgentKey = normalizeKey(config.bolna.candidateAgentId);
+  let purposeHint = '';
+  if (jobAgentKey && candAgentKey && jobAgentKey !== candAgentKey) {
+    if (execAgentKey === candAgentKey) purposeHint = 'job_application_verification';
+    else if (execAgentKey === jobAgentKey) purposeHint = 'job_posting_verification';
+  }
   const businessName =
-    userData.organisation ?? userData.name ?? userData.candidate_name
+    businessNameFromBolnaUserData(userData, purposeHint) ||
+    (userData.organisation ?? userData.name ?? userData.candidate_name
       ? String(userData.organisation || userData.name || userData.candidate_name).trim()
-      : undefined;
+      : undefined);
   const duration =
     telephony.duration != null
       ? parseInt(telephony.duration, 10)
@@ -547,6 +662,7 @@ async function backfillFromBolna(options = {}) {
 async function fillMissingBusinessNameFromJobs(limit = 100) {
   const records = await CallRecord.find({
     $and: [
+      { $nor: [{ purpose: /job_application_verification/i }] },
       { $or: [{ businessName: { $in: [null, ''] } }, { businessName: { $exists: false } }] },
       {
         $or: [
@@ -589,6 +705,7 @@ async function fillMissingBusinessNameFromJobs(limit = 100) {
 
 export default {
   createFromWebhook,
+  createRecord,
   listCallRecords,
   fillMissingBusinessNameFromJobs,
   normalizePayload,

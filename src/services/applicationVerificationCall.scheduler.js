@@ -10,48 +10,7 @@ import JobApplication from '../models/jobApplication.model.js';
 import logger from '../config/logger.js';
 import bolnaService from './bolna.service.js';
 import callRecordService from './callRecord.service.js';
-import { numberToWords, currencyToWords } from '../utils/numberToWords.js';
-
-/**
- * Format job context for Bolna agent
- */
-function jobContextFromDocs(application, candidate, job) {
-  if (!job || !candidate) return {};
-  
-  const orgName = job.organisation?.name || job.organisation || 'the company';
-  let salaryRange = '';
-  
-  if (job.salaryRange) {
-    const { min, max, currency } = job.salaryRange;
-    const curr = currencyToWords(currency);
-    if (min != null && max != null) {
-      salaryRange = `${numberToWords(min)} to ${numberToWords(max)} ${curr}`;
-    } else if (min != null) {
-      salaryRange = `From ${numberToWords(min)} ${curr}`;
-    } else if (max != null) {
-      salaryRange = `Up to ${numberToWords(max)} ${curr}`;
-    }
-  }
-  
-  return {
-    candidateName: candidate.fullName || 'there',
-    candidate_name: candidate.fullName || 'there',
-    jobTitle: job.title,
-    job_title: job.title,
-    organisation: orgName,
-    company_name: orgName,
-    jobType: job.jobType,
-    job_type: job.jobType,
-    location: job.location || 'not specified',
-    experienceLevel: job.experienceLevel || 'not specified',
-    experience_level: job.experienceLevel || 'not specified',
-    salaryRange: salaryRange || 'to be discussed',
-    salary_range: salaryRange || 'to be discussed',
-    applicationDate: application.createdAt ? new Date(application.createdAt).toLocaleDateString() : 'today',
-    candidateEmail: candidate.email,
-    candidate_email: candidate.email,
-  };
-}
+import { initiateCandidateVerificationCall } from './bolnaCandidateVerification.service.js';
 
 /**
  * Find applications that need verification calls
@@ -69,11 +28,13 @@ async function findApplicationsNeedingCalls() {
     })
       .populate({
         path: 'candidate',
-        select: 'fullName email phoneNumber countryCode',
+        select:
+          'fullName email phoneNumber countryCode qualifications experiences skills visaType customVisaType address shortBio salaryRange',
       })
       .populate({
         path: 'job',
-        select: 'title organisation jobType location experienceLevel salaryRange jobOrigin',
+        select:
+          'title organisation jobType location experienceLevel salaryRange jobOrigin jobDescription skillTags',
       })
       .limit(10)
       .lean();
@@ -127,18 +88,16 @@ async function runApplicationVerificationCalls() {
           phone = `${countryPrefix}${phone}`;
         }
         
-        // Prepare context for Bolna agent
-        const context = jobContextFromDocs(application, candidate, job);
-        
         logger.info(`Initiating verification call for application ${application._id} to ${phone}`);
-        
-        // Use candidate agent ID for verification calls
+
         const config = (await import('../config/config.js')).default;
-        
-        const result = await bolnaService.initiateCall({
-          phone,
-          agentId: config.bolna.candidateAgentId, // Use candidate agent ID
-          ...context,
+
+        const result = await initiateCandidateVerificationCall({
+          agentId: config.bolna.candidateAgentId,
+          formattedPhone: phone,
+          candidate,
+          job,
+          application,
         });
         
         if (result.success && result.executionId) {
@@ -198,43 +157,60 @@ async function runApplicationVerificationCalls() {
 /**
  * Sync call records from Bolna to update application status
  */
+function mapNormalizedStatusToApplicationVerification(normStatus) {
+  const s = String(normStatus || 'unknown').toLowerCase();
+  if (s === 'completed') return 'completed';
+  if (s === 'failed' || s === 'error') return 'failed';
+  if (s === 'no_answer' || s === 'busy') return 'no_answer';
+  if (s === 'in_progress' || s === 'initiated' || s === 'ringing' || s === 'queued') return 'pending';
+  return 'pending';
+}
+
 async function syncApplicationCallRecords() {
   try {
-    const records = await callRecordService.findRecordsNeedingSync(10);
-    
+    const records = await callRecordService.findRecordsNeedingSync(25);
+
     for (const rec of records) {
       const executionId = rec.executionId;
       if (!executionId) continue;
-      
+
       const result = await bolnaService.getExecutionDetails(executionId);
       if (!result.success || !result.details) continue;
-      
-      const updated = await callRecordService.updateFromExecutionDetails(executionId, result.details);
-      
-      if (updated) {
+
+      const details = result.details;
+      const data = details.data || details.execution || {};
+      const hadBolnaStatus =
+        details.status != null ||
+        details.smart_status != null ||
+        data.status != null ||
+        data.smart_status != null;
+
+      const updated = await callRecordService.updateFromExecutionDetails(executionId, details, {
+        setCompletedAt: true,
+        setErrorMessage: true,
+      });
+
+      const norm = callRecordService.normalizePayload({
+        ...details,
+        id: details.id ?? details.execution_id ?? executionId,
+      });
+
+      if (updated?.transcript || updated?.recordingUrl) {
         logger.info(`Synced application call record ${executionId} with transcript/recording from Bolna`);
-        
-        // Update application status based on call result
-        const callStatus = result.details.status || 'unknown';
-        let appCallStatus = 'pending';
-        
-        if (callStatus === 'completed') {
-          appCallStatus = 'completed';
-        } else if (callStatus === 'failed' || callStatus === 'error') {
-          appCallStatus = 'failed';
-        } else if (callStatus === 'no_answer' || callStatus === 'busy') {
-          appCallStatus = 'no_answer';
-        }
-        
-        // Update the application
+      } else if (hadBolnaStatus) {
+        logger.debug(`Application call record ${executionId} Bolna status: ${norm.status}`);
+      }
+
+      if (hadBolnaStatus) {
+        const appCallStatus = mapNormalizedStatusToApplicationVerification(norm.status);
         await JobApplication.updateOne(
           { verificationCallExecutionId: executionId },
           { $set: { verificationCallStatus: appCallStatus } }
         );
       }
     }
-    
-    logger.debug(`Application call records sync completed: ${records.length} executions synced`);
+
+    logger.debug(`Application call records sync completed: checked ${records.length} record(s)`);
   } catch (error) {
     logger.error(`Application call record sync error: ${error.message}`);
   }

@@ -826,112 +826,95 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
   // Initiate verification call via Bolna (async, don't wait) — skip for external listings
   if (phoneNumber && countryCode && job.jobOrigin !== 'external') {
     try {
-      const bolnaService = (await import('./bolna.service.js')).default;
-      const { numberToWords, currencyToWords } = await import('../utils/numberToWords.js');
-      
+      const { initiateCandidateVerificationCall } = await import('./bolnaCandidateVerification.service.js');
+
       console.log(`Processing phone for ${fullName}: Raw="${phoneNumber}", Country="${countryCode}"`);
-      
-      // Format phone number to E.164 - more robust handling
-      let formattedPhone = String(phoneNumber).replace(/\D/g, ''); // Remove all non-digits
-      
+
+      let formattedPhone = String(phoneNumber).replace(/\D/g, '');
+
       console.log(`After digit extraction: "${formattedPhone}"`);
-      
-      // If phone already starts with country code digits, use as is
-      // Otherwise, add country prefix
-      if (!formattedPhone.startsWith('91') && !formattedPhone.startsWith('1') && 
-          !formattedPhone.startsWith('44') && !formattedPhone.startsWith('61')) {
-        const countryPrefix = countryCode === 'IN' ? '91' : 
-                             countryCode === 'US' ? '1' : 
-                             countryCode === 'GB' ? '44' : 
-                             countryCode === 'AU' ? '61' : '1';
+
+      if (
+        !formattedPhone.startsWith('91') &&
+        !formattedPhone.startsWith('1') &&
+        !formattedPhone.startsWith('44') &&
+        !formattedPhone.startsWith('61')
+      ) {
+        const countryPrefix =
+          countryCode === 'IN'
+            ? '91'
+            : countryCode === 'US'
+              ? '1'
+              : countryCode === 'GB'
+                ? '44'
+                : countryCode === 'AU'
+                  ? '61'
+                  : '1';
         formattedPhone = countryPrefix + formattedPhone;
         console.log(`Added country prefix: "${formattedPhone}"`);
       }
-      
-      // Add '+' prefix for E.164 format
+
       formattedPhone = '+' + formattedPhone;
-      
+
       console.log(`Final formatted phone: "${formattedPhone}" (length: ${formattedPhone.length})`);
-      
-      // Validate phone number length (check digits only, not the + sign)
+
       const digitsOnly = formattedPhone.replace(/\D/g, '');
       if (digitsOnly.length < 10 || digitsOnly.length > 15) {
         console.warn(`⚠️ Invalid phone number format for ${fullName}: ${formattedPhone} (digits: ${digitsOnly.length})`);
-        // Skip call but don't fail the application
       } else {
-        // Format salary range for voice
-        let salaryRange = '';
-        if (job.salaryRange) {
-          const { min, max, currency } = job.salaryRange;
-          const curr = currencyToWords(currency || 'USD');
-          if (min != null && max != null) {
-            salaryRange = `${numberToWords(min)} to ${numberToWords(max)} ${curr} per year`;
-          } else if (min != null) {
-            salaryRange = `From ${numberToWords(min)} ${curr} per year`;
-          } else if (max != null) {
-            salaryRange = `Up to ${numberToWords(max)} ${curr} per year`;
-          }
-        }
+        const fullCandidate = await Candidate.findById(candidate._id);
+        if (!fullCandidate) {
+          console.warn(`⚠️ Candidate not found for Bolna call: ${candidate._id}`);
+        } else {
+          initiateCandidateVerificationCall({
+            agentId: config.bolna.candidateAgentId,
+            formattedPhone,
+            candidate: fullCandidate,
+            job,
+            application,
+          })
+            .then((result) => {
+              if (result.success && result.executionId) {
+                JobApplication.updateOne(
+                  { _id: application._id },
+                  {
+                    $set: {
+                      verificationCallExecutionId: result.executionId,
+                      verificationCallInitiatedAt: new Date(),
+                      verificationCallStatus: 'pending',
+                    },
+                  }
+                ).catch((err) => {
+                  console.error('Failed to update application with call details:', err);
+                });
 
-        // Prepare context for Bolna agent
-        const callContext = {
-          phone: formattedPhone,
-          agentId: config.bolna.candidateAgentId, // Use candidate agent ID
-          candidate_name: fullName,
-          candidate_email: email,
-          job_title: job.title,
-          job_type: job.employmentType || 'Full-time',
-          location: `${job.location || 'Remote'}${job.workMode ? ` - ${job.workMode}` : ''}`,
-          experience_level: job.experienceLevel || 'Not specified',
-          salary_range: salaryRange || 'Competitive salary based on experience',
-          company_name: job.organisation?.name || 'Our Company',
-          application_date: new Date(application.createdAt).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          }),
-        };
+                callRecordService
+                  .createRecord({
+                    executionId: result.executionId,
+                    recipientPhone: formattedPhone,
+                    recipientName: fullName,
+                    recipientEmail: email,
+                    purpose: 'job_application_verification',
+                    relatedJobApplication: application._id,
+                    relatedJob: job._id,
+                    relatedCandidate: candidate._id,
+                    status: 'initiated',
+                  })
+                  .catch((err) => {
+                    console.error('Failed to create call record:', err);
+                  });
 
-        // Initiate call
-        bolnaService.initiateCall(callContext).then((result) => {
-          if (result.success && result.executionId) {
-            // Update application with call details
-            JobApplication.updateOne(
-              { _id: application._id },
-              {
-                $set: {
-                  verificationCallExecutionId: result.executionId,
-                  verificationCallInitiatedAt: new Date(),
-                  verificationCallStatus: 'pending',
-                },
+                console.log(
+                  `✅ Verification call initiated for ${fullName} (${formattedPhone}) - Execution: ${result.executionId}`
+                );
+              } else {
+                console.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
               }
-            ).catch((err) => {
-              console.error('Failed to update application with call details:', err);
+            })
+            .catch((err) => {
+              console.error('Failed to initiate verification call:', err);
             });
-
-            // Create call record
-            callRecordService.createRecord({
-              executionId: result.executionId,
-              recipientPhone: formattedPhone,
-              recipientName: fullName,
-              recipientEmail: email,
-              purpose: 'job_application_verification',
-              relatedJobApplication: application._id,
-              relatedJob: job._id,
-              relatedCandidate: candidate._id,
-              status: 'initiated',
-            }).catch((err) => {
-              console.error('Failed to create call record:', err);
-            });
-
-            console.log(`✅ Verification call initiated for ${fullName} (${formattedPhone}) - Execution: ${result.executionId}`);
-          } else {
-            console.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
-          }
-        }).catch((err) => {
-          console.error('Failed to initiate verification call:', err);
-          // Don't fail the application if call fails
-        });
+        }
       }
     } catch (err) {
       console.error(`Error in call initiation for ${fullName}:`, err);

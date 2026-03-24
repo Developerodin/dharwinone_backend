@@ -71,6 +71,15 @@ const envVarsSchema = Joi.object()
     BOLNA_FROM_PHONE_NUMBER: Joi.string().optional().description('Bolna caller ID in E.164 format'),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
+    BOLNA_MAX_CALL_DURATION_SECONDS: Joi.number()
+      .integer()
+      .min(0)
+      .max(7200)
+      .optional()
+      .default(900)
+      .description(
+        'Max voice call length in seconds (sent as max_call_duration_seconds on POST /call when > 0). Set 0 to omit. Also set the same limit in Bolna Call tab for job + candidate agents.'
+      ),
 
     // Microsoft / Outlook OAuth
     MICROSOFT_CLIENT_ID: Joi.string().optional().description('Microsoft OAuth client ID (for Outlook)'),
@@ -201,10 +210,17 @@ const config = {
   },
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',
+    /** Job posting / recruiter verification calls (no prompt PATCH in app). */
     agentId: envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
+    /**
+     * Applicant verification only — receives PATCH system prompt before each call.
+     * Must differ from agentId or flows overwrite each other’s behavior.
+     */
     candidateAgentId: envVars.BOLNA_CANDIDATE_AGENT_ID || envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
     fromPhoneNumber: envVars.BOLNA_FROM_PHONE_NUMBER || envVars.CALLER_ID || '',
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
+    /** Applied to every outbound call; mirror in Bolna dashboard Call tab for each agent. */
+    maxCallDurationSeconds: envVars.BOLNA_MAX_CALL_DURATION_SECONDS,
   },
   rateLimit: {
     authWindowMinutes: envVars.RATE_LIMIT_AUTH_WINDOW_MINUTES ?? 15,
