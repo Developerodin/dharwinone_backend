@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
+import User from '../models/user.model.js';
 import Conversation from '../models/conversation.model.js';
 import Message from '../models/message.model.js';
 import ChatCall from '../models/chatCall.model.js';
@@ -64,6 +65,36 @@ const ensureAdmin = async (conversationId, userId) => {
 };
 
 const isCreator = (conv, userId) => conv.createdBy?.toString() === userId;
+
+const userIsPrivilegedChatParticipant = (u) => u && (u.hideFromDirectory || u.platformSuperUser);
+
+const loadUserFlagsMapByIds = async (objectIds) => {
+  const uniq = [...new Set(objectIds.map((id) => id?.toString?.()).filter(Boolean))];
+  if (!uniq.length) return new Map();
+  const oids = uniq.map((id) => new mongoose.Types.ObjectId(id));
+  const users = await User.find({ _id: { $in: oids } })
+    .select('hideFromDirectory platformSuperUser')
+    .lean();
+  return new Map(users.map((u) => [u._id.toString(), u]));
+};
+
+const participantRowUserId = (p) => {
+  if (!p?.user) return '';
+  if (typeof p.user === 'object' && p.user._id != null) return p.user._id.toString();
+  return p.user.toString();
+};
+
+const assertCallerCanAddRestrictedParticipants = async (callerUserId, newParticipantObjectIds) => {
+  const caller = await User.findById(callerUserId).select('platformSuperUser').lean();
+  if (caller?.platformSuperUser) return;
+  const flagMap = await loadUserFlagsMapByIds(newParticipantObjectIds);
+  const hasRestricted = newParticipantObjectIds.some((oid) =>
+    userIsPrivilegedChatParticipant(flagMap.get(oid.toString()))
+  );
+  if (hasRestricted) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You cannot add this user to the conversation');
+  }
+};
 
 const getConversationParticipantIds = async (conversationId) => {
   const conv = await Conversation.findById(conversationId).lean();
@@ -197,6 +228,47 @@ const createConversation = async (userId, { type, participantIds, name }) => {
   }
 
   const allParticipantIds = [userId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
+  const caller = await User.findById(userId).select('platformSuperUser').lean();
+  const callerIsSuper = !!caller?.platformSuperUser;
+  const flagMap = await loadUserFlagsMapByIds(allParticipantIds);
+  const hasRestrictedInSet = allParticipantIds.some((oid) =>
+    userIsPrivilegedChatParticipant(flagMap.get(oid.toString()))
+  );
+
+  if (hasRestrictedInSet && !callerIsSuper) {
+    if (type === 'direct') {
+      const existingEarly = await Conversation.findOne({
+        type: 'direct',
+        $and: allParticipantIds.map((id) => ({ 'participants.user': id })),
+      })
+        .populate('participants.user', 'name email')
+        .lean();
+      if (
+        existingEarly &&
+        (existingEarly.participants || []).some((p) => participantRowUserId(p) === userId)
+      ) {
+        return formatConversationForClient({ ...existingEarly, id: existingEarly._id?.toString() });
+      }
+    } else if (type === 'group') {
+      const groupsEarly = await Conversation.find({
+        type: 'group',
+        'participants.user': { $all: allParticipantIds },
+        'participants.0': { $exists: true },
+      })
+        .populate('participants.user', 'name email')
+        .populate('createdBy', 'name email')
+        .lean();
+      const existingGroup = groupsEarly.find((g) => {
+        const gIds = (g.participants || []).map((p) => p.user?._id?.toString?.()).filter(Boolean);
+        return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
+      });
+      if (existingGroup && (existingGroup.participants || []).some((p) => participantRowUserId(p) === userId)) {
+        return formatConversationForClient({ ...existingGroup, id: existingGroup._id?.toString() });
+      }
+    }
+    throw new ApiError(httpStatus.FORBIDDEN, 'You cannot start a conversation with this user');
+  }
+
   if (type === 'direct') {
     const existing = await Conversation.findOne({
       type: 'direct',
@@ -602,6 +674,11 @@ const addParticipants = async (conversationId, userId, { participantIds }) => {
   const existingIds = (conv.participants || []).map((p) => p.user.toString());
   const toAdd = ids.filter((id) => !existingIds.includes(id));
   if (!toAdd.length) return getConversation(conversationId, userId);
+
+  await assertCallerCanAddRestrictedParticipants(
+    userId,
+    toAdd.map((id) => new mongoose.Types.ObjectId(id))
+  );
 
   const newParticipants = toAdd.map((id) => ({
     user: new mongoose.Types.ObjectId(id),

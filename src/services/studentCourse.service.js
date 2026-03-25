@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
+import Candidate from '../models/candidate.model.js';
 import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
 
@@ -42,15 +43,23 @@ const getOrCreateProgress = async (studentId, moduleId) => {
       module: moduleId,
       enrolledAt: new Date(),
     });
+    const ownerId = student.user;
+    if (ownerId) {
+      const cand = await Candidate.findOne({ owner: ownerId }).select('_id').lean();
+      if (cand?._id) {
+        const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+        queueSopReminderCheckForCandidate(String(cand._id));
+      }
+    }
   }
-  
+
   return progress;
 };
 
 /**
  * Default progress for a module when student has no progress record yet (so assigned courses still show in list).
  */
-const defaultProgressRow = (moduleId) => ({
+const defaultProgressRow = (_moduleId) => ({
   progress: { percentage: 0, completedItems: [], lastAccessedAt: null, lastAccessedItem: null },
   quizScores: { totalQuizzes: 0, completedQuizzes: 0, averageScore: 0, totalScore: 0 },
   enrolledAt: new Date(),

@@ -84,6 +84,14 @@ const userSchema = mongoose.Schema(
       courseUpdates: { type: Boolean, default: true },
       recruiterUpdates: { type: Boolean, default: true },
     },
+    platformSuperUser: {
+      type: Boolean,
+      default: false,
+    },
+    hideFromDirectory: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
@@ -101,6 +109,8 @@ userSchema.options.toJSON.transform = function (doc, ret, options) {
   if (originalUserToJSON) originalUserToJSON(doc, ret, options);
   ret.createdAt = doc.createdAt;
   ret.updatedAt = doc.updatedAt;
+  delete ret.platformSuperUser;
+  delete ret.hideFromDirectory;
   return ret;
 };
 

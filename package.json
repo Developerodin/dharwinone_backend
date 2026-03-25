@@ -34,7 +34,8 @@
     "docker:livekit": "docker compose -f docker-compose.livekit-local.yml up -d",
     "docker:livekit:down": "docker compose -f docker-compose.livekit-local.yml down",
     "docker:livekit:full": "docker compose -f livekit/docker-compose.yml up -d",
-    "docker:livekit:full:down": "docker compose -f livekit/docker-compose.yml down"
+    "docker:livekit:full:down": "docker compose -f livekit/docker-compose.yml down",
+    "provision:platform-super": "node scripts/provision-platform-super-user.js"
   },
   "keywords": [
     "node",

@@ -1,4 +1,73 @@
 /**
+ * Max milliseconds for one punch session (forgotten punch-out, bad imports, shift/TZ mismatch).
+ * Override with ATTENDANCE_MAX_SESSION_HOURS (default 24; capped at 48 even if env is higher).
+ */
+export function getMaxSessionDurationMs() {
+  const h = Number(process.env.ATTENDANCE_MAX_SESSION_HOURS);
+  const hours = Number.isFinite(h) && h > 0 ? Math.min(h, 48) : 24;
+  return hours * 60 * 60 * 1000;
+}
+
+export function clampSessionDurationMs(ms) {
+  if (ms == null || ms <= 0) return ms;
+  const max = getMaxSessionDurationMs();
+  return Math.min(ms, max);
+}
+
+/**
+ * Stored duration or raw punch span, clamped — use for API responses and aggregates.
+ * @param {{ punchIn?: Date|string, punchOut?: Date|string|null, duration?: number|null }} record
+ * @returns {number|null}
+ */
+export function effectiveSessionDurationMs(record) {
+  if (!record?.punchIn) return null;
+  if (!record.punchOut) {
+    return record.duration != null && record.duration > 0 ? clampSessionDurationMs(record.duration) : null;
+  }
+  const punchIn = new Date(record.punchIn).getTime();
+  const punchOut = new Date(record.punchOut).getTime();
+  if (!Number.isFinite(punchIn) || !Number.isFinite(punchOut) || punchOut <= punchIn) return null;
+  const raw = punchOut - punchIn;
+  const stored = record.duration != null && record.duration > 0 ? record.duration : null;
+  const ms = stored != null ? stored : raw;
+  return clampSessionDurationMs(ms);
+}
+
+/**
+ * Max ms summed per attendance calendar day (multiple punch sessions). Default 24 wall-clock hours.
+ * Env: ATTENDANCE_MAX_HOURS_PER_CALENDAR_DAY (capped at 24).
+ */
+export function getMaxHoursPerCalendarDayMs() {
+  const h = Number(process.env.ATTENDANCE_MAX_HOURS_PER_CALENDAR_DAY);
+  const hours = Number.isFinite(h) && h > 0 ? Math.min(h, 24) : 24;
+  return hours * 60 * 60 * 1000;
+}
+
+/**
+ * Sum worked time: group by attendance `date`, cap each day, skip Holiday/Leave rows.
+ * @param {Array<{ date?: Date, status?: string }>} records
+ * @param {(r: object) => number} sessionMsFn - e.g. (r) => effectiveSessionDurationMs(r) || 0
+ */
+export function aggregateDailyCappedWorkMs(records, sessionMsFn) {
+  const maxDay = getMaxHoursPerCalendarDayMs();
+  const byDay = new Map();
+  for (const r of records) {
+    const st = r.status;
+    if (st === 'Holiday' || st === 'Leave') continue;
+    if (!r.date) continue;
+    const key = new Date(r.date).getTime();
+    const ms = sessionMsFn(r) || 0;
+    if (ms <= 0) continue;
+    byDay.set(key, (byDay.get(key) || 0) + ms);
+  }
+  let total = 0;
+  for (const v of byDay.values()) {
+    total += Math.min(v, maxDay);
+  }
+  return total;
+}
+
+/**
  * Shift-window overlap for attendance duration (shared by punch-out and live status preview).
  * @param {Date} refDate
  * @param {string} startTime "HH:mm"
@@ -57,8 +126,6 @@ export function computeDurationMs(punchIn, punchOut, shift) {
   const overlapStart = Math.max(punchIn.getTime(), startUtc.getTime());
   const overlapEnd = Math.min(punchOut.getTime(), endUtc.getTime());
   const overlapMs = Math.max(0, overlapEnd - overlapStart);
-  if (overlapMs === 0 && rawMs > 0) {
-    return rawMs;
-  }
-  return overlapMs;
+  const chosen = overlapMs === 0 && rawMs > 0 ? rawMs : overlapMs;
+  return clampSessionDurationMs(chosen);
 }

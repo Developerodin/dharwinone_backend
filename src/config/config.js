@@ -226,6 +226,8 @@ const config = {
     authWindowMinutes: envVars.RATE_LIMIT_AUTH_WINDOW_MINUTES ?? 15,
     authMax: envVars.RATE_LIMIT_AUTH_MAX ?? 500,
   },
+  /** In-app SOP reminders after candidate/training updates; set NOTIFY_SOP_REMINDERS=0 to disable. */
+  notifySopReminders: process.env.NOTIFY_SOP_REMINDERS !== '0' && process.env.NOTIFY_SOP_REMINDERS !== 'false',
 };
 
 // Production: warn if email/share links would use localhost

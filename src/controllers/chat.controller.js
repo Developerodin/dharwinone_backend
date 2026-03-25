@@ -188,7 +188,8 @@ const searchUsers = catchAsync(async (req, res) => {
   const limit = Math.min(50, parseInt(req.query.limit, 10) || 20);
   const result = await queryUsers(
     { search: search || undefined, status: 'active' },
-    { limit, page: 1, sortBy: 'name:asc' }
+    { limit, page: 1, sortBy: 'name:asc' },
+    req.user
   );
   res.send(result);
 });

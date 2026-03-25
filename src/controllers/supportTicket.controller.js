@@ -1,7 +1,6 @@
 import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
-import ApiError from '../utils/ApiError.js';
 import {
   createSupportTicket,
   querySupportTickets,
@@ -10,14 +9,9 @@ import {
   addCommentToTicket,
   deleteSupportTicketById,
 } from '../services/supportTicket.service.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
 
 const create = catchAsync(async (req, res) => {
   const files = req.files || (req.file ? [req.file] : []);
-
-  if (req.body.candidateId && !(await userIsAdmin(req.user))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only admins can create tickets on behalf of candidates');
-  }
 
   const ticket = await createSupportTicket(req.body, req.user.id, files, req.user);
   res.status(httpStatus.CREATED).send(ticket);

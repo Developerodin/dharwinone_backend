@@ -47,6 +47,7 @@ When adding a trigger: update this file, `notification.model.js` `type` enum, fr
 | Candidate invite | `auth.controller.js` | `notifyByEmail` | `general` | Invitee | No in-app | Bulk array; invitation email separate |
 | Candidate profile share | `candidate.controller.js` | `notifyByEmail` | `general` | Recipient | No in-app | Share email separate |
 | Post-call (Bolna) | `bolna.controller.js` `sendPostCallEmailAndNotification` | `createNotification` | `general` | User matching candidate email | No in-app | **`CallRecord.postCallFollowUpSent`** claim + rollback on failure |
+| SOP incomplete (onboarding checklist) | `sopReminder.service.js` `queueSopReminderCheckForCandidate` | `createNotification` | `sop` | Candidate **`adminId`**, **`assignedAgent`** (Settings → Agents), and **`assignedRecruiter`** only — no broadcast to all `candidates.manage` users. Each agent is notified only for candidates they are assigned to. Dedupe: at most one notif per recipient × candidate × UTC day while the incomplete-step set is unchanged. | N/A | Disabled when `NOTIFY_SOP_REMINDERS=0` / `false`. **Queued from:** candidate create/update, agent/recruiter assign, bulk week-off/shift, training enrollment, `GET /v1/candidates/:id/sop-status`, and **`POST /v1/candidates/sop-reminders/dispatch`** (manual batch from Settings → Candidate SOP). Managers still use **SOP open overview** / candidate list for full visibility. |
 
 ## Webhooks and duplicates
 

@@ -7,8 +7,16 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 
+const PRIVILEGED_USER_FIELDS = ['platformSuperUser', 'hideFromDirectory'];
+
 const createUser = catchAsync(async (req, res) => {
-  const user = await userService.createUser(req.body);
+  const body = { ...req.body };
+  if (!req.user?.platformSuperUser) {
+    for (const k of PRIVILEGED_USER_FIELDS) delete body[k];
+  }
+  const user = await userService.createUser(body, {
+    allowPrivilegedUserFields: !!req.user?.platformSuperUser,
+  });
   await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_CREATE, EntityTypes.USER, user.id, { roleIds: user.roleIds }, req);
   res.status(httpStatus.CREATED).send(user);
 });
@@ -16,20 +24,33 @@ const createUser = catchAsync(async (req, res) => {
 const getUsers = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['name', 'status', 'search']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const result = await userService.queryUsers(filter, options);
+  const result = await userService.queryUsers(filter, options, req.user);
   res.send(result);
 });
 
 const getUser = catchAsync(async (req, res) => {
-  const user = await userService.getUserById(req.params.userId);
-  if (!user) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
-  }
+  const user = await userService.getUserByIdForRequester(req.params.userId, req.user);
   res.send(user);
 });
 
 const updateUser = catchAsync(async (req, res) => {
+  const target = await userService.getUserById(req.params.userId);
+  if (!target) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+  const self =
+    String(req.user.id || req.user._id) === String(target._id);
+  if (
+    !self &&
+    (target.hideFromDirectory || target.platformSuperUser) &&
+    !req.user?.platformSuperUser
+  ) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
   const updateBody = { ...req.body };
+  if (!req.user?.platformSuperUser) {
+    for (const k of PRIVILEGED_USER_FIELDS) delete updateBody[k];
+  }
   const isAdmin = await userIsAdmin(req.user);
   const isAgent = await userIsAgent(req.user);
   if (!isAdmin && 'username' in updateBody) {
@@ -59,6 +80,25 @@ const updateUser = catchAsync(async (req, res) => {
 });
 
 const deleteUser = catchAsync(async (req, res) => {
+  const target = await userService.getUserById(req.params.userId);
+  if (!target) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+  const self =
+    String(req.user.id || req.user._id) === String(target._id);
+  if (
+    !self &&
+    (target.hideFromDirectory || target.platformSuperUser) &&
+    !req.user?.platformSuperUser
+  ) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+  if (target.platformSuperUser) {
+    const n = await userService.countPlatformSuperUsers();
+    if (n <= 1) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot delete the last platform super user account');
+    }
+  }
   await userService.deleteUserById(req.params.userId);
   await activityLogService.createActivityLog(req.user.id, ActivityActions.USER_DELETE, EntityTypes.USER, req.params.userId, {}, req);
   res.status(httpStatus.NO_CONTENT).send();

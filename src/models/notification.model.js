@@ -24,6 +24,7 @@ const notificationSchema = mongoose.Schema(
         'account',
         'recruiter',
         'assignment',
+        'sop',
         'general',
       ],
       default: 'general',

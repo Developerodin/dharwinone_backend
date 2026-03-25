@@ -11,6 +11,9 @@ const requireRoleByName = (roleName) => async (req, res, next) => {
   if (!req.user) {
     return next(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
   }
+  if (req.user.platformSuperUser) {
+    return next();
+  }
   const roleIds = req.user.roleIds || [];
   if (roleIds.length === 0) {
     return next(

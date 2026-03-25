@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 
 import ApiError from '../utils/ApiError.js';
 import User from '../models/user.model.js';
+import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
 import Token from '../models/token.model.js';
 import logger from '../config/logger.js';
 
@@ -9,13 +10,20 @@ import logger from '../config/logger.js';
 /**
  * Create a user
  * @param {Object} userBody
+ * @param {{ allowPrivilegedUserFields?: boolean }} [options] - When false (default), strips platformSuperUser/hideFromDirectory (public/register flows cannot self-elevate).
  * @returns {Promise<User>}
  */
-const createUser = async (userBody) => {
-  if (await User.isEmailTaken(userBody.email)) {
+const createUser = async (userBody, options = {}) => {
+  const { allowPrivilegedUserFields = false } = options;
+  const body = { ...userBody };
+  if (!allowPrivilegedUserFields) {
+    delete body.platformSuperUser;
+    delete body.hideFromDirectory;
+  }
+  if (await User.isEmailTaken(body.email)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
-  const user = await User.create(userBody);
+  const user = await User.create(body);
   // Auto-create Student / Candidate profiles when user has those roles
   if (user.roleIds?.length) {
     // eslint-disable-next-line import/no-cycle
@@ -35,9 +43,10 @@ const createUser = async (userBody) => {
  * @param {string} [options.sortBy] - Sort option in the format: sortField:(desc|asc)
  * @param {number} [options.limit] - Maximum number of results per page (default = 10)
  * @param {number} [options.page] - Current page (default = 1)
+ * @param {object | null} [requester] - req.user; when set and not platform super, excludes directory-hidden users
  * @returns {Promise<QueryResult>}
  */
-const queryUsers = async (filter, options) => {
+const queryUsers = async (filter, options, requester = null) => {
   const { search, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
   if (search && search.trim()) {
@@ -47,6 +56,12 @@ const queryUsers = async (filter, options) => {
       { name: { $regex: searchRegex } },
       { email: { $regex: searchRegex } },
     ];
+  }
+  if (requester && !viewerSeesHiddenUsers(requester)) {
+    const hiddenIds = await getDirectoryHiddenUserIds();
+    if (hiddenIds.length > 0) {
+      mongoFilter._id = { $nin: hiddenIds };
+    }
   }
   const users = await User.paginate(mongoFilter, options);
   return users;
@@ -60,6 +75,33 @@ const queryUsers = async (filter, options) => {
 const getUserById = async (id) => {
   return User.findById(id);
 };
+
+/**
+ * Get user by id for an authenticated viewer. Hidden / platform-super targets are not discoverable (404) unless viewer is self or platform super.
+ * @param {import('mongoose').Types.ObjectId|string} targetId
+ * @param {object | null | undefined} viewer - req.user (mongoose doc or plain object with id/_id)
+ * @returns {Promise<import('mongoose').Document>}
+ */
+const getUserByIdForRequester = async (targetId, viewer) => {
+  const user = await User.findById(targetId);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+  const viewerId = viewer?._id != null ? viewer._id.toString() : viewer?.id != null ? String(viewer.id) : '';
+  const targetStr = user._id.toString();
+  if (viewerId && targetStr === viewerId) {
+    return user;
+  }
+  if ((user.hideFromDirectory || user.platformSuperUser) && !viewer?.platformSuperUser) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+  return user;
+};
+
+/**
+ * @returns {Promise<number>}
+ */
+const countPlatformSuperUsers = async () => User.countDocuments({ platformSuperUser: true });
 
 /**
  * Get user by email
@@ -204,8 +246,10 @@ export {
   createUser,
   queryUsers,
   getUserById,
+  getUserByIdForRequester,
   getUserByEmail,
   updateUserById,
   deleteUserById,
+  countPlatformSuperUsers,
 };
 

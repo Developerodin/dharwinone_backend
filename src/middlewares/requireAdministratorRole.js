@@ -11,6 +11,9 @@ const requireAdministratorRole = (roleName = 'Administrator') => async (req, res
   if (!req.user) {
     return next(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
   }
+  if (req.user.platformSuperUser) {
+    return next();
+  }
   const roleIds = req.user.roleIds || [];
   if (roleIds.length === 0) {
     return next(new ApiError(httpStatus.FORBIDDEN, 'Only users with Administrator role can perform this action'));

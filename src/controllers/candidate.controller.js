@@ -40,6 +40,12 @@ import { logActivity } from '../services/recruiterActivity.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
 import { getUserPermissionContext } from '../services/permission.service.js';
 import logger from '../config/logger.js';
+import { dispatchSopRemindersForOpenCandidates } from '../services/sopReminder.service.js';
+import {
+  evaluateSopForCandidate,
+  assertCanViewCandidateSop,
+  listSopOpenOverviewForManage,
+} from '../services/sopChecklist.service.js';
 
 const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
 
@@ -123,6 +129,7 @@ const list = catchAsync(async (req, res) => {
     'degree',
     'visaType',
     'skillMatchMode',
+    'includeOpenSopCount',
   ]);
   if (!req.user.canManageCandidates) {
     filter.owner = req.user._id;
@@ -130,6 +137,30 @@ const list = catchAsync(async (req, res) => {
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryCandidates(filter, options);
   res.send(result);
+});
+
+const getSopStatus = catchAsync(async (req, res) => {
+  const candidate = await getCandidateById(req.params.candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!assertCanViewCandidateSop(req, candidate)) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  const payload = await evaluateSopForCandidate(req.params.candidateId);
+  res.send(payload);
+  const { queueSopReminderCheckForCandidate } = await import('../services/sopReminder.service.js');
+  queueSopReminderCheckForCandidate(req.params.candidateId, payload);
+});
+
+const getSopOpenOverview = catchAsync(async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const data = await listSopOpenOverviewForManage({ limit });
+  res.send(data);
+});
+
+const postSopRemindersDispatch = catchAsync(async (req, res) => {
+  const limit = Math.min(Number(req.body?.limit) || 150, 500);
+  const out = await dispatchSopRemindersForOpenCandidates({ limit });
+  res.send(out);
 });
 
 const get = catchAsync(async (req, res) => {
@@ -185,7 +216,18 @@ const updateMyCandidate = catchAsync(async (req, res) => {
   res.send(updated);
 });
 
-export { create, list, get, getMyCandidate, updateMyCandidate, update, remove };
+export {
+  create,
+  list,
+  get,
+  getSopStatus,
+  getSopOpenOverview,
+  postSopRemindersDispatch,
+  getMyCandidate,
+  updateMyCandidate,
+  update,
+  remove,
+};
 
 const exportProfile = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);

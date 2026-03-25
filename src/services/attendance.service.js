@@ -6,7 +6,12 @@ import User from '../models/user.model.js';
 import Candidate from '../models/candidate.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
-import { computeDurationMs } from '../utils/attendanceDuration.js';
+import {
+  aggregateDailyCappedWorkMs,
+  computeDurationMs,
+  effectiveSessionDurationMs,
+  getMaxSessionDurationMs,
+} from '../utils/attendanceDuration.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -243,14 +248,16 @@ const listByStudent = async (studentId, query = {}) => {
     Attendance.countDocuments(filter),
   ]);
 
+  const maxMs = getMaxSessionDurationMs();
   const results = rawResults.map((r) => {
-    let duration = r.duration;
-    if ((duration == null || duration === 0) && r.punchOut && r.punchIn) {
-      const computed = new Date(r.punchOut).getTime() - new Date(r.punchIn).getTime();
-      if (computed > 0) {
-        duration = computed;
-        Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
-      }
+    const duration = effectiveSessionDurationMs(r);
+    if (
+      r.punchOut &&
+      duration != null &&
+      r.duration !== duration &&
+      (r.duration == null || r.duration === 0 || r.duration > maxMs)
+    ) {
+      Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
     }
     return {
       ...r,
@@ -307,21 +314,29 @@ const getStatistics = async (studentId, query = {}) => {
     if (endDate) filter.date.$lte = getUtcMidnight(endDate);
   }
 
-  const records = await Attendance.find(filter).select('duration punchIn punchOut timezone').lean();
-  const totalMs = records.reduce((sum, r) => sum + (r.duration || 0), 0);
+  const records = await Attendance.find(filter).select('duration punchIn punchOut timezone date status').lean();
+  const msFor = (r) => effectiveSessionDurationMs(r) || 0;
+  const totalMs = aggregateDailyCappedWorkMs(records, msFor);
   const totalHours = Math.round((totalMs / (1000 * 60 * 60)) * 100) / 100;
 
   const now = new Date();
   const weekStart = getUtcMidnight(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
   const monthStart = getUtcMidnight(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
-  const weekMs = records.filter((r) => r.date >= weekStart).reduce((s, r) => s + (r.duration || 0), 0);
-  const monthMs = records.filter((r) => r.date >= monthStart).reduce((s, r) => s + (r.duration || 0), 0);
+  const weekMs = aggregateDailyCappedWorkMs(
+    records.filter((r) => r.date >= weekStart),
+    msFor
+  );
+  const monthMs = aggregateDailyCappedWorkMs(
+    records.filter((r) => r.date >= monthStart),
+    msFor
+  );
   const totalHoursWeek = Math.round((weekMs / (1000 * 60 * 60)) * 100) / 100;
   const totalHoursMonth = Math.round((monthMs / (1000 * 60 * 60)) * 100) / 100;
 
-  const sessionsWithDuration = records.filter((r) => r.duration != null && r.duration > 0);
+  const workSessions = records.filter((r) => r.status !== 'Holiday' && r.status !== 'Leave');
+  const sessionsWithDuration = workSessions.filter((r) => msFor(r) > 0);
   const averageSessionMinutes = sessionsWithDuration.length
-    ? Math.round(sessionsWithDuration.reduce((s, r) => s + r.duration, 0) / sessionsWithDuration.length / 60000)
+    ? Math.round(sessionsWithDuration.reduce((s, r) => s + msFor(r), 0) / sessionsWithDuration.length / 60000)
     : null;
 
   const workStartHour = Number(process.env.ATTENDANCE_WORK_START_HOUR) || DEFAULT_WORK_START_HOUR;
@@ -523,14 +538,16 @@ const listByUser = async (userId, query = {}) => {
     Attendance.countDocuments(filter),
   ]);
 
+  const maxMs = getMaxSessionDurationMs();
   const results = rawResults.map((r) => {
-    let duration = r.duration;
-    if ((duration == null || duration === 0) && r.punchOut && r.punchIn) {
-      const computed = new Date(r.punchOut).getTime() - new Date(r.punchIn).getTime();
-      if (computed > 0) {
-        duration = computed;
-        Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
-      }
+    const duration = effectiveSessionDurationMs(r);
+    if (
+      r.punchOut &&
+      duration != null &&
+      r.duration !== duration &&
+      (r.duration == null || r.duration === 0 || r.duration > maxMs)
+    ) {
+      Attendance.updateOne({ _id: r._id }, { $set: { duration } }, { background: true }).catch(() => {});
     }
     return {
       ...r,
@@ -566,21 +583,29 @@ const getStatisticsByUser = async (userId, query = {}) => {
     if (endDate) filter.date.$lte = getUtcMidnight(endDate);
   }
 
-  const records = await Attendance.find(filter).select('duration punchIn punchOut timezone').lean();
-  const totalMs = records.reduce((sum, r) => sum + (r.duration || 0), 0);
+  const records = await Attendance.find(filter).select('duration punchIn punchOut timezone date status').lean();
+  const msFor = (r) => effectiveSessionDurationMs(r) || 0;
+  const totalMs = aggregateDailyCappedWorkMs(records, msFor);
   const totalHours = Math.round((totalMs / (1000 * 60 * 60)) * 100) / 100;
 
   const now = new Date();
   const weekStart = getUtcMidnight(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
   const monthStart = getUtcMidnight(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
-  const weekMs = records.filter((r) => r.date >= weekStart).reduce((s, r) => s + (r.duration || 0), 0);
-  const monthMs = records.filter((r) => r.date >= monthStart).reduce((s, r) => s + (r.duration || 0), 0);
+  const weekMs = aggregateDailyCappedWorkMs(
+    records.filter((r) => r.date >= weekStart),
+    msFor
+  );
+  const monthMs = aggregateDailyCappedWorkMs(
+    records.filter((r) => r.date >= monthStart),
+    msFor
+  );
   const totalHoursWeek = Math.round((weekMs / (1000 * 60 * 60)) * 100) / 100;
   const totalHoursMonth = Math.round((monthMs / (1000 * 60 * 60)) * 100) / 100;
 
-  const sessionsWithDuration = records.filter((r) => r.duration != null && r.duration > 0);
+  const workSessions = records.filter((r) => r.status !== 'Holiday' && r.status !== 'Leave');
+  const sessionsWithDuration = workSessions.filter((r) => msFor(r) > 0);
   const averageSessionMinutes = sessionsWithDuration.length
-    ? Math.round(sessionsWithDuration.reduce((s, r) => s + r.duration, 0) / sessionsWithDuration.length / 60000)
+    ? Math.round(sessionsWithDuration.reduce((s, r) => s + msFor(r), 0) / sessionsWithDuration.length / 60000)
     : null;
 
   const workStartHour = Number(process.env.ATTENDANCE_WORK_START_HOUR) || DEFAULT_WORK_START_HOUR;
@@ -659,14 +684,11 @@ const getTrackList = async (options = {}) => {
     const student = byStudent.get(row._id?.toString?.());
     const user = student?.user;
     const fallbackUser = !user && row.studentEmail ? emailToUser.get(row.studentEmail) : null;
-    const punchIn = row.punchIn ? new Date(row.punchIn) : null;
-    const punchOut = row.punchOut ? new Date(row.punchOut) : null;
-    const durationMs =
-      row.duration != null && row.duration > 0
-        ? row.duration
-        : punchIn && punchOut
-          ? punchOut.getTime() - punchIn.getTime()
-          : null;
+    const durationMs = effectiveSessionDurationMs({
+      punchIn: row.punchIn,
+      punchOut: row.punchOut,
+      duration: row.duration,
+    });
     const email = user?.email ?? fallbackUser?.email ?? row.studentEmail ?? '—';
     const studentName = user?.name ?? fallbackUser?.name ?? row.studentName ?? '—';
     const employeeId = user?._id ? (ownerToEmployeeId.get(user._id?.toString?.()) || '') : '';
@@ -815,14 +837,11 @@ const getTrackHistory = async (options = {}) => {
   });
   const records = await Attendance.aggregate(pipeline);
   const results = records.map((r) => {
-    const punchIn = r.punchIn ? new Date(r.punchIn) : null;
-    const punchOut = r.punchOut ? new Date(r.punchOut) : null;
-    const durationMs =
-      r.duration != null && r.duration > 0
-        ? r.duration
-        : punchIn && punchOut
-          ? punchOut.getTime() - punchIn.getTime()
-          : null;
+    const durationMs = effectiveSessionDurationMs({
+      punchIn: r.punchIn,
+      punchOut: r.punchOut,
+      duration: r.duration,
+    });
     return {
       id: r.id,
       studentId: r.studentId || null,

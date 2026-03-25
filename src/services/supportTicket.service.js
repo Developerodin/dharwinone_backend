@@ -4,7 +4,7 @@ import Candidate from '../models/candidate.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { uploadMultipleFilesToS3 } from './upload.service.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
+import { userIsAdmin, userIsAgent } from '../utils/roleHelpers.js';
 
 /**
  * Create a support ticket
@@ -18,15 +18,37 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
   let candidate = null;
   let candidateId = null;
 
-  // Check if admin is creating ticket on behalf of a candidate
   const isAdmin = user ? await userIsAdmin(user) : false;
-  if (isAdmin && ticketData.candidateId) {
+  const isAgent = user ? await userIsAgent(user) : false;
+  const actorUserId = user?.id?.toString?.() || user?._id?.toString?.() || String(userId);
+
+  if (ticketData.candidateId) {
     candidate = await Candidate.findById(ticketData.candidateId);
     if (!candidate) {
       throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
     }
-    candidateId = candidate._id;
+    if (isAdmin) {
+      candidateId = candidate._id;
+    } else if (isAgent) {
+      const assignedAgentId = candidate.assignedAgent?.toString?.() || '';
+      if (!assignedAgentId || assignedAgentId !== actorUserId) {
+        throw new ApiError(
+          httpStatus.FORBIDDEN,
+          'You can only create tickets on behalf of candidates assigned to you'
+        );
+      }
+      candidateId = candidate._id;
+    } else {
+      throw new ApiError(
+        httpStatus.FORBIDDEN,
+        'Only administrators or agents (for their assigned candidates) can create tickets on behalf of a candidate'
+      );
+    }
+  } else if (isAdmin) {
+    // Admin with no "on behalf" selection: ticket is for the admin (staff), not linked to a Candidate.
+    candidateId = null;
   } else {
+    // Non-admins (e.g. candidate portal users) resolve their profile via owner.
     candidate = await Candidate.findOne({ owner: userId });
     candidateId = candidate?._id || null;
   }
@@ -48,7 +70,8 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
     }
   }
 
-  const { candidateId: _candidateId, ...ticketFields } = ticketData;
+  const ticketFields = { ...ticketData };
+  delete ticketFields.candidateId;
 
   const ticket = await SupportTicket.create({
     ...ticketFields,

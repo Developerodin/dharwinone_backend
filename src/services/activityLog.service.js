@@ -1,4 +1,6 @@
+import mongoose from 'mongoose';
 import ActivityLog from '../models/activityLog.model.js';
+import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
 
 /**
  * Create an activity log entry. Do not pass sensitive PII in metadata.
@@ -42,15 +44,33 @@ const sanitizeMetadata = (meta) => {
  * Populates actor with id and name only (no PII like email in default response).
  * @param {Object} filter - actor, action, entityType, entityId, startDate, endDate
  * @param {Object} options - sortBy, limit, page
+ * @param {object | null} [viewer] - req.user; non–platform-super viewers omit logs whose actor is directory-hidden
  * @returns {Promise<QueryResult>}
  */
-const queryActivityLogs = async (filter, options) => {
+const queryActivityLogs = async (filter, options, viewer = null) => {
   const { startDate, endDate, ...rest } = filter;
   const mongoFilter = { ...rest };
   if (startDate || endDate) {
     mongoFilter.createdAt = {};
     if (startDate) mongoFilter.createdAt.$gte = new Date(startDate);
     if (endDate) mongoFilter.createdAt.$lte = new Date(endDate);
+  }
+  if (viewer && !viewerSeesHiddenUsers(viewer)) {
+    const hiddenIds = await getDirectoryHiddenUserIds();
+    if (hiddenIds.length > 0) {
+      const hiddenSet = new Set(hiddenIds.map((id) => id.toString()));
+      if (mongoFilter.actor) {
+        let actorId = mongoFilter.actor;
+        if (typeof actorId === 'string' && mongoose.Types.ObjectId.isValid(actorId)) {
+          actorId = new mongoose.Types.ObjectId(actorId);
+        }
+        if (actorId && hiddenSet.has(actorId.toString())) {
+          mongoFilter._id = { $in: [] };
+        }
+      } else {
+        mongoFilter.actor = { $nin: hiddenIds };
+      }
+    }
   }
   const sortBy = options.sortBy || 'createdAt:desc';
   const sort = sortBy.split(',').map((s) => {

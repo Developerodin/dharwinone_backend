@@ -119,6 +119,12 @@ const startImpersonation = async (adminUser, targetUserId, adminRefreshToken) =>
   if (String(impersonatedUser.id) === String(adminUser.id)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot impersonate yourself');
   }
+  if (
+    (impersonatedUser.hideFromDirectory || impersonatedUser.platformSuperUser) &&
+    !adminUser.platformSuperUser
+  ) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You cannot impersonate this user');
+  }
 
   const impersonation = await Impersonation.create({
     adminUser: adminUser.id,

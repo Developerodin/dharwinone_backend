@@ -44,6 +44,17 @@ router.get(
   candidateController.listStudentAgentAssignmentsHandler
 );
 
+/** Active-SOP incomplete steps across current candidates — candidates.manage only */
+router.get(
+  '/sop-open-overview',
+  ...canManage,
+  validate(candidateValidation.getSopOpenOverview),
+  candidateController.getSopOpenOverview
+);
+
+/** Queue in-app SOP notifications for candidates with open steps (all users with candidates.manage receive them). */
+router.post('/sop-reminders/dispatch', ...canManage, candidateController.postSopRemindersDispatch);
+
 router
   .route('/export')
   .post(...canManage, validate(candidateValidation.exportAllCandidates), candidateController.exportAll);
@@ -114,6 +125,13 @@ router.get(
   requireCandidateAttendanceList,
   validate(attendanceValidation.listAttendanceCandidate),
   attendanceController.getAttendanceByCandidate
+);
+
+router.get(
+  '/:candidateId/sop-status',
+  auth(),
+  validate(candidateValidation.getCandidateSopStatus),
+  candidateController.getSopStatus
 );
 
 router

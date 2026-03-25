@@ -122,6 +122,8 @@ const createCandidate = async (ownerId, payload) => {
     emailsInBatch.add(email);
   }
 
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+
   // Process each candidate
   for (let i = 0; i < candidatesData.length; i++) {
     const candidateData = candidatesData[i];
@@ -195,7 +197,9 @@ const createCandidate = async (ownerId, payload) => {
         student.position = candidate.position || null;
         await student.save();
       }
-      
+
+      queueSopReminderCheckForCandidate(String(candidate._id));
+
       results.successful.push({
         index: i,
         candidate: candidate,
@@ -403,6 +407,11 @@ const buildAdvancedFilter = (filter) => {
 };
 
 const queryCandidates = async (filter, options) => {
+  const wantOpenSop =
+    filter.includeOpenSopCount === true ||
+    filter.includeOpenSopCount === 'true' ||
+    filter.includeOpenSopCount === '1';
+
   // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
 
@@ -676,7 +685,17 @@ const queryCandidates = async (filter, options) => {
         }
       }
     }));
-    
+
+    if (wantOpenSop && candidatesWithEmailStatus.length > 0) {
+      const { countOpenSopSteps } = await import('./sopChecklist.service.js');
+      await Promise.all(
+        candidatesWithEmailStatus.map(async (row) => {
+          const id = row._id ?? row.id;
+          if (id) row.openSopCount = await countOpenSopSteps(id);
+        })
+      );
+    }
+
     return {
       results: candidatesWithEmailStatus,
       page,
@@ -759,8 +778,18 @@ const queryCandidates = async (filter, options) => {
           }
         }
       }));
+
+      if (wantOpenSop && result.results.length > 0) {
+        const { countOpenSopSteps } = await import('./sopChecklist.service.js');
+        await Promise.all(
+          result.results.map(async (row) => {
+            const id = row._id ?? row.id;
+            if (id) row.openSopCount = await countOpenSopSteps(id);
+          })
+        );
+      }
     }
-    
+
     return result;
 };
 
@@ -916,7 +945,10 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   candidate.isCompleted = candidate.isProfileCompleted === 100;
   
   await candidate.save();
-  
+
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  queueSopReminderCheckForCandidate(String(candidate._id));
+
   // Sync critical fields to the linked User model
   if (candidate.owner) {
     try {
@@ -1705,6 +1737,9 @@ const assignRecruiterToCandidate = async (candidateId, recruiterId) => {
   candidate.assignedRecruiter = recruiterId;
   await candidate.save();
 
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  queueSopReminderCheckForCandidate(String(candidate._id));
+
   const { notify, plainTextEmailBody } = await import('./notification.service.js');
   const candidateName = candidate.fullName || candidate.email || 'a candidate';
   const candLink = `/candidates/${candidateId}`;
@@ -1884,6 +1919,8 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
   if (agentId === null || agentId === undefined || agentId === '') {
     candidate.set('assignedAgent', null);
     await candidate.save();
+    const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+    queueSopReminderCheckForCandidate(String(candidate._id));
     await candidate.populate([
       { path: 'owner', select: 'name email' },
       { path: 'assignedAgent', select: 'name email' },
@@ -1906,6 +1943,9 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
 
   candidate.assignedAgent = agentId;
   await candidate.save();
+
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  queueSopReminderCheckForCandidate(String(candidate._id));
 
   const { notify } = await import('./notification.service.js');
   const studentLabel = candidate.fullName || candidate.email || 'a person';
@@ -2028,6 +2068,9 @@ const updateWeekOffForCandidates = async (candidateIds, weekOff, user) => {
     { $set: { weekOff } }
   );
 
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  candidateIds.forEach((cid) => queueSopReminderCheckForCandidate(String(cid)));
+
   // Fetch updated candidates
   const updatedCandidates = await Candidate.find({ _id: { $in: candidateIds } })
     .populate('owner', 'name email')
@@ -2096,6 +2139,9 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
     { _id: { $in: candidateIds } },
     { $set: { shift: shiftId } }
   );
+
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  candidateIds.forEach((cid) => queueSopReminderCheckForCandidate(String(cid)));
 
   // Fetch updated candidates with populated shift
   const updatedCandidates = await Candidate.find({ _id: { $in: candidateIds } })

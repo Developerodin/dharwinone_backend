@@ -651,21 +651,19 @@ export async function getThread(account, threadId) {
   return with401Refresh(account, async () => {
     const client = createGraphClient(account.accessToken);
     const escapedId = (threadId || '').replace(/'/g, "''");
+    /** Do not $select body on list queries: Graph often returns truncated body (~preview length) when $top is large, which made us skip per-message fetch and showed only a few lines in the UI. */
     const res = await client
       .api('/me/messages')
       .filter(`conversationId eq '${escapedId}'`)
       .orderby('receivedDateTime asc')
-      .select('id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag')
+      .select(
+        'id,conversationId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag'
+      )
       .top(50)
       .get();
     const rows = res.value || [];
-    /** Graph often omits empty body on filtered list; load each message by id for full HTML/text. */
     const messages = await Promise.all(
       rows.map(async (row) => {
-        const hasBody = row.body?.content && String(row.body.content).trim();
-        if (hasBody) {
-          return formatOutlookMessage(row);
-        }
         try {
           const full = await client
             .api(`/me/messages/${row.id}`)
@@ -676,7 +674,7 @@ export async function getThread(account, threadId) {
             .get();
           return formatOutlookMessage(full);
         } catch (e) {
-          logger.warn('[Outlook] getThread message %s body fetch failed: %s', row.id, e.message);
+          logger.warn('[Outlook] getThread message %s fetch failed: %s', row.id, e.message);
           return formatOutlookMessage(row);
         }
       })

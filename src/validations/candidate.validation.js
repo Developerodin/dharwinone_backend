@@ -144,12 +144,26 @@ const getCandidates = {
     visaType: Joi.string().trim(),
     skillMatchMode: Joi.string().valid('all', 'any').default('any'),
     employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
+    /** When true, each list row includes openSopCount (extra DB work per candidate). */
+    includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
   }),
 };
 
 const getCandidate = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId),
+  }),
+};
+
+const getCandidateSopStatus = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId),
+  }),
+};
+
+const getSopOpenOverview = {
+  query: Joi.object().keys({
+    limit: Joi.number().integer().min(1).max(500),
   }),
 };
 
@@ -451,6 +465,8 @@ export {
   createCandidate,
   getCandidates,
   getCandidate,
+  getCandidateSopStatus,
+  getSopOpenOverview,
   updateCandidate,
   updateMyCandidate,
   deleteCandidate,

@@ -14,6 +14,7 @@ const router = express.Router();
 
 /** users.manage (derived from settings.users) or Administrator role */
 const requireUsersManageOrAdministrator = async (req, res, next) => {
+  if (req.user?.platformSuperUser) return next();
   const granting = getGrantingPermissions('users.manage');
   const has = granting.some((p) => req.authContext.permissions.has(p));
   if (has) return next();

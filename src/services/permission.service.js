@@ -1,4 +1,5 @@
 import Role from '../models/role.model.js';
+import User from '../models/user.model.js';
 
 /**
  * Derive API permissions from raw domain permissions using a single rule:
@@ -40,6 +41,32 @@ const deriveApiPermissions = (rawPermissions) => {
 };
 
 /**
+ * @param {Array<{ permissions?: string[] }>} roles
+ * @returns {Set<string>}
+ */
+const collectRawPermissionsFromRoles = (roles) => {
+  const rawPermissions = new Set();
+  for (const role of roles) {
+    if (!role.permissions || !Array.isArray(role.permissions)) continue;
+    for (const p of role.permissions) {
+      if (typeof p === 'string' && p.trim()) {
+        rawPermissions.add(p.trim());
+      }
+    }
+  }
+  return rawPermissions;
+};
+
+/**
+ * Union of every active role's domain permission strings (for platform super users).
+ * @returns {Promise<Set<string>>}
+ */
+const getAllActiveRolesRawPermissions = async () => {
+  const roles = await Role.find({ status: 'active' }).lean();
+  return collectRawPermissionsFromRoles(roles);
+};
+
+/**
  * Build permission context for a user based on their roleIds.
  * - Roles contribute domain permissions, which are mapped to API permissions.
  *
@@ -47,6 +74,12 @@ const deriveApiPermissions = (rawPermissions) => {
  * @returns {Promise<{ isAdmin: boolean, permissions: Set<string> }>}
  */
 const getUserPermissionContext = async (user) => {
+  if (user?.platformSuperUser) {
+    const rawPermissions = await getAllActiveRolesRawPermissions();
+    const apiPermissions = deriveApiPermissions(rawPermissions);
+    return { isAdmin: true, permissions: apiPermissions };
+  }
+
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) {
     return { isAdmin: false, permissions: new Set() }; // isAdmin kept for future extensibility
@@ -58,16 +91,7 @@ const getUserPermissionContext = async (user) => {
   }
 
   // Collect raw domain permissions from all roles
-  const rawPermissions = new Set();
-  for (const role of roles) {
-    if (!role.permissions || !Array.isArray(role.permissions)) continue;
-    for (const p of role.permissions) {
-      if (typeof p === 'string' && p.trim()) {
-        rawPermissions.add(p.trim());
-      }
-    }
-  }
-
+  const rawPermissions = collectRawPermissionsFromRoles(roles);
   const apiPermissions = deriveApiPermissions(rawPermissions);
 
   return { isAdmin: false, permissions: apiPermissions };
@@ -81,37 +105,83 @@ const getUserPermissionContext = async (user) => {
  * @returns {Promise<{ permissions: string[], roleNames: string[], isAdministrator: boolean }>}
  */
 const getMyPermissionsForFrontend = async (user) => {
+  if (user?.platformSuperUser) {
+    const rawPermissions = await getAllActiveRolesRawPermissions();
+    const roleIds = user?.roleIds || [];
+    const myRoles = roleIds.length
+      ? await Role.find({ _id: { $in: roleIds }, status: 'active' }).lean()
+      : [];
+    const roleNames = myRoles.map((r) => r.name);
+    return {
+      permissions: Array.from(rawPermissions),
+      roleNames,
+      isAdministrator: true,
+      isPlatformSuperUser: true,
+    };
+  }
+
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) {
-    return { permissions: [], roleNames: [], isAdministrator: false };
+    return { permissions: [], roleNames: [], isAdministrator: false, isPlatformSuperUser: false };
   }
 
   const roles = await Role.find({ _id: { $in: roleIds }, status: 'active' }).lean();
   if (!roles.length) {
-    return { permissions: [], roleNames: [], isAdministrator: false };
+    return { permissions: [], roleNames: [], isAdministrator: false, isPlatformSuperUser: false };
   }
 
-  const rawPermissions = new Set();
-  const roleNames = [];
-  let isAdministrator = false;
-
-  for (const role of roles) {
-    roleNames.push(role.name);
-    if (role.name === 'Administrator') isAdministrator = true;
-    if (!role.permissions || !Array.isArray(role.permissions)) continue;
-    for (const p of role.permissions) {
-      if (typeof p === 'string' && p.trim()) {
-        rawPermissions.add(p.trim());
-      }
-    }
-  }
+  const rawPermissions = collectRawPermissionsFromRoles(roles);
+  const roleNames = roles.map((r) => r.name);
+  const isAdministrator = roles.some((r) => r.name === 'Administrator');
 
   return {
     permissions: Array.from(rawPermissions),
     roleNames,
     isAdministrator,
+    isPlatformSuperUser: false,
   };
 };
 
-export { getUserPermissionContext, getMyPermissionsForFrontend };
+/**
+ * User IDs for in-app alerts that should reach everyone who can manage ATS candidates.
+ * Includes platform super users and users with any active role whose permissions derive `apiPermissionKey`
+ * (e.g. `candidates.manage` from `ats.candidates:view,create,edit,delete`).
+ *
+ * @param {string} apiPermissionKey
+ * @returns {Promise<string[]>}
+ */
+const getUserIdsWithApiPermission = async (apiPermissionKey) => {
+  const ids = new Set();
+
+  const supers = await User.find({
+    platformSuperUser: true,
+    status: { $in: ['active', 'pending'] },
+  })
+    .select('_id')
+    .lean();
+  for (const u of supers) ids.add(String(u._id));
+
+  const roles = await Role.find({ status: 'active' }).lean();
+  const roleIdsWithPerm = [];
+  for (const role of roles) {
+    const api = deriveApiPermissions(collectRawPermissionsFromRoles([role]));
+    if (api.has(apiPermissionKey)) {
+      roleIdsWithPerm.push(role._id);
+    }
+  }
+
+  if (roleIdsWithPerm.length > 0) {
+    const users = await User.find({
+      roleIds: { $in: roleIdsWithPerm },
+      status: { $in: ['active', 'pending'] },
+    })
+      .select('_id')
+      .lean();
+    for (const u of users) ids.add(String(u._id));
+  }
+
+  return [...ids];
+};
+
+export { getUserPermissionContext, getMyPermissionsForFrontend, getUserIdsWithApiPermission };
 

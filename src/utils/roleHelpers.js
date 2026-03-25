@@ -6,6 +6,7 @@ import Role from '../models/role.model.js';
  * @returns {Promise<boolean>}
  */
 export const userIsAdmin = async (user) => {
+  if (user?.platformSuperUser) return true;
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;
   const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Administrator', status: 'active' });
@@ -35,6 +36,7 @@ export const userIsAgent = async (user) => {
  * @returns {Promise<boolean>}
  */
 export const userIsAdminOrAgent = async (user) => {
+  if (user?.platformSuperUser) return true;
   const roleIds = user?.roleIds || [];
   if (roleIds.length === 0) return false;
   const role = await Role.findOne(

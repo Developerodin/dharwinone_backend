@@ -15,6 +15,10 @@ const requirePermissions = (...requiredPermissions) => (req, res, next) => {
     return next(new ApiError(httpStatus.UNAUTHORIZED, 'Please authenticate'));
   }
 
+  if (req.user.platformSuperUser) {
+    return next();
+  }
+
   const { permissions } = req.authContext;
 
   if (!requiredPermissions.length) {

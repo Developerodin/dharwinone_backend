@@ -378,9 +378,11 @@ const ensureStudentProfileForUser = async (userId) => {
  * Use this when a user was created via User Management with the Student role
  * but has no Training student profile yet (so they don't appear in course assignment).
  * @param {ObjectId} userId
+ * @param {{ ensureStudentRoleForCandidateOwner?: boolean }} [options]
  * @returns {Promise<Student>}
  */
-const createStudentFromUser = async (userId) => {
+const createStudentFromUser = async (userId, options = {}) => {
+  const { ensureStudentRoleForCandidateOwner = false } = options;
   const studentRole = await getRoleByName('Student');
   if (!studentRole) {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found.');
@@ -391,9 +393,20 @@ const createStudentFromUser = async (userId) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
 
-  const hasStudentRole = (user.roleIds || []).some(
+  let hasStudentRole = (user.roleIds || []).some(
     (id) => id && id.toString() === studentRole._id.toString()
   );
+  if (!hasStudentRole && ensureStudentRoleForCandidateOwner) {
+    const ownsCandidate = await Candidate.exists({ owner: userId });
+    if (!ownsCandidate) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'User does not have the Student role. Assign the Student role in User Management first.'
+      );
+    }
+    await User.updateOne({ _id: userId }, { $addToSet: { roleIds: studentRole._id } });
+    hasStudentRole = true;
+  }
   if (!hasStudentRole) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,

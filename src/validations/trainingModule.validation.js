@@ -167,6 +167,27 @@ const updateCategoriesField = Joi.alternatives()
     })
   );
 
+/** Same as categories: FormData empty roster sends students/mentorsAssigned as literal "[]". */
+const updateIdArrayField = Joi.alternatives()
+  .try(
+    Joi.array().items(Joi.custom(objectId)),
+    Joi.string().custom((value, helpers) => {
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+          return helpers.error('any.invalid');
+        }
+        const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate(parsed);
+        if (error) {
+          return helpers.error('any.invalid');
+        }
+        return coerced;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    })
+  );
+
 const updateTrainingModule = {
   params: Joi.object().keys({
     moduleId: Joi.custom(objectId).required(),
@@ -176,8 +197,8 @@ const updateTrainingModule = {
       categories: updateCategoriesField,
       moduleName: Joi.string().trim(),
       shortDescription: Joi.string().trim(),
-      students: Joi.array().items(Joi.custom(objectId)),
-      mentorsAssigned: Joi.array().items(Joi.custom(objectId)),
+      students: updateIdArrayField,
+      mentorsAssigned: updateIdArrayField,
       playlist: Joi.array().items(playlistItemSchema),
       status: Joi.string().valid('draft', 'published', 'archived'),
     })

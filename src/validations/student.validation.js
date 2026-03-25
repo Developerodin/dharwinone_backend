@@ -82,6 +82,8 @@ const deleteStudent = {
 const createStudentFromUser = {
   body: Joi.object().keys({
     userId: Joi.string().required().custom(objectId),
+    /** When true: if user owns a Candidate but lacks Student role, add Student role then create profile (students.manage only). */
+    ensureStudentRoleForCandidateOwner: Joi.boolean().optional(),
   }),
 };
 

@@ -88,7 +88,9 @@ const getProfileImage = catchAsync(async (req, res) => {
  * That user will then appear in course assignment dropdowns.
  */
 const createStudentFromUser = catchAsync(async (req, res) => {
-  const student = await studentService.createStudentFromUser(req.body.userId);
+  const student = await studentService.createStudentFromUser(req.body.userId, {
+    ensureStudentRoleForCandidateOwner: Boolean(req.body.ensureStudentRoleForCandidateOwner),
+  });
   res.status(httpStatus.CREATED).send(student);
 });
 

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
+import { clampSessionDurationMs } from '../utils/attendanceDuration.js';
 
 const attendanceSchema = mongoose.Schema(
   {
@@ -88,8 +89,13 @@ attendanceSchema.pre('save', function (next) {
   if (hasStudent === hasUser) {
     return next(new Error('Exactly one of student or user must be set'));
   }
-  if (this.punchOut != null && this.punchIn != null && (this.duration == null || this.duration === undefined)) {
-    this.duration = this.punchOut.getTime() - this.punchIn.getTime();
+  if (this.punchOut != null && this.punchIn != null) {
+    const raw = this.punchOut.getTime() - this.punchIn.getTime();
+    if (this.duration == null || this.duration === undefined) {
+      this.duration = raw > 0 ? clampSessionDurationMs(raw) : this.duration;
+    } else if (this.duration > 0) {
+      this.duration = clampSessionDurationMs(this.duration);
+    }
   }
   next();
 });
