@@ -18,6 +18,12 @@ import * as bolnaController from './controllers/bolna.controller.js';
 
 const app = express();
 
+// Real client IP for req.ip (and activity logs, rate limits) when behind nginx/ALB/Cloudflare.
+// Set TRUST_PROXY_HOPS=1 for a single trusted hop; 0 in local dev when hitting Node directly.
+if (config.trustProxyHops > 0) {
+  app.set('trust proxy', config.trustProxyHops);
+}
+
 if (config.env !== 'test') {
   app.use(morgan.successHandler);
   app.use(morgan.errorHandler);

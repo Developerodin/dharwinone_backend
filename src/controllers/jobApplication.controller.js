@@ -11,6 +11,8 @@ import {
   createJobApplication,
   deleteJobApplication,
 } from '../services/jobApplication.service.js';
+import * as activityLogService from '../services/activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const get = catchAsync(async (req, res) => {
   const application = await getJobApplicationById(req.params.applicationId);
@@ -25,6 +27,15 @@ const updateStatus = catchAsync(async (req, res) => {
     req.params.applicationId,
     req.body,
     req.user
+  );
+  const aid = application?._id ?? application?.id ?? req.params.applicationId;
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.JOB_APPLICATION_UPDATE,
+    EntityTypes.JOB_APPLICATION,
+    String(aid),
+    { status: application?.status },
+    req
   );
   res.send(application);
 });
@@ -78,16 +89,43 @@ const withdrawApplication = catchAsync(async (req, res) => {
     );
   }
   await JobApplication.findByIdAndDelete(application._id);
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.JOB_APPLICATION_DELETE,
+    EntityTypes.JOB_APPLICATION,
+    String(application._id),
+    { withdrawn: true },
+    req
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
 const create = catchAsync(async (req, res) => {
   const application = await createJobApplication(req.body, req.user);
+  const aid = application?._id ?? application?.id;
+  if (aid) {
+    await activityLogService.createActivityLog(
+      String(req.user.id || req.user._id),
+      ActivityActions.JOB_APPLICATION_CREATE,
+      EntityTypes.JOB_APPLICATION,
+      String(aid),
+      {},
+      req
+    );
+  }
   res.status(httpStatus.CREATED).send(application);
 });
 
 const remove = catchAsync(async (req, res) => {
   await deleteJobApplication(req.params.applicationId, req.user);
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.JOB_APPLICATION_DELETE,
+    EntityTypes.JOB_APPLICATION,
+    req.params.applicationId,
+    {},
+    req
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 

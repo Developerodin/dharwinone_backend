@@ -90,6 +90,17 @@ const envVarsSchema = Joi.object()
     // Auth rate limit (deployed apps often share IPs; increase to avoid 429 on sign-in)
     RATE_LIMIT_AUTH_WINDOW_MINUTES: Joi.number().optional().default(15).description('Auth rate limit window in minutes'),
     RATE_LIMIT_AUTH_MAX: Joi.number().optional().default(500).description('Max failed auth requests per window per IP'),
+
+    // Reverse proxy: Express req.ip / X-Forwarded-For (activity logs geo, rate limits, secure cookies)
+    TRUST_PROXY_HOPS: Joi.number()
+      .integer()
+      .min(0)
+      .max(32)
+      .optional()
+      .default(0)
+      .description(
+        'Number of trusted reverse-proxy hops (0=off). Use 1 behind a single nginx/ALB/Cloudflare in front of Node. See Express "behind proxies" guide.'
+      ),
   })
   .unknown();
 
@@ -226,6 +237,8 @@ const config = {
     authWindowMinutes: envVars.RATE_LIMIT_AUTH_WINDOW_MINUTES ?? 15,
     authMax: envVars.RATE_LIMIT_AUTH_MAX ?? 500,
   },
+  /** Express `trust proxy` hop count; 0 leaves default (do not trust X-Forwarded-For). */
+  trustProxyHops: envVars.TRUST_PROXY_HOPS ?? 0,
   /** In-app SOP reminders after candidate/training updates; set NOTIFY_SOP_REMINDERS=0 to disable. */
   notifySopReminders: process.env.NOTIFY_SOP_REMINDERS !== '0' && process.env.NOTIFY_SOP_REMINDERS !== 'false',
 };

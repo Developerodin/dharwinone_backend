@@ -24,6 +24,8 @@ import { logActivity } from '../services/recruiterActivity.service.js';
 import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
 import Candidate from '../models/candidate.model.js';
 import User from '../models/user.model.js';
+import * as activityLogService from '../services/activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 // Job CRUD
 const create = catchAsync(async (req, res) => {
@@ -40,6 +42,18 @@ const create = catchAsync(async (req, res) => {
         status: job.status,
       },
     });
+  }
+
+  const jid = job._id ?? job.id;
+  if (jid) {
+    await activityLogService.createActivityLog(
+      String(createdById),
+      ActivityActions.JOB_CREATE,
+      EntityTypes.JOB,
+      String(jid),
+      { title: job.title, status: job.status },
+      req
+    );
   }
 
   res.status(httpStatus.CREATED).send(job);
@@ -84,11 +98,28 @@ const get = catchAsync(async (req, res) => {
 
 const update = catchAsync(async (req, res) => {
   const job = await updateJobById(req.params.jobId, req.body, req.user);
+  const jid = job?._id ?? job?.id ?? req.params.jobId;
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.JOB_UPDATE,
+    EntityTypes.JOB,
+    String(jid),
+    {},
+    req
+  );
   res.send(job);
 });
 
 const remove = catchAsync(async (req, res) => {
   await deleteJobById(req.params.jobId, req.user);
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.JOB_DELETE,
+    EntityTypes.JOB,
+    req.params.jobId,
+    {},
+    req
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 

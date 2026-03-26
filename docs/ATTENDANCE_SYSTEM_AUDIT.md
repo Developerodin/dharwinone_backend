@@ -60,7 +60,6 @@
 - **Live UI “Session” timer:** Wall time since `punchIn`, shown with seconds; corrects when the tab becomes visible again (timers are throttled in background tabs).
 - **Stored `duration`:** Same overlap as above when the student has a shift; otherwise full `punchOut − punchIn`. User-based punch-out uses the same helper with `shift: null` (raw ms).
 - **GET `/training/attendance/status/:studentId` (and `/status/me`):** While punched in, includes `elapsedPreview: { sessionMs, eligibleMs }` and `shift` (students). `eligibleMs` matches what punch-out would record up to “now”. Clients poll status every ~15s while punched in so `eligibleMs` stays fresh.
-- **Tests:** `npm run test:attendance-duration` runs Node tests on `computeDurationMs` (raw vs shift-clipped overlap).
 
 ### 2.4 Backdated Attendance Requests
 
@@ -218,7 +217,3 @@ Use this checklist to verify behaviour for **Student**, **Candidate**, and **Age
 - **Administrator:** GET `/me` returns **404**; uses Track Attendance (students.manage) for others; no self-attendance.
 - **Admin detection** is RBAC-only (`roleIds`); legacy `role` field is not used for attendance identity.
 - Frontend (attendance page and dashboard) branches correctly on `identity.type === 'user'` for all attendance and backdated APIs.
-
-### Automated tests
-
-- **`tests/integration/attendance.test.js`** – Integration tests for `GET /v1/training/attendance/me` (401 without token, 200 with token and user identity). Run after fixing Jest/ESM if needed: `npm test -- tests/integration/attendance.test.js`

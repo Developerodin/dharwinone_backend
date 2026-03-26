@@ -46,6 +46,8 @@ import {
   assertCanViewCandidateSop,
   listSopOpenOverviewForManage,
 } from '../services/sopChecklist.service.js';
+import * as activityLogService from '../services/activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
 
@@ -77,7 +79,37 @@ const create = catchAsync(async (req, res) => {
   }
 
   const result = await createCandidate(ownerId, req.body);
-  
+
+  const actorId = String(req.user.id || req.user._id);
+  if (isMultiple && result.successful?.length) {
+    for (const row of result.successful) {
+      const c = row.candidate;
+      const cid = c?._id ?? c?.id;
+      if (cid) {
+        await activityLogService.createActivityLog(
+          actorId,
+          ActivityActions.CANDIDATE_CREATE,
+          EntityTypes.CANDIDATE,
+          String(cid),
+          { bulkIndex: row.index },
+          req
+        );
+      }
+    }
+  } else if (!isMultiple && result) {
+    const cid = result._id ?? result.id;
+    if (cid) {
+      await activityLogService.createActivityLog(
+        actorId,
+        ActivityActions.CANDIDATE_CREATE,
+        EntityTypes.CANDIDATE,
+        String(cid),
+        { fullName: result.fullName },
+        req
+      );
+    }
+  }
+
   if (isMultiple) {
     // Handle multiple candidates response
     if (result.summary.failed === 0) {
@@ -184,6 +216,15 @@ const get = catchAsync(async (req, res) => {
 const update = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const candidate = await updateCandidateById(req.params.candidateId, req.body, req.user);
+  const cid = candidate?._id ?? candidate?.id ?? req.params.candidateId;
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.CANDIDATE_UPDATE,
+    EntityTypes.CANDIDATE,
+    String(cid),
+    {},
+    req
+  );
   res.send(candidate);
 });
 
@@ -193,6 +234,14 @@ const remove = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can delete a candidate');
   }
   await deleteCandidateById(req.params.candidateId);
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.CANDIDATE_DELETE,
+    EntityTypes.CANDIDATE,
+    req.params.candidateId,
+    {},
+    req
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -213,6 +262,15 @@ const updateMyCandidate = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
   }
   const updated = await updateCandidateById(candidate._id || candidate.id, req.body, req.user);
+  const cid = updated?._id ?? updated?.id ?? candidate._id ?? candidate.id;
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.CANDIDATE_UPDATE,
+    EntityTypes.CANDIDATE,
+    String(cid),
+    { selfService: true },
+    req
+  );
   res.send(updated);
 });
 

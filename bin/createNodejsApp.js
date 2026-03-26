@@ -85,9 +85,9 @@ async function setup() {
     await runCmd('npx rimraf ./.git');
 
     // Remove extra files
-    fs.unlinkSync(path.join(appPath, 'CHANGELOG.md'));
-    fs.unlinkSync(path.join(appPath, 'CODE_OF_CONDUCT.md'));
-    fs.unlinkSync(path.join(appPath, 'CONTRIBUTING.md'));
+    fs.unlinkSync(path.join(appPath, 'docs', 'CHANGELOG.md'));
+    fs.unlinkSync(path.join(appPath, 'docs', 'CODE_OF_CONDUCT.md'));
+    fs.unlinkSync(path.join(appPath, 'docs', 'CONTRIBUTING.md'));
     fs.unlinkSync(path.join(appPath, 'bin', 'createNodejsApp.js'));
     fs.rmdirSync(path.join(appPath, 'bin'));
     if (!useYarn) {

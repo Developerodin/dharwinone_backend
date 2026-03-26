@@ -35,6 +35,18 @@ export const ActivityActions = {
   ATTENDANCE_PUNCH_OUT: 'attendance.punchOut',
   ATTENDANCE_PUNCH_OUT_BY_ADMIN: 'attendance.punchOutByAdmin',
   ATTENDANCE_AUTO_PUNCH_OUT: 'attendance.autoPunchOut',
+  // ATS — candidates, jobs, applications
+  CANDIDATE_CREATE: 'candidate.create',
+  CANDIDATE_UPDATE: 'candidate.update',
+  CANDIDATE_DELETE: 'candidate.delete',
+  JOB_CREATE: 'job.create',
+  JOB_UPDATE: 'job.update',
+  JOB_DELETE: 'job.delete',
+  JOB_APPLICATION_CREATE: 'jobApplication.create',
+  JOB_APPLICATION_UPDATE: 'jobApplication.update',
+  JOB_APPLICATION_DELETE: 'jobApplication.delete',
+  // Integration / admin settings (sensitive config surfaces)
+  SETTINGS_BOLNA_CANDIDATE_AGENT_UPDATE: 'settings.bolnaCandidateAgent.update',
 };
 
 export const EntityTypes = {
@@ -48,4 +60,8 @@ export const EntityTypes = {
   STUDENT_QUIZ_ATTEMPT: 'StudentQuizAttempt',
   CERTIFICATE: 'Certificate',
   ATTENDANCE: 'Attendance',
+  CANDIDATE: 'Candidate',
+  JOB: 'Job',
+  JOB_APPLICATION: 'JobApplication',
+  BOLNA_CANDIDATE_AGENT_SETTINGS: 'BolnaCandidateAgentSettings',
 };

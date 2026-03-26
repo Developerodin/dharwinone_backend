@@ -39,6 +39,19 @@ const activityLogSchema = mongoose.Schema(
       type: String,
       default: null,
     },
+    httpMethod: {
+      type: String,
+      default: null,
+    },
+    httpPath: {
+      type: String,
+      default: null,
+    },
+    geo: {
+      country: { type: String, default: null },
+      region: { type: String, default: null },
+      city: { type: String, default: null },
+    },
   },
   {
     timestamps: true,
@@ -48,6 +61,7 @@ const activityLogSchema = mongoose.Schema(
 activityLogSchema.index({ createdAt: -1 });
 activityLogSchema.index({ actor: 1, createdAt: -1 });
 activityLogSchema.index({ entityType: 1, entityId: 1 });
+activityLogSchema.index({ action: 1, createdAt: -1 });
 activityLogSchema.plugin(paginate);
 
 activityLogSchema.set('toJSON', {
