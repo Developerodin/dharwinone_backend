@@ -38,4 +38,9 @@ const exportActivityLogs = catchAsync(async (req, res) => {
   await activityLogService.streamActivityLogsCsv(filter, req.user, res);
 });
 
-export { getActivityLogs, exportActivityLogs };
+/** Server-seen client IP (for audit UI); same value stored on activity log entries as `ip`. */
+const getActivityLogNetworkPreview = catchAsync(async (req, res) => {
+  res.send({ ip: req.ip || null });
+});
+
+export { getActivityLogs, exportActivityLogs, getActivityLogNetworkPreview };

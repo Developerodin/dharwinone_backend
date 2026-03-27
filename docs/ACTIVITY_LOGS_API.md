@@ -16,7 +16,7 @@ Important actions by administrators and significant user actions are recorded fo
 ## Requirements (implemented)
 
 - **Administrator / ATS actions:** Roles, users, impersonation, categories, students, mentors, training, attendance, certificates, **candidates**, **jobs**, **job applications** (create/update/delete as applicable).
-- **Log fields:** `actor`, `action`, `entityType`, `entityId`, `metadata`, `ip`, `userAgent`, **`httpMethod`**, **`httpPath`**, **`geo`** (e.g. `country` from `CF-IPCountry` when behind Cloudflare), `createdAt`.
+- **Log fields:** `actor`, `action`, `entityType`, `entityId`, `metadata`, `ip`, `userAgent`, **`httpMethod`**, **`httpPath`**, **`geo`** (e.g. `country` from `CF-IPCountry` when behind Cloudflare), optional **`clientGeo`** (browser GPS when a privileged user opts in; see below), `createdAt`.
 - **Write safety:** If persisting a log fails (DB error, etc.), the failure is logged server-side and **does not** fail the primary HTTP operation (e.g. user update still succeeds).
 - **Retention:** Stored in the `ActivityLog` collection; TTL/archival are operational decisions.
 - **Metadata:** Sanitized (no passwords, tokens, email, phone, SSN-style keys, etc.). Actor in list responses: **`id` and `name` only**.
@@ -25,6 +25,12 @@ Important actions by administrators and significant user actions are recorded fo
 
 - Set **`TRUST_PROXY_HOPS`** in `.env` when the API sits behind a **trusted** reverse proxy, load balancer, or Cloudflare (typically **`1`** for one hop). Configured in [`src/app.js`](../src/app.js) as Express **`trust proxy`**. If unset/`0`, `req.ip` is the direct TCP peer (often `127.0.0.1` in dev or the LB internal IP in prod), so activity **IP**/**Location** and **per-IP rate limits** can be wrong.
 - Your edge must **set or overwrite** `X-Forwarded-For` (do not trust client-forged values from the open internet). See [Express behind proxies](https://expressjs.com/en/guide/behind-proxies.html).
+
+### Optional: browser GPS (signed-in users)
+
+- Any **authenticated** client may send header **`X-Activity-Client-Geo`** on API requests: `lat,lng,accuracyM,epochMs` (comma-separated). The timestamp must be within **30 minutes**; values are validated server-side. When valid, the log stores **`clientGeo`** (`lat`, `lng`, `accuracyM`, `capturedAt`, `source: browser_geolocation`) **in addition to** server-derived **`ip`** and IP-based **`geo`**. The frontend prompts for geolocation after sign-in (once per browser tab session).
+- CORS must allow **`X-Activity-Client-Geo`** on the frontend origin (see [`src/app.js`](../src/app.js) `allowedHeaders`).
+- **GET /v1/activity-logs/network-preview** — same auth as list (`requireActivityLogsListAccess`); returns **`{ "ip": "<server-seen address>" }`** (optional; for custom tooling).
 
 ---
 
@@ -76,9 +82,20 @@ Important actions by administrators and significant user actions are recorded fo
 }
 ```
 
-Older documents may have **`httpMethod`**, **`httpPath`**, or **`geo`** omitted (null/empty).
+Older documents may have **`httpMethod`**, **`httpPath`**, **`geo`**, or **`clientGeo`** omitted (null/empty).
+
+**List response `clientGeo` (optional):** When present, shape is `{ "lat", "lng", "accuracyM", "capturedAt", "source": "browser_geolocation" }`. Written when the actor was **authenticated** and the creating request included a valid **`X-Activity-Client-Geo`** header (e.g. after the user allowed browser location).
 
 **List response `geo` (enriched):** For each row, if stored `geo` has no country/region/city, the API fills display location from the stored **`ip`**: **local/private** addresses (e.g. `127.0.0.1`, RFC1918) map to a **`city` label** (`Local / private network`); **public IPv4** uses the bundled **GeoLite-derived** database from `geoip-lite` (approximate; update the package / data periodically). Rows that already have `geo` from Cloudflare are unchanged.
+
+---
+
+## Endpoint: Network preview (server-seen IP)
+
+**GET /v1/activity-logs/network-preview**
+
+- **Auth:** Same as list (`requireActivityLogsListAccess`).
+- **Response:** `200` — `{ "ip": "<string or null>" }` — Express **`req.ip`** after **`trust proxy`** (same value persisted on new log rows as **`ip`**). For UI only; not a substitute for list/export.
 
 ---
 
@@ -104,6 +121,7 @@ Older documents may have **`httpMethod`**, **`httpPath`**, or **`geo`** omitted 
 
 - Do not put secrets or unnecessary PII in `metadata`; the service strips known sensitive key substrings.
 - **Geo** from **`CF-IPCountry`** is only trustworthy when the header is set by your **CDN / edge**, not by the browser.
+- **`X-Activity-Client-Geo`** is **user-supplied** GPS; it is **only persisted** for **authenticated** requests and is **validated** (ranges, freshness). It supplements, not replaces, server **`ip`** / **`geo`**.
 - Apply normal **rate limiting** for admin list endpoints in production.
 
 ---

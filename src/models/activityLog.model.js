@@ -53,6 +53,14 @@ const activityLogSchema = mongoose.Schema(
       region: { type: String, default: null },
       city: { type: String, default: null },
     },
+    /** Optional GPS from browser when the user allows geolocation; IP remains server-derived. */
+    clientGeo: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      accuracyM: { type: Number, default: null },
+      capturedAt: { type: Date, default: null },
+      source: { type: String, default: null },
+    },
   },
   {
     timestamps: true,

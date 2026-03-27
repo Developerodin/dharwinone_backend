@@ -69,6 +69,44 @@ const geoFromTrustedHeaders = (req) => {
   return { country: country.toUpperCase() };
 };
 
+const CLIENT_GEO_MAX_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * Authenticated users may send optional browser GPS via X-Activity-Client-Geo.
+ * Format: lat,lng,accuracyM,epochMs (comma-separated). Stale timestamps are ignored.
+ * @param {import('express').Request} req
+ * @returns {{ lat: number, lng: number, accuracyM: number, capturedAt: Date, source: string }|null}
+ */
+const parseClientGeoHeader = (req) => {
+  if (!req?.get) return null;
+  const raw = req.get('x-activity-client-geo');
+  if (!raw || typeof raw !== 'string') return null;
+  const parts = raw.split(',');
+  if (parts.length !== 4) return null;
+  const lat = Number(parts[0]);
+  const lng = Number(parts[1]);
+  const accuracyM = Number(parts[2]);
+  const ts = Number(parts[3]);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) return null;
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) return null;
+  if (!Number.isFinite(accuracyM) || accuracyM < 0 || accuracyM > 50000) return null;
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  if (Date.now() - ts > CLIENT_GEO_MAX_AGE_MS) return null;
+  return {
+    lat,
+    lng,
+    accuracyM,
+    capturedAt: new Date(ts),
+    source: 'browser_geolocation',
+  };
+};
+
+/**
+ * Only attach client-reported GPS when the request is authenticated (JWT / cookie session).
+ * @param {import('express').Request|null|undefined} req
+ */
+const canAttachClientGeo = (req) => Boolean(req?.user);
+
 /**
  * Create an activity log entry. Do not pass sensitive PII in metadata.
  * On persistence failure, logs and resolves to null — primary request flow must not depend on success.
@@ -93,6 +131,11 @@ const createActivityLog = async (actorId, action, entityType, entityId, metadata
           city: resolvedGeo.city ?? null,
         }
       : null);
+  let clientGeo = null;
+  if (req && canAttachClientGeo(req)) {
+    clientGeo = parseClientGeoHeader(req);
+  }
+
   const entry = {
     actor: actorId,
     action,
@@ -104,6 +147,7 @@ const createActivityLog = async (actorId, action, entityType, entityId, metadata
     httpMethod: req?.method || null,
     httpPath: requestPathTemplate(req),
     ...(geo ? { geo } : {}),
+    ...(clientGeo ? { clientGeo } : {}),
   };
   try {
     return await ActivityLog.create(entry);
@@ -398,6 +442,7 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
     'entityType',
     'entityId',
     'location',
+    'browserGeo',
     'ip',
     'browser',
     'os',
@@ -420,6 +465,12 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
     const geo = plain.geo;
     const locParts = [geo?.city, geo?.region, geo?.country].filter(Boolean);
     const location = locParts.length ? locParts.join(', ') : '';
+    const cg = plain.clientGeo;
+    let browserGeo = '';
+    if (cg && typeof cg.lat === 'number' && typeof cg.lng === 'number') {
+      browserGeo = `${cg.lat},${cg.lng}`;
+      if (typeof cg.accuracyM === 'number') browserGeo += `,acc=${cg.accuracyM}m`;
+    }
     const uaParsed = parseUserAgentDetails(plain.userAgent);
     const metaStr = JSON.stringify(plain.metadata ?? {});
     const row = [
@@ -431,6 +482,7 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
       plain.entityType ?? '',
       plain.entityId ?? '',
       location,
+      browserGeo,
       plain.ip ?? '',
       uaParsed?.browser ?? '',
       uaParsed?.os ?? '',

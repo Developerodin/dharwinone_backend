@@ -16,6 +16,13 @@ router.get(
   activityLogController.exportActivityLogs
 );
 
+router.get(
+  '/network-preview',
+  auth(),
+  requireActivityLogsListAccess,
+  activityLogController.getActivityLogNetworkPreview
+);
+
 router
   .route('/')
   .get(
