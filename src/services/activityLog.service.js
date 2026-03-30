@@ -10,6 +10,7 @@ import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platf
 import { resolveGeoForDisplay } from '../utils/ipGeo.util.js';
 import { getClientIpFromRequest, parseClientSuppliedIpHeader } from '../utils/requestIp.util.js';
 import { parseUserAgentDetails } from '../utils/parseUserAgent.util.js';
+import { nominatimReversePlace } from '../utils/nominatimReverse.util.js';
 
 const EXPORT_ROW_CAP = 50000;
 
@@ -71,18 +72,89 @@ const geoFromTrustedHeaders = (req) => {
 };
 
 const CLIENT_GEO_MAX_AGE_MS = 30 * 60 * 1000;
+const CLIENT_GEO_HEADER_MAX = 2048;
+const PLACE_MAX_LEN = 128;
 
 /**
- * Authenticated users may send optional browser GPS via X-Activity-Client-Geo.
- * Format: lat,lng,accuracyM,epochMs (comma-separated). Stale timestamps are ignored.
- * @param {import('express').Request} req
- * @returns {{ lat: number, lng: number, accuracyM: number, capturedAt: Date, source: string }|null}
+ * @param {unknown} v
+ * @returns {string|null}
  */
-const parseClientGeoHeader = (req) => {
+const trimClientGeoPlace = (v) => {
+  if (v == null) return null;
+  const s = String(v).trim().slice(0, PLACE_MAX_LEN);
+  return s || null;
+};
+
+/**
+ * Optional browser location via X-Activity-Client-Geo.
+ *
+ * Preferred: JSON `{"ts":epochMs,"accuracy":m,"city","region","country"}` — coarse place only (no lat/lng stored).
+ * JSON fallback: `{"ts","accuracy","lat","lng"|"lon"}` when reverse geocode failed on the client — server reverse-geocodes; still no coordinates persisted.
+ * Legacy: `lat,lng,accuracyM,epochMs` — server reverse-geocodes then persists place names only.
+ *
+ * @param {import('express').Request} req
+ * @returns {Promise<{ city: string|null, region: string|null, country: string|null, accuracyM: number, capturedAt: Date, source: string }|null>}
+ */
+const resolveClientGeoFromRequest = async (req) => {
   if (!req?.get) return null;
   const raw = req.get('x-activity-client-geo');
   if (!raw || typeof raw !== 'string') return null;
-  const parts = raw.split(',');
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > CLIENT_GEO_HEADER_MAX) return null;
+
+  if (trimmed.startsWith('{')) {
+    let o;
+    try {
+      o = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+    const ts = Number(o.ts);
+    if (!Number.isFinite(ts) || ts <= 0) return null;
+    if (Date.now() - ts > CLIENT_GEO_MAX_AGE_MS) return null;
+    const accRaw = Number(o.accuracy);
+    const accuracyM =
+      Number.isFinite(accRaw) && accRaw >= 0 && accRaw <= 50000 ? accRaw : 0;
+    const city = trimClientGeoPlace(o.city);
+    const region = trimClientGeoPlace(o.region);
+    const country = trimClientGeoPlace(o.country);
+    if (city || region || country) {
+      return {
+        city,
+        region,
+        country,
+        accuracyM,
+        capturedAt: new Date(ts),
+        source: 'browser_geolocation',
+      };
+    }
+
+    const lat = Number(o.lat);
+    const lng = Number(o.lon ?? o.lng);
+    if (
+      Number.isFinite(lat) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      Number.isFinite(lng) &&
+      lng >= -180 &&
+      lng <= 180
+    ) {
+      const place = await nominatimReversePlace(lat, lng);
+      if (!place) return null;
+      return {
+        city: place.city,
+        region: place.region,
+        country: place.country,
+        accuracyM,
+        capturedAt: new Date(ts),
+        source: 'browser_geolocation',
+      };
+    }
+    return null;
+  }
+
+  const parts = trimmed.split(',');
   if (parts.length !== 4) return null;
   const lat = Number(parts[0]);
   const lng = Number(parts[1]);
@@ -93,9 +165,13 @@ const parseClientGeoHeader = (req) => {
   if (!Number.isFinite(accuracyM) || accuracyM < 0 || accuracyM > 50000) return null;
   if (!Number.isFinite(ts) || ts <= 0) return null;
   if (Date.now() - ts > CLIENT_GEO_MAX_AGE_MS) return null;
+
+  const place = await nominatimReversePlace(lat, lng);
+  if (!place) return null;
   return {
-    lat,
-    lng,
+    city: place.city,
+    region: place.region,
+    country: place.country,
     accuracyM,
     capturedAt: new Date(ts),
     source: 'browser_geolocation',
@@ -129,7 +205,7 @@ const createActivityLog = async (actorId, action, entityType, entityId, metadata
         }
       : null);
 
-  const clientGeo = req ? parseClientGeoHeader(req) : null;
+  const clientGeo = req ? await resolveClientGeoFromRequest(req) : null;
 
   const entry = {
     actor: actorId,
@@ -278,6 +354,25 @@ const csvEscape = (cell) => {
 };
 
 /**
+ * Single-line summary for tools/exports: GPS place when present, else IP-derived geo.
+ * @param {Record<string, unknown>} p
+ * @returns {string|null}
+ */
+const displayLocationFromPlain = (p) => {
+  const cg = p.clientGeo;
+  if (cg && typeof cg === 'object') {
+    const parts = [cg.city, cg.region, cg.country].filter((x) => x != null && String(x).trim());
+    if (parts.length) return `${parts.map((x) => String(x).trim()).join(', ')} (GPS)`;
+  }
+  const g = p.geo;
+  if (g && typeof g === 'object') {
+    const parts = [g.city, g.region, g.country].filter((x) => x != null && String(x).trim());
+    if (parts.length) return `${parts.map((x) => String(x).trim()).join(', ')} (IP approx)`;
+  }
+  return null;
+};
+
+/**
  * @param {Record<string, unknown>} plain
  */
 const enrichPlainForClient = (plain) => {
@@ -287,6 +382,7 @@ const enrichPlainForClient = (plain) => {
   const preferred = cip || serverIp;
   withGeo.geo = resolveGeoForDisplay(preferred, withGeo.geo);
   withGeo.displayIp = cip || serverIp || null;
+  withGeo.displayLocation = displayLocationFromPlain(withGeo);
   return normalizeIdsForClient(withGeo);
 };
 
@@ -459,6 +555,7 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
     'userAgent',
     'httpMethod',
     'httpPath',
+    'displayLocation',
     'metadata',
   ];
   res.write(`${headers.map(csvEscape).join(',')}\n`);
@@ -475,11 +572,8 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
     const locParts = [geo?.city, geo?.region, geo?.country].filter(Boolean);
     const location = locParts.length ? locParts.join(', ') : '';
     const cg = plain.clientGeo;
-    let browserGeo = '';
-    if (cg && typeof cg.lat === 'number' && typeof cg.lng === 'number') {
-      browserGeo = `${cg.lat},${cg.lng}`;
-      if (typeof cg.accuracyM === 'number') browserGeo += `,acc=${cg.accuracyM}m`;
-    }
+    const cgParts = [cg?.city, cg?.region, cg?.country].filter(Boolean);
+    const browserGeo = cgParts.length ? cgParts.join(', ') : '';
     const uaParsed = parseUserAgentDetails(plain.userAgent);
     const metaStr = JSON.stringify(plain.metadata ?? {});
     const row = [
@@ -501,6 +595,7 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
       plain.userAgent ?? '',
       plain.httpMethod ?? '',
       plain.httpPath ?? '',
+      plain.displayLocation ?? '',
       metaStr,
     ].map(csvEscape);
     res.write(`${row.join(',')}\n`);

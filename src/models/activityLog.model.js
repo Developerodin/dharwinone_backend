@@ -58,8 +58,14 @@ const activityLogSchema = mongoose.Schema(
       region: { type: String, default: null },
       city: { type: String, default: null },
     },
-    /** Optional GPS from browser when the user allows geolocation; IP remains server-derived. */
+    /**
+     * Optional device location from browser (reverse-geocoded to city/region/country; lat/lng not stored for new writes).
+     * Legacy documents may still have lat/lng.
+     */
     clientGeo: {
+      city: { type: String, default: null },
+      region: { type: String, default: null },
+      country: { type: String, default: null },
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
       accuracyM: { type: Number, default: null },
