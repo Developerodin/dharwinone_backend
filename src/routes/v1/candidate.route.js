@@ -36,6 +36,14 @@ router.get(
   candidateController.listAgentsForFilter
 );
 
+/** Per-agent assigned counts + unassigned (org-wide for employment scope) — candidates.manage */
+router.get(
+  '/agent-assignment-summary',
+  ...canManage,
+  validate(candidateValidation.getAgentAssignmentSummary),
+  candidateController.getAgentAssignmentSummaryHandler
+);
+
 /** Training students ↔ agents — must be before /:candidateId */
 router.get(
   '/student-agent-assignments',

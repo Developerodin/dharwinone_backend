@@ -67,6 +67,91 @@ function validatePhoneForCountry(phoneNumber, countryCode) {
   return { valid: true, digits };
 }
 
+/** Optional tabs that extend Personal Info (same FullName per row). */
+const SUPPLEMENTAL_PERSONAL_SHEETS = ['Visa and IDs', 'Supervisor and salary', 'Address'];
+
+/**
+ * Map one row's personal/address columns onto a candidate (used for Personal Info and supplemental tabs).
+ */
+function mergePersonalRowIntoCandidate(candidate, headers, row) {
+  headers.forEach((header, index) => {
+    const raw = row[index];
+    const value = raw != null && raw !== '' ? String(raw).trim() : '';
+    const normalized = String(header || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '');
+
+    switch (normalized) {
+      case 'fullname':
+        if (value) candidate.fullName = value;
+        break;
+      case 'email':
+        if (value) candidate.email = value;
+        break;
+      case 'phonenumber':
+        if (value) candidate.phoneNumber = value;
+        break;
+      case 'countrycode':
+        candidate.countryCode = value || candidate.countryCode || 'US';
+        break;
+      case 'password':
+        if (value) candidate.password = value;
+        break;
+      case 'shortbio':
+        if (value) candidate.shortBio = value;
+        break;
+      case 'sevisid':
+        if (value) candidate.sevisId = value;
+        break;
+      case 'ead':
+        if (value) candidate.ead = value;
+        break;
+      case 'degree':
+        if (value) candidate.degree = value;
+        break;
+      case 'visatype':
+        if (value) candidate.visaType = value;
+        break;
+      case 'customvisatype':
+        if (value) candidate.customVisaType = value;
+        break;
+      case 'supervisorname':
+        if (value) candidate.supervisorName = value;
+        break;
+      case 'supervisorcontact':
+        if (value) candidate.supervisorContact = value;
+        break;
+      case 'supervisorcountrycode':
+        if (value) candidate.supervisorCountryCode = value;
+        break;
+      case 'salaryrange':
+        if (value) candidate.salaryRange = value;
+        break;
+      case 'streetaddress':
+        if (value) candidate.streetAddress = value;
+        break;
+      case 'streetaddress2':
+        if (value) candidate.streetAddress2 = value;
+        break;
+      case 'city':
+        if (value) candidate.city = value;
+        break;
+      case 'state':
+        if (value) candidate.state = value;
+        break;
+      case 'zipcode':
+        if (value) candidate.zipCode = value;
+        break;
+      case 'country':
+        if (value) candidate.country = value;
+        break;
+      default:
+        break;
+    }
+  });
+}
+
 /**
  * Parse multi-sheet candidate Excel file
  */
@@ -100,37 +185,25 @@ function parseMultiSheetExcel(fileBuffer) {
         skills: [],
         socialLinks: [],
       };
-      
-      headers.forEach((header, index) => {
-        const value = row[index] != null ? String(row[index]).trim() : '';
-        const normalized = header.toLowerCase().replace(/\s+/g, '');
-        
-        switch (normalized) {
-          case 'fullname': candidate.fullName = value; break;
-          case 'email': candidate.email = value; break;
-          case 'phonenumber': candidate.phoneNumber = value; break;
-          case 'countrycode': candidate.countryCode = value || 'US'; break;
-          case 'password': candidate.password = value; break;
-          case 'shortbio': candidate.shortBio = value; break;
-          case 'sevisid': candidate.sevisId = value; break;
-          case 'ead': candidate.ead = value; break;
-          case 'degree': candidate.degree = value; break;
-          case 'visatype': candidate.visaType = value; break;
-          case 'customvisatype': candidate.customVisaType = value; break;
-          case 'supervisorname': candidate.supervisorName = value; break;
-          case 'supervisorcontact': candidate.supervisorContact = value; break;
-          case 'supervisorcountrycode': candidate.supervisorCountryCode = value; break;
-          case 'salaryrange': candidate.salaryRange = value; break;
-          case 'streetaddress': candidate.streetAddress = value; break;
-          case 'streetaddress2': candidate.streetAddress2 = value; break;
-          case 'city': candidate.city = value; break;
-          case 'state': candidate.state = value; break;
-          case 'zipcode': candidate.zipCode = value; break;
-          case 'country': candidate.country = value; break;
-        }
-      });
-      
+      mergePersonalRowIntoCandidate(candidate, headers, row);
       candidates.push(candidate);
+    }
+  }
+
+  // Merge optional split tabs (legacy templates put all columns on Personal Info only)
+  for (const sheetName of SUPPLEMENTAL_PERSONAL_SHEETS) {
+    if (!workbook.SheetNames.includes(sheetName)) continue;
+    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+    if (data.length < 2) continue;
+    const sh = data[0].map((h) => String(h || '').trim());
+    for (let i = 1; i < data.length; i += 1) {
+      const row = data[i];
+      if (!row || !row.some((c) => c !== undefined && c !== null && c !== '')) continue;
+      const nameIdx = sh.findIndex((h) => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === 'fullname');
+      const fullName = nameIdx >= 0 && row[nameIdx] != null ? String(row[nameIdx]).trim() : '';
+      if (!fullName) continue;
+      const candidate = candidates.find((c) => c.fullName === fullName);
+      if (candidate) mergePersonalRowIntoCandidate(candidate, sh, row);
     }
   }
   

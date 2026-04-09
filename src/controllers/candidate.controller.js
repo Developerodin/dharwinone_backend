@@ -34,8 +34,11 @@ import {
   updateWeekOffForCandidates,
   getCandidateWeekOff,
   assignShiftToCandidates,
-  listAgentUsersForAssignment
+  listAgentUsersForAssignment,
+  getAgentAssignmentSummary,
 } from '../services/candidate.service.js';
+import { generateCandidateExportCsv } from '../utils/candidateExportCsv.js';
+import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.js';
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
@@ -362,116 +365,65 @@ const exportAll = catchAsync(async (req, res) => {
   }
 
   const { email } = req.body;
-  
-  // Get filters from query parameters
-  const filters = pick(req.query, ['owner', 'fullName', 'email']);
-  
-  // Export all candidates
-  const exportData = await exportAllCandidates(filters);
-  
+
+  const listFilter = pick(req.query, [
+    'owner',
+    'fullName',
+    'email',
+    'employeeId',
+    'agent',
+    'agentIds',
+    'employmentStatus',
+    'skills',
+    'skillLevel',
+    'experienceLevel',
+    'minYearsOfExperience',
+    'maxYearsOfExperience',
+    'salaryRangeMin',
+    'salaryRangeMax',
+    'location',
+    'city',
+    'state',
+    'country',
+    'degree',
+    'visaType',
+    'skillMatchMode',
+  ]);
+  const queryOptions = pick(req.query, ['sortBy']);
+
+  const exportData = await exportAllCandidates(listFilter, queryOptions);
+
+  const wantsCsv = String(req.query.format || '').toLowerCase() === 'csv';
+  const dateStamp = new Date().toISOString().split('T')[0];
+
   if (email) {
-    // Send via email
+    // Email body remains CSV for plain-text compatibility with current mailer
     const subject = `All Candidates Export - ${exportData.totalCandidates} candidates`;
-    const csvContent = generateCSVFormat(exportData);
-    
+    const csvContent = generateCandidateExportCsv(exportData);
     await sendEmail(email, subject, csvContent);
-    
     res.status(httpStatus.OK).send({
-      message: `CSV export sent successfully to ${email}`,
+      message: `Export sent successfully to ${email} (CSV in email body)`,
       totalCandidates: exportData.totalCandidates,
-      exportedAt: exportData.exportedAt
+      exportedAt: exportData.exportedAt,
     });
-  } else {
-    // Return CSV data directly
-    const csvContent = generateCSVFormat(exportData);
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="candidates-export-${new Date().toISOString().split('T')[0]}.csv"`);
+  } else if (wantsCsv) {
+    const csvContent = generateCandidateExportCsv(exportData);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="candidates-export-${dateStamp}.csv"`);
     res.status(httpStatus.OK).send(csvContent);
+  } else {
+    const buf = generateCandidateExportXlsxBuffer(exportData);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="candidates-export-${dateStamp}.xlsx"`
+    );
+    res.status(httpStatus.OK).send(buf);
   }
 });
-
-
-// Helper function to generate CSV format
-const generateCSVFormat = (exportData) => {
-  const headers = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Phone Number',
-    'Short Bio',
-    'SEVIS ID',
-    'EAD',
-    'Visa Type',
-    'Custom Visa Type',
-    'Country Code',
-    'Degree',
-    'Supervisor Name',
-    'Supervisor Contact',
-    'Supervisor Country Code',
-    'Salary Range',
-    'Street Address',
-    'Street Address 2',
-    'City',
-    'State',
-    'Zip Code',
-    'Country',
-    'Owner',
-    'Owner Email',
-    'Admin',
-    'Admin Email',
-    'Profile Completion %',
-    'Status',
-    'Created At',
-    'Updated At',
-    'Qualifications',
-    'Experiences',
-    'Skills',
-    'Social Links',
-    'Documents',
-    'Salary Slips'
-  ];
-
-  const rows = exportData.data.map(candidate => [
-    candidate.employeeId || '',
-    `"${candidate.fullName || ''}"`,
-    candidate.email || '',
-    `="${candidate.phoneNumber || ''}"`,
-    `"${(candidate.shortBio || '').replace(/"/g, '""')}"`,
-    candidate.sevisId || '',
-    candidate.ead || '',
-    candidate.visaType || '',
-    candidate.customVisaType || '',
-    candidate.countryCode || '',
-    `"${candidate.degree || ''}"`,
-    `"${candidate.supervisorName || ''}"`,
-    `="${candidate.supervisorContact || ''}"`,
-    candidate.supervisorCountryCode || '',
-    candidate.salaryRange || '',
-    candidate.address?.streetAddress || '',
-    candidate.address?.streetAddress2 || '',
-    candidate.address?.city || '',
-    candidate.address?.state || '',
-    candidate.address?.zipCode || '',
-    candidate.address?.country || '',
-    `"${candidate.owner || ''}"`,
-    candidate.ownerEmail || '',
-    `"${candidate.adminId || ''}"`,
-    candidate.adminEmail || '',
-    candidate.isProfileCompleted || 0,
-    candidate.isCompleted ? 'Completed' : 'Incomplete',
-    new Date(candidate.createdAt).toLocaleDateString(),
-    new Date(candidate.updatedAt).toLocaleDateString(),
-    `"${candidate.qualifications.map(q => `${q.degree} - ${q.institute}`).join('; ')}"`,
-    `"${candidate.experiences.map(e => `${e.role} @ ${e.company}${e.currentlyWorking ? ' (Currently Working)' : ''}`).join('; ')}"`,
-    `"${candidate.skills.map(s => `${s.name} (${s.level})`).join('; ')}"`,
-    `"${candidate.socialLinks.map(sl => `${sl.platform}: ${sl.url}`).join('; ')}"`,
-    `"${candidate.documents.map(d => d.label || d.originalName).join('; ')}"`,
-    `"${candidate.salarySlips.map(ss => `${ss.month} ${ss.year}`).join('; ')}"`
-  ]);
-
-  const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
-  return csvContent;
-};
 
 export { exportProfile, exportAll };
 
@@ -1381,6 +1333,16 @@ const listStudentAgentAssignmentsHandler = catchAsync(async (req, res) => {
   res.send(data);
 });
 
+const getAgentAssignmentSummaryHandler = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can view agent assignment summary');
+  }
+  const scope = pick(req.query, ['employmentStatus']);
+  const data = await getAgentAssignmentSummary(scope);
+  res.send(data);
+});
+
 const assignAgent = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   if (!req.user.canManageCandidates) {
@@ -1392,7 +1354,15 @@ const assignAgent = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(candidate);
 });
 
-export { addNote, addFeedback, assignRecruiter, listAgentsForFilter, listStudentAgentAssignmentsHandler, assignAgent };
+export {
+  addNote,
+  addFeedback,
+  assignRecruiter,
+  listAgentsForFilter,
+  listStudentAgentAssignmentsHandler,
+  getAgentAssignmentSummaryHandler,
+  assignAgent,
+};
 
 /**
  * Update candidate joining date

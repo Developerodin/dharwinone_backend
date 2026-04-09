@@ -13,6 +13,9 @@ import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 
+/** Max rows per bulk CSV export (same filter scope as list). */
+const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
+
 /** User may have canManageCandidates set by controller (from candidates.manage permission). */
 const isOwnerOrAdmin = (user, candidate) => {
   if (!candidate) return false;
@@ -1002,6 +1005,107 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   return candidate;
 };
 
+/**
+ * Export must use the same filter pipeline as GET /candidates; never Candidate.find with a partial query only.
+ * @param {object} listFilter - Same shape as list endpoint filter (after controller pick / agent scoping).
+ * @param {string} [sortBy] - Same as list sortBy (default createdAt:desc).
+ * @returns {Promise<mongoose.Types.ObjectId[]>} Ordered ids.
+ */
+const getCandidateIdsMatchingListFilters = async (listFilter, sortBy = 'createdAt:desc') => {
+  const filter = { ...listFilter };
+  filter.includeOpenSopCount = false;
+
+  const peek = await queryCandidates(filter, { page: 1, limit: 1, sortBy });
+  const total = peek.totalResults ?? 0;
+  if (total > MAX_CANDIDATE_EXPORT) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Export is limited to ${MAX_CANDIDATE_EXPORT} candidates; your filters match ${total}. Narrow filters and try again.`
+    );
+  }
+  if (total === 0) {
+    return [];
+  }
+  const full = await queryCandidates(filter, { page: 1, limit: total, sortBy });
+  const results = full.results || [];
+  return results.map((r) => r._id ?? r.id).filter(Boolean);
+};
+
+/**
+ * Org-wide agent workload: counts per Agent user + unassigned, same candidate-owner scope as list (Candidate role owners).
+ * Ignores agent / agentIds query filters so the report is always full-picture for the employment scope.
+ * @param {{ employmentStatus?: string }} [scope]
+ */
+const getAgentAssignmentSummary = async (scope = {}) => {
+  const filter = {
+    employmentStatus: scope.employmentStatus,
+    includeOpenSopCount: false,
+  };
+  const mongoFilter = buildAdvancedFilter(filter);
+
+  if (filter.employmentStatus === 'resigned') {
+    // Resigned: do not filter by isActive (matches queryCandidates)
+  } else if (filter.employmentStatus === 'all') {
+    // All: do not filter by isActive
+  } else if (filter.isActive === undefined) {
+    mongoFilter.isActive = { $ne: false };
+  } else {
+    mongoFilter.isActive = filter.isActive;
+  }
+
+  const { getRoleByName } = await import('./role.service.js');
+  const candidateRole = await getRoleByName('Candidate');
+  if (candidateRole) {
+    const usersWithCandidateRole = await User.find(
+      { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    const ownerIdsWithCandidateRole = usersWithCandidateRole.map((u) => u._id);
+    mongoFilter.owner =
+      ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
+  }
+
+  const groups = await Candidate.aggregate([
+    { $match: mongoFilter },
+    { $group: { _id: '$assignedAgent', assignedCount: { $sum: 1 } } },
+  ]);
+
+  const countByAgentKey = new Map();
+  let unassignedCount = 0;
+  for (const g of groups) {
+    if (g._id == null) {
+      unassignedCount += g.assignedCount;
+    } else {
+      countByAgentKey.set(String(g._id), g.assignedCount);
+    }
+  }
+
+  const agentRole = await getRoleByName('Agent');
+  let agents = [];
+  if (agentRole) {
+    agents = await User.find({
+      roleIds: agentRole._id,
+      status: { $in: ['active', 'pending'] },
+    })
+      .select('name email')
+      .sort({ name: 1 })
+      .lean();
+  }
+
+  const agentsPayload = agents.map((a) => ({
+    agentId: a._id,
+    name: a.name || '',
+    email: a.email || '',
+    assignedCount: countByAgentKey.get(String(a._id)) || 0,
+  }));
+
+  return {
+    employmentStatus: filter.employmentStatus || 'current',
+    agents: agentsPayload,
+    unassignedCount,
+  };
+};
+
 const deleteCandidateById = async (id) => {
   const candidate = await getCandidateById(id);
   if (!candidate) {
@@ -1031,16 +1135,13 @@ const deleteCandidateById = async (id) => {
   return candidate;
 };
 
-const exportAllCandidates = async (filters = {}) => {
-  // Get all candidates with optional filters
-  const candidates = await Candidate.find(filters)
-    .populate('owner', 'name email')
-    .populate('adminId', 'name email')
-    .sort({ createdAt: -1 });
-
-  // Format candidates data for export
-  const exportData = candidates.map(candidate => ({
-    id: candidate.id,
+const mapCandidateDocToExportRow = (candidate) => {
+  const owner = candidate.owner;
+  const adminId = candidate.adminId;
+  const ag = candidate.assignedAgent;
+  const pos = candidate.position;
+  return {
+    id: candidate._id?.toString?.() ?? candidate.id,
     employeeId: candidate.employeeId || '',
     fullName: candidate.fullName,
     email: candidate.email,
@@ -1057,59 +1158,90 @@ const exportAllCandidates = async (filters = {}) => {
     supervisorCountryCode: candidate.supervisorCountryCode || '',
     salaryRange: candidate.salaryRange || '',
     address: candidate.address || {},
-    owner: candidate.owner ? candidate.owner.name : '',
-    ownerEmail: candidate.owner ? candidate.owner.email : '',
-    adminId: candidate.adminId ? candidate.adminId.name : '',
-    adminEmail: candidate.adminId ? candidate.adminId.email : '',
+    owner: owner && typeof owner === 'object' ? owner.name || '' : '',
+    ownerEmail: owner && typeof owner === 'object' ? owner.email || '' : '',
+    adminId: adminId && typeof adminId === 'object' ? adminId.name || '' : '',
+    adminEmail: adminId && typeof adminId === 'object' ? adminId.email || '' : '',
+    assignedAgentName: ag && typeof ag === 'object' ? ag.name || '' : '',
+    assignedAgentEmail: ag && typeof ag === 'object' ? ag.email || '' : '',
+    designation: candidate.designation || '',
+    positionTitle: pos && typeof pos === 'object' ? pos.name || '' : '',
     isProfileCompleted: candidate.isProfileCompleted,
     isCompleted: candidate.isCompleted,
     createdAt: candidate.createdAt,
     updatedAt: candidate.updatedAt,
-    qualifications: candidate.qualifications.map(q => ({
+    qualifications: (candidate.qualifications || []).map((q) => ({
       degree: q.degree,
       institute: q.institute,
       location: q.location || '',
       startYear: q.startYear || '',
       endYear: q.endYear || '',
-      description: q.description || ''
+      description: q.description || '',
     })),
-    experiences: candidate.experiences.map(e => ({
+    experiences: (candidate.experiences || []).map((e) => ({
       company: e.company,
       role: e.role,
       startDate: e.startDate ? new Date(e.startDate).toISOString().split('T')[0] : '',
       endDate: e.endDate ? new Date(e.endDate).toISOString().split('T')[0] : '',
-      description: e.description || ''
+      description: e.description || '',
+      currentlyWorking: !!e.currentlyWorking,
     })),
-    skills: candidate.skills.map(s => ({
+    skills: (candidate.skills || []).map((s) => ({
       name: s.name,
       level: s.level,
-      category: s.category || ''
+      category: s.category || '',
     })),
-    socialLinks: candidate.socialLinks.map(sl => ({
+    socialLinks: (candidate.socialLinks || []).map((sl) => ({
       platform: sl.platform,
-      url: sl.url
+      url: sl.url,
     })),
-    documents: candidate.documents.map(d => ({
+    documents: (candidate.documents || []).map((d) => ({
       label: d.label || '',
       url: d.url || '',
       originalName: d.originalName || '',
       size: d.size || '',
-      mimeType: d.mimeType || ''
+      mimeType: d.mimeType || '',
     })),
-    salarySlips: candidate.salarySlips.map(ss => ({
+    salarySlips: (candidate.salarySlips || []).map((ss) => ({
       month: ss.month || '',
       year: ss.year || '',
       documentUrl: ss.documentUrl || '',
       originalName: ss.originalName || '',
       size: ss.size || '',
-      mimeType: ss.mimeType || ''
-    }))
-  }));
+      mimeType: ss.mimeType || '',
+    })),
+  };
+};
+
+const exportAllCandidates = async (listFilter = {}, queryOptions = {}) => {
+  const sortBy = queryOptions.sortBy || 'createdAt:desc';
+  const ids = await getCandidateIdsMatchingListFilters(listFilter, sortBy);
+  if (ids.length === 0) {
+    return {
+      totalCandidates: 0,
+      exportedAt: new Date().toISOString(),
+      data: [],
+    };
+  }
+
+  const oidList = ids.map((id) => new mongoose.Types.ObjectId(String(id)));
+  const orderIdx = new Map(ids.map((id, i) => [String(id), i]));
+
+  const candidates = await Candidate.find({ _id: { $in: oidList } })
+    .populate('owner', 'name email')
+    .populate('adminId', 'name email')
+    .populate('assignedAgent', 'name email')
+    .populate('position', 'name')
+    .lean();
+
+  candidates.sort((a, b) => (orderIdx.get(String(a._id)) ?? 0) - (orderIdx.get(String(b._id)) ?? 0));
+
+  const exportData = candidates.map((c) => mapCandidateDocToExportRow(c));
 
   return {
     totalCandidates: exportData.length,
     exportedAt: new Date().toISOString(),
-    data: exportData
+    data: exportData,
   };
 };
 
@@ -2400,6 +2532,7 @@ export {
   updateCandidateById,
   deleteCandidateById,
   exportAllCandidates,
+  getAgentAssignmentSummary,
   isOwnerOrAdmin,
   calculateProfileCompletion,
   hasAllRequiredData,

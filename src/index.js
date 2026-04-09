@@ -47,23 +47,20 @@ mongoose
     });
   })
   .catch((err) => {
-    logger.error('MongoDB connection failed:', err.message);
+    logger.error('MongoDB connection error', err);
     process.exit(1);
   });
 
 const exitHandler = () => {
-  stopAttendanceScheduler();
-  stopCandidateScheduler(candidateSchedulerId);
-  stopJobVerificationCallScheduler(jobVerificationSchedulerId);
-  stopCallRecordSyncScheduler(callRecordSyncSchedulerId);
-  if (applicationVerificationSchedulerId) {
-    clearInterval(applicationVerificationSchedulerId);
-  }
-  stopMeetingScheduler();
-
   if (server) {
     server.close(() => {
       logger.info('Server closed');
+      stopAttendanceScheduler();
+      stopCandidateScheduler(candidateSchedulerId);
+      stopJobVerificationCallScheduler(jobVerificationSchedulerId);
+      stopCallRecordSyncScheduler(callRecordSyncSchedulerId);
+      applicationVerificationCallScheduler.stopApplicationVerificationCallScheduler(applicationVerificationSchedulerId);
+      stopMeetingScheduler();
       process.exit(1);
     });
   } else {
@@ -85,4 +82,3 @@ process.on('SIGTERM', () => {
     server.close();
   }
 });
-

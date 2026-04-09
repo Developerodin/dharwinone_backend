@@ -14,4 +14,25 @@ router.route('/signaling-token').post(
   hrmWebRtcController.getSignalingToken
 );
 
+router.route('/device-token').post(
+  auth(),
+  requireHrmWebRtcAccess,
+  validate(hrmWebRtcValidation.createDeviceToken),
+  hrmWebRtcController.createDeviceToken
+);
+
+router.route('/revoke-device-token').post(
+  auth(),
+  requireHrmWebRtcAccess,
+  validate(hrmWebRtcValidation.revokeDeviceToken),
+  hrmWebRtcController.revokeDeviceToken
+);
+
+router.route('/device-tokens').get(
+  auth(),
+  requireHrmWebRtcAccess,
+  validate(hrmWebRtcValidation.listDeviceTokens),
+  hrmWebRtcController.listDeviceTokens
+);
+
 export default router;

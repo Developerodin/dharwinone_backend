@@ -15,13 +15,48 @@ import {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-/** Get UTC midnight for a given date (used as attendance "date") */
+/** Get UTC midnight for a given date (used as attendance "date" for calendar-date inputs). */
 const getUtcMidnight = (d) => {
   const date = new Date(d);
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 };
 
 const getDayName = (date) => DAY_NAMES[date.getUTCDay()];
+
+/**
+ * Timezone-aware date/day derivation. Returns { midnight, day } where:
+ * - midnight = Date(UTC(localY, localM, localD)) — a "date-only" convention
+ * - day = local weekday name ("Monday", "Tuesday", etc.)
+ * Uses Intl.DateTimeFormat to extract the local calendar date in the given IANA timezone
+ * (same technique used in getShiftWindowUtc in attendanceDuration.js).
+ */
+const getLocalMidnightAndDay = (instant, timezone) => {
+  const tz = timezone && timezone.trim() ? timezone.trim() : 'UTC';
+  const d = new Date(instant);
+  if (tz === 'UTC') {
+    return {
+      midnight: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())),
+      day: DAY_NAMES[d.getUTCDay()],
+    };
+  }
+  const dateFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = dateFmt.formatToParts(d);
+  const getPart = (name) => parts.find((p) => p.type === name)?.value;
+  const y = parseInt(getPart('year'), 10);
+  const m = parseInt(getPart('month'), 10) - 1;
+  const dd = parseInt(getPart('day'), 10);
+
+  const weekdayFmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long' });
+  const day = weekdayFmt.format(d);
+
+  const midnight = new Date(Date.UTC(y, m, dd));
+  return { midnight, day };
+};
 
 /**
  * Lower bound for listing/statistics: never include days before the student's joining date.
@@ -70,7 +105,7 @@ const getHolidayDates = (holiday) => {
  * @param {Object} body - { punchInTime?, notes?, timezone? }
  */
 const punchIn = async (studentId, body = {}) => {
-  const student = await Student.findById(studentId).populate('user', 'name email').select('joiningDate');
+  const student = await Student.findById(studentId).populate('user', 'name email').populate('shift', 'timezone');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
@@ -79,8 +114,8 @@ const punchIn = async (studentId, body = {}) => {
   const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const attendanceDate = getUtcMidnight(punchInTime);
-  const day = getDayName(attendanceDate);
+  const effectiveTz = student.shift?.timezone || timezone;
+  const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, effectiveTz);
 
   // Attendance starts from joining date (if set)
   if (student.joiningDate) {
@@ -145,7 +180,10 @@ const punchOut = async (studentId, body = {}) => {
   const notes = body.notes != null ? String(body.notes) : '';
 
   const now = new Date();
-  const today = getUtcMidnight(now);
+  const effectiveTz = student.shift?.timezone || 'UTC';
+  const { midnight: today } = getLocalMidnightAndDay(now, effectiveTz);
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const dayBefore = new Date(today);
@@ -153,7 +191,7 @@ const punchOut = async (studentId, body = {}) => {
 
   const active = await Attendance.findOne({
     student: studentId,
-    date: { $in: [today, yesterday, dayBefore] },
+    date: { $in: [tomorrow, today, yesterday, dayBefore] },
     punchOut: null,
     isActive: true,
     status: { $nin: ['Holiday', 'Leave'] },
@@ -195,7 +233,10 @@ const getCurrentPunchStatus = async (studentId) => {
       : null;
 
   const now = new Date();
-  const today = getUtcMidnight(now);
+  const effectiveTz = student.shift?.timezone || 'UTC';
+  const { midnight: today } = getLocalMidnightAndDay(now, effectiveTz);
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const dayBefore = new Date(today);
@@ -203,7 +244,7 @@ const getCurrentPunchStatus = async (studentId) => {
 
   const active = await Attendance.findOne({
     student: studentId,
-    date: { $in: [today, yesterday, dayBefore] },
+    date: { $in: [tomorrow, today, yesterday, dayBefore] },
     punchOut: null,
     isActive: true,
     status: { $nin: ['Holiday', 'Leave'] },
@@ -394,8 +435,7 @@ const punchInByUser = async (userId, body = {}) => {
   const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const attendanceDate = getUtcMidnight(punchInTime);
-  const day = getDayName(attendanceDate);
+  const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, timezone);
 
   const existing = await Attendance.findOne({
     user: userId,
@@ -451,6 +491,8 @@ const punchOutByUser = async (userId, body = {}) => {
 
   const now = new Date();
   const today = getUtcMidnight(now);
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const dayBefore = new Date(today);
@@ -458,7 +500,7 @@ const punchOutByUser = async (userId, body = {}) => {
 
   const active = await Attendance.findOne({
     user: userId,
-    date: { $in: [today, yesterday, dayBefore] },
+    date: { $in: [tomorrow, today, yesterday, dayBefore] },
     punchOut: null,
     isActive: true,
     status: { $nin: ['Holiday', 'Leave'] },
@@ -491,6 +533,8 @@ const getCurrentPunchStatusByUser = async (userId) => {
 
   const now = new Date();
   const today = getUtcMidnight(now);
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const dayBefore = new Date(today);
@@ -498,7 +542,7 @@ const getCurrentPunchStatusByUser = async (userId) => {
 
   const active = await Attendance.findOne({
     user: userId,
-    date: { $in: [today, yesterday, dayBefore] },
+    date: { $in: [tomorrow, today, yesterday, dayBefore] },
     punchOut: null,
     isActive: true,
     status: { $nin: ['Holiday', 'Leave'] },
@@ -1342,6 +1386,7 @@ export default {
   findAllActivePunchIns,
   autoPunchOut,
   getUtcMidnight,
+  getLocalMidnightAndDay,
   addHolidaysToStudents,
   removeHolidaysFromStudents,
   assignLeavesToStudents,

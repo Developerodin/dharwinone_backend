@@ -31,7 +31,9 @@
     "docker:livekit:full": "docker compose -f livekit/docker-compose.yml up -d",
     "docker:livekit:full:down": "docker compose -f livekit/docker-compose.yml down",
     "provision:platform-super": "node scripts/provision-platform-super-user.js",
-    "verify:permissions": "node scripts/verify-permission-aliases.mjs"
+    "verify:permissions": "node scripts/verify-permission-aliases.mjs",
+    "verify:export-filters": "node scripts/verify-candidate-export-filters.mjs",
+    "fix:attendance-tz": "node scripts/fix-attendance-timezone-dates.mjs"
   },
   "keywords": [
     "node",

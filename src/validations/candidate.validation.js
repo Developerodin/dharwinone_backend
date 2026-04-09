@@ -117,36 +117,39 @@ const createCandidate = {
     .required(),
 };
 
+/** Shared with GET /candidates and POST /candidates/export query (export ignores page/limit). */
+const listCandidatesQueryKeys = {
+  owner: Joi.string().custom(objectId),
+  fullName: Joi.string().trim(),
+  email: Joi.string().trim(),
+  employeeId: Joi.string().trim(),
+  agent: Joi.string().trim().allow(''),
+  /** Comma-separated agent User ids (assignedAgent filter) */
+  agentIds: Joi.string().trim().allow(''),
+  sortBy: Joi.string(),
+  limit: Joi.number().integer(),
+  page: Joi.number().integer(),
+  skills: Joi.alternatives().try(Joi.string(), Joi.array().items(Joi.string())),
+  skillLevel: Joi.string().valid('Beginner', 'Intermediate', 'Advanced', 'Expert'),
+  experienceLevel: Joi.string().valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive'),
+  minYearsOfExperience: Joi.number().min(0),
+  maxYearsOfExperience: Joi.number().min(0),
+  salaryRangeMin: Joi.number().min(0),
+  salaryRangeMax: Joi.number().min(0),
+  location: Joi.string().trim(),
+  city: Joi.string().trim(),
+  state: Joi.string().trim(),
+  country: Joi.string().trim(),
+  degree: Joi.string().trim(),
+  visaType: Joi.string().trim(),
+  skillMatchMode: Joi.string().valid('all', 'any').default('any'),
+  employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
+  /** When true, each list row includes openSopCount (extra DB work per candidate). */
+  includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
+};
+
 const getCandidates = {
-  query: Joi.object().keys({
-    owner: Joi.string().custom(objectId),
-    fullName: Joi.string().trim(),
-    email: Joi.string().trim(),
-    employeeId: Joi.string().trim(),
-    agent: Joi.string().trim().allow(''),
-    /** Comma-separated agent User ids (assignedAgent filter) */
-    agentIds: Joi.string().trim().allow(''),
-    sortBy: Joi.string(),
-    limit: Joi.number().integer(),
-    page: Joi.number().integer(),
-    skills: Joi.alternatives().try(Joi.string(), Joi.array().items(Joi.string())),
-    skillLevel: Joi.string().valid('Beginner', 'Intermediate', 'Advanced', 'Expert'),
-    experienceLevel: Joi.string().valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive'),
-    minYearsOfExperience: Joi.number().min(0),
-    maxYearsOfExperience: Joi.number().min(0),
-    salaryRangeMin: Joi.number().min(0),
-    salaryRangeMax: Joi.number().min(0),
-    location: Joi.string().trim(),
-    city: Joi.string().trim(),
-    state: Joi.string().trim(),
-    country: Joi.string().trim(),
-    degree: Joi.string().trim(),
-    visaType: Joi.string().trim(),
-    skillMatchMode: Joi.string().valid('all', 'any').default('any'),
-    employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
-    /** When true, each list row includes openSopCount (extra DB work per candidate). */
-    includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
-  }),
+  query: Joi.object().keys(listCandidatesQueryKeys),
 };
 
 const getCandidate = {
@@ -240,12 +243,19 @@ const exportCandidate = {
 
 const exportAllCandidates = {
   query: Joi.object().keys({
-    owner: Joi.string().custom(objectId),
-    fullName: Joi.string(),
-    email: Joi.string().email(),
+    ...listCandidatesQueryKeys,
+    /** `csv` single sheet as text; default (omit) = multi-sheet `.xlsx` download */
+    format: Joi.string().valid('csv', 'xlsx'),
   }),
   body: Joi.object().keys({
     email: Joi.string().email().optional(),
+  }),
+};
+
+/** Agent workload report; ignores agent/agentIds (org-wide for employment scope). */
+const getAgentAssignmentSummary = {
+  query: Joi.object().keys({
+    employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
   }),
 };
 
@@ -472,6 +482,7 @@ export {
   deleteCandidate,
   exportCandidate,
   exportAllCandidates,
+  getAgentAssignmentSummary,
   addSalarySlip,
   updateSalarySlip,
   deleteSalarySlip,

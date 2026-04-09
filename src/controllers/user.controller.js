@@ -5,6 +5,7 @@ import catchAsync from '../utils/catchAsync.js';
 import * as userService from '../services/user.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import config from '../config/config.js';
 import { userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import { pickUserDisplayForActivityLog, buildUserDeleteActivityMetadata } from '../utils/activityLogSubject.util.js';
 
@@ -64,7 +65,9 @@ const updateUser = catchAsync(async (req, res) => {
   if (!isAdmin && 'username' in updateBody) {
     delete updateBody.username;
   }
-  if (!isAdmin && 'hrmDeviceId' in updateBody) {
+  const canSetHrmDeviceId =
+    !!req.user?.platformSuperUser || config.isDesignatedSuperadminEmail(req.user?.email);
+  if (!canSetHrmDeviceId && 'hrmDeviceId' in updateBody) {
     delete updateBody.hrmDeviceId;
   }
   if (isAgent && !isAdmin && Array.isArray(updateBody.roleIds)) {
