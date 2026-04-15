@@ -1,7 +1,16 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import Project from '../models/project.model.js';
+import Task from '../models/task.model.js';
+import AssignmentRun from '../models/assignmentRun.model.js';
+import TaskBreakdownIdempotency from '../models/taskBreakdownIdempotency.model.js';
+import TeamGroup from '../models/teamGroup.model.js';
 import ApiError from '../utils/ApiError.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
+import { buildSpecialistTaskSlugOrConditions } from '../constants/candidateProjectTaskTypes.js';
+import { userIsAdmin, userHasCandidateRole } from '../utils/roleHelpers.js';
+
+/** Safe substring search — user input is literal, not a RegExp pattern. */
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
@@ -35,27 +44,72 @@ const createProject = async (createdById, payload) => {
 
 const queryProjects = async (filter, options) => {
   if (filter.search) {
-    const searchRegex = new RegExp(filter.search, 'i');
-    filter.$or = [
-      { name: searchRegex },
-      { description: searchRegex },
-      { projectManager: searchRegex },
-      { clientStakeholder: searchRegex },
-      { tags: searchRegex },
-    ];
+    const raw = String(filter.search).trim();
+    if (raw) {
+      const searchRegex = new RegExp(escapeRegex(raw), 'i');
+      const teamMatches = await TeamGroup.find({ name: searchRegex }).select('_id').limit(300).lean();
+      const teamIds = teamMatches.map((t) => t._id).filter(Boolean);
+
+      filter.$or = [
+        { name: searchRegex },
+        { description: searchRegex },
+        { projectManager: searchRegex },
+        { clientStakeholder: searchRegex },
+        { tags: searchRegex },
+        ...(teamIds.length ? [{ assignedTeams: { $in: teamIds } }] : []),
+      ];
+    }
     delete filter.search;
   }
 
   const isAdmin = await userIsAdmin({ roleIds: filter.userRoleIds || [] });
   const userId = filter.userId;
+  const userRoleIds = filter.userRoleIds || [];
   const mineOnly =
     filter.mine === true || filter.mine === 'true' || filter.mine === '1' || filter.mine === 1;
   delete filter.mine;
-  if (!isAdmin && userId) {
-    filter.createdBy = userId;
-  } else if (isAdmin && mineOnly && userId) {
-    filter.createdBy = userId;
+
+  const searchDisjunction = filter.$or;
+  const hasSearchDisjunction = Array.isArray(searchDisjunction) && searchDisjunction.length > 0;
+  if (hasSearchDisjunction) {
+    delete filter.$or;
   }
+
+  if (!isAdmin && userId) {
+    const isCandidate = await userHasCandidateRole({ roleIds: userRoleIds });
+    if (isCandidate && mongoose.Types.ObjectId.isValid(String(userId))) {
+      const userOid = new mongoose.Types.ObjectId(String(userId));
+      /** My Projects (?mine=1): any assigned task. Main Projects list: specialist-slug tasks only. */
+      const taskProjectFilter = mineOnly
+        ? { assignedTo: userOid, projectId: { $ne: null } }
+        : {
+            assignedTo: userOid,
+            projectId: { $ne: null },
+            $or: buildSpecialistTaskSlugOrConditions(),
+          };
+      const projectIdsFromTasks = await Task.distinct('projectId', taskProjectFilter).exec();
+      const idList = (projectIdsFromTasks || []).filter(Boolean);
+      const accessOr = [{ createdBy: userId }, { _id: { $in: idList } }];
+      if (hasSearchDisjunction) {
+        filter.$and = [{ $or: searchDisjunction }, { $or: accessOr }];
+      } else {
+        filter.$or = accessOr;
+      }
+    } else if (hasSearchDisjunction) {
+      filter.$and = [{ $or: searchDisjunction }, { createdBy: userId }];
+    } else {
+      filter.createdBy = userId;
+    }
+  } else if (isAdmin && mineOnly && userId) {
+    if (hasSearchDisjunction) {
+      filter.$and = [{ $or: searchDisjunction }, { createdBy: userId }];
+    } else {
+      filter.createdBy = userId;
+    }
+  } else if (hasSearchDisjunction) {
+    filter.$or = searchDisjunction;
+  }
+
   delete filter.userRoleIds;
   delete filter.userId;
 
@@ -85,6 +139,21 @@ const getProjectById = async (id) => {
   ]);
 
   return project;
+};
+
+/**
+ * Any user with a task assigned on this project may read it (e.g. My Tasks → project context).
+ * Candidate project *list* remains restricted to specialist-slug tasks in queryProjects.
+ */
+const userCanReadProjectViaAssignedTask = async (project, user) => {
+  if (!project?._id || !user) return false;
+  const uid = user.id || user._id;
+  if (!mongoose.Types.ObjectId.isValid(String(uid))) return false;
+  const userOid = new mongoose.Types.ObjectId(String(uid));
+  return !!(await Task.exists({
+    projectId: project._id,
+    assignedTo: userOid,
+  }).exec());
 };
 
 const updateProjectById = async (id, updateBody, currentUser) => {
@@ -132,6 +201,12 @@ const deleteProjectById = async (id, currentUser) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
+  const projectOid = project._id;
+  await Promise.all([
+    Task.deleteMany({ projectId: projectOid }),
+    TaskBreakdownIdempotency.deleteMany({ projectId: projectOid }),
+    AssignmentRun.deleteMany({ projectId: projectOid }),
+  ]);
   await project.deleteOne();
   return project;
 };
@@ -140,6 +215,7 @@ export {
   createProject,
   queryProjects,
   getProjectById,
+  userCanReadProjectViaAssignedTask,
   updateProjectById,
   deleteProjectById,
 };

@@ -119,6 +119,9 @@ export const permissionAliases = {
   // permission.service derives communication.calling:view → calling.read; we must grant calls.* via calling.* too
   'calls.read': ['calls.read', 'calling.read', 'communication.calling:view', 'communication.calling:view,create,edit,delete'],
   'calls.manage': ['calls.manage', 'calling.manage', 'communication.calling:create,edit,delete', 'communication.calling:view,create,edit,delete'],
+  // My Projects: narrow list; legacy project.projects:view still grants access (see route-permissions aliases)
+  'my-projects.read': ['my-projects.read', 'projects.read'],
+  'my-projects.manage': ['my-projects.manage', 'projects.manage'],
   // Teams (project.teams covers team + teamGroup)
   'teams.read': ['teams.read', 'project.teams:view', 'project.teams:view,create,edit,delete'],
   'teams.manage': ['teams.manage', 'project.teams:create,edit,delete', 'project.teams:view,create,edit,delete'],

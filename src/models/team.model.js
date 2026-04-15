@@ -41,6 +41,16 @@ teamMemberSchema.index({ createdAt: -1 });
 
 teamMemberSchema.plugin(toJSON);
 
+// toJSON plugin strips timestamps; roster UI uses createdAt when memberSinceLabel is empty.
+const originalTeamMemberToJSON = teamMemberSchema.options.toJSON?.transform;
+teamMemberSchema.options.toJSON = teamMemberSchema.options.toJSON || {};
+teamMemberSchema.options.toJSON.transform = function teamMemberToJSONTransform(doc, ret, options) {
+  if (originalTeamMemberToJSON) originalTeamMemberToJSON(doc, ret, options);
+  if (doc.createdAt) ret.createdAt = doc.createdAt.toISOString();
+  if (doc.updatedAt) ret.updatedAt = doc.updatedAt.toISOString();
+  return ret;
+};
+
 const TeamMember = mongoose.model('TeamMember', teamMemberSchema);
 
 export default TeamMember;

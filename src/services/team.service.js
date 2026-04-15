@@ -1,7 +1,60 @@
 import httpStatus from 'http-status';
 import TeamMember from '../models/team.model.js';
+import Candidate from '../models/candidate.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
+import logger from '../config/logger.js';
+
+const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeMemberEmail = (email) => String(email ?? '').trim().toLowerCase();
+
+/**
+ * For each roster row, attach candidateProfilePictureUrl when a Candidate exists with the same email
+ * and has a stored profile picture (presigned URL). Does not require candidates.read — only teams.read
+ * roster visibility already applied in queryTeamMembers.
+ * @param {import('mongoose').Document[]|Record<string, unknown>[]} members
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+const enrichTeamMembersWithCandidateProfilePictureUrls = async (members) => {
+  if (!members?.length) {
+    return (members || []).map((m) => (m.toJSON ? m.toJSON() : { ...m }));
+  }
+  const normalizedEmails = [
+    ...new Set(members.map((m) => normalizeMemberEmail(m.email)).filter(Boolean)),
+  ];
+  if (normalizedEmails.length === 0) {
+    return members.map((m) => (m.toJSON ? m.toJSON() : { ...m }));
+  }
+
+  const candidates = await Candidate.find({ email: { $in: normalizedEmails } })
+    .select('email profilePicture')
+    .lean();
+
+  /** @type {Map<string, string>} */
+  const urlByEmail = new Map();
+  await Promise.all(
+    candidates.map(async (c) => {
+      const key = normalizeMemberEmail(c.email);
+      if (!key || !c.profilePicture?.key) return;
+      try {
+        const url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
+        urlByEmail.set(key, url);
+      } catch (e) {
+        logger.warn(`Team roster: presign profile picture failed for ${key}: ${e?.message}`);
+      }
+    })
+  );
+
+  return members.map((m) => {
+    const obj = m.toJSON ? m.toJSON() : { ...m };
+    const key = normalizeMemberEmail(m.email);
+    const u = key ? urlByEmail.get(key) : undefined;
+    if (u) obj.candidateProfilePictureUrl = u;
+    return obj;
+  });
+};
 
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
@@ -35,14 +88,35 @@ const queryTeamMembers = async (filter, options) => {
 
   const userId = filter.userId;
   const userRoleIds = filter.userRoleIds;
+  const userEmail = filter.userEmail;
   delete filter.userRoleIds;
   delete filter.userId;
+  delete filter.userEmail;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   let finalFilter = { ...filter };
+  /**
+   * Non-admins must see rosters they did not create: admins add TeamMember rows with createdBy = admin.
+   * Show rows the user created, their own roster row (email match), or anyone on a team that lists them.
+   */
   if (!isAdmin && userId) {
+    const uemail = String(userEmail || '').trim();
+    let teamIdsImOn = [];
+    if (uemail) {
+      teamIdsImOn = await TeamMember.distinct('teamId', {
+        teamId: { $ne: null },
+        email: new RegExp(`^${escapeRegex(uemail)}$`, 'i'),
+      }).exec();
+    }
+    const visibilityOr = [
+      { createdBy: userId },
+      ...(uemail ? [{ email: new RegExp(`^${escapeRegex(uemail)}$`, 'i') }] : []),
+      ...(teamIdsImOn.length
+        ? [{ teamId: { $in: teamIdsImOn.filter((id) => id != null) } }]
+        : []),
+    ];
     finalFilter = {
-      $and: [finalFilter, { createdBy: userId }],
+      $and: [finalFilter, { $or: visibilityOr }],
     };
   }
 
@@ -65,7 +139,8 @@ const queryTeamMembers = async (filter, options) => {
   ]);
 
   const totalPages = Math.ceil(totalResults / limit);
-  return { results, page, limit, totalPages, totalResults };
+  const enrichedResults = await enrichTeamMembersWithCandidateProfilePictureUrls(results);
+  return { results: enrichedResults, page, limit, totalPages, totalResults };
 };
 
 const getTeamMemberById = async (id) => {
@@ -115,5 +190,6 @@ export {
   getTeamMemberById,
   updateTeamMemberById,
   deleteTeamMemberById,
+  enrichTeamMembersWithCandidateProfilePictureUrls,
 };
 

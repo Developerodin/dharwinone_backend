@@ -53,9 +53,20 @@ const taskSchema = new mongoose.Schema(
 
 taskSchema.index({ title: 'text', description: 'text' });
 taskSchema.index({ projectId: 1, status: 1 });
+taskSchema.index({ assignedTo: 1, projectId: 1 });
 taskSchema.index({ createdAt: -1 });
 
 taskSchema.plugin(toJSON);
+
+// toJSON plugin strips timestamps by default; tasks need them for lists (e.g. My Tasks "Created").
+const originalTaskToJSON = taskSchema.options.toJSON?.transform;
+taskSchema.options.toJSON = taskSchema.options.toJSON || {};
+taskSchema.options.toJSON.transform = function taskToJSONTransform(doc, ret, options) {
+  if (originalTaskToJSON) originalTaskToJSON(doc, ret, options);
+  ret.createdAt = doc.createdAt;
+  ret.updatedAt = doc.updatedAt;
+  return ret;
+};
 
 const Task = mongoose.model('Task', taskSchema);
 

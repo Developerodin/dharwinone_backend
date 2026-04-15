@@ -1,5 +1,7 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import Task from '../models/task.model.js';
+import Project from '../models/project.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
@@ -76,6 +78,34 @@ const queryTasks = async (filter, options) => {
         { $or: [{ createdBy: userId }, { assignedTo: userId }] },
       ],
     };
+  }
+
+  /** Tasks whose project was deleted still had projectId set; hide from user-facing lists. */
+  if (userId && (assignedToMe || !isAdmin) && mongoose.Types.ObjectId.isValid(String(userId))) {
+    const userOid = new mongoose.Types.ObjectId(String(userId));
+    const orphanMatch = assignedToMe
+      ? { assignedTo: userOid, projectId: { $ne: null } }
+      : {
+          projectId: { $ne: null },
+          $or: [{ createdBy: userOid }, { assignedTo: userOid }],
+        };
+    const orphanRows = await Task.aggregate([
+      { $match: orphanMatch },
+      {
+        $lookup: {
+          from: Project.collection.name,
+          localField: 'projectId',
+          foreignField: '_id',
+          as: 'proj',
+        },
+      },
+      { $match: { proj: { $size: 0 } } },
+      { $project: { _id: 1 } },
+    ]);
+    const orphanIds = orphanRows.map((r) => r._id);
+    if (orphanIds.length) {
+      finalFilter = { $and: [finalFilter, { _id: { $nin: orphanIds } }] };
+    }
   }
 
   const sort = options.sortBy || '-createdAt';

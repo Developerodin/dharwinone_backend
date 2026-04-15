@@ -5,6 +5,8 @@ import Project from '../models/project.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
+const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
   const admin = await userIsAdmin(user);
@@ -30,13 +32,36 @@ const queryTeamGroups = async (filter, options) => {
 
   const userId = filter.userId;
   const userRoleIds = filter.userRoleIds;
+  const userEmail = filter.userEmail;
   delete filter.userRoleIds;
   delete filter.userId;
+  delete filter.userEmail;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   let finalFilter = { ...filter };
+  /** Teams created by someone else still appear if the user is on that team's roster (email match). */
   if (!isAdmin && userId) {
-    finalFilter = { $and: [finalFilter, { createdBy: userId }] };
+    const uemail = String(userEmail || '').trim();
+    let teamIdsImOn = [];
+    if (uemail) {
+      teamIdsImOn = await TeamMember.distinct('teamId', {
+        teamId: { $ne: null },
+        email: new RegExp(`^${escapeRegex(uemail)}$`, 'i'),
+      }).exec();
+    }
+    finalFilter = {
+      $and: [
+        finalFilter,
+        {
+          $or: [
+            { createdBy: userId },
+            ...(teamIdsImOn.length
+              ? [{ _id: { $in: teamIdsImOn.filter((id) => id != null) } }]
+              : []),
+          ],
+        },
+      ],
+    };
   }
 
   const sort = options.sortBy || '-createdAt';

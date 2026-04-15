@@ -6,6 +6,7 @@ import {
   createProject,
   queryProjects,
   getProjectById,
+  userCanReadProjectViaAssignedTask,
   updateProjectById,
   deleteProjectById,
 } from '../services/project.service.js';
@@ -36,7 +37,10 @@ const get = catchAsync(async (req, res) => {
   const isAdmin = await userIsAdmin(req.user);
   const isOwner = String(project.createdBy?._id || project.createdBy) === String(req.user.id || req.user._id);
   if (!isAdmin && !isOwner) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+    const viaAssignedTask = await userCanReadProjectViaAssignedTask(project, req.user);
+    if (!viaAssignedTask) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+    }
   }
 
   res.send(project);

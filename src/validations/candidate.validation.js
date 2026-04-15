@@ -181,13 +181,18 @@ const updateCandidate = {
       phoneNumber: Joi.string().pattern(/^\d{6,15}$/).messages({
         'string.pattern.base': 'Phone number must be 6-15 digits',
       }),
-      profilePicture: Joi.object({
-        url: Joi.string().uri().optional(),
-        key: Joi.string().optional().trim(),
-        originalName: Joi.string().optional().trim(),
-        size: Joi.number().optional().integer().min(0),
-        mimeType: Joi.string().optional().trim(),
-      }).optional(),
+      profilePicture: Joi.alternatives()
+        .try(
+          Joi.object({
+            url: Joi.string().uri().optional(),
+            key: Joi.string().optional().trim(),
+            originalName: Joi.string().optional().trim(),
+            size: Joi.number().optional().integer().min(0),
+            mimeType: Joi.string().optional().trim(),
+          }),
+          Joi.valid(null)
+        )
+        .optional(),
       shortBio: Joi.string().allow('', null),
       sevisId: Joi.string().allow('', null),
       ead: Joi.string().allow('', null),

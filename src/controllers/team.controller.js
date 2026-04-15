@@ -8,18 +8,21 @@ import {
   getTeamMemberById,
   updateTeamMemberById,
   deleteTeamMemberById,
+  enrichTeamMembersWithCandidateProfilePictureUrls,
 } from '../services/team.service.js';
 
 const create = catchAsync(async (req, res) => {
   const createdById = req.user.id || req.user._id;
   const member = await createTeamMember(createdById, req.body);
-  res.status(httpStatus.CREATED).send(member);
+  const [out] = await enrichTeamMembersWithCandidateProfilePictureUrls([member]);
+  res.status(httpStatus.CREATED).send(out);
 });
 
 const list = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['teamGroup', 'teamId', 'search']);
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
+  filter.userEmail = req.user.email;
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryTeamMembers(filter, options);
   res.send(result);
@@ -30,12 +33,14 @@ const get = catchAsync(async (req, res) => {
   if (!member) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Team member not found');
   }
-  res.send(member);
+  const [out] = await enrichTeamMembersWithCandidateProfilePictureUrls([member]);
+  res.send(out);
 });
 
 const update = catchAsync(async (req, res) => {
   const member = await updateTeamMemberById(req.params.teamMemberId, req.body, req.user);
-  res.send(member);
+  const [out] = await enrichTeamMembersWithCandidateProfilePictureUrls([member]);
+  res.send(out);
 });
 
 const remove = catchAsync(async (req, res) => {

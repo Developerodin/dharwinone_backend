@@ -60,7 +60,20 @@ const enhanceProjectBrief = catchAsync(async (req, res) => {
     projectName: req.body?.projectName,
     projectManager: req.body?.projectManager,
     clientStakeholder: req.body?.clientStakeholder,
+    previousEnhancedHtml: req.body?.previousEnhancedHtml,
+    refinementInstructions: req.body?.refinementInstructions,
+    feedback: req.body?.feedback,
   });
+  res.status(httpStatus.OK).send(out);
+});
+
+const generateAssignmentRowJobDraft = catchAsync(async (req, res) => {
+  const out = await pmAssistantService.generateAssignmentRowJobDraft(
+    req.params.runId,
+    req.params.rowId,
+    req.user,
+    { force: !!req.body?.force }
+  );
   res.status(httpStatus.OK).send(out);
 });
 
@@ -74,4 +87,5 @@ export {
   applyAssignmentRun,
   bootstrapSmartTeam,
   enhanceProjectBrief,
+  generateAssignmentRowJobDraft,
 };

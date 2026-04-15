@@ -20,6 +20,7 @@ const list = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['search']);
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
+  filter.userEmail = req.user.email;
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryTeamGroups(filter, options);
   res.send(result);

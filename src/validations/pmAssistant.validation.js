@@ -90,6 +90,18 @@ const patchAssignmentRun = {
   }),
 };
 
+const assignmentRowJobDraft = {
+  params: Joi.object().keys({
+    runId: Joi.string().custom(objectId).required(),
+    rowId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      force: Joi.boolean().optional(),
+    })
+    .default({}),
+};
+
 const bootstrapSmartTeam = {
   ...projectIdParam,
   body: Joi.object().keys({
@@ -107,6 +119,14 @@ const enhanceProjectBrief = {
       projectName: Joi.string().trim().allow('').max(BRIEF_CONTEXT_MAX).optional(),
       projectManager: Joi.string().trim().allow('').max(BRIEF_CONTEXT_MAX).optional(),
       clientStakeholder: Joi.string().trim().allow('').max(BRIEF_CONTEXT_MAX).optional(),
+      previousEnhancedHtml: Joi.string().allow('').max(BRIEF_HTML_IN_MAX).optional(),
+      refinementInstructions: Joi.string().trim().allow('').max(4000).optional(),
+      feedback: Joi.object()
+        .keys({
+          rating: Joi.string().valid('up', 'down').optional(),
+          comment: Joi.string().trim().allow('').max(800).optional(),
+        })
+        .optional(),
     })
     .required(),
 };
@@ -119,4 +139,5 @@ export {
   projectIdParam,
   runIdParam,
   patchAssignmentRun,
+  assignmentRowJobDraft,
 };

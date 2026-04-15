@@ -53,6 +53,15 @@ router
   );
 
 router
+  .route('/assignment-runs/:runId/rows/:rowId/job-draft')
+  .post(
+    auth(),
+    requirePermissions('projects.read'),
+    validate(pmAssistantValidation.assignmentRowJobDraft),
+    pmAssistantController.generateAssignmentRowJobDraft
+  );
+
+router
   .route('/assignment-runs/:runId')
   .get(auth(), requirePermissions('projects.read'), validate(pmAssistantValidation.runIdParam), pmAssistantController.getAssignmentRun)
   .patch(
