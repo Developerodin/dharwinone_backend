@@ -17,7 +17,7 @@
     "prettier:fix": "prettier --write **/*.js",
     "docker:prod": "docker-compose -f docker-compose.yml -f docker-compose.prod.yml up",
     "docker:dev": "docker-compose -f docker-compose.yml -f docker-compose.dev.yml up",
-    "prepare": "husky install",
+    "prepare": "node -e \"if(process.env.NODE_ENV !== 'production') require('husky').install()\"",
     "docker:livekit": "docker compose -f docker-compose.livekit-local.yml up -d",
     "docker:livekit:down": "docker compose -f docker-compose.livekit-local.yml down",
     "docker:livekit:full": "docker compose -f livekit/docker-compose.yml up -d",
