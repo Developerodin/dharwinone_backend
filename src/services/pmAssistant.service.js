@@ -1244,8 +1244,9 @@ export async function applyAssignmentRun(runId, user) {
 }
 
 /**
- * One-shot pipeline: GPT tasks → GPT staffing → approve+apply assignments →
- * create a dedicated TeamGroup, add TeamMember rows for matched candidates, link team on the project.
+ * Pipeline: GPT tasks → persist tasks → GPT staffing (assignment run).
+ * Does **not** approve or apply the run — the user reviews on the assignment screen first; apply there
+ * sets task owners, project assignees, and syncs the project team (same as other PM assistant flows).
  * Caller must have rights equivalent to projects.manage + tasks.manage + teams.manage + candidates.read (enforced on route).
  */
 export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief } = {}) {
@@ -1282,6 +1283,8 @@ export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief
     return {
       projectId,
       staffed: false,
+      hasStaffableMatches: false,
+      assignmentApplied: false,
       assignmentRunId: runId,
       teamGroup: null,
       tasksCreated: preview.tasks.length,
@@ -1290,32 +1293,23 @@ export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief
     };
   }
 
-  await approveAssignmentRun(runId, user);
-  const applyOut = await applyAssignmentRun(runId, user);
-  const teamSync = applyOut.teamSync || {
-    teamGroup: null,
-    teamGroupId: null,
-    membersAdded: 0,
-    usedExistingTeam: false,
-  };
-
-  logger.info('[PM Assistant] bootstrapSmartTeamForProject completed', {
+  logger.info('[PM Assistant] bootstrapSmartTeamForProject ready for review (not applied)', {
     projectId,
     runId,
-    teamGroupId: teamSync.teamGroupId,
-    membersAdded: teamSync.membersAdded,
-    usedExistingTeam: teamSync.usedExistingTeam,
     tasksCreated: preview.tasks.length,
+    hasStaffableMatches: true,
   });
 
   return {
     projectId,
     staffed: true,
+    hasStaffableMatches: true,
+    assignmentApplied: false,
     assignmentRunId: runId,
-    teamGroup: teamSync.teamGroup,
+    teamGroup: null,
     tasksCreated: preview.tasks.length,
-    teamMembersAdded: teamSync.membersAdded,
-    usedExistingTeam: teamSync.usedExistingTeam,
+    teamMembersAdded: 0,
+    usedExistingTeam: false,
   };
 }
 
