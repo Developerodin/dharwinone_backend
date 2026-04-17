@@ -103,6 +103,8 @@ const singleCandidateSchema = Joi.object().keys({
   salarySlips: Joi.array().items(salarySlip),
   joiningDate: Joi.date().optional(),
   position: Joi.string().custom(objectId).optional().allow(null),
+  companyAssignedEmail: Joi.string().email().allow('', null),
+  companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
 });
 
 const createCandidate = {
@@ -222,6 +224,8 @@ const updateCandidate = {
       skills: Joi.array().items(skill),
       socialLinks: Joi.array().items(socialLink),
       salarySlips: Joi.array().items(salarySlip),
+      companyAssignedEmail: Joi.string().email().allow('', null),
+      companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
     })
     .min(1),
 };
@@ -409,6 +413,34 @@ const assignAgent = {
     .required(),
 };
 
+const listCompanyEmailAssignments = {
+  query: Joi.object().keys({}),
+};
+
+const assignCompanyAssignedEmail = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      companyAssignedEmail: Joi.string().allow('', null),
+      companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
+    })
+    .required(),
+};
+
+const getCompanyEmailSettings = {
+  query: Joi.object().keys({}),
+};
+
+const patchCompanyEmailSettings = {
+  body: Joi.object()
+    .keys({
+      companyEmailAssignmentEnabled: Joi.boolean().required(),
+    })
+    .required(),
+};
+
 const updateJoiningDate = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
@@ -501,8 +533,12 @@ export {
   addRecruiterFeedback,
   assignRecruiter,
   listStudentAgentAssignments,
+  listCompanyEmailAssignments,
   listAgentsForFilter,
   assignAgent,
+  assignCompanyAssignedEmail,
+  getCompanyEmailSettings,
+  patchCompanyEmailSettings,
   updateJoiningDate,
   updateResignDate,
   updateWeekOff,

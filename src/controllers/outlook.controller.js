@@ -23,9 +23,13 @@ const microsoftCallback = catchAsync(async (req, res) => {
     return res.redirect(`${config.frontendBaseUrl}/communication/email?error=invalid_state`);
   }
   try {
-    await outlookClientService.handleMicrosoftCallback(code, userId);
+    await outlookClientService.handleMicrosoftCallback(code, userId, state);
     return res.redirect(`${config.frontendBaseUrl}/communication/email?connected=outlook`);
   } catch (err) {
+    const codeErr = err?.code;
+    if (codeErr === 'MAILBOX_MISMATCH' || codeErr === 'POLICY_CHANGED' || codeErr === 'WRONG_PROVIDER') {
+      return res.redirect(`${config.frontendBaseUrl}/communication/email?error=${encodeURIComponent(codeErr)}`);
+    }
     return res.redirect(
       `${config.frontendBaseUrl}/communication/email?error=${encodeURIComponent(err.message || 'auth_failed')}`
     );

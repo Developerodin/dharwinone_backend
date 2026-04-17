@@ -98,6 +98,10 @@ const userSchema = mongoose.Schema(
       trim: true,
       default: '',
     },
+    /** Org-level toggles for recruiting admins (candidates.manage). */
+    adminCandidateSettings: {
+      companyEmailAssignmentEnabled: { type: Boolean, default: false },
+    },
   },
   {
     timestamps: true,

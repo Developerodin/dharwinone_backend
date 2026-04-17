@@ -2,7 +2,7 @@ import express from 'express';
 import config from '../../config/config.js';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as emailValidation from '../../validations/email.validation.js';
 import * as outlookValidation from '../../validations/outlook.validation.js';
 import * as emailController from '../../controllers/email.controller.js';
@@ -45,6 +45,12 @@ router.get(
 
 router.use(auth());
 
+router.get(
+  '/connection-policy',
+  requireAnyOfPermissions('emails.read', 'emails.manage'),
+  validate(emailValidation.connectionPolicy),
+  emailController.getConnectionPolicy
+);
 router.get('/accounts', requirePermissions('emails.read'), validate(emailValidation.listGmailAccounts), emailController.listGmailAccounts);
 router.get('/auth/google', requirePermissions('emails.manage'), validate(emailValidation.getGoogleAuthUrl), emailController.getGoogleAuthUrl);
 router.delete(

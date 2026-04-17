@@ -58,6 +58,7 @@ const emailAccountSchema = mongoose.Schema(
 emailAccountSchema.plugin(toJSON);
 
 emailAccountSchema.index({ user: 1, provider: 1, email: 1 }, { unique: true });
+emailAccountSchema.index({ user: 1, status: 1 });
 
 /**
  * @typedef EmailAccount

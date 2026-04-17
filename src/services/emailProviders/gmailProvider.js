@@ -2,6 +2,11 @@ import { google } from 'googleapis';
 import config from '../../config/config.js';
 import EmailAccount from '../../models/emailAccount.model.js';
 import { MAX_GMAIL_ACCOUNTS_PER_USER } from '../../constants/emailAccountLimits.js';
+import logger from '../../config/logger.js';
+import {
+  getAssignedMailboxPolicy,
+  revokeAllOtherEmailAccounts,
+} from '../emailConnectionPolicy.service.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -22,24 +27,73 @@ function getGmailClient(auth) {
   return google.gmail({ version: 'v1', auth });
 }
 
+async function revokeGoogleAccessToken(accessToken) {
+  if (!accessToken) return;
+  try {
+    await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: accessToken }),
+    });
+  } catch (err) {
+    logger.debug('[mailbox_lock] google token revoke failed: %s', err?.message);
+  }
+}
+
+function parseOAuthState(stateEncoded) {
+  if (!stateEncoded) return {};
+  try {
+    return JSON.parse(Buffer.from(stateEncoded, 'base64url').toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Build Google OAuth consent URL. State encodes userId for callback.
+ * Build Google OAuth consent URL. State encodes userId (+ policy fingerprint when mailbox lock applies).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ policy?: Awaited<ReturnType<typeof getAssignedMailboxPolicy>> }} [options]
  */
-export function getAuthUrl(userId) {
+export function getAuthUrl(userId, options = {}) {
   const oauth2Client = createOAuth2Client();
-  const state = Buffer.from(JSON.stringify({ userId: userId.toString() }), 'utf8').toString('base64url');
-  return oauth2Client.generateAuthUrl({
+  const stateObj = { userId: userId.toString() };
+  const { policy } = options;
+  if (policy?.hardLockActive && policy.policyFingerprint) {
+    stateObj.policyFp = policy.policyFingerprint;
+  }
+  const state = Buffer.from(JSON.stringify(stateObj), 'utf8').toString('base64url');
+  const urlOpts = {
     access_type: 'offline',
     scope: SCOPES,
     prompt: 'consent',
     state,
-  });
+  };
+  if (policy?.hardLockActive && policy.expectedEmail) {
+    urlOpts.login_hint = policy.expectedEmail;
+  }
+  return oauth2Client.generateAuthUrl(urlOpts);
 }
 
 /**
  * Exchange authorization code for tokens, create/update EmailAccount.
+ * @param {string} code
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {string} [stateEncoded] raw state query param
  */
-export async function handleCallback(code, userId) {
+export async function handleCallback(code, userId, stateEncoded = '') {
+  const stateObj = parseOAuthState(stateEncoded);
+  const policy = await getAssignedMailboxPolicy(userId);
+
+  if (policy.hardLockActive && stateObj.policyFp && stateObj.policyFp !== policy.policyFingerprint) {
+    const oauth2Client = createOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
+    await revokeGoogleAccessToken(tokens.access_token);
+    logger.warn('[mailbox_lock] mismatch_rejected reason=policy_changed userId=%s provider=gmail', String(userId));
+    const err = new Error('POLICY_CHANGED');
+    err.code = 'POLICY_CHANGED';
+    throw err;
+  }
+
   const oauth2Client = createOAuth2Client();
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
@@ -48,6 +102,22 @@ export async function handleCallback(code, userId) {
   const { data } = await oauth2.userinfo.get();
   const email = (data.email || '').toLowerCase();
   if (!email) throw new Error('Could not fetch user email from Google');
+
+  if (policy.hardLockActive) {
+    if (email !== policy.expectedEmail) {
+      await revokeGoogleAccessToken(tokens.access_token);
+      logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=gmail', String(userId));
+      const err = new Error('MAILBOX_MISMATCH');
+      err.code = 'MAILBOX_MISMATCH';
+      throw err;
+    }
+    if (!policy.allowedProviders.includes('gmail')) {
+      await revokeGoogleAccessToken(tokens.access_token);
+      const err = new Error('WRONG_PROVIDER');
+      err.code = 'WRONG_PROVIDER';
+      throw err;
+    }
+  }
 
   const tokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
 
@@ -58,6 +128,14 @@ export async function handleCallback(code, userId) {
     existing.tokenExpiry = tokenExpiry;
     existing.status = 'active';
     await existing.save();
+    if (policy.hardLockActive) {
+      try {
+        await revokeAllOtherEmailAccounts(userId, existing._id);
+      } catch (revErr) {
+        logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+      }
+      logger.info('[mailbox_lock] enforced userId=%s provider=gmail', String(userId));
+    }
     return existing;
   }
 
@@ -66,13 +144,14 @@ export async function handleCallback(code, userId) {
     provider: 'gmail',
     status: 'active',
   });
-  if (activeGmailCount >= MAX_GMAIL_ACCOUNTS_PER_USER) {
+  const skipCap = policy.hardLockActive && email === policy.expectedEmail;
+  if (!skipCap && activeGmailCount >= MAX_GMAIL_ACCOUNTS_PER_USER) {
     throw new Error(
       `Maximum of ${MAX_GMAIL_ACCOUNTS_PER_USER} Gmail accounts allowed. Disconnect one to add another.`
     );
   }
 
-  return EmailAccount.create({
+  const created = await EmailAccount.create({
     user: userId,
     provider: 'gmail',
     email,
@@ -81,6 +160,15 @@ export async function handleCallback(code, userId) {
     tokenExpiry,
     status: 'active',
   });
+  if (policy.hardLockActive) {
+    try {
+      await revokeAllOtherEmailAccounts(userId, created._id);
+    } catch (revErr) {
+      logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+    }
+    logger.info('[mailbox_lock] enforced userId=%s provider=gmail', String(userId));
+  }
+  return created;
 }
 
 /**

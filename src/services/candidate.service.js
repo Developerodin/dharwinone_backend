@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
+import validator from 'validator';
 import Candidate from '../models/candidate.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
@@ -12,6 +13,7 @@ import { generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
+import { resolveCompanyEmailSettingsUserId } from './emailConnectionPolicy.service.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -21,6 +23,55 @@ const isOwnerOrAdmin = (user, candidate) => {
   if (!candidate) return false;
   const hasManage = user?.canManageCandidates === true;
   return hasManage || String(candidate.owner) === String(user?.id || user?._id);
+};
+
+const inferCompanyEmailProvider = (email) => {
+  if (!email || typeof email !== 'string') return '';
+  const domain = email.split('@')[1]?.toLowerCase() || '';
+  if (domain === 'gmail.com' || domain === 'googlemail.com') return 'gmail';
+  if (
+    ['outlook.com', 'hotmail.com', 'live.com', 'msn.com'].includes(domain) ||
+    domain.endsWith('.onmicrosoft.com')
+  ) {
+    return 'outlook';
+  }
+  return 'unknown';
+};
+
+const normalizeCompanyAssignedEmailInput = (raw) => {
+  if (raw === null || raw === undefined || raw === '') return '';
+  return String(raw).toLowerCase().trim();
+};
+
+/** When a company work email is saved, enable Assignment Hub on the recruiting user so mailbox hard-lock applies. */
+const syncCompanyEmailHubForCandidate = async (candidate) => {
+  const email = normalizeCompanyAssignedEmailInput(candidate.companyAssignedEmail);
+  if (!email || !candidate.owner) return;
+  const settingsUid = resolveCompanyEmailSettingsUserId(candidate, candidate.owner);
+  if (!settingsUid) return;
+  await User.updateOne(
+    { _id: settingsUid },
+    { $set: { 'adminCandidateSettings.companyEmailAssignmentEnabled': true } }
+  );
+};
+
+/**
+ * After OAuth mailbox connect: log when connected address differs from admin-assigned work email (no PII in log).
+ */
+const warnCompanyEmailMismatchForOwner = async (ownerUserId, connectedEmail) => {
+  try {
+    const cand = await Candidate.findOne({ owner: ownerUserId }).select('companyAssignedEmail').lean();
+    const expected = normalizeCompanyAssignedEmailInput(cand?.companyAssignedEmail);
+    if (!expected) return;
+    const actual = normalizeCompanyAssignedEmailInput(connectedEmail);
+    if (!actual || actual === expected) return;
+    logger.warn(
+      '[email] Connected mailbox does not match company-assigned work email (ownerUserId=%s)',
+      String(ownerUserId)
+    );
+  } catch (err) {
+    logger.debug('warnCompanyEmailMismatchForOwner: %s', err?.message);
+  }
 };
 
 // Helper function to generate document API endpoint URL (never expires)
@@ -1004,15 +1055,42 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   if (!isOwnerOrAdmin(currentUser, candidate)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
-  
+
+  const sanitized = { ...updateBody };
+  if (!currentUser?.canManageCandidates) {
+    delete sanitized.companyAssignedEmail;
+    delete sanitized.companyEmailProvider;
+  } else if (Object.prototype.hasOwnProperty.call(sanitized, 'companyAssignedEmail')) {
+    const ce = normalizeCompanyAssignedEmailInput(sanitized.companyAssignedEmail);
+    if (!ce) {
+      sanitized.companyAssignedEmail = '';
+      sanitized.companyEmailProvider = '';
+    } else {
+      if (!validator.isEmail(ce)) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid company work email');
+      }
+      sanitized.companyAssignedEmail = ce;
+      const prov = sanitized.companyEmailProvider;
+      const p =
+        prov === null || prov === undefined || prov === ''
+          ? inferCompanyEmailProvider(ce)
+          : String(prov).trim();
+      sanitized.companyEmailProvider = ['gmail', 'outlook', 'unknown'].includes(p) ? p : inferCompanyEmailProvider(ce);
+    }
+  }
+
   // Update the candidate with new data
-  Object.assign(candidate, updateBody);
+  Object.assign(candidate, sanitized);
   
   // Automatically recalculate profile completion percentage and completion status
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
   candidate.isCompleted = candidate.isProfileCompleted === 100;
   
   await candidate.save();
+
+  if (Object.prototype.hasOwnProperty.call(sanitized, 'companyAssignedEmail')) {
+    await syncCompanyEmailHubForCandidate(candidate);
+  }
 
   const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
   queueSopReminderCheckForCandidate(String(candidate._id));
@@ -2164,6 +2242,169 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
 };
 
 /**
+ * Same roster as agent assignment UI, with company work email fields for Settings → Company email.
+ */
+const listCompanyEmailAssignments = async () => {
+  const { getRoleByName } = await import('./role.service.js');
+  const Role = (await import('../models/role.model.js')).default;
+  const studentRole = await getRoleByName('Student');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!studentRole && !candidateRole) {
+    return { students: [] };
+  }
+
+  const ownerIdSet = new Set();
+  const addOwnersWithRole = async (roleDoc) => {
+    if (!roleDoc) return;
+    const rows = await User.find(
+      { roleIds: roleDoc._id, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    rows.forEach((u) => ownerIdSet.add(u._id));
+  };
+  await addOwnersWithRole(studentRole);
+  await addOwnersWithRole(candidateRole);
+
+  const ownerIds = [...ownerIdSet];
+  if (ownerIds.length === 0) {
+    return { students: [] };
+  }
+
+  const candidates = await Candidate.find({ owner: { $in: ownerIds } })
+    .select('fullName email employeeId owner assignedAgent companyAssignedEmail companyEmailProvider')
+    .populate({ path: 'assignedAgent', select: 'name email' })
+    .sort({ fullName: 1 })
+    .lean();
+
+  const studentsForOwners =
+    ownerIds.length > 0
+      ? await Student.find({ user: { $in: ownerIds } })
+          .select('_id user')
+          .lean()
+      : [];
+  const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
+
+  const ownerUsers =
+    ownerIds.length > 0
+      ? await User.find({ _id: { $in: ownerIds } })
+          .select('roleIds')
+          .lean()
+      : [];
+  const allRoleIds = [...new Set(ownerUsers.flatMap((u) => u.roleIds || []).map((id) => String(id)))];
+  const roleDocs =
+    allRoleIds.length > 0 ? await Role.find({ _id: { $in: allRoleIds } }).select('name').lean() : [];
+  const roleNameById = new Map(roleDocs.map((r) => [String(r._id), r.name]));
+
+  const ownerRoleLabelByOwnerId = new Map();
+  ownerUsers.forEach((u) => {
+    const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
+    const tags = [];
+    if (names.includes('Student')) tags.push('Student');
+    if (names.includes('Candidate')) tags.push('Candidate');
+    ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
+  });
+
+  const students = candidates.map((c) => {
+    const ownerId = c.owner ? String(c.owner) : '';
+    const ag = c.assignedAgent;
+    return {
+      id: String(c._id),
+      fullName: c.fullName,
+      email: c.email,
+      employeeId: c.employeeId ?? null,
+      ownerId,
+      ownerRoleLabel: ownerRoleLabelByOwnerId.get(ownerId) ?? '—',
+      studentId: studentIdByOwnerId.get(ownerId) ?? null,
+      companyAssignedEmail: c.companyAssignedEmail || '',
+      companyEmailProvider: c.companyEmailProvider || '',
+      assignedAgent: ag
+        ? {
+            id: String(ag._id),
+            name: ag.name,
+            email: ag.email,
+          }
+        : null,
+    };
+  });
+
+  return { students };
+};
+
+const assertAssignableStudentOrCandidateOwner = async (candidate) => {
+  const { getRoleByName } = await import('./role.service.js');
+  const studentRole = await getRoleByName('Student');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!studentRole && !candidateRole) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Candidate role must be configured');
+  }
+  const ownerOr = [];
+  if (studentRole) ownerOr.push({ roleIds: studentRole._id });
+  if (candidateRole) ownerOr.push({ roleIds: candidateRole._id });
+  const ownerEligible =
+    ownerOr.length > 0
+      ? await User.exists({
+          _id: candidate.owner,
+          status: { $in: ['active', 'pending'] },
+          $or: ownerOr,
+        })
+      : false;
+  if (!ownerEligible) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Company work email assignment applies only to users with the Student or Candidate role'
+    );
+  }
+};
+
+/**
+ * Set or clear company work email (same eligibility as agent assignment).
+ */
+const assignCompanyAssignedEmailToCandidate = async (candidateId, { companyAssignedEmail, companyEmailProvider }) => {
+  const candidate = await Candidate.findById(candidateId);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  await assertAssignableStudentOrCandidateOwner(candidate);
+
+  const normalized = normalizeCompanyAssignedEmailInput(companyAssignedEmail);
+  if (!normalized) {
+    candidate.set('companyAssignedEmail', '');
+    candidate.set('companyEmailProvider', '');
+  } else {
+    if (!validator.isEmail(normalized)) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid company work email');
+    }
+    candidate.companyAssignedEmail = normalized;
+    const prov = companyEmailProvider === null || companyEmailProvider === undefined ? '' : String(companyEmailProvider).trim();
+    candidate.companyEmailProvider = ['gmail', 'outlook', 'unknown'].includes(prov)
+      ? prov
+      : inferCompanyEmailProvider(normalized);
+  }
+
+  await candidate.save();
+  if (normalized) {
+    await syncCompanyEmailHubForCandidate(candidate);
+  }
+  const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
+  queueSopReminderCheckForCandidate(String(candidate._id));
+  return candidate;
+};
+
+const getCompanyEmailSettingsForUser = async (userId) => {
+  const u = await User.findById(userId).select('adminCandidateSettings').lean();
+  const enabled = u?.adminCandidateSettings?.companyEmailAssignmentEnabled === true;
+  return { companyEmailAssignmentEnabled: enabled };
+};
+
+const patchCompanyEmailSettingsForUser = async (userId, companyEmailAssignmentEnabled) => {
+  await User.updateOne(
+    { _id: userId },
+    { $set: { 'adminCandidateSettings.companyEmailAssignmentEnabled': !!companyEmailAssignmentEnabled } }
+  );
+  return getCompanyEmailSettingsForUser(userId);
+};
+
+/**
  * Update candidate joining date
  * @param {string} candidateId - Candidate ID
  * @param {Date} joiningDate - Joining date (can be null to clear)
@@ -2638,8 +2879,13 @@ export {
   addRecruiterFeedback,
   assignRecruiterToCandidate,
   listStudentAgentAssignments,
+  listCompanyEmailAssignments,
   listAgentUsersForAssignment,
   assignAgentToCandidate,
+  assignCompanyAssignedEmailToCandidate,
+  getCompanyEmailSettingsForUser,
+  patchCompanyEmailSettingsForUser,
+  warnCompanyEmailMismatchForOwner,
   // Joining and resign dates
   updateJoiningDate,
   updateResignDate,

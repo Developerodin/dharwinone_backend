@@ -82,6 +82,13 @@ const candidateSchema = new mongoose.Schema(
     employeeId: { type: String, trim: true, unique: true, sparse: true, index: true },
     fullName: { type: String, required: true, trim: true },
     email: { type: String, required: true, trim: true, lowercase: true, unique: true },
+    /** Company-provided work mailbox (Google Workspace / M365); distinct from login email. */
+    companyAssignedEmail: { type: String, trim: true, lowercase: true, default: '', index: true },
+    companyEmailProvider: {
+      type: String,
+      enum: ['gmail', 'outlook', 'unknown', ''],
+      default: '',
+    },
     phoneNumber: { type: String, required: true, trim: true },
     profilePicture: {
       url: { type: String, trim: true },
@@ -186,6 +193,9 @@ candidateSchema.pre('save', async function (next) {
 });
 
 candidateSchema.pre('save', function (next) {
+  if (this.isModified('companyAssignedEmail') && this.companyAssignedEmail) {
+    this.companyAssignedEmail = String(this.companyAssignedEmail).toLowerCase().trim();
+  }
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   if (this.resignDate) {

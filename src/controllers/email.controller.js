@@ -3,6 +3,12 @@ import catchAsync from '../utils/catchAsync.js';
 import config from '../config/config.js';
 import * as emailClientService from '../services/emailClient.service.js';
 import * as emailDraftOpenAIService from '../services/emailDraftOpenAI.service.js';
+import { getAssignedMailboxPolicy, toConnectionPolicyResponse } from '../services/emailConnectionPolicy.service.js';
+
+const getConnectionPolicy = catchAsync(async (req, res) => {
+  const policy = await getAssignedMailboxPolicy(req.user.id);
+  res.json(toConnectionPolicyResponse(policy));
+});
 
 const listGmailAccounts = catchAsync(async (req, res) => {
   const accounts = await emailClientService.listGmailAccounts(req.user.id);
@@ -24,9 +30,13 @@ const googleCallback = catchAsync(async (req, res) => {
     return res.redirect(`${config.frontendBaseUrl}/communication/email?error=invalid_state`);
   }
   try {
-    await emailClientService.handleGoogleCallback(code, userId);
+    await emailClientService.handleGoogleCallback(code, userId, state);
     return res.redirect(`${config.frontendBaseUrl}/communication/email?connected=gmail`);
   } catch (err) {
+    const codeErr = err?.code;
+    if (codeErr === 'MAILBOX_MISMATCH' || codeErr === 'POLICY_CHANGED' || codeErr === 'WRONG_PROVIDER') {
+      return res.redirect(`${config.frontendBaseUrl}/communication/email?error=${encodeURIComponent(codeErr)}`);
+    }
     return res.redirect(`${config.frontendBaseUrl}/communication/email?error=${encodeURIComponent(err.message || 'auth_failed')}`);
   }
 });
@@ -180,6 +190,7 @@ const createLabel = catchAsync(async (req, res) => {
 });
 
 export {
+  getConnectionPolicy,
   listGmailAccounts,
   getGoogleAuthUrl,
   googleCallback,

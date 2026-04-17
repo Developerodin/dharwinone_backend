@@ -52,6 +52,23 @@ router.get(
   candidateController.listStudentAgentAssignmentsHandler
 );
 
+/** Company work email roster (Settings hub) — candidates.manage */
+router.get(
+  '/company-email-assignments',
+  ...canManage,
+  validate(candidateValidation.listCompanyEmailAssignments),
+  candidateController.listCompanyEmailAssignmentsHandler
+);
+
+router
+  .route('/company-email-settings')
+  .get(...canManage, validate(candidateValidation.getCompanyEmailSettings), candidateController.getCompanyEmailSettings)
+  .patch(
+    ...canManage,
+    validate(candidateValidation.patchCompanyEmailSettings),
+    candidateController.patchCompanyEmailSettings
+  );
+
 /** Active-SOP incomplete steps across current candidates — candidates.manage only */
 router.get(
   '/sop-open-overview',
@@ -105,6 +122,14 @@ router
 router
   .route('/:candidateId/assign-agent')
   .post(...canManage, validate(candidateValidation.assignAgent), candidateController.assignAgent);
+
+router
+  .route('/:candidateId/company-assigned-email')
+  .post(
+    ...canManage,
+    validate(candidateValidation.assignCompanyAssignedEmail),
+    candidateController.assignCompanyAssignedEmail
+  );
 
 router
   .route('/week-off')

@@ -3,6 +3,9 @@ import { objectId } from './custom.validation.js';
 
 const listGmailAccounts = {};
 
+/** GET /v1/email/connection-policy — no query/body */
+const connectionPolicy = {};
+
 const getGoogleAuthUrl = {};
 
 const googleCallback = {
@@ -292,6 +295,7 @@ const adminPatchEmailSignature = {
 
 export {
   listGmailAccounts,
+  connectionPolicy,
   getGoogleAuthUrl,
   googleCallback,
   disconnectAccount,

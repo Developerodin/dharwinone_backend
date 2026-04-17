@@ -28,7 +28,11 @@ import {
   addRecruiterFeedback,
   assignRecruiterToCandidate,
   listStudentAgentAssignments,
+  listCompanyEmailAssignments,
   assignAgentToCandidate,
+  assignCompanyAssignedEmailToCandidate,
+  getCompanyEmailSettingsForUser,
+  patchCompanyEmailSettingsForUser,
   updateJoiningDate,
   updateResignDate,
   updateWeekOffForCandidates,
@@ -1355,6 +1359,55 @@ const assignAgent = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(candidate);
 });
 
+const listCompanyEmailAssignmentsHandler = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can view company email assignments');
+  }
+  const data = await listCompanyEmailAssignments();
+  res.send(data);
+});
+
+const getCompanyEmailSettings = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can view company email settings');
+  }
+  const uid = req.user.id || req.user._id;
+  const data = await getCompanyEmailSettingsForUser(uid);
+  res.send(data);
+});
+
+const patchCompanyEmailSettings = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can update company email settings');
+  }
+  const uid = req.user.id || req.user._id;
+  const { companyEmailAssignmentEnabled } = req.body;
+  const data = await patchCompanyEmailSettingsForUser(uid, companyEmailAssignmentEnabled);
+  res.send(data);
+});
+
+const assignCompanyAssignedEmail = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  if (!req.user.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can assign company work email');
+  }
+  const { candidateId } = req.params;
+  const candidate = await assignCompanyAssignedEmailToCandidate(candidateId, req.body);
+  const cid = candidate?._id ?? candidate?.id ?? candidateId;
+  await activityLogService.createActivityLog(
+    String(req.user.id || req.user._id),
+    ActivityActions.CANDIDATE_UPDATE,
+    EntityTypes.CANDIDATE,
+    String(cid),
+    { companyWorkEmailAssignmentUpdated: true },
+    req
+  );
+  res.status(httpStatus.OK).send(candidate);
+});
+
 export {
   addNote,
   addFeedback,
@@ -1363,6 +1416,10 @@ export {
   listStudentAgentAssignmentsHandler,
   getAgentAssignmentSummaryHandler,
   assignAgent,
+  listCompanyEmailAssignmentsHandler,
+  getCompanyEmailSettings,
+  patchCompanyEmailSettings,
+  assignCompanyAssignedEmail,
 };
 
 /**

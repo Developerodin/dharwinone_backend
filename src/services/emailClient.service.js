@@ -1,5 +1,7 @@
 import EmailAccount from '../models/emailAccount.model.js';
 import * as gmailProvider from './emailProviders/gmailProvider.js';
+import { warnCompanyEmailMismatchForOwner } from './candidate.service.js';
+import { getAssignedMailboxPolicy } from './emailConnectionPolicy.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 
@@ -21,14 +23,32 @@ export async function listGmailAccounts(userId) {
 }
 
 export async function getGoogleAuthUrl(userId) {
-  return gmailProvider.getAuthUrl(userId);
+  const policy = await getAssignedMailboxPolicy(userId);
+  if (policy.hardLockActive && !policy.allowedProviders.includes('gmail')) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Your organization requires Microsoft Outlook for this mailbox. Use Connect Outlook.',
+      true,
+      '',
+      { errorCode: 'WRONG_PROVIDER' }
+    );
+  }
+  return gmailProvider.getAuthUrl(userId, { policy });
 }
 
-export async function handleGoogleCallback(code, userId) {
-  return gmailProvider.handleCallback(code, userId);
+export async function handleGoogleCallback(code, userId, stateEncoded = '') {
+  const account = await gmailProvider.handleCallback(code, userId, stateEncoded);
+  await warnCompanyEmailMismatchForOwner(userId, account?.email).catch(() => {});
+  return account;
 }
 
 export async function disconnectGmailAccount(accountId, userId) {
+  const policy = await getAssignedMailboxPolicy(userId);
+  if (policy.hardLockActive) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Mailbox is locked by company policy.', true, '', {
+      errorCode: 'MAILBOX_LOCKED',
+    });
+  }
   const account = await getGmailAccountForUser(accountId, userId);
   account.status = 'revoked';
   await account.save();

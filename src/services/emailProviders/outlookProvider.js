@@ -6,6 +6,10 @@ import EmailAccount from '../../models/emailAccount.model.js';
 import logger from '../../config/logger.js';
 import { MAX_OUTLOOK_ACCOUNTS_PER_USER } from '../../constants/emailAccountLimits.js';
 import ApiError from '../../utils/ApiError.js';
+import {
+  getAssignedMailboxPolicy,
+  revokeAllOtherEmailAccounts,
+} from '../emailConnectionPolicy.service.js';
 
 const SCOPES = [
   'openid',
@@ -179,24 +183,64 @@ function resolveOutlookFolderId(labelId) {
   return null;
 }
 
+function parseOAuthState(stateEncoded) {
+  if (!stateEncoded) return {};
+  try {
+    return JSON.parse(Buffer.from(stateEncoded, 'base64url').toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Build Microsoft OAuth consent URL. State encodes userId for callback.
+ * Build Microsoft OAuth consent URL. State encodes userId (+ policy fingerprint when mailbox lock applies).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ policy?: Awaited<ReturnType<typeof getAssignedMailboxPolicy>> }} [options]
  */
-export function getAuthUrl(userId) {
+export function getAuthUrl(userId, options = {}) {
   const msalApp = createMsalApp();
-  const state = Buffer.from(JSON.stringify({ userId: userId.toString() }), 'utf8').toString('base64url');
-  return msalApp.getAuthCodeUrl({
+  const stateObj = { userId: userId.toString() };
+  const { policy } = options;
+  if (policy?.hardLockActive && policy.policyFingerprint) {
+    stateObj.policyFp = policy.policyFingerprint;
+  }
+  const state = Buffer.from(JSON.stringify(stateObj), 'utf8').toString('base64url');
+  const req = {
     scopes: SCOPES,
     redirectUri: config.microsoft.redirectUri,
     state,
-    prompt: 'select_account',
-  });
+    prompt: policy?.hardLockActive ? 'login' : 'select_account',
+  };
+  if (policy?.hardLockActive && policy.expectedEmail) {
+    req.loginHint = policy.expectedEmail;
+  }
+  return msalApp.getAuthCodeUrl(req);
 }
 
 /**
  * Exchange authorization code for tokens, create/update EmailAccount.
+ * @param {string} code
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {string} [stateEncoded]
  */
-export async function handleCallback(code, userId) {
+export async function handleCallback(code, userId, stateEncoded = '') {
+  const stateObj = parseOAuthState(stateEncoded);
+  const policy = await getAssignedMailboxPolicy(userId);
+
+  if (policy.hardLockActive && stateObj.policyFp && stateObj.policyFp !== policy.policyFingerprint) {
+    const msalAppEarly = createMsalApp();
+    const uriEarly = config.microsoft.redirectUri;
+    try {
+      await msalAppEarly.acquireTokenByCode({ code, scopes: SCOPES, redirectUri: uriEarly });
+    } catch (e) {
+      logger.debug('[Outlook] policy_changed exchange: %s', e?.message);
+    }
+    logger.warn('[mailbox_lock] mismatch_rejected reason=policy_changed userId=%s provider=outlook', String(userId));
+    const err = new Error('POLICY_CHANGED');
+    err.code = 'POLICY_CHANGED';
+    throw err;
+  }
+
   const msalApp = createMsalApp();
   const uri = config.microsoft.redirectUri;
   logger.info('[Outlook] handleCallback exchange: userId=%s, redirectUri=%s, codePrefix=%s', userId, uri, code?.substring(0, 10));
@@ -210,6 +254,20 @@ export async function handleCallback(code, userId) {
   const me = await client.api('/me').select('mail,userPrincipalName').get();
   const email = (me.mail || me.userPrincipalName || '').toLowerCase();
   if (!email) throw new Error('Could not fetch user email from Microsoft');
+
+  if (policy.hardLockActive) {
+    if (email !== policy.expectedEmail) {
+      logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=outlook', String(userId));
+      const err = new Error('MAILBOX_MISMATCH');
+      err.code = 'MAILBOX_MISMATCH';
+      throw err;
+    }
+    if (!policy.allowedProviders.includes('outlook')) {
+      const err = new Error('WRONG_PROVIDER');
+      err.code = 'WRONG_PROVIDER';
+      throw err;
+    }
+  }
 
   const tokenExpiry =
     tokenResponse.expiresOn != null
@@ -231,6 +289,14 @@ export async function handleCallback(code, userId) {
     existing.tokenExpiry = tokenExpiry;
     existing.status = 'active';
     await existing.save();
+    if (policy.hardLockActive) {
+      try {
+        await revokeAllOtherEmailAccounts(userId, existing._id);
+      } catch (revErr) {
+        logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+      }
+      logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
+    }
     return existing;
   }
 
@@ -239,13 +305,14 @@ export async function handleCallback(code, userId) {
     provider: 'outlook',
     status: 'active',
   });
-  if (activeOutlookCount >= MAX_OUTLOOK_ACCOUNTS_PER_USER) {
+  const skipCap = policy.hardLockActive && email === policy.expectedEmail;
+  if (!skipCap && activeOutlookCount >= MAX_OUTLOOK_ACCOUNTS_PER_USER) {
     throw new Error(
       'Only one Outlook account is allowed. Disconnect it to connect a different mailbox.'
     );
   }
 
-  return EmailAccount.create({
+  const created = await EmailAccount.create({
     user: userId,
     provider: 'outlook',
     email,
@@ -254,6 +321,15 @@ export async function handleCallback(code, userId) {
     tokenExpiry,
     status: 'active',
   });
+  if (policy.hardLockActive) {
+    try {
+      await revokeAllOtherEmailAccounts(userId, created._id);
+    } catch (revErr) {
+      logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+    }
+    logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
+  }
+  return created;
 }
 
 /**
