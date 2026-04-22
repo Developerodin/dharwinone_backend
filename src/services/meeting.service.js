@@ -6,11 +6,13 @@ import Job from '../models/job.model.js';
 import Offer from '../models/offer.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import config from '../config/config.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
+import { getPublicMeetingUrl } from '../utils/meetingPublicUrl.js';
+import { getMeetingByMeetingId } from './meetingLookup.service.js';
+import { deleteInterviewRoom } from './livekit.service.js';
 
 /**
  * Display name for join link / email (hosts, candidate, recruiter, or email local-part).
@@ -35,24 +37,6 @@ const resolveInviteeDisplayName = (meeting, emailAddress) => {
   }
   const local = em.split('@')[0];
   return local || 'Guest';
-};
-
-/**
- * Build public meeting URL for a meetingId; optional name/email prefill for LiveKit join.
- * @param {string} meetingId
- * @param {{ name?: string, email?: string }} [invite]
- * @returns {string}
- */
-const getPublicMeetingUrl = (meetingId, invite = {}) => {
-  const base = (config.frontendBaseUrl || '').replace(/\/$/, '');
-  const params = new URLSearchParams();
-  params.set('room', meetingId);
-  const n = typeof invite.name === 'string' ? invite.name.trim() : '';
-  const e = typeof invite.email === 'string' ? invite.email.trim() : '';
-  if (n) params.set('name', n);
-  if (e) params.set('email', e);
-  const qs = params.toString();
-  return base ? `${base}/join/room?${qs}` : `/join/room?${qs}`;
 };
 
 /**
@@ -182,26 +166,6 @@ const getMeetingById = async (id) => {
   if (!populated) return null;
   const doc = populated.toJSON();
   doc.publicMeetingUrl = getPublicMeetingUrl(populated.meetingId);
-  return doc;
-};
-
-/**
- * Get meeting by meetingId (for public URL lookup)
- * @param {string} meetingId
- * @returns {Promise<Meeting|null>}
- */
-const getMeetingByMeetingId = async (meetingId) => {
-  const meeting = await Meeting.findOne({ meetingId }).populate('createdBy');
-  if (meeting) {
-    const doc = meeting.toJSON();
-    doc.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
-    return doc;
-  }
-  const internal = await InternalMeeting.findOne({ meetingId }).populate('createdBy');
-  if (!internal) return null;
-  const doc = internal.toJSON();
-  doc.publicMeetingUrl = getPublicMeetingUrl(internal.meetingId);
-  doc.meetingKind = 'internal';
   return doc;
 };
 
@@ -489,6 +453,11 @@ const endMeetingByRoomPublic = async (roomName, hostEmail) => {
     }
     meeting.status = 'ended';
     await meeting.save();
+    try {
+      await deleteInterviewRoom(roomName);
+    } catch (err) {
+      logger.warn('[endMeetingByRoomPublic] LiveKit deleteInterviewRoom failed', { roomName, err: err?.message || err });
+    }
     const doc = meeting.toJSON();
     doc.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
     return doc;
@@ -504,6 +473,11 @@ const endMeetingByRoomPublic = async (roomName, hostEmail) => {
   }
   internal.status = 'ended';
   await internal.save();
+  try {
+    await deleteInterviewRoom(roomName);
+  } catch (err) {
+    logger.warn('[endMeetingByRoomPublic] LiveKit deleteInterviewRoom failed (internal)', { roomName, err: err?.message || err });
+  }
   const doc = internal.toJSON();
   doc.publicMeetingUrl = getPublicMeetingUrl(internal.meetingId);
   return doc;
@@ -530,6 +504,9 @@ const autoEndExpiredMeetings = async () => {
   for (const m of meetings) {
     try {
       await Meeting.updateOne({ _id: m._id }, { status: 'ended' });
+      await deleteInterviewRoom(m.meetingId).catch((err) =>
+        logger.warn(`[autoEndExpiredMeetings] LiveKit delete failed ${m.meetingId}:`, err?.message || err)
+      );
       count += 1;
       logger.info(`[autoEndExpiredMeetings] Auto-ended meeting ${m.meetingId} (${m.title})`);
     } catch (err) {

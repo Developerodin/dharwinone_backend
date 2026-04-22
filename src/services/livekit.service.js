@@ -11,7 +11,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { getMeetingByMeetingId } from './meeting.service.js';
+import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import Recording from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
@@ -99,7 +99,7 @@ const isParticipantHost = async (roomName, participantEmail) => {
  * @param {string} options.participantIdentity - Unique identity (usually user ID)
  * @param {string} options.participantEmail - Participant email (optional, for host check)
  * @param {boolean} options.forceFullPermissions - Force full permissions (for admitted participants)
- * @returns {Promise<{token: string, isHost: boolean, canPublish: boolean}>} JWT token and participant grants
+ * @returns {Promise<{token: string, isHost: boolean, canPublish: boolean, meetingEndAt: string|null}>} JWT token and participant grants
  */
 const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false }) => {
   logger.info('[LiveKit] generateAccessToken', { roomName, participantName, participantIdentity: participantIdentity || '(none)' });
@@ -128,9 +128,23 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     const startMs = meeting.scheduledAt ? new Date(meeting.scheduledAt).getTime() : null;
     const durationMinutes = Number(meeting.durationMinutes) > 0 ? Number(meeting.durationMinutes) : 60;
     const endMs = startMs ? startMs + durationMinutes * 60 * 1000 : null;
+    let participantsInRoom = null;
+
+    if (roomService) {
+      try {
+        participantsInRoom = await roomService.listParticipants(roomName);
+      } catch {
+        participantsInRoom = null;
+      }
+    }
 
     if (startMs && nowMs < startMs && !hostByEmail) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'Meeting has not started yet');
+      // Allow invitees to join early once the room is already opened (host joined first).
+      // Without this, participants can get stuck on "Meeting has not started yet" even after host starts.
+      const roomAlreadyOpened = Array.isArray(participantsInRoom) && participantsInRoom.length > 0;
+      if (!roomAlreadyOpened) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Meeting has not started yet');
+      }
     }
     if (endMs && nowMs > endMs) {
       throw new ApiError(httpStatus.GONE, 'Meeting has ended');
@@ -154,9 +168,11 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
 
     if (!hostByEmail && roomService && Number(meeting.maxParticipants) > 0) {
       try {
-        const participantsInRoom = await roomService.listParticipants(roomName);
-        const alreadyJoined = participantsInRoom.some((p) => p.identity === (participantIdentity || participantName));
-        if (!alreadyJoined && participantsInRoom.length >= Number(meeting.maxParticipants)) {
+        const currentParticipants = Array.isArray(participantsInRoom)
+          ? participantsInRoom
+          : await roomService.listParticipants(roomName);
+        const alreadyJoined = currentParticipants.some((p) => p.identity === (participantIdentity || participantName));
+        if (!alreadyJoined && currentParticipants.length >= Number(meeting.maxParticipants)) {
           throw new ApiError(httpStatus.CONFLICT, 'Meeting is full (max participants reached)');
         }
       } catch (error) {
@@ -195,8 +211,19 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   });
 
   const jwt = await token.toJwt();
-  logger.info('[LiveKit] Token generated successfully', { roomName, isHost });
-  return { token: jwt, isHost, canPublish };
+
+  /** Calendar end time for interview UI (scheduled start + duration). */
+  let meetingEndAt = null;
+  if (meeting?.scheduledAt) {
+    const startMs = new Date(meeting.scheduledAt).getTime();
+    if (!Number.isNaN(startMs)) {
+      const durMin = Number(meeting.durationMinutes) > 0 ? Number(meeting.durationMinutes) : 60;
+      meetingEndAt = new Date(startMs + durMin * 60 * 1000).toISOString();
+    }
+  }
+
+  logger.info('[LiveKit] Token generated successfully', { roomName, isHost, meetingEndAt });
+  return { token: jwt, isHost, canPublish, meetingEndAt };
 };
 
 /**
@@ -712,6 +739,33 @@ const disconnectAllParticipants = async (roomName) => {
   }
 };
 
+/**
+ * End LiveKit room for an interview (disconnect everyone, then delete room).
+ * Safe to call if the room no longer exists.
+ * @param {string} roomName
+ */
+const deleteInterviewRoom = async (roomName) => {
+  const rid = String(roomName || '').trim();
+  if (!rid || !roomService) {
+    logger.warn('[LiveKit] deleteInterviewRoom skipped', { roomName: rid, hasRoomService: !!roomService });
+    return { deleted: false };
+  }
+  await disconnectAllParticipants(rid);
+  try {
+    await roomService.deleteRoom(rid);
+    logger.info('[LiveKit] deleteRoom completed', { roomName: rid });
+    return { deleted: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/not found|does not exist|no room/i.test(msg)) {
+      logger.info('[LiveKit] deleteRoom no-op (already gone)', { roomName: rid });
+      return { deleted: false };
+    }
+    logger.warn('[LiveKit] deleteRoom failed', { roomName: rid, error: msg });
+    return { deleted: false };
+  }
+};
+
 export { 
   generateAccessToken,
   generateSupportCameraToken,
@@ -723,6 +777,7 @@ export {
   removeParticipant,
   getRoomParticipantCount,
   disconnectAllParticipants,
+  deleteInterviewRoom,
   isParticipantHost,
   isParticipantAdmitted,
 };
