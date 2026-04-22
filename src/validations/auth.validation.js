@@ -49,6 +49,8 @@ const registerCandidate = {
     password: Joi.string().required().custom(password),
     name: Joi.string().required(),
     phoneNumber: Joi.string().allow('').optional(),
+    /** HMAC v1 ref= token from tracked referral link */
+    ref: Joi.string().trim().allow('').optional(),
   }),
 };
 

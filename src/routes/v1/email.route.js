@@ -124,37 +124,37 @@ router.patch(
 
 router.get(
   '/admin/templates',
-  requirePermissions('users.manage'),
+  requireAnyOfPermissions('email-templates-admin.read', 'email-templates-admin.manage'),
   validate(emailValidation.adminListEmailTemplates),
   emailPreferencesController.adminListTemplates
 );
 router.post(
   '/admin/templates',
-  requirePermissions('users.manage'),
+  requirePermissions('email-templates-admin.manage'),
   validate(emailValidation.adminCreateEmailTemplate),
   emailPreferencesController.adminCreateTemplate
 );
 router.get(
   '/admin/signature',
-  requirePermissions('users.manage'),
+  requireAnyOfPermissions('email-templates-admin.read', 'email-templates-admin.manage'),
   validate(emailValidation.adminGetEmailSignature),
   emailPreferencesController.adminGetSignature
 );
 router.patch(
   '/admin/templates/:templateId',
-  requirePermissions('users.manage'),
+  requirePermissions('email-templates-admin.manage'),
   validate(emailValidation.adminUpdateEmailTemplate),
   emailPreferencesController.adminUpdateTemplate
 );
 router.delete(
   '/admin/templates/:templateId',
-  requirePermissions('users.manage'),
+  requirePermissions('email-templates-admin.manage'),
   validate(emailValidation.adminDeleteEmailTemplate),
   emailPreferencesController.adminDeleteTemplate
 );
 router.patch(
   '/admin/signature',
-  requirePermissions('users.manage'),
+  requirePermissions('email-templates-admin.manage'),
   validate(emailValidation.adminPatchEmailSignature),
   emailPreferencesController.adminPatchSignature
 );

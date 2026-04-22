@@ -164,6 +164,37 @@ const candidateSchema = new mongoose.Schema(
     // Position (ref to Position - Java Developer, Data Analyst, etc.) - used during onboarding
     position: { type: mongoose.Schema.Types.ObjectId, ref: 'Position', default: null, index: true },
     reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    /** Referral attribution (HMAC ref token claim at registration / job flows). */
+    referredByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    referralContext: {
+      type: String,
+      enum: ['SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY'],
+      default: null,
+    },
+    referralJobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
+    /** Denormalized job title for list/export when ref is job-scoped. */
+    referralJobTitle: { type: String, trim: true, default: null },
+    referredAt: { type: Date, default: null, index: true },
+    referralBatchId: { type: String, trim: true, default: null },
+    /** Idempotency for token verify (FVCW / revocation lookup). */
+    referralJti: { type: String, trim: true, default: null, index: true, sparse: true },
+    /** When set, first successful claim is final unless admin overrides. */
+    attributionLockedAt: { type: Date, default: null },
+    /** GDPR: suppress personal attribution in UI while keeping audit internally if needed. */
+    referralAttributionAnonymised: { type: Boolean, default: false },
+    referralPipelineStatus: {
+      type: String,
+      enum: ['profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending'],
+      default: 'pending',
+    },
+    /** Most recent override audit (older chain can move to collection later). */
+    referralLastOverride: {
+      previousReferredByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      newReferredByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      reason: { type: String, trim: true },
+      overriddenBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      overriddenAt: { type: Date },
+    },
   },
   { timestamps: true }
 );
@@ -220,6 +251,7 @@ candidateSchema.pre('save', async function (next) {
   next();
 });
 
+candidateSchema.index({ referredByUserId: 1, referredAt: -1 });
 candidateSchema.index({ 'skills.name': 'text' });
 candidateSchema.plugin(toJSON);
 candidateSchema.plugin(paginate);

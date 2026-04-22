@@ -2,7 +2,10 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
-import requireUsersManageOrAdministrator from '../../middlewares/requireUsersManageOrAdministrator.js';
+import {
+  requireAnyOfPermissionsOrAdministrator,
+  requirePermissionOrAdministrator,
+} from '../../middlewares/requirePermissionOrAdministrator.js';
 import * as bolnaValidation from '../../validations/bolna.validation.js';
 import * as bolnaController from '../../controllers/bolna.controller.js';
 import * as bolnaCandidateAgentSettingsController from '../../controllers/bolnaCandidateAgentSettings.controller.js';
@@ -11,10 +14,14 @@ const router = express.Router();
 
 router
   .route('/candidate-agent-settings')
-  .get(auth(), requireUsersManageOrAdministrator, bolnaCandidateAgentSettingsController.getBolnaCandidateAgentSettings)
+  .get(
+    auth(),
+    requireAnyOfPermissionsOrAdministrator('bolna-voice-agent.read', 'bolna-voice-agent.manage'),
+    bolnaCandidateAgentSettingsController.getBolnaCandidateAgentSettings
+  )
   .patch(
     auth(),
-    requireUsersManageOrAdministrator,
+    requirePermissionOrAdministrator('bolna-voice-agent.manage'),
     validate(bolnaValidation.patchBolnaCandidateAgentSettings),
     bolnaCandidateAgentSettingsController.patchBolnaCandidateAgentSettings
   );

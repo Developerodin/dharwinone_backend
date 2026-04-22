@@ -47,7 +47,7 @@ export const permissionAliases = {
   'training.analytics': ['training.analytics', 'training.analytics:view', 'training.modules.read', 'modules.read'],
   // Attendance: students access their own via requireAttendanceAccess (ownership); grant so Student role can see attendance nav
   'training.attendance.read': ['training.attendance.read', 'training.attendance:view', 'students.read', 'students.manage'],
-  // Attendance assignment (holidays, leave, regularize, week-off): admins (students.manage) OR agents (attendance.manage)
+  // Attendance assignment (holidays, leave, regularize, week-off): admins (students.manage) OR agents (training attendance.manage) OR Settings settings.attendance:* write → attendance.manage
   'attendance.assign': ['students.manage', 'attendance.manage'],
   // ATS candidates: ats.candidates:view -> candidates.read, ats.candidates:create,edit,delete -> candidates.manage
   // Interview scheduling needs candidate picklist for agents who only have ats.interviews.*
@@ -141,9 +141,39 @@ export const permissionAliases = {
   'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
   'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],
   'chats.manage': ['chats.manage', 'communication.chats:create,edit,delete', 'communication.chats:view,create,edit,delete'],
-  // Email / Outlook (communication.emails:* → emails.read / emails.manage in auth context)
-  'emails.read': ['emails.read', 'communication.emails:view', 'communication.emails:view,create,edit,delete'],
-  'emails.manage': ['emails.manage', 'communication.emails:create,edit,delete', 'communication.emails:view,create,edit,delete'],
+  // Email / Outlook (communication.emails:* → emails.read / emails.manage) + Settings "My email templates" (settings.email-templates:* → email-templates.*)
+  'emails.read': [
+    'emails.read',
+    'communication.emails:view',
+    'communication.emails:view,create,edit,delete',
+    'email-templates.read',
+    'email-templates.manage',
+  ],
+  'emails.manage': [
+    'emails.manage',
+    'communication.emails:create,edit,delete',
+    'communication.emails:view,create,edit,delete',
+    'email-templates.manage',
+  ],
+  // Settings → All agents' email templates (admin). Legacy: these routes used users.manage before the matrix; keep grant until all roles have settings.email-templates-admin.
+  'email-templates-admin.read': [
+    'email-templates-admin.read',
+    'email-templates-admin.manage',
+    'users.manage',
+  ],
+  'email-templates-admin.manage': ['email-templates-admin.manage', 'users.manage'],
+  // Company work email (Settings). Legacy: hub routes used candidates.manage.
+  'company-email.read': ['company-email.read', 'company-email.manage', 'candidates.manage'],
+  'company-email.manage': ['company-email.manage', 'candidates.manage'],
+  // Employee SOP template editor (Settings). Legacy: route used candidates.manage for template CRUD.
+  'candidate-sop.read': ['candidate-sop.read', 'candidate-sop.manage', 'candidates.manage'],
+  'candidate-sop.manage': ['candidate-sop.manage', 'candidates.manage'],
+  // Settings → Agents. Legacy: voice agent routes used users.manage.
+  'agents.read': ['agents.read', 'agents.manage', 'users.manage'],
+  'agents.manage': ['agents.manage', 'users.manage'],
+  // Settings → Bolna candidate agent prompts. Legacy: used users.manage / Administrator.
+  'bolna-voice-agent.read': ['bolna-voice-agent.read', 'bolna-voice-agent.manage', 'users.manage'],
+  'bolna-voice-agent.manage': ['bolna-voice-agent.manage', 'users.manage'],
   // File manager API (communication.files-storage:* → files-storage.read / files-storage.manage)
   'files-storage.read': ['files-storage.read', 'communication.files-storage:view', 'communication.files-storage:view,create,edit,delete'],
   'files-storage.manage': [
@@ -165,6 +195,12 @@ export const permissionAliases = {
     'modules.manage',
     'teams.manage',
     'users.manage',
+    'email-templates.manage',
+    'email-templates-admin.manage',
+    'company-email.manage',
+    'candidate-sop.manage',
+    'agents.manage',
+    'bolna-voice-agent.manage',
   ],
   // Support tickets: support.tickets:view → tickets.read, support.tickets:create,edit,delete → tickets.manage
   'supportTickets.read': [

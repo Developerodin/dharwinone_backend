@@ -311,6 +311,8 @@ const publicApplyToJob = {
       'any.required': 'Country code is required',
     }),
     coverLetter: Joi.string().optional().trim().allow('', null),
+    /** HMAC v1 `ref` from job share URL ?ref= (must match job id in token for job-sourced links). */
+    ref: Joi.string().trim().allow('', null).optional(),
     // Multipart parsers can surface file field names on req.body while the files
     // themselves are available on req.files via multer.
     resume: Joi.any().optional(),

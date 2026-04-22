@@ -18,6 +18,7 @@ import {
   deleteJobTemplateById,
   createJobFromTemplate,
   applyCandidateToJob,
+  applyJobReferralFromRef,
 } from '../services/job.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
@@ -318,6 +319,16 @@ const browseApply = catchAsync(async (req, res) => {
   }
 
   const application = await applyCandidateToJob(jobId, candidate._id, userId, req.user);
+  const job = await getJobById(jobId);
+  const referralRef = req.body?.ref;
+  await applyJobReferralFromRef({
+    jobId,
+    job,
+    candidate,
+    applicantEmail: emailNorm || req.user.email,
+    referralRef,
+    req,
+  });
   res.status(httpStatus.CREATED).send({ application, candidateId: candidate._id });
 });
 
@@ -412,11 +423,7 @@ const publicApplyToJob = catchAsync(async (req, res) => {
   // Import publicApplyToJobService dynamically
   const { publicApplyToJobService } = await import('../services/job.service.js');
   
-  const result = await publicApplyToJobService(
-    req.params.jobId,
-    req.body,
-    req.files
-  );
+  const result = await publicApplyToJobService(req.params.jobId, req.body, req.files, { req });
   
   res.status(httpStatus.CREATED).send(result);
 });

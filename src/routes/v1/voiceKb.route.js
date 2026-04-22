@@ -3,7 +3,10 @@ import multer from 'multer';
 import config from '../../config/config.js';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requireUsersManageOrAdministrator from '../../middlewares/requireUsersManageOrAdministrator.js';
+import {
+  requireAnyOfPermissionsOrAdministrator,
+  requirePermissionOrAdministrator,
+} from '../../middlewares/requirePermissionOrAdministrator.js';
 import * as voiceAgentValidation from '../../validations/voiceAgent.validation.js';
 import * as voiceKbController from '../../controllers/voiceKb.controller.js';
 
@@ -18,7 +21,7 @@ const router = express.Router();
 router.post(
   '/query',
   auth(),
-  requireUsersManageOrAdministrator,
+  requireAnyOfPermissionsOrAdministrator('agents.read', 'agents.manage'),
   validate(voiceAgentValidation.kbQuery),
   voiceKbController.postKbQuery
 );
@@ -26,7 +29,7 @@ router.post(
 router.post(
   '/:agentId/documents/pdf',
   auth(),
-  requireUsersManageOrAdministrator,
+  requirePermissionOrAdministrator('agents.manage'),
   validate(voiceAgentValidation.kbPdfIngest),
   upload.single('file'),
   voiceKbController.postPdfDocument
@@ -35,7 +38,7 @@ router.post(
 router.post(
   '/:agentId/documents/text',
   auth(),
-  requireUsersManageOrAdministrator,
+  requirePermissionOrAdministrator('agents.manage'),
   validate(voiceAgentValidation.kbTextIngest),
   voiceKbController.postTextDocument
 );
@@ -43,7 +46,7 @@ router.post(
 router.post(
   '/:agentId/documents/url',
   auth(),
-  requireUsersManageOrAdministrator,
+  requirePermissionOrAdministrator('agents.manage'),
   validate(voiceAgentValidation.kbUrlIngest),
   voiceKbController.postUrlDocument
 );
@@ -51,7 +54,7 @@ router.post(
 router.get(
   '/:agentId/documents',
   auth(),
-  requireUsersManageOrAdministrator,
+  requireAnyOfPermissionsOrAdministrator('agents.read', 'agents.manage'),
   validate(voiceAgentValidation.kbListDocs),
   voiceKbController.listDocuments
 );
@@ -59,7 +62,7 @@ router.get(
 router.delete(
   '/documents/:documentId',
   auth(),
-  requireUsersManageOrAdministrator,
+  requirePermissionOrAdministrator('agents.manage'),
   validate(voiceAgentValidation.kbDeleteDoc),
   voiceKbController.deleteDocument
 );

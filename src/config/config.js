@@ -176,6 +176,11 @@ const envVarsSchema = Joi.object()
     EXPOSE_OPENAPI: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     /** bcrypt salt rounds for password hashing (default 12). */
     BCRYPT_SALT_ROUNDS: Joi.number().integer().min(8).max(20).optional().default(12),
+
+    /** HMAC secret for referral link tokens; defaults to JWT_SECRET at runtime if unset. */
+    REFERRAL_LINK_SECRET: Joi.string().min(16).optional().allow('').description('Referral ref= token signing'),
+    /** Canonical org key embedded in referral payload (single-tenant default). */
+    REFERRAL_DEFAULT_ORG_ID: Joi.string().trim().optional().default('default'),
   })
   .unknown();
 
@@ -397,6 +402,14 @@ const config = {
     envVars.NODE_ENV !== 'production' ||
     ['true', '1'].includes(String(envVars.EXPOSE_OPENAPI || '').trim().toLowerCase()),
   bcryptSaltRounds: envVars.BCRYPT_SALT_ROUNDS ?? 12,
+  referral: {
+    linkSecret: (() => {
+      const s = (envVars.REFERRAL_LINK_SECRET || '').trim();
+      if (s.length >= 16) return s;
+      return envVars.JWT_SECRET;
+    })(),
+    defaultOrgId: (envVars.REFERRAL_DEFAULT_ORG_ID || 'default').trim() || 'default',
+  },
 };
 
 // Production: warn if email/share links would use localhost

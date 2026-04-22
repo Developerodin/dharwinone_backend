@@ -662,14 +662,75 @@ const createJobFromTemplate = async (templateId, createdById, jobData) => {
 };
 
 /**
+ * Apply HMAC `ref` from a job share URL (?ref=) to the candidate after a successful job application.
+ * Used by public apply and authenticated browse apply.
+ * @param {object} params
+ * @param {import('mongoose').Types.ObjectId|string} params.jobId
+ * @param {object} params.job - job document (for title / id)
+ * @param {import('mongoose').Document} params.candidate
+ * @param {string} params.applicantEmail
+ * @param {string|undefined|null} params.referralRef
+ * @param {import('express').Request} [params.req]
+ */
+const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, referralRef, req }) => {
+  if (!referralRef || !String(referralRef).trim() || !candidate?._id) {
+    return;
+  }
+  const emailNormalized = String(applicantEmail || '')
+    .toLowerCase()
+    .trim();
+  const { verifyReferralToken, applyReferralToCandidate, logReferralEvent } = await import(
+    './referralAttribution.service.js'
+  );
+  const { createActivityLog } = await import('./activityLog.service.js');
+  const { ActivityActions, EntityTypes } = await import('../config/activityLog.js');
+  const v = verifyReferralToken(String(referralRef).trim());
+  if (v.ok) {
+    const jobScoped = v.data.s === 'job' && v.data.j;
+    if (jobScoped && String(v.data.j) !== String(jobId)) {
+      logReferralEvent('referral_job_mismatch', { jobId: String(jobId), tokenJob: String(v.data.j) });
+    } else {
+      const r = await applyReferralToCandidate(candidate._id, emailNormalized, v.data);
+      if (r.applied) {
+        const cRef = await Candidate.findById(candidate._id);
+        if (cRef) {
+          cRef.referralJobTitle = job?.title || null;
+          if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
+          cRef.referralPipelineStatus = 'applied';
+          await cRef.save();
+        }
+        try {
+          await createActivityLog(
+            v.data.t,
+            ActivityActions.REFERRAL_CLAIM,
+            EntityTypes.CANDIDATE,
+            candidate._id,
+            { jti: v.data.jti, source: v.data.s, org: v.data.o, jobId: String(jobId) },
+            req
+          );
+        } catch (e) {
+          logReferralEvent('referral_activity_log_failed', { message: e?.message });
+        }
+      } else {
+        logReferralEvent('referral_claim_skipped', { reason: r.reason, candidateId: String(candidate._id) });
+      }
+    }
+  } else {
+    logReferralEvent('referral_token_invalid', { error: v.error });
+  }
+};
+
+/**
  * Public apply to job service
  * Creates user, candidate with resume, and job application in one transaction
  * Returns auth tokens for auto-login
+ * @param {object} [options]
+ * @param {import('express').Request} [options.req] - for referral activity log
  */
-const publicApplyToJobService = async (jobId, applicationData, files) => {
+const publicApplyToJobService = async (jobId, applicationData, files, options = {}) => {
   // Import necessary services
   const User = (await import('../models/user.model.js')).default;
-  const { generateAuthTokens, generateResetPasswordToken } = await import('./token.service.js');
+  const { generateVerifyEmailToken } = await import('./token.service.js');
 
   // Validate job exists and is Active
   const job = await getJobById(jobId);
@@ -680,7 +741,7 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'This job is no longer accepting applications');
   }
 
-  const { fullName, email, password, phoneNumber, countryCode, coverLetter } = applicationData;
+  const { fullName, email, password, phoneNumber, countryCode, coverLetter, ref: referralRef } = applicationData;
   const emailNormalized = String(email || '').toLowerCase().trim();
 
   // Check if user with this email already exists
@@ -692,22 +753,15 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
     );
   }
 
-  // Get Student role for auto-assignment
-  const { getRoleByName } = await import('./role.service.js');
-  const studentRole = await getRoleByName('Student');
-  if (!studentRole) {
-    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
-  }
-
-  // Create new user with Student role (active status for auto-login)
+  // Match share-candidate invite: pending account, no roles until an admin assigns them
   const user = await User.create({
     name: fullName,
     email: emailNormalized,
     password,
     phoneNumber,
     countryCode,
-    roleIds: [studentRole._id], // Assign Student role
-    status: 'active',
+    roleIds: [],
+    status: 'pending',
   });
 
   // Handle file uploads to S3
@@ -822,31 +876,27 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
     } : null 
   });
 
-  // Generate auth tokens for auto-login
-  const tokens = await generateAuthTokens(user);
+  await applyJobReferralFromRef({
+    jobId,
+    job,
+    candidate,
+    applicantEmail: emailNormalized,
+    referralRef,
+    req: options.req,
+  });
 
-  // Send welcome email with secure account setup instructions (async, don't wait)
-  const config = (await import('../config/config.js')).default;
-  const { sendJobApplicationWelcomeEmail } = await import('./email.service.js');
-  const loginUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/authentication/sign-in/`;
-  const resetPasswordToken = await generateResetPasswordToken(user.email);
-  const resetPasswordUrl = `${config.frontendBaseUrl || 'http://localhost:3001'}/reset-password?token=${resetPasswordToken}`;
-  
-  sendJobApplicationWelcomeEmail(user.email, {
-    fullName,
-    email: user.email,
-    jobTitle: job.title,
-    companyName: job.organisation?.name || 'Company',
-    loginUrl,
-    resetPasswordUrl,
-  }).catch((err) => {
-    logger.error('Failed to send welcome email:', err);
-    // Don't fail the application if email fails
+  const verifyEmailToken = await generateVerifyEmailToken(user);
+  const { sendVerificationEmail } = await import('./email.service.js');
+  await sendVerificationEmail(user.email, verifyEmailToken, {
+    req: options.req,
+    recipientName: fullName,
+    accountContext: 'job application',
   });
 
   // Initiate verification call via Bolna (async, don't wait) — skip for external listings
   if (phoneNumber && countryCode && job.jobOrigin !== 'external') {
     try {
+      const config = (await import('../config/config.js')).default;
       const { initiateCandidateVerificationCall } = await import('./bolnaCandidateVerification.service.js');
 
       logger.info(`Processing phone for ${fullName}: Raw="${phoneNumber}", Country="${countryCode}"`);
@@ -948,6 +998,7 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      status: user.status,
     },
     candidate: {
       id: candidate._id,
@@ -958,7 +1009,8 @@ const publicApplyToJobService = async (jobId, applicationData, files) => {
       status: application.status,
       jobTitle: application.job?.title,
     },
-    tokens,
+    message:
+      'Application received. Your account is pending activation—verify your email, then an administrator can activate your access. You can sign in once your account is active.',
   };
 };
 
@@ -980,4 +1032,5 @@ export {
   applyCandidateToJob,
   isOwnerOrAdmin,
   publicApplyToJobService,
+  applyJobReferralFromRef,
 };

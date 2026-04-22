@@ -153,6 +153,11 @@ const defaultRoutes = [
     path: '/candidates',
     route: candidateRoute,
   },
+  /** Alias: same handlers as /candidates (Phase B; no DB change). */
+  {
+    path: '/employees',
+    route: candidateRoute,
+  },
   {
     path: '/candidate-sop-templates',
     route: candidateSopTemplateRoute,

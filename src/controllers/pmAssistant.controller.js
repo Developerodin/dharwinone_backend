@@ -7,6 +7,17 @@ const previewTaskBreakdown = catchAsync(async (req, res) => {
     extraBrief: req.body?.extraBrief,
     feedback: req.body?.feedback,
     priorTasks: req.body?.priorTasks,
+    breakdownContext: req.body?.breakdownContext,
+  });
+  res.status(httpStatus.OK).send(out);
+});
+
+const refineTaskBreakdown = catchAsync(async (req, res) => {
+  const out = await pmAssistantService.refineTaskBreakdown(req.params.projectId, req.user, {
+    previousPreviewId: req.body?.previousPreviewId,
+    feedback: req.body?.feedback,
+    lockedTaskIds: req.body?.lockedTaskIds,
+    breakdownContextOverride: req.body?.breakdownContextOverride,
   });
   res.status(httpStatus.OK).send(out);
 });
@@ -16,6 +27,7 @@ const applyTaskBreakdown = catchAsync(async (req, res) => {
   const out = await pmAssistantService.applyTaskBreakdown(req.params.projectId, req.user, {
     tasks: req.body.tasks,
     idempotencyKey,
+    previewId: req.body?.previewId,
   });
   res.status(httpStatus.CREATED).send(out);
 });
@@ -50,8 +62,22 @@ const applyAssignmentRun = catchAsync(async (req, res) => {
 const bootstrapSmartTeam = catchAsync(async (req, res) => {
   const out = await pmAssistantService.bootstrapSmartTeamForProject(req.params.projectId, req.user, {
     extraBrief: req.body?.extraBrief,
+    breakdownContext: req.body?.breakdownContext,
   });
   res.status(httpStatus.OK).send(out);
+});
+
+const submitAssignmentRunFeedback = catchAsync(async (req, res) => {
+  const out = await pmAssistantService.submitAssignmentRunFeedback(
+    req.params.projectId,
+    req.params.runId,
+    req.user,
+    {
+      items: req.body?.items,
+      submittedAt: req.body?.submittedAt,
+    }
+  );
+  res.status(httpStatus.ACCEPTED).send(out);
 });
 
 const enhanceProjectBrief = catchAsync(async (req, res) => {
@@ -79,6 +105,7 @@ const generateAssignmentRowJobDraft = catchAsync(async (req, res) => {
 
 export {
   previewTaskBreakdown,
+  refineTaskBreakdown,
   applyTaskBreakdown,
   createAssignmentRun,
   getAssignmentRun,
@@ -86,6 +113,7 @@ export {
   approveAssignmentRun,
   applyAssignmentRun,
   bootstrapSmartTeam,
+  submitAssignmentRunFeedback,
   enhanceProjectBrief,
   generateAssignmentRowJobDraft,
 };

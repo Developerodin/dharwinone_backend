@@ -1,10 +1,13 @@
 import httpStatus from 'http-status';
 import crypto from 'crypto';
+import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import Project from '../models/project.model.js';
 import Task from '../models/task.model.js';
 import TaskBreakdownIdempotency from '../models/taskBreakdownIdempotency.model.js';
+import TaskBreakdownPreview from '../models/taskBreakdownPreview.model.js';
+import AssignmentRunFeedback from '../models/assignmentRunFeedback.model.js';
 import Candidate from '../models/candidate.model.js';
 import AssignmentRun from '../models/assignmentRun.model.js';
 import AssignmentRow from '../models/assignmentRow.model.js';
@@ -113,33 +116,154 @@ function hashIdempotencyKey(key) {
   return crypto.createHash('sha256').update(String(key)).digest('hex');
 }
 
-export async function previewTaskBreakdown(projectId, user, { extraBrief, feedback, priorTasks } = {}) {
+const TASK_BREAKDOWN_PREVIEW_MAX = 30;
+const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
+
+const PROJECT_TYPES = new Set(['software', 'marketing', 'operations', 'research', 'design', 'other']);
+const TEAM_SIZE_HINTS = new Set(['1-3', '4-8', '9+']);
+const BREAKDOWN_CONSTRAINTS = new Set([
+  'budget_cap',
+  'specific_people',
+  'fixed_tech_stack',
+  'regulatory_compliance',
+  'external_dependency',
+  'hard_deadline',
+]);
+
+/**
+ * @param {unknown} raw
+ * @returns {object|null}
+ */
+function normalizeBreakdownContextInput(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = /** @type {Record<string, unknown>} */ (raw);
+  const projectType = typeof o.projectType === 'string' ? o.projectType.trim() : '';
+  if (!PROJECT_TYPES.has(projectType)) return null;
+  const out = { projectType };
+  if (typeof o.deadline === 'string' && o.deadline.trim()) {
+    out.deadline = o.deadline.trim().slice(0, 32);
+  }
+  if (typeof o.teamSizeHint === 'string' && TEAM_SIZE_HINTS.has(o.teamSizeHint)) {
+    out.teamSizeHint = o.teamSizeHint;
+  }
+  if (Array.isArray(o.keyDeliverables)) {
+    out.keyDeliverables = o.keyDeliverables
+      .map((x) => String(x).trim())
+      .filter(Boolean)
+      .slice(0, 10)
+      .map((s) => s.slice(0, 80));
+  }
+  if (Array.isArray(o.constraints)) {
+    out.constraints = [...new Set(o.constraints.map(String))].filter((c) => BREAKDOWN_CONSTRAINTS.has(c));
+  }
+  if (typeof o.extraNotes === 'string' && o.extraNotes.trim()) {
+    out.extraNotes = o.extraNotes.trim().slice(0, 500);
+  }
+  return out;
+}
+
+/**
+ * @param {object|null|undefined} base
+ * @param {object|null|undefined} over
+ */
+function mergeBreakdownContext(base, over) {
+  if (!over || typeof over !== 'object') return base || null;
+  if (!base || typeof base !== 'object') return { ...over };
+  const a = /** @type {Record<string, unknown>} */ (base);
+  const b = /** @type {Record<string, unknown>} */ (over);
+  return {
+    ...a,
+    ...b,
+    projectType: PROJECT_TYPES.has(String(b.projectType)) ? b.projectType : a.projectType,
+    keyDeliverables: b.keyDeliverables !== undefined ? b.keyDeliverables : a.keyDeliverables,
+    constraints: b.constraints !== undefined ? b.constraints : a.constraints,
+  };
+}
+
+/**
+ * @param {Array<{ requiredSkills?: string[] }>} tasks
+ * @param {object|null} ctx
+ */
+function computeTaskBreakdownConfidence(tasks, ctx) {
+  let score = 0;
+  if (ctx?.deadline) score += 0.2;
+  if (ctx?.teamSizeHint) score += 0.15;
+  const dels = Array.isArray(ctx?.keyDeliverables) ? ctx.keyDeliverables : [];
+  if (dels.length >= 2) score += 0.2;
+  if (ctx?.projectType && ctx.projectType !== 'other') score += 0.2;
+  const cons = Array.isArray(ctx?.constraints) ? ctx.constraints : [];
+  if (cons.length >= 1) score += 0.1;
+  const list = Array.isArray(tasks) ? tasks : [];
+  const allSkills =
+    list.length > 0 && list.every((t) => Array.isArray(t?.requiredSkills) && t.requiredSkills.length >= 1);
+  if (allSkills) score += 0.15;
+  return Math.min(1, Math.max(0, score));
+}
+
+/**
+ * @param {object[]} tasks
+ */
+function attachPreviewTaskIds(tasks) {
+  return tasks.map((t) => ({ ...t, id: randomUUID() }));
+}
+
+async function persistTaskBreakdownPreview({ projectId, userId, breakdownContext, tasks }) {
+  const previewId = randomUUID();
+  const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+  await TaskBreakdownPreview.create({
+    previewId,
+    projectId,
+    userId,
+    state: 'open',
+    breakdownContext: breakdownContext || null,
+    tasks,
+    expiresAt,
+  });
+  return previewId;
+}
+
+export async function previewTaskBreakdown(projectId, user, { extraBrief, feedback, priorTasks, breakdownContext: bcIn } = {}) {
   ensurePmAssistantEnabled();
   ensureOpenAIConfigured();
   const project = await getProjectById(projectId);
   await assertProjectOwnerOrAdmin(project, user);
+  const uid = user.id || user._id;
+  const userOid = mongoose.Types.ObjectId.isValid(String(uid)) ? new mongoose.Types.ObjectId(String(uid)) : uid;
+  const projectOid = project._id;
 
-  const existingTasks = await Task.find({ projectId })
+  const bc = normalizeBreakdownContextInput(bcIn);
+  const extraBriefText = typeof extraBrief === 'string' ? extraBrief.trim().slice(0, 2000) : '';
+  const mergedNote =
+    !bc && extraBriefText
+      ? extraBriefText
+      : [bc?.extraNotes, !bc ? extraBriefText : ''].filter(Boolean).join('\n\n').trim().slice(0, 2000);
+
+  const existingTasks = await Task.find({ projectId: projectOid })
     .select('title status')
     .limit(80)
     .lean();
 
+  const hasDraftIteration = Array.isArray(priorTasks) && priorTasks.length > 0;
+  const userFeedbackForModel = hasDraftIteration && typeof feedback === 'string' ? feedback.trim().slice(0, 1000) : '';
+
   const specialistSlugHint = CANDIDATE_PROJECT_TASK_TYPE_SLUGS.map((s) => `"${s}"`).join(', ');
   const system = `You are a project management assistant. Output a single JSON object with key "tasks" (array).
 Each task: { "title": string (required), "description": string (optional), "status": one of "new","todo","on_going","in_review","completed" (default "new"), "tags": string[], "requiredSkills": string[] (optional, up to 15 short skill/role hints for staffing e.g. "Python", "React", "Node.js", "LLM evaluation"), "order": number (optional, integer rank for display order, lower first) }.
-Populate "requiredSkills" when the work clearly implies technologies or roles so downstream assignment can match candidates.
-Specialist workflow slugs (exact spelling, hyphenated — put each in "tags" and/or "requiredSkills" when the work clearly fits; enables candidate dashboards): ${specialistSlugHint}.
+Populate "requiredSkills" when the work clearly implies technologies or roles so downstream assignment can match employees.
+Specialist workflow slugs (exact spelling, hyphenated — put each in "tags" and/or "requiredSkills" when the work clearly fits; enables dashboards): ${specialistSlugHint}.
   - feature-engineer: product discovery, specs, backlog shaping, feature ideation, market/feature research.
   - feasibility-reviewer: risk, feasibility, architecture or plan vetting before build.
   - orchestrating-swarms: parallel multi-agent work, swarm-style orchestration, coordinated specialist pipelines.
 Prefer at most one primary slug per task unless the work genuinely spans two areas.
-Do not duplicate titles that already exist in existingTasks. Max 25 new tasks.
+Do not duplicate titles that already exist in existingTasks. Max ${TASK_BREAKDOWN_PREVIEW_MAX} new tasks.
 If userFeedback is provided, revise the draft to satisfy it while keeping strong tasks from priorTasksDraft unless the user asked to remove them.`;
 
   const priorForPrompt = Array.isArray(priorTasks)
-    ? priorTasks.slice(0, 25).map((p) => ({
+    ? priorTasks.slice(0, TASK_BREAKDOWN_PREVIEW_MAX).map((p) => ({
+        id: p.id != null ? String(p.id).slice(0, 64) : undefined,
         title: String(p.title || '').slice(0, 500),
         description: typeof p.description === 'string' ? p.description.trim().slice(0, 400) : '',
+        status: typeof p.status === 'string' ? p.status.slice(0, 32) : undefined,
       }))
     : [];
 
@@ -147,8 +271,10 @@ If userFeedback is provided, revise the draft to satisfy it while keeping strong
     projectName: project.name,
     projectDescription: (project.description || '').slice(0, 4000),
     projectTags: project.tags || [],
-    extraBrief: extraBrief || '',
-    userFeedback: typeof feedback === 'string' ? feedback.trim().slice(0, 2000) : '',
+    breakdownContext: bc || null,
+    extraBriefLegacy: !bc && extraBriefText ? extraBriefText : null,
+    extraNotes: mergedNote || null,
+    userFeedback: userFeedbackForModel,
     priorTasksDraft: priorForPrompt,
     existingTasks: existingTasks.map((t) => t.title),
   });
@@ -159,17 +285,172 @@ If userFeedback is provided, revise the draft to satisfy it while keeping strong
     { maxTokens: 3500 }
   );
 
-  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const rawTasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const trimmed = rawTasks.slice(0, TASK_BREAKDOWN_PREVIEW_MAX);
+  const withIds = attachPreviewTaskIds(trimmed);
+  const confidenceScore = computeTaskBreakdownConfidence(withIds, bc);
+  const previewId = await persistTaskBreakdownPreview({
+    projectId: projectOid,
+    userId: userOid,
+    breakdownContext: bc,
+    tasks: withIds,
+  });
+
   return {
     projectId,
     promptHash,
     modelId: modelUsed,
     usage: { promptTokens, completionTokens },
-    tasks: tasks.slice(0, 25),
+    tasks: withIds,
+    previewId,
+    confidenceScore,
   };
 }
 
-export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKey } = {}) {
+/**
+ * @param {string} projectId
+ * @param {object} user
+ * @param {{ previousPreviewId?: string, feedback?: string, lockedTaskIds?: string[], breakdownContextOverride?: object }} body
+ */
+export async function refineTaskBreakdown(
+  projectId,
+  user,
+  { previousPreviewId, feedback, lockedTaskIds = [], breakdownContextOverride } = {}
+) {
+  ensurePmAssistantEnabled();
+  ensureOpenAIConfigured();
+  const project = await getProjectById(projectId);
+  await assertProjectOwnerOrAdmin(project, user);
+  const uid = user.id || user._id;
+  const userOid = mongoose.Types.ObjectId.isValid(String(uid)) ? new mongoose.Types.ObjectId(String(uid)) : uid;
+  const projectOid = project._id;
+
+  const feedbackText = typeof feedback === 'string' ? feedback.trim().slice(0, 1000) : '';
+  const prevId = typeof previousPreviewId === 'string' ? previousPreviewId.trim() : '';
+  if (!prevId || !feedbackText) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'previousPreviewId and feedback are required');
+  }
+
+  const snap = await TaskBreakdownPreview.findOne({
+    previewId: prevId,
+    projectId: projectOid,
+    userId: userOid,
+  }).exec();
+
+  if (!snap) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Preview not found or expired');
+  }
+  if (snap.state === 'applied') {
+    throw new ApiError(httpStatus.CONFLICT, 'This preview was already applied');
+  }
+  if (snap.state === 'superseded') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Preview is no longer valid');
+  }
+  if (snap.expiresAt && new Date(snap.expiresAt) < new Date()) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Preview expired');
+  }
+
+  const allTasks = Array.isArray(snap.tasks) ? snap.tasks : [];
+  if (allTasks.length > TASK_BREAKDOWN_PREVIEW_MAX) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Too many tasks in this preview');
+  }
+
+  const lockedSet = new Set((lockedTaskIds || []).map((x) => String(x)));
+  const locked = [];
+  const unlocked = [];
+  for (const t of allTasks) {
+    const tid = String(t?.id || '');
+    if (tid && lockedSet.has(tid)) locked.push(t);
+    else unlocked.push(t);
+  }
+
+  const mergedCtx =
+    breakdownContextOverride && typeof breakdownContextOverride === 'object'
+      ? normalizeBreakdownContextInput(
+          mergeBreakdownContext(snap.breakdownContext || { projectType: 'other' }, breakdownContextOverride)
+        ) || snap.breakdownContext
+      : snap.breakdownContext;
+
+  if (unlocked.length === 0) {
+    const confidenceScore = computeTaskBreakdownConfidence(allTasks, mergedCtx);
+    await TaskBreakdownPreview.updateOne({ _id: snap._id }, { $set: { state: 'superseded' } });
+    const newPreviewId = await persistTaskBreakdownPreview({
+      projectId: projectOid,
+      userId: userOid,
+      breakdownContext: mergedCtx,
+      tasks: allTasks,
+    });
+    return {
+      projectId,
+      promptHash: hashPmPrompt(['task-breakdown-refine-nop', projectId, newPreviewId]),
+      modelId: 'noop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      tasks: allTasks,
+      previewId: newPreviewId,
+      confidenceScore,
+    };
+  }
+
+  const specialistSlugHint = CANDIDATE_PROJECT_TASK_TYPE_SLUGS.map((s) => `"${s}"`).join(', ');
+  const ulen = unlocked.length;
+  const system = `You refine a subset of project tasks. Return a single JSON object with key "revisedUnlocked" (array).
+The array length MUST be exactly ${ulen}. Each item: { "title" (required), "description", "status", "tags", "requiredSkills", "order" } — same as task breakdown.
+Use specialist workflow slugs where appropriate: ${specialistSlugHint}.
+Populate "requiredSkills" for staffing. Do not include "id" in output; order must match "unlockedTasksToRegenerate" in the user JSON.`;
+
+  const userMsg = JSON.stringify({
+    projectName: project.name,
+    projectDescription: (project.description || '').slice(0, 2000),
+    breakdownContext: mergedCtx || null,
+    lockedTasks: locked,
+    unlockedTasksToRegenerate: unlocked,
+    userFeedback: feedbackText,
+  });
+
+  const promptHash = hashPmPrompt(['task-breakdown-refine', projectId, prevId, userMsg.slice(0, 2400)]);
+  const { data, modelUsed, promptTokens, completionTokens } = await pmChatJsonObject(
+    { system, user: userMsg, context: 'pm-task-breakdown-refine' },
+    { maxTokens: 3500 }
+  );
+
+  const revisedRaw = Array.isArray(data.revisedUnlocked) ? data.revisedUnlocked : [];
+  const revised = [];
+  for (let i = 0; i < unlocked.length; i += 1) {
+    const oldT = unlocked[i];
+    const neu = revisedRaw[i] || oldT;
+    // eslint-disable-next-line no-unused-vars
+    const { id: _idDrop, ...rest } = neu && typeof neu === 'object' ? neu : {};
+    revised.push({ ...oldT, ...rest, id: oldT.id });
+  }
+
+  const revisedById = new Map(revised.map((t) => [String(t.id), t]));
+  const finalTasks = allTasks.map((t) => {
+    const id = String(t.id || '');
+    if (lockedSet.has(id)) return t;
+    return revisedById.get(id) || t;
+  });
+
+  const confidenceScore = computeTaskBreakdownConfidence(finalTasks, mergedCtx);
+  await TaskBreakdownPreview.updateOne({ _id: snap._id }, { $set: { state: 'superseded' } });
+  const newPreviewId = await persistTaskBreakdownPreview({
+    projectId: projectOid,
+    userId: userOid,
+    breakdownContext: mergedCtx,
+    tasks: finalTasks,
+  });
+
+  return {
+    projectId,
+    promptHash,
+    modelId: modelUsed,
+    usage: { promptTokens, completionTokens },
+    tasks: finalTasks,
+    previewId: newPreviewId,
+    confidenceScore,
+  };
+}
+
+export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKey, previewId } = {}) {
   ensurePmAssistantEnabled();
   /** Apply only persists tasks; preview already used OpenAI. */
   const project = await getProjectById(projectId);
@@ -182,6 +463,20 @@ export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKe
   const uid = user.id || user._id;
   const projectOid = project._id;
   const userOid = mongoose.Types.ObjectId.isValid(String(uid)) ? new mongoose.Types.ObjectId(String(uid)) : uid;
+
+  const previewIdRaw = typeof previewId === 'string' ? previewId.trim() : '';
+  if (previewIdRaw) {
+    const upd = await TaskBreakdownPreview.updateOne(
+      { previewId: previewIdRaw, projectId: projectOid, userId: userOid, state: 'open' },
+      { $set: { state: 'applied' } }
+    );
+    if (upd.matchedCount === 0) {
+      logger.warn('[PM Assistant] applyTaskBreakdown: previewId did not match an open snapshot', {
+        previewId: previewIdRaw,
+        projectId: String(projectOid),
+      });
+    }
+  }
 
   const payloadHash = taskBreakdownPayloadHash(tasks);
   const idemKey = typeof idempotencyKey === 'string' ? idempotencyKey.trim() : '';
@@ -1271,25 +1566,122 @@ export async function applyAssignmentRun(runId, user) {
   return { ...envelope, teamSync };
 }
 
+const FEEDBACK_OUTCOMES = new Set(['approved', 'rejected', 'replaced']);
+const REJECTION_REASONS = new Set([
+  'skill_gap',
+  'capacity',
+  'seniority_mismatch',
+  'preference',
+  'conflict_of_interest',
+  'other',
+]);
+
+/**
+ * Persist assignment row feedback (ADR-0042) for analytics.
+ * @param {string} projectId
+ * @param {string} runId
+ * @param {object} user
+ * @param {{ items?: unknown[], submittedAt?: string }} body
+ */
+export async function submitAssignmentRunFeedback(projectId, runId, user, { items, submittedAt } = {}) {
+  ensurePmAssistantEnabled();
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'items array is required');
+  }
+  if (items.length > 50) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Too many feedback items');
+  }
+
+  const run = await AssignmentRun.findById(runId).lean();
+  if (!run) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Run not found');
+  }
+  if (String(run.projectId) !== String(projectId)) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Run not found for this project');
+  }
+
+  const project = await getProjectById(String(projectId));
+  await assertProjectOwnerOrAdmin(project, user);
+
+  const normalized = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid feedback item');
+    }
+    const o = /** @type {Record<string, unknown>} */ (raw);
+    const taskId = String(o.taskId || '').trim();
+    const suggestedEmployeeId = String(o.suggestedEmployeeId || '')
+      .trim()
+      .replace(/^(candidate|employee):/i, '');
+    const outcome = String(o.outcome || '').trim();
+    if (!taskId || !suggestedEmployeeId || !FEEDBACK_OUTCOMES.has(outcome)) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Each item needs taskId, suggestedEmployeeId, and a valid outcome');
+    }
+    if (outcome === 'replaced') {
+      const rep = o.replacedWithEmployeeId != null ? String(o.replacedWithEmployeeId).trim() : '';
+      if (!rep) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'replacedWithEmployeeId is required when outcome is replaced');
+      }
+    }
+    if (o.rejectionReason != null) {
+      const rr = String(o.rejectionReason);
+      if (!REJECTION_REASONS.has(rr)) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid rejection reason');
+      }
+    }
+    const row = {
+      taskId,
+      suggestedEmployeeId,
+      outcome,
+    };
+    if (o.replacedWithEmployeeId != null) {
+      row.replacedWithEmployeeId = String(o.replacedWithEmployeeId).trim();
+    }
+    if (o.rejectionReason) row.rejectionReason = String(o.rejectionReason);
+    if (o.note) row.note = String(o.note).trim().slice(0, 200);
+    normalized.push(row);
+  }
+
+  await AssignmentRunFeedback.create({
+    projectId: run.projectId,
+    runId: run._id,
+    createdBy: user.id || user._id,
+    clientSubmittedAt: submittedAt ? new Date(submittedAt) : null,
+    items: normalized,
+  });
+
+  logger.info('[PM Assistant] assignment feedback recorded', {
+    runId: String(runId),
+    projectId: String(projectId),
+    n: normalized.length,
+  });
+
+  return { accepted: normalized.length };
+}
+
 /**
  * Pipeline: GPT tasks → persist tasks → GPT staffing (assignment run).
  * Does **not** approve or apply the run — the user reviews on the assignment screen first; apply there
  * sets task owners, project assignees, and syncs the project team (same as other PM assistant flows).
  * Caller must have rights equivalent to projects.manage + tasks.manage + teams.manage + candidates.read (enforced on route).
  */
-export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief } = {}) {
+export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief, breakdownContext } = {}) {
   ensurePmAssistantEnabled();
   ensureOpenAIConfigured();
   const project = await getProjectById(projectId);
   await assertProjectOwnerOrAdmin(project, user);
 
-  const preview = await previewTaskBreakdown(projectId, user, { extraBrief });
+  const preview = await previewTaskBreakdown(projectId, user, { extraBrief, breakdownContext });
   if (!preview.tasks?.length) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'The model returned no tasks from the project description. Add more detail and try again.');
   }
 
   const bootstrapIdempotencyKey = crypto.randomUUID();
-  await applyTaskBreakdown(projectId, user, { tasks: preview.tasks, idempotencyKey: bootstrapIdempotencyKey });
+  await applyTaskBreakdown(projectId, user, {
+    tasks: preview.tasks,
+    idempotencyKey: bootstrapIdempotencyKey,
+    previewId: preview.previewId,
+  });
 
   const assignmentEnvelope = await generateAssignmentRun(projectId, user);
   const runId = String(assignmentEnvelope.run?._id || assignmentEnvelope.run?.id || '');
@@ -1318,6 +1710,8 @@ export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief
       tasksCreated: preview.tasks.length,
       teamMembersAdded: 0,
       message,
+      confidenceScore: preview.confidenceScore,
+      lowConfidence: preview.confidenceScore < 0.75,
     };
   }
 
@@ -1338,6 +1732,8 @@ export async function bootstrapSmartTeamForProject(projectId, user, { extraBrief
     tasksCreated: preview.tasks.length,
     teamMembersAdded: 0,
     usedExistingTeam: false,
+    confidenceScore: preview.confidenceScore,
+    lowConfidence: preview.confidenceScore < 0.75,
   };
 }
 

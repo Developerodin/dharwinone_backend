@@ -508,10 +508,66 @@ const assignShift = {
     .required(),
 };
 
+const referralLeadsQueryKeys = {
+  limit: Joi.number().integer().min(1).max(100),
+  cursor: Joi.string().trim().allow(''),
+  search: Joi.string().trim().allow(''),
+  referredByUserId: Joi.string().custom(objectId).allow(''),
+  referralContext: Joi.string().valid('SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY').allow(''),
+  referralPipelineStatus: Joi.string()
+    .valid('profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending')
+    .allow(''),
+  from: Joi.string().trim().allow('').optional(),
+  to: Joi.string().trim().allow('').optional(),
+};
+
+const getReferralLeads = {
+  query: Joi.object().keys(referralLeadsQueryKeys),
+};
+
+const getReferralLeadsStats = {
+  query: Joi.object().keys(referralLeadsQueryKeys),
+};
+
+const postReferralLinkToken = {
+  body: Joi.object()
+    .keys({
+      source: Joi.string().valid('onboard', 'job').required(),
+      candidateEmail: Joi.when('source', {
+        is: 'onboard',
+        then: Joi.string().email().required(),
+        otherwise: Joi.string().email().allow('', null).optional(),
+      }),
+      jobId: Joi.when('source', {
+        is: 'job',
+        then: Joi.string().custom(objectId).required(),
+        otherwise: Joi.string().custom(objectId).allow(null, '').optional(),
+      }),
+      batchId: Joi.string().trim().max(200).allow('').optional(),
+    })
+    .required(),
+};
+
+const postReferralAttributionOverride = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      newReferredByUserId: Joi.string().custom(objectId).required(),
+      reason: Joi.string().trim().min(1).max(200).required(),
+    })
+    .required(),
+};
+
 export {
   createCandidate,
   getCandidates,
   getCandidate,
+  getReferralLeads,
+  getReferralLeadsStats,
+  postReferralLinkToken,
+  postReferralAttributionOverride,
   getCandidateSopStatus,
   getSopOpenOverview,
   updateCandidate,

@@ -53,6 +53,9 @@ export const ActivityActions = {
   JOB_APPLICATION_CREATE: 'jobApplication.create',
   JOB_APPLICATION_UPDATE: 'jobApplication.update',
   JOB_APPLICATION_DELETE: 'jobApplication.delete',
+  REFERRAL_LEADS_EXPORT: 'referralLeads.export',
+  REFERRAL_ATTRIBUTION_OVERRIDE: 'referral.attribution.override',
+  REFERRAL_CLAIM: 'referral.claim',
   // Support Tickets
   TICKET_CREATE: 'ticket.create',
   TICKET_STATUS_CHANGE: 'ticket.statusChange',

@@ -1,7 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import documentAuth from '../../middlewares/documentAuth.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import requireCandidateAttendanceList from '../../middlewares/requireCandidateAttendanceList.js';
 import { uploadSingle } from '../../middlewares/upload.js';
 import validate from '../../middlewares/validate.js';
@@ -21,6 +21,38 @@ router
   .route('/')
   .post(auth(), requirePermissions('candidates.manage'), validate(candidateValidation.createCandidate), candidateController.create)
   .get(...canRead, validate(candidateValidation.getCandidates), candidateController.list);
+
+/** Referral leads (ATS) — list must be before /:candidateId */
+router.get(
+  '/referral-leads',
+  ...canRead,
+  validate(candidateValidation.getReferralLeads),
+  candidateController.listReferralLeadsHandler
+);
+router.get(
+  '/referral-leads/stats',
+  ...canRead,
+  validate(candidateValidation.getReferralLeadsStats),
+  candidateController.getReferralLeadsStatsHandler
+);
+router.get(
+  '/referral-leads/export',
+  ...canRead,
+  validate(candidateValidation.getReferralLeadsStats),
+  candidateController.exportReferralLeadsHandler
+);
+router.post(
+  '/referral-link',
+  ...canRead,
+  validate(candidateValidation.postReferralLinkToken),
+  candidateController.postReferralLinkToken
+);
+router.post(
+  '/referral-leads/:candidateId/override',
+  ...canManage,
+  validate(candidateValidation.postReferralAttributionOverride),
+  candidateController.postReferralAttributionOverride
+);
 
 /** Current user's own candidate – auth only (for role 'user' from share-candidate-form). Must be before /:candidateId. */
 router
@@ -52,19 +84,26 @@ router.get(
   candidateController.listStudentAgentAssignmentsHandler
 );
 
-/** Company work email roster (Settings hub) — candidates.manage */
+/** Company work email roster (Settings hub) — settings.company-email:* (not candidates.manage) */
 router.get(
   '/company-email-assignments',
-  ...canManage,
+  auth(),
+  requireAnyOfPermissions('company-email.read', 'company-email.manage'),
   validate(candidateValidation.listCompanyEmailAssignments),
   candidateController.listCompanyEmailAssignmentsHandler
 );
 
 router
   .route('/company-email-settings')
-  .get(...canManage, validate(candidateValidation.getCompanyEmailSettings), candidateController.getCompanyEmailSettings)
+  .get(
+    auth(),
+    requireAnyOfPermissions('company-email.read', 'company-email.manage'),
+    validate(candidateValidation.getCompanyEmailSettings),
+    candidateController.getCompanyEmailSettings
+  )
   .patch(
-    ...canManage,
+    auth(),
+    requirePermissions('company-email.manage'),
     validate(candidateValidation.patchCompanyEmailSettings),
     candidateController.patchCompanyEmailSettings
   );

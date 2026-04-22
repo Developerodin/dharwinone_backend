@@ -26,6 +26,15 @@ router
   );
 
 router
+  .route('/projects/:projectId/task-breakdown/refine')
+  .post(
+    auth(),
+    requirePermissions('projects.read'),
+    validate(pmAssistantValidation.refineTaskBreakdown),
+    pmAssistantController.refineTaskBreakdown
+  );
+
+router
   .route('/projects/:projectId/task-breakdown/apply')
   .post(
     auth(),
@@ -50,6 +59,15 @@ router
     requirePermissions('projects.read', 'candidates.read'),
     validate(pmAssistantValidation.projectIdParam),
     pmAssistantController.createAssignmentRun
+  );
+
+router
+  .route('/projects/:projectId/assignment-runs/:runId/feedback')
+  .post(
+    auth(),
+    requirePermissions('projects.read'),
+    validate(pmAssistantValidation.assignmentRunFeedback),
+    pmAssistantController.submitAssignmentRunFeedback
   );
 
 router

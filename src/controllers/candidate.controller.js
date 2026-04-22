@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import config from '../config/config.js';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
@@ -41,6 +42,13 @@ import {
   listAgentUsersForAssignment,
   getAgentAssignmentSummary,
 } from '../services/candidate.service.js';
+import {
+  listReferralLeads,
+  getReferralLeadsStats,
+  exportReferralLeadsCsv,
+  overrideReferralAttribution,
+} from '../services/referralLeads.service.js';
+import { signReferralToken } from '../services/referralAttribution.service.js';
 import { generateCandidateExportCsv } from '../utils/candidateExportCsv.js';
 import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.js';
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
@@ -187,6 +195,42 @@ const list = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const listReferralLeadsHandler = catchAsync(async (req, res) => {
+  const out = await listReferralLeads(req);
+  res.send(out);
+});
+
+const getReferralLeadsStatsHandler = catchAsync(async (req, res) => {
+  const out = await getReferralLeadsStats(req);
+  res.send(out);
+});
+
+const exportReferralLeadsHandler = catchAsync(async (req, res) => {
+  await exportReferralLeadsCsv(req, res);
+});
+
+const postReferralLinkToken = catchAsync(async (req, res) => {
+  const { candidateEmail, source, jobId, batchId } = req.body;
+  const orgId = config.referral?.defaultOrgId || 'default';
+  const src = source === 'job' ? 'job' : 'onboard';
+  const emailForToken =
+    src === 'job' && (!candidateEmail || !String(candidateEmail).trim()) ? '' : candidateEmail;
+  const ref = signReferralToken({
+    orgId,
+    source: src,
+    referrerUserId: String(req.user._id || req.user.id),
+    candidateEmail: emailForToken,
+    jobId: jobId || null,
+    batchId: batchId || null,
+  });
+  res.send({ ref, orgId, expiresInSeconds: 30 * 24 * 3600 });
+});
+
+const postReferralAttributionOverride = catchAsync(async (req, res) => {
+  const out = await overrideReferralAttribution(req);
+  res.send({ success: true, lead: out });
+});
+
 const getSopStatus = catchAsync(async (req, res) => {
   const candidate = await getCandidateById(req.params.candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
@@ -315,6 +359,11 @@ export {
   updateMyCandidate,
   update,
   remove,
+  listReferralLeadsHandler,
+  getReferralLeadsStatsHandler,
+  exportReferralLeadsHandler,
+  postReferralLinkToken,
+  postReferralAttributionOverride,
 };
 
 const exportProfile = catchAsync(async (req, res) => {

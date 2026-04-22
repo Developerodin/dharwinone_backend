@@ -18,23 +18,50 @@ const TASK_DESC_MAX = 8000;
 const TASK_TAG_MAX_LEN = 64;
 const TASK_TAGS_MAX = 20;
 const TASK_REQUIRED_SKILLS_MAX = 15;
-const TASK_BREAKDOWN_MAX_TASKS = 25;
-const FEEDBACK_MAX = 2000;
-const PRIOR_TASKS_MAX = 25;
+const TASK_BREAKDOWN_MAX_TASKS = 30;
+const FEEDBACK_MAX = 1000;
+const PRIOR_TASKS_MAX = 30;
 const ASSIGNMENT_ROW_NOTES_MAX = 500;
+
+const breakdownContext = Joi.object()
+  .keys({
+    projectType: Joi.string()
+      .valid('software', 'marketing', 'operations', 'research', 'design', 'other')
+      .required(),
+    deadline: Joi.string().trim().max(32).optional(),
+    teamSizeHint: Joi.string().valid('1-3', '4-8', '9+').optional(),
+    keyDeliverables: Joi.array().max(10).items(Joi.string().trim().max(80)).optional(),
+    constraints: Joi.array()
+      .items(
+        Joi.string().valid(
+          'budget_cap',
+          'specific_people',
+          'fixed_tech_stack',
+          'regulatory_compliance',
+          'external_dependency',
+          'hard_deadline'
+        )
+      )
+      .optional(),
+    extraNotes: Joi.string().trim().allow('').max(500).optional(),
+  })
+  .unknown(true);
 
 const previewTaskBreakdown = {
   ...projectIdParam,
   body: Joi.object().keys({
-    extraBrief: Joi.string().trim().allow('').max(8000).optional(),
+    breakdownContext: breakdownContext.optional(),
+    extraBrief: Joi.string().trim().allow('').max(2000).optional(),
     feedback: Joi.string().trim().allow('').max(FEEDBACK_MAX).optional(),
     priorTasks: Joi.array()
       .max(PRIOR_TASKS_MAX)
       .items(
         Joi.object()
           .keys({
+            id: Joi.string().trim().max(64).optional(),
             title: Joi.string().trim().max(TASK_TITLE_MAX).required(),
             description: Joi.string().trim().allow('').max(TASK_DESC_MAX).optional(),
+            status: Joi.string().trim().max(32).optional(),
           })
           .unknown(false)
       )
@@ -42,9 +69,46 @@ const previewTaskBreakdown = {
   }),
 };
 
+const breakdownContextOverride = Joi.object()
+  .keys({
+    projectType: Joi.string()
+      .valid('software', 'marketing', 'operations', 'research', 'design', 'other')
+      .optional(),
+    deadline: Joi.string().trim().max(32).optional().allow(''),
+    teamSizeHint: Joi.string().valid('1-3', '4-8', '9+').optional().allow(null, ''),
+    keyDeliverables: Joi.array().max(10).items(Joi.string().trim().max(80)).optional(),
+    constraints: Joi.array()
+      .items(
+        Joi.string().valid(
+          'budget_cap',
+          'specific_people',
+          'fixed_tech_stack',
+          'regulatory_compliance',
+          'external_dependency',
+          'hard_deadline'
+        )
+      )
+      .optional(),
+    extraNotes: Joi.string().trim().allow('').max(500).optional(),
+  })
+  .unknown(true);
+
+const refineTaskBreakdown = {
+  ...projectIdParam,
+  body: Joi.object()
+    .keys({
+      previousPreviewId: Joi.string().trim().uuid().required(),
+      feedback: Joi.string().trim().min(1).max(FEEDBACK_MAX).required(),
+      lockedTaskIds: Joi.array().max(40).items(Joi.string().trim().max(64)).optional(),
+      breakdownContextOverride: breakdownContextOverride.optional(),
+    })
+    .required(),
+};
+
 const applyTaskBreakdown = {
   ...projectIdParam,
   body: Joi.object().keys({
+    previewId: Joi.string().trim().uuid().optional(),
     tasks: Joi.array()
       .items(
         Joi.object()
@@ -106,8 +170,39 @@ const assignmentRowJobDraft = {
 const bootstrapSmartTeam = {
   ...projectIdParam,
   body: Joi.object().keys({
-    extraBrief: Joi.string().trim().allow('').max(8000).optional(),
+    extraBrief: Joi.string().trim().allow('').max(2000).optional(),
+    breakdownContext: breakdownContext.optional(),
   }),
+};
+
+const assignmentRunFeedback = {
+  params: Joi.object().keys({
+    projectId: Joi.string().custom(objectId).required(),
+    runId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      items: Joi.array()
+        .min(1)
+        .max(50)
+        .items(
+          Joi.object()
+            .keys({
+              taskId: Joi.string().trim().required(),
+              suggestedEmployeeId: Joi.string().trim().required(),
+              outcome: Joi.string().valid('approved', 'rejected', 'replaced').required(),
+              replacedWithEmployeeId: Joi.string().trim().allow('').optional(),
+              rejectionReason: Joi.string()
+                .valid('skill_gap', 'capacity', 'seniority_mismatch', 'preference', 'conflict_of_interest', 'other')
+                .optional(),
+              note: Joi.string().trim().allow('').max(200).optional(),
+            })
+            .required()
+        )
+        .required(),
+      submittedAt: Joi.string().trim().optional(),
+    })
+    .required(),
 };
 
 const BRIEF_HTML_IN_MAX = 50000;
@@ -134,6 +229,7 @@ const enhanceProjectBrief = {
 
 export {
   previewTaskBreakdown,
+  refineTaskBreakdown,
   applyTaskBreakdown,
   bootstrapSmartTeam,
   enhanceProjectBrief,
@@ -141,4 +237,5 @@ export {
   runIdParam,
   patchAssignmentRun,
   assignmentRowJobDraft,
+  assignmentRunFeedback,
 };

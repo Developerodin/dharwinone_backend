@@ -23,6 +23,12 @@ import { getMyPermissionsForFrontend } from '../services/permission.service.js';
 import { pickUserDisplayForActivityLog } from '../utils/activityLogSubject.util.js';
 import Impersonation from '../models/impersonation.model.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
+import {
+  applyReferralToCandidate,
+  applyOnboardInviteReferral,
+  verifyReferralToken,
+  logReferralEvent,
+} from '../services/referralAttribution.service.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
 
@@ -98,13 +104,33 @@ const register = catchAsync(async (req, res) => {
       countryCode: countryCode || undefined,
     });
     const completionPercentage = 30;
-    await createCandidate(user._id, {
+    const candidate = await createCandidate(user._id, {
       fullName: user.name,
       email: user.email,
       phoneNumber: (phoneNumber && String(phoneNumber).trim()) || '0000000000',
       adminId,
       isProfileCompleted: completionPercentage,
     });
+    const inviterRef = await applyOnboardInviteReferral(candidate._id, user.email, adminId);
+    if (inviterRef.applied) {
+      try {
+        await activityLogService.createActivityLog(
+          adminId,
+          ActivityActions.REFERRAL_CLAIM,
+          EntityTypes.CANDIDATE,
+          candidate._id,
+          { source: 'invite_onboard' },
+          req
+        );
+      } catch (e) {
+        logReferralEvent('referral_activity_log_failed', { message: e?.message });
+      }
+    } else {
+      logReferralEvent('referral_invite_attribution_skipped', {
+        reason: inviterRef.reason,
+        candidateId: String(candidate._id),
+      });
+    }
     const verifyEmailToken = await generateVerifyEmailToken(user);
     await sendVerificationEmail2(user.email, verifyEmailToken, {
       req,
@@ -201,7 +227,7 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
   }
 
-  const { name, email, password, phoneNumber } = req.body;
+  const { name, email, password, phoneNumber, ref: referralRef } = req.body;
   const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
   let user;
   try {
@@ -239,6 +265,30 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       });
     }
     throw err;
+  }
+  if (referralRef && String(referralRef).trim() && candidate?._id) {
+    const v = verifyReferralToken(String(referralRef).trim());
+    if (v.ok) {
+      const r = await applyReferralToCandidate(candidate._id, email, v.data);
+      if (r.applied) {
+        try {
+          await activityLogService.createActivityLog(
+            v.data.t,
+            ActivityActions.REFERRAL_CLAIM,
+            EntityTypes.CANDIDATE,
+            candidate._id,
+            { jti: v.data.jti, source: v.data.s, org: v.data.o },
+            req
+          );
+        } catch (e) {
+          logReferralEvent('referral_activity_log_failed', { message: e?.message });
+        }
+      } else {
+        logReferralEvent('referral_claim_skipped', { reason: r.reason, candidateId: String(candidate._id) });
+      }
+    } else {
+      logReferralEvent('referral_token_invalid', { error: v.error });
+    }
   }
   res.status(httpStatus.CREATED).send({
     user,
