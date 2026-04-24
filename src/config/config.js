@@ -410,6 +410,13 @@ const config = {
     })(),
     defaultOrgId: (envVars.REFERRAL_DEFAULT_ORG_ID || 'default').trim() || 'default',
   },
+  /** ATS offer → placement → onboarding (feature flags and optional defaults) */
+  ats: {
+    joiningRemindersEnabled: ['true', '1'].includes(String(process.env.JOINING_REMINDERS_ENABLED || '').toLowerCase()),
+    preboardingChecklistEnabled: process.env.PREBOARDING_CHECKLIST_ENABLED !== 'false',
+    onboardingChecklistEnabled: process.env.ONBOARDING_CHECKLIST_ENABLED !== 'false',
+    defaultOnboardingModuleId: (process.env.DEFAULT_ONBOARDING_MODULE_ID || '').trim(),
+  },
 };
 
 // Production: warn if email/share links would use localhost

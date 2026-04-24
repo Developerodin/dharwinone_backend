@@ -55,7 +55,16 @@ export const ActivityActions = {
   JOB_APPLICATION_DELETE: 'jobApplication.delete',
   REFERRAL_LEADS_EXPORT: 'referralLeads.export',
   REFERRAL_ATTRIBUTION_OVERRIDE: 'referral.attribution.override',
+  /** Referrer id stored as actor; metadata includes claimStage (public_register, onboard_invite, job_apply*). */
   REFERRAL_CLAIM: 'referral.claim',
+  /** HMAC ref= link minted (POST /referral-link). entityId = jti. */
+  REFERRAL_LINK_ISSUED: 'referral.link.issued',
+  /** Referral candidate moved to `applied` for a job (incl. when attribution was already set). */
+  REFERRAL_JOB_APPLIED: 'referral.job.applied',
+  /** Referred candidate User became active (pending → active) while linked Employee has a referrer. */
+  REFERRAL_CANDIDATE_ACTIVATED: 'referral.candidate.activated',
+  /** Referred candidate’s placement status set to Joined (hire); metadata includes placementId, jobId, referrerUserId. */
+  REFERRAL_HIRE_JOINED: 'referral.hire.joined',
   // Support Tickets
   TICKET_CREATE: 'ticket.create',
   TICKET_STATUS_CHANGE: 'ticket.statusChange',
@@ -79,6 +88,8 @@ export const EntityTypes = {
   CERTIFICATE: 'Certificate',
   ATTENDANCE: 'Attendance',
   CANDIDATE: 'Candidate',
+  /** Referral link issuance rows (entityId = jti) */
+  REFERRAL: 'Referral',
   JOB: 'Job',
   JOB_APPLICATION: 'JobApplication',
   BOLNA_CANDIDATE_AGENT_SETTINGS: 'BolnaCandidateAgentSettings',

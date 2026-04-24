@@ -79,6 +79,7 @@ const updateUser = catchAsync(async (req, res) => {
       );
     }
   }
+  const previousStatus = target.status;
   const user = await userService.updateUserById(req.params.userId, updateBody);
   const metadata = { ...pickUserDisplayForActivityLog(user) };
   if (req.body.status !== undefined) {
@@ -90,6 +91,10 @@ const updateUser = catchAsync(async (req, res) => {
       ? ActivityActions.USER_DISABLE
       : ActivityActions.USER_UPDATE;
   await activityLogService.createActivityLog(req.user.id, action, EntityTypes.USER, user.id, metadata, req);
+  if (updateBody.status === 'active' && previousStatus === 'pending') {
+    const { tryLogReferralCandidateActivated } = await import('../services/referralAudit.service.js');
+    await tryLogReferralCandidateActivated({ userId: user._id || user.id, actorId: req.user.id, req });
+  }
   res.send(user);
 });
 

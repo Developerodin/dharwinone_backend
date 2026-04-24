@@ -40,7 +40,16 @@ const letterBodyKeys = {
 const createOffer = {
   body: Joi.object()
     .keys({
-      jobApplicationId: Joi.string().custom(objectId).required(),
+      jobApplicationId: Joi.string()
+        .trim()
+        .allow(null, '')
+        .optional()
+        .custom((value, helpers) => {
+          if (value == null || value === '') {
+            return undefined;
+          }
+          return objectId(value, helpers);
+        }),
       ctcBreakdown: ctcBreakdown.optional(),
       joiningDate: Joi.date().optional().allow(null),
       offerValidityDate: Joi.date().optional().allow(null),

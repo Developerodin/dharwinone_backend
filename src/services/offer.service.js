@@ -1,10 +1,11 @@
 import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import Offer from '../models/offer.model.js';
+import Job from '../models/job.model.js';
 import Placement from '../models/placement.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
-import { getJobById, isOwnerOrAdmin } from './job.service.js';
+import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { buildOfferLetterPdfBuffer, formatStartDate } from './offerLetterPdf.service.js';
 import { uploadPdfBuffer, getObjectBufferByKey } from './fileStorage.service.js';
@@ -192,18 +193,86 @@ const ensureAccess = async (currentUser, offerOrJob) => {
   }
 };
 
+const INTERNAL_OFFER_LETTER_JOB_TITLE = 'Offer letter (internal)';
+
+const mapPayloadJobTypeToJobListingType = (payload) => {
+  const jt = payload?.jobType;
+  if (jt === 'PT_25') return 'Part-time';
+  if (jt === 'INTERN_UNPAID') return 'Internship';
+  return 'Full-time';
+};
+
+/**
+ * When no job application is provided, create a shell job + candidate + application
+ * so the offer model invariants (job, candidate, jobApplication) hold.
+ * Uses one Draft “internal” job per user to avoid posting spam.
+ * @param {Object} payload - same letter payload as create offer
+ * @param {import('mongoose').Types.ObjectId | string} userId
+ * @returns {Promise<string>} new JobApplication id
+ */
+const createStandaloneApplicationForOfferLetter = async (payload, userId) => {
+  const fullName = (payload.letterFullName && String(payload.letterFullName).trim()) || 'Candidate';
+  const workLoc = (payload.workLocation && String(payload.workLocation).trim()) || 'Remote (USA)';
+
+  let job = await Job.findOne({
+    createdBy: userId,
+    jobOrigin: 'internal',
+    title: INTERNAL_OFFER_LETTER_JOB_TITLE,
+  })
+    .select('_id')
+    .lean();
+
+  if (!job) {
+    const created = await createJob(userId, {
+      organisation: { name: 'Dharwin Business Solutions' },
+      title: INTERNAL_OFFER_LETTER_JOB_TITLE,
+      jobDescription:
+        'This internal job record is used for offer letters created without a job application. It is not a public listing.',
+      jobType: mapPayloadJobTypeToJobListingType(payload),
+      location: workLoc,
+      status: 'Draft',
+      jobOrigin: 'internal',
+    });
+    job = { _id: created._id };
+  }
+
+  const unique = new mongoose.Types.ObjectId();
+  const email = `ol.${unique.toString()}.noreply@dharwin.offers.local`;
+  const phoneNumber = '+1-000-000-0000';
+
+  const candidate = await Employee.create({
+    owner: userId,
+    adminId: userId,
+    fullName,
+    email,
+    phoneNumber,
+  });
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: candidate._id,
+    status: 'Applied',
+  });
+
+  return application._id.toString();
+};
+
 /**
  * Create an offer from a job application
  */
 const createOffer = async (jobApplicationId, payload, userId) => {
   const offerCode = await Offer.generateOfferCode();
-  const application = await JobApplication.findById(jobApplicationId)
+  const applicationId = jobApplicationId
+    ? jobApplicationId
+    : await createStandaloneApplicationForOfferLetter(payload, userId);
+
+  const application = await JobApplication.findById(applicationId)
     .populate('job')
     .populate('candidate');
   if (!application) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job application not found');
   }
-  const existing = await Offer.findOne({ jobApplication: jobApplicationId });
+  const existing = await Offer.findOne({ jobApplication: applicationId });
   if (existing) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'An offer already exists for this application');
   }
@@ -220,7 +289,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
 
   const offer = await Offer.create({
     offerCode,
-    jobApplication: jobApplicationId,
+    jobApplication: applicationId,
     job: application.job._id,
     candidate: application.candidate._id,
     status: 'Draft',
@@ -322,18 +391,30 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     if (newStatus === 'Sent' && oldStatus === 'Draft') {
       offer.sentAt = new Date();
     } else if (newStatus === 'Accepted') {
-      offer.acceptedAt = new Date();
-      await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
+      if (oldStatus !== 'Accepted') {
+        offer.acceptedAt = new Date();
+      }
+      if (offer.jobApplication) {
+        await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
+      }
       const candidate = await Employee.findById(offer.candidate).select('employeeId joiningDate').lean();
-      await Placement.create({
-        offer: offer._id,
-        candidate: offer.candidate,
-        job: offer.job,
-        joiningDate: offer.joiningDate || null,
-        employeeId: candidate?.employeeId || null,
-        status: 'Pending',
-        createdBy: offer.createdBy,
-      });
+      const hasPlacement = await Placement.exists({ offer: offer._id });
+      if (!hasPlacement) {
+        try {
+          await Placement.create({
+            offer: offer._id,
+            candidate: offer.candidate,
+            job: offer.job,
+            joiningDate: offer.joiningDate || null,
+            employeeId: candidate?.employeeId || null,
+            status: 'Pending',
+            createdBy: offer.createdBy,
+          });
+        } catch (e) {
+          /* Unique index on offer: idempotent on duplicate accept / concurrent requests */
+          if (e?.code !== 11000) throw e;
+        }
+      }
       if (offer.joiningDate) {
         await Employee.findByIdAndUpdate(offer.candidate, { joiningDate: offer.joiningDate });
       }
@@ -443,7 +524,10 @@ const queryOffers = async (filter, options, currentUser) => {
   let placementByOffer = {};
   if (acceptedIds.length > 0) {
     const placements = await Placement.find({ offer: { $in: acceptedIds } })
-      .select('offer status preBoardingStatus backgroundVerification assetAllocation itAccess')
+      .select(
+        '_id offer status preBoardingStatus backgroundVerification assetAllocation itAccess deferredBy deferredAt cancelledBy cancelledAt'
+      )
+      .populate([{ path: 'deferredBy', select: 'name email' }, { path: 'cancelledBy', select: 'name email' }])
       .lean();
     placementByOffer = Object.fromEntries(placements.map((p) => [p.offer.toString(), p]));
   }
@@ -453,12 +537,17 @@ const queryOffers = async (filter, options, currentUser) => {
     if (plain.status === 'Accepted') {
       const pl = placementByOffer[String(plain._id || plain.id)];
       if (pl) {
+        plain.placementId = pl._id;
         plain.placementStatus = pl.status;
         plain.placement = {
           preBoardingStatus: pl.preBoardingStatus,
           backgroundVerification: pl.backgroundVerification,
           assetAllocation: pl.assetAllocation || [],
           itAccess: pl.itAccess || [],
+          deferredBy: pl.deferredBy,
+          deferredAt: pl.deferredAt,
+          cancelledBy: pl.cancelledBy,
+          cancelledAt: pl.cancelledAt,
         };
       } else {
         plain.placementStatus = null;

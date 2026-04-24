@@ -47,8 +47,9 @@ import {
   getReferralLeadsStats,
   exportReferralLeadsCsv,
   overrideReferralAttribution,
+  getReferralAttributionOverrideHistory,
 } from '../services/referralLeads.service.js';
-import { signReferralToken } from '../services/referralAttribution.service.js';
+import { signReferralToken, logReferralEvent } from '../services/referralAttribution.service.js';
 import { generateCandidateExportCsv } from '../utils/candidateExportCsv.js';
 import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.js';
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
@@ -223,12 +224,47 @@ const postReferralLinkToken = catchAsync(async (req, res) => {
     jobId: jobId || null,
     batchId: batchId || null,
   });
-  res.send({ ref, orgId, expiresInSeconds: 30 * 24 * 3600 });
+  const expiresInSeconds = 30 * 24 * 3600;
+  let jti;
+  try {
+    const [payloadB64] = String(ref).split('.');
+    if (payloadB64) {
+      jti = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')).jti;
+    }
+  } catch (e) {
+    logger.warn('referral link token parse for audit', e?.message);
+  }
+  if (jti) {
+    try {
+      await activityLogService.createActivityLog(
+        String(req.user._id || req.user.id),
+        ActivityActions.REFERRAL_LINK_ISSUED,
+        EntityTypes.REFERRAL,
+        String(jti),
+        {
+          refSource: src,
+          orgId,
+          jobId: jobId != null && String(jobId).trim() ? String(jobId) : null,
+          batchId: batchId != null && String(batchId).trim() ? String(batchId).trim().slice(0, 200) : null,
+        },
+        req
+      );
+    } catch (e) {
+      logger.warn('referral link issued activity log', e?.message);
+    }
+    logReferralEvent('referral_link_issued', { orgId, refSource: src, jti, jobId: jobId || null, batchId: batchId || null });
+  }
+  res.send({ ref, orgId, expiresInSeconds });
 });
 
 const postReferralAttributionOverride = catchAsync(async (req, res) => {
   const out = await overrideReferralAttribution(req);
   res.send({ success: true, lead: out });
+});
+
+const getReferralAttributionOverrideHistoryHandler = catchAsync(async (req, res) => {
+  const out = await getReferralAttributionOverrideHistory(req);
+  res.send(out);
 });
 
 const getSopStatus = catchAsync(async (req, res) => {
@@ -364,6 +400,7 @@ export {
   exportReferralLeadsHandler,
   postReferralLinkToken,
   postReferralAttributionOverride,
+  getReferralAttributionOverrideHistoryHandler,
 };
 
 const exportProfile = catchAsync(async (req, res) => {

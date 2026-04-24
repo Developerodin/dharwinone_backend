@@ -76,6 +76,53 @@ const placementSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** When status becomes Joined (operational) */
+    joinedAt: { type: Date, default: null, index: true },
+    /** User who last set placement status to Deferred */
+    deferredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    deferredAt: { type: Date, default: null },
+    /** User who set placement status to Cancelled (terminal) */
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    cancelledAt: { type: Date, default: null },
+    /** Skip candidate emails for T-1 and Joined handoff when true */
+    suppressCandidateNotifications: { type: Boolean, default: false },
+    /** Checklist items; preBoardingStatus is synced from these when array non-empty */
+    preBoardingTasks: {
+      type: [
+        {
+          _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
+          title: { type: String, trim: true, required: true },
+          required: { type: Boolean, default: true },
+          done: { type: Boolean, default: false },
+          doneAt: { type: Date, default: null },
+          order: { type: Number, default: 0 },
+        },
+      ],
+      default: [],
+    },
+    onboardingTasks: {
+      type: [
+        {
+          _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
+          title: { type: String, trim: true, required: true },
+          required: { type: Boolean, default: true },
+          done: { type: Boolean, default: false },
+          doneAt: { type: Date, default: null },
+          order: { type: Number, default: 0 },
+        },
+      ],
+      default: [],
+    },
+    /** Deduplication for joining reminder scheduler */
+    reminderSentAt: {
+      t7: { type: Date, default: null },
+      t1Recruiter: { type: Date, default: null },
+      t1Candidate: { type: Date, default: null },
+      /** agentUserId (hex) -> last sent (ISO) stored as Mixed map */
+      t1ByAgent: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    },
+    trainingModuleId: { type: mongoose.Schema.Types.ObjectId, ref: 'TrainingModule', default: null },
+    trainingAssignedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

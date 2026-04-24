@@ -3,11 +3,13 @@ import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
+import ActivityLog from '../models/activityLog.model.js';
 import Job from '../models/job.model.js';
 import config from '../config/config.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import * as activityLogService from './activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { logReferralEvent } from './referralAttribution.service.js';
 import logger from '../config/logger.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -18,6 +20,93 @@ const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g
  * - `interviews.manage`: same org-wide need as the Schedule Interview jobs/recruiters pick lists
  * @param {import('express').Request} req
  */
+/**
+ * Same access as referral lead list row: org-wide readers, or current lead referrer.
+ * @param {import('express').Request} req
+ * @param {string} candidateId
+ */
+export const assertReferralLeadViewAccess = async (req, candidateId) => {
+  const c = await Employee.findById(candidateId).select('referredByUserId').lean();
+  if (!c) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  if (canSeeAllReferralLeads(req)) {
+    return;
+  }
+  if (c.referredByUserId && String(c.referredByUserId) === String(req.user._id)) {
+    return;
+  }
+  throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+};
+
+/**
+ * Audit trail of admin attribution overrides for a lead (from ActivityLog).
+ * @param {import('express').Request} req
+ */
+export const getReferralAttributionOverrideHistory = async (req) => {
+  const { candidateId } = req.params;
+  await assertReferralLeadViewAccess(req, candidateId);
+  const rows = await ActivityLog.find({
+    action: ActivityActions.REFERRAL_ATTRIBUTION_OVERRIDE,
+    entityType: EntityTypes.CANDIDATE,
+    entityId: String(candidateId),
+  })
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .populate({ path: 'actor', select: 'name email' })
+    .lean();
+
+  const idSet = new Set();
+  for (const r of rows) {
+    const m = r.metadata && typeof r.metadata === 'object' ? r.metadata : {};
+    if (m.previousReferredByUserId && mongoose.Types.ObjectId.isValid(String(m.previousReferredByUserId))) {
+      idSet.add(String(m.previousReferredByUserId));
+    }
+    if (m.newReferredByUserId && mongoose.Types.ObjectId.isValid(String(m.newReferredByUserId))) {
+      idSet.add(String(m.newReferredByUserId));
+    }
+  }
+  const ids = [...idSet];
+  const users = ids.length ? await User.find({ _id: { $in: ids } }).select('name email').lean() : [];
+  const uMap = new Map(
+    users.map((u) => [u._id.toString(), { id: u._id.toString(), name: u.name, email: u.email }])
+  );
+
+  const shapeActor = (r) => {
+    const a = r.actor;
+    if (a && typeof a === 'object' && (a.name !== undefined || a.email !== undefined)) {
+      return {
+        id: (a._id || a.id).toString(),
+        name: a.name,
+        email: a.email,
+      };
+    }
+    return { id: String(r.actor), name: 'Unknown', email: undefined };
+  };
+
+  return {
+    results: rows.map((r) => {
+      const m = r.metadata && typeof r.metadata === 'object' ? r.metadata : {};
+      const prevId =
+        m.previousReferredByUserId && mongoose.Types.ObjectId.isValid(String(m.previousReferredByUserId))
+          ? String(m.previousReferredByUserId)
+          : null;
+      const newId =
+        m.newReferredByUserId && mongoose.Types.ObjectId.isValid(String(m.newReferredByUserId))
+          ? String(m.newReferredByUserId)
+          : null;
+      return {
+        id: r._id.toString(),
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+        actor: shapeActor(r),
+        previousReferredBy: prevId ? uMap.get(prevId) || { id: prevId, name: 'Unknown', email: undefined } : null,
+        newReferredBy: newId ? uMap.get(newId) || { id: newId, name: 'Unknown', email: undefined } : null,
+        reason: m.reason != null ? String(m.reason) : '',
+      };
+    }),
+  };
+};
+
 export const canSeeAllReferralLeads = (req) => {
   const p = req.authContext?.permissions;
   if (!p) return false;
@@ -88,6 +177,75 @@ const selectList =
   'fullName email profilePicture referredByUserId referralContext referralJobId referralJobTitle referredAt referralBatchId referralPipelineStatus attributionLockedAt referralAttributionAnonymised referralLastOverride createdAt';
 
 /**
+ * Normalize a user ref (ObjectId, subdoc, string, populated lean doc) to a 24-hex id string.
+ * Dot-notation `populate` on `referralLastOverride.*` is unreliable for single nested subdocs, so we resolve by id.
+ * @param {unknown} v
+ * @returns {string|null}
+ */
+const asObjectIdString = (v) => {
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    if (v._id != null) return String(v._id);
+    if (v.id != null && mongoose.isValidObjectId(v.id)) return String(v.id);
+  }
+  if (typeof v === 'string' && mongoose.isValidObjectId(v)) return v;
+  try {
+    if (typeof v?.toString === 'function' && (v._bsontype === 'ObjectID' || v.constructor?.name === 'ObjectId')) {
+      const s = v.toString();
+      if (s && mongoose.isValidObjectId(s)) return s;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const s = v.toString?.();
+    if (s && mongoose.isValidObjectId(s)) return s;
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
+/**
+ * @param {object|null|undefined} rlo
+ * @returns {Promise<object|null>}
+ */
+const shapeReferralLastOverride = async (rlo) => {
+  if (!rlo) return null;
+  if (
+    !rlo.overriddenAt &&
+    !rlo.overriddenBy &&
+    !rlo.previousReferredByUserId &&
+    !rlo.newReferredByUserId
+  ) {
+    return null;
+  }
+  const idBy = asObjectIdString(rlo.overriddenBy);
+  const idPrev = asObjectIdString(rlo.previousReferredByUserId);
+  const idNew = asObjectIdString(rlo.newReferredByUserId);
+  const unique = [...new Set([idBy, idPrev, idNew].filter(Boolean))];
+  const users = unique.length
+    ? await User.find({ _id: { $in: unique } })
+        .select('name email')
+        .lean()
+    : [];
+  const byId = new Map(users.map((u) => [u._id.toString(), u]));
+  const toSummary = (idStr) => {
+    if (!idStr) return null;
+    const u = byId.get(idStr);
+    if (u) return { id: u._id.toString(), name: u.name, email: u.email };
+    return { id: idStr, name: 'Unknown', email: undefined };
+  };
+  return {
+    reason: rlo.reason != null ? String(rlo.reason) : '',
+    overriddenAt: rlo.overriddenAt ? new Date(rlo.overriddenAt).toISOString() : null,
+    overriddenByUser: toSummary(idBy),
+    previousReferredBy: toSummary(idPrev),
+    newReferredBy: toSummary(idNew),
+  };
+};
+
+/**
  * @param {import('mongoose').Document|object} row
  */
 const shapeLeadRow = async (row) => {
@@ -112,6 +270,9 @@ const shapeLeadRow = async (row) => {
   } else if (o.referralJobTitle) {
     job = { title: o.referralJobTitle };
   }
+
+  const referralLastOverride = await shapeReferralLastOverride(o.referralLastOverride);
+
   if (o.profilePicture?.key) {
     try {
       o.profilePicture.url = await generatePresignedDownloadUrl(o.profilePicture.key, 7 * 24 * 3600);
@@ -132,7 +293,7 @@ const shapeLeadRow = async (row) => {
     referralPipelineStatus: o.referralPipelineStatus,
     referralBatchId: o.referralBatchId,
     job,
-    referralLastOverride: o.referralLastOverride,
+    referralLastOverride,
     createdAt: o.createdAt,
   };
 };
@@ -349,9 +510,9 @@ function csvCell(v) {
 export const overrideReferralAttribution = async (req) => {
   const { candidateId } = req.params;
   const { newReferredByUserId, reason } = req.body;
-  if (!reason || !String(reason).trim()) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Reason is required');
-  }
+  const reasonNorm = String(reason ?? '')
+    .trim()
+    .slice(0, 200);
   if (!mongoose.Types.ObjectId.isValid(newReferredByUserId)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid new referrer id');
   }
@@ -365,7 +526,7 @@ export const overrideReferralAttribution = async (req) => {
   c.referralLastOverride = {
     previousReferredByUserId: prev,
     newReferredByUserId,
-    reason: String(reason).trim().slice(0, 200),
+    reason: reasonNorm,
     overriddenBy: req.user._id,
     overriddenAt: new Date(),
   };
@@ -381,9 +542,15 @@ export const overrideReferralAttribution = async (req) => {
       previousReferredByUserId: String(prev),
       newReferredByUserId: String(newReferredByUserId),
       reason: c.referralLastOverride.reason,
+      claimStage: 'attribution_override',
     },
     req
   );
+  logReferralEvent('referral_attribution_overridden', {
+    candidateId: String(candidateId),
+    previousReferredByUserId: String(prev),
+    newReferredByUserId: String(newReferredByUserId),
+  });
 
   await c.populate([{ path: 'referredByUserId', select: 'name email' }]);
   return shapeLeadRow(c);

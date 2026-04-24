@@ -555,9 +555,15 @@ const postReferralAttributionOverride = {
   body: Joi.object()
     .keys({
       newReferredByUserId: Joi.string().custom(objectId).required(),
-      reason: Joi.string().trim().min(1).max(200).required(),
+      reason: Joi.string().trim().max(200).allow('').optional(),
     })
     .required(),
+};
+
+const getReferralAttributionOverrideHistory = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+  }),
 };
 
 export {
@@ -568,6 +574,7 @@ export {
   getReferralLeadsStats,
   postReferralLinkToken,
   postReferralAttributionOverride,
+  getReferralAttributionOverrideHistory,
   getCandidateSopStatus,
   getSopOpenOverview,
   updateCandidate,

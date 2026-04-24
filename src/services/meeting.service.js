@@ -279,15 +279,18 @@ const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
 };
 
 /**
- * Move candidate to preboarding when interview result is "selected".
+ * [ADR] createPlacementFromInterview: creates offer + accepted placement from interview — not "completing"
+ * pre-boarding tasks. Both recruiter accept and this path should end with the same Offer/Placement/Employee invariants.
+ * @deprecated use createPlacementFromInterview name; `moveCandidateToPreboarding` is a backward-compatible alias.
+ * Move employee to preboarding when interview result is "selected".
  * Creates an offer, emails an offer letter, then Sent → Accepted (placement Pending).
  * @param {Object} meeting - Meeting document (after save)
  * @param {string} userId - User performing the action
  */
-const moveCandidateToPreboarding = async (meeting, userId) => {
+const createPlacementFromInterview = async (meeting, userId) => {
   const candidateId = meeting.candidate?.id;
   if (!candidateId || !mongoose.Types.ObjectId.isValid(candidateId)) {
-    logger.warn('[moveCandidateToPreboarding] No valid candidate id on meeting %s', meeting._id);
+    logger.warn('[createPlacementFromInterview] No valid candidate id on meeting %s', meeting._id);
     return;
   }
 
@@ -344,31 +347,31 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
           candidate: candidateObjId,
           status: 'Interview',
         });
-        logger.info('[moveCandidateToPreboarding] Created JobApplication for candidate %s + job %s', candidateId, jobId);
+        logger.info('[createPlacementFromInterview] Created JobApplication for candidate %s + job %s', candidateId, jobId);
       }
     } catch (err) {
-      logger.warn('[moveCandidateToPreboarding] Could not create JobApplication:', err?.message || err);
+      logger.warn('[createPlacementFromInterview] Could not create JobApplication:', err?.message || err);
       return;
     }
   }
 
   if (!application) {
-    logger.warn('[moveCandidateToPreboarding] No job application for meeting %s (candidate %s)', meeting._id, candidateId);
+    logger.warn('[createPlacementFromInterview] No job application for meeting %s (candidate %s)', meeting._id, candidateId);
     return;
   }
 
   const existingOffer = await Offer.findOne({ jobApplication: application._id });
   if (existingOffer) {
     if (existingOffer.status === 'Accepted') {
-      logger.debug('[moveCandidateToPreboarding] Offer already accepted, placement exists');
+      logger.debug('[createPlacementFromInterview] Offer already accepted, placement exists');
       return;
     }
     if (existingOffer.status === 'Draft') {
       try {
         await emailOfferLetterAndCompletePlacement(existingOffer._id, userId);
-        logger.info('[moveCandidateToPreboarding] Emailed offer letter and completed placement for application %s', application._id);
+        logger.info('[createPlacementFromInterview] Emailed offer letter and completed placement for application %s', application._id);
       } catch (err) {
-        logger.error('[moveCandidateToPreboarding] Failed to complete offer from Draft:', err?.message || err);
+        logger.error('[createPlacementFromInterview] Failed to complete offer from Draft:', err?.message || err);
         throw err;
       }
       return;
@@ -376,12 +379,12 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
     if (existingOffer.status === 'Sent' || existingOffer.status === 'Under Negotiation') {
       const hasPlacement = await Placement.exists({ offer: existingOffer._id });
       if (hasPlacement) {
-        logger.debug('[moveCandidateToPreboarding] Offer already has placement, skipping');
+        logger.debug('[createPlacementFromInterview] Offer already has placement, skipping');
         return;
       }
       if (!existingOffer.joiningDate) {
         logger.warn(
-          '[moveCandidateToPreboarding] Offer %s has no joining date; cannot create placement. Update the offer in Offers & placement.',
+          '[createPlacementFromInterview] Offer %s has no joining date; cannot create placement. Update the offer in Offers & placement.',
           existingOffer._id
         );
         return;
@@ -393,14 +396,14 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
           { id: userId, _id: userId },
           { skipAccessCheck: true }
         );
-        logger.info('[moveCandidateToPreboarding] Accepted existing Sent offer for application %s, placement created', application._id);
+        logger.info('[createPlacementFromInterview] Accepted existing Sent offer for application %s, placement created', application._id);
       } catch (err) {
-        logger.error('[moveCandidateToPreboarding] Failed to accept existing offer:', err?.message || err);
+        logger.error('[createPlacementFromInterview] Failed to accept existing offer:', err?.message || err);
         throw err;
       }
       return;
     }
-    logger.debug('[moveCandidateToPreboarding] Offer exists with status %s, skipping', existingOffer.status);
+    logger.debug('[createPlacementFromInterview] Offer exists with status %s, skipping', existingOffer.status);
     return;
   }
 
@@ -417,9 +420,9 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
     if (created) {
       await emailOfferLetterAndCompletePlacement(created._id, userId);
     }
-    logger.info('[moveCandidateToPreboarding] Created offer, emailed letter, and placement for application %s', application._id);
+    logger.info('[createPlacementFromInterview] Created offer, emailed letter, and placement for application %s', application._id);
   } catch (err) {
-    logger.error('[moveCandidateToPreboarding] Failed to create/accept offer:', err?.message || err);
+    logger.error('[createPlacementFromInterview] Failed to create/accept offer:', err?.message || err);
     throw err;
   }
 };
@@ -453,10 +456,10 @@ const updateMeetingById = async (id, updateBody, userId) => {
   ) {
     const effectiveUserId = userId || meeting.createdBy?.toString?.() || meeting.createdBy;
     try {
-      await moveCandidateToPreboarding(meeting, effectiveUserId);
+      await createPlacementFromInterview(meeting, effectiveUserId);
     } catch (err) {
       moveError = err?.message || String(err);
-      logger.warn('[moveCandidateToPreboarding] Failed:', moveError);
+      logger.warn('[createPlacementFromInterview] Failed:', moveError);
     }
   }
 
@@ -556,9 +559,12 @@ const moveMeetingToPreboarding = async (id, userId) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Meeting has no candidate linked');
   }
   const effectiveUserId = userId || meeting.createdBy?.toString?.() || meeting.createdBy;
-  await moveCandidateToPreboarding(meeting, effectiveUserId);
+  await createPlacementFromInterview(meeting, effectiveUserId);
   return { moved: true, message: 'Candidate moved to pre-boarding' };
 };
+
+/** @deprecated use createPlacementFromInterview */
+const moveCandidateToPreboarding = createPlacementFromInterview;
 
 /**
  * End meeting by room name (public: host only by email)
@@ -708,6 +714,8 @@ export {
   deleteMeetingById,
   resendMeetingInvitations,
   moveMeetingToPreboarding,
+  createPlacementFromInterview,
+  moveCandidateToPreboarding,
   getPublicMeetingUrl,
   endMeetingByRoomPublic,
   autoEndExpiredMeetings,

@@ -215,6 +215,8 @@ export const permissionAliases = {
     'support.tickets:create,edit,delete',
     'support.tickets:view,create,edit,delete',
   ],
+  'placement.audit': ['placement.audit', 'candidates.manage'],
+  'preboarding.override': ['preboarding.override', 'candidates.manage'],
 };
 
 /**

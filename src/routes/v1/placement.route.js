@@ -1,6 +1,6 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import validate from '../../middlewares/validate.js';
 import * as placementValidation from '../../validations/placement.validation.js';
 import * as placementController from '../../controllers/placement.controller.js';
@@ -14,6 +14,15 @@ router
     requirePermissions('candidates.read'),
     validate(placementValidation.getPlacements),
     placementController.list
+  );
+
+router
+  .route('/:placementId/audit')
+  .get(
+    auth(),
+    requireAnyOfPermissions('placement.audit', 'candidates.manage'),
+    validate(placementValidation.getPlacement),
+    placementController.audit
   );
 
 router

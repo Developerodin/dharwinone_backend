@@ -53,6 +53,12 @@ router.post(
   validate(employeeValidation.postReferralAttributionOverride),
   employeeController.postReferralAttributionOverride
 );
+router.get(
+  '/referral-leads/:candidateId/attribution-override-history',
+  ...canRead,
+  validate(employeeValidation.getReferralAttributionOverrideHistory),
+  employeeController.getReferralAttributionOverrideHistoryHandler
+);
 
 /** Current user's own candidate – auth only (for role 'user' from share-candidate-form). Must be before /:candidateId. */
 router

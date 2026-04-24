@@ -17,7 +17,8 @@ import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 const create = catchAsync(async (req, res) => {
   const { jobApplicationId, ...payload } = req.body;
   const userId = req.user?.id ?? req.user?._id;
-  const offer = await createOffer(jobApplicationId, payload, userId);
+  const raw = jobApplicationId != null && String(jobApplicationId).trim() ? String(jobApplicationId).trim() : null;
+  const offer = await createOffer(raw, payload, userId);
   res.status(httpStatus.CREATED).send(offer);
 });
 

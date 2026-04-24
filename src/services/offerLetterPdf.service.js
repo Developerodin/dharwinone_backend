@@ -5,8 +5,31 @@ import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-/** Full-time + unpaid internship letters use the same PNG as the on-screen preview. */
-const OFFER_LETTER_LOGO_PNG = path.join(__dirname, '../assets/offer-letters/dharwin-offer-letter-logo.png');
+/** Same asset as frontend `public/assets/images/dharwin-offer-letter-logo.png` (kept in-repo under src/assets). */
+const OFFER_LETTER_LOGO_CANDIDATES = [
+  path.join(__dirname, '../assets/offer-letters/dharwin-offer-letter-logo.png'),
+  path.join(process.cwd(), 'src/assets/offer-letters/dharwin-offer-letter-logo.png'),
+];
+
+const resolveOfferLetterLogoPng = () => {
+  for (const p of OFFER_LETTER_LOGO_CANDIDATES) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+};
+
+/** CEO ink signature (Harvinder) — same asset as frontend `public/assets/images/ceo-signature-harvinder.png`. */
+const OFFER_LETTER_CEO_SIGNATURE_CANDIDATES = [
+  path.join(__dirname, '../assets/offer-letters/ceo-signature-harvinder.png'),
+  path.join(process.cwd(), 'src/assets/offer-letters/ceo-signature-harvinder.png'),
+];
+
+const resolveOfferCeoSignaturePng = () => {
+  for (const p of OFFER_LETTER_CEO_SIGNATURE_CANDIDATES) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+};
 
 const BRAND = 'Dharwin Business Solutions LLC';
 const SUPPORT = 'support@dharwinbusinesssolutions.com';
@@ -15,8 +38,12 @@ const EVERIFY = 'E-Verify Company ID: 2702244 | EIN: 38-4356712';
 /** ~1" margins to match typical Word letter */
 const MARGIN = 72;
 const PAGE_W = 612;
+const PAGE_H = 792; // US Letter, PDFKit points
 const CONTENT_W = PAGE_W - MARGIN * 2;
-const MAX_Y = 718;
+/** Band at page bottom for repeating letter footer (rule + three columns). */
+const REPEAT_FOOTER_H = 52;
+/** Body content must stay above this y so the stacked footer is never overlapped. */
+const CONTENT_MAX_Y = PAGE_H - MARGIN - REPEAT_FOOTER_H;
 /** Match `offer-letter-generator.module.css` `.letter` / `.letterBody` */
 const BODY_PT = 11;
 const SECTION_TITLE_PT = 11.5;
@@ -74,27 +101,6 @@ const formatLetterDateLong = (d) => {
   return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', day: 'numeric' }).format(x);
 };
 
-/** Bottom bar — matches `.letterFooter` (rule + three columns). */
-const drawLetterFooterBlock = (doc, y) => {
-  if (y > MAX_Y - 72) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
-  }
-  y += 12;
-  doc.save();
-  doc.strokeColor('#222222').lineWidth(1.5);
-  doc.moveTo(MARGIN, y).lineTo(MARGIN + CONTENT_W, y).stroke();
-  doc.restore();
-  y += 10;
-  const colW = CONTENT_W / 3;
-  doc.font(FONT).fontSize(9).fillColor('#333333');
-  doc.text('support@dharwinbusinesssolutions.com', MARGIN, y, { width: colW - 6, align: 'left' });
-  doc.text('30 N Gould St, STE R Sheridan, WY82801, USA', MARGIN + colW, y, { width: colW - 6, align: 'center' });
-  doc.text('Website: www.dharwinbusinesssolutions.com', MARGIN + 2 * colW, y, { width: colW - 6, align: 'right' });
-  doc.fillColor('#000000');
-  return y + 28;
-};
-
 const jobTypeLabel = (ctx) => {
   if (ctx.isIntern) return 'Training / Unpaid Internship (Full Time)';
   if (ctx.jobType === 'FT_40') return 'Full-Time (40 Hours per Week)';
@@ -102,14 +108,11 @@ const jobTypeLabel = (ctx) => {
   return 'Full-Time (40 Hours per Week)';
 };
 
-const shouldUsePngOfferLetterhead = (jobType) => jobType === 'FT_40' || jobType === 'INTERN_UNPAID';
-
 /**
  * Header matching on-screen preview (`letterHeader` + `letterDivider`).
- * FT_40 and INTERN_UNPAID use the brand PNG; PT_25 keeps the vector text mark.
+ * All job types use the same PNG as the web preview when the file is present.
  */
 const drawLetterheadLikePreview = (doc, yStart) => {
-  const jt = doc._offerLetterJobType;
   const splitX = MARGIN + CONTENT_W * 0.5;
   const rightPad = MARGIN + CONTENT_W - splitX - 8;
   const leftW = Math.max(120, splitX - MARGIN - 8);
@@ -117,9 +120,10 @@ const drawLetterheadLikePreview = (doc, yStart) => {
   let y = yStart;
   let leftBottom = y + 42;
 
-  if (shouldUsePngOfferLetterhead(jt) && fs.existsSync(OFFER_LETTER_LOGO_PNG)) {
+  const logoPath = resolveOfferLetterLogoPng();
+  if (logoPath) {
     try {
-      doc.image(OFFER_LETTER_LOGO_PNG, MARGIN, y, { fit: [leftW, fitH] });
+      doc.image(logoPath, MARGIN, y, { fit: [leftW, fitH] });
       leftBottom = y + fitH;
     } catch {
       doc.font(FONT_BOLD).fontSize(14).fillColor(BRAND_BLUE).text('Dharwin', MARGIN, y);
@@ -148,11 +152,33 @@ const drawLetterheadLikePreview = (doc, yStart) => {
   return y + 12;
 };
 
+/** Rule + three columns pinned to the bottom of the *current* page (matches `.letterFooter`, pic 4). */
+const drawFooterAtBottomOfCurrentPage = (doc) => {
+  const lineY = PAGE_H - MARGIN - 34;
+  const colY = lineY + 10;
+  doc.save();
+  doc.strokeColor('#222222').lineWidth(1.5);
+  doc.moveTo(MARGIN, lineY).lineTo(MARGIN + CONTENT_W, lineY).stroke();
+  doc.restore();
+  const colW = CONTENT_W / 3;
+  doc.font(FONT).fontSize(9).fillColor('#333333');
+  doc.text('support@dharwinbusinesssolutions.com', MARGIN, colY, { width: colW - 6, align: 'left' });
+  doc.text('30 N Gould St, STE R Sheridan, WY82801, USA', MARGIN + colW, colY, { width: colW - 6, align: 'center' });
+  doc.text('Website: www.dharwinbusinesssolutions.com', MARGIN + 2 * colW, colY, { width: colW - 6, align: 'right' });
+  doc.fillColor('#000000');
+};
+
+/** Repeat footer on the page we are leaving, then new page + letterhead (pic 3 header on every sheet). */
+const addContinuationPage = (doc) => {
+  drawFooterAtBottomOfCurrentPage(doc);
+  doc.addPage();
+  return drawLetterheadLikePreview(doc, MARGIN) + 10;
+};
+
 const drawParagraph = (doc, text, y, w = CONTENT_W, opts = {}) => {
   const { fontSize = BODY_PT, bold = false, justify = true } = opts;
-  if (y > MAX_Y - 48) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 48) {
+    y = addContinuationPage(doc);
   }
   doc.font(bold ? FONT_BOLD : FONT).fontSize(fontSize);
   doc.text(text, MARGIN, y, {
@@ -171,9 +197,8 @@ const drawBullets = (doc, items, y) => {
   for (const it of items || []) {
     const t = (it || '').trim();
     if (!t) continue;
-    if (pos > MAX_Y - 36) {
-      doc.addPage();
-      pos = drawLetterheadLikePreview(doc, MARGIN) + 10;
+    if (pos > CONTENT_MAX_Y - 36) {
+      pos = addContinuationPage(doc);
     }
     doc.text(`• ${t}`, x, pos, { width: CONTENT_W - BULLET_INSET, align: 'justify', lineGap });
     pos = doc.y + 2;
@@ -183,9 +208,8 @@ const drawBullets = (doc, items, y) => {
 
 /** Bullet + bold label + value (matches Word “Position Details” / supervisor lists) */
 const drawBulletedLabeled = (doc, label, value, y) => {
-  if (y > MAX_Y - 36) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 36) {
+    y = addContinuationPage(doc);
   }
   const x = MARGIN + BULLET_INSET;
   doc.font(FONT_BOLD).fontSize(BODY_PT).fillColor('#000000');
@@ -198,9 +222,8 @@ const drawBulletedLabeled = (doc, label, value, y) => {
 
 /** Compensation line: bullet + narrative with currency amounts in bold (Word template) */
 const drawCompensationBullet = (doc, text, y) => {
-  if (y > MAX_Y - 36) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 36) {
+    y = addContinuationPage(doc);
   }
   const s =
     sanitizeCompensationForPdf(text) || 'As stated in your formal compensation discussion.';
@@ -234,9 +257,8 @@ const DEFAULT_PAID_ELIGIBILITY = [
 
 /** Inline yellow + underline — matches `.sectionTitleHl` (not full-width bar). */
 function drawSectionTitle(doc, title, y) {
-  if (y > MAX_Y - 40) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 40) {
+    y = addContinuationPage(doc);
   }
   const fs = SECTION_TITLE_PT;
   const padX = 2;
@@ -253,9 +275,8 @@ function drawSectionTitle(doc, title, y) {
 
 /** Bold + underline, no yellow bar (Employment Eligibility in Word template). */
 function drawSectionTitlePlain(doc, title, y) {
-  if (y > MAX_Y - 40) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 40) {
+    y = addContinuationPage(doc);
   }
   doc.fillColor('#111111');
   doc
@@ -267,9 +288,8 @@ function drawSectionTitlePlain(doc, title, y) {
 
 /** Centered banner — matches frontend “Offer of Employment” badge. */
 function drawOfferEmploymentBanner(doc, y) {
-  if (y > MAX_Y - 50) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 50) {
+    y = addContinuationPage(doc);
   }
   const barH = 24;
   const padY = 1;
@@ -297,38 +317,51 @@ function drawSupervisorBlock(doc, y, ctx) {
   return y + 6;
 }
 
+/** Place CEO ink above the line: wide/cropped assets stay legible (min h + clip if width overflows column). */
+function drawCeoSignatureImageInColumn(doc, leftX, yL, colW, ceoSigPath) {
+  const MAX_H = 56;
+  const MIN_H = 40;
+  const img = doc.openImage(ceoSigPath);
+  let drawW = colW;
+  let drawH = (img.height / img.width) * drawW;
+  if (drawH > MAX_H) {
+    drawH = MAX_H;
+    drawW = (img.width / img.height) * drawH;
+  } else if (drawH < MIN_H) {
+    drawH = MIN_H;
+    drawW = (img.width / img.height) * drawH;
+  }
+  if (drawW > colW + 0.5) {
+    const clipH = drawH;
+    doc.save();
+    doc.rect(leftX, yL, colW, clipH).clip();
+    const ix = leftX + (colW - drawW) / 2;
+    doc.image(ceoSigPath, ix, yL, { width: drawW, height: drawH });
+    doc.restore();
+    yL += clipH + 6;
+  } else {
+    doc.image(ceoSigPath, leftX, yL, { width: drawW, height: drawH });
+    yL += drawH + 6;
+  }
+  return yL;
+}
+
 function drawSignatureTwoColumn(doc, y, ctx) {
+  /** Entire two-column block must share one page (right uses same y as “For” line; no page breaks mid-left). */
+  if (y > CONTENT_MAX_Y - 200) {
+    y = addContinuationPage(doc);
+  }
   const colW = (CONTENT_W - 24) / 2;
   const leftX = MARGIN;
   const rightX = MARGIN + colW + 24;
   const dateStr = ctx.letterDateDisplay || formatUsDate(new Date());
-
-  const blocks = {
-    left: [
-      ['For Dharwin Business Solutions LLC', true],
-      ['_____________________________', false],
-      ['Dhariwal Harvinder Singh', false],
-      ['CEO & Founder', false],
-      [`Date: ${dateStr}`, false],
-    ],
-    right: [
-      ['Accepted and Agreed:', true],
-      ['_____________________________', false],
-      [ctx.fullName, false],
-      [ctx.positionTitle, false],
-      [`Date: ${dateStr}`, false],
-    ],
-  };
-
-  let yL = y;
-  let yR = y;
+  const yStart = y;
 
   const flushLine = (x, yRef, rows) => {
     let yy = yRef;
     for (const [text, bold] of rows) {
-      if (yy > MAX_Y - 30) {
-        doc.addPage();
-        yy = drawLetterheadLikePreview(doc, MARGIN) + 10;
+      if (yy > CONTENT_MAX_Y - 30) {
+        yy = addContinuationPage(doc);
       }
       doc.font(bold ? FONT_BOLD : FONT).fontSize(BODY_PT).text(text, x, yy, { width: colW, lineGap: 2 });
       yy = doc.y + 4;
@@ -336,16 +369,50 @@ function drawSignatureTwoColumn(doc, y, ctx) {
     return yy;
   };
 
-  yL = flushLine(leftX, yL, blocks.left);
-  yR = flushLine(rightX, yR, blocks.right);
+  const rightRows = [
+    ['Accepted and Agreed:', true],
+    ['_____________________________', false],
+    [ctx.fullName, false],
+    [ctx.positionTitle, false],
+    [`Date: ${dateStr}`, false],
+  ];
+
+  /** Left: “For…” line, CEO signature image, rule, name / title / date (all bold). */
+  let yL = yStart;
+  doc.fillColor('#111111');
+  doc.font(FONT_BOLD).fontSize(BODY_PT).text('For Dharwin Business Solutions LLC', leftX, yL, { width: colW, lineGap: 2 });
+  yL = doc.y + 4;
+
+  const ceoSigPath = resolveOfferCeoSignaturePng();
+  if (ceoSigPath) {
+    try {
+      yL = drawCeoSignatureImageInColumn(doc, leftX, yL, colW, ceoSigPath);
+    } catch {
+      yL += 4;
+    }
+  } else {
+    yL += 4;
+  }
+
+  doc.save();
+  doc.strokeColor('#222222').lineWidth(0.9);
+  doc.moveTo(leftX, yL).lineTo(leftX + colW, yL).stroke();
+  doc.restore();
+  yL += 8;
+
+  for (const line of ['Dhariwal Harvinder Singh', 'CEO & Founder', `Date: ${dateStr}`]) {
+    doc.font(FONT_BOLD).fontSize(BODY_PT).text(line, leftX, yL, { width: colW, lineGap: 2 });
+    yL = doc.y + 4;
+  }
+
+  const yR = flushLine(rightX, yStart, rightRows);
   return Math.max(yL, yR);
 }
 
 /** Opening paragraph with bold E-Verify / ID clause (matches internship styling). */
 function drawOpeningIntro(doc, y, ctx) {
-  if (y > MAX_Y - 60) {
-    doc.addPage();
-    y = drawLetterheadLikePreview(doc, MARGIN) + 10;
+  if (y > CONTENT_MAX_Y - 60) {
+    y = addContinuationPage(doc);
   }
   const fs = BODY_PT;
   const lg = Math.round(BODY_PT * 0.45);
@@ -507,7 +574,6 @@ const buildOfferLetterPdfBuffer = (ctx) =>
     doc.on('end', () => resolve(Buffer.concat(chunks)));
 
     try {
-      doc._offerLetterJobType = ctx.jobType;
       let y = drawLetterheadLikePreview(doc, MARGIN);
       y += 2;
 
@@ -541,7 +607,7 @@ const buildOfferLetterPdfBuffer = (ctx) =>
       y = doc.y + 12;
 
       y = drawUnifiedOfferBody(doc, y, ctx);
-      drawLetterFooterBlock(doc, y);
+      drawFooterAtBottomOfCurrentPage(doc);
 
       doc.end();
     } catch (e) {

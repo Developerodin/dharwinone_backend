@@ -1,11 +1,13 @@
 import Employee from '../models/employee.model.js';
 import logger from '../config/logger.js';
+import { runJoiningDateReminders } from './placementReminders.service.js';
 
 /**
  * Auto deactivate candidates whose resign date has arrived.
  * Notifies candidate (by email) and admin (in-app) when deactivated.
  * @returns {Promise<number>} Number of candidates deactivated
  */
+
 const autoDeactivateResignedCandidates = async () => {
   try {
     const now = new Date();
@@ -103,6 +105,7 @@ const startCandidateScheduler = (intervalMinutes = 60) => {
   const run = async () => {
     await autoDeactivateResignedCandidates();
     await sendJoiningDateReminders();
+    await runJoiningDateReminders().catch((e) => logger.error(`runJoiningDateReminders: ${e.message}`));
   };
   run();
   const id = setInterval(run, intervalMs);

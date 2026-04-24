@@ -120,7 +120,7 @@ const register = catchAsync(async (req, res) => {
           ActivityActions.REFERRAL_CLAIM,
           EntityTypes.CANDIDATE,
           candidate._id,
-          { source: 'invite_onboard' },
+          { source: 'invite_onboard', claimStage: 'onboard_invite' },
           req
         );
       } catch (e) {
@@ -282,7 +282,7 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
             ActivityActions.REFERRAL_CLAIM,
             EntityTypes.CANDIDATE,
             candidate._id,
-            { jti: v.data.jti, source: v.data.s, org: v.data.o },
+            { jti: v.data.jti, source: v.data.s, org: v.data.o, claimStage: 'public_register' },
             req
           );
         } catch (e) {

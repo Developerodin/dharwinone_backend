@@ -691,8 +691,8 @@ const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, 
       logReferralEvent('referral_job_mismatch', { jobId: String(jobId), tokenJob: String(v.data.j) });
     } else {
       const r = await applyReferralToCandidate(candidate._id, emailNormalized, v.data);
+      const cRef = await Employee.findById(candidate._id);
       if (r.applied) {
-        const cRef = await Employee.findById(candidate._id);
         if (cRef) {
           cRef.referralJobTitle = job?.title || null;
           if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
@@ -705,12 +705,48 @@ const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, 
             ActivityActions.REFERRAL_CLAIM,
             EntityTypes.CANDIDATE,
             candidate._id,
-            { jti: v.data.jti, source: v.data.s, org: v.data.o, jobId: String(jobId) },
+            {
+              jti: v.data.jti,
+              source: v.data.s,
+              org: v.data.o,
+              jobId: String(jobId),
+              claimStage: 'job_apply',
+            },
             req
           );
         } catch (e) {
           logReferralEvent('referral_activity_log_failed', { message: e?.message });
         }
+        try {
+          await createActivityLog(
+            v.data.t,
+            ActivityActions.REFERRAL_JOB_APPLIED,
+            EntityTypes.CANDIDATE,
+            candidate._id,
+            { jobId: String(jobId), claimStage: 'job_apply', pipelineStatus: 'applied' },
+            req
+          );
+        } catch (e) {
+          logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
+        }
+      } else if (r.reason === 'already_attributed' && cRef && v.data.t && String(cRef.referredByUserId) === String(v.data.t)) {
+        cRef.referralJobTitle = job?.title || null;
+        if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
+        cRef.referralPipelineStatus = 'applied';
+        await cRef.save();
+        try {
+          await createActivityLog(
+            v.data.t,
+            ActivityActions.REFERRAL_JOB_APPLIED,
+            EntityTypes.CANDIDATE,
+            candidate._id,
+            { jobId: String(jobId), claimStage: 'job_apply_attributed_earlier', pipelineStatus: 'applied' },
+            req
+          );
+        } catch (e) {
+          logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
+        }
+        logReferralEvent('referral_job_pipeline_update', { candidateId: String(candidate._id), jobId: String(jobId) });
       } else {
         logReferralEvent('referral_claim_skipped', { reason: r.reason, candidateId: String(candidate._id) });
       }
