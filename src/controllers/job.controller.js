@@ -23,7 +23,7 @@ import {
 import { sendJobShareEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -292,9 +292,9 @@ const browseApply = catchAsync(async (req, res) => {
 
   const emailNorm = (req.user.email || '').toLowerCase().trim();
   // Public apply stores candidate.owner as job creator, so logged-in applicants may have no row by owner — match by email too.
-  let candidate = await Candidate.findOne({ owner: userId });
+  let candidate = await Employee.findOne({ owner: userId });
   if (!candidate && emailNorm) {
-    candidate = await Candidate.findOne({ email: emailNorm });
+    candidate = await Employee.findOne({ email: emailNorm });
   }
   if (!candidate) {
     // Find admin user via roleIds
@@ -307,7 +307,7 @@ const browseApply = catchAsync(async (req, res) => {
       throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'No admin user found to assign candidate');
     }
     const userPhone = (req.user.phoneNumber || '').replace(/\D/g, '');
-    candidate = await Candidate.create({
+    candidate = await Employee.create({
       owner: userId,
       adminId: adminUser._id,
       fullName: req.user.name || req.user.email,

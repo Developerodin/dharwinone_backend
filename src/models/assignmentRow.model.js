@@ -15,9 +15,9 @@ const assignmentRowSchema = new mongoose.Schema(
     },
     recommendedCandidateId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Candidate',
+      ref: 'Employee',
     },
-    alternates: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Candidate' }],
+    alternates: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
     rank: { type: Number, default: 1 },
     scores: { type: mongoose.Schema.Types.Mixed },
     gap: { type: Boolean, default: false },

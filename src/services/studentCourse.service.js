@@ -3,7 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
 
@@ -45,7 +45,7 @@ const getOrCreateProgress = async (studentId, moduleId) => {
     });
     const ownerId = student.user;
     if (ownerId) {
-      const cand = await Candidate.findOne({ owner: ownerId }).select('_id').lean();
+      const cand = await Employee.findOne({ owner: ownerId }).select('_id').lean();
       if (cand?._id) {
         const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
         queueSopReminderCheckForCandidate(String(cand._id));

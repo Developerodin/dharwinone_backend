@@ -1,7 +1,7 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import validator from 'validator';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import Token from '../models/token.model.js';
@@ -146,7 +146,7 @@ const syncCompanyEmailHubForCandidate = async (candidate) => {
  */
 const warnCompanyEmailMismatchForOwner = async (ownerUserId, connectedEmail) => {
   try {
-    const cand = await Candidate.findOne({ owner: ownerUserId }).select('companyAssignedEmail').lean();
+    const cand = await Employee.findOne({ owner: ownerUserId }).select('companyAssignedEmail').lean();
     const expected = normalizeCompanyAssignedEmailInput(cand?.companyAssignedEmail);
     if (!expected) return;
     const actual = normalizeCompanyAssignedEmailInput(connectedEmail);
@@ -295,7 +295,7 @@ const createCandidate = async (ownerId, payload) => {
       }
       
       // Check if candidate already exists with the same email
-      const existingCandidate = await Candidate.findOne({ email: candidateData.email });
+      const existingCandidate = await Employee.findOne({ email: candidateData.email });
       if (existingCandidate) {
         throw new ApiError(httpStatus.CONFLICT, `Candidate with email ${candidateData.email} already exists`);
       }
@@ -318,7 +318,7 @@ const createCandidate = async (ownerId, payload) => {
       };
 
       // Create candidate with calculated profile completion
-      const candidate = await Candidate.create(candidatePayload);
+      const candidate = await Employee.create(candidatePayload);
       
       // Calculate and update profile completion percentage and completion status
       candidate.isProfileCompleted = calculateProfileCompletion(candidate);
@@ -557,8 +557,8 @@ const buildAdvancedFilter = (filter) => {
  * @returns {Promise<import('mongoose').Types.ObjectId[]|null>}
  */
 const ensureCandidateProfilesForActiveCandidateUsers = async () => {
-  const { getRoleByName } = await import('./role.service.js');
-  const candidateRole = await getRoleByName('Candidate');
+  const { getEmployeeRole } = await import('./role.service.js');
+  const candidateRole = await getEmployeeRole();
   if (!candidateRole) return null;
 
   const usersWithCandidateRole = await User.find(
@@ -568,7 +568,7 @@ const ensureCandidateProfilesForActiveCandidateUsers = async () => {
   const ownerIdsWithCandidateRole = usersWithCandidateRole.map((u) => u._id);
   if (ownerIdsWithCandidateRole.length === 0) return ownerIdsWithCandidateRole;
 
-  const existingCandidates = await Candidate.find(
+  const existingCandidates = await Employee.find(
     { owner: { $in: ownerIdsWithCandidateRole } },
     { owner: 1 }
   ).lean();
@@ -601,8 +601,8 @@ const ensureCandidateProfilesForActiveCandidateUsers = async () => {
  * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if the Candidate role is not configured
  */
 const getCandidateRoleOwnerIdsForAssignmentRoster = async () => {
-  const { getRoleByName } = await import('./role.service.js');
-  const candidateRole = await getRoleByName('Candidate');
+  const { getEmployeeRole } = await import('./role.service.js');
+  const candidateRole = await getEmployeeRole();
   if (!candidateRole) return null;
 
   const usersWithCandidateRole = await User.find(
@@ -809,7 +809,7 @@ const queryCandidates = async (filter, options) => {
     
     // Count total documents (before pagination)
     const countPipeline = [...pipeline, { $count: 'total' }];
-    const countResult = await Candidate.aggregate(countPipeline);
+    const countResult = await Employee.aggregate(countPipeline);
     const total = countResult.length > 0 ? countResult[0].total : 0;
     
     // Add sorting
@@ -827,7 +827,7 @@ const queryCandidates = async (filter, options) => {
     pipeline.push({ $limit: limit });
     
     // Execute aggregation
-    const candidates = await Candidate.aggregate(pipeline);
+    const candidates = await Employee.aggregate(pipeline);
     
     // Collect all unique owner IDs BEFORE population (owner is just an ID at this point)
     const ownerIds = [...new Set(candidates
@@ -850,7 +850,7 @@ const queryCandidates = async (filter, options) => {
     const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
     
     // Populate owner and adminId
-    const populatedCandidates = await Candidate.populate(candidates, [
+    const populatedCandidates = await Employee.populate(candidates, [
       { path: 'owner', select: 'name email isEmailVerified countryCode' },
       { path: 'adminId', select: 'name email' }
     ]);
@@ -917,7 +917,7 @@ const queryCandidates = async (filter, options) => {
   // Use simple pagination for non-experience-based filters (lean + select for faster load)
   const listFields = 'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate';
   const paginateOptions = { ...options, lean: true, select: listFields };
-  const result = await Candidate.paginate(mongoFilter, paginateOptions);
+  const result = await Employee.paginate(mongoFilter, paginateOptions);
     
     // Manually populate with field selection including isEmailVerified
     if (result.results && result.results.length > 0) {
@@ -943,7 +943,7 @@ const queryCandidates = async (filter, options) => {
           : [];
       const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
       
-      await Candidate.populate(result.results, [
+      await Employee.populate(result.results, [
         { path: 'owner', select: 'name email isEmailVerified countryCode' },
         { path: 'adminId', select: 'name email' }
       ]);
@@ -1010,7 +1010,7 @@ const queryCandidates = async (filter, options) => {
  * @returns {Promise<{ resigned: boolean }>}
  */
 const getResignStatusByOwnerId = async (ownerId) => {
-  const candidate = await Candidate.findOne({ owner: ownerId }).select('resignDate').lean();
+  const candidate = await Employee.findOne({ owner: ownerId }).select('resignDate').lean();
   if (!candidate?.resignDate) return { resigned: false };
   const rd = new Date(candidate.resignDate);
   rd.setHours(0, 0, 0, 0);
@@ -1021,7 +1021,7 @@ const getResignStatusByOwnerId = async (ownerId) => {
 
 /** Get full candidate by owner (for GET /auth/me/with-candidate). Includes documents & salarySlips with presigned URLs. */
 const getCandidateByOwnerForMe = async (userId) => {
-  const candidate = await Candidate.findOne({ owner: userId });
+  const candidate = await Employee.findOne({ owner: userId });
   if (!candidate) return null;
   await candidate.populate([{ path: 'owner', select: 'name email countryCode' }, { path: 'adminId', select: 'name email' }]);
   if (candidate.profilePicture?.key) {
@@ -1061,7 +1061,7 @@ const getCandidateByOwnerForMe = async (userId) => {
 };
 
 const getCandidateById = async (id) => {
-  const candidate = await Candidate.findById(id);
+  const candidate = await Employee.findById(id);
   if (candidate) {
     await candidate.populate([
       { path: 'owner', select: 'name email countryCode' },
@@ -1264,7 +1264,7 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
 };
 
 /**
- * Export must use the same filter pipeline as GET /candidates; never Candidate.find with a partial query only.
+ * Export must use the same filter pipeline as GET /candidates; never Employee.find with a partial query only.
  * @param {object} listFilter - Same shape as list endpoint filter (after controller pick / agent scoping).
  * @param {string} [sortBy] - Same as list sortBy (default createdAt:desc).
  * @returns {Promise<mongoose.Types.ObjectId[]>} Ordered ids.
@@ -1325,7 +1325,7 @@ const getAgentAssignmentSummary = async (scope = {}) => {
       ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
   }
 
-  const groups = await Candidate.aggregate([
+  const groups = await Employee.aggregate([
     { $match: mongoFilter },
     { $group: { _id: '$assignedAgent', assignedCount: { $sum: 1 } } },
   ]);
@@ -1480,7 +1480,7 @@ const exportAllCandidates = async (listFilter = {}, queryOptions = {}) => {
   const oidList = ids.map((id) => new mongoose.Types.ObjectId(String(id)));
   const orderIdx = new Map(ids.map((id, i) => [String(id), i]));
 
-  const candidates = await Candidate.find({ _id: { $in: oidList } })
+  const candidates = await Employee.find({ _id: { $in: oidList } })
     .populate('owner', 'name email')
     .populate('adminId', 'name email')
     .populate('assignedAgent', 'name email')
@@ -1570,7 +1570,7 @@ const verifyDocument = async (candidateId, documentIndex, verificationData, user
     throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can verify documents');
   }
 
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -1593,7 +1593,7 @@ const verifyDocument = async (candidateId, documentIndex, verificationData, user
 };
 
 const getDocumentStatus = async (candidateId, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -1640,7 +1640,7 @@ const getDocumentStatus = async (candidateId, user) => {
 };
 
 const getDocuments = async (candidateId, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -1712,7 +1712,7 @@ const getDocuments = async (candidateId, user) => {
 
 // Get document download URL (generates fresh presigned URL on-demand)
 const getDocumentDownloadUrl = async (candidateId, documentIndex, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -1792,7 +1792,7 @@ const getDocumentDownloadUrl = async (candidateId, documentIndex, user) => {
 
 /** Get salary slip download URL (generates fresh presigned URL on-demand). */
 const getSalarySlipDownloadUrl = async (candidateId, salarySlipIndex, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -1852,7 +1852,7 @@ const shareCandidateProfile = async (candidateId, shareData, currentUser) => {
   const { email, withDoc = false } = shareData;
   
   // Get the candidate with populated owner and admin data
-  const candidate = await Candidate.findById(candidateId)
+  const candidate = await Employee.findById(candidateId)
     .populate('owner', 'name email')
     .populate('adminId', 'name email');
     
@@ -1908,7 +1908,7 @@ const getPublicCandidateProfile = async (candidateId, token, data) => {
   }
   
   // Get the candidate data
-  const candidate = await Candidate.findById(candidateId)
+  const candidate = await Employee.findById(candidateId)
     .populate('owner', 'name email')
     .populate('adminId', 'name email');
     
@@ -2029,7 +2029,7 @@ const getPublicCandidateProfile = async (candidateId, token, data) => {
  */
 const resendCandidateVerificationEmail = async (candidateId, options = {}) => {
   // Get the candidate
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2076,7 +2076,7 @@ const resendCandidateVerificationEmail = async (candidateId, options = {}) => {
  * Add recruiter note to candidate
  */
 const addRecruiterNote = async (candidateId, note, recruiterId) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2104,7 +2104,7 @@ const addRecruiterNote = async (candidateId, note, recruiterId) => {
  * Add recruiter feedback to candidate
  */
 const addRecruiterFeedback = async (candidateId, feedback, rating, _recruiterId) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2131,7 +2131,7 @@ const addRecruiterFeedback = async (candidateId, feedback, rating, _recruiterId)
  * Assign recruiter to candidate
  */
 const assignRecruiterToCandidate = async (candidateId, recruiterId) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2192,10 +2192,10 @@ const listAgentUsersForAssignment = async () => {
  * Each candidate has at most one assignedAgent; many candidates may share the same agent.
  */
 const listStudentAgentAssignments = async () => {
-  const { getRoleByName } = await import('./role.service.js');
+  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
   const Role = (await import('../models/role.model.js')).default;
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getRoleByName('Candidate');
+  const candidateRole = await getEmployeeRole();
   if (!studentRole && !candidateRole) {
     const agents = await listAgentUsersForAssignment();
     return {
@@ -2225,7 +2225,7 @@ const listStudentAgentAssignments = async () => {
     };
   }
 
-  const candidates = await Candidate.find({ owner: { $in: ownerIds } })
+  const candidates = await Employee.find({ owner: { $in: ownerIds } })
     .select('fullName email employeeId owner assignedAgent')
     .populate({ path: 'assignedAgent', select: 'name email' })
     .sort({ fullName: 1 })
@@ -2255,7 +2255,7 @@ const listStudentAgentAssignments = async () => {
     const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
     const tags = [];
     if (names.includes('Student')) tags.push('Student');
-    if (names.includes('Candidate')) tags.push('Candidate');
+    if (names.includes('Employee') || names.includes('Candidate')) tags.push('Employee');
     ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
   });
 
@@ -2293,16 +2293,16 @@ const listStudentAgentAssignments = async () => {
  * @param {string|null|undefined} agentId - null clears assignment
  */
 const assignAgentToCandidate = async (candidateId, agentId) => {
-  const { getRoleByName } = await import('./role.service.js');
-  const candidate = await Candidate.findById(candidateId);
+  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getRoleByName('Candidate');
+  const candidateRole = await getEmployeeRole();
   if (!studentRole && !candidateRole) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Candidate role must be configured');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Employee role must be configured');
   }
   const ownerOr = [];
   if (studentRole) ownerOr.push({ roleIds: studentRole._id });
@@ -2318,7 +2318,7 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
   if (!ownerEligible) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      'Agent assignment applies only to users with the Student or Candidate role'
+      'Agent assignment applies only to users with the Student or Employee role'
     );
   }
 
@@ -2373,10 +2373,10 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
  * Same roster as agent assignment UI, with company work email fields for Settings → Company email.
  */
 const listCompanyEmailAssignments = async () => {
-  const { getRoleByName } = await import('./role.service.js');
+  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
   const Role = (await import('../models/role.model.js')).default;
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getRoleByName('Candidate');
+  const candidateRole = await getEmployeeRole();
   if (!studentRole && !candidateRole) {
     return { students: [] };
   }
@@ -2398,7 +2398,7 @@ const listCompanyEmailAssignments = async () => {
     return { students: [] };
   }
 
-  const candidates = await Candidate.find({ owner: { $in: ownerIds } })
+  const candidates = await Employee.find({ owner: { $in: ownerIds } })
     .select('fullName email employeeId owner assignedAgent companyAssignedEmail companyEmailProvider')
     .populate({ path: 'assignedAgent', select: 'name email' })
     .sort({ fullName: 1 })
@@ -2428,7 +2428,7 @@ const listCompanyEmailAssignments = async () => {
     const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
     const tags = [];
     if (names.includes('Student')) tags.push('Student');
-    if (names.includes('Candidate')) tags.push('Candidate');
+    if (names.includes('Employee') || names.includes('Candidate')) tags.push('Employee');
     ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
   });
 
@@ -2459,11 +2459,11 @@ const listCompanyEmailAssignments = async () => {
 };
 
 const assertAssignableStudentOrCandidateOwner = async (candidate) => {
-  const { getRoleByName } = await import('./role.service.js');
+  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getRoleByName('Candidate');
+  const candidateRole = await getEmployeeRole();
   if (!studentRole && !candidateRole) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Candidate role must be configured');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Employee role must be configured');
   }
   const ownerOr = [];
   if (studentRole) ownerOr.push({ roleIds: studentRole._id });
@@ -2479,7 +2479,7 @@ const assertAssignableStudentOrCandidateOwner = async (candidate) => {
   if (!ownerEligible) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      'Company work email assignment applies only to users with the Student or Candidate role'
+      'Company work email assignment applies only to users with the Student or Employee role'
     );
   }
 };
@@ -2488,7 +2488,7 @@ const assertAssignableStudentOrCandidateOwner = async (candidate) => {
  * Set or clear company work email (same eligibility as agent assignment).
  */
 const assignCompanyAssignedEmailToCandidate = async (candidateId, { companyAssignedEmail, companyEmailProvider }) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2540,7 +2540,7 @@ const patchCompanyEmailSettingsForUser = async (userId, companyEmailAssignmentEn
  * @returns {Promise<Candidate>}
  */
 const updateJoiningDate = async (candidateId, joiningDate, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2582,7 +2582,7 @@ const updateJoiningDate = async (candidateId, joiningDate, user) => {
  * @returns {Promise<Candidate>}
  */
 const updateResignDate = async (candidateId, resignDate, user) => {
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -2624,7 +2624,7 @@ const updateWeekOffForCandidates = async (candidateIds, weekOff, user) => {
   }
 
   // Validate candidate IDs
-  const candidates = await Candidate.find({ _id: { $in: candidateIds } });
+  const candidates = await Employee.find({ _id: { $in: candidateIds } });
   if (candidates.length !== candidateIds.length) {
     const foundIds = candidates.map((c) => String(c._id));
     const missingIds = candidateIds.filter((id) => !foundIds.includes(String(id)));
@@ -2632,7 +2632,7 @@ const updateWeekOffForCandidates = async (candidateIds, weekOff, user) => {
   }
 
   // Update week-off for all candidates
-  const updateResult = await Candidate.updateMany(
+  const updateResult = await Employee.updateMany(
     { _id: { $in: candidateIds } },
     { $set: { weekOff } }
   );
@@ -2641,7 +2641,7 @@ const updateWeekOffForCandidates = async (candidateIds, weekOff, user) => {
   candidateIds.forEach((cid) => queueSopReminderCheckForCandidate(String(cid)));
 
   // Fetch updated candidates
-  const updatedCandidates = await Candidate.find({ _id: { $in: candidateIds } })
+  const updatedCandidates = await Employee.find({ _id: { $in: candidateIds } })
     .populate('owner', 'name email')
     .populate('adminId', 'name email');
 
@@ -2661,7 +2661,7 @@ const updateWeekOffForCandidates = async (candidateIds, weekOff, user) => {
  * @returns {Promise<Object>} Candidate week-off information
  */
 const getCandidateWeekOff = async (candidateId) => {
-  const candidate = await Candidate.findById(candidateId)
+  const candidate = await Employee.findById(candidateId)
     .select('weekOff fullName email')
     .populate('owner', 'name email');
 
@@ -2696,7 +2696,7 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
   }
 
   // Validate candidate IDs
-  const candidates = await Candidate.find({ _id: { $in: candidateIds } });
+  const candidates = await Employee.find({ _id: { $in: candidateIds } });
   if (candidates.length !== candidateIds.length) {
     const foundIds = candidates.map((c) => String(c._id));
     const missingIds = candidateIds.filter((id) => !foundIds.includes(String(id)));
@@ -2704,7 +2704,7 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
   }
 
   // Update shift reference for all candidates
-  const updateResult = await Candidate.updateMany(
+  const updateResult = await Employee.updateMany(
     { _id: { $in: candidateIds } },
     { $set: { shift: shiftId } }
   );
@@ -2713,7 +2713,7 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
   candidateIds.forEach((cid) => queueSopReminderCheckForCandidate(String(cid)));
 
   // Fetch updated candidates with populated shift
-  const updatedCandidates = await Candidate.find({ _id: { $in: candidateIds } })
+  const updatedCandidates = await Employee.find({ _id: { $in: candidateIds } })
     .populate('owner', 'name email')
     .populate('adminId', 'name email')
     .populate('shift', 'name description timezone startTime endTime isActive')
@@ -2745,8 +2745,8 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
  * @returns {Promise<Candidate|null>}
  */
 const ensureCandidateProfileForUser = async (userId) => {
-  const { getRoleByName } = await import('./role.service.js');
-  const candidateRole = await getRoleByName('Candidate');
+  const { getEmployeeRole } = await import('./role.service.js');
+  const candidateRole = await getEmployeeRole();
   if (!candidateRole) return null;
 
   const user = await User.findById(userId);
@@ -2757,7 +2757,7 @@ const ensureCandidateProfileForUser = async (userId) => {
   );
   if (!hasCandidateRole) return null;
 
-  const existing = await Candidate.findOne({ owner: userId });
+  const existing = await Employee.findOne({ owner: userId });
   if (existing) {
     if (existing.isActive === false) {
       existing.isActive = true;
@@ -2768,7 +2768,7 @@ const ensureCandidateProfileForUser = async (userId) => {
 
   // Historical repair: some ATS profiles were created with the right email but attached to the wrong owner.
   // Re-link that profile instead of trying to create a duplicate candidate row (email is unique).
-  const existingByEmail = user.email ? await Candidate.findOne({ email: user.email.toLowerCase().trim() }) : null;
+  const existingByEmail = user.email ? await Employee.findOne({ email: user.email.toLowerCase().trim() }) : null;
   if (existingByEmail) {
     if (String(existingByEmail.owner) !== String(userId)) {
       logger.warn(
@@ -2790,7 +2790,7 @@ const ensureCandidateProfileForUser = async (userId) => {
     ? await User.findOne({ roleIds: adminRole._id }).select('_id').lean()
     : null;
 
-  const candidate = await Candidate.create({
+  const candidate = await Employee.create({
     owner: userId,
     adminId: adminUser?._id || userId,
     fullName: user.name || user.email,
@@ -2820,7 +2820,7 @@ const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
   const hasSalary = salaryRange !== undefined && salaryRange !== null && String(salaryRange).trim() !== '';
   if (!hasEmployee && !hasBio && !hasJoin && !hasDept && !hasDesig && !hasDegree && !hasSalary) return null;
 
-  const candidate = await Candidate.findOne({ owner: userId });
+  const candidate = await Employee.findOne({ owner: userId });
   if (!candidate) return null;
 
   if (hasEmployee) {
@@ -2846,7 +2846,7 @@ const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
 /**
  * Mirror User phone fields onto the linked Candidate (owner).
  * Called after User is updated (admin or PATCH /auth/me) so ATS and User stay aligned.
- * Does not call updateUserById (avoids loops). Candidate.phoneNumber is required — if User clears phone, candidate keeps existing digits.
+ * Does not call updateUserById (avoids loops). Employee.phoneNumber is required — if User clears phone, candidate keeps existing digits.
  * @param {import('mongoose').Types.ObjectId} ownerUserId
  * @param {{ phoneNumber?: string | null, countryCode?: string | null }} fields - omit key to skip that field
  */
@@ -2854,7 +2854,7 @@ const syncPhoneFromUserToCandidate = async (ownerUserId, fields) => {
   const { phoneNumber, countryCode } = fields;
   if (phoneNumber === undefined && countryCode === undefined) return;
 
-  const candidate = await Candidate.findOne({ owner: ownerUserId });
+  const candidate = await Employee.findOne({ owner: ownerUserId });
   if (!candidate) return;
 
   if (phoneNumber !== undefined) {
@@ -2941,7 +2941,7 @@ const updateUserAndCandidateForMe = async (userId, body) => {
       await user.save({ session });
     }
 
-    const candidate = await Candidate.findById(candidateDoc.id || candidateDoc._id).session(session);
+    const candidate = await Employee.findById(candidateDoc.id || candidateDoc._id).session(session);
     if (!candidate) {
       throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
     }
@@ -2978,7 +2978,7 @@ const updateUserAndCandidateForMe = async (userId, body) => {
     }
 
     await session.commitTransaction();
-    return { user: await User.findById(userId), candidate: await Candidate.findById(candidate._id) };
+    return { user: await User.findById(userId), candidate: await Employee.findById(candidate._id) };
   } catch (err) {
     await session.abortTransaction();
     throw err;

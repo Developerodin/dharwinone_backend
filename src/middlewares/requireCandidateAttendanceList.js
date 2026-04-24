@@ -1,7 +1,7 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { getGrantingPermissions } from '../config/permissions.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 
 /**
  * Authorize listing attendance for an ATS candidate (by candidate id).
@@ -17,7 +17,7 @@ const requireCandidateAttendanceList = async (req, res, next) => {
     return next(new ApiError(httpStatus.BAD_REQUEST, 'Candidate ID required'));
   }
 
-  const candidate = await Candidate.findById(candidateId).select('owner').lean();
+  const candidate = await Employee.findById(candidateId).select('owner').lean();
   if (!candidate) {
     return next(new ApiError(httpStatus.NOT_FOUND, 'Candidate not found'));
   }

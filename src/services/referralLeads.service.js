@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import Job from '../models/job.model.js';
 import config from '../config/config.js';
@@ -12,9 +12,19 @@ import logger from '../config/logger.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** @param {import('express').Request} req */
-export const canSeeAllReferralLeads = (req) =>
-  req.authContext?.permissions?.has('candidates.manage') ?? false;
+/**
+ * Who may see the full org referral-lead list (else scoped to their own `referredByUserId`).
+ * - `candidates.manage`: ATS admins
+ * - `interviews.manage`: same org-wide need as the Schedule Interview jobs/recruiters pick lists
+ * @param {import('express').Request} req
+ */
+export const canSeeAllReferralLeads = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  if (p.has('candidates.manage')) return true;
+  if (p.has('interviews.manage')) return true;
+  return false;
+};
 
 /**
  * Build Mongo match for referral leads (referred candidates; not restricted by Candidate-role owner roster).
@@ -172,7 +182,7 @@ export const listReferralLeads = async (req) => {
     }
   }
 
-  const rows = await Candidate.find(match)
+  const rows = await Employee.find(match)
     .sort({ referredAt: -1, _id: -1 })
     .limit(limit + 1)
     .select(selectList)
@@ -206,12 +216,12 @@ export const getReferralLeadsStats = async (req) => {
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
 
   const [totalAgg, byStatus, topRef] = await Promise.all([
-    Candidate.countDocuments(match),
-    Candidate.aggregate([
+    Employee.countDocuments(match),
+    Employee.aggregate([
       { $match: match },
       { $group: { _id: '$referralPipelineStatus', count: { $sum: 1 } } },
     ]),
-    Candidate.aggregate([
+    Employee.aggregate([
       { $match: match },
       { $group: { _id: '$referredByUserId', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
@@ -260,7 +270,7 @@ export const exportReferralLeadsCsv = async (req, res) => {
   const q = { ...req.query, search: undefined };
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
   const cap = 5000;
-  const rows = await Candidate.find(match)
+  const rows = await Employee.find(match)
     .sort({ referredAt: -1 })
     .limit(cap)
     .select(
@@ -345,7 +355,7 @@ export const overrideReferralAttribution = async (req) => {
   if (!mongoose.Types.ObjectId.isValid(newReferredByUserId)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid new referrer id');
   }
-  const c = await Candidate.findById(candidateId);
+  const c = await Employee.findById(candidateId);
   if (!c) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   if (!c.referredByUserId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Candidate has no referral to override');

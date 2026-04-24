@@ -16,7 +16,7 @@ import {
   getResignStatusByOwnerId,
   updateUserAndCandidateForMe,
   applyInitialCandidateProfileFromAdmin,
-} from '../services/candidate.service.js';
+} from '../services/employee.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
@@ -89,7 +89,7 @@ const enrichUserWithFreshProfilePictureUrl = async (user) => {
 
 /**
  * Register (POST /v1/auth/register).
- * - Candidate from invite (role=user, adminId): create User (pending) + Candidate. No tokens until admin activates.
+ * - Candidate from invite (role=user, adminId): create User (pending) + Employee. No tokens until admin activates.
  * - Admin registration (req.user present): create user, no tokens, activity log.
  */
 const register = catchAsync(async (req, res) => {
@@ -108,6 +108,7 @@ const register = catchAsync(async (req, res) => {
       fullName: user.name,
       email: user.email,
       phoneNumber: (phoneNumber && String(phoneNumber).trim()) || '0000000000',
+      ...(countryCode && String(countryCode).trim() && { countryCode: String(countryCode).trim().toUpperCase() }),
       adminId,
       isProfileCompleted: completionPercentage,
     });
@@ -152,7 +153,7 @@ const register = catchAsync(async (req, res) => {
       if (!validation.allowed) {
         throw new ApiError(
           httpStatus.FORBIDDEN,
-          `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Candidate, Student, and Mentor are allowed.`
+          `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Employee, Student, and Mentor are allowed.`
         );
       }
     }
@@ -227,8 +228,9 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
   }
 
-  const { name, email, password, phoneNumber, ref: referralRef } = req.body;
+  const { name, email, password, phoneNumber, countryCode, ref: referralRef } = req.body;
   const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
+  const cc = countryCode && String(countryCode).trim().toUpperCase();
   let user;
   try {
     user = await createUser({
@@ -237,6 +239,8 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       password,
       status: 'pending',
       roleIds: [studentRole._id],
+      ...(phone && phone !== '0000000000' && { phoneNumber: phone }),
+      ...(cc && { countryCode: cc }),
     });
   } catch (err) {
     if (err.statusCode !== httpStatus.BAD_REQUEST || err.message !== 'Email already taken') throw err;
@@ -255,13 +259,14 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       fullName: name,
       email,
       phoneNumber: phone,
+      ...(cc && { countryCode: cc }),
       adminId: user._id,
     });
   } catch (err) {
     if (err.statusCode === httpStatus.CONFLICT && err.message?.includes('already exists')) {
       return res.status(httpStatus.OK).send({
         user,
-        message: 'You are already registered and in the candidate list. You can sign in when your account is active.',
+        message: 'You are already registered and in the employee list. You can sign in when your account is active.',
       });
     }
     throw err;
@@ -295,7 +300,7 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     candidate,
     message: user.status === 'pending'
       ? 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.'
-      : 'You were already registered. You have been added to the candidate list.',
+      : 'You were already registered. You have been added to the employee list.',
   });
 });
 
@@ -585,7 +590,7 @@ const sendCandidateInvitation = catchAsync(async (req, res) => {
       message: 'Click the link in the email to get started.',
       link: onboardUrl,
     }).catch(() => {});
-    res.status(httpStatus.OK).json({ message: 'Candidate invitation email sent successfully', email });
+    res.status(httpStatus.OK).json({ message: 'Onboarding invitation email sent successfully', email });
   }
 });
 

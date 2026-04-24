@@ -30,7 +30,7 @@ const createUser = async (userBody, options = {}) => {
     const { ensureStudentProfileForUser } = await import('./student.service.js');
     await ensureStudentProfileForUser(user.id).catch(() => {});
     // eslint-disable-next-line import/no-cycle
-    const { ensureCandidateProfileForUser } = await import('./candidate.service.js');
+    const { ensureCandidateProfileForUser } = await import('./employee.service.js');
     await ensureCandidateProfileForUser(user.id).catch((err) => {
       logger.warn(`ensureCandidateProfileForUser failed after User.create userId=${user.id}: ${err?.message || err}`);
     });
@@ -143,8 +143,8 @@ const updateUserById = async (userId, updateBody) => {
 
   // Keep linked Candidate phone/country in sync with User (admin PATCH /users, etc.)
   if (updateBody.phoneNumber !== undefined || updateBody.countryCode !== undefined) {
-    // eslint-disable-next-line import/no-cycle -- candidate.service imports user.service; sync is runtime-only
-    const { syncPhoneFromUserToCandidate } = await import('./candidate.service.js');
+    // eslint-disable-next-line import/no-cycle -- employee.service imports user.service; sync is runtime-only
+    const { syncPhoneFromUserToCandidate } = await import('./employee.service.js');
     await syncPhoneFromUserToCandidate(userId, {
       ...(updateBody.phoneNumber !== undefined && { phoneNumber: user.phoneNumber }),
       ...(updateBody.countryCode !== undefined && { countryCode: user.countryCode }),
@@ -173,7 +173,7 @@ const updateUserById = async (userId, updateBody) => {
     const { ensureStudentProfileForUser } = await import('./student.service.js');
     await ensureStudentProfileForUser(user.id).catch(() => {});
     // eslint-disable-next-line import/no-cycle
-    const { ensureCandidateProfileForUser } = await import('./candidate.service.js');
+    const { ensureCandidateProfileForUser } = await import('./employee.service.js');
     await ensureCandidateProfileForUser(user.id).catch((err) => {
       logger.warn(`ensureCandidateProfileForUser failed after updateUserById userId=${userId}: ${err?.message || err}`);
     });
@@ -221,13 +221,13 @@ const deleteUserById = async (userId) => {
   }
 
   // --- Cascade delete Candidate and candidate-linked data ---
-  const Candidate = (await import('../models/candidate.model.js')).default;
-  const candidates = await Candidate.find({ owner: userId }).select('_id');
+  const Employee = (await import('../models/employee.model.js')).default;
+  const candidates = await Employee.find({ owner: userId }).select('_id');
   if (candidates.length) {
     const candidateIds = candidates.map((c) => c._id);
     const JobApplication = (await import('../models/jobApplication.model.js')).default;
     await JobApplication.deleteMany({ candidate: { $in: candidateIds } });
-    await Candidate.deleteMany({ owner: userId });
+    await Employee.deleteMany({ owner: userId });
   }
 
   // --- Delete job applications submitted by this user directly ---

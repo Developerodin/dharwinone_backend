@@ -1,6 +1,6 @@
 import CallRecord from '../models/callRecord.model.js';
 import Job from '../models/job.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import config from '../config/config.js';
 import { normalizePhone } from '../utils/phone.js';
 
@@ -181,7 +181,7 @@ async function listCallRecords(options = {}) {
   if (!options.isAdmin && options.userId) {
     const [jobIds, candidateIds] = await Promise.all([
       Job.distinct('_id', { createdBy: options.userId }),
-      Candidate.distinct('_id', { owner: options.userId }),
+      Employee.distinct('_id', { owner: options.userId }),
     ]);
     andConditions.push({
       $or: [
@@ -285,7 +285,7 @@ async function listCallRecords(options = {}) {
   const needCandidateName = results.filter((r) => r.candidate && !(r.businessName && r.businessName.trim()));
   if (needCandidateName.length > 0) {
     const candidateIds = [...new Set(needCandidateName.map((r) => r.candidate?.toString()).filter(Boolean))];
-    const candidates = await Candidate.find({ _id: { $in: candidateIds } })
+    const candidates = await Employee.find({ _id: { $in: candidateIds } })
       .select('_id fullName')
       .lean();
     const candidateNameMap = new Map(candidates.map((c) => [c._id?.toString(), c.fullName || '']));

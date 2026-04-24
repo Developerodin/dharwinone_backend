@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import EmailAccount from '../models/emailAccount.model.js';
 import logger from '../config/logger.js';
 
@@ -14,7 +14,7 @@ import logger from '../config/logger.js';
 /** @typedef {'gmail'|'outlook'} MailProvider */
 
 /**
- * Normalize company-assigned email (same rules as candidate.service).
+ * Normalize company-assigned email (same rules as employee.service).
  * @param {unknown} raw
  * @returns {string}
  */
@@ -113,7 +113,7 @@ export async function getAssignedMailboxPolicy(ownerUserId) {
     return { hardLockActive: false };
   }
   try {
-    const candidate = await Candidate.findOne({ owner: oid })
+    const candidate = await Employee.findOne({ owner: oid })
       .select('adminId assignedAgent owner companyAssignedEmail companyEmailProvider')
       .lean();
     if (!candidate) {

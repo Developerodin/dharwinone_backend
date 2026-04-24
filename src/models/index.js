@@ -10,7 +10,7 @@ import Attendance from './attendance.model.js';
 import Holiday from './holiday.model.js';
 import StudentGroup from './studentGroup.model.js';
 import Shift from './shift.model.js';
-import Candidate from './candidate.model.js';
+import Employee from './employee.model.js';
 import Meeting from './meeting.model.js';
 import JobApplication from './jobApplication.model.js';
 import Offer from './offer.model.js';
@@ -18,5 +18,5 @@ import Placement from './placement.model.js';
 import Recording from './recording.model.js';
 import EmailAccount from './emailAccount.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Candidate, Meeting, JobApplication, Offer, Placement, Recording, EmailAccount };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Employee, Meeting, JobApplication, Offer, Placement, Recording, EmailAccount };
 

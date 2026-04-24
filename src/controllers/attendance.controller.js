@@ -5,7 +5,7 @@ import attendanceService from '../services/attendance.service.js';
 import * as studentService from '../services/student.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import Student from '../models/student.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 /**
@@ -163,7 +163,7 @@ const getUserAttendance = catchAsync(async (req, res) => {
 
 /** List attendance for a candidate: uses Student records when present, otherwise user-based Attendance.user */
 const getAttendanceByCandidate = catchAsync(async (req, res) => {
-  const candidate = await Candidate.findById(req.params.candidateId).select('owner').lean();
+  const candidate = await Employee.findById(req.params.candidateId).select('owner').lean();
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }

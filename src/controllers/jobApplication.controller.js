@@ -2,7 +2,7 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import {
   getJobApplicationById,
@@ -17,11 +17,11 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
   const userId = user._id || user.id;
-  let candidate = await Candidate.findOne({ owner: userId });
+  let candidate = await Employee.findOne({ owner: userId });
   if (!candidate) {
     const emailNorm = String(user.email || '').toLowerCase().trim();
     if (emailNorm) {
-      candidate = await Candidate.findOne({ email: emailNorm });
+      candidate = await Employee.findOne({ email: emailNorm });
     }
   }
   return candidate;

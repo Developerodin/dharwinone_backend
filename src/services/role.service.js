@@ -110,16 +110,32 @@ const getRoleByName = async (name) => {
   return Role.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
 };
 
+/** Preferred user-role name; legacy deploys may still have "Candidate" until migration. */
+const EMPLOYEE_ROLE_NAME_ALIASES = ['Employee', 'Candidate'];
+
 /**
- * User ids that own ATS candidate profiles we treat as candidates: users with the Candidate role (active or pending).
+ * The ATS employee / job-seeker user role (renamed from Candidate to Employee).
+ * Tries "Employee" first, then "Candidate" for backward compatibility.
+ * @returns {Promise<import('mongoose').Document|null>}
+ */
+const getEmployeeRole = async () => {
+  for (const name of EMPLOYEE_ROLE_NAME_ALIASES) {
+    const r = await getRoleByName(name);
+    if (r) return r;
+  }
+  return null;
+};
+
+/**
+ * User ids that own ATS candidate profiles: users with the Employee (or legacy Candidate) role (active or pending).
  * Supports multi-role users (role id in roleIds array).
- * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if the Candidate role document does not exist; otherwise id list (may be empty)
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if no employee role document exists; otherwise id list (may be empty)
  */
 const getOwnerIdsWithCandidateRole = async () => {
-  const candidateRole = await getRoleByName('Candidate');
-  if (!candidateRole) return null;
+  const employeeRole = await getEmployeeRole();
+  if (!employeeRole) return null;
   const users = await User.find(
-    { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+    { roleIds: employeeRole._id, status: { $in: ['active', 'pending'] } },
     { _id: 1 }
   ).lean();
   return users.map((u) => u._id);
@@ -205,6 +221,7 @@ export {
   queryRoles,
   getRoleById,
   getRoleByName,
+  getEmployeeRole,
   getOwnerIdsWithCandidateRole,
   updateRoleById,
   deleteRoleById,

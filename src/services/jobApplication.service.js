@@ -1,6 +1,6 @@
 import httpStatus from 'http-status';
 import JobApplication from '../models/jobApplication.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 
@@ -14,7 +14,7 @@ const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 
 const getJobApplicationById = async (id) => {
   const application = await JobApplication.findById(id)
     .populate('job', 'title organisation status createdBy')
-    .populate('candidate', 'fullName email phoneNumber countryCode')
+    .populate('candidate', 'fullName email phoneNumber countryCode address')
     .populate('appliedBy', 'name email');
   return application;
 };
@@ -34,7 +34,7 @@ const createJobApplication = async (body, currentUser) => {
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You do not have access to this job');
   }
-  const candidate = await Candidate.findById(body.candidate);
+  const candidate = await Employee.findById(body.candidate);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -91,7 +91,7 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
     application.job = jobId;
   }
   if (candidateId != null && candidateId !== undefined) {
-    const candidate = await Candidate.findById(candidateId);
+    const candidate = await Employee.findById(candidateId);
     if (!candidate) {
       throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
     }
@@ -189,13 +189,16 @@ const queryJobApplications = async (filter, options, currentUser) => {
   // Only include applications from active, existing candidates (excludes soft-deleted AND hard-deleted)
   if (filter.includeInactive !== true && !query.candidate) {
     const activeCandidateIds = (
-      await Candidate.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
+      await Employee.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
     ).map((c) => c._id);
     query.candidate = { $in: activeCandidateIds };
   }
 
   const isAdmin = await userIsAdmin(currentUser);
-  if (!isAdmin && currentUser?.id) {
+  // When filtering by candidate, do not scope to "jobs I created" — referral applications are often
+  // for jobs created by another user; schedule interview (interviews.manage) and listing still
+  // require `candidates.read` on the route.
+  if (!isAdmin && currentUser?.id && !filter.candidateId) {
     const Job = (await import('../models/job.model.js')).default;
     const myJobs = await Job.find({ createdBy: currentUser.id }, { _id: 1 }).lean();
     const myJobIds = myJobs.map((j) => j._id.toString());
@@ -215,7 +218,7 @@ const queryJobApplications = async (filter, options, currentUser) => {
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber countryCode isActive' },
+      { path: 'candidate', select: 'fullName email phoneNumber countryCode isActive address' },
       { path: 'appliedBy', select: 'name email' },
     ],
   });

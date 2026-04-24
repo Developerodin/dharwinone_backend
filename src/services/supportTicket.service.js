@@ -1,6 +1,6 @@
 import httpStatus from 'http-status';
 import SupportTicket from '../models/supportTicket.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { uploadMultipleFilesToS3 } from './upload.service.js';
@@ -112,7 +112,7 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
   const actorUserId = user?.id?.toString?.() || user?._id?.toString?.() || String(userId);
 
   if (ticketData.candidateId) {
-    candidate = await Candidate.findById(ticketData.candidateId);
+    candidate = await Employee.findById(ticketData.candidateId);
     if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
     if (isAdmin) {
       candidateId = candidate._id;
@@ -128,7 +128,7 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
   } else if (isAdmin) {
     candidateId = null;
   } else {
-    candidate = await Candidate.findOne({ owner: userId });
+    candidate = await Employee.findOne({ owner: userId });
     candidateId = candidate?._id || null;
   }
 
@@ -172,7 +172,7 @@ const createSupportTicket = async (ticketData, userId, files = [], user = null) 
 const querySupportTickets = async (filter, options, user) => {
   const isAdmin = await userIsAdmin(user);
   if (!isAdmin) {
-    const candidate = await Candidate.findOne({ owner: user.id });
+    const candidate = await Employee.findOne({ owner: user.id });
     if (candidate) {
       filter.$or = [{ createdBy: user.id }, { candidate: candidate._id }];
     } else {
@@ -216,7 +216,7 @@ const getSupportTicketById = async (ticketId, user) => {
 
   const isAdmin = await userIsAdmin(user);
   if (!isAdmin) {
-    const candidate = await Candidate.findOne({ owner: user.id });
+    const candidate = await Employee.findOne({ owner: user.id });
     const canView = String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
     if (!canView) throw new ApiError(httpStatus.FORBIDDEN, 'You can only view your own tickets');
   }
@@ -233,7 +233,7 @@ const updateSupportTicketById = async (ticketId, updateData, user) => {
 
   const isAdmin = await userIsAdmin(user);
   if (!isAdmin) {
-    const candidate = await Candidate.findOne({ owner: user.id });
+    const candidate = await Employee.findOne({ owner: user.id });
     const canUpdate = String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
     if (!canUpdate) throw new ApiError(httpStatus.FORBIDDEN, 'You can only update your own tickets');
   }
@@ -321,7 +321,7 @@ const addCommentToTicket = async (ticketId, content, user, files = [], isInterna
 
   const isAdmin = await userIsAdmin(user);
   if (!isAdmin) {
-    const candidate = await Candidate.findOne({ owner: user.id });
+    const candidate = await Employee.findOne({ owner: user.id });
     const canComment = String(ticket.createdBy) === String(user.id) || (candidate && String(ticket.candidate) === String(candidate._id));
     if (!canComment) throw new ApiError(httpStatus.FORBIDDEN, 'You can only comment on your own tickets');
     isInternal = false;

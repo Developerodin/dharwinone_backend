@@ -3,11 +3,186 @@ import httpStatus from 'http-status';
 import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
 import JobApplication from '../models/jobApplication.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
+import { buildOfferLetterPdfBuffer, formatStartDate } from './offerLetterPdf.service.js';
+import { uploadPdfBuffer, getObjectBufferByKey } from './fileStorage.service.js';
+import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 
 const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
+
+const DEFAULT_SUPERVISOR = {
+  firstName: 'Jason',
+  lastName: 'Mendonca',
+  phone: '+1-307-206-9144',
+  email: 'jason@dharwinbusinesssolutions.com',
+};
+
+/** Offer letter modal fields — allowed to update even when status is not Draft (CTC etc. stay locked). */
+const OFFER_LETTER_FIELD_KEYS = [
+  'letterFullName',
+  'letterAddress',
+  'positionTitle',
+  'jobType',
+  'weeklyHours',
+  'workLocation',
+  'roleResponsibilities',
+  'trainingOutcomes',
+  'compensationNarrative',
+  'academicAlignmentNote',
+  'employmentEligibilityLines',
+  'supervisor',
+  'letterDate',
+  'joiningDate',
+];
+
+const formatAddressLine = (addr) => {
+  if (!addr || typeof addr !== 'object') return '';
+  const a = addr;
+  const parts = [a.streetAddress, a.streetAddress2, a.city, a.state, a.zipCode, a.country].filter(
+    (x) => x && String(x).trim()
+  );
+  return parts.join(', ');
+};
+
+const buildCompensationNarrative = (offer) => {
+  const gross = offer?.ctcBreakdown?.gross;
+  if (gross == null || Number.isNaN(Number(gross)) || Number(gross) <= 0) return '';
+  const cur = (offer.ctcBreakdown?.currency || 'USD').toUpperCase();
+  const monthly = Number(gross) / 12;
+  const closing =
+    'subject to all applicable federal, state, and local tax withholdings.';
+  if (cur === 'USD') {
+    return `You will receive a gross annual salary of $${Number(gross).toLocaleString('en-US', { maximumFractionDigits: 0 })} USD, payable in monthly installments of $${Math.round(monthly).toLocaleString('en-US', { maximumFractionDigits: 0 })} USD, ${closing}`;
+  }
+  if (cur === 'INR') {
+    const g = Number(gross).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const m = Math.round(monthly).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    // No ₹ in generated copy — standard PDF fonts often render U+20B9 as a wrong glyph (e.g. apostrophe).
+    return `You will receive a gross annual salary of ${g} INR, payable in monthly installments of ${m} INR, ${closing}`;
+  }
+  return `You will receive a gross annual salary of ${Number(gross).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}, payable in monthly installments of ${Math.round(monthly).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}, ${closing}`;
+};
+
+const applyLetterFieldsFromUpdate = (offer, updateBody) => {
+  const take = (k) => {
+    if (updateBody[k] === undefined) return;
+    offer[k] = updateBody[k];
+    delete updateBody[k];
+  };
+  take('letterFullName');
+  take('letterAddress');
+  take('positionTitle');
+  take('jobType');
+  if (updateBody.weeklyHours !== undefined) {
+    offer.weeklyHours = [25, 40].includes(Number(updateBody.weeklyHours)) ? Number(updateBody.weeklyHours) : 40;
+    delete updateBody.weeklyHours;
+  }
+  take('workLocation');
+  if (updateBody.roleResponsibilities !== undefined) {
+    offer.roleResponsibilities = Array.isArray(updateBody.roleResponsibilities) ? updateBody.roleResponsibilities : [];
+    delete updateBody.roleResponsibilities;
+  }
+  if (updateBody.trainingOutcomes !== undefined) {
+    offer.trainingOutcomes = Array.isArray(updateBody.trainingOutcomes) ? updateBody.trainingOutcomes : [];
+    delete updateBody.trainingOutcomes;
+  }
+  take('compensationNarrative');
+  take('academicAlignmentNote');
+  if (updateBody.employmentEligibilityLines !== undefined) {
+    offer.employmentEligibilityLines = Array.isArray(updateBody.employmentEligibilityLines)
+      ? updateBody.employmentEligibilityLines
+      : [];
+    delete updateBody.employmentEligibilityLines;
+  }
+  if (updateBody.supervisor !== undefined) {
+    const s = updateBody.supervisor && typeof updateBody.supervisor === 'object' ? updateBody.supervisor : {};
+    const prev = offer.supervisor && offer.supervisor.toObject ? offer.supervisor.toObject() : offer.supervisor;
+    offer.supervisor = { ...(prev || {}), ...s };
+    delete updateBody.supervisor;
+  }
+  if (updateBody.letterDate !== undefined) {
+    offer.letterDate = updateBody.letterDate ? new Date(updateBody.letterDate) : null;
+    delete updateBody.letterDate;
+  }
+};
+
+const toLetterContext = (offer) => {
+  const job = offer.job && typeof offer.job === 'object' && offer.job.title ? offer.job : null;
+  const candidate = offer.candidate && typeof offer.candidate === 'object' ? offer.candidate : null;
+  const position = (offer.positionTitle && offer.positionTitle.trim()) || (job && job.title) || 'Open role';
+  const fullName = (offer.letterFullName && offer.letterFullName.trim()) || (candidate && candidate.fullName) || 'Candidate';
+  const addrFromEmp = formatAddressLine(candidate && candidate.address);
+  const address = (offer.letterAddress && offer.letterAddress.trim()) || addrFromEmp || '';
+  const jt = offer.jobType || 'FT_40';
+  const isIntern = jt === 'INTERN_UNPAID';
+  let weeklyHours = [25, 40].includes(offer.weeklyHours) ? offer.weeklyHours : 40;
+  if (jt === 'PT_25') weeklyHours = 25;
+  if (jt === 'FT_40') weeklyHours = 40;
+  const fromCtc = buildCompensationNarrative(offer);
+  const comp =
+    (fromCtc && fromCtc.trim()) ||
+    (offer.compensationNarrative && String(offer.compensationNarrative).trim()) ||
+    '';
+  const s = offer.supervisor && (offer.supervisor.toObject ? offer.supervisor.toObject() : offer.supervisor);
+  const hasSup = s && (s.firstName || s.lastName || s.email || s.phone);
+  /** Same supervisor defaults as paid letters — Word template includes supervisor for all offer types. */
+  const supFinal = { ...DEFAULT_SUPERVISOR, ...(hasSup ? s : {}) };
+  const roleBullets = Array.isArray(offer.roleResponsibilities) ? offer.roleResponsibilities.map((x) => String(x)) : [];
+  const trainingBullets = Array.isArray(offer.trainingOutcomes) ? offer.trainingOutcomes.map((x) => String(x)) : [];
+  return {
+    isIntern,
+    jobType: jt,
+    weeklyHours,
+    fullName,
+    address,
+    positionTitle: position,
+    startDateText: formatStartDate(offer.joiningDate),
+    workLocation: offer.workLocation || 'Remote (USA)',
+    roleBullets,
+    trainingBullets: isIntern ? trainingBullets : undefined,
+    compensation: isIntern ? undefined : comp,
+    supervisor: supFinal,
+    academicNote: offer.academicAlignmentNote,
+    eligibilityLines: Array.isArray(offer.employmentEligibilityLines)
+      ? offer.employmentEligibilityLines.map((x) => String(x).trim()).filter(Boolean)
+      : [],
+    /** Null when unset — PDF uses same long vs short date rules as the on-screen preview. */
+    letterDate: offer.letterDate || null,
+  };
+};
+
+const assertOfferLetterReady = (offer) => {
+  const ctx = toLetterContext(offer);
+  if (!ctx.address) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Letter address is required (set letter address or candidate address).');
+  }
+  if (!offer.joiningDate) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Joining date is required for the offer letter.');
+  }
+  if (!offer.jobType) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Job type is required (FT_40, PT_25, or INTERN_UNPAID).');
+  }
+  if (ctx.roleBullets.length === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'At least one role / responsibility is required.');
+  }
+  if (ctx.isIntern) {
+    if (!ctx.trainingBullets || ctx.trainingBullets.length === 0) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Training / learning outcomes are required for an unpaid internship offer.');
+    }
+  } else if (
+    !(
+      Number(offer.ctcBreakdown?.gross) > 0 ||
+      (offer.compensationNarrative && offer.compensationNarrative.trim())
+    )
+  ) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Compensation: set annual gross CTC on the offer (letter form), or save a custom compensation narrative.'
+    );
+  }
+};
 
 const ensureAccess = async (currentUser, offerOrJob) => {
   const job = offerOrJob.job ? await getJobById(offerOrJob.job) : offerOrJob;
@@ -54,6 +229,19 @@ const createOffer = async (jobApplicationId, payload, userId) => {
     offerValidityDate: payload.offerValidityDate ? new Date(payload.offerValidityDate) : null,
     notes: payload.notes,
     createdBy: userId,
+    ...(payload.letterFullName != null && { letterFullName: payload.letterFullName }),
+    ...(payload.letterAddress != null && { letterAddress: payload.letterAddress }),
+    ...(payload.positionTitle != null && { positionTitle: payload.positionTitle }),
+    ...(payload.jobType != null && { jobType: payload.jobType }),
+    ...([25, 40].includes(payload.weeklyHours) && { weeklyHours: payload.weeklyHours }),
+    ...(payload.workLocation != null && { workLocation: payload.workLocation }),
+    ...(Array.isArray(payload.roleResponsibilities) && { roleResponsibilities: payload.roleResponsibilities }),
+    ...(Array.isArray(payload.trainingOutcomes) && { trainingOutcomes: payload.trainingOutcomes }),
+    ...(payload.compensationNarrative != null && { compensationNarrative: payload.compensationNarrative }),
+    ...(payload.academicAlignmentNote != null && { academicAlignmentNote: payload.academicAlignmentNote }),
+    ...(Array.isArray(payload.employmentEligibilityLines) && { employmentEligibilityLines: payload.employmentEligibilityLines }),
+    ...(payload.supervisor != null && typeof payload.supervisor === 'object' && { supervisor: payload.supervisor }),
+    ...(payload.letterDate != null && { letterDate: new Date(payload.letterDate) }),
   });
 
   await application.updateOne({ status: 'Offered' });
@@ -67,7 +255,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
 const getOfferById = async (id, currentUser = null) => {
   const offer = await Offer.findById(id)
     .populate('job', 'title organisation status')
-    .populate('candidate', 'fullName email phoneNumber')
+    .populate('candidate', 'fullName email phoneNumber address')
     .populate('jobApplication', 'status notes')
     .populate('createdBy', 'name email');
   if (!offer) return null;
@@ -78,11 +266,12 @@ const getOfferById = async (id, currentUser = null) => {
 };
 
 /**
- * Update offer (only Draft can be fully edited)
+ * Update offer: Draft allows full edit; non-Draft allows status/notes/rejection + offer letter PDF fields only.
  * @param {string} id - Offer id
  * @param {Object} updateBody - Fields to update
  * @param {Object} currentUser - User performing the update
- * @param {Object} [options] - { skipAccessCheck: true } for internal flows (e.g. move from interview)
+ * @param {Object} [options] - { skipAccessCheck: true } for internal flows (e.g. move from interview);
+ *   skipSentNotification: true to skip the default "offer sent" in-app/email when a full offer letter was already sent.
  */
 const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   const offer = await Offer.findById(id);
@@ -94,10 +283,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   }
 
   if (offer.status !== 'Draft') {
-    const allowed = ['status', 'notes', 'rejectionReason'];
+    const allowed = ['status', 'notes', 'rejectionReason', ...OFFER_LETTER_FIELD_KEYS, 'ctcBreakdown'];
     const keys = Object.keys(updateBody).filter((k) => allowed.includes(k));
     updateBody = Object.fromEntries(keys.map((k) => [k, updateBody[k]]));
   }
+
+  applyLetterFieldsFromUpdate(offer, updateBody);
 
   if (updateBody.ctcBreakdown) {
     const cb = updateBody.ctcBreakdown;
@@ -133,7 +324,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     } else if (newStatus === 'Accepted') {
       offer.acceptedAt = new Date();
       await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
-      const candidate = await Candidate.findById(offer.candidate).select('employeeId joiningDate').lean();
+      const candidate = await Employee.findById(offer.candidate).select('employeeId joiningDate').lean();
       await Placement.create({
         offer: offer._id,
         candidate: offer.candidate,
@@ -144,7 +335,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         createdBy: offer.createdBy,
       });
       if (offer.joiningDate) {
-        await Candidate.findByIdAndUpdate(offer.candidate, { joiningDate: offer.joiningDate });
+        await Employee.findByIdAndUpdate(offer.candidate, { joiningDate: offer.joiningDate });
       }
     } else if (newStatus === 'Rejected') {
       offer.rejectedAt = new Date();
@@ -157,19 +348,21 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     const jobObj = offer.job && typeof offer.job === 'object' && offer.job.title ? offer.job : await getJobById(offer.job);
     const jobTitle = jobObj?.title || 'Job';
     if (newStatus === 'Sent') {
-      const cand = await Candidate.findById(offer.candidate).select('email').lean();
-      if (cand?.email) {
-        const msg = `An offer for "${jobTitle}" has been sent to you.`;
-        notifyByEmail(cand.email, {
-          type: 'offer',
-          title: 'Offer sent to you',
-          message: msg,
-          link: '/ats/offers-placement',
-          email: {
-            subject: `Offer: ${jobTitle}`,
-            text: plainTextEmailBody(msg, '/ats/offers-placement'),
-          },
-        }).catch(() => {});
+      if (!options.skipSentNotification) {
+        const cand = await Employee.findById(offer.candidate).select('email').lean();
+        if (cand?.email) {
+          const msg = `An offer for "${jobTitle}" has been sent to you.`;
+          notifyByEmail(cand.email, {
+            type: 'offer',
+            title: 'Offer sent to you',
+            message: msg,
+            link: '/ats/offers-placement',
+            email: {
+              subject: `Offer: ${jobTitle}`,
+              text: plainTextEmailBody(msg, '/ats/offers-placement'),
+            },
+          }).catch(() => {});
+        }
       }
     } else if (newStatus === 'Accepted' || newStatus === 'Rejected') {
       const creatorId = offer.createdBy?._id || offer.createdBy;
@@ -239,7 +432,7 @@ const queryOffers = async (filter, options, currentUser) => {
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber profilePicture employeeId department designation reportingManager' },
+      { path: 'candidate', select: 'fullName email phoneNumber address profilePicture employeeId department designation reportingManager' },
       { path: 'createdBy', select: 'name email' },
     ],
   });
@@ -294,11 +487,43 @@ const deleteOfferById = async (id, currentUser) => {
   return offer;
 };
 
+const generateOfferLetter = async (id, currentUser) => {
+  const offer = await getOfferById(id, currentUser);
+  if (!offer) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
+  }
+  assertOfferLetterReady(offer);
+  const ctx = toLetterContext(offer);
+  const buf = await buildOfferLetterPdfBuffer(ctx);
+  const userId = currentUser?.id ?? currentUser?._id;
+  const { key } = await uploadPdfBuffer(userId, buf, 'offer-letters/');
+  await Offer.findByIdAndUpdate(id, {
+    offerLetterKey: key,
+    offerLetterGeneratedAt: new Date(),
+  });
+  return getOfferById(id, currentUser);
+};
+
+const getOfferLetterFileBuffer = async (id, currentUser) => {
+  const offer = await getOfferById(id, currentUser);
+  if (!offer?.offerLetterKey) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Offer letter has not been generated yet');
+  }
+  const buffer = await getObjectBufferByKey(offer.offerLetterKey);
+  const filename = `Offer-Letter-${offer.offerCode || id}.pdf`;
+  return { buffer, filename };
+};
+
+const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);
+
 export {
   createOffer,
   getOfferById,
   updateOfferById,
   queryOffers,
   deleteOfferById,
+  generateOfferLetter,
+  getOfferLetterFileBuffer,
+  getLetterDefaultsForTitle,
   STATUS_VALUES,
 };

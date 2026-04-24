@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 
 const CTX_ONBOARD = 'SHARE_CANDIDATE_ONBOARD';
 const CTX_JOB = 'JOB_APPLY';
@@ -89,7 +89,7 @@ export const verifyReferralToken = (token) => {
 };
 
 /**
- * Map token source to Candidate.referralContext
+ * Map token source to Employee.referralContext
  */
 const sourceToContext = (s) => {
   if (s === 'job') return CTX_JOB;
@@ -117,7 +117,7 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
     return { applied: false, reason: 'email_mismatch' };
   }
 
-  const c = await Candidate.findById(candidateId);
+  const c = await Employee.findById(candidateId);
   if (!c) {
     return { applied: false, reason: 'not_found' };
   }
@@ -153,7 +153,7 @@ export const applyOnboardInviteReferral = async (candidateId, inviteeEmail, invi
   if (!email || !mongoose.Types.ObjectId.isValid(String(inviterUserId))) {
     return { applied: false, reason: 'invalid_input' };
   }
-  const c = await Candidate.findById(candidateId);
+  const c = await Employee.findById(candidateId);
   if (!c) {
     return { applied: false, reason: 'not_found' };
   }

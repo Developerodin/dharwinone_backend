@@ -1,10 +1,10 @@
 import mongoose from 'mongoose';
 import Job from '../models/job.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import User from '../models/user.model.js';
 import { getActivityStatistics, getActivityLogsSummary } from './recruiterActivity.service.js';
-import { ensureCandidateProfilesForActiveCandidateUsers } from './candidate.service.js';
+import { ensureCandidateProfilesForActiveCandidateUsers } from './employee.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
 
 const TIME_BUCKETS = 12;
@@ -82,7 +82,7 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
 
   // Active candidate docs for application metrics — same owner/Candidate-role rule as list + totals
   const activeCandidateIds = (
-    await Candidate.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
+    await Employee.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
   ).map((c) => c._id);
 
   const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
@@ -112,7 +112,7 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     previousApplications,
     previousHired,
   ] = await Promise.all([
-    Candidate.countDocuments(candidateMatch),
+    Employee.countDocuments(candidateMatch),
     Job.countDocuments(jobMatch),
     Job.countDocuments({ ...jobMatch, status: 'Active' }),
     JobApplication.countDocuments({ ...appMatch, ...appDateMatch }),
@@ -124,7 +124,7 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
           const recruiterRole = await Role.findOne({ name: 'Recruiter', status: 'active' }).select('_id').lean();
           return recruiterRole ? User.countDocuments({ roleIds: recruiterRole._id }) : 0;
         })(),
-    Candidate.aggregate([
+    Employee.aggregate([
       { $match: candidateMatch },
       { $group: { _id: null, avg: { $avg: '$isProfileCompleted' } } },
     ]),
@@ -241,7 +241,7 @@ const getDrillDown = async (params, user = {}) => {
         ? {}
         : { owner: ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] } };
     const activeCandidateIds = (
-      await Candidate.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
+      await Employee.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
     ).map((c) => c._id);
 
     const query = { status: value, candidate: { $in: activeCandidateIds } };

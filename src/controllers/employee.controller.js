@@ -41,7 +41,7 @@ import {
   assignShiftToCandidates,
   listAgentUsersForAssignment,
   getAgentAssignmentSummary,
-} from '../services/candidate.service.js';
+} from '../services/employee.service.js';
 import {
   listReferralLeads,
   getReferralLeadsStats,

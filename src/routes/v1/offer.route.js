@@ -7,6 +7,38 @@ import * as offerController from '../../controllers/offer.controller.js';
 
 const router = express.Router();
 
+router.get(
+  '/letter-defaults',
+  auth(),
+  requirePermissions('candidates.read'),
+  validate(offerValidation.letterDefaults),
+  offerController.letterDefaults
+);
+
+router.post(
+  '/enhance-roles',
+  auth(),
+  requirePermissions('candidates.manage'),
+  validate(offerValidation.enhanceRoles),
+  offerController.enhanceRoles
+);
+
+router.post(
+  '/:offerId/generate-letter',
+  auth(),
+  requirePermissions('candidates.manage'),
+  validate(offerValidation.generateLetter),
+  offerController.generateLetter
+);
+
+router.get(
+  '/:offerId/letter-file',
+  auth(),
+  requirePermissions('candidates.read'),
+  validate(offerValidation.getOffer),
+  offerController.downloadLetterFile
+);
+
 router
   .route('/')
   .post(

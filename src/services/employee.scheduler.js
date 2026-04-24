@@ -1,4 +1,4 @@
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import logger from '../config/logger.js';
 
 /**
@@ -11,7 +11,7 @@ const autoDeactivateResignedCandidates = async () => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
 
-    const candidatesToDeactivate = await Candidate.find({
+    const candidatesToDeactivate = await Employee.find({
       resignDate: { $lte: now },
       isActive: true,
     })
@@ -24,7 +24,7 @@ const autoDeactivateResignedCandidates = async () => {
     let deactivated = 0;
     for (const c of candidatesToDeactivate) {
       try {
-        await Candidate.updateOne({ _id: c._id }, { isActive: false });
+        await Employee.updateOne({ _id: c._id }, { isActive: false });
         deactivated++;
         logger.info(
           `Auto-deactivated candidate ${c.fullName} (ID: ${c._id}, Email: ${c.email}) on resign date: ${c.resignDate?.toISOString?.() || c.resignDate}`
@@ -67,7 +67,7 @@ const sendJoiningDateReminders = async () => {
     const nextDay = new Date(inThreeDays);
     nextDay.setDate(nextDay.getDate() + 1);
 
-    const candidates = await Candidate.find({
+    const candidates = await Employee.find({
       joiningDate: { $gte: inThreeDays, $lt: nextDay },
       isActive: true,
     })

@@ -1,7 +1,7 @@
 import XLSX from 'xlsx';
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
-import { createCandidate } from './candidate.service.js';
+import { createCandidate } from './employee.service.js';
 
 // Country-specific phone validation rules
 const PHONE_RULES = {

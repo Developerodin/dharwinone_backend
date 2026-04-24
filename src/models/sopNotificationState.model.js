@@ -6,7 +6,7 @@ import mongoose from 'mongoose';
 const sopNotificationStateSchema = new mongoose.Schema(
   {
     recipientUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate', required: true, index: true },
+    candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
     checkerKey: { type: String, required: true, trim: true },
     dateBucket: { type: String, required: true, trim: true },
     lastNotifiedAt: { type: Date, default: Date.now },

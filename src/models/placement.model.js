@@ -16,7 +16,7 @@ const placementSchema = new mongoose.Schema(
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Candidate',
+      ref: 'Employee',
       required: true,
       index: true,
     },

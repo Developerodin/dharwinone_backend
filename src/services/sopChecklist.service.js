@@ -1,13 +1,13 @@
 import logger from '../config/logger.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import Student from '../models/student.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import CandidateSopTemplate from '../models/candidateSopTemplate.model.js';
 
 /**
- * Candidate first, then Student — avoids flicker when training profile sync lags behind Candidate.
- * @param {import('../models/candidate.model.js').default} candidate
+ * Candidate first, then Student — avoids flicker when training profile sync lags behind Employee.
+ * @param {import('../models/employee.model.js').default} candidate
  * @param {import('../models/student.model.js').default|null} student
  */
 const ctxFromRecords = (candidate, student) => ({ candidate, student });
@@ -249,7 +249,7 @@ export const getActiveTemplateLean = async () => {
  * Load candidate + student for SOP evaluation.
  */
 export const loadSopContext = async (candidateId) => {
-  const candidate = await Candidate.findById(candidateId).lean();
+  const candidate = await Employee.findById(candidateId).lean();
   if (!candidate) return { candidate: null, student: null };
   const ownerId = candidate.owner;
   const student = ownerId
@@ -405,7 +405,7 @@ export const listSopOpenOverviewForManage = async ({ limit = 200 } = {}) => {
   const cap = Math.min(Math.max(Number(limit) || 200, 1), 500);
   const activeTemplate = await getActiveTemplateLean();
 
-  const { queryCandidates } = await import('./candidate.service.js');
+  const { queryCandidates } = await import('./employee.service.js');
   const list = await queryCandidates(
     { employmentStatus: 'current' },
     { limit: cap, page: 1, sortBy: 'fullName:asc' }

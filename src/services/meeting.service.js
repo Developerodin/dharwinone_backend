@@ -4,9 +4,10 @@ import InternalMeeting from '../models/internalMeeting.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Job from '../models/job.model.js';
 import Offer from '../models/offer.model.js';
+import Placement from '../models/placement.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { sendMeetingInvitationEmail } from './email.service.js';
+import { sendMeetingInvitationEmail, sendOfferLetterEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
@@ -183,9 +184,103 @@ const resolveMeetingByIdOrMeetingId = async (id) => {
   return Meeting.findOne({ meetingId: trimmed });
 };
 
+const DEFAULT_OFFER_JOINING_DAYS = 30;
+
+const defaultJoiningDateForInterviewOffer = () => {
+  const d = new Date();
+  d.setDate(d.getDate() + DEFAULT_OFFER_JOINING_DAYS);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const formatCtcLine = (ctc) => {
+  const gross = ctc?.gross ?? 0;
+  const currency = ctc?.currency || 'INR';
+  try {
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(gross);
+  } catch {
+    return `${gross} ${currency}`;
+  }
+};
+
+const formatOfferDate = (d) => {
+  if (!d) return 'TBD';
+  try {
+    return new Intl.DateTimeFormat('en-IN', { dateStyle: 'long' }).format(new Date(d));
+  } catch {
+    return 'TBD';
+  }
+};
+
+/**
+ * Ensure joining date, email offer letter, then Draft → Sent → Accepted (placement).
+ * @param {import('mongoose').Types.ObjectId|string} offerId
+ * @param {string} userId
+ */
+const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
+  const actor = { id: userId, _id: userId };
+  const id = offerId.toString();
+  let offer = await offerService.getOfferById(id, null);
+  if (!offer) {
+    logger.warn('[emailOfferLetterAndCompletePlacement] Offer not found %s', id);
+    return;
+  }
+  if (offer.status === 'Accepted') {
+    return;
+  }
+
+  if (!offer.joiningDate) {
+    await offerService.updateOfferById(
+      id,
+      { joiningDate: defaultJoiningDateForInterviewOffer() },
+      actor,
+      { skipAccessCheck: true }
+    );
+    offer = await offerService.getOfferById(id, null);
+  }
+
+  const cand = offer.candidate;
+  const job = offer.job;
+  const email = typeof cand === 'object' && cand?.email ? String(cand.email).trim() : null;
+  const fullName = typeof cand === 'object' && cand?.fullName ? cand.fullName : 'Candidate';
+  const companyName = typeof job === 'object' && job?.organisation?.name ? job.organisation.name : 'Dharwin Business Solutions';
+  const jobTitle = typeof job === 'object' && job?.title ? job.title : 'Open role';
+  const validityText = offer.offerValidityDate ? formatOfferDate(offer.offerValidityDate) : '';
+
+  if (email) {
+    try {
+      await sendOfferLetterEmail(email, {
+        candidateName: fullName,
+        jobTitle,
+        offerCode: offer.offerCode,
+        companyName,
+        ctcLine: formatCtcLine(offer.ctcBreakdown),
+        joiningDateText: formatOfferDate(offer.joiningDate),
+        validityText,
+      });
+    } catch (err) {
+      logger.error('[emailOfferLetterAndCompletePlacement] sendOfferLetterEmail failed: %s', err?.message || err);
+    }
+  } else {
+    logger.warn('[emailOfferLetterAndCompletePlacement] No candidate email for offer %s', id);
+  }
+
+  const fresh = await offerService.getOfferById(id, null);
+  if (fresh?.status === 'Accepted') {
+    return;
+  }
+  if (fresh?.status === 'Draft') {
+    await offerService.updateOfferById(id, { status: 'Sent' }, actor, {
+      skipAccessCheck: true,
+      skipSentNotification: true,
+    });
+  }
+  await offerService.updateOfferById(id, { status: 'Accepted' }, actor, { skipAccessCheck: true });
+};
+
 /**
  * Move candidate to preboarding when interview result is "selected".
- * Creates an offer, sets it to Accepted (which creates Placement with status Pending).
+ * Creates an offer, emails an offer letter, then Sent → Accepted (placement Pending).
  * @param {Object} meeting - Meeting document (after save)
  * @param {string} userId - User performing the action
  */
@@ -269,13 +364,40 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
       return;
     }
     if (existingOffer.status === 'Draft') {
-      await offerService.updateOfferById(
-        existingOffer._id.toString(),
-        { status: 'Accepted' },
-        { id: userId, _id: userId },
-        { skipAccessCheck: true }
-      );
-      logger.info('[moveCandidateToPreboarding] Updated Draft offer to Accepted for application %s', application._id);
+      try {
+        await emailOfferLetterAndCompletePlacement(existingOffer._id, userId);
+        logger.info('[moveCandidateToPreboarding] Emailed offer letter and completed placement for application %s', application._id);
+      } catch (err) {
+        logger.error('[moveCandidateToPreboarding] Failed to complete offer from Draft:', err?.message || err);
+        throw err;
+      }
+      return;
+    }
+    if (existingOffer.status === 'Sent' || existingOffer.status === 'Under Negotiation') {
+      const hasPlacement = await Placement.exists({ offer: existingOffer._id });
+      if (hasPlacement) {
+        logger.debug('[moveCandidateToPreboarding] Offer already has placement, skipping');
+        return;
+      }
+      if (!existingOffer.joiningDate) {
+        logger.warn(
+          '[moveCandidateToPreboarding] Offer %s has no joining date; cannot create placement. Update the offer in Offers & placement.',
+          existingOffer._id
+        );
+        return;
+      }
+      try {
+        await offerService.updateOfferById(
+          existingOffer._id.toString(),
+          { status: 'Accepted' },
+          { id: userId, _id: userId },
+          { skipAccessCheck: true }
+        );
+        logger.info('[moveCandidateToPreboarding] Accepted existing Sent offer for application %s, placement created', application._id);
+      } catch (err) {
+        logger.error('[moveCandidateToPreboarding] Failed to accept existing offer:', err?.message || err);
+        throw err;
+      }
       return;
     }
     logger.debug('[moveCandidateToPreboarding] Offer exists with status %s, skipping', existingOffer.status);
@@ -283,18 +405,19 @@ const moveCandidateToPreboarding = async (meeting, userId) => {
   }
 
   try {
-    const offer = await offerService.createOffer(
+    await offerService.createOffer(
       application._id.toString(),
-      { ctcBreakdown: { base: 0, hra: 0, gross: 0, currency: 'INR' } },
+      {
+        ctcBreakdown: { base: 0, hra: 0, gross: 0, currency: 'INR' },
+        joiningDate: defaultJoiningDateForInterviewOffer(),
+      },
       userId
     );
-    await offerService.updateOfferById(
-      offer._id.toString(),
-      { status: 'Accepted' },
-      { id: userId, _id: userId },
-      { skipAccessCheck: true }
-    );
-    logger.info('[moveCandidateToPreboarding] Created and accepted offer for application %s, placement created', application._id);
+    const created = await Offer.findOne({ jobApplication: application._id });
+    if (created) {
+      await emailOfferLetterAndCompletePlacement(created._id, userId);
+    }
+    logger.info('[moveCandidateToPreboarding] Created offer, emailed letter, and placement for application %s', application._id);
   } catch (err) {
     logger.error('[moveCandidateToPreboarding] Failed to create/accept offer:', err?.message || err);
     throw err;

@@ -8,7 +8,11 @@ import {
   updateOfferById,
   queryOffers,
   deleteOfferById,
+  generateOfferLetter,
+  getOfferLetterFileBuffer,
+  getLetterDefaultsForTitle,
 } from '../services/offer.service.js';
+import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 
 const create = catchAsync(async (req, res) => {
   const { jobApplicationId, ...payload } = req.body;
@@ -42,4 +46,48 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { create, get, update, list, remove };
+const letterDefaults = catchAsync(async (req, res) => {
+  const positionTitle = String(req.query.positionTitle || '');
+  res.send(getLetterDefaultsForTitle(positionTitle));
+});
+
+const generateLetter = catchAsync(async (req, res) => {
+  const offer = await generateOfferLetter(req.params.offerId, req.user);
+  res.send(offer);
+});
+
+const downloadLetterFile = catchAsync(async (req, res) => {
+  const { buffer, filename } = await getOfferLetterFileBuffer(req.params.offerId, req.user);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(buffer);
+});
+
+const enhanceRoles = catchAsync(async (req, res) => {
+  const { jobTitle, existingRoles, existingTraining, isInternship, enhanceFocus } = req.body;
+  const intern = !!isInternship;
+  const resolvedFocus = !intern
+    ? 'roles'
+    : enhanceFocus === 'training' || enhanceFocus === 'both'
+      ? enhanceFocus
+      : 'roles';
+  const result = await enhanceOfferLetterRoles({
+    jobTitle,
+    existingRoles: existingRoles || '',
+    existingTraining: existingTraining || '',
+    isInternship: intern,
+    enhanceFocus: intern ? resolvedFocus : 'roles',
+  });
+  const payload = {};
+  if (result.lines?.length) {
+    payload.lines = result.lines;
+    payload.text = result.lines.join('\n');
+  }
+  if (result.trainingOutcomes?.length) {
+    payload.trainingLines = result.trainingOutcomes;
+    payload.trainingText = result.trainingOutcomes.join('\n');
+  }
+  res.send(payload);
+});
+
+export { create, get, update, list, remove, letterDefaults, generateLetter, downloadLetterFile, enhanceRoles };

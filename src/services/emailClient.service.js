@@ -1,6 +1,6 @@
 import EmailAccount from '../models/emailAccount.model.js';
 import * as gmailProvider from './emailProviders/gmailProvider.js';
-import { warnCompanyEmailMismatchForOwner } from './candidate.service.js';
+import { warnCompanyEmailMismatchForOwner } from './employee.service.js';
 import { getAssignedMailboxPolicy } from './emailConnectionPolicy.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';

@@ -49,6 +49,8 @@ const registerCandidate = {
     password: Joi.string().required().custom(password),
     name: Joi.string().required(),
     phoneNumber: Joi.string().allow('').optional(),
+    /** ISO 3166-1 alpha-2, e.g. US, IN — stored on User + Candidate so profile shows correct dial code */
+    countryCode: Joi.string().length(2).uppercase().optional().allow(''),
     /** HMAC v1 ref= token from tracked referral link */
     ref: Joi.string().trim().allow('').optional(),
   }),
@@ -300,7 +302,7 @@ const updateMeWithCandidate = {
       })
         .optional()
         .allow(null),
-      // Candidate fields (from candidate.validation updateCandidate)
+      // Employee profile fields (from employee.validation updateCandidate)
       fullName: Joi.string().trim(),
       email: Joi.string().email(),
       phoneNumber: Joi.string()

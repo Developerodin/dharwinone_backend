@@ -28,7 +28,7 @@ const recruiterActivityLogSchema = new mongoose.Schema(
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Candidate',
+      ref: 'Employee',
       index: true,
     },
     // Meeting ref optional - DHARWIN NEW has no Meeting model yet

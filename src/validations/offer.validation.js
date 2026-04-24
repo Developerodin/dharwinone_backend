@@ -12,6 +12,31 @@ const ctcBreakdown = Joi.object({
   currency: Joi.string().optional().trim().default('INR'),
 });
 
+const jobTypeLetter = Joi.string().valid('FT_40', 'PT_25', 'INTERN_UNPAID');
+
+const supervisor = Joi.object({
+  firstName: Joi.string().trim().allow(''),
+  lastName: Joi.string().trim().allow(''),
+  phone: Joi.string().trim().allow(''),
+  email: Joi.string().trim().allow(''),
+});
+
+const letterBodyKeys = {
+  letterFullName: Joi.string().trim().allow(''),
+  letterAddress: Joi.string().trim().allow(''),
+  positionTitle: Joi.string().trim().allow(''),
+  jobType: jobTypeLetter,
+  weeklyHours: Joi.number().valid(25, 40),
+  workLocation: Joi.string().trim().allow(''),
+  roleResponsibilities: Joi.array().items(Joi.string().trim()),
+  trainingOutcomes: Joi.array().items(Joi.string().trim()),
+  compensationNarrative: Joi.string().trim().allow(''),
+  academicAlignmentNote: Joi.string().trim().allow(''),
+  employmentEligibilityLines: Joi.array().items(Joi.string().trim()),
+  supervisor,
+  letterDate: Joi.date().allow(null),
+};
+
 const createOffer = {
   body: Joi.object()
     .keys({
@@ -20,6 +45,7 @@ const createOffer = {
       joiningDate: Joi.date().optional().allow(null),
       offerValidityDate: Joi.date().optional().allow(null),
       notes: Joi.string().trim().optional().allow('', null),
+      ...letterBodyKeys,
     })
     .required(),
 };
@@ -42,8 +68,21 @@ const updateOffer = {
       offerValidityDate: Joi.date().optional().allow(null),
       notes: Joi.string().trim().optional().allow('', null),
       rejectionReason: Joi.string().trim().optional().allow('', null),
+      ...letterBodyKeys,
     })
     .min(1),
+};
+
+const letterDefaults = {
+  query: Joi.object().keys({
+    positionTitle: Joi.string().trim().allow(''),
+  }),
+};
+
+const generateLetter = {
+  params: Joi.object().keys({
+    offerId: Joi.string().custom(objectId).required(),
+  }),
 };
 
 const getOffers = {
@@ -63,4 +102,16 @@ const deleteOffer = {
   }),
 };
 
-export { createOffer, getOffer, updateOffer, getOffers, deleteOffer };
+const enhanceRoles = {
+  body: Joi.object()
+    .keys({
+      jobTitle: Joi.string().trim().min(1).max(300).required(),
+      existingRoles: Joi.string().trim().allow('').max(20000),
+      existingTraining: Joi.string().trim().allow('').max(20000),
+      isInternship: Joi.boolean().optional(),
+      enhanceFocus: Joi.string().valid('roles', 'training', 'both').optional(),
+    })
+    .required(),
+};
+
+export { createOffer, getOffer, updateOffer, getOffers, deleteOffer, letterDefaults, generateLetter, enhanceRoles };

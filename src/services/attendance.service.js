@@ -3,7 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import Attendance from '../models/attendance.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
 import {
@@ -723,7 +723,7 @@ const getTrackList = async (options = {}) => {
   // Fetch Candidate by owner (User) to get employeeId for each student
   const userIds = students.map((s) => s.user?._id).filter(Boolean);
   const candidates = userIds.length > 0
-    ? await Candidate.find({ owner: { $in: userIds } }).select('owner employeeId').lean()
+    ? await Employee.find({ owner: { $in: userIds } }).select('owner employeeId').lean()
     : [];
   const ownerToEmployeeId = new Map(candidates.map((c) => [c.owner?.toString?.(), c.employeeId || '']));
 
@@ -766,7 +766,7 @@ const getTrackList = async (options = {}) => {
   const noAttendanceUserIds = noAttendanceStudents.map((s) => s.user?._id).filter(Boolean);
   const noAttendanceCandidates =
     noAttendanceUserIds.length > 0
-      ? await Candidate.find({ owner: { $in: noAttendanceUserIds } }).select('owner employeeId').lean()
+      ? await Employee.find({ owner: { $in: noAttendanceUserIds } }).select('owner employeeId').lean()
       : [];
   const noAttendanceOwnerToEmployeeId = new Map(noAttendanceCandidates.map((c) => [c.owner?.toString?.(), c.employeeId || '']));
 
@@ -822,7 +822,7 @@ const getTrackHistory = async (options = {}) => {
   const limitNum = Math.min(1000, Math.max(1, Number(limit) || 500));
   const studentsColl = Student.collection?.name || 'students';
   const usersColl = User.collection?.name || 'users';
-  const candidatesColl = Candidate.collection?.name || 'candidates';
+  const candidatesColl = Employee.collection?.name || 'candidates';
 
   const pipeline = [
     { $match: match },

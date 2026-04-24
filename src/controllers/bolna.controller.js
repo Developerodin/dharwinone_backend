@@ -88,8 +88,8 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     companyName,
   } = req.body;
 
-  const Candidate = (await import('../models/candidate.model.js')).default;
-  const candidate = await Candidate.findById(candidateId);
+  const Employee = (await import('../models/employee.model.js')).default;
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -252,7 +252,7 @@ async function sendPostCallEmailAndNotification(record, application) {
   if (!isEnded) return;
 
   const JobApplication = (await import('../models/jobApplication.model.js')).default;
-  const Candidate = (await import('../models/candidate.model.js')).default;
+  const Employee = (await import('../models/employee.model.js')).default;
   const Job = (await import('../models/job.model.js')).default;
   const User = (await import('../models/user.model.js')).default;
 
@@ -262,7 +262,7 @@ async function sendPostCallEmailAndNotification(record, application) {
 
   await JobApplication.findByIdAndUpdate(application._id, { $set: { verificationCallStatus: appCallStatus } });
 
-  const candidate = await Candidate.findById(application.candidate);
+  const candidate = await Employee.findById(application.candidate);
   const job = await Job.findById(application.job);
   if (!candidate || !job) {
     logger.warn('Post-call email skipped: candidate or job not found');

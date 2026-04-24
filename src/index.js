@@ -5,7 +5,7 @@ import config from './config/config.js';
 import logger from './config/logger.js';
 import { initSocket } from './services/chatSocket.service.js';
 import { startAttendanceScheduler, stopAttendanceScheduler } from './services/attendance.scheduler.js';
-import { startCandidateScheduler, stopCandidateScheduler } from './services/candidate.scheduler.js';
+import { startCandidateScheduler, stopCandidateScheduler } from './services/employee.scheduler.js';
 import {
   startJobVerificationCallScheduler,
   stopJobVerificationCallScheduler,

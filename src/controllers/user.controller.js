@@ -75,7 +75,7 @@ const updateUser = catchAsync(async (req, res) => {
     if (!validation.allowed) {
       throw new ApiError(
         httpStatus.FORBIDDEN,
-        `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Candidate, Student, and Mentor are allowed.`
+        `Agents cannot assign the following roles: ${validation.restrictedNames.join(', ')}. Only Employee, Student, and Mentor are allowed.`
       );
     }
   }

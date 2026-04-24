@@ -62,7 +62,7 @@ export const validateRoleIdsForAgent = async (roleIds) => {
 };
 
 /**
- * Check if user has Candidate role (by roleIds).
+ * Check if user has the Employee user role (by roleIds), including legacy "Candidate" role name.
  * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}
  */
@@ -70,7 +70,11 @@ export const userHasCandidateRole = async (user) => {
   if (!user) return false;
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;
-  const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Candidate', status: 'active' });
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: { $in: ['Employee', 'Candidate'] },
+    status: 'active',
+  });
   return !!hasRole;
 };
 

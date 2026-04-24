@@ -342,4 +342,80 @@ const createFolder = async (userId, folderPath) => {
   return { name: safePath.replace(/\/$/, '').split('/').pop(), prefix: key };
 };
 
-export { listObjects, uploadFile, getDownloadUrl, deleteObject, createFolder, userPrefix, isKeyAllowed };
+/**
+ * Upload a PDF buffer under file-storage/{userId}/{folder} — for generated offer letters, etc.
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {Buffer} buffer
+ * @param {string} [folderPath] e.g. "offer-letters/" — normalized like uploadFile
+ * @returns {Promise<{ key: string, size: number, mimeType: string }>}
+ */
+const uploadPdfBuffer = async (userId, buffer, folderPath = 'offer-letters/') => {
+  const bucket = config.aws?.bucketName;
+  if (!bucket) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'S3 bucket not configured');
+  }
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid PDF buffer');
+  }
+  const safeFolder = normalizeFolderPath(folderPath);
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 15);
+  const key = `${FILE_STORAGE_PREFIX}/${userId}/${safeFolder}${timestamp}-${random}.pdf`;
+  if (key.length > MAX_KEY_LENGTH) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Generated key exceeds maximum length');
+  }
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: 'application/pdf',
+    Metadata: {
+      uploadedBy: String(userId),
+      uploadedAt: new Date().toISOString(),
+    },
+  });
+  await s3Client.send(command);
+  return { key, size: buffer.length, mimeType: 'application/pdf' };
+};
+
+const isFileStorageObjectKey = (key) => {
+  if (typeof key !== 'string' || key.length > MAX_KEY_LENGTH) return false;
+  if (!key.startsWith(`${FILE_STORAGE_PREFIX}/`)) return false;
+  if (key.includes('..') || key.includes('%2e%2e') || key.includes('\\')) return false;
+  return true;
+};
+
+/**
+ * Read an object that lives under file-storage/ (any user folder). For server-side download after access checks.
+ * @param {string} key
+ * @returns {Promise<Buffer>}
+ */
+const getObjectBufferByKey = async (key) => {
+  if (!isFileStorageObjectKey(key)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Access denied to this object');
+  }
+  const bucket = config.aws?.bucketName;
+  if (!bucket) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'S3 bucket not configured');
+  }
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+  const res = await s3Client.send(command);
+  if (!res.Body) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Object not found');
+  }
+  const bytes = await res.Body.transformToByteArray();
+  return Buffer.from(bytes);
+};
+
+export {
+  listObjects,
+  uploadFile,
+  getDownloadUrl,
+  deleteObject,
+  createFolder,
+  userPrefix,
+  isKeyAllowed,
+  uploadPdfBuffer,
+  getObjectBufferByKey,
+  isFileStorageObjectKey,
+};

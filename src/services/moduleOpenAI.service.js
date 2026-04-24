@@ -893,3 +893,210 @@ Apply the user's request and return the FULL updated module as valid JSON (same 
   }
   return parseJsonWithRepair(text, 'refineModuleWithChat');
 }
+
+/**
+ * Generate or improve offer-letter content.
+ * @param {{ jobTitle: string, existingRoles?: string, existingTraining?: string, isInternship?: boolean, enhanceFocus?: 'roles'|'training'|'both' }} params
+ * @returns {Promise<{ lines?: string[], trainingOutcomes?: string[] }>}
+ */
+export async function enhanceOfferLetterRoles({
+  jobTitle,
+  existingRoles = '',
+  existingTraining = '',
+  isInternship = false,
+  enhanceFocus = 'roles',
+}) {
+  const client = getClient();
+  const title = String(jobTitle || '').trim() || 'Professional role';
+  const trimmedRoles = String(existingRoles || '').trim();
+  const trimmedTraining = String(existingTraining || '').trim();
+  const focus = isInternship ? enhanceFocus : 'roles';
+
+  const modeRolesOnly = trimmedRoles ? 'improve' : 'generate';
+  const modeTrainingOnly = trimmedTraining ? 'improve' : 'generate';
+  const modeBoth = trimmedRoles || trimmedTraining ? 'improve' : 'generate';
+
+  let prompt;
+  let maxTokens = 2500;
+
+  if (!isInternship) {
+    const mode = modeRolesOnly;
+    prompt =
+      mode === 'generate'
+        ? `You are an HR writer. Generate 5–8 concise lines for the "Roles & responsibilities" section of a formal job offer letter.
+
+Job title: ${title}
+
+Rules:
+- Each line is ONE professional sentence (no leading "•" or "-" or numbers).
+- Suitable for a technology / business services employer (Dharwin-style).
+- Plain English, specific to the job title.
+
+Return ONLY valid JSON:
+{ "lines": [ "First responsibility sentence.", "Second..." ] }`
+        : `You are an HR writer. Improve the following "Roles & responsibilities" text for a job offer letter.
+
+Job title: ${title}
+
+Current text (one item per line):
+${trimmedRoles}
+
+Rules:
+- Output 5–8 concise lines; each line ONE sentence.
+- Keep the spirit of the duties but improve clarity, specificity, and professional tone.
+- Remove duplicates; no leading bullets or numbers in each string.
+
+Return ONLY valid JSON:
+{ "lines": [ "..." ] }`;
+  } else if (focus === 'training') {
+    maxTokens = 2000;
+    prompt =
+      modeTrainingOnly === 'generate'
+        ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style).
+
+Job title: ${title}
+
+For context only — current "Roles & responsibilities" (one item per line; may be empty):
+${trimmedRoles || '(none provided)'}
+
+Generate 4–6 SHORT lines for the section "Training & learning outcomes" (they appear after "This internship will focus on enhancing your knowledge in:").
+Use concise noun phrases or brief clauses (e.g. "Data cleaning and preprocessing techniques"). Each line under ~90 characters. Align topics with the job title and, if provided, the role context above.
+No leading "•", "-", or numbers in any string.
+
+Return ONLY valid JSON:
+{ "trainingOutcomes": [ "Short outcome phrase", "..." ] }`
+        : `You are an HR writer. Improve the "Training & learning outcomes" list for an unpaid internship offer letter.
+
+Job title: ${title}
+
+Role responsibilities for context (one item per line):
+${trimmedRoles || '(none provided)'}
+
+Current training / learning outcomes (one item per line):
+${trimmedTraining}
+
+Rules:
+- Output 4–6 short phrases; same style as above; no leading bullets or numbers.
+- Remove duplicates; plain English; specific to the role.
+
+Return ONLY valid JSON:
+{ "trainingOutcomes": [ "..." ] }`;
+  } else if (focus === 'roles') {
+    maxTokens = 2800;
+    prompt =
+      modeRolesOnly === 'generate'
+        ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style, technology and business services).
+
+Job title: ${title}
+
+Generate 5–8 concise lines for "Roles & responsibilities" only. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). No leading "•", "-", or numbers in any string.
+
+Return ONLY valid JSON:
+{ "lines": [ "First responsibility sentence.", "..." ] }`
+        : `You are an HR writer. Improve the "Roles & responsibilities" section for an unpaid internship offer letter.
+
+Job title: ${title}
+
+Current roles (one item per line):
+${trimmedRoles}
+
+Rules:
+- Output 5–8 concise sentences; supervised, training-appropriate intern duties; no leading bullets or numbers.
+- Remove duplicates; plain English; specific to the job title.
+
+Return ONLY valid JSON:
+{ "lines": [ "..." ] }`;
+  } else {
+    maxTokens = 3200;
+    const mode = modeBoth;
+    prompt =
+      mode === 'generate'
+        ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style, technology and business services).
+
+Job title: ${title}
+
+Produce TWO lists:
+
+1) "Roles & responsibilities" — 5–8 concise lines. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). No leading "•", "-", or numbers in any string.
+
+2) "Training & learning outcomes" — 4–6 SHORT lines that work as bullet items after the sentence "This internship will focus on enhancing your knowledge in:". Prefer concise noun phrases or brief clauses (examples: "Data cleaning and preprocessing techniques", "Stakeholder communication in a remote team"). Each line under ~90 characters. No leading bullets in strings.
+
+Return ONLY valid JSON:
+{ "lines": [ "First responsibility sentence.", "..." ], "trainingOutcomes": [ "Short outcome phrase", "..." ] }`
+        : `You are an HR writer. Improve BOTH the "Roles & responsibilities" and "Training & learning outcomes" sections for an unpaid internship offer letter.
+
+Job title: ${title}
+
+Current roles (one item per line):
+${trimmedRoles || '(empty)'}
+
+Current training / learning outcomes (one item per line):
+${trimmedTraining || '(empty)'}
+
+Rules:
+- "lines": 5–8 concise sentences; supervised, training-appropriate intern duties; no leading bullets or numbers.
+- "trainingOutcomes": 4–6 short phrases for a "knowledge outcomes" bullet list; no leading bullets or numbers.
+- Remove duplicates; plain English; specific to the job title.
+
+Return ONLY valid JSON:
+{ "lines": [ "..." ], "trainingOutcomes": [ "..." ] }`;
+  }
+
+  logger.info('[Offer letter AI] enhanceOfferLetterRoles', {
+    focus,
+    titleLen: title.length,
+    isInternship: !!isInternship,
+  });
+
+  const response = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.45,
+    max_tokens: maxTokens,
+    response_format: { type: 'json_object' },
+  });
+
+  const text = response.choices?.[0]?.message?.content;
+  if (!text) {
+    logger.warn('[Offer letter AI] OpenAI returned empty content');
+    throw new Error('AI returned no content');
+  }
+
+  const parsed = parseJsonWithRepair(text, 'enhanceOfferLetterRoles');
+
+  const normalizeLines = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((l) => String(l || '').trim().replace(/^[•\-\d.)\s]+/u, ''))
+      .filter((l) => l.length > 5);
+
+  const normalizeTraining = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((l) => String(l || '').trim().replace(/^[•\-\d.)\s]+/u, ''))
+      .filter((l) => l.length > 3);
+
+  if (!isInternship || focus === 'roles') {
+    const lines = normalizeLines(parsed?.lines);
+    if (lines.length === 0) {
+      throw new Error('AI returned no role lines');
+    }
+    return { lines };
+  }
+
+  if (focus === 'training') {
+    const trainingOutcomes = normalizeTraining(parsed?.trainingOutcomes);
+    if (trainingOutcomes.length === 0) {
+      throw new Error('AI returned no training / learning outcome lines');
+    }
+    return { trainingOutcomes };
+  }
+
+  const lines = normalizeLines(parsed?.lines);
+  if (lines.length === 0) {
+    throw new Error('AI returned no role lines');
+  }
+  const trainingOutcomes = normalizeTraining(parsed?.trainingOutcomes);
+  if (trainingOutcomes.length === 0) {
+    throw new Error('AI returned no training / learning outcome lines');
+  }
+  return { lines, trainingOutcomes };
+}

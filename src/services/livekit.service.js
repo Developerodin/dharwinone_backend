@@ -122,6 +122,10 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   // True host identity is based on meeting host/recruiter/creator email only.
   const hostByEmail = participantEmail ? await isParticipantHost(roomName, participantEmail) : false;
 
+  // If true, guest is before scheduled start and room not yet open — still issue a token with canPublish: false
+  // so the public /join/room page can connect and show the lobby (instead of HTTP 403 on getPublicLiveKitToken).
+  let preStartBlockPublish = false;
+
   // Enforce schedule window + capacity + guest policy for scheduled meetings.
   if (meeting) {
     const nowMs = Date.now();
@@ -139,11 +143,11 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     }
 
     if (startMs && nowMs < startMs && !hostByEmail) {
-      // Allow invitees to join early once the room is already opened (host joined first).
-      // Without this, participants can get stuck on "Meeting has not started yet" even after host starts.
+      // Allow invitees to join early with full (non-waiting) access once the host has opened the room.
+      // Before that, do not 403: mint subscribe-only; client shows waiting/lobby until start or host joins.
       const roomAlreadyOpened = Array.isArray(participantsInRoom) && participantsInRoom.length > 0;
       if (!roomAlreadyOpened) {
-        throw new ApiError(httpStatus.FORBIDDEN, 'Meeting has not started yet');
+        preStartBlockPublish = true;
       }
     }
     if (endMs && nowMs > endMs) {
@@ -189,7 +193,9 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     meeting.admittedIdentities.includes(participantIdentity);
   const isAdmitted = roomAdmitted?.has(participantIdentity) || dbAdmitted || false;
   const approvalRequired = Boolean(meeting?.requireApproval);
-  const canPublish = forceFullPermissions || hostByEmail || isAdmitted || (meeting ? !approvalRequired : false);
+  const canPublish =
+    (forceFullPermissions || hostByEmail || isAdmitted || (meeting ? !approvalRequired : false)) &&
+    !preStartBlockPublish;
   const isHost = hostByEmail;
 
   logger.info('[LiveKit] Token grants', { roomName, isHost, canPublish, isAdmitted, forceFullPermissions });
@@ -427,6 +433,46 @@ const stopRecording = async (egressId) => {
 };
 
 /**
+ * LiveKit EgressInfo.startedAt is often nanoseconds as bigint; JSON would stringify poorly and
+ * clients parsing with `new Date(string)` break. Normalize to ISO-8601 (ms).
+ * @param {unknown} v
+ * @returns {string|null}
+ */
+const egressStartedAtToIso = (v) => {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    const t = v.getTime();
+    return Number.isNaN(t) ? null : v.toISOString();
+  }
+  if (typeof v === 'bigint') {
+    const ms = Number(v / 1000000n);
+    return new Date(ms).toISOString();
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const ms = v > 1e15 ? Math.floor(v / 1e6) : v;
+    return new Date(ms).toISOString();
+  }
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (/^\d+$/.test(trimmed)) {
+      if (trimmed.length > 15) {
+        try {
+          const ms = Number(BigInt(trimmed) / 1000000n);
+          return new Date(ms).toISOString();
+        } catch {
+          return null;
+        }
+      }
+      const ms = Number(trimmed);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+  }
+  return null;
+};
+
+/**
  * Get recording status for a room
  * @param {string} roomName - Room name
  * @returns {Promise<Object>} Recording status and list
@@ -447,37 +493,14 @@ const getRecordingStatus = async (roomName) => {
       (egress) => egress.status === EgressStatus.EGRESS_ACTIVE
     );
 
-    // Helper function to serialize BigInt and Date for JSON
-    const serializeBigInt = (value) => {
-      if (typeof value === 'bigint') {
-        return value.toString();
-      }
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      if (Array.isArray(value)) {
-        return value.map(serializeBigInt);
-      }
-      if (value && typeof value === 'object') {
-        const serialized = {};
-        for (const [key, val] of Object.entries(value)) {
-          serialized[key] = serializeBigInt(val);
-        }
-        return serialized;
-      }
-      return value;
-    };
-
     return {
       isRecording: activeRecordings.length > 0,
-      recordings: activeRecordings.map((egress) =>
-        serializeBigInt({
-          egressId: egress.egressId,
-          roomName: egress.roomName,
-          status: egress.status,
-          startedAt: egress.startedAt,
-        })
-      ),
+      recordings: activeRecordings.map((egress) => ({
+        egressId: egress.egressId,
+        roomName: egress.roomName,
+        status: egress.status,
+        startedAt: egressStartedAtToIso(egress.startedAt),
+      })),
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -493,6 +516,17 @@ const getRecordingStatus = async (roomName) => {
       `Failed to get recording status: ${errorMessage}`
     );
   }
+};
+
+/**
+ * Room composite egress joins internal LiveKit participants (subscribe-only) so the recorder
+ * can pull tracks. Their identity is `EG_<egressId>` — not a human in the waiting room.
+ * @param {string} [identity]
+ * @returns {boolean}
+ */
+const isLiveKitEgressRecorderIdentity = (identity) => {
+  if (!identity || typeof identity !== 'string') return false;
+  return identity.startsWith('EG_');
 };
 
 /**
@@ -524,6 +558,9 @@ const getWaitingParticipants = async (roomName) => {
     // Exclude identities already admitted (DB/memory): LiveKit still shows canPublish=false until they reconnect
     const waitingParticipants = participants
       .filter((p) => {
+        if (isLiveKitEgressRecorderIdentity(p.identity)) {
+          return false;
+        }
         if (dbAdmitted.has(p.identity) || memAdmitted.has(p.identity)) {
           return false;
         }

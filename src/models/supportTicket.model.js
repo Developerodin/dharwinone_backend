@@ -71,7 +71,7 @@ const supportTicketSchema = new mongoose.Schema(
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Candidate',
+      ref: 'Employee',
       index: true,
     },
     assignedTo: {

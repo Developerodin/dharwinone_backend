@@ -3,7 +3,7 @@ import logger from '../config/logger.js';
 import SopNotificationState from '../models/sopNotificationState.model.js';
 import { createNotification } from './notification.service.js';
 import { evaluateSopForCandidate, listSopOpenOverviewForManage } from './sopChecklist.service.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 
 const dateBucketUtc = () => new Date().toISOString().slice(0, 10);
 
@@ -51,7 +51,7 @@ async function runSopReminderCheckForCandidate(candidateId, precomputedEval = nu
   const open = evalResult.steps.filter((s) => !s.done);
   if (!open.length) return;
 
-  const candidate = await Candidate.findById(candidateId)
+  const candidate = await Employee.findById(candidateId)
     .select('adminId assignedAgent assignedRecruiter fullName')
     .lean();
   if (!candidate) return;

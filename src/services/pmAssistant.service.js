@@ -8,14 +8,14 @@ import Task from '../models/task.model.js';
 import TaskBreakdownIdempotency from '../models/taskBreakdownIdempotency.model.js';
 import TaskBreakdownPreview from '../models/taskBreakdownPreview.model.js';
 import AssignmentRunFeedback from '../models/assignmentRunFeedback.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import AssignmentRun from '../models/assignmentRun.model.js';
 import AssignmentRow from '../models/assignmentRow.model.js';
 import { getProjectById, updateProjectById } from './project.service.js';
 import TeamMember from '../models/team.model.js';
 import { createTeamGroup, getTeamGroupById } from './teamGroup.service.js';
 import { createTeamMember } from './team.service.js';
-import { getCandidateRoleOwnerIdsForAssignmentRoster } from './candidate.service.js';
+import { getCandidateRoleOwnerIdsForAssignmentRoster } from './employee.service.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import { pmChatJsonObject, hashPmPrompt } from './pmOpenAI.service.js';
 import config from '../config/config.js';
@@ -892,7 +892,7 @@ export async function generateAssignmentRun(projectId, user) {
   /** Always load assignees’ candidate docs (even if adminId ≠ project.createdBy), then fill remaining slots from ATS pool. */
   let assigneeCandidates = [];
   if (assigneeOids.length > 0) {
-    assigneeCandidates = await Candidate.find({
+    assigneeCandidates = await Employee.find({
       owner: { $in: assigneeOids },
       isActive: { $ne: false },
       ...candidateCurrentEmploymentMongoMatch(),
@@ -919,7 +919,7 @@ export async function generateAssignmentRun(projectId, user) {
     } else {
       poolBase.owner = { $in: candidateRoleOwnerIds };
     }
-    poolCandidates = await Candidate.find(poolBase)
+    poolCandidates = await Employee.find(poolBase)
       .select('fullName email skills experiences experience owner')
       .sort({ isProfileCompleted: -1, updatedAt: -1 })
       .limit(remainingSlots)
@@ -1449,7 +1449,7 @@ export async function syncAiStaffedCandidatesToProjectTeam(project, user, rows) 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let membersAdded = 0;
   for (const cid of candidateIds) {
-    const c = await Candidate.findById(cid).select('fullName email').lean();
+    const c = await Employee.findById(cid).select('fullName email').lean();
     if (!c) continue;
     const emailRaw = String(c.email || '').trim();
     const email = emailRaw || `candidate-${cid}@project-roster.local`;
@@ -1511,7 +1511,7 @@ export async function applyAssignmentRun(runId, user) {
       for (const row of rows) {
         if (!row.taskId || row.gap || !row.recommendedCandidateId) continue;
         // eslint-disable-next-line no-await-in-loop
-        const candidate = await Candidate.findById(row.recommendedCandidateId).select('owner').lean().session(session);
+        const candidate = await Employee.findById(row.recommendedCandidateId).select('owner').lean().session(session);
         if (!candidate?.owner) continue;
         const ownerId = String(candidate.owner);
         const ownerOid = mongoose.Types.ObjectId.isValid(ownerId)

@@ -75,7 +75,7 @@ const salarySlipSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const candidateSchema = new mongoose.Schema(
+const employeeSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -199,7 +199,7 @@ const candidateSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-candidateSchema.pre('save', async function (next) {
+employeeSchema.pre('save', async function (next) {
   if (this.isNew && (!this.employeeId || this.employeeId.trim() === '')) {
     try {
       const candidatesWithIds = await this.constructor
@@ -223,7 +223,7 @@ candidateSchema.pre('save', async function (next) {
   next();
 });
 
-candidateSchema.pre('save', function (next) {
+employeeSchema.pre('save', function (next) {
   if (this.isModified('companyAssignedEmail') && this.companyAssignedEmail) {
     this.companyAssignedEmail = String(this.companyAssignedEmail).toLowerCase().trim();
   }
@@ -239,8 +239,8 @@ candidateSchema.pre('save', function (next) {
   next();
 });
 
-// Resigned candidates must keep their employee ID for records; do not allow clearing or changing it.
-candidateSchema.pre('save', async function (next) {
+// Resigned employees must keep their employee ID for records; do not allow clearing or changing it.
+employeeSchema.pre('save', async function (next) {
   if (this.isNew || !this.resignDate || !this.isModified('employeeId')) return next();
   try {
     const existing = await this.constructor.findById(this._id).select('employeeId').lean();
@@ -251,10 +251,11 @@ candidateSchema.pre('save', async function (next) {
   next();
 });
 
-candidateSchema.index({ referredByUserId: 1, referredAt: -1 });
-candidateSchema.index({ 'skills.name': 'text' });
-candidateSchema.plugin(toJSON);
-candidateSchema.plugin(paginate);
+employeeSchema.index({ referredByUserId: 1, referredAt: -1 });
+employeeSchema.index({ 'skills.name': 'text' });
+employeeSchema.plugin(toJSON);
+employeeSchema.plugin(paginate);
 
-const Candidate = mongoose.model('Candidate', candidateSchema);
-export default Candidate;
+/** Registered model name `Employee`; persisted collection name remains `candidates` (legacy / no DB migration). */
+const Employee = mongoose.model('Employee', employeeSchema, 'candidates');
+export default Employee;

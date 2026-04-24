@@ -9,7 +9,7 @@ import * as livekitService from './livekit.service.js';
 import Recording from '../models/recording.model.js';
 import { generatePresignedDownloadUrl, generatePresignedRecordingPlaybackUrl } from '../config/s3.js';
 
-/** Same presigned TTL as user profilePicture (auth.controller, candidate.service). */
+/** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
 const PROFILE_PICTURE_PRESIGN_TTL_SEC = 7 * 24 * 3600;
 
 /**

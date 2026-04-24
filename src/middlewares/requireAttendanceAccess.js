@@ -2,7 +2,7 @@ import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { getGrantingPermissions } from '../config/permissions.js';
 import Student from '../models/student.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 
 /**
  * Require that the current user is either the student owner (student.user === req.user.id)
@@ -58,7 +58,7 @@ const requireAttendanceAccess = async (req, res, next) => {
       getGrantingPermissions('candidates.manage')
     );
     if (grantingCandidates.some((p) => permissions.has(p))) {
-      const linkedCandidate = await Candidate.findOne({ owner: studentUserId }).select('_id').lean();
+      const linkedCandidate = await Employee.findOne({ owner: studentUserId }).select('_id').lean();
       if (linkedCandidate) {
         return next();
       }

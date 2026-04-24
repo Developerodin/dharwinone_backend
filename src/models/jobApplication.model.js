@@ -5,7 +5,7 @@ import paginate from './plugins/paginate.plugin.js';
 const jobApplicationSchema = new mongoose.Schema(
   {
     job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', required: true, index: true },
-    candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate', required: true, index: true },
+    candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
     status: {
       type: String,
       enum: ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'],

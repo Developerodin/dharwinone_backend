@@ -8,7 +8,7 @@ import Impersonation from '../models/impersonation.model.js';
 import ApiError from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
 import { userHasCandidateRole } from '../utils/roleHelpers.js';
-import { getResignStatusByOwnerId } from './candidate.service.js';
+import { getResignStatusByOwnerId } from './employee.service.js';
 
 /**
  * Login with username and password

@@ -37,7 +37,7 @@ const offerSchema = new mongoose.Schema(
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Candidate',
+      ref: 'Employee',
       required: true,
       index: true,
     },
@@ -61,6 +61,38 @@ const offerSchema = new mongoose.Schema(
     },
     offerLetterUrl: { type: String, trim: true },
     offerLetterKey: { type: String, trim: true },
+    /** PDF offer letter (Draft editing / generation) */
+    letterFullName: { type: String, trim: true },
+    /** Full address line as printed on the letter */
+    letterAddress: { type: String, trim: true },
+    /** When set, overrides job title in the letter */
+    positionTitle: { type: String, trim: true },
+    /**
+     * FT_40: Full time 40 hrs | PT_25: Part time 25 hrs | INTERN_UNPAID: unpaid training internship
+     */
+    jobType: {
+      type: String,
+      enum: ['FT_40', 'PT_25', 'INTERN_UNPAID'],
+    },
+    /** Display hours for intern (25 or 40) */
+    weeklyHours: { type: Number, enum: [25, 40], default: 40 },
+    workLocation: { type: String, trim: true, default: 'Remote (USA)' },
+    roleResponsibilities: [{ type: String, trim: true }],
+    trainingOutcomes: [{ type: String, trim: true }],
+    /** Paid roles: full compensation sentence; optional if gross CTC is set */
+    compensationNarrative: { type: String, trim: true },
+    /** e.g. degree alignment (paid template) */
+    academicAlignmentNote: { type: String, trim: true },
+    employmentEligibilityLines: [{ type: String, trim: true }],
+    supervisor: {
+      firstName: { type: String, trim: true },
+      lastName: { type: String, trim: true },
+      phone: { type: String, trim: true },
+      email: { type: String, trim: true },
+    },
+    /** Shown in letter header; defaults to now when generating */
+    letterDate: { type: Date },
+    offerLetterGeneratedAt: { type: Date },
     sentAt: { type: Date },
     acceptedAt: { type: Date },
     rejectedAt: { type: Date },

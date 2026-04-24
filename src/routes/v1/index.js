@@ -22,7 +22,7 @@ import shiftRoute from './shift.route.js';
 import positionRoute from './position.route.js';
 import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
-import candidateRoute from './candidate.route.js';
+import employeeRoute from './employee.route.js';
 import candidateSopTemplateRoute from './candidateSopTemplate.route.js';
 import jobRoute from './job.route.js';
 import externalJobRoute from './externalJob.route.js';
@@ -151,12 +151,12 @@ const defaultRoutes = [
   },
   {
     path: '/candidates',
-    route: candidateRoute,
+    route: employeeRoute,
   },
   /** Alias: same handlers as /candidates (Phase B; no DB change). */
   {
     path: '/employees',
-    route: candidateRoute,
+    route: employeeRoute,
   },
   {
     path: '/candidate-sop-templates',

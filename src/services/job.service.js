@@ -3,7 +3,7 @@ import XLSX from 'xlsx';
 import Job from '../models/job.model.js';
 import JobTemplate from '../models/jobTemplate.model.js';
 import JobApplication from '../models/jobApplication.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import ExternalJob from '../models/externalJob.model.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
@@ -612,7 +612,7 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
     throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot apply to a job that is not active');
   }
   const canAccessJob = await isOwnerOrAdmin(currentUser, job);
-  const candidate = await Candidate.findById(candidateId);
+  const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
@@ -692,7 +692,7 @@ const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, 
     } else {
       const r = await applyReferralToCandidate(candidate._id, emailNormalized, v.data);
       if (r.applied) {
-        const cRef = await Candidate.findById(candidate._id);
+        const cRef = await Employee.findById(candidate._id);
         if (cRef) {
           cRef.referralJobTitle = job?.title || null;
           if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
@@ -791,7 +791,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   const jobCreatorId = job.createdBy || job.owner;
   
   // Check if candidate with this email already exists (unique index on email)
-  let candidate = await Candidate.findOne({ email: emailNormalized });
+  let candidate = await Employee.findOne({ email: emailNormalized });
 
   if (!candidate) {
     const candidateData = {
@@ -817,11 +817,11 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     }
 
     try {
-      candidate = await Candidate.create(candidateData);
+      candidate = await Employee.create(candidateData);
       logger.info('✅ New candidate created:', { _id: candidate._id, fullName: candidate.fullName, email: candidate.email });
     } catch (createErr) {
       if (createErr.code === 11000) {
-        candidate = await Candidate.findOne({ email: emailNormalized });
+        candidate = await Employee.findOne({ email: emailNormalized });
       }
       if (!candidate) throw createErr;
       logger.info('✅ Existing candidate reused after duplicate-key race:', {
@@ -933,7 +933,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       if (digitsOnly.length < 10 || digitsOnly.length > 15) {
         logger.warn(`⚠️ Invalid phone number format for ${fullName}: ${formattedPhone} (digits: ${digitsOnly.length})`);
       } else {
-        const fullCandidate = await Candidate.findById(candidate._id);
+        const fullCandidate = await Employee.findById(candidate._id);
         if (!fullCandidate) {
           logger.warn(`⚠️ Candidate not found for Bolna call: ${candidate._id}`);
         } else {

@@ -1,6 +1,6 @@
 import httpStatus from 'http-status';
 import TeamMember from '../models/team.model.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
@@ -32,7 +32,7 @@ const enrichTeamMembersWithCandidateProfilePictureUrls = async (members, { inclu
     return members.map((m) => (m.toJSON ? m.toJSON() : { ...m }));
   }
 
-  const candidates = await Candidate.find({ email: { $in: normalizedEmails } })
+  const candidates = await Employee.find({ email: { $in: normalizedEmails } })
     .select('email profilePicture')
     .lean();
 

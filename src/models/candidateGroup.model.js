@@ -7,7 +7,7 @@ const candidateGroupSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, index: true },
     description: { type: String, trim: true },
     candidates: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Candidate' }],
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
       default: [],
       index: true,
     },

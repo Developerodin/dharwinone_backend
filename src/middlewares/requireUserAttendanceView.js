@@ -1,7 +1,7 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { getGrantingPermissions } from '../config/permissions.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 
 /**
  * Allows listing user-based attendance (Attendance.user) for another user when:
@@ -33,7 +33,7 @@ const requireUserAttendanceView = async (req, res, next) => {
 
   const grantingCandidates = getGrantingPermissions('candidates.read').concat(getGrantingPermissions('candidates.manage'));
   if (permissions && grantingCandidates.some((p) => permissions.has(p))) {
-    const candidate = await Candidate.findOne({ owner: targetUserId }).select('_id').lean();
+    const candidate = await Employee.findOne({ owner: targetUserId }).select('_id').lean();
     if (candidate) {
       return next();
     }

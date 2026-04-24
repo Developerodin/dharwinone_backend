@@ -1,5 +1,9 @@
 {
   "env": { "node": true },
+  "globals": {
+    "BigInt": "readonly",
+    "globalThis": "readonly"
+  },
   "extends": [
     "airbnb-base",
     "plugin:security/recommended",

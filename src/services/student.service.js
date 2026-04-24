@@ -1,6 +1,6 @@
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
-import Candidate from '../models/candidate.model.js';
+import Employee from '../models/employee.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
@@ -87,7 +87,7 @@ const queryStudents = async (filter, options) => {
       })
         .select('_id')
         .lean(),
-      Candidate.find({ employeeId: { $regex: searchRegex } })
+      Employee.find({ employeeId: { $regex: searchRegex } })
         .select('owner')
         .lean(),
     ]);
@@ -282,7 +282,7 @@ const getOrCreateStudentForAttendance = async (user) => {
     return getStudentById(student.id);
   }
 
-  const candidate = await Candidate.findOne({ owner: userId }).select('joiningDate').lean();
+  const candidate = await Employee.findOne({ owner: userId }).select('joiningDate').lean();
   const joiningDate = candidate?.joiningDate || null;
 
   student = await Student.create({
@@ -397,7 +397,7 @@ const createStudentFromUser = async (userId, options = {}) => {
     (id) => id && id.toString() === studentRole._id.toString()
   );
   if (!hasStudentRole && ensureStudentRoleForCandidateOwner) {
-    const ownsCandidate = await Candidate.exists({ owner: userId });
+    const ownsCandidate = await Employee.exists({ owner: userId });
     if (!ownsCandidate) {
       throw new ApiError(
         httpStatus.BAD_REQUEST,
@@ -425,7 +425,7 @@ const createStudentFromUser = async (userId, options = {}) => {
   }
 
   // Sync joiningDate from Candidate if user has one (attendance starts from joining date)
-  const candidate = await Candidate.findOne({ owner: userId }).select('joiningDate').lean();
+  const candidate = await Employee.findOne({ owner: userId }).select('joiningDate').lean();
   const joiningDate = candidate?.joiningDate || null;
 
   const student = await Student.create({
