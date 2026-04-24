@@ -374,7 +374,19 @@ const uploadPdfBuffer = async (userId, buffer, folderPath = 'offer-letters/') =>
       uploadedAt: new Date().toISOString(),
     },
   });
-  await s3Client.send(command);
+  try {
+    await s3Client.send(command);
+  } catch (e) {
+    const name = e?.name || '';
+    const msg = String(e?.message || e);
+    if (name === 'TimeoutError' || /timeout|ETIMEDOUT|read ETIMEDOUT|socket hang up/i.test(msg)) {
+      throw new ApiError(
+        httpStatus.BAD_GATEWAY,
+        'Uploading the PDF to storage failed or timed out. Verify AWS_REGION matches the S3 bucket region, the EC2 instance can reach S3, and credentials or the instance IAM role allow s3:PutObject.'
+      );
+    }
+    throw e;
+  }
   return { key, size: buffer.length, mimeType: 'application/pdf' };
 };
 

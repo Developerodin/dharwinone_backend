@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import config from './config.js';
 
 // Same logic as livekit.service: Egress uses MinIO in dev, AWS S3 in production/Cloud
@@ -9,14 +10,26 @@ const isRecordingStorageLocal = () => {
   return config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey;
 };
 
-// Create S3 client (used for documents/profile uploads and AWS recording playback)
-const s3Client = new S3Client({
-  region: config.aws?.region,
-  credentials: {
-    accessKeyId: config.aws?.accessKeyId,
-    secretAccessKey: config.aws?.secretAccessKey,
-  },
-});
+/**
+ * S3Client for the main app bucket (uploads, offer letter PDFs, presigned URLs).
+ * When static keys are omitted, do NOT pass `credentials: { undefined, undefined }` — that blocks the
+ * default provider chain. On EC2, use an IAM instance role and omit AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+ */
+const s3ClientConfig = {
+  region: config.aws?.region || 'us-east-1',
+  /** Avoid hanging forever if S3 is unreachable (common symptom: “Generate PDF” spinner never ends). */
+  requestHandler: new NodeHttpHandler({
+    requestTimeout: 60000,
+    connectionTimeout: 15000,
+  }),
+};
+if (config.aws?.accessKeyId && config.aws?.secretAccessKey) {
+  s3ClientConfig.credentials = {
+    accessKeyId: config.aws.accessKeyId,
+    secretAccessKey: config.aws.secretAccessKey,
+  };
+}
+const s3Client = new S3Client(s3ClientConfig);
 
 // MinIO client for recording playback when Egress writes to MinIO (local dev)
 let minioS3Client = null;

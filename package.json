@@ -50,6 +50,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1031.0",
     "@azure/msal-node": "^5.1.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@smithy/node-http-handler": "^4.6.1",
     "bcryptjs": "^2.4.3",
     "cheerio": "^1.2.0",
     "compression": "^1.7.4",
