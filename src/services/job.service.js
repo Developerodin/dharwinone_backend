@@ -603,6 +603,30 @@ const deleteJobTemplateById = async (id, currentUser) => {
   return template;
 };
 
+/**
+ * After JobApplication is created: set referral pipeline job + status for Referral leads / ATS.
+ * Onboard-invited candidates often have SHARE_CANDIDATE_ONBOARD attribution but no ?ref on browse apply,
+ * so applyJobReferralFromRef never runs — this keeps job column and status in sync.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} jobId
+ * @param {import('mongoose').Types.ObjectId|string} candidateId
+ * @param {object} [jobDoc] - job from getJobById (avoids extra query)
+ */
+const syncReferralPipelineAfterJobApplication = async (jobId, candidateId, jobDoc) => {
+  const j = jobDoc || (await getJobById(jobId));
+  if (!j) return;
+  await Employee.updateOne(
+    { _id: candidateId },
+    {
+      $set: {
+        referralJobId: j._id,
+        referralJobTitle: j.title || null,
+        referralPipelineStatus: 'applied',
+      },
+    }
+  );
+};
+
 const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser) => {
   const job = await getJobById(jobId);
   if (!job) {
@@ -636,6 +660,7 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
     appliedBy: appliedById,
     status: 'Applied',
   });
+  await syncReferralPipelineAfterJobApplication(jobId, candidateId, job);
   await application.populate([{ path: 'candidate', select: 'fullName email' }, { path: 'job', select: 'title' }]);
   return application;
 };
@@ -904,6 +929,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     coverLetter: coverLetter || '',
   });
   logger.info('✅ Job application created:', { _id: application._id, candidate: application.candidate, job: application.job });
+
+  await syncReferralPipelineAfterJobApplication(jobId, candidate._id, job);
 
   await application.populate([
     { path: 'candidate', select: 'fullName email phoneNumber' },

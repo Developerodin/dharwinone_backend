@@ -31,6 +31,8 @@ router.post(
   offerController.generateLetter
 );
 
+// D-01 (product): download uses `candidates.read` while generate-letter uses `candidates.manage`.
+// Aligning both to `candidates.manage` is a permission product decision — do not change silently here.
 router.get(
   '/:offerId/letter-file',
   auth(),

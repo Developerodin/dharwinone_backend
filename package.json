@@ -11,6 +11,8 @@
     "start": "node src/index.js",
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",
     "test": "node --test ./src/services/emailConnectionPolicy.service.test.js ./src/services/auth.verifyEmailUpdate.test.js",
+    "check:offer-assets": "node ./scripts/check-offer-letter-assets.js",
+    "ensure:sales-agent-role": "node ./scripts/ensure-sales-agent-role.js",
     "audit:ci": "npm audit --audit-level=high",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

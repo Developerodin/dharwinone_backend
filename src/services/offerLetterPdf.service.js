@@ -1,7 +1,14 @@
+/*
+ * DESIGN DECISION (ADR-001): PDF uses Times-Roman/Times-Bold; browser preview uses DM Sans.
+ * Times is a PDFKit built-in (no font embedding). Formal letter aesthetic is intentional.
+ * Do not switch the PDF to match the preview without embedding DM Sans via doc.registerFont()
+ * and re-checking line/page breaks against a golden PDF.
+ */
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import PDFDocument from 'pdfkit';
+import logger from '../config/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -563,6 +570,20 @@ function drawUnifiedOfferBody(doc, y, ctx) {
  */
 const buildOfferLetterPdfBuffer = (ctx) =>
   new Promise((resolve, reject) => {
+    if (!RESOLVED_OFFER_LETTER_LOGO_PNG) {
+      const msg =
+        'Offer letter logo PNG missing: add dharwin-offer-letter-logo.png under src/assets/offer-letters/ (mirror public/assets/images).';
+      logger.error(msg);
+      reject(new Error(msg));
+      return;
+    }
+    if (!RESOLVED_CEO_SIGNATURE_PNG) {
+      const msg =
+        'Offer letter CEO signature PNG missing: add ceo-signature-harvinder.png under src/assets/offer-letters/ (mirror public/assets/images).';
+      logger.error(msg);
+      reject(new Error(msg));
+      return;
+    }
     const doc = new PDFDocument({
       size: 'LETTER',
       margin: MARGIN,

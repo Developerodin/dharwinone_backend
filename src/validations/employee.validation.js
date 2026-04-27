@@ -515,7 +515,7 @@ const referralLeadsQueryKeys = {
   referredByUserId: Joi.string().custom(objectId).allow(''),
   referralContext: Joi.string().valid('SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY').allow(''),
   referralPipelineStatus: Joi.string()
-    .valid('profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending')
+    .valid('profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending', 'withdrawn')
     .allow(''),
   from: Joi.string().trim().allow('').optional(),
   to: Joi.string().trim().allow('').optional(),

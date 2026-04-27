@@ -4,7 +4,17 @@ import ApiError from '../utils/ApiError.js';
 import config from '../config/config.js';
 import { createUser, getUserByEmail, getUserById, updateUserById } from '../services/user.service.js';
 import { generateAuthTokens, generateResetPasswordToken, generateVerifyEmailToken, getSessionsForUser } from '../services/token.service.js';
-import { loginUserWithEmailAndPassword, logout as logout2, refreshAuth, resetPassword as resetPassword2, changePassword as changePassword2, verifyEmail as verifyEmail2, startImpersonation, stopImpersonation as stopImpersonationService } from '../services/auth.service.js';
+import {
+  loginUserWithEmailAndPassword,
+  logout as logout2,
+  refreshAuth,
+  resetPassword as resetPassword2,
+  changePassword as changePassword2,
+  verifyEmail as verifyEmail2,
+  startImpersonation,
+  stopImpersonation as stopImpersonationService,
+  userIsStaffForVerifyEmail,
+} from '../services/auth.service.js';
 import { sendResetPasswordEmail, sendVerificationEmail as sendVerificationEmail2, sendCandidateInvitationEmail } from '../services/email.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -19,6 +29,7 @@ import {
 } from '../services/employee.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
+import User from '../models/user.model.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
 import { pickUserDisplayForActivityLog } from '../utils/activityLogSubject.util.js';
 import Impersonation from '../models/impersonation.model.js';
@@ -234,20 +245,33 @@ const publicRegister = catchAsync(async (req, res) => {
 /**
  * Public candidate onboarding: no auth required.
  * Creates User (status 'pending', registrationSource public_candidate) and a Candidate linked to that user.
- * Assigns Candidate role. Duplicate email: merges Candidate, strips Student, sets registrationSource only if unset.
+ * Duplicate email: internal/staff accounts are rejected; otherwise `$addToSet` Candidate role and set
+ * `registrationSource` only when currently unset (never overwrite an existing source — R5).
  */
 const publicRegisterCandidate = catchAsync(async (req, res) => {
   const candidateRole = await getRoleByName('Candidate');
   if (!candidateRole) {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Candidate role not found. Please contact administrator.');
   }
-  const studentRole = await getRoleByName('Student');
 
   const { name, email, password, phoneNumber, countryCode, ref: referralRef } = req.body;
   const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
   const cc = countryCode && String(countryCode).trim().toUpperCase();
-  let user;
-  try {
+  let user = await getUserByEmail(email);
+  if (user) {
+    if (await userIsStaffForVerifyEmail(user)) {
+      throw new ApiError(
+        httpStatus.CONFLICT,
+        'This email is already registered to an internal account. Sign in or use a different email.',
+      );
+    }
+    if (!user.registrationSource) {
+      await updateUserById(user._id, { registrationSource: 'public_candidate' });
+      user.registrationSource = 'public_candidate';
+    }
+    await User.findByIdAndUpdate(user._id, { $addToSet: { roleIds: candidateRole._id } });
+    user = await getUserById(user._id);
+  } else {
     user = await createUser({
       name,
       email,
@@ -258,27 +282,6 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       ...(phone && phone !== '0000000000' && { phoneNumber: phone }),
       ...(cc && { countryCode: cc }),
     });
-  } catch (err) {
-    if (err.statusCode !== httpStatus.BAD_REQUEST || err.message !== 'Email already taken') throw err;
-    user = await getUserByEmail(email);
-    if (!user) throw err;
-
-    let mergedRoleIds = [...(user.roleIds || [])];
-    if (studentRole) {
-      mergedRoleIds = mergedRoleIds.filter((id) => id.toString() !== studentRole._id.toString());
-    }
-    if (!mergedRoleIds.some((id) => id.toString() === candidateRole._id.toString())) {
-      mergedRoleIds.push(candidateRole._id);
-    }
-    const patch = { roleIds: mergedRoleIds };
-    if (!user.registrationSource) {
-      patch.registrationSource = 'public_candidate';
-    }
-    await updateUserById(user._id, patch);
-    user.roleIds = mergedRoleIds;
-    if (patch.registrationSource) {
-      user.registrationSource = patch.registrationSource;
-    }
   }
   let candidate;
   try {

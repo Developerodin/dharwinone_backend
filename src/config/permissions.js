@@ -53,8 +53,11 @@ export const permissionAliases = {
   // Interview scheduling needs candidate picklist for agents who only have ats.interviews.*
   'candidates.read': [
     'candidates.read',
+    'referralLeads.read',
     'ats.candidates:view',
     'ats.candidates:view,create,edit,delete',
+    'ats.referralLeads:view',
+    'ats.referralLeads:view,create,edit,delete',
     'interviews.read',
     'interviews.manage',
   ],

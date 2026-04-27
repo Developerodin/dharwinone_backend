@@ -1,52 +1,107 @@
 /**
- * Normalize role id for Set keys (Mongo update accepts same shape back on User.roleIds).
- * @param {unknown} id
- * @returns {string}
- */
-const roleIdKey = (id) => (id != null && typeof id === 'object' && 'toString' in id ? id.toString() : String(id));
-
-/**
- * Pure builder for Mongo update used by verifyEmail (unit-tested).
- * MongoDB rejects the same update using both `$addToSet` and `$pull` on `roleIds` ("conflict at roleIds").
- * We merge role ids in one `$set.roleIds` instead.
+ * Pure builders for verify-email persistence (unit-tested).
+ * RoleIds are applied via a single aggregation-pipeline $set so Student→Candidate swap is atomic in MongoDB.
+ * (Using `$pull` + `$addToSet` on the same field in one update often conflicts.)
  *
  * @param {{ status: string, eligibleForCandidateAutoActivate: boolean, setRegistrationSourcePublicCandidate?: boolean, roleIds?: unknown[] }} user
  * @param {{ skipStaffAutoActivate: boolean, candidateRoleId: import('mongoose').Types.ObjectId|string|null, studentRoleId?: import('mongoose').Types.ObjectId|string|null }} opts
- * @returns {{ mongoUpdate: { $set: object }, pendingToActive: boolean }}
+ * @returns {{
+ *   pendingToActive: boolean,
+ *   applyRoleIdsInDb: boolean,
+ *   scalarSet: Record<string, unknown>,
+ *   studentRoleId: import('mongoose').Types.ObjectId|string|null,
+ *   candidateRoleId: import('mongoose').Types.ObjectId|string|null,
+ * }}
  */
-export const buildVerifyEmailMongoUpdate = (user, opts) => {
+export const buildVerifyEmailUpdatePlan = (user, opts) => {
   const { skipStaffAutoActivate, candidateRoleId, studentRoleId } = opts;
   const eligible = user.eligibleForCandidateAutoActivate === true;
 
+  const emptyPlan = {
+    pendingToActive: false,
+    applyRoleIdsInDb: false,
+    scalarSet: { isEmailVerified: true },
+    studentRoleId: null,
+    candidateRoleId: null,
+  };
+
   if (skipStaffAutoActivate) {
-    return { mongoUpdate: { $set: { isEmailVerified: true } }, pendingToActive: false };
+    return emptyPlan;
   }
 
   if (!eligible) {
-    return { mongoUpdate: { $set: { isEmailVerified: true } }, pendingToActive: false };
+    return emptyPlan;
   }
 
   if (user.status === 'disabled' || user.status === 'deleted') {
-    return { mongoUpdate: { $set: { isEmailVerified: true } }, pendingToActive: false };
+    return emptyPlan;
   }
 
   const wasPending = user.status === 'pending';
-  const set = { isEmailVerified: true };
+  const scalarSet = { isEmailVerified: true };
   if (wasPending) {
-    set.status = 'active';
+    scalarSet.status = 'active';
   }
   if (user.setRegistrationSourcePublicCandidate) {
-    set.registrationSource = 'public_candidate';
+    scalarSet.registrationSource = 'public_candidate';
   }
 
-  const merged = new Set((user.roleIds || []).map(roleIdKey));
-  if (studentRoleId != null) {
-    merged.delete(roleIdKey(studentRoleId));
-  }
-  if (candidateRoleId != null) {
-    merged.add(roleIdKey(candidateRoleId));
-  }
-  set.roleIds = [...merged];
+  return {
+    pendingToActive: wasPending,
+    applyRoleIdsInDb: candidateRoleId != null,
+    scalarSet,
+    studentRoleId: studentRoleId || null,
+    candidateRoleId: candidateRoleId || null,
+  };
+};
 
-  return { mongoUpdate: { $set: set }, pendingToActive: wasPending };
+/**
+ * One-stage aggregation pipeline: atomic roleIds merge + scalar fields from `plan.scalarSet`.
+ * @param {ReturnType<typeof buildVerifyEmailUpdatePlan>} plan
+ * @returns {object[]|null} null when pipeline is not needed
+ */
+export const buildVerifyEmailAggregationPipeline = (plan) => {
+  if (!plan.applyRoleIdsInDb || !plan.candidateRoleId) {
+    return null;
+  }
+  const studentOid = plan.studentRoleId || null;
+  const candidateOid = plan.candidateRoleId;
+
+  const roleExpr = studentOid
+    ? {
+        $let: {
+          vars: {
+            stripped: {
+              $filter: {
+                input: { $ifNull: ['$roleIds', []] },
+                as: 'r',
+                cond: { $ne: ['$$r', studentOid] },
+              },
+            },
+          },
+          in: {
+            $cond: [
+              { $in: [candidateOid, '$$stripped'] },
+              '$$stripped',
+              { $concatArrays: ['$$stripped', [candidateOid]] },
+            ],
+          },
+        },
+      }
+    : {
+        $cond: [
+          { $in: [candidateOid, { $ifNull: ['$roleIds', []] }] },
+          { $ifNull: ['$roleIds', []] },
+          { $concatArrays: [{ $ifNull: ['$roleIds', []] }, [candidateOid]] },
+        ],
+      };
+
+  return [
+    {
+      $set: {
+        roleIds: roleExpr,
+        ...plan.scalarSet,
+      },
+    },
+  ];
 };

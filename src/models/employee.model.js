@@ -184,7 +184,7 @@ const employeeSchema = new mongoose.Schema(
     referralAttributionAnonymised: { type: Boolean, default: false },
     referralPipelineStatus: {
       type: String,
-      enum: ['profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending'],
+      enum: ['profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending', 'withdrawn'],
       default: 'pending',
     },
     /** Most recent override audit (older chain can move to collection later). */

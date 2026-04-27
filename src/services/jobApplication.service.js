@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
+import { syncReferralPipelineAfterApplicationWithdrawal } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
 
 const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
@@ -162,7 +163,10 @@ const deleteJobApplication = async (id, currentUser) => {
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
+  const candidateId = application.candidate;
+  const withdrawnJobId = application.job;
   await JobApplication.findByIdAndDelete(id);
+  await syncReferralPipelineAfterApplicationWithdrawal(candidateId, { withdrawnJobId });
 };
 
 /**

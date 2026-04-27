@@ -5,12 +5,14 @@ import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import ActivityLog from '../models/activityLog.model.js';
 import Job from '../models/job.model.js';
+import JobApplication from '../models/jobApplication.model.js';
 import config from '../config/config.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import * as activityLogService from './activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { logReferralEvent } from './referralAttribution.service.js';
 import logger from '../config/logger.js';
+import { userIsSalesAgent } from '../utils/roleHelpers.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -30,7 +32,7 @@ export const assertReferralLeadViewAccess = async (req, candidateId) => {
   if (!c) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
-  if (canSeeAllReferralLeads(req)) {
+  if (await canUserSeeAllReferralLeads(req)) {
     return;
   }
   if (c.referredByUserId && String(c.referredByUserId) === String(req.user._id)) {
@@ -116,6 +118,17 @@ export const canSeeAllReferralLeads = (req) => {
 };
 
 /**
+ * Org-wide referral lead list (else match is forced to `referredByUserId: req.user`).
+ * Sales agents are always scoped to their own referrals — never `interviews.manage` / `candidates.manage` bypass.
+ * @param {import('express').Request} req
+ * @returns {Promise<boolean>}
+ */
+export const canUserSeeAllReferralLeads = async (req) => {
+  if (await userIsSalesAgent(req.user)) return false;
+  return canSeeAllReferralLeads(req);
+};
+
+/**
  * Build Mongo match for referral leads (referred candidates; not restricted by Candidate-role owner roster).
  * @param {object} opts
  * @param {object} opts.user
@@ -138,8 +151,8 @@ export const buildReferralLeadsMatch = async (opts) => {
     mongo.referralContext = query.referralContext;
   }
 
-  if (query.referralPipelineStatus) {
-    mongo.referralPipelineStatus = query.referralPipelineStatus;
+  if (query.referralPipelineStatus && String(query.referralPipelineStatus).trim()) {
+    mongo.referralPipelineStatus = String(query.referralPipelineStatus).trim();
   }
 
   if (query.from || query.to) {
@@ -171,6 +184,91 @@ export const buildReferralLeadsMatch = async (opts) => {
   // `roleIds` until activation; they still have a Candidate document and must appear here.
 
   return mongo;
+};
+
+/**
+ * Org-wide match for the "top referrer" card only.
+ * Ignores self-scope (sales agent), referrer dropdown, pipeline status, and search — otherwise a scoped
+ * view would always rank the current user #1 with their own count.
+ * Still respects **Link type** and **date range** so the leaderboard matches the reporting window.
+ *
+ * @param {object} query - parsed query string (same shape as referral leads list)
+ */
+const buildGlobalTopReferrerMatch = (query) => {
+  const mongo = {
+    referredByUserId: { $exists: true, $ne: null },
+  };
+
+  if (query.referralContext && ['SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY'].includes(query.referralContext)) {
+    mongo.referralContext = query.referralContext;
+  }
+
+  if (query.from || query.to) {
+    mongo.referredAt = {};
+    if (query.from) {
+      mongo.referredAt.$gte = new Date(query.from);
+    }
+    if (query.to) {
+      const t = new Date(query.to);
+      t.setHours(23, 59, 59, 999);
+      mongo.referredAt.$lte = t;
+    }
+  }
+
+  return mongo;
+};
+
+/**
+ * After a job application is deleted (candidate withdraw or admin): keep referral leads accurate.
+ * - No applications left + pipeline was post-apply → `withdrawn` (still listed; job kept from withdrawn application when provided).
+ * - Still has applications → re-point job + `applied` to the latest application.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} candidateId
+ * @param {object} [options]
+ * @param {import('mongoose').Types.ObjectId|string|null} [options.withdrawnJobId] - job from the deleted application (for JOB column + context)
+ */
+export const syncReferralPipelineAfterApplicationWithdrawal = async (candidateId, options = {}) => {
+  if (!candidateId) return;
+  const withdrawnJobId = options.withdrawnJobId;
+  const remaining = await JobApplication.find({ candidate: candidateId })
+    .sort({ createdAt: -1 })
+    .select('job')
+    .lean();
+
+  if (!remaining.length) {
+    const c = await Employee.findById(candidateId)
+      .select('referredByUserId referralPipelineStatus')
+      .lean();
+    if (!c?.referredByUserId) return;
+    const pipeline = c.referralPipelineStatus || 'pending';
+    if (pipeline === 'withdrawn') return;
+    if (['applied', 'in_review', 'hired'].includes(pipeline)) {
+      const setDoc = { referralPipelineStatus: 'withdrawn' };
+      if (withdrawnJobId && mongoose.Types.ObjectId.isValid(String(withdrawnJobId))) {
+        const job = await Job.findById(withdrawnJobId).select('title').lean();
+        setDoc.referralJobId = withdrawnJobId;
+        setDoc.referralJobTitle = job?.title || null;
+      } else {
+        setDoc.referralJobId = null;
+        setDoc.referralJobTitle = null;
+      }
+      await Employee.updateOne({ _id: candidateId }, { $set: setDoc });
+    }
+    return;
+  }
+
+  const latest = remaining[0];
+  const job = await Job.findById(latest.job).select('title').lean();
+  await Employee.updateOne(
+    { _id: candidateId },
+    {
+      $set: {
+        referralJobId: latest.job,
+        referralJobTitle: job?.title || null,
+        referralPipelineStatus: 'applied',
+      },
+    }
+  );
 };
 
 /**
@@ -379,7 +477,7 @@ const referralLeadsPopulateReferrerAndJobStages = () => {
 };
 
 export const listReferralLeads = async (req) => {
-  const canSeeAll = canSeeAllReferralLeads(req);
+  const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
   const limit = Math.min(Math.max(parseInt(q.limit, 10) || 25, 1), 100);
   const baseMatch = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
@@ -432,9 +530,10 @@ const CONVERTED_STATUSES = ['applied', 'in_review', 'hired'];
 const PENDING_STATUSES = ['pending', 'profile_complete'];
 
 export const getReferralLeadsStats = async (req) => {
-  const canSeeAll = canSeeAllReferralLeads(req);
+  const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
+  const matchGlobalTop = buildGlobalTopReferrerMatch(q);
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
@@ -446,7 +545,7 @@ export const getReferralLeadsStats = async (req) => {
       { $group: { _id: '$referralPipelineStatus', count: { $sum: 1 } } },
     ]),
     Employee.aggregate([
-      { $match: match },
+      { $match: matchGlobalTop },
       ...ownerStages,
       { $group: { _id: '$referredByUserId', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
@@ -493,7 +592,7 @@ export const getReferralLeadsStats = async (req) => {
 };
 
 export const exportReferralLeadsCsv = async (req, res) => {
-  const canSeeAll = canSeeAllReferralLeads(req);
+  const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = { ...req.query, search: undefined };
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
   const cap = 5000;
@@ -519,7 +618,6 @@ export const exportReferralLeadsCsv = async (req, res) => {
     'job_id',
     'job_title',
     'referral_jti',
-    'batch_id',
     'status',
     'referred_at',
     'attribution_locked_at',
@@ -541,7 +639,6 @@ export const exportReferralLeadsCsv = async (req, res) => {
       r.referralJobId?._id || r.referralJobId || '',
       r.referralJobId?.title || r.referralJobTitle || '',
       r.referralJti || '',
-      r.referralBatchId || '',
       r.referralPipelineStatus || '',
       r.referredAt ? new Date(r.referredAt).toISOString() : '',
       r.attributionLockedAt ? new Date(r.attributionLockedAt).toISOString() : '',
@@ -572,6 +669,9 @@ function csvCell(v) {
 }
 
 export const overrideReferralAttribution = async (req) => {
+  if (await userIsSalesAgent(req.user)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Sales agents cannot override referral attribution');
+  }
   const { candidateId } = req.params;
   const { newReferredByUserId, reason } = req.body;
   const reasonNorm = String(reason ?? '')

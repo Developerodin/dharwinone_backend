@@ -13,6 +13,7 @@ import {
 } from '../services/jobApplication.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
 
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
@@ -101,7 +102,10 @@ const withdrawApplication = catchAsync(async (req, res) => {
       `Cannot withdraw application in "${application.status}" status`
     );
   }
+  const candidateId = application.candidate;
+  const withdrawnJobId = application.job;
   await JobApplication.findByIdAndDelete(application._id);
+  await syncReferralPipelineAfterApplicationWithdrawal(candidateId, { withdrawnJobId });
   await activityLogService.createActivityLog(
     String(req.user.id || req.user._id),
     ActivityActions.JOB_APPLICATION_DELETE,

@@ -1,6 +1,44 @@
 import Role from '../models/role.model.js';
 
 /**
+ * Staff / internal roles: if the user has any of these (active), skip public-candidate auto-activate on email verify.
+ * Single enumeration for D-02 — keep in sync with product definition of "internal account".
+ * ('agent' lowercase matches legacy DB rows; see userIsAgent.)
+ */
+/** ATS referral leads: scoped to own `referredByUserId` only; no org-wide list / override. */
+export const SALES_AGENT_ROLE_NAME = 'sales_agent';
+
+/** DB / UI variants that denote the same sales-agent role (canonical name is {@link SALES_AGENT_ROLE_NAME}). */
+export const SALES_AGENT_ROLE_NAMES = [SALES_AGENT_ROLE_NAME, 'Sales Agent'];
+
+export const STAFF_ROLE_NAMES_SKIP_PUBLIC_CANDIDATE_VERIFY = [
+  'Administrator',
+  'Agent',
+  'agent',
+  'Employee',
+  'Manager',
+  'Mentor',
+  'Recruiter',
+  ...SALES_AGENT_ROLE_NAMES,
+];
+
+/**
+ * @param {Object|null|undefined} user - User with roleIds
+ * @returns {Promise<boolean>}
+ */
+export const userIsSalesAgent = async (user) => {
+  if (!user) return false;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: { $in: SALES_AGENT_ROLE_NAMES },
+    status: 'active',
+  });
+  return !!hasRole;
+};
+
+/**
  * Check if user has Administrator role (by roleIds).
  * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}
@@ -45,11 +83,11 @@ export const userIsAdminOrAgent = async (user) => {
   return !!role;
 };
 
-/** Role names that Agents are not allowed to assign (Administrator, Agent, Manager). */
-const RESTRICTED_ROLE_NAMES_FOR_AGENT = ['Administrator', 'Agent', 'Manager'];
+/** Role names that Agents are not allowed to assign (Administrator, Agent, Manager, Sales Agent). */
+const RESTRICTED_ROLE_NAMES_FOR_AGENT = ['Administrator', 'Agent', 'Manager', ...SALES_AGENT_ROLE_NAMES];
 
 /**
- * When the requester is an Agent, roleIds must not include Administrator, Agent, or Manager.
+ * When the requester is an Agent, roleIds must not include Administrator, Agent, Manager, or sales_agent.
  * @param {string[]} roleIds - Role IDs being assigned
  * @returns {Promise<{ allowed: boolean, restrictedNames?: string[] }>}
  */
@@ -76,24 +114,6 @@ export const userHasCandidateRole = async (user) => {
     status: 'active',
   });
   return !!hasRole;
-};
-
-/**
- * Users who must not receive public-candidate auto-activation (status/role) on email verify.
- * Still receive isEmailVerified when the token is valid.
- * @param {Object} user - User with roleIds, platformSuperUser
- * @returns {Promise<boolean>}
- */
-export const shouldSkipPublicCandidateAutoActivate = async (user) => {
-  if (await userIsAdmin(user)) return true;
-  const roleIds = user?.roleIds || [];
-  if (!roleIds.length) return false;
-  const hasStaff = await Role.exists({
-    _id: { $in: roleIds },
-    name: { $in: ['Employee', 'Agent', 'Manager'] },
-    status: 'active',
-  });
-  return !!hasStaff;
 };
 
 /**
