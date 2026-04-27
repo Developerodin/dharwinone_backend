@@ -89,26 +89,39 @@ const enrichUserWithFreshProfilePictureUrl = async (user) => {
 
 /**
  * Register (POST /v1/auth/register).
- * - Candidate from invite (role=user, adminId): create User (pending) + Employee. No tokens until admin activates.
+ * - Candidate from invite (role=user, adminId): User pending + Candidate role + registrationSource public_candidate;
+ *   email verify then auto-activates (same as /public/register-candidate). No tokens until active.
  * - Admin registration (req.user present): create user, no tokens, activity log.
  */
 const register = catchAsync(async (req, res) => {
   const { adminId, phoneNumber, countryCode } = req.body;
 
   if (adminId) {
+    const candidateRole = await getRoleByName('Candidate');
+    if (!candidateRole) {
+      throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Candidate role not found. Please contact administrator.');
+    }
+    const { name, email, password } = req.body;
+    const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
+    const cc = countryCode && String(countryCode).trim().toUpperCase();
+
     const user = await createUser({
-      ...req.body,
+      name,
+      email,
+      password,
       adminId,
       status: 'pending',
-      phoneNumber: phoneNumber || undefined,
-      countryCode: countryCode || undefined,
+      registrationSource: 'public_candidate',
+      roleIds: [candidateRole._id],
+      ...(phone && phone !== '0000000000' && { phoneNumber: phone }),
+      ...(cc && { countryCode: cc }),
     });
     const completionPercentage = 30;
     const candidate = await createCandidate(user._id, {
       fullName: user.name,
       email: user.email,
-      phoneNumber: (phoneNumber && String(phoneNumber).trim()) || '0000000000',
-      ...(countryCode && String(countryCode).trim() && { countryCode: String(countryCode).trim().toUpperCase() }),
+      phoneNumber: phone,
+      ...(cc && { countryCode: cc }),
       adminId,
       isProfileCompleted: completionPercentage,
     });
@@ -140,7 +153,8 @@ const register = catchAsync(async (req, res) => {
     });
     res.status(httpStatus.CREATED).send({
       user,
-      message: 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.',
+      message:
+        'Registration successful. Check your email and verify your address — after that you can sign in (no administrator activation required).',
     });
     return;
   }
@@ -205,7 +219,7 @@ const register = catchAsync(async (req, res) => {
  * No tokens or cookies are issued.
  */
 const publicRegister = catchAsync(async (req, res) => {
-  const body = { ...req.body, status: 'pending' };
+  const body = { ...req.body, status: 'pending', registrationSource: 'public_generic' };
   delete body.roleIds;
   delete body.isEmailVerified;
   delete body.platformSuperUser;
@@ -219,14 +233,15 @@ const publicRegister = catchAsync(async (req, res) => {
 
 /**
  * Public candidate onboarding: no auth required.
- * Creates User (status 'pending') and a Candidate linked to that user so they appear in the ATS candidate list.
- * Assigns Student role by default. If the email is already registered, creates only the missing Candidate and ensures Student role.
+ * Creates User (status 'pending', registrationSource public_candidate) and a Candidate linked to that user.
+ * Assigns Candidate role. Duplicate email: merges Candidate, strips Student, sets registrationSource only if unset.
  */
 const publicRegisterCandidate = catchAsync(async (req, res) => {
-  const studentRole = await getRoleByName('Student');
-  if (!studentRole) {
-    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Student role not found. Please contact administrator.');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!candidateRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Candidate role not found. Please contact administrator.');
   }
+  const studentRole = await getRoleByName('Student');
 
   const { name, email, password, phoneNumber, countryCode, ref: referralRef } = req.body;
   const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
@@ -238,7 +253,8 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       email,
       password,
       status: 'pending',
-      roleIds: [studentRole._id],
+      registrationSource: 'public_candidate',
+      roleIds: [candidateRole._id],
       ...(phone && phone !== '0000000000' && { phoneNumber: phone }),
       ...(cc && { countryCode: cc }),
     });
@@ -246,11 +262,22 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     if (err.statusCode !== httpStatus.BAD_REQUEST || err.message !== 'Email already taken') throw err;
     user = await getUserByEmail(email);
     if (!user) throw err;
-    // Ensure existing user has Student role
-    const existingRoleIds = (user.roleIds || []).map((id) => id.toString());
-    if (!existingRoleIds.includes(studentRole._id.toString())) {
-      await updateUserById(user._id, { roleIds: [...(user.roleIds || []), studentRole._id] });
-      user.roleIds = [...(user.roleIds || []), studentRole._id];
+
+    let mergedRoleIds = [...(user.roleIds || [])];
+    if (studentRole) {
+      mergedRoleIds = mergedRoleIds.filter((id) => id.toString() !== studentRole._id.toString());
+    }
+    if (!mergedRoleIds.some((id) => id.toString() === candidateRole._id.toString())) {
+      mergedRoleIds.push(candidateRole._id);
+    }
+    const patch = { roleIds: mergedRoleIds };
+    if (!user.registrationSource) {
+      patch.registrationSource = 'public_candidate';
+    }
+    await updateUserById(user._id, patch);
+    user.roleIds = mergedRoleIds;
+    if (patch.registrationSource) {
+      user.registrationSource = patch.registrationSource;
     }
   }
   let candidate;
@@ -299,7 +326,7 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     user,
     candidate,
     message: user.status === 'pending'
-      ? 'Registration successful. Your account is pending administrator approval. You will be able to sign in once activated.'
+      ? 'Registration successful. Check your email to verify your address and activate your account.'
       : 'You were already registered. You have been added to the employee list.',
   });
 });

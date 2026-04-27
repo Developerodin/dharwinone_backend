@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import Employee from '../models/employee.model.js';
+import * as activityLogService from './activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const CTX_ONBOARD = 'SHARE_CANDIDATE_ONBOARD';
 const CTX_JOB = 'JOB_APPLY';
@@ -172,6 +174,55 @@ export const applyOnboardInviteReferral = async (candidateId, inviteeEmail, invi
   c.attributionLockedAt = new Date();
   await c.save();
   return { applied: true };
+};
+
+/**
+ * Mint open job-share ref (same as POST /employees/referral-link with source job) and record audit.
+ * @param {import('express').Request} req
+ * @param {string|import('mongoose').Types.ObjectId} jobId
+ * @returns {Promise<string>}
+ */
+export const mintJobOpenReferralRefWithAudit = async (req, jobId) => {
+  const orgId = config.referral?.defaultOrgId || 'default';
+  const jobIdStr = jobId != null && String(jobId).trim() ? String(jobId) : null;
+  const ref = signReferralToken({
+    orgId,
+    source: 'job',
+    referrerUserId: String(req.user._id || req.user.id),
+    candidateEmail: '',
+    jobId: jobIdStr,
+    batchId: null,
+  });
+  let jti;
+  try {
+    const [payloadB64] = String(ref).split('.');
+    if (payloadB64) {
+      jti = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')).jti;
+    }
+  } catch (e) {
+    logger.warn('referral link token parse for audit', e?.message);
+  }
+  if (jti) {
+    try {
+      await activityLogService.createActivityLog(
+        String(req.user._id || req.user.id),
+        ActivityActions.REFERRAL_LINK_ISSUED,
+        EntityTypes.REFERRAL,
+        String(jti),
+        {
+          refSource: 'job',
+          orgId,
+          jobId: jobIdStr,
+          batchId: null,
+        },
+        req
+      );
+    } catch (e) {
+      logger.warn('referral link issued activity log', e?.message);
+    }
+    logReferralEvent('referral_link_issued', { orgId, refSource: 'job', jti, jobId: jobIdStr, batchId: null });
+  }
+  return ref;
 };
 
 /**

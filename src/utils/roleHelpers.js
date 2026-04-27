@@ -79,6 +79,24 @@ export const userHasCandidateRole = async (user) => {
 };
 
 /**
+ * Users who must not receive public-candidate auto-activation (status/role) on email verify.
+ * Still receive isEmailVerified when the token is valid.
+ * @param {Object} user - User with roleIds, platformSuperUser
+ * @returns {Promise<boolean>}
+ */
+export const shouldSkipPublicCandidateAutoActivate = async (user) => {
+  if (await userIsAdmin(user)) return true;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasStaff = await Role.exists({
+    _id: { $in: roleIds },
+    name: { $in: ['Employee', 'Agent', 'Manager'] },
+    status: 'active',
+  });
+  return !!hasStaff;
+};
+
+/**
  * Check if user has Recruiter role (by roleIds).
  * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}

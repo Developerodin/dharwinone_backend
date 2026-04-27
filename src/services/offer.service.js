@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import Offer from '../models/offer.model.js';
@@ -154,7 +155,20 @@ const toLetterContext = (offer) => {
   };
 };
 
-const assertOfferLetterReady = (offer) => {
+/**
+ * Stable hash of PDF input from an already-built letter context.
+ * When letterDate is unset, PDF uses "today" — include calendar day so a new day triggers rebuild.
+ */
+const letterPdfContentHashFromCtx = (ctx) => {
+  const dateStamp =
+    ctx.letterDate != null
+      ? `fixed:${new Date(ctx.letterDate).toISOString().slice(0, 10)}`
+      : `implicitDay:${new Date().toISOString().slice(0, 10)}`;
+  return createHash('sha256').update(JSON.stringify(ctx)).update(dateStamp).digest('hex');
+};
+
+/** Validates offer letter prerequisites and returns PDF context once (single toLetterContext). */
+const validateAndBuildLetterContext = (offer) => {
   const ctx = toLetterContext(offer);
   if (!ctx.address) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Letter address is required (set letter address or candidate address).');
@@ -183,15 +197,46 @@ const assertOfferLetterReady = (offer) => {
       'Compensation: set annual gross CTC on the offer (letter form), or save a custom compensation narrative.'
     );
   }
+  return ctx;
+};
+
+const jobHasPopulatedCreatedBy = (jobDoc) => {
+  if (!jobDoc || typeof jobDoc !== 'object') return false;
+  const cb = jobDoc.createdBy;
+  if (cb == null) return false;
+  if (typeof cb === 'object') return Boolean(cb._id ?? cb.id);
+  return mongoose.Types.ObjectId.isValid(String(cb));
 };
 
 const ensureAccess = async (currentUser, offerOrJob) => {
-  const job = offerOrJob.job ? await getJobById(offerOrJob.job) : offerOrJob;
+  let job;
+  if (offerOrJob.job) {
+    const j = offerOrJob.job;
+    if (typeof j === 'object' && j !== null && jobHasPopulatedCreatedBy(j)) {
+      job = j;
+    } else {
+      job = await getJobById(j?._id ?? j);
+    }
+  } else {
+    job = offerOrJob;
+  }
   const canAccess = await isOwnerOrAdmin(currentUser, job);
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 };
+
+/** Same shape as `getOfferById` / post-generate offer document */
+const OFFER_LETTER_POPULATE = [
+  {
+    path: 'job',
+    select: 'title organisation status createdBy',
+    populate: { path: 'createdBy', select: '_id name email' },
+  },
+  { path: 'candidate', select: 'fullName email phoneNumber address' },
+  { path: 'jobApplication', select: 'status notes' },
+  { path: 'createdBy', select: 'name email' },
+];
 
 const INTERNAL_OFFER_LETTER_JOB_TITLE = 'Offer letter (internal)';
 
@@ -322,11 +367,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
  * Get offer by id (with optional access check)
  */
 const getOfferById = async (id, currentUser = null) => {
-  const offer = await Offer.findById(id)
-    .populate('job', 'title organisation status')
-    .populate('candidate', 'fullName email phoneNumber address')
-    .populate('jobApplication', 'status notes')
-    .populate('createdBy', 'name email');
+  const offer = await Offer.findById(id).populate(OFFER_LETTER_POPULATE);
   if (!offer) return null;
   if (currentUser) {
     await ensureAccess(currentUser, offer);
@@ -470,6 +511,47 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   return getOfferById(offer._id);
 };
 
+/** Allowed fields on POST /offers/:id/generate-letter body (letter slice only; never status). */
+const GENERATE_LETTER_PATCH_KEYS = [...OFFER_LETTER_FIELD_KEYS, 'ctcBreakdown'];
+
+/**
+ * Apply letter-form fields from generate-letter POST body in one save (avoids a separate PATCH).
+ */
+const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
+  if (!rawBody || typeof rawBody !== 'object') return;
+
+  const updateBody = { ...rawBody };
+  for (const k of Object.keys(updateBody)) {
+    if (!GENERATE_LETTER_PATCH_KEYS.includes(k)) {
+      delete updateBody[k];
+    }
+  }
+
+  if (Object.keys(updateBody).length === 0) return;
+
+  applyLetterFieldsFromUpdate(offer, updateBody);
+
+  if (updateBody.ctcBreakdown) {
+    const cb = updateBody.ctcBreakdown;
+    offer.ctcBreakdown = {
+      base: cb.base ?? offer.ctcBreakdown?.base ?? 0,
+      hra: cb.hra ?? offer.ctcBreakdown?.hra ?? 0,
+      specialAllowances: cb.specialAllowances ?? offer.ctcBreakdown?.specialAllowances ?? 0,
+      otherAllowances: cb.otherAllowances ?? offer.ctcBreakdown?.otherAllowances ?? 0,
+      gross: cb.gross ?? offer.ctcBreakdown?.gross ?? 0,
+      currency: cb.currency ?? offer.ctcBreakdown?.currency ?? 'INR',
+    };
+    delete updateBody.ctcBreakdown;
+  }
+
+  if (updateBody.joiningDate !== undefined) {
+    offer.joiningDate = updateBody.joiningDate ? new Date(updateBody.joiningDate) : null;
+    delete updateBody.joiningDate;
+  }
+
+  await offer.save();
+};
+
 /**
  * Query offers with filter
  */
@@ -576,21 +658,42 @@ const deleteOfferById = async (id, currentUser) => {
   return offer;
 };
 
-const generateOfferLetter = async (id, currentUser) => {
+const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const offer = await getOfferById(id, currentUser);
   if (!offer) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
   }
-  assertOfferLetterReady(offer);
-  const ctx = toLetterContext(offer);
+
+  const hasPayload =
+    letterPayload && typeof letterPayload === 'object' && Object.keys(letterPayload).length > 0;
+  if (hasPayload) {
+    await applyOfferLetterPatchForGenerate(offer, letterPayload);
+  }
+
+  const ctx = validateAndBuildLetterContext(offer);
+  const newHash = letterPdfContentHashFromCtx(ctx);
+  if (offer.offerLetterKey && offer.offerLetterHash === newHash) {
+    return offer;
+  }
+
   const buf = await buildOfferLetterPdfBuffer(ctx);
   const userId = currentUser?.id ?? currentUser?._id;
   const { key } = await uploadPdfBuffer(userId, buf, 'offer-letters/');
-  await Offer.findByIdAndUpdate(id, {
-    offerLetterKey: key,
-    offerLetterGeneratedAt: new Date(),
-  });
-  return getOfferById(id, currentUser);
+
+  const updated = await Offer.findByIdAndUpdate(
+    id,
+    {
+      offerLetterKey: key,
+      offerLetterGeneratedAt: new Date(),
+      offerLetterHash: newHash,
+    },
+    { new: true }
+  ).populate(OFFER_LETTER_POPULATE);
+
+  if (!updated) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
+  }
+  return updated;
 };
 
 const getOfferLetterFileBuffer = async (id, currentUser) => {

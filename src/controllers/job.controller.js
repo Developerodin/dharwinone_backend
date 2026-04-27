@@ -21,6 +21,8 @@ import {
   applyJobReferralFromRef,
 } from '../services/job.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
+import { getFrontendBaseUrl } from '../utils/emailLinks.js';
+import { mintJobOpenReferralRefWithAudit } from '../services/referralAttribution.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
 import Employee from '../models/employee.model.js';
@@ -259,8 +261,12 @@ const shareJobEmail = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const { to, message } = req.body;
+  const jobIdStr = String(job._id || job.id);
+  const ref = await mintJobOpenReferralRefWithAudit(req, jobIdStr);
+  const jobPublicUrl = `${getFrontendBaseUrl(req)}/public-job/${jobIdStr}?ref=${encodeURIComponent(ref)}`;
   await sendJobShareEmail(to, job, message, {
     sharerName: req.user.name || 'Dharwin team',
+    publicJobUrl: jobPublicUrl,
   });
   await activityLogService.createActivityLog(
     String(req.user.id || req.user._id),
@@ -275,13 +281,12 @@ const shareJobEmail = catchAsync(async (req, res) => {
     },
     req
   );
-  const frontendBase = (await import('../config/config.js')).default?.frontendBaseUrl || 'http://localhost:3001';
   const { notifyByEmail } = await import('../services/notification.service.js');
   notifyByEmail(to, {
     type: 'general',
     title: `Job shared: ${job.title}`,
     message: `${job.organisation?.name || 'Company'}${job.location ? ` - ${job.location}` : ''}`,
-    link: `${frontendBase}/public-job/${job._id || job.id}`,
+    link: jobPublicUrl,
   }).catch(() => {});
   res.send({ message: 'Job shared successfully' });
 });

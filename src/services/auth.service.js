@@ -4,11 +4,95 @@ import config from '../config/config.js';
 import { verifyToken, generateAuthTokens, generateImpersonationTokens } from './token.service.js';
 import { getUserByEmail, getUserById, updateUserById } from './user.service.js';
 import Token from '../models/token.model.js';
+import User from '../models/user.model.js';
+import Employee from '../models/employee.model.js';
+import JobApplication from '../models/jobApplication.model.js';
 import Impersonation from '../models/impersonation.model.js';
 import ApiError from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
-import { userHasCandidateRole } from '../utils/roleHelpers.js';
+import { userHasCandidateRole, shouldSkipPublicCandidateAutoActivate } from '../utils/roleHelpers.js';
 import { getResignStatusByOwnerId } from './employee.service.js';
+import logger from '../config/logger.js';
+import { getRoleByName } from './role.service.js';
+import { buildVerifyEmailMongoUpdate } from './auth.verifyEmailUpdate.js';
+
+/**
+ * Share-candidate invite users created before `registrationSource` + Candidate `roleIds` could verify
+ * but stay pending. Repair when they open the verify page again (JWT/consumed token idempotent path).
+ * @param {import('mongoose').Document} user
+ */
+async function healPendingCandidateAfterStaleVerify(user) {
+  if (!user?.isEmailVerified || user.status !== 'pending') return;
+
+  const noOrEmptyRoles = !user.roleIds || user.roleIds.length === 0;
+  if (!noOrEmptyRoles) return;
+  if (user.registrationSource === 'public_generic') return;
+
+  if (await shouldSkipPublicCandidateAutoActivate(user)) return;
+
+  const hasJobApplicationAsApplicant = await JobApplication.exists({ appliedBy: user._id });
+  const ownedCandidateProfile = await Employee.exists({ owner: user._id });
+  const eligibleForCandidateAutoActivate =
+    user.registrationSource === 'public_candidate' ||
+    (user.registrationSource !== 'public_generic' &&
+      noOrEmptyRoles &&
+      (!!hasJobApplicationAsApplicant || !!ownedCandidateProfile));
+
+  if (!eligibleForCandidateAutoActivate) return;
+
+  const candidateRole = await getRoleByName('Candidate');
+  const studentRole = await getRoleByName('Student');
+  if (!candidateRole) {
+    logger.warn('healPendingCandidateAfterStaleVerify: Candidate role not configured');
+    return;
+  }
+
+  const setRegistrationSourcePublicCandidate =
+    user.registrationSource !== 'public_candidate' && user.registrationSource !== 'public_generic';
+
+  const { mongoUpdate, pendingToActive } = buildVerifyEmailMongoUpdate(
+    {
+      status: user.status,
+      eligibleForCandidateAutoActivate,
+      setRegistrationSourcePublicCandidate,
+      roleIds: user.roleIds,
+    },
+    {
+      skipStaffAutoActivate: false,
+      candidateRoleId: candidateRole._id,
+      studentRoleId: studentRole ? studentRole._id : null,
+    }
+  );
+
+  await User.findByIdAndUpdate(user._id, mongoUpdate);
+
+  if (pendingToActive && user.email) {
+    const { sendCandidateAccountActivationEmail } = await import('./email.service.js');
+    sendCandidateAccountActivationEmail(user.email, user.name).catch((err) => {
+      logger.warn(`healPendingCandidateAfterStaleVerify: activation email failed ${err?.message || err}`);
+    });
+    const cfg = (await import('../config/config.js')).default;
+    const signInUrl = `${(cfg?.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '')}/authentication/sign-in/`;
+    const { notify } = await import('./notification.service.js');
+    notify(user.id || user._id, {
+      type: 'account',
+      title: 'Your account has been activated',
+      message: 'You can now sign in.',
+      link: signInUrl,
+    }).catch(() => {});
+  }
+
+  if (Array.isArray(mongoUpdate.$set?.roleIds)) {
+    const { ensureStudentProfileForUser } = await import('./student.service.js');
+    const { ensureCandidateProfileForUser } = await import('./employee.service.js');
+    await ensureStudentProfileForUser(user.id).catch(() => {});
+    await ensureCandidateProfileForUser(user.id).catch((err) => {
+      logger.warn(`healPendingCandidateAfterStaleVerify: ensureCandidateProfileForUser failed: ${err?.message || err}`);
+    });
+  }
+
+  logger.info(`healPendingCandidateAfterStaleVerify: repaired user ${user._id}`);
+}
 
 /**
  * Login with username and password
@@ -230,20 +314,123 @@ const changePassword = async (userId, currentPassword, newPassword) => {
 };
 
 /**
- * Verify email
+ * Verify email — sets isEmailVerified; for `registrationSource: public_candidate` (non-staff),
+ * also activates pending users and normalizes Candidate vs Student roleIds ($addToSet / $pull).
  * @param {string} verifyEmailToken
- * @returns {Promise}
+ * @returns {Promise<void>}
  */
 const verifyEmail = async (verifyEmailToken) => {
   try {
-    const verifyEmailTokenDoc = await verifyToken(verifyEmailToken, tokenTypes.VERIFY_EMAIL);
-    const user = await getUserById(verifyEmailTokenDoc.user);
-    if (!user) {
-      throw new Error();
+    const payload = jwt.verify(verifyEmailToken, config.jwt.secret);
+    if (payload.type !== tokenTypes.VERIFY_EMAIL) {
+      throw new jwt.JsonWebTokenError('invalid verify-email token type');
     }
+
+    const verifyEmailTokenDoc = await Token.findOne({
+      token: verifyEmailToken,
+      type: tokenTypes.VERIFY_EMAIL,
+      user: payload.sub,
+      blacklisted: false,
+    });
+
+    const user = await getUserById(payload.sub);
+    if (!user) {
+      logger.warn('verifyEmail: user_not_found');
+      throw new Error('user_not_found');
+    }
+
+    if (!verifyEmailTokenDoc) {
+      if (user.isEmailVerified) {
+        await healPendingCandidateAfterStaleVerify(user);
+        logger.info('verifyEmail: idempotent_ok_already_verified');
+        return;
+      }
+      throw new Error('Token not found');
+    }
+
     await Token.deleteMany({ user: user.id, type: tokenTypes.VERIFY_EMAIL });
-    await updateUserById(user.id, { isEmailVerified: true });
+
+    const skipStaff = await shouldSkipPublicCandidateAutoActivate(user);
+    const candidateRole = await getRoleByName('Candidate');
+    const studentRole = await getRoleByName('Student');
+
+    const hasJobApplicationAsApplicant = await JobApplication.exists({ appliedBy: user._id });
+    const ownedCandidateProfile = await Employee.exists({ owner: user._id });
+    const noOrEmptyRoles = !user.roleIds || user.roleIds.length === 0;
+
+    /** Public job apply (and legacy rows) may lack registrationSource; generic /public/register uses public_generic and stays admin-gated. */
+    const eligibleForCandidateAutoActivate =
+      user.registrationSource === 'public_candidate' ||
+      (user.registrationSource !== 'public_generic' &&
+        noOrEmptyRoles &&
+        (!!hasJobApplicationAsApplicant || !!ownedCandidateProfile));
+
+    const setRegistrationSourcePublicCandidate =
+      eligibleForCandidateAutoActivate &&
+      user.registrationSource !== 'public_candidate' &&
+      user.registrationSource !== 'public_generic';
+
+    const needsCandidateRole =
+      eligibleForCandidateAutoActivate &&
+      !skipStaff &&
+      user.status !== 'disabled' &&
+      user.status !== 'deleted';
+
+    if (needsCandidateRole && !candidateRole) {
+      logger.error('verifyEmail: Candidate role not configured');
+      throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Server configuration error');
+    }
+
+    const { mongoUpdate, pendingToActive } = buildVerifyEmailMongoUpdate(
+      {
+        status: user.status,
+        eligibleForCandidateAutoActivate,
+        setRegistrationSourcePublicCandidate,
+        roleIds: user.roleIds,
+      },
+      {
+        skipStaffAutoActivate: skipStaff,
+        candidateRoleId: candidateRole ? candidateRole._id : null,
+        studentRoleId: studentRole ? studentRole._id : null,
+      }
+    );
+
+    await User.findByIdAndUpdate(user._id, mongoUpdate);
+
+    if (pendingToActive && user.email) {
+      const { sendCandidateAccountActivationEmail } = await import('./email.service.js');
+      sendCandidateAccountActivationEmail(user.email, user.name).catch((err) => {
+        logger.warn(`verifyEmail: activation email failed ${err?.message || err}`);
+      });
+      const cfg = (await import('../config/config.js')).default;
+      const signInUrl = `${(cfg?.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '')}/authentication/sign-in/`;
+      const { notify } = await import('./notification.service.js');
+      notify(user.id || user._id, {
+        type: 'account',
+        title: 'Your account has been activated',
+        message: 'You can now sign in.',
+        link: signInUrl,
+      }).catch(() => {});
+    }
+
+    if (Array.isArray(mongoUpdate.$set?.roleIds)) {
+      const { ensureStudentProfileForUser } = await import('./student.service.js');
+      const { ensureCandidateProfileForUser } = await import('./employee.service.js');
+      await ensureStudentProfileForUser(user.id).catch(() => {});
+      await ensureCandidateProfileForUser(user.id).catch((err) => {
+        logger.warn(`verifyEmail: ensureCandidateProfileForUser failed: ${err?.message || err}`);
+      });
+    }
   } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    let reason = 'verify_email_failed';
+    if (error?.name === 'TokenExpiredError') reason = 'verify_email_token_expired';
+    else if (error?.name === 'JsonWebTokenError') reason = 'verify_email_token_malformed';
+    else if (error?.message === 'Token not found') reason = 'verify_email_token_revoked';
+    else if (error?.message === 'user_not_found') reason = 'verify_email_user_not_found';
+    logger.warn(`verifyEmail: ${reason} — ${error?.message || error}`);
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Email verification failed');
   }
 };

@@ -221,17 +221,23 @@ const deleteUserById = async (userId) => {
   }
 
   // --- Cascade delete Candidate and candidate-linked data ---
+  // Employee.email is globally unique; portal User.email matches the candidate row for self-serve signups.
+  // Delete by owner OR by email so referral/ATS rows disappear even if owner was mis-set (legacy bugs).
   const Employee = (await import('../models/employee.model.js')).default;
-  const candidates = await Employee.find({ owner: userId }).select('_id');
+  const JobApplication = (await import('../models/jobApplication.model.js')).default;
+  const emailNorm = (user.email || '').trim().toLowerCase();
+  const candidateMatch =
+    emailNorm.length > 0
+      ? { $or: [{ owner: userId }, { email: emailNorm }] }
+      : { owner: userId };
+  const candidates = await Employee.find(candidateMatch).select('_id').lean();
   if (candidates.length) {
     const candidateIds = candidates.map((c) => c._id);
-    const JobApplication = (await import('../models/jobApplication.model.js')).default;
     await JobApplication.deleteMany({ candidate: { $in: candidateIds } });
-    await Employee.deleteMany({ owner: userId });
+    await Employee.deleteMany({ _id: { $in: candidateIds } });
   }
 
   // --- Delete job applications submitted by this user directly ---
-  const JobApplication = (await import('../models/jobApplication.model.js')).default;
   await JobApplication.deleteMany({ appliedBy: userId }).catch(() => {});
 
   // --- Delete other user-owned data ---

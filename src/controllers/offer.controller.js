@@ -53,7 +53,7 @@ const letterDefaults = catchAsync(async (req, res) => {
 });
 
 const generateLetter = catchAsync(async (req, res) => {
-  const offer = await generateOfferLetter(req.params.offerId, req.user);
+  const offer = await generateOfferLetter(req.params.offerId, req.user, req.body);
   res.send(offer);
 });
 

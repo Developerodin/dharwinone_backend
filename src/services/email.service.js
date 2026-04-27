@@ -723,7 +723,10 @@ const sendJobShareEmail = async (to, job, customMessage = '', options = {}) => {
   const organisationName = job.organisation?.name || 'Company';
   const subject = `${sharerName} shared a job with you: ${job.title}`;
   const jobId = job._id || job.id;
-  const jobUrl = `${getFrontendBaseUrl()}/public-job/${jobId}`;
+  const jobUrl =
+    options.publicJobUrl && String(options.publicJobUrl).trim()
+      ? String(options.publicJobUrl).trim()
+      : `${getFrontendBaseUrl()}/public-job/${jobId}`;
   const jobSummary = truncateText(job.jobDescription, 360);
   const introLines = [
     `${sharerName} shared this opportunity from ${organisationName}.`,

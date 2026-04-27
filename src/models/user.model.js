@@ -56,6 +56,11 @@ const userSchema = mongoose.Schema(
       enum: ['active', 'pending', 'disabled', 'deleted'],
       default: 'active',
     },
+    /** Provenance for public signup flows. Used to scope verify-email auto-activation. */
+    registrationSource: {
+      type: String,
+      enum: ['public_generic', 'public_candidate'],
+    },
     phoneNumber: { type: String, trim: true },
     countryCode: { type: String, trim: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

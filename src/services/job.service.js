@@ -789,14 +789,20 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     );
   }
 
-  // Match share-candidate invite: pending account, no roles until an admin assigns them
+  const { getRoleByName } = await import('./role.service.js');
+  const candidateRole = await getRoleByName('Candidate');
+  if (!candidateRole) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Candidate role not found. Please contact administrator.');
+  }
+
   const user = await User.create({
     name: fullName,
     email: emailNormalized,
     password,
     phoneNumber,
     countryCode,
-    roleIds: [],
+    roleIds: [candidateRole._id],
+    registrationSource: 'public_candidate',
     status: 'pending',
   });
 
@@ -1046,7 +1052,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       jobTitle: application.job?.title,
     },
     message:
-      'Application received. Your account is pending activation—verify your email, then an administrator can activate your access. You can sign in once your account is active.',
+      'Application received. Check your email to verify your address; after verification you can sign in.',
   };
 };
 

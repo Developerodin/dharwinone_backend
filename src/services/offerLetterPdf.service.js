@@ -11,12 +11,13 @@ const OFFER_LETTER_LOGO_CANDIDATES = [
   path.join(process.cwd(), 'src/assets/offer-letters/dharwin-offer-letter-logo.png'),
 ];
 
-const resolveOfferLetterLogoPng = () => {
+/** Resolved once at load — avoids existsSync loops on every PDF build */
+const RESOLVED_OFFER_LETTER_LOGO_PNG = (() => {
   for (const p of OFFER_LETTER_LOGO_CANDIDATES) {
     if (fs.existsSync(p)) return p;
   }
   return null;
-};
+})();
 
 /** CEO ink signature (Harvinder) — same asset as frontend `public/assets/images/ceo-signature-harvinder.png`. */
 const OFFER_LETTER_CEO_SIGNATURE_CANDIDATES = [
@@ -24,12 +25,12 @@ const OFFER_LETTER_CEO_SIGNATURE_CANDIDATES = [
   path.join(process.cwd(), 'src/assets/offer-letters/ceo-signature-harvinder.png'),
 ];
 
-const resolveOfferCeoSignaturePng = () => {
+const RESOLVED_CEO_SIGNATURE_PNG = (() => {
   for (const p of OFFER_LETTER_CEO_SIGNATURE_CANDIDATES) {
     if (fs.existsSync(p)) return p;
   }
   return null;
-};
+})();
 
 const BRAND = 'Dharwin Business Solutions LLC';
 const SUPPORT = 'support@dharwinbusinesssolutions.com';
@@ -120,7 +121,7 @@ const drawLetterheadLikePreview = (doc, yStart) => {
   let y = yStart;
   let leftBottom = y + 42;
 
-  const logoPath = resolveOfferLetterLogoPng();
+  const logoPath = RESOLVED_OFFER_LETTER_LOGO_PNG;
   if (logoPath) {
     try {
       doc.image(logoPath, MARGIN, y, { fit: [leftW, fitH] });
@@ -383,7 +384,7 @@ function drawSignatureTwoColumn(doc, y, ctx) {
   doc.font(FONT_BOLD).fontSize(BODY_PT).text('For Dharwin Business Solutions LLC', leftX, yL, { width: colW, lineGap: 2 });
   yL = doc.y + 4;
 
-  const ceoSigPath = resolveOfferCeoSignaturePng();
+  const ceoSigPath = RESOLVED_CEO_SIGNATURE_PNG;
   if (ceoSigPath) {
     try {
       yL = drawCeoSignatureImageInColumn(doc, leftX, yL, colW, ceoSigPath);

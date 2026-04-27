@@ -61,6 +61,8 @@ const offerSchema = new mongoose.Schema(
     },
     offerLetterUrl: { type: String, trim: true },
     offerLetterKey: { type: String, trim: true },
+    /** SHA-256 hex of letter PDF inputs (see offer.service letterPdfContentHashFromCtx) — skip rebuild when unchanged */
+    offerLetterHash: { type: String, trim: true },
     /** PDF offer letter (Draft editing / generation) */
     letterFullName: { type: String, trim: true },
     /** Full address line as printed on the letter */

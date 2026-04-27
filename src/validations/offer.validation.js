@@ -92,6 +92,14 @@ const generateLetter = {
   params: Joi.object().keys({
     offerId: Joi.string().custom(objectId).required(),
   }),
+  /** Optional: same letter fields as PATCH — applied in one request before PDF build */
+  body: Joi.object()
+    .keys({
+      ctcBreakdown: ctcBreakdown.optional(),
+      joiningDate: Joi.date().optional().allow(null),
+      ...letterBodyKeys,
+    })
+    .default({}),
 };
 
 const getOffers = {

@@ -173,9 +173,6 @@ export const buildReferralLeadsMatch = async (opts) => {
   return mongo;
 };
 
-const selectList =
-  'fullName email profilePicture referredByUserId referralContext referralJobId referralJobTitle referredAt referralBatchId referralPipelineStatus attributionLockedAt referralAttributionAnonymised referralLastOverride createdAt';
-
 /**
  * Normalize a user ref (ObjectId, subdoc, string, populated lean doc) to a 24-hex id string.
  * Dot-notation `populate` on `referralLastOverride.*` is unreliable for single nested subdocs, so we resolve by id.
@@ -320,6 +317,67 @@ const decodeCursor = (cursor) => {
   }
 };
 
+const usersCollectionName = () => User.collection.collectionName;
+const jobsCollectionName = () => Job.collection.collectionName;
+
+/**
+ * Referral rows are Candidate (`Employee`) documents with denormalized name/email.
+ * They always have `owner` → portal User. After user hard-delete, cascade should remove the candidate;
+ * if anything is missed (legacy data, partial failure), the owner id can point at a deleted user.
+ * These stages restrict lists/stats/export to candidates whose owner still exists in `users`.
+ */
+const referralLeadsRequireExistingOwnerStages = () => {
+  const from = usersCollectionName();
+  return [
+    {
+      $lookup: {
+        from,
+        localField: 'owner',
+        foreignField: '_id',
+        as: '__portalOwnerExists',
+      },
+    },
+    { $match: { '__portalOwnerExists.0': { $exists: true } } },
+    { $project: { __portalOwnerExists: 0 } },
+  ];
+};
+
+/** Match shapeLeadRow: single embedded docs for referrer + job (like .populate().lean()). */
+const referralLeadsPopulateReferrerAndJobStages = () => {
+  const usersColl = usersCollectionName();
+  const jobsColl = jobsCollectionName();
+  return [
+    {
+      $lookup: {
+        from: usersColl,
+        localField: 'referredByUserId',
+        foreignField: '_id',
+        as: 'referredByUserIdArr',
+      },
+    },
+    {
+      $addFields: {
+        referredByUserId: { $arrayElemAt: ['$referredByUserIdArr', 0] },
+      },
+    },
+    { $project: { referredByUserIdArr: 0 } },
+    {
+      $lookup: {
+        from: jobsColl,
+        localField: 'referralJobId',
+        foreignField: '_id',
+        as: 'referralJobIdArr',
+      },
+    },
+    {
+      $addFields: {
+        referralJobId: { $arrayElemAt: ['$referralJobIdArr', 0] },
+      },
+    },
+    { $project: { referralJobIdArr: 0 } },
+  ];
+};
+
 export const listReferralLeads = async (req) => {
   const canSeeAll = canSeeAllReferralLeads(req);
   const q = req.query || {};
@@ -343,13 +401,15 @@ export const listReferralLeads = async (req) => {
     }
   }
 
-  const rows = await Employee.find(match)
-    .sort({ referredAt: -1, _id: -1 })
-    .limit(limit + 1)
-    .select(selectList)
-    .populate({ path: 'referredByUserId', select: 'name email' })
-    .populate({ path: 'referralJobId', select: 'title' })
-    .lean();
+  const pipeline = [
+    { $match: match },
+    ...referralLeadsRequireExistingOwnerStages(),
+    ...referralLeadsPopulateReferrerAndJobStages(),
+    { $sort: { referredAt: -1, _id: -1 } },
+    { $limit: limit + 1 },
+  ];
+
+  const rows = await Employee.aggregate(pipeline);
 
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
@@ -376,19 +436,25 @@ export const getReferralLeadsStats = async (req) => {
   const q = req.query || {};
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
 
-  const [totalAgg, byStatus, topRef] = await Promise.all([
-    Employee.countDocuments(match),
+  const ownerStages = referralLeadsRequireExistingOwnerStages();
+
+  const [totalArr, byStatus, topRef] = await Promise.all([
+    Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
     Employee.aggregate([
       { $match: match },
+      ...ownerStages,
       { $group: { _id: '$referralPipelineStatus', count: { $sum: 1 } } },
     ]),
     Employee.aggregate([
       { $match: match },
+      ...ownerStages,
       { $group: { _id: '$referredByUserId', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 1 },
     ]),
   ]);
+
+  const totalAgg = totalArr[0]?.c ?? 0;
 
   const byStatusMap = Object.fromEntries(byStatus.map((x) => [x._id || 'null', x.count]));
   let converted = 0;
@@ -431,15 +497,13 @@ export const exportReferralLeadsCsv = async (req, res) => {
   const q = { ...req.query, search: undefined };
   const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
   const cap = 5000;
-  const rows = await Employee.find(match)
-    .sort({ referredAt: -1 })
-    .limit(cap)
-    .select(
-      'fullName email referredByUserId referralContext referralJobId referralJobTitle referredAt referralBatchId referralJti referralPipelineStatus attributionLockedAt'
-    )
-    .populate('referredByUserId', 'name email')
-    .populate('referralJobId', 'title')
-    .lean();
+  const rows = await Employee.aggregate([
+    { $match: match },
+    ...referralLeadsRequireExistingOwnerStages(),
+    ...referralLeadsPopulateReferrerAndJobStages(),
+    { $sort: { referredAt: -1 } },
+    { $limit: cap },
+  ]);
 
   const orgId = config.referral?.defaultOrgId || 'default';
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
