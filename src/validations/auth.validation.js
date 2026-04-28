@@ -349,7 +349,25 @@ const updateMeWithCandidate = {
       ),
       documents: Joi.array().items(
         Joi.object({
-          type: Joi.string().valid('Aadhar', 'PAN', 'Bank', 'Passport', 'Other').optional().default('Other'),
+          type: Joi.string()
+            .valid(
+              'Aadhar',
+              'PAN',
+              'Bank',
+              'Passport',
+              'CV/Resume',
+              'Marksheet',
+              'Degree Certificate',
+              'Experience Letter',
+              'Offer Letter',
+              'Visa',
+              'EAD Card',
+              'I-765 Receipt',
+              'I-983 Form-only',
+              'Other'
+            )
+            .optional()
+            .default('Other'),
           label: Joi.string().optional().trim(),
           url: Joi.string().trim().optional().allow(''),
           key: Joi.string().optional().trim(),

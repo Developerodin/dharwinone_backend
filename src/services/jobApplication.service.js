@@ -8,6 +8,39 @@ import ApiError from '../utils/ApiError.js';
 const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
 
 /**
+ * Narrow application query to jobs that still exist with status Active.
+ * Drops orphaned applications (job deleted) and applications for Draft/Closed/Archived jobs.
+ */
+const applyActiveJobsOnlyFilter = async (query) => {
+  const Job = (await import('../models/job.model.js')).default;
+  const rows = await Job.find({ status: 'Active' }).select('_id').lean();
+  const activeIds = rows.map((r) => r._id);
+  if (activeIds.length === 0) return false;
+
+  const allowed = new Set(activeIds.map((id) => String(id)));
+
+  if (query.job == null) {
+    query.job = { $in: activeIds };
+    return true;
+  }
+
+  const j = query.job;
+  if (j && typeof j === 'object' && Array.isArray(j.$in)) {
+    const narrowed = j.$in.filter((jid) => allowed.has(String(jid)));
+    if (narrowed.length === 0) return false;
+    query.job = { $in: narrowed };
+    return true;
+  }
+
+  return allowed.has(String(j));
+};
+
+const isActiveJobsOnlyFlag = (filter) => {
+  const v = filter?.activeJobsOnly;
+  return v === true || v === 'true' || v === '1' || v === 1;
+};
+
+/**
  * Get job application by id
  * @param {ObjectId} id
  * @returns {Promise<JobApplication|null>}
@@ -190,10 +223,18 @@ const queryJobApplications = async (filter, options, currentUser) => {
     query.status = filter.status;
   }
 
-  // Only include applications from active, existing candidates (excludes soft-deleted AND hard-deleted)
+  // Only include applications from active candidates whose owner user account is also active/pending.
+  // This ensures the list count matches the analytics dashboard count exactly.
   if (filter.includeInactive !== true && !query.candidate) {
+    const User = (await import('../models/user.model.js')).default;
+    const activeUserIds = (
+      await User.find({ status: { $in: ['active', 'pending'] } }, { _id: 1 }).lean()
+    ).map((u) => u._id);
     const activeCandidateIds = (
-      await Employee.find({ isActive: { $ne: false } }, { _id: 1 }).lean()
+      await Employee.find(
+        { isActive: { $ne: false }, owner: { $in: activeUserIds } },
+        { _id: 1 }
+      ).lean()
     ).map((c) => c._id);
     query.candidate = { $in: activeCandidateIds };
   }
@@ -214,6 +255,14 @@ const queryJobApplications = async (filter, options, currentUser) => {
       }
     } else {
       query.job = { $in: myJobs.map((j) => j._id) };
+    }
+  }
+
+  if (isActiveJobsOnlyFlag(filter)) {
+    const hasMatchingJobs = await applyActiveJobsOnlyFilter(query);
+    if (!hasMatchingJobs) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
     }
   }
 

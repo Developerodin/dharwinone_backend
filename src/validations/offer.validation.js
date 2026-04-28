@@ -123,6 +123,8 @@ const enhanceRoles = {
   body: Joi.object()
     .keys({
       jobTitle: Joi.string().trim().min(1).max(300).required(),
+      /** Full job posting JD (and optional shorter description) sent from client for AI context */
+      jobDescription: Joi.string().trim().allow('').max(50000).optional(),
       existingRoles: Joi.string().trim().allow('').max(20000),
       existingTraining: Joi.string().trim().allow('').max(20000),
       isInternship: Joi.boolean().optional(),
@@ -131,4 +133,13 @@ const enhanceRoles = {
     .required(),
 };
 
-export { createOffer, getOffer, updateOffer, getOffers, deleteOffer, letterDefaults, generateLetter, enhanceRoles };
+export {
+  createOffer,
+  getOffer,
+  updateOffer,
+  getOffers,
+  deleteOffer,
+  letterDefaults,
+  generateLetter,
+  enhanceRoles,
+};

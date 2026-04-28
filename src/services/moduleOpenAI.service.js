@@ -894,13 +894,22 @@ Apply the user's request and return the FULL updated module as valid JSON (same 
   return parseJsonWithRepair(text, 'refineModuleWithChat');
 }
 
+/** Clamp JD text so prompts stay bounded (model still receives full substantive content within limit). */
+function truncateJobPostingJd(raw, maxChars = 14000) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars)}\n\n[Truncated — posting text exceeded ${maxChars} characters.]`;
+}
+
 /**
- * Generate or improve offer-letter content.
- * @param {{ jobTitle: string, existingRoles?: string, existingTraining?: string, isInternship?: boolean, enhanceFocus?: 'roles'|'training'|'both' }} params
+ * Generate or improve offer-letter content (optionally grounded in the posting JD).
+ * @param {{ jobTitle: string, jobDescription?: string, existingRoles?: string, existingTraining?: string, isInternship?: boolean, enhanceFocus?: 'roles'|'training'|'both' }} params
  * @returns {Promise<{ lines?: string[], trainingOutcomes?: string[] }>}
  */
 export async function enhanceOfferLetterRoles({
   jobTitle,
+  jobDescription = '',
   existingRoles = '',
   existingTraining = '',
   isInternship = false,
@@ -912,6 +921,24 @@ export async function enhanceOfferLetterRoles({
   const trimmedTraining = String(existingTraining || '').trim();
   const focus = isInternship ? enhanceFocus : 'roles';
 
+  const jdText = truncateJobPostingJd(jobDescription);
+  const jdPrefix =
+    jdText.length > 0
+      ? [
+          'PRIMARY SOURCE — official job posting / job description (JD) for the listing the candidate applied to:',
+          'Derive responsibilities, tools, teamwork, qualifications, metrics, stakeholders, reporting, scope, deliverables, and priorities from THIS text.',
+          '',
+          'NAMED PROGRAMS & PROJECTS:',
+          'If the JD names specific products, platforms, product lines, internal initiatives, roadmap items, programmes, or flagship offerings (e.g. branded tools, ATS modules, learning platforms, client programmes), you MUST weave those names into several output lines wherever the work naturally connects—so the offer reflects what the hire will actually build or support, not only generic duties.',
+          'Do not reduce everything to vague wording when the posting is explicit about what they will work on.',
+          '',
+          '--- JOB DESCRIPTION ---',
+          jdText,
+          '--- END JOB DESCRIPTION ---',
+          '',
+        ].join('\n')
+      : '';
+
   const modeRolesOnly = trimmedRoles ? 'improve' : 'generate';
   const modeTrainingOnly = trimmedTraining ? 'improve' : 'generate';
   const modeBoth = trimmedRoles || trimmedTraining ? 'improve' : 'generate';
@@ -919,55 +946,69 @@ export async function enhanceOfferLetterRoles({
   let prompt;
   let maxTokens = 2500;
 
+  /** Forces explicit naming when JD enumerates flagship products — reduces generic-only output. */
+  const ftNamedOfferingRules = jdText
+    ? `
+MANDATORY WHEN JOB DESCRIPTION EXISTS ABOVE:
+- Identify proper names used in that JD for products, platforms, flagship programmes, or internal offerings (typically Title Case phrases, acronym systems, branded tool names — e.g. names under “Our flagship products include…” or sections like “Position Overview”).
+- At least TWO lines MUST each mention at least one such JD name verbatim (exact spelling/capitalization as in JD) inside a normal duty sentence—not only vague “AI-powered platforms”.
+- Forbidden pattern: Every line sounding like “AI-driven automation / operational efficiency” with zero named artefacts when the JD names specific products or systems.
+- It is GOOD to dedicate one sentence to requirements/analysis work on each major named initiative when the JD lists several (e.g. separate lines for similarly weighted platforms).
+`
+    : '';
+
   if (!isInternship) {
     const mode = modeRolesOnly;
     prompt =
-      mode === 'generate'
+      jdPrefix +
+      (mode === 'generate'
         ? `You are an HR writer. Generate 5–8 concise lines for the "Roles & responsibilities" section of a formal job offer letter.
 
-Job title: ${title}
-
+Job title (label): ${title}
+${ftNamedOfferingRules}
 Rules:
-- Each line is ONE professional sentence (no leading "•" or "-" or numbers).
+- When a JOB DESCRIPTION block appears above: ground sentences in responsibilities, qualifications, tech/tools, teamwork, timelines, KPIs/outputs, geography, shifts, domains, or stakeholder interaction described there. Paraphrase; do not copy verbatim slabs.
+${jdText ? '- Where the JD describes work on named products, platforms, or projects, reference those by the same names the posting uses (when professional) across multiple lines so responsibilities read concrete and role-specific.\n' : ''}${jdText ? '- If JD is insufficient for 5 lines only, modestly extrapolate ONLY along the role’s plausible scope implied above (do not invent unrelated departments).\n' : ''}- Each line is ONE professional sentence (no leading "•" or "-" or numbers).
 - Suitable for a technology / business services employer (Dharwin-style).
-- Plain English, specific to the job title.
+- Plain English.
 
 Return ONLY valid JSON:
 { "lines": [ "First responsibility sentence.", "Second..." ] }`
         : `You are an HR writer. Improve the following "Roles & responsibilities" text for a job offer letter.
 
-Job title: ${title}
+Job title (label): ${title}
 
 Current text (one item per line):
 ${trimmedRoles}
-
+${ftNamedOfferingRules}
 Rules:
-- Output 5–8 concise lines; each line ONE sentence.
-- Keep the spirit of the duties but improve clarity, specificity, and professional tone.
+${jdText ? '- Reflect the JOB DESCRIPTION section above wherever it overlaps; remove or rewrite lines that contradict the JD.\n' : ''}${jdText ? '- If CURRENT TEXT omits names of products/platforms/programmes that the JD clearly names (e.g. flagship offerings in an “About” or “Position Overview” section), ADD or SUBSTITUTE lines so at least two sentences include those exact names from the JD—do not leave only generic “AI” wording.\n' : ''}${jdText ? '- Ensure named initiatives, products, or programmes from the JD appear in the revised text where duties relate (not only the job title).\n' : ''}- Output 5–8 concise lines; each line ONE sentence.
+- Keep spirit of duties but sharpen clarity and specificity toward the posting when present.
 - Remove duplicates; no leading bullets or numbers in each string.
 
 Return ONLY valid JSON:
-{ "lines": [ "..." ] }`;
+{ "lines": [ "..." ] }`);
   } else if (focus === 'training') {
     maxTokens = 2000;
     prompt =
-      modeTrainingOnly === 'generate'
+      jdPrefix +
+      (modeTrainingOnly === 'generate'
         ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style).
 
-Job title: ${title}
+Job title (label): ${title}
 
-For context only — current "Roles & responsibilities" (one item per line; may be empty):
+For context — current "Roles & responsibilities" (one item per line; may be empty):
 ${trimmedRoles || '(none provided)'}
 
 Generate 4–6 SHORT lines for the section "Training & learning outcomes" (they appear after "This internship will focus on enhancing your knowledge in:").
-Use concise noun phrases or brief clauses (e.g. "Data cleaning and preprocessing techniques"). Each line under ~90 characters. Align topics with the job title and, if provided, the role context above.
+Use concise noun phrases or brief clauses (e.g. "Data cleaning and preprocessing techniques"). Each line under ~90 characters. When a JOB DESCRIPTION block appears above, align outcomes with domains, tools, and learning goals implied there; otherwise anchor to role title/context.
 No leading "•", "-", or numbers in any string.
 
 Return ONLY valid JSON:
 { "trainingOutcomes": [ "Short outcome phrase", "..." ] }`
         : `You are an HR writer. Improve the "Training & learning outcomes" list for an unpaid internship offer letter.
 
-Job title: ${title}
+Job title (label): ${title}
 
 Role responsibilities for context (one item per line):
 ${trimmedRoles || '(none provided)'}
@@ -976,82 +1017,86 @@ Current training / learning outcomes (one item per line):
 ${trimmedTraining}
 
 Rules:
-- Output 4–6 short phrases; same style as above; no leading bullets or numbers.
-- Remove duplicates; plain English; specific to the role.
+${jdText ? '- Prioritize coherence with any JOB DESCRIPTION block above.\n' : ''}- Output 4–6 short phrases; same style as above; no leading bullets or numbers.
+- Remove duplicates; plain English.
 
 Return ONLY valid JSON:
-{ "trainingOutcomes": [ "..." ] }`;
+{ "trainingOutcomes": [ "..." ] }`);
   } else if (focus === 'roles') {
     maxTokens = 2800;
     prompt =
-      modeRolesOnly === 'generate'
+      jdPrefix +
+      (modeRolesOnly === 'generate'
         ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style, technology and business services).
 
-Job title: ${title}
-
-Generate 5–8 concise lines for "Roles & responsibilities" only. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). No leading "•", "-", or numbers in any string.
+Job title (label): ${title}
+${ftNamedOfferingRules}
+Generate 5–8 concise lines for "Roles & responsibilities" only. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). When JOB DESCRIPTION appears above, ground supervised tasks in domains, tools, named products/programmes, and scope described there. No leading "•", "-", or numbers in any string.
 
 Return ONLY valid JSON:
 { "lines": [ "First responsibility sentence.", "..." ] }`
         : `You are an HR writer. Improve the "Roles & responsibilities" section for an unpaid internship offer letter.
 
-Job title: ${title}
+Job title (label): ${title}
 
 Current roles (one item per line):
 ${trimmedRoles}
-
+${ftNamedOfferingRules}
 Rules:
-- Output 5–8 concise sentences; supervised, training-appropriate intern duties; no leading bullets or numbers.
-- Remove duplicates; plain English; specific to the job title.
+${jdText ? '- Align with the JOB DESCRIPTION block above when present.\n' : ''}${jdText ? '- If current text omits JD-named products/platforms, add at least two lines that name them exactly as in the JD.\n' : ''}- Output 5–8 concise sentences; supervised, training-appropriate intern duties; no leading bullets or numbers.
+- Remove duplicates; plain English.
 
 Return ONLY valid JSON:
-{ "lines": [ "..." ] }`;
+{ "lines": [ "..." ] }`);
   } else {
     maxTokens = 3200;
     const mode = modeBoth;
     prompt =
-      mode === 'generate'
+      jdPrefix +
+      (mode === 'generate'
         ? `You are an HR writer for unpaid U.S. internship / training offer letters (Dharwin-style, technology and business services).
 
-Job title: ${title}
-
+Job title (label): ${title}
+${ftNamedOfferingRules}
 Produce TWO lists:
 
-1) "Roles & responsibilities" — 5–8 concise lines. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). No leading "•", "-", or numbers in any string.
+1) "Roles & responsibilities" — 5–8 concise lines. Each line is ONE full sentence. Tasks must sound supervised and training-oriented (appropriate for an intern). Ground in JD above when present, including named programmes/products/projects from the posting. No leading "•", "-", or numbers in any string.
 
-2) "Training & learning outcomes" — 4–6 SHORT lines that work as bullet items after the sentence "This internship will focus on enhancing your knowledge in:". Prefer concise noun phrases or brief clauses (examples: "Data cleaning and preprocessing techniques", "Stakeholder communication in a remote team"). Each line under ~90 characters. No leading bullets in strings.
+2) "Training & learning outcomes" — 4–6 SHORT lines that work as bullet items after the sentence "This internship will focus on enhancing your knowledge in:". Prefer concise noun phrases or brief clauses aligned with the JD, including named tools/platforms/programmes when relevant. Each line under ~90 characters. No leading bullets in strings.
 
 Return ONLY valid JSON:
 { "lines": [ "First responsibility sentence.", "..." ], "trainingOutcomes": [ "Short outcome phrase", "..." ] }`
         : `You are an HR writer. Improve BOTH the "Roles & responsibilities" and "Training & learning outcomes" sections for an unpaid internship offer letter.
 
-Job title: ${title}
+Job title (label): ${title}
 
 Current roles (one item per line):
 ${trimmedRoles || '(empty)'}
 
 Current training / learning outcomes (one item per line):
 ${trimmedTraining || '(empty)'}
-
+${ftNamedOfferingRules}
 Rules:
-- "lines": 5–8 concise sentences; supervised, training-appropriate intern duties; no leading bullets or numbers.
-- "trainingOutcomes": 4–6 short phrases for a "knowledge outcomes" bullet list; no leading bullets or numbers.
-- Remove duplicates; plain English; specific to the job title.
+- "lines": 5–8 concise sentences; supervised, training-appropriate intern duties; prioritize JD overlap when JOB DESCRIPTION appeared above; ensure JD-named flagship products/systems appear in at least two lines when listed in JD.
+- "trainingOutcomes": 4–6 short phrases for a knowledge-outcomes bullet list; no leading bullets or numbers.
+- Remove duplicates; plain English.
 
 Return ONLY valid JSON:
-{ "lines": [ "..." ], "trainingOutcomes": [ "..." ] }`;
+{ "lines": [ "..." ], "trainingOutcomes": [ "..." ] }`);
   }
 
   logger.info('[Offer letter AI] enhanceOfferLetterRoles', {
     focus,
     titleLen: title.length,
+    jdChars: jdText.length,
     isInternship: !!isInternship,
   });
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
-    temperature: 0.45,
+    /** Slightly higher when JD is large so the model keeps proper names instead of collapsing to generic phrases. */
+    temperature: jdText ? 0.52 : 0.45,
     max_tokens: maxTokens,
     response_format: { type: 'json_object' },
   });

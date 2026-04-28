@@ -7,7 +7,7 @@ import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { sendMeetingInvitationEmail, sendOfferLetterEmail } from './email.service.js';
+import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
@@ -193,27 +193,9 @@ const defaultJoiningDateForInterviewOffer = () => {
   return d;
 };
 
-const formatCtcLine = (ctc) => {
-  const gross = ctc?.gross ?? 0;
-  const currency = ctc?.currency || 'INR';
-  try {
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(gross);
-  } catch {
-    return `${gross} ${currency}`;
-  }
-};
-
-const formatOfferDate = (d) => {
-  if (!d) return 'TBD';
-  try {
-    return new Intl.DateTimeFormat('en-IN', { dateStyle: 'long' }).format(new Date(d));
-  } catch {
-    return 'TBD';
-  }
-};
-
 /**
- * Ensure joining date, email offer letter, then Draft → Sent → Accepted (placement).
+ * Ensure joining date, then Draft → Sent → Accepted (placement).
+ * Candidate offer-letter email is not sent automatically; recruiters send it from the Offer Letter Generator.
  * @param {import('mongoose').Types.ObjectId|string} offerId
  * @param {string} userId
  */
@@ -239,32 +221,6 @@ const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
     offer = await offerService.getOfferById(id, null);
   }
 
-  const cand = offer.candidate;
-  const job = offer.job;
-  const email = typeof cand === 'object' && cand?.email ? String(cand.email).trim() : null;
-  const fullName = typeof cand === 'object' && cand?.fullName ? cand.fullName : 'Candidate';
-  const companyName = typeof job === 'object' && job?.organisation?.name ? job.organisation.name : 'Dharwin Business Solutions';
-  const jobTitle = typeof job === 'object' && job?.title ? job.title : 'Open role';
-  const validityText = offer.offerValidityDate ? formatOfferDate(offer.offerValidityDate) : '';
-
-  if (email) {
-    try {
-      await sendOfferLetterEmail(email, {
-        candidateName: fullName,
-        jobTitle,
-        offerCode: offer.offerCode,
-        companyName,
-        ctcLine: formatCtcLine(offer.ctcBreakdown),
-        joiningDateText: formatOfferDate(offer.joiningDate),
-        validityText,
-      });
-    } catch (err) {
-      logger.error('[emailOfferLetterAndCompletePlacement] sendOfferLetterEmail failed: %s', err?.message || err);
-    }
-  } else {
-    logger.warn('[emailOfferLetterAndCompletePlacement] No candidate email for offer %s', id);
-  }
-
   const fresh = await offerService.getOfferById(id, null);
   if (fresh?.status === 'Accepted') {
     return;
@@ -283,7 +239,7 @@ const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
  * pre-boarding tasks. Both recruiter accept and this path should end with the same Offer/Placement/Employee invariants.
  * @deprecated use createPlacementFromInterview name; `moveCandidateToPreboarding` is a backward-compatible alias.
  * Move employee to preboarding when interview result is "selected".
- * Creates an offer, emails an offer letter, then Sent → Accepted (placement Pending).
+ * Creates an offer, then Sent → Accepted (placement Pending). Candidate offer email is sent from Offer Letter Generator.
  * @param {Object} meeting - Meeting document (after save)
  * @param {string} userId - User performing the action
  */
@@ -369,7 +325,7 @@ const createPlacementFromInterview = async (meeting, userId) => {
     if (existingOffer.status === 'Draft') {
       try {
         await emailOfferLetterAndCompletePlacement(existingOffer._id, userId);
-        logger.info('[createPlacementFromInterview] Emailed offer letter and completed placement for application %s', application._id);
+        logger.info('[createPlacementFromInterview] Completed placement workflow for application %s', application._id);
       } catch (err) {
         logger.error('[createPlacementFromInterview] Failed to complete offer from Draft:', err?.message || err);
         throw err;
@@ -420,7 +376,7 @@ const createPlacementFromInterview = async (meeting, userId) => {
     if (created) {
       await emailOfferLetterAndCompletePlacement(created._id, userId);
     }
-    logger.info('[createPlacementFromInterview] Created offer, emailed letter, and placement for application %s', application._id);
+    logger.info('[createPlacementFromInterview] Created offer and placement for application %s', application._id);
   } catch (err) {
     logger.error('[createPlacementFromInterview] Failed to create/accept offer:', err?.message || err);
     throw err;

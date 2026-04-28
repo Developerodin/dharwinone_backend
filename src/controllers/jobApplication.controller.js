@@ -55,20 +55,24 @@ const updateStatus = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['jobId', 'candidateId', 'status']);
+  const filter = pick(req.query, ['jobId', 'candidateId', 'status', 'activeJobsOnly']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobApplications(filter, options, req.user);
   res.send(result);
 });
 
 const getMyApplications = catchAsync(async (req, res) => {
+  const userId = req.user._id || req.user.id;
   const candidate = await findApplicantCandidate(req.user);
-  if (!candidate) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found');
+  /** Self-apply rows always set `appliedBy`; candidate profile may be missing for some portal roles yet applications exist. */
+  const orBranches = [{ appliedBy: userId }];
+  if (candidate) {
+    orBranches.push({ candidate: candidate._id });
   }
-  const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const filter = { candidate: candidate._id };
+  const filter = { $or: orBranches };
   if (req.query.status) filter.status = req.query.status;
+
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
 
   const result = await JobApplication.paginate(filter, {
     ...options,
@@ -85,15 +89,15 @@ const getMyApplications = catchAsync(async (req, res) => {
 const WITHDRAWABLE_STATUSES = ['Applied', 'Screening'];
 
 const withdrawApplication = catchAsync(async (req, res) => {
+  const userId = String(req.user._id || req.user.id);
   const candidate = await findApplicantCandidate(req.user);
-  if (!candidate) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found');
-  }
   const application = await JobApplication.findById(req.params.applicationId);
   if (!application) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Application not found');
   }
-  if (String(application.candidate) !== String(candidate._id)) {
+  const matchesCandidate = candidate && String(application.candidate) === String(candidate._id);
+  const matchesAppliedBy = application.appliedBy != null && String(application.appliedBy) === userId;
+  if (!matchesCandidate && !matchesAppliedBy) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Not your application');
   }
   if (!WITHDRAWABLE_STATUSES.includes(application.status)) {

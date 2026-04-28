@@ -7,6 +7,49 @@ import ApiError from '../utils/ApiError.js';
 import { assertAgentCanReadPlacement, stripPlacementPlain } from '../utils/placementAccess.util.js';
 import { recordPlacementAudit } from './placementAudit.service.js';
 import config from '../config/config.js';
+import logger from '../config/logger.js';
+
+/** UTC calendar day string YYYY-MM-DD for stable comparison of stored dates. */
+const joinDateYmdUtc = (d) => {
+  const x = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(x.getTime())) return '';
+  return x.toISOString().slice(0, 10);
+};
+
+/**
+ * Accepted offer letter joining date is authoritative. If Placement (or related Employee row)
+ * drifted from the Offer (e.g. sync race or legacy data), align DB + in-memory doc on read.
+ * @param {import('mongoose').Document|object} doc - Placement document or plain object with populated `offer`.
+ */
+const reconcilePlacementJoiningDateWithAcceptedOffer = async (doc) => {
+  if (!doc) return;
+  const offer = typeof doc.offer === 'object' && doc.offer !== null ? doc.offer : null;
+  if (!offer || offer.status !== 'Accepted' || !offer.joiningDate) return;
+
+  const jd = new Date(offer.joiningDate);
+  if (Number.isNaN(jd.getTime())) return;
+
+  const cur = doc.joiningDate ? new Date(doc.joiningDate) : null;
+  if (cur && !Number.isNaN(cur.getTime()) && joinDateYmdUtc(cur) === joinDateYmdUtc(jd)) return;
+
+  const pid = doc._id ?? doc.id;
+  if (!pid) return;
+
+  await Placement.updateOne({ _id: pid }, { $set: { joiningDate: jd } });
+
+  const candRef = doc.candidate && typeof doc.candidate === 'object' ? doc.candidate._id ?? doc.candidate.id : doc.candidate;
+  if (candRef) {
+    await Employee.findByIdAndUpdate(candRef, { joiningDate: jd });
+    const empLean = await Employee.findById(candRef).select('owner').lean();
+    if (empLean?.owner) {
+      const Student = (await import('../models/student.model.js')).default;
+      await Student.updateMany({ user: empLean.owner }, { $set: { joiningDate: jd } });
+    }
+  }
+
+  doc.joiningDate = jd;
+  if (typeof doc.set === 'function') doc.set('joiningDate', jd);
+};
 
 /**
  * Sync canonical joining date to Offer + Employee when placement date changes.
@@ -95,6 +138,67 @@ const recomputeOnboardingStatus = (placement) => {
 };
 
 /**
+ * Pre-boarding / onboarding lists: hide placements whose Employee (candidate) no longer exists
+ * or has no displayable name/email (deleted candidate, empty stub, or removed profile).
+ * @param {object|null|undefined} emp - Populated Employee or lean doc
+ * @returns {boolean}
+ */
+const placementCandidateHasDisplayIdentity = (emp) => {
+  if (!emp || !emp._id) return false;
+  const fn = String(emp.fullName ?? '').trim();
+  const em = String(emp.email ?? '').trim();
+  const bad = new Set(['-', '—', 'n/a', 'na', 'none', 'tbd']);
+  if (fn.length > 0 && !bad.has(fn.toLowerCase())) return true;
+  if (em.length > 0 && !bad.has(em.toLowerCase()) && em.includes('@')) return true;
+  return false;
+};
+
+/**
+ * Restrict placement query to candidates that still exist and have display identity.
+ * Mutates `query` (sets `query.candidate`).
+ * @returns {Promise<{ ok: boolean }>} ok false → caller should return an empty paginated result
+ */
+const narrowPlacementQueryToValidCandidates = async (query, filter) => {
+  if (filter.candidateId) {
+    const emp = await Employee.findById(filter.candidateId).select('fullName email').lean();
+    if (!placementCandidateHasDisplayIdentity(emp)) {
+      return { ok: false };
+    }
+    query.candidate = filter.candidateId;
+    return { ok: true };
+  }
+
+  const candidateRefs = await Placement.distinct('candidate', query);
+  if (!candidateRefs.length) {
+    return { ok: false };
+  }
+
+  const employees = await Employee.find({ _id: { $in: candidateRefs } })
+    .select('_id fullName email')
+    .lean();
+
+  const allowed = employees.filter(placementCandidateHasDisplayIdentity).map((e) => e._id);
+  if (!allowed.length) {
+    return { ok: false };
+  }
+
+  query.candidate = { $in: allowed };
+  return { ok: true };
+};
+
+const emptyPaginateResult = (options) => {
+  const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
+  const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
+  return {
+    results: [],
+    page,
+    limit,
+    totalPages: 0,
+    totalResults: 0,
+  };
+};
+
+/**
  * Query placements with filter
  */
 const queryPlacements = async (filter, options, currentUser) => {
@@ -102,7 +206,6 @@ const queryPlacements = async (filter, options, currentUser) => {
   const query = {};
 
   if (filter.jobId) query.job = filter.jobId;
-  if (filter.candidateId) query.candidate = filter.candidateId;
   if (filter.status) {
     const raw = String(filter.status);
     if (raw.includes(',')) {
@@ -135,17 +238,26 @@ const queryPlacements = async (filter, options, currentUser) => {
     }
   }
 
+  const narrow = await narrowPlacementQueryToValidCandidates(query, filter);
+  if (!narrow.ok) {
+    return emptyPaginateResult(options);
+  }
+
   const result = await Placement.paginate(query, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
-      { path: 'offer', select: 'offerCode status ctcBreakdown' },
+      { path: 'offer', select: 'offerCode status ctcBreakdown joiningDate' },
       { path: 'job', select: 'title organisation' },
       { path: 'candidate', select: 'fullName email phoneNumber employeeId department designation reportingManager' },
       { path: 'deferredBy', select: 'name email' },
       { path: 'cancelledBy', select: 'name email' },
     ],
   });
+
+  if (result.results?.length) {
+    await Promise.all(result.results.map((d) => reconcilePlacementJoiningDateWithAcceptedOffer(d)));
+  }
 
   if (result.results && currentUser) {
     const { userIsAdmin } = await import('../utils/roleHelpers.js');
@@ -190,6 +302,13 @@ const getPlacementById = async (id, currentUser = null) => {
     .populate('deferredBy', 'name email')
     .populate('cancelledBy', 'name email');
   if (!placement) return null;
+
+  if (!placementCandidateHasDisplayIdentity(placement.candidate)) {
+    return null;
+  }
+
+  await reconcilePlacementJoiningDateWithAcceptedOffer(placement);
+
   if (currentUser) {
     const createdByMe = String(placement.createdBy) === String(currentUser.id ?? currentUser._id);
     if (!createdByMe && placement.job) {
@@ -239,6 +358,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
 
   const previousStatus = placement.status;
   const actorId = currentUser?.id ?? currentUser?._id;
+  let joiningDateChangedForNotify = false;
 
   if (updateBody.status) {
     if (!VALID_STATUS.has(updateBody.status)) {
@@ -307,8 +427,14 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   }
 
   if (updateBody.joiningDate !== undefined) {
+    const prevY = placement.joiningDate ? joinDateYmdUtc(placement.joiningDate) : '';
     placement.joiningDate = updateBody.joiningDate ? new Date(updateBody.joiningDate) : null;
     await syncJoiningDateFromPlacement(placement);
+    const nextY = placement.joiningDate ? joinDateYmdUtc(placement.joiningDate) : '';
+    if (nextY && nextY !== prevY) {
+      joiningDateChangedForNotify = true;
+      placement.set('onboardingJoinRemindersSentAt', { t1: null, t0: null });
+    }
   }
   if (updateBody.notes !== undefined) {
     placement.notes = updateBody.notes;
@@ -359,6 +485,15 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
 
   await placement.save();
 
+  if (joiningDateChangedForNotify) {
+    try {
+      const { sendJoiningDateFinalizedEmails } = await import('./onboardingJoiningNotifications.service.js');
+      await sendJoiningDateFinalizedEmails(placement._id);
+    } catch (e) {
+      logger.warn(`sendJoiningDateFinalizedEmails: ${e?.message || e}`);
+    }
+  }
+
   if (updateBody.status && updateBody.status !== previousStatus) {
     await recordPlacementAudit({
       placementId: placement._id,
@@ -372,7 +507,16 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   if (placement.status === 'Joined' && previousStatus !== 'Joined') {
     const { notify, plainTextEmailBody } = await import('./notification.service.js');
     const { assignDefaultTrainingOnJoined } = await import('./placementTrainingHook.service.js');
-    const emp = await Employee.findById(placement.candidate).select('email fullName referredByUserId').lean();
+    const emp = await Employee.findById(placement.candidate).select('email fullName referredByUserId owner').lean();
+    try {
+      if (emp?.owner) {
+        const { promoteCandidateOwnerToEmployeeRole } = await import('./employeeRolePromotion.service.js');
+        await promoteCandidateOwnerToEmployeeRole(emp.owner);
+      }
+    } catch (e) {
+      const log = (await import('../config/logger.js')).default;
+      log.warn(`promoteCandidateOwnerToEmployeeRole on Joined: ${e?.message || e}`);
+    }
     if (emp?.referredByUserId) {
       try {
         const { createActivityLog } = await import('./activityLog.service.js');

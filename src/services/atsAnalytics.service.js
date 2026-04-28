@@ -4,7 +4,7 @@ import Employee from '../models/employee.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import User from '../models/user.model.js';
 import { getActivityStatistics, getActivityLogsSummary } from './recruiterActivity.service.js';
-import { ensureCandidateProfilesForActiveCandidateUsers } from './employee.service.js';
+import { ensureCandidateProfilesForActiveCandidateUsers, queryCandidates } from './employee.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
 
 const TIME_BUCKETS = 12;
@@ -59,30 +59,29 @@ function timeSeriesPipeline(dateField, extraMatch = {}, dateRange = null) {
 
 const getAtsAnalytics = async (options = {}, user = {}) => {
   const dateRange = getDateRange(options.range);
-  const isRecruiter = await userHasRecruiterRole(user);
+  const { userHasRecruiterRole, userIsAdmin } = await import('../utils/roleHelpers.js');
+  const isAdmin = await userIsAdmin(user);
+  const isRecruiter = !isAdmin && (await userHasRecruiterRole(user));
+
+  const activeUserIds = (await User.find({ status: { $in: ['active', 'pending'] } }, { _id: 1 }).lean()).map((u) => u._id);
 
   const recruiterJobIds = isRecruiter
     ? (await Job.find({ createdBy: user._id }, { _id: 1 }).lean()).map((j) => j._id)
     : null;
 
-  const ownerIdsWithCandidateRole = await ensureCandidateProfilesForActiveCandidateUsers();
-  const ownerClause =
-    ownerIdsWithCandidateRole === null
-      ? {}
-      : { owner: ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] } };
+  await ensureCandidateProfilesForActiveCandidateUsers();
 
   const candidateMatch = {
     ...(isRecruiter ? { assignedRecruiter: user._id, isActive: { $ne: false } } : { isActive: { $ne: false } }),
-    ...ownerClause,
+    owner: { $in: activeUserIds },
   };
   const jobMatch = isRecruiter ? { createdBy: user._id } : {};
   const activityFilter = isRecruiter ? { recruiterId: user._id } : {};
 
   const appDateMatch = dateRange ? { createdAt: { $gte: dateRange.start, $lte: dateRange.end } } : {};
 
-  // Active candidate docs for application metrics — same owner/Candidate-role rule as list + totals
   const activeCandidateIds = (
-    await Employee.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
+    await Employee.find({ isActive: { $ne: false }, owner: { $in: activeUserIds } }, { _id: 1 }).lean()
   ).map((c) => c._id);
 
   const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
@@ -112,7 +111,17 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     previousApplications,
     previousHired,
   ] = await Promise.all([
-    Employee.countDocuments(candidateMatch),
+    // Match GET /employees total: Candidate-role owners + default "current" employment (not resigned), not all active-user employee rows.
+    (async () => {
+      if (isRecruiter) {
+        return Employee.countDocuments(candidateMatch);
+      }
+      const listResult = await queryCandidates(
+        { employmentStatus: 'current' },
+        { page: 1, limit: 1, sortBy: 'createdAt:desc' }
+      );
+      return Number(listResult.totalResults ?? 0);
+    })(),
     Job.countDocuments(jobMatch),
     Job.countDocuments({ ...jobMatch, status: 'Active' }),
     JobApplication.countDocuments({ ...appMatch, ...appDateMatch }),

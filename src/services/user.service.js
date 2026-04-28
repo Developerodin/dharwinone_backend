@@ -51,11 +51,15 @@ const createUser = async (userBody, options = {}) => {
 const queryUsers = async (filter, options, requester = null) => {
   const { search, role, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
-  if (role === 'recruiter') {
+  if (role === 'recruiter' || role === 'referral_eligible') {
     const Role = (await import('../models/role.model.js')).default;
-    const recruiterRole = await Role.findOne({ name: 'Recruiter', status: 'active' }).select('_id').lean();
-    if (recruiterRole?._id) {
-      mongoFilter.roleIds = recruiterRole._id;
+    const targetRoles =
+      role === 'recruiter'
+        ? ['Recruiter']
+        : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
+    const roles = await Role.find({ name: { $in: targetRoles }, status: 'active' }).select('_id').lean();
+    if (roles.length > 0) {
+      mongoFilter.roleIds = { $in: roles.map((r) => r._id) };
     } else {
       mongoFilter._id = { $in: [] };
     }

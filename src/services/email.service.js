@@ -953,98 +953,6 @@ const sendPostCallThankYouEmail = async (to, data) => {
   );
 };
 
-/**
- * Formal offer letter email after interview selection (recruiter workflow).
- * Sent before offer status is moved to Sent/Accepted in the system.
- * @param {string} to - Candidate email
- * @param {Object} [options]
- * @param {string} [options.candidateName]
- * @param {string} [options.jobTitle]
- * @param {string} [options.offerCode]
- * @param {string} [options.companyName]
- * @param {string} [options.ctcLine] - e.g. formatted currency
- * @param {string} [options.joiningDateText]
- * @param {string} [options.validityText]
- */
-const sendOfferLetterEmail = async (to, options = {}) => {
-  const {
-    candidateName = 'Candidate',
-    jobTitle = 'Open role',
-    offerCode = '',
-    companyName = BRAND_NAME,
-    ctcLine = '',
-    joiningDateText = 'TBD',
-    validityText = '',
-  } = options;
-
-  const base = getFrontendBaseUrl();
-  const offersUrl = `${base}/ats/offers-placement`;
-  const signInUrl = `${base}/authentication/sign-in/`;
-
-  const introLines = [
-    'Congratulations! We are pleased to extend a formal offer of employment following your successful interview.',
-    'The summary below reflects the current offer terms in our system. You can review full details and next steps in your Dharwin account.',
-  ];
-  const detailRows = [
-    { label: 'Role', value: jobTitle },
-    { label: 'Company', value: companyName },
-    { label: 'Offer reference', value: offerCode || '—' },
-  ];
-  if (ctcLine) detailRows.push({ label: 'Annual CTC (gross, indicative)', value: ctcLine });
-  detailRows.push({ label: 'Tentative joining date', value: joiningDateText });
-  if (validityText) detailRows.push({ label: 'Offer validity', value: validityText });
-
-  const sections = [
-    {
-      title: 'Next steps',
-      tone: 'success',
-      bulletItems: [
-        'Sign in to Dharwin to view this offer under Offers & placement.',
-        'If anything needs to change, reply to this email or contact your recruiter.',
-        'We look forward to welcoming you to the team.',
-      ],
-    },
-  ];
-  const primaryAction = { label: 'View offer in Dharwin', href: offersUrl };
-  const secondaryActions = [{ label: 'Sign in', href: signInUrl, variant: 'secondary' }];
-  const outroLines = [
-    'This message was sent because your interview outcome was updated to Selected.',
-    'If you have questions, reply to this email.',
-  ];
-  const subject = `Offer letter: ${jobTitle} — ${offerCode || 'Dharwin'}`;
-
-  const text = buildPlainTextEmail({
-    title: 'Offer of employment',
-    greeting: candidateName,
-    introLines,
-    detailRows,
-    sections,
-    primaryAction,
-    outroLines,
-  });
-  const html = buildEmailHTML({
-    badgeText: 'Offer',
-    title: 'Offer of employment',
-    greeting: candidateName,
-    introLines,
-    detailRows,
-    sections,
-    primaryAction,
-    secondaryActions,
-    outroLines,
-    preheader: `Your offer for ${jobTitle} at ${companyName}.`,
-  });
-
-  await sendEmail(
-    to,
-    subject,
-    text,
-    html,
-    'offerLetterInterviewSelection',
-    compactMetadata({ candidateName, jobTitle, offerCode, companyName, joiningDateText })
-  );
-};
-
 export {
   transport,
   sendEmail,
@@ -1058,6 +966,5 @@ export {
   sendJobShareEmail,
   sendJobApplicationWelcomeEmail,
   sendPostCallThankYouEmail,
-  sendOfferLetterEmail,
 };
 

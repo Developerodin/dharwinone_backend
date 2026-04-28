@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import Offer from '../models/offer.model.js';
@@ -8,8 +7,6 @@ import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
-import { buildOfferLetterPdfBuffer, formatStartDate } from './offerLetterPdf.service.js';
-import { uploadPdfBuffer, getObjectBufferByKey } from './fileStorage.service.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 
 const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
@@ -65,6 +62,46 @@ const buildCompensationNarrative = (offer) => {
     return `You will receive a gross annual salary of ${g} INR, payable in monthly installments of ${m} INR, ${closing}`;
   }
   return `You will receive a gross annual salary of ${Number(gross).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}, payable in monthly installments of ${Math.round(monthly).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}, ${closing}`;
+};
+
+/** Same ordinal wording as legacy PDF pipeline (offer letter preview / validation context). */
+const ordinalDay = (n) => {
+  const j = n % 10;
+  const k = n % 100;
+  if (j === 1 && k !== 11) return `${n}st`;
+  if (j === 2 && k !== 12) return `${n}nd`;
+  if (j === 3 && k !== 13) return `${n}rd`;
+  return `${n}th`;
+};
+
+const formatStartDate = (d) => {
+  if (!d) return 'TBD';
+  const x = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(x.getTime())) return 'TBD';
+  const mon = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(x);
+  return `${ordinalDay(x.getDate())} ${mon}, ${x.getFullYear()}`;
+};
+
+/**
+ * Onboarding reads Placement.joiningDate; Employees list HRMS joining date reads Employee.joiningDate.
+ * When Accepted offer joining date changes (offer letter / PATCH), mirror to placement + candidate.
+ */
+const syncJoiningDateFromAcceptedOfferToPlacementAndEmployee = async (offer) => {
+  if (!offer || offer.status !== 'Accepted') return;
+  const jd = offer.joiningDate ? new Date(offer.joiningDate) : null;
+  if (!jd || Number.isNaN(jd.getTime())) return;
+
+  const oid = offer._id ?? offer.id;
+  if (!oid) return;
+
+  await Placement.updateOne({ offer: oid }, { $set: { joiningDate: jd } });
+
+  const cand = offer.candidate && typeof offer.candidate === 'object' && offer.candidate !== null
+    ? offer.candidate._id ?? offer.candidate.id
+    : offer.candidate;
+  if (cand) {
+    await Employee.findByIdAndUpdate(cand, { joiningDate: jd });
+  }
 };
 
 const applyLetterFieldsFromUpdate = (offer, updateBody) => {
@@ -155,19 +192,7 @@ const toLetterContext = (offer) => {
   };
 };
 
-/**
- * Stable hash of PDF input from an already-built letter context.
- * When letterDate is unset, PDF uses "today" — include calendar day so a new day triggers rebuild.
- */
-const letterPdfContentHashFromCtx = (ctx) => {
-  const dateStamp =
-    ctx.letterDate != null
-      ? `fixed:${new Date(ctx.letterDate).toISOString().slice(0, 10)}`
-      : `implicitDay:${new Date().toISOString().slice(0, 10)}`;
-  return createHash('sha256').update(JSON.stringify(ctx)).update(dateStamp).digest('hex');
-};
-
-/** Validates offer letter prerequisites and returns PDF context once (single toLetterContext). */
+/** Validates offer letter prerequisites and returns letter context once (single toLetterContext). */
 const validateAndBuildLetterContext = (offer) => {
   const ctx = toLetterContext(offer);
   if (!ctx.address) {
@@ -230,7 +255,7 @@ const ensureAccess = async (currentUser, offerOrJob) => {
 const OFFER_LETTER_POPULATE = [
   {
     path: 'job',
-    select: 'title organisation status createdBy',
+    select: 'title organisation status createdBy jobDescription description',
     populate: { path: 'createdBy', select: '_id name email' },
   },
   { path: 'candidate', select: 'fullName email phoneNumber address' },
@@ -508,6 +533,8 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   Object.assign(offer, updateBody);
   await offer.save();
 
+  await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
+
   return getOfferById(offer._id);
 };
 
@@ -550,6 +577,8 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
   }
 
   await offer.save();
+
+  await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
 };
 
 /**
@@ -658,6 +687,10 @@ const deleteOfferById = async (id, currentUser) => {
   return offer;
 };
 
+/**
+ * Validate and persist offer letter fields (POST /offers/:id/generate-letter).
+ * Server-side PDF generation was removed; clients use browser print / Save as PDF only.
+ */
 const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const offer = await getOfferById(id, currentUser);
   if (!offer) {
@@ -670,40 +703,14 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     await applyOfferLetterPatchForGenerate(offer, letterPayload);
   }
 
-  const ctx = validateAndBuildLetterContext(offer);
-  const newHash = letterPdfContentHashFromCtx(ctx);
-  if (offer.offerLetterKey && offer.offerLetterHash === newHash) {
-    return offer;
-  }
+  const fresh = await getOfferById(id, currentUser);
+  validateAndBuildLetterContext(fresh);
 
-  const buf = await buildOfferLetterPdfBuffer(ctx);
-  const userId = currentUser?.id ?? currentUser?._id;
-  const { key } = await uploadPdfBuffer(userId, buf, 'offer-letters/');
+  await Offer.findByIdAndUpdate(id, {
+    $unset: { offerLetterKey: 1, offerLetterUrl: 1, offerLetterHash: 1, offerLetterGeneratedAt: 1 },
+  });
 
-  const updated = await Offer.findByIdAndUpdate(
-    id,
-    {
-      offerLetterKey: key,
-      offerLetterGeneratedAt: new Date(),
-      offerLetterHash: newHash,
-    },
-    { new: true }
-  ).populate(OFFER_LETTER_POPULATE);
-
-  if (!updated) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
-  }
-  return updated;
-};
-
-const getOfferLetterFileBuffer = async (id, currentUser) => {
-  const offer = await getOfferById(id, currentUser);
-  if (!offer?.offerLetterKey) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Offer letter has not been generated yet');
-  }
-  const buffer = await getObjectBufferByKey(offer.offerLetterKey);
-  const filename = `Offer-Letter-${offer.offerCode || id}.pdf`;
-  return { buffer, filename };
+  return getOfferById(id, currentUser);
 };
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);
@@ -715,7 +722,6 @@ export {
   queryOffers,
   deleteOfferById,
   generateOfferLetter,
-  getOfferLetterFileBuffer,
   getLetterDefaultsForTitle,
   STATUS_VALUES,
 };

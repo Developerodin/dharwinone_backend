@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import XLSX from 'xlsx';
 import Job from '../models/job.model.js';
 import JobTemplate from '../models/jobTemplate.model.js';
@@ -296,7 +297,50 @@ const deleteJobById = async (id, currentUser) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
+  const deletedJobId = job._id instanceof mongoose.Types.ObjectId ? job._id : new mongoose.Types.ObjectId(String(job._id));
+
+  /** Applicants may have JobApplications but inconsistent candidate referralJobId (Mongoose model Employee, collection `candidates`) — match both before job row is deleted. */
+  let applicationCandidateIds = [];
+  try {
+    applicationCandidateIds = await JobApplication.distinct('candidate', { job: deletedJobId });
+  } catch (e) {
+    logger.warn(`deleteJobById: distinct applicants ${e?.message || e}`);
+  }
+
+  /** Referral leads: postings removed from the system should not keep “Applied” + a stale job title. */
+  try {
+    const orBranches = [{ referralJobId: deletedJobId }];
+    if (applicationCandidateIds?.length) {
+      orBranches.push({
+        _id: {
+          $in: applicationCandidateIds.map((id) =>
+            id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(String(id))
+          ),
+        },
+      });
+    }
+    const r = await Employee.updateMany(
+      { $or: orBranches },
+      { $set: { referralPipelineStatus: 'job_removed', referralJobTitle: null, referralJobId: null } }
+    );
+    if (r.modifiedCount > 0) {
+      logger.info(`deleteJobById: set job_removed on ${r.modifiedCount} ATS candidate profile(s) for job ${deletedJobId}`);
+    }
+  } catch (e) {
+    logger.warn(`deleteJobById: referral cleanup failed: ${e?.message || e}`);
+  }
+
+  try {
+    const dr = await JobApplication.deleteMany({ job: deletedJobId });
+    if (dr.deletedCount > 0) {
+      logger.info(`deleteJobById: deleted ${dr.deletedCount} JobApplication row(s) for job ${deletedJobId}`);
+    }
+  } catch (e) {
+    logger.warn(`deleteJobById: application cleanup failed: ${e?.message || e}`);
+  }
+
   await job.deleteOne();
+
   return job;
 };
 

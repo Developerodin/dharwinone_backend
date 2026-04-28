@@ -342,54 +342,6 @@ const createFolder = async (userId, folderPath) => {
   return { name: safePath.replace(/\/$/, '').split('/').pop(), prefix: key };
 };
 
-/**
- * Upload a PDF buffer under file-storage/{userId}/{folder} — for generated offer letters, etc.
- * @param {string|import('mongoose').Types.ObjectId} userId
- * @param {Buffer} buffer
- * @param {string} [folderPath] e.g. "offer-letters/" — normalized like uploadFile
- * @returns {Promise<{ key: string, size: number, mimeType: string }>}
- */
-const uploadPdfBuffer = async (userId, buffer, folderPath = 'offer-letters/') => {
-  const bucket = config.aws?.bucketName;
-  if (!bucket) {
-    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'S3 bucket not configured');
-  }
-  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid PDF buffer');
-  }
-  const safeFolder = normalizeFolderPath(folderPath);
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 15);
-  const key = `${FILE_STORAGE_PREFIX}/${userId}/${safeFolder}${timestamp}-${random}.pdf`;
-  if (key.length > MAX_KEY_LENGTH) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Generated key exceeds maximum length');
-  }
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: buffer,
-    ContentType: 'application/pdf',
-    Metadata: {
-      uploadedBy: String(userId),
-      uploadedAt: new Date().toISOString(),
-    },
-  });
-  try {
-    await s3Client.send(command);
-  } catch (e) {
-    const name = e?.name || '';
-    const msg = String(e?.message || e);
-    if (name === 'TimeoutError' || /timeout|ETIMEDOUT|read ETIMEDOUT|socket hang up/i.test(msg)) {
-      throw new ApiError(
-        httpStatus.BAD_GATEWAY,
-        'Uploading the PDF to storage failed or timed out. Verify AWS_REGION matches the S3 bucket region, the EC2 instance can reach S3, and credentials or the instance IAM role allow s3:PutObject.'
-      );
-    }
-    throw e;
-  }
-  return { key, size: buffer.length, mimeType: 'application/pdf' };
-};
-
 const isFileStorageObjectKey = (key) => {
   if (typeof key !== 'string' || key.length > MAX_KEY_LENGTH) return false;
   if (!key.startsWith(`${FILE_STORAGE_PREFIX}/`)) return false;
@@ -427,7 +379,6 @@ export {
   createFolder,
   userPrefix,
   isKeyAllowed,
-  uploadPdfBuffer,
   getObjectBufferByKey,
   isFileStorageObjectKey,
 };

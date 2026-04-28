@@ -121,6 +121,11 @@ const placementSchema = new mongoose.Schema(
       /** agentUserId (hex) -> last sent (ISO) stored as Mixed map */
       t1ByAgent: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     },
+    /** Dedup T-1 / T-0 onboarding emails for Joined placements (candidate + assigned agent same run) */
+    onboardingJoinRemindersSentAt: {
+      t1: { type: Date, default: null },
+      t0: { type: Date, default: null },
+    },
     trainingModuleId: { type: mongoose.Schema.Types.ObjectId, ref: 'TrainingModule', default: null },
     trainingAssignedAt: { type: Date, default: null },
   },

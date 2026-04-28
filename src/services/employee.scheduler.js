@@ -106,6 +106,24 @@ const startCandidateScheduler = (intervalMinutes = 60) => {
     await autoDeactivateResignedCandidates();
     await sendJoiningDateReminders();
     await runJoiningDateReminders().catch((e) => logger.error(`runJoiningDateReminders: ${e.message}`));
+    try {
+      const { runJoinedOnboardingJoiningReminders } = await import('./onboardingJoiningNotifications.service.js');
+      const ob = await runJoinedOnboardingJoiningReminders();
+      if (ob && (ob.t1 > 0 || ob.t0 > 0)) {
+        logger.info(`[scheduler] Joined onboarding join reminders: t1=${ob.t1} t0=${ob.t0}`);
+      }
+    } catch (e) {
+      logger.error(`runJoinedOnboardingJoiningReminders: ${e.message}`);
+    }
+    try {
+      const { promoteAllEligibleCandidateOwnersFromScheduler } = await import('./employeeRolePromotion.service.js');
+      const promoted = await promoteAllEligibleCandidateOwnersFromScheduler();
+      if (promoted > 0) {
+        logger.info(`[scheduler] Candidate → Employee role promotion: ${promoted} user(s) updated`);
+      }
+    } catch (e) {
+      logger.error(`promoteAllEligibleCandidateOwnersFromScheduler: ${e.message}`);
+    }
   };
   run();
   const id = setInterval(run, intervalMs);

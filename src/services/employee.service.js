@@ -612,6 +612,18 @@ const getCandidateRoleOwnerIdsForAssignmentRoster = async () => {
   return usersWithCandidateRole.map((u) => u._id);
 };
 
+/**
+ * Locale-aware collation for Mongo sort (otherwise Z–A ignores case conventions; lowercase mixes with uppercase incorrectly).
+ */
+const collationForCandidateListSortBy = (sortBy) => {
+  if (!sortBy || typeof sortBy !== 'string') return undefined;
+  const primary = sortBy.split(',')[0]?.split(':')[0]?.trim();
+  if (primary === 'fullName' || primary === 'degree') {
+    return { locale: 'en', strength: 2 };
+  }
+  return undefined;
+};
+
 const queryCandidates = async (filter, options) => {
   const wantOpenSop =
     filter.includeOpenSopCount === true ||
@@ -826,8 +838,11 @@ const queryCandidates = async (filter, options) => {
     pipeline.push({ $skip: skip });
     pipeline.push({ $limit: limit });
     
-    // Execute aggregation
-    const candidates = await Employee.aggregate(pipeline);
+    // Execute aggregation (collation aligns string sort with list view expectations)
+    const coll = collationForCandidateListSortBy(options.sortBy);
+    let aggExec = Employee.aggregate(pipeline);
+    if (coll) aggExec = aggExec.collation(coll);
+    const candidates = await aggExec.exec();
     
     // Collect all unique owner IDs BEFORE population (owner is just an ID at this point)
     const ownerIds = [...new Set(candidates
@@ -849,10 +864,11 @@ const queryCandidates = async (filter, options) => {
         : [];
     const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
     
-    // Populate owner and adminId
+    // Populate owner, adminId, position (HRMS job title from onboarding)
     const populatedCandidates = await Employee.populate(candidates, [
       { path: 'owner', select: 'name email isEmailVerified countryCode' },
-      { path: 'adminId', select: 'name email' }
+      { path: 'adminId', select: 'name email' },
+      { path: 'position', select: 'name' },
     ]);
     
     // Add isEmailVerified and countryCode to each candidate from the owner user
@@ -915,8 +931,14 @@ const queryCandidates = async (filter, options) => {
     };
   }
   // Use simple pagination for non-experience-based filters (lean + select for faster load)
-  const listFields = 'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate';
-  const paginateOptions = { ...options, lean: true, select: listFields };
+  const listFields =
+    'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate position degree';
+  const paginateOptions = {
+    ...options,
+    lean: true,
+    select: listFields,
+    collation: collationForCandidateListSortBy(options.sortBy),
+  };
   const result = await Employee.paginate(mongoFilter, paginateOptions);
     
     // Manually populate with field selection including isEmailVerified
@@ -945,7 +967,8 @@ const queryCandidates = async (filter, options) => {
       
       await Employee.populate(result.results, [
         { path: 'owner', select: 'name email isEmailVerified countryCode' },
-        { path: 'adminId', select: 'name email' }
+        { path: 'adminId', select: 'name email' },
+        { path: 'position', select: 'name' },
       ]);
       
       // Convert to plain objects and add isEmailVerified and countryCode
@@ -1023,7 +1046,11 @@ const getResignStatusByOwnerId = async (ownerId) => {
 const getCandidateByOwnerForMe = async (userId) => {
   const candidate = await Employee.findOne({ owner: userId });
   if (!candidate) return null;
-  await candidate.populate([{ path: 'owner', select: 'name email countryCode' }, { path: 'adminId', select: 'name email' }]);
+  await candidate.populate([
+    { path: 'owner', select: 'name email countryCode' },
+    { path: 'adminId', select: 'name email' },
+    { path: 'position', select: 'name' },
+  ]);
   if (candidate.profilePicture?.key) {
     try {
       candidate.profilePicture.url = await generatePresignedDownloadUrl(candidate.profilePicture.key, 7 * 24 * 3600);
@@ -2188,7 +2215,33 @@ const listAgentUsersForAssignment = async () => {
 };
 
 /**
- * Assignable people: Candidate records whose owner has Student and/or Candidate role.
+ * Settings → Agents / Company email rosters: badge text and when to show HR `employeeId` (e.g. DBS149).
+ * Legacy job-seeker Role is often named `Candidate`; the company **Employee** user role is separate.
+ * Until the owner has the `Employee` role, show **Candidate** (not Employee) and hide DBS id.
+ *
+ * @param {string[]} roleNames - `Role.name` values for the candidate owner's `User.roleIds`
+ * @returns {{ ownerRoleLabel: string, showHrEmployeeId: boolean }}
+ */
+const ownerRosterDisplayForAgentUi = (roleNames) => {
+  const names = roleNames ?? [];
+  const lower = new Set(names.map((n) => String(n).toLowerCase()));
+  const tags = [];
+  if (lower.has('student')) tags.push('Student');
+  if (lower.has('employee')) tags.push('Employee');
+  else if (lower.has('candidate')) tags.push('Candidate');
+  if (lower.has('agent')) tags.push('Agent');
+  return {
+    ownerRoleLabel: tags.length ? tags.join(' · ') : '—',
+    showHrEmployeeId: lower.has('employee'),
+  };
+};
+
+/**
+ * Candidate profiles for Settings → Agents: people who can be assigned (typically owners with Student /
+ * Candidate (Employee) user roles) PLUS anyone who already has `assignedAgent` set.
+ *
+ * The latter fixes hires whose portal `owner` User is only Agent / Recruiter (no Student/Candidate role)
+ * — they were invisible here even though Onboarding HRMS correctly showed the agent.
  * Each candidate has at most one assignedAgent; many candidates may share the same agent.
  */
 const listStudentAgentAssignments = async () => {
@@ -2217,31 +2270,33 @@ const listStudentAgentAssignments = async () => {
   await addOwnersWithRole(candidateRole);
 
   const ownerIds = [...ownerIdSet];
-  if (ownerIds.length === 0) {
-    const agents = await listAgentUsersForAssignment();
-    return {
-      students: [],
-      agents: agents.map((u) => ({ id: String(u._id), name: u.name, email: u.email })),
-    };
-  }
 
-  const candidates = await Employee.find({ owner: { $in: ownerIds } })
+  /** Pool for “add people” + unassigned; also include anyone already assigned so agent cards show correct counts. */
+  const employeeMatchOr = [];
+  if (ownerIds.length > 0) {
+    employeeMatchOr.push({ owner: { $in: ownerIds } });
+  }
+  employeeMatchOr.push({ assignedAgent: { $ne: null } });
+
+  const candidates = await Employee.find({ $or: employeeMatchOr })
     .select('fullName email employeeId owner assignedAgent')
     .populate({ path: 'assignedAgent', select: 'name email' })
     .sort({ fullName: 1 })
     .lean();
 
+  const distinctOwnerIds = [...new Set(candidates.map((c) => c.owner).filter(Boolean))];
+
   const studentsForOwners =
-    ownerIds.length > 0
-      ? await Student.find({ user: { $in: ownerIds } })
+    distinctOwnerIds.length > 0
+      ? await Student.find({ user: { $in: distinctOwnerIds } })
           .select('_id user')
           .lean()
       : [];
   const studentIdByOwnerId = new Map(studentsForOwners.map((s) => [String(s.user), String(s._id)]));
 
   const ownerUsers =
-    ownerIds.length > 0
-      ? await User.find({ _id: { $in: ownerIds } })
+    distinctOwnerIds.length > 0
+      ? await User.find({ _id: { $in: distinctOwnerIds } })
           .select('roleIds')
           .lean()
       : [];
@@ -2250,25 +2305,27 @@ const listStudentAgentAssignments = async () => {
     allRoleIds.length > 0 ? await Role.find({ _id: { $in: allRoleIds } }).select('name').lean() : [];
   const roleNameById = new Map(roleDocs.map((r) => [String(r._id), r.name]));
 
-  const ownerRoleLabelByOwnerId = new Map();
+  const ownerRosterDisplayByOwnerId = new Map();
   ownerUsers.forEach((u) => {
     const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
-    const tags = [];
-    if (names.includes('Student')) tags.push('Student');
-    if (names.includes('Employee') || names.includes('Candidate')) tags.push('Employee');
-    ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
+    const display = ownerRosterDisplayForAgentUi(names);
+    ownerRosterDisplayByOwnerId.set(String(u._id), display);
   });
 
   const students = candidates.map((c) => {
     const ownerId = c.owner ? String(c.owner) : '';
     const ag = c.assignedAgent;
+    const display = ownerRosterDisplayByOwnerId.get(ownerId) ?? {
+      ownerRoleLabel: '—',
+      showHrEmployeeId: false,
+    };
     return {
       id: String(c._id),
       fullName: c.fullName,
       email: c.email,
-      employeeId: c.employeeId ?? null,
+      employeeId: display.showHrEmployeeId ? (c.employeeId ?? null) : null,
       ownerId,
-      ownerRoleLabel: ownerRoleLabelByOwnerId.get(ownerId) ?? '—',
+      ownerRoleLabel: display.ownerRoleLabel,
       studentId: studentIdByOwnerId.get(ownerId) ?? null,
       assignedAgent: ag
         ? {
@@ -2288,37 +2345,29 @@ const listStudentAgentAssignments = async () => {
 };
 
 /**
- * Assign or unassign an Agent to a candidate profile whose owner has Student and/or Candidate role.
+ * Assign or unassign an Agent on a candidate (Employee profile).
+ * Allowed when the owning user exists and is active/pending — not limited to Student/Employee role labels only.
  * @param {string} candidateId
  * @param {string|null|undefined} agentId - null clears assignment
  */
 const assignAgentToCandidate = async (candidateId, agentId) => {
-  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
+  const { getRoleByName } = await import('./role.service.js');
   const candidate = await Employee.findById(candidateId);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
-  const studentRole = await getRoleByName('Student');
-  const candidateRole = await getEmployeeRole();
-  if (!studentRole && !candidateRole) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Employee role must be configured');
+  if (!candidate.owner) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Candidate has no linked user account (owner)');
   }
-  const ownerOr = [];
-  if (studentRole) ownerOr.push({ roleIds: studentRole._id });
-  if (candidateRole) ownerOr.push({ roleIds: candidateRole._id });
-  const ownerEligible =
-    ownerOr.length > 0
-      ? await User.exists({
-          _id: candidate.owner,
-          status: { $in: ['active', 'pending'] },
-          $or: ownerOr,
-        })
-      : false;
+  const ownerEligible = await User.exists({
+    _id: candidate.owner,
+    status: { $in: ['active', 'pending'] },
+  });
   if (!ownerEligible) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      'Agent assignment applies only to users with the Student or Employee role'
+      'Candidate owner account is missing or not active; activate the user before assigning an agent'
     );
   }
 
@@ -2423,25 +2472,27 @@ const listCompanyEmailAssignments = async () => {
     allRoleIds.length > 0 ? await Role.find({ _id: { $in: allRoleIds } }).select('name').lean() : [];
   const roleNameById = new Map(roleDocs.map((r) => [String(r._id), r.name]));
 
-  const ownerRoleLabelByOwnerId = new Map();
+  const ownerRosterDisplayByOwnerId = new Map();
   ownerUsers.forEach((u) => {
     const names = (u.roleIds || []).map((rid) => roleNameById.get(String(rid))).filter(Boolean);
-    const tags = [];
-    if (names.includes('Student')) tags.push('Student');
-    if (names.includes('Employee') || names.includes('Candidate')) tags.push('Employee');
-    ownerRoleLabelByOwnerId.set(String(u._id), tags.length ? tags.join(' · ') : '—');
+    const display = ownerRosterDisplayForAgentUi(names);
+    ownerRosterDisplayByOwnerId.set(String(u._id), display);
   });
 
   const students = candidates.map((c) => {
     const ownerId = c.owner ? String(c.owner) : '';
     const ag = c.assignedAgent;
+    const display = ownerRosterDisplayByOwnerId.get(ownerId) ?? {
+      ownerRoleLabel: '—',
+      showHrEmployeeId: false,
+    };
     return {
       id: String(c._id),
       fullName: c.fullName,
       email: c.email,
-      employeeId: c.employeeId ?? null,
+      employeeId: display.showHrEmployeeId ? (c.employeeId ?? null) : null,
       ownerId,
-      ownerRoleLabel: ownerRoleLabelByOwnerId.get(ownerId) ?? '—',
+      ownerRoleLabel: display.ownerRoleLabel,
       studentId: studentIdByOwnerId.get(ownerId) ?? null,
       companyAssignedEmail: c.companyAssignedEmail || '',
       companyEmailProvider: c.companyEmailProvider || '',

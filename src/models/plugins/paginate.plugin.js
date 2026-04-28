@@ -38,6 +38,9 @@ const paginate = (schema) => {
 
     const countPromise = this.countDocuments(filter).exec();
     let docsPromise = this.find(filter).sort(sort).skip(skip).limit(limit);
+    if (options.collation && typeof options.collation === 'object') {
+      docsPromise = docsPromise.collation(options.collation);
+    }
     if (options.lean) docsPromise = docsPromise.lean();
     if (options.select) docsPromise = docsPromise.select(options.select);
 

@@ -2,7 +2,25 @@ import Joi from 'joi';
 import { objectId, password as passwordValidator } from './custom.validation.js';
 
 const document = Joi.object({
-  type: Joi.string().valid('Aadhar', 'PAN', 'Bank', 'Passport', 'Other').optional().default('Other'),
+  type: Joi.string()
+    .valid(
+      'Aadhar',
+      'PAN',
+      'Bank',
+      'Passport',
+      'CV/Resume',
+      'Marksheet',
+      'Degree Certificate',
+      'Experience Letter',
+      'Offer Letter',
+      'Visa',
+      'EAD Card',
+      'I-765 Receipt',
+      'I-983 Form-only',
+      'Other'
+    )
+    .optional()
+    .default('Other'),
   label: Joi.string().optional().trim(),
   url: Joi.string().uri().optional(),
   key: Joi.string().optional().trim(),
@@ -515,7 +533,16 @@ const referralLeadsQueryKeys = {
   referredByUserId: Joi.string().custom(objectId).allow(''),
   referralContext: Joi.string().valid('SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY').allow(''),
   referralPipelineStatus: Joi.string()
-    .valid('profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending', 'withdrawn')
+    .valid(
+      'profile_complete',
+      'applied',
+      'in_review',
+      'hired',
+      'rejected',
+      'pending',
+      'withdrawn',
+      'job_removed'
+    )
     .allow(''),
   from: Joi.string().trim().allow('').optional(),
   to: Joi.string().trim().allow('').optional(),

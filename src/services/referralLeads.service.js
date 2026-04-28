@@ -342,8 +342,10 @@ const shapeReferralLastOverride = async (rlo) => {
 
 /**
  * @param {import('mongoose').Document|object} row
+ * @param {object} [options]
+ * @param {Set<string>} [options.appliedJobApplyOrphans] - from {@link appliedJobPostingOrphansForJobApplyApplied}
  */
-const shapeLeadRow = async (row) => {
+const shapeLeadRow = async (row, options = {}) => {
   const o = row.toObject ? row.toObject() : { ...row };
   const ref = o.referredByUserId;
   let referredBy = null;
@@ -353,15 +355,52 @@ const shapeLeadRow = async (row) => {
     const u = await User.findById(ref).select('name email').lean();
     if (u) referredBy = { id: u._id.toString(), name: u.name, email: u.email };
   }
+  /** Aggregates set `referralJobMissing` when `referralJobId` pointed at a deleted Job. */
+  const jobMissing = o.referralJobMissing === true;
   let job = null;
-  if (o.referralJobId && typeof o.referralJobId === 'object' && o.referralJobId.title) {
+  let effectivePipelineStatus = o.referralPipelineStatus || 'pending';
+
+  const cidStr = o._id?.toString?.() || (o.id != null ? String(o.id) : '');
+  if (
+    cidStr &&
+    options.appliedJobApplyOrphans?.has?.(cidStr) &&
+    o.referralContext === 'JOB_APPLY' &&
+    String(effectivePipelineStatus) === 'applied'
+  ) {
+    job = null;
+    if (!['withdrawn', 'rejected'].includes(String(effectivePipelineStatus))) {
+      effectivePipelineStatus = 'job_removed';
+    }
+  } else if (jobMissing) {
+    job = null;
+    if (
+      effectivePipelineStatus &&
+      !['withdrawn', 'rejected'].includes(String(effectivePipelineStatus)) &&
+      effectivePipelineStatus !== 'job_removed'
+    ) {
+      effectivePipelineStatus = 'job_removed';
+    }
+  } else if (o.referralJobId && typeof o.referralJobId === 'object' && o.referralJobId.title) {
     job = {
       id: (o.referralJobId._id || o.referralJobId.id).toString(),
       title: o.referralJobId.title,
     };
   } else if (o.referralJobId) {
-    const j = await Job.findById(o.referralJobId).select('title').lean();
-    if (j) job = { id: String(o.referralJobId), title: j.title };
+    const jobOidForLookup = asObjectIdString(o.referralJobId);
+    const j = jobOidForLookup ? await Job.findById(jobOidForLookup).select('title').lean() : null;
+    if (j) job = { id: jobOidForLookup, title: j.title };
+    else if (jobOidForLookup) {
+      /** Stale referralJobId pointing at deleted/missing Job (cleanup may not have run). */
+      job = null;
+      if (
+        !['withdrawn', 'rejected'].includes(String(effectivePipelineStatus)) &&
+        effectivePipelineStatus !== 'job_removed'
+      ) {
+        effectivePipelineStatus = 'job_removed';
+      }
+    } else if (o.referralJobTitle) {
+      job = { title: o.referralJobTitle };
+    }
   } else if (o.referralJobTitle) {
     job = { title: o.referralJobTitle };
   }
@@ -385,7 +424,7 @@ const shapeLeadRow = async (row) => {
     referredAt: o.referredAt,
     attributionLockedAt: o.attributionLockedAt,
     referralAttributionAnonymised: o.referralAttributionAnonymised,
-    referralPipelineStatus: o.referralPipelineStatus,
+    referralPipelineStatus: effectivePipelineStatus,
     referralBatchId: o.referralBatchId,
     job,
     referralLastOverride,
@@ -417,6 +456,54 @@ const decodeCursor = (cursor) => {
 
 const usersCollectionName = () => User.collection.collectionName;
 const jobsCollectionName = () => Job.collection.collectionName;
+/**
+ * JOB_APPLY + applied rows whose latest application points at a deleted job (or no application row).
+ * Fixes legacy rows where Employee still has denormalised title/referralJobId drift.
+ *
+ * @param {object[]} rows - aggregate rows before shapeLeadRow
+ * @returns {Promise<Set<string>>} candidate ids to show as job_removed
+ */
+async function appliedJobPostingOrphansForJobApplyApplied(rows) {
+  const candIds = rows
+    .filter(
+      (r) =>
+        String(r.referralPipelineStatus) === 'applied' &&
+        r.referralContext === 'JOB_APPLY' &&
+        r.referralJobMissing !== true
+    )
+    .map((r) => r._id);
+  if (!candIds.length) return new Set();
+
+  const jobsColl = jobsCollectionName();
+
+  const agg = await JobApplication.aggregate([
+    { $match: { candidate: { $in: candIds } } },
+    { $sort: { updatedAt: -1 } },
+    { $group: { _id: '$candidate', jobId: { $first: '$job' } } },
+    {
+      $lookup: {
+        from: jobsColl,
+        localField: 'jobId',
+        foreignField: '_id',
+        as: 'jobHits',
+      },
+    },
+  ]);
+
+  const hasHealthyJobPosting = new Map();
+  for (const x of agg) {
+    hasHealthyJobPosting.set(String(x._id), Array.isArray(x.jobHits) && x.jobHits.length > 0);
+  }
+
+  const orphans = new Set();
+  for (const cid of candIds) {
+    const s = String(cid);
+    if (!hasHealthyJobPosting.has(s) || !hasHealthyJobPosting.get(s)) {
+      orphans.add(s);
+    }
+  }
+  return orphans;
+}
 
 /**
  * Referral rows are Candidate (`Employee`) documents with denormalized name/email.
@@ -445,6 +532,7 @@ const referralLeadsPopulateReferrerAndJobStages = () => {
   const usersColl = usersCollectionName();
   const jobsColl = jobsCollectionName();
   return [
+    { $set: { _referralJobOid: '$referralJobId' } },
     {
       $lookup: {
         from: usersColl,
@@ -462,7 +550,7 @@ const referralLeadsPopulateReferrerAndJobStages = () => {
     {
       $lookup: {
         from: jobsColl,
-        localField: 'referralJobId',
+        localField: '_referralJobOid',
         foreignField: '_id',
         as: 'referralJobIdArr',
       },
@@ -470,9 +558,12 @@ const referralLeadsPopulateReferrerAndJobStages = () => {
     {
       $addFields: {
         referralJobId: { $arrayElemAt: ['$referralJobIdArr', 0] },
+        referralJobMissing: {
+          $and: [{ $ne: ['$_referralJobOid', null] }, { $eq: [{ $size: '$referralJobIdArr' }, 0] }],
+        },
       },
     },
-    { $project: { referralJobIdArr: 0 } },
+    { $project: { referralJobIdArr: 0, _referralJobOid: 0 } },
   ];
 };
 
@@ -517,7 +608,8 @@ export const listReferralLeads = async (req) => {
     nextCursor = encodeCursor(last.referredAt, last._id);
   }
 
-  const results = await Promise.all(slice.map((r) => shapeLeadRow(r)));
+  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(slice);
+  const results = await Promise.all(slice.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
   return {
     results,
     nextCursor,

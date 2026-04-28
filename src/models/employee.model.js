@@ -26,7 +26,23 @@ const experienceSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const DOCUMENT_TYPES = ['Resume', 'Aadhar', 'PAN', 'Bank', 'Passport', 'Other'];
+const DOCUMENT_TYPES = [
+  'Resume',
+  'Aadhar',
+  'PAN',
+  'Bank',
+  'Passport',
+  'CV/Resume',
+  'Marksheet',
+  'Degree Certificate',
+  'Experience Letter',
+  'Offer Letter',
+  'Visa',
+  'EAD Card',
+  'I-765 Receipt',
+  'I-983 Form-only',
+  'Other',
+];
 
 const documentSchema = new mongoose.Schema(
   {
@@ -184,7 +200,17 @@ const employeeSchema = new mongoose.Schema(
     referralAttributionAnonymised: { type: Boolean, default: false },
     referralPipelineStatus: {
       type: String,
-      enum: ['profile_complete', 'applied', 'in_review', 'hired', 'rejected', 'pending', 'withdrawn'],
+      enum: [
+        'profile_complete',
+        'applied',
+        'in_review',
+        'hired',
+        'rejected',
+        'pending',
+        'withdrawn',
+        /** Job posting was deleted; referral had been tied to that job (see job.service deleteJobById). */
+        'job_removed',
+      ],
       default: 'pending',
     },
     /** Most recent override audit (older chain can move to collection later). */

@@ -59,6 +59,10 @@ const getJobApplications = {
     status: Joi.string()
       .valid(...STATUS_VALUES)
       .optional(),
+    /** Only applications for jobs that exist with status Active (excludes closed/archived/deleted-job orphans). */
+    activeJobsOnly: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().optional(),
     page: Joi.number().integer().optional(),

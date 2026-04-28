@@ -9,7 +9,6 @@ import {
   queryOffers,
   deleteOfferById,
   generateOfferLetter,
-  getOfferLetterFileBuffer,
   getLetterDefaultsForTitle,
 } from '../services/offer.service.js';
 import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
@@ -57,15 +56,8 @@ const generateLetter = catchAsync(async (req, res) => {
   res.send(offer);
 });
 
-const downloadLetterFile = catchAsync(async (req, res) => {
-  const { buffer, filename } = await getOfferLetterFileBuffer(req.params.offerId, req.user);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.send(buffer);
-});
-
 const enhanceRoles = catchAsync(async (req, res) => {
-  const { jobTitle, existingRoles, existingTraining, isInternship, enhanceFocus } = req.body;
+  const { jobTitle, jobDescription, existingRoles, existingTraining, isInternship, enhanceFocus } = req.body;
   const intern = !!isInternship;
   const resolvedFocus = !intern
     ? 'roles'
@@ -74,6 +66,7 @@ const enhanceRoles = catchAsync(async (req, res) => {
       : 'roles';
   const result = await enhanceOfferLetterRoles({
     jobTitle,
+    jobDescription: jobDescription ?? '',
     existingRoles: existingRoles || '',
     existingTraining: existingTraining || '',
     isInternship: intern,
@@ -91,4 +84,13 @@ const enhanceRoles = catchAsync(async (req, res) => {
   res.send(payload);
 });
 
-export { create, get, update, list, remove, letterDefaults, generateLetter, downloadLetterFile, enhanceRoles };
+export {
+  create,
+  get,
+  update,
+  list,
+  remove,
+  letterDefaults,
+  generateLetter,
+  enhanceRoles,
+};
