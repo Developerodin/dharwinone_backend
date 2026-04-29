@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import Employee from '../models/employee.model.js';
+import User from '../models/user.model.js';
 import * as activityLogService from './activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
@@ -128,9 +129,16 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
   if (c.referredByUserId) {
     return { applied: false, reason: 'already_attributed' };
   }
-  // Guard: referrer cannot refer themselves (same user id as candidate owner)
-  if (c.owner && String(c.owner) === String(verifiedPayload.t)) {
-    return { applied: false, reason: 'self_referral' };
+  /**
+   * Self-referral: block when the **applicant's login user** is the same as the token referrer.
+   * Do not use `Employee.owner` — public job apply sets owner to `job.createdBy` (recruiter), so
+   * owner often equals the sharer's user id even for a legitimate external referral.
+   */
+  if (email) {
+    const applicantUser = await User.findOne({ email }).select('_id').lean();
+    if (applicantUser && String(applicantUser._id) === String(verifiedPayload.t)) {
+      return { applied: false, reason: 'self_referral' };
+    }
   }
 
   c.referredByUserId = verifiedPayload.t;

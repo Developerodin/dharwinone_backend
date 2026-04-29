@@ -128,3 +128,25 @@ export const userHasRecruiterRole = async (user) => {
   const hasRole = await Role.exists({ _id: { $in: roleIds }, name: 'Recruiter', status: 'active' });
   return !!hasRole;
 };
+
+/** Role names that may list/view all ATS jobs (tenant-wide), not only jobs they created. */
+const ATS_JOB_FULL_LISTING_ROLE_NAMES = ['Administrator', 'Agent', 'agent', 'Recruiter'];
+
+/**
+ * True for Administrator, Agent, or Recruiter (routes still require jobs.read / jobs.manage as appropriate).
+ * Used so non-poster staff are not limited to createdBy-only job lists.
+ * @param {Object|null|undefined} user
+ * @returns {Promise<boolean>}
+ */
+export const userCanViewAllJobsForListing = async (user) => {
+  if (!user) return false;
+  if (user.platformSuperUser) return true;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: { $in: ATS_JOB_FULL_LISTING_ROLE_NAMES },
+    status: 'active',
+  });
+  return !!hasRole;
+};

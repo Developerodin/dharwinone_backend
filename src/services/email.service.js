@@ -957,6 +957,9 @@ export {
   transport,
   sendEmail,
   queueEmail,
+  /** Shared branded wrapper — same layout as reset password / verification emails */
+  buildEmailHTML,
+  buildPlainTextEmail,
   sendResetPasswordEmail,
   sendVerificationEmail,
   sendCandidateInvitationEmail,

@@ -98,47 +98,62 @@ const sendJoiningDateReminders = async () => {
 };
 
 /**
- * @param {number} intervalMinutes Default 60
+ * @param {number} intervalMinutes Default 5 (see config `candidate.schedulerIntervalMinutes` / `CANDIDATE_SCHEDULER_INTERVAL_MINUTES`)
  * @returns {NodeJS.Timeout}
  */
-const startCandidateScheduler = (intervalMinutes = 60) => {
-  const intervalMs = intervalMinutes * 60 * 1000;
-  const run = async () => {
-    await autoDeactivateResignedCandidates();
-    await sendJoiningDateReminders();
-    await runJoiningDateReminders().catch((e) => logger.error(`runJoiningDateReminders: ${e.message}`));
-    try {
-      const { runJoinedOnboardingJoiningReminders } = await import('./onboardingJoiningNotifications.service.js');
-      const ob = await runJoinedOnboardingJoiningReminders();
-      if (ob && (ob.t1 > 0 || ob.t0 > 0)) {
-        logger.info(`[scheduler] Joined onboarding join reminders: t1=${ob.t1} t0=${ob.t0}`);
-      }
-    } catch (e) {
-      logger.error(`runJoinedOnboardingJoiningReminders: ${e.message}`);
+const startCandidateScheduler = (intervalMinutes = 5) => {
+  const mins = Math.min(1440, Math.max(1, Number(intervalMinutes) || 5));
+  const intervalMs = mins * 60 * 1000;
+  let tickRunning = false;
+
+  const runTick = async () => {
+    if (tickRunning) {
+      logger.warn('[scheduler] Candidate scheduler tick skipped: previous tick still running');
+      return;
     }
+    tickRunning = true;
+    const tickStarted = Date.now();
     try {
-      const { promoteAllEligibleCandidateOwnersFromScheduler } = await import('./employeeRolePromotion.service.js');
-      const promoted = await promoteAllEligibleCandidateOwnersFromScheduler();
-      if (promoted > 0) {
-        logger.info(`[scheduler] Candidate → Employee role promotion: ${promoted} user(s) updated`);
+      await autoDeactivateResignedCandidates();
+      await sendJoiningDateReminders();
+      await runJoiningDateReminders().catch((e) => logger.error(`runJoiningDateReminders: ${e.message}`));
+      try {
+        const { runJoinedOnboardingJoiningReminders } = await import('./onboardingJoiningNotifications.service.js');
+        const ob = await runJoinedOnboardingJoiningReminders();
+        if (ob && (ob.t1 > 0 || ob.t0 > 0)) {
+          logger.info(`[scheduler] Joined onboarding join reminders: t1=${ob.t1} t0=${ob.t0}`);
+        }
+      } catch (e) {
+        logger.error(`runJoinedOnboardingJoiningReminders: ${e.message}`);
       }
-    } catch (e) {
-      logger.error(`promoteAllEligibleCandidateOwnersFromScheduler: ${e.message}`);
-    }
-    // EC-4: Auto-expire offers whose validity date has passed.
-    try {
-      const { autoExpireOffers } = await import('./offer.service.js');
-      const expired = await autoExpireOffers();
-      if (expired > 0) {
-        logger.info(`[scheduler] Auto-expired ${expired} offer(s) past validity date`);
+      try {
+        const { promoteAllEligibleCandidateOwnersFromScheduler } = await import('./employeeRolePromotion.service.js');
+        await promoteAllEligibleCandidateOwnersFromScheduler();
+      } catch (e) {
+        logger.error(`promoteAllEligibleCandidateOwnersFromScheduler: ${e.message}`);
       }
+      try {
+        const { autoExpireOffers } = await import('./offer.service.js');
+        const expired = await autoExpireOffers();
+        if (expired > 0) {
+          logger.info(`[scheduler] Auto-expired ${expired} offer(s) past validity date`);
+        }
+      } catch (e) {
+        logger.error(`autoExpireOffers: ${e.message}`);
+      }
+      logger.info(`[scheduler] Candidate batch tick finished in ${Date.now() - tickStarted}ms`);
     } catch (e) {
-      logger.error(`autoExpireOffers: ${e.message}`);
+      logger.error(`[scheduler] Candidate batch tick failed: ${e.message}`, e);
+    } finally {
+      tickRunning = false;
     }
   };
-  run();
-  const id = setInterval(run, intervalMs);
-  logger.info(`Candidate scheduler started (every ${intervalMinutes} min)`);
+
+  logger.info(`Candidate scheduler started (every ${mins} min); first tick running`);
+  runTick().catch((e) => logger.error(`[scheduler] Candidate first tick rejected: ${e.message}`, e));
+  const id = setInterval(() => {
+    runTick().catch((e) => logger.error(`[scheduler] Candidate tick rejected: ${e.message}`, e));
+  }, intervalMs);
   return id;
 };
 

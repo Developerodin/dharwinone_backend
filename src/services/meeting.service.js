@@ -16,6 +16,171 @@ import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
+/** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
+const PIPELINE_STATUSES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'];
+
+/**
+ * Resolve job application for an interview's candidate + jobPosition (shared forward / rollback).
+ * @param {object} meeting - Meeting doc
+ * @param {{ createIfMissing?: boolean }} [options]
+ * @returns {Promise<{ candidateObjId: import('mongoose').Types.ObjectId|null, jobId: string|null, application: import('mongoose').Document|null }>}
+ */
+async function resolveJobApplicationForInterviewMeeting(meeting, options = {}) {
+  const { createIfMissing = true } = options;
+  const candidateId = meeting.candidate?.id;
+  if (!candidateId || !mongoose.Types.ObjectId.isValid(candidateId)) {
+    return { candidateObjId: null, jobId: null, application: null };
+  }
+
+  const candidateObjId = new mongoose.Types.ObjectId(candidateId);
+
+  let jobId = null;
+  const jobPositionVal = (meeting.jobPosition || '').trim();
+
+  if (/^[0-9a-fA-F]{24}$/.test(jobPositionVal)) {
+    jobId = jobPositionVal;
+  } else if (jobPositionVal) {
+    const job = await Job.findOne({
+      title: { $regex: new RegExp(`^${jobPositionVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+    })
+      .select('_id')
+      .lean();
+    jobId = job?._id?.toString() || null;
+  }
+
+  let application = null;
+
+  if (jobId) {
+    application = await JobApplication.findOne({
+      candidate: candidateObjId,
+      job: new mongoose.Types.ObjectId(jobId),
+      status: { $in: PIPELINE_STATUSES },
+    });
+  }
+
+  if (!application) {
+    application = await JobApplication.findOne({
+      candidate: candidateObjId,
+      status: { $in: PIPELINE_STATUSES },
+    }).sort({ updatedAt: -1 });
+    if (application?.job) {
+      jobId = application.job._id?.toString?.() ?? String(application.job);
+    }
+  }
+
+  if (!application && jobId && createIfMissing) {
+    try {
+      const existing = await JobApplication.findOne({
+        candidate: candidateObjId,
+        job: new mongoose.Types.ObjectId(jobId),
+      });
+      if (existing && PIPELINE_STATUSES.includes(existing.status)) {
+        application = existing;
+      } else if (!existing) {
+        application = await JobApplication.create({
+          job: new mongoose.Types.ObjectId(jobId),
+          candidate: candidateObjId,
+          status: 'Interview',
+        });
+        logger.info(
+          '[resolveJobApplicationForInterviewMeeting] Created JobApplication for candidate %s + job %s',
+          candidateId,
+          jobId
+        );
+      }
+    } catch (err) {
+      logger.warn('[resolveJobApplicationForInterviewMeeting] Could not create JobApplication:', err?.message || err);
+      throw new ApiError(httpStatus.BAD_REQUEST, `Could not link to a job application: ${err?.message || String(err)}`);
+    }
+  }
+
+  return { candidateObjId, jobId, application };
+}
+
+/**
+ * When rollback needs an application row that left PIPELINE_STATUSES (e.g. Rejected), widen lookup.
+ */
+async function resolveJobApplicationForInterviewRollback(meeting) {
+  const resolved = await resolveJobApplicationForInterviewMeeting(meeting, {
+    createIfMissing: false,
+  });
+  const { candidateObjId, jobId } = resolved;
+  let { application } = resolved;
+  if (application || !candidateObjId) {
+    return { candidateObjId, jobId, application };
+  }
+  if (jobId) {
+    application = await JobApplication.findOne({
+      candidate: candidateObjId,
+      job: new mongoose.Types.ObjectId(jobId),
+    });
+  }
+  if (!application) {
+    application = await JobApplication.findOne({ candidate: candidateObjId }).sort({ updatedAt: -1 });
+  }
+  return { candidateObjId, jobId, application };
+}
+
+/**
+ * Undo Offers/placement pipeline created when result was Selected: delete Pending (etc.) placement + offer,
+ * set JobApplication back to Interview. Skips if placement already Joined (onboarding started).
+ */
+async function rollbackInterviewSelectionPipeline(meeting) {
+  let syncCandidateId = null;
+  try {
+    const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
+    if (!candidateObjId || !application) {
+      logger.info('[rollbackInterviewSelectionPipeline] No application — nothing to roll back');
+      return;
+    }
+
+    const offer = await Offer.findOne({ jobApplication: application._id });
+    if (!offer) {
+      const st = application.status;
+      if (st === 'Offered' || st === 'Hired') {
+        await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+        syncCandidateId = candidateObjId;
+      }
+      logger.info('[rollbackInterviewSelectionPipeline] No offer doc — normalized application status only');
+      if (syncCandidateId) await syncReferralPipelineStatusForCandidate(syncCandidateId);
+      return;
+    }
+
+    const placement = await Placement.findOne({ offer: offer._id }).lean();
+
+    if (placement?.status === 'Joined') {
+      logger.warn(
+        '[rollbackInterviewSelectionPipeline] Placement already Joined — skipping destructive rollback (meeting=%s)',
+        meeting._id
+      );
+      return;
+    }
+
+    if (placement) {
+      await Placement.deleteOne({ _id: placement._id });
+    }
+
+    await Offer.deleteOne({ _id: offer._id });
+
+    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+
+    syncCandidateId = candidateObjId;
+
+    logger.info(
+      '[rollbackInterviewSelectionPipeline] Rolled back offer/placement for application %s (meeting=%s)',
+      application._id,
+      meeting._id
+    );
+  } catch (err) {
+    logger.error('[rollbackInterviewSelectionPipeline] Failed:', err?.message || err);
+    throw err;
+  }
+
+  if (syncCandidateId) {
+    await syncReferralPipelineStatusForCandidate(syncCandidateId);
+  }
+}
+
 /**
  * Display name for join link / email (hosts, candidate, recruiter, or email local-part).
  * @param {Object} meeting - Meeting doc or plain object
@@ -208,20 +373,20 @@ const defaultJoiningDateForInterviewOffer = () => {
 };
 
 /**
- * Ensure joining date, then Draft → Sent → Accepted (placement).
- * Candidate offer-letter email is not sent automatically; recruiters send it from the Offer Letter Generator.
+ * Interview selection creates offers in Draft. Ensure a default joining date so the Offer Letter Generator
+ * can validate; do not advance status — recruiters send and accept from Offers & Placement.
  * @param {import('mongoose').Types.ObjectId|string} offerId
  * @param {string} userId
  */
-const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
+const ensureInterviewOfferLetterDefaults = async (offerId, userId) => {
   const actor = { id: userId, _id: userId };
   const id = offerId.toString();
-  let offer = await offerService.getOfferById(id, null);
+  const offer = await offerService.getOfferById(id, null);
   if (!offer) {
-    logger.warn('[emailOfferLetterAndCompletePlacement] Offer not found %s', id);
+    logger.warn('[ensureInterviewOfferLetterDefaults] Offer not found %s', id);
     return;
   }
-  if (offer.status === 'Accepted') {
+  if (offer.status === 'Accepted' || offer.status === 'Rejected') {
     return;
   }
 
@@ -232,102 +397,34 @@ const emailOfferLetterAndCompletePlacement = async (offerId, userId) => {
       actor,
       { skipAccessCheck: true }
     );
-    offer = await offerService.getOfferById(id, null);
   }
-
-  const fresh = await offerService.getOfferById(id, null);
-  if (fresh?.status === 'Accepted') {
-    return;
-  }
-  if (fresh?.status === 'Draft') {
-    await offerService.updateOfferById(id, { status: 'Sent' }, actor, {
-      skipAccessCheck: true,
-      skipSentNotification: true,
-    });
-  }
-  await offerService.updateOfferById(id, { status: 'Accepted' }, actor, { skipAccessCheck: true });
 };
 
 /**
- * [ADR] createPlacementFromInterview: creates offer + accepted placement from interview — not "completing"
- * pre-boarding tasks. Both recruiter accept and this path should end with the same Offer/Placement/Employee invariants.
+ * [ADR] createPlacementFromInterview: ensures a Draft offer (+ default joining date when missing) for this interview’s
+ * job application. Placement is created when the offer is Accepted from Offers & Placement — not during this call.
  * @deprecated use createPlacementFromInterview name; `moveCandidateToPreboarding` is a backward-compatible alias.
- * Move employee to preboarding when interview result is "selected".
- * Creates an offer, then Sent → Accepted (placement Pending). Candidate offer email is sent from Offer Letter Generator.
+ * Runs when interview result is "selected".
  * @param {Object} meeting - Meeting document (after save)
  * @param {string} userId - User performing the action
  */
 const createPlacementFromInterview = async (meeting, userId) => {
-  const candidateId = meeting.candidate?.id;
-  if (!candidateId || !mongoose.Types.ObjectId.isValid(candidateId)) {
-    logger.warn('[createPlacementFromInterview] No valid candidate id on meeting %s', meeting._id);
-    return;
-  }
+  const { candidateObjId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
+    createIfMissing: true,
+  });
 
-  const candidateObjId = new mongoose.Types.ObjectId(candidateId);
-  let jobId = null;
-  const jobPositionVal = (meeting.jobPosition || meeting.title || '').trim();
-
-  if (/^[0-9a-fA-F]{24}$/.test(jobPositionVal)) {
-    jobId = jobPositionVal;
-  } else if (jobPositionVal) {
-    const job = await Job.findOne({ title: { $regex: new RegExp(`^${jobPositionVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } })
-      .select('_id')
-      .lean();
-    jobId = job?._id?.toString() || null;
-  }
-
-  let application = null;
-  if (jobId) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      job: new mongoose.Types.ObjectId(jobId),
-      status: { $in: ['Applied', 'Screening', 'Interview'] },
-    });
-  }
-  if (!application) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      status: 'Interview',
-    }).sort({ updatedAt: -1 });
-  }
-  if (!application && !jobId) {
-    const appByCandidate = await JobApplication.findOne({
-      candidate: candidateObjId,
-      status: { $in: ['Applied', 'Screening'] },
-    })
-      .sort({ updatedAt: -1 })
-      .populate('job', '_id title');
-    if (appByCandidate) {
-      application = appByCandidate;
-      jobId = application.job?._id?.toString();
-    }
-  }
-  if (!application && jobId) {
-    try {
-      const existing = await JobApplication.findOne({
-        candidate: candidateObjId,
-        job: new mongoose.Types.ObjectId(jobId),
-      });
-      if (existing && ['Applied', 'Screening', 'Interview'].includes(existing.status)) {
-        application = existing;
-      } else if (!existing) {
-        application = await JobApplication.create({
-          job: new mongoose.Types.ObjectId(jobId),
-          candidate: candidateObjId,
-          status: 'Interview',
-        });
-        logger.info('[createPlacementFromInterview] Created JobApplication for candidate %s + job %s', candidateId, jobId);
-      }
-    } catch (err) {
-      logger.warn('[createPlacementFromInterview] Could not create JobApplication:', err?.message || err);
-      return;
-    }
+  if (!candidateObjId) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot move to Offers & placement: this interview has no valid candidate linked. Edit the interview and choose a candidate.'
+    );
   }
 
   if (!application) {
-    logger.warn('[createPlacementFromInterview] No job application for meeting %s (candidate %s)', meeting._id, candidateId);
-    return;
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot move to Offers & placement: no job application found for this candidate. Ensure they have an application in progress (Applied, Screening, Interview, Offered, or Hired).'
+    );
   }
 
   const existingOffer = await Offer.findOne({ jobApplication: application._id });
@@ -338,10 +435,13 @@ const createPlacementFromInterview = async (meeting, userId) => {
     }
     if (existingOffer.status === 'Draft') {
       try {
-        await emailOfferLetterAndCompletePlacement(existingOffer._id, userId);
-        logger.info('[createPlacementFromInterview] Completed placement workflow for application %s', application._id);
+        await ensureInterviewOfferLetterDefaults(existingOffer._id, userId);
+        logger.info(
+          '[createPlacementFromInterview] Draft offer ensured (joining date); awaiting acceptance in Offers & placement — application %s',
+          application._id
+        );
       } catch (err) {
-        logger.error('[createPlacementFromInterview] Failed to complete offer from Draft:', err?.message || err);
+        logger.error('[createPlacementFromInterview] Failed to ensure draft offer defaults:', err?.message || err);
         throw err;
       }
       return;
@@ -353,11 +453,10 @@ const createPlacementFromInterview = async (meeting, userId) => {
         return;
       }
       if (!existingOffer.joiningDate) {
-        logger.warn(
-          '[createPlacementFromInterview] Offer %s has no joining date; cannot create placement. Update the offer in Offers & placement.',
-          existingOffer._id
+        throw new ApiError(
+          httpStatus.BAD_REQUEST,
+          'An offer exists but has no joining date. Open Offers & placement, set joining date, then accept the offer or use Move to Pre-boarding again.'
         );
-        return;
       }
       try {
         await offerService.updateOfferById(
@@ -373,8 +472,17 @@ const createPlacementFromInterview = async (meeting, userId) => {
       }
       return;
     }
-    logger.debug('[createPlacementFromInterview] Offer exists with status %s, skipping', existingOffer.status);
-    return;
+    // BUG-10 FIX: specific, actionable message when offer was previously rejected.
+    if (existingOffer.status === 'Rejected') {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'The offer for this application was previously rejected. To re-hire this candidate, delete the rejected offer in Offers & Placement first, then retry Move to Pre-boarding.'
+      );
+    }
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Cannot auto-move to Offers & placement: an offer already exists with status "${existingOffer.status}". Open Offers & placement to continue.`
+    );
   }
 
   try {
@@ -388,10 +496,23 @@ const createPlacementFromInterview = async (meeting, userId) => {
     );
     const created = await Offer.findOne({ jobApplication: application._id });
     if (created) {
-      await emailOfferLetterAndCompletePlacement(created._id, userId);
+      await ensureInterviewOfferLetterDefaults(created._id, userId);
     }
-    logger.info('[createPlacementFromInterview] Created offer and placement for application %s', application._id);
+    logger.info('[createPlacementFromInterview] Created draft offer for application %s (complete in Offers & placement)', application._id);
   } catch (err) {
+    // BUG-8 FIX: race condition — two concurrent requests both passed the existingOffer check.
+    // The second call gets "An offer already exists"; treat it as an idempotent success.
+    if (
+      (err?.statusCode === 400 || err?.status === 400) &&
+      /already exists/i.test(err?.message || '')
+    ) {
+      logger.info('[createPlacementFromInterview] Concurrent offer creation detected for application %s — treating as success', application._id);
+      const created = await Offer.findOne({ jobApplication: application._id });
+      if (created && created.status !== 'Accepted' && created.status !== 'Rejected') {
+        await ensureInterviewOfferLetterDefaults(created._id, userId);
+      }
+      return;
+    }
     logger.error('[createPlacementFromInterview] Failed to create/accept offer:', err?.message || err);
     throw err;
   }
@@ -409,6 +530,7 @@ const updateMeetingById = async (id, updateBody, userId) => {
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  const previousInterviewResult = meeting.interviewResult;
   const safeBody = { ...updateBody };
   const dur = Number(safeBody.durationMinutes);
   if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
@@ -419,12 +541,33 @@ const updateMeetingById = async (id, updateBody, userId) => {
   Object.assign(meeting, safeBody);
   await meeting.save();
 
+  const newInterviewResult = meeting.interviewResult;
+
+  if (
+    previousInterviewResult === 'selected' &&
+    (newInterviewResult === 'pending' || newInterviewResult === 'rejected')
+  ) {
+    try {
+      await rollbackInterviewSelectionPipeline(meeting);
+    } catch (err) {
+      logger.error('[updateMeetingById] rollbackInterviewSelectionPipeline failed:', err?.message || err);
+    }
+  }
+
   let moveError = null;
   if (
     updateBody.interviewResult === 'selected' &&
     meeting.candidate?.id
   ) {
+    // BUG-6 FIX: guard null effectiveUserId — createOffer requires createdBy.
     const effectiveUserId = userId || meeting.createdBy?.toString?.() || meeting.createdBy;
+    if (!effectiveUserId) {
+      const msg = 'Cannot create offer: no user identity available for this meeting. Please retry while logged in.';
+      logger.warn('[updateMeetingById] %s (meetingId=%s)', msg, meeting._id);
+      const result2 = await getMeetingById(meeting._id.toString());
+      result2.moveToPreboardingError = msg;
+      return result2;
+    }
     try {
       await createPlacementFromInterview(meeting, effectiveUserId);
     } catch (err) {

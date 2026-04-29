@@ -8,7 +8,7 @@ import Employee from '../models/employee.model.js';
 import ExternalJob from '../models/externalJob.model.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
+import { userIsAdmin, userCanViewAllJobsForListing } from '../utils/roleHelpers.js';
 import callRecordService from './callRecord.service.js';
 import { syncPublishedJobForExternal } from './externalJobPublishedJob.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
@@ -176,6 +176,7 @@ const queryJobs = async (filter, options) => {
     delete filter.forCandidates;
     delete filter.userRoleIds;
     delete filter.userId;
+    delete filter.platformSuperUser;
     filter.status = 'Active';
 
     if (jobOriginMode === 'internal') {
@@ -190,9 +191,14 @@ const queryJobs = async (filter, options) => {
     return result;
   }
 
-  // If user is not admin: own internal jobs + all mirrored external jobs (tenant-wide listings)
-  const isAdmin = await userIsAdmin({ roleIds: filter.userRoleIds || [] });
-  if (!isAdmin && filter.userId) {
+  // Staff with Administrator / Agent / Recruiter see all jobs; others only own internal + mirrored external
+  const listUser = {
+    roleIds: filter.userRoleIds || [],
+    platformSuperUser: filter.platformSuperUser,
+  };
+  delete filter.platformSuperUser;
+  const canSeeAllTenantJobs = await userCanViewAllJobsForListing(listUser);
+  if (!canSeeAllTenantJobs && filter.userId) {
     const userId = filter.userId;
 
     delete filter.userRoleIds;
@@ -347,8 +353,12 @@ const deleteJobById = async (id, currentUser) => {
 
 // Excel Export
 const exportJobsToExcel = async (filters = {}) => {
-  const isAdmin = await userIsAdmin({ roleIds: filters.userRoleIds || [] });
-  if (!isAdmin && filters.userId) {
+  const canSeeAllTenantJobs = await userCanViewAllJobsForListing({
+    roleIds: filters.userRoleIds || [],
+    platformSuperUser: filters.platformSuperUser,
+  });
+  delete filters.platformSuperUser;
+  if (!canSeeAllTenantJobs && filters.userId) {
     filters.createdBy = filters.userId;
   }
   delete filters.userRole;
@@ -571,8 +581,12 @@ const createJobTemplate = async (createdById, payload) => {
 };
 
 const queryJobTemplates = async (filter, options) => {
-  const isAdmin = await userIsAdmin({ roleIds: filter.userRoleIds || [] });
-  if (!isAdmin && filter.userId) {
+  const canSeeAllTenantJobs = await userCanViewAllJobsForListing({
+    roleIds: filter.userRoleIds || [],
+    platformSuperUser: filter.platformSuperUser,
+  });
+  delete filter.platformSuperUser;
+  if (!canSeeAllTenantJobs && filter.userId) {
     const userId = filter.userId;
     const userFilter = { createdBy: userId };
 

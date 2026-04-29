@@ -8,6 +8,7 @@ import { assertAgentCanReadPlacement, stripPlacementPlain } from '../utils/place
 import { recordPlacementAudit } from './placementAudit.service.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
 
 /** UTC calendar day string YYYY-MM-DD for stable comparison of stored dates. */
 const joinDateYmdUtc = (d) => {
@@ -127,6 +128,98 @@ const recomputePreBoardingStatus = (placement) => {
   else placement.preBoardingStatus = 'Pending';
 };
 
+/**
+ * Merge incoming PATCH fields into a plain snapshot so Joined/pre-boarding gate matches what this save will persist.
+ * Without this, changing Pre-boarding status + Placement status in one request failed because gate ran on stale DB values.
+ */
+const snapshotPlacementForPreboardingGate = (placement, updateBody) => {
+  let preBoardingStatus = placement.preBoardingStatus;
+  let preBoardingTasks = placement.preBoardingTasks;
+  if (updateBody.preBoardingStatus !== undefined) {
+    preBoardingStatus = updateBody.preBoardingStatus;
+  }
+  if (Array.isArray(updateBody.preBoardingTasks)) {
+    preBoardingTasks = mergeTaskList(placement.preBoardingTasks, updateBody.preBoardingTasks) || placement.preBoardingTasks;
+    const tmp = { preBoardingStatus, preBoardingTasks };
+    recomputePreBoardingStatus(tmp);
+    preBoardingStatus = tmp.preBoardingStatus;
+    preBoardingTasks = tmp.preBoardingTasks;
+  }
+  return { preBoardingStatus, preBoardingTasks };
+};
+
+/**
+ * Human-readable blocker when marking Joined is not allowed (plus structured details for UI).
+ */
+const explainPreboardingGateBlock = (placement, updateBody, gateBasis) => {
+  const checklistEnabled = config.ats?.preboardingChecklistEnabled !== false;
+  const tasks = gateBasis.preBoardingTasks;
+
+  if (Array.isArray(tasks) && tasks.length > 0 && checklistEnabled) {
+    const incomplete = tasks.filter((t) => t.required && !t.done);
+    const titles = incomplete.map((t) => String(t.title || 'Untitled step').trim()).filter(Boolean);
+    const preview = titles.slice(0, 6).join('; ');
+    const more =
+      titles.length > 6 ? ` (+${titles.length - 6} more)` : '';
+    const message =
+      incomplete.length === 0
+        ? [
+            'Cannot move this hire to Joined yet.',
+            '',
+            'The pre-boarding checklist must be satisfied before onboarding.',
+            `Effective pre-boarding status after your edits would be "${gateBasis.preBoardingStatus ?? 'Pending'}".`,
+            'Finish every required checklist item below, then save again.',
+          ].join('\n')
+        : [
+            'Cannot move this hire to Joined yet.',
+            '',
+            `Reason: ${incomplete.length} required pre-boarding checklist step(s) are still incomplete.`,
+            preview ? `Still open: ${preview}${more}` : '',
+            '',
+            'What to do: scroll to Pre-boarding tasks in this form, check off each required step, then click Save.',
+            'If policy allows skipping this requirement, enable “Override pre-boarding gate” (requires permission) and save.',
+          ]
+            .filter(Boolean)
+            .join('\n');
+
+    return {
+      message,
+      details: {
+        gate: 'checklist',
+        incompleteRequiredCount: incomplete.length,
+        incompleteRequiredTaskTitles: titles,
+        savedPreBoardingStatusOnRecord: placement.preBoardingStatus,
+        effectivePreBoardingStatusForGate: gateBasis.preBoardingStatus,
+      },
+    };
+  }
+
+  const pb = gateBasis.preBoardingStatus || 'Pending';
+  const message = [
+    'Cannot move this hire to Joined yet.',
+    '',
+    `Reason: pre-boarding must show as Completed before onboarding.`,
+    pb !== 'Completed'
+      ? `After applying your edits, status would still be "${pb}" (saved on server before this update was "${placement.preBoardingStatus ?? 'Pending'}").`
+      : '',
+    '',
+    'What to do: set Pre-boarding status to Completed and save again.',
+    'If an approved exception applies, enable “Override pre-boarding gate” and save.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    message,
+    details: {
+      gate: 'status',
+      savedPreBoardingStatusOnRecord: placement.preBoardingStatus,
+      effectivePreBoardingStatusForGate: pb,
+      preBoardingStatusInRequest: updateBody.preBoardingStatus ?? null,
+    },
+  };
+};
+
 const recomputeOnboardingStatus = (placement) => {
   const tasks = placement.onboardingTasks;
   if (!Array.isArray(tasks) || tasks.length === 0) return;
@@ -142,22 +235,6 @@ const recomputeOnboardingStatus = (placement) => {
     // Reset if tasks are un-done after completion
     placement.onboardingCompletedAt = null;
   }
-};
-
-/**
- * Pre-boarding / onboarding lists: hide placements whose Employee (candidate) no longer exists
- * or has no displayable name/email (deleted candidate, empty stub, or removed profile).
- * @param {object|null|undefined} emp - Populated Employee or lean doc
- * @returns {boolean}
- */
-const placementCandidateHasDisplayIdentity = (emp) => {
-  if (!emp || !emp._id) return false;
-  const fn = String(emp.fullName ?? '').trim();
-  const em = String(emp.email ?? '').trim();
-  const bad = new Set(['-', '—', 'n/a', 'na', 'none', 'tbd']);
-  if (fn.length > 0 && !bad.has(fn.toLowerCase())) return true;
-  if (em.length > 0 && !bad.has(em.toLowerCase()) && em.includes('@')) return true;
-  return false;
 };
 
 /**
@@ -405,24 +482,27 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
           { errorCode: 'JOINING_DATE_REQUIRED' }
         );
       }
+      const gateBasis = snapshotPlacementForPreboardingGate(placement, updateBody);
+      const gateOk = isPreboardingGateSatisfied(gateBasis);
       const allowBypass = wantsGateBypass && canOverridePreboardingGate;
-      if (!isPreboardingGateSatisfied(placement) && !allowBypass) {
-        throw new ApiError(
-          httpStatus.UNPROCESSABLE_ENTITY,
-          'Pre-boarding must be completed before joining',
-          true,
-          '',
-          { errorCode: 'PREBOARDING_INCOMPLETE' }
-        );
+      if (!gateOk && !allowBypass) {
+        const { message, details } = explainPreboardingGateBlock(placement, updateBody, gateBasis);
+        throw new ApiError(httpStatus.UNPROCESSABLE_ENTITY, message, true, '', {
+          errorCode: 'PREBOARDING_INCOMPLETE',
+          details,
+        });
       }
-      if (!isPreboardingGateSatisfied(placement) && allowBypass) {
+      if (!gateOk && allowBypass) {
         await recordPlacementAudit({
           placementId: placement._id,
           action: 'PREBOARDING_GATE_BYPASSED',
           actorId,
           fromValue: String(previousStatus),
           toValue: 'Joined',
-          details: { preBoardingStatus: placement.preBoardingStatus },
+          details: {
+            preBoardingStatus: placement.preBoardingStatus,
+            effectiveSnapshotPreBoardingStatus: gateBasis.preBoardingStatus,
+          },
         });
       }
       placement.joinedAt = new Date();
@@ -593,7 +673,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     try {
       if (emp?.owner) {
         const { promoteCandidateOwnerToEmployeeRole } = await import('./employeeRolePromotion.service.js');
-        await promoteCandidateOwnerToEmployeeRole(emp.owner);
+        await promoteCandidateOwnerToEmployeeRole(emp.owner, { employeeId: emp._id });
       }
     } catch (e) {
       const log = (await import('../config/logger.js')).default;

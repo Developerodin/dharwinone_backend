@@ -357,6 +357,20 @@ const createOffer = async (jobApplicationId, payload, userId) => {
   if (!application) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job application not found');
   }
+  const jobRefId = application.job?._id ?? application.job;
+  const candRefId = application.candidate?._id ?? application.candidate;
+  if (!jobRefId || !mongoose.Types.ObjectId.isValid(String(jobRefId))) {
+    throw new ApiError(
+      httpStatus.UNPROCESSABLE_ENTITY,
+      'The job linked to this application no longer exists or could not be loaded. Cannot create offer.'
+    );
+  }
+  if (!candRefId || !mongoose.Types.ObjectId.isValid(String(candRefId))) {
+    throw new ApiError(
+      httpStatus.UNPROCESSABLE_ENTITY,
+      'The candidate linked to this application no longer exists or could not be loaded. Cannot create offer.'
+    );
+  }
   const existing = await Offer.findOne({ jobApplication: applicationId });
   if (existing) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'An offer already exists for this application');
@@ -375,8 +389,8 @@ const createOffer = async (jobApplicationId, payload, userId) => {
   const offer = await Offer.create({
     offerCode,
     jobApplication: applicationId,
-    job: application.job._id,
-    candidate: application.candidate._id,
+    job: jobRefId,
+    candidate: candRefId,
     status: 'Draft',
     ctcBreakdown,
     joiningDate: payload.joiningDate ? new Date(payload.joiningDate) : null,
@@ -399,7 +413,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
   });
 
   await application.updateOne({ status: 'Offered' });
-  await syncReferralPipelineStatusForCandidate(application.candidate._id);
+  await syncReferralPipelineStatusForCandidate(candRefId);
 
   return getOfferById(offer._id);
 };
@@ -540,6 +554,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     delete updateBody.status;
 
     const { notifyByEmail, notify, plainTextEmailBody } = await import('./notification.service.js');
+    const { buildEmailHTML, buildPlainTextEmail } = await import('./email.service.js');
     const jobObj = offer.job && typeof offer.job === 'object' && offer.job.title ? offer.job : await getJobById(offer.job);
     const jobTitle = jobObj?.title || 'Job';
 
@@ -555,18 +570,35 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       if (!options.skipSentNotification) {
         const cand = await Employee.findById(offer.candidate).select('email fullName').lean();
         if (cand?.email) {
-          // Richer candidate notification — includes validity deadline and joining date if set.
-          const deadlineLine = validityDisplay ? ` Please respond by ${validityDisplay}.` : '';
-          const joiningLine = joiningDateDisplay ? ` Your proposed joining date is ${joiningDateDisplay}.` : '';
-          const msg = `An offer for "${jobTitle}" has been sent to you.${joiningLine}${deadlineLine}`;
+          const introLines = [`An offer for "${jobTitle}" has been sent to you.`];
+          if (joiningDateDisplay) introLines.push(`Your proposed joining date is ${joiningDateDisplay}.`);
+          if (validityDisplay) introLines.push(`Please respond by ${validityDisplay}.`);
+          const msg = introLines.join(' ');
+          const greetingName = cand.fullName?.trim() || 'there';
+          const emailFooter =
+            'This email was sent automatically by Dharwin Business Solutions because of an action in your account or a workflow initiated for you.';
+          const offerEmailText = buildPlainTextEmail({
+            title: 'You have received an offer',
+            greeting: greetingName,
+            introLines,
+            footerLines: [emailFooter],
+          });
+          const offerEmailHtml = buildEmailHTML({
+            badgeText: 'Offer letter',
+            title: 'You have received an offer',
+            greeting: greetingName,
+            introLines,
+            fallbackUrl: '',
+            preheader: `Offer letter: ${jobTitle}`,
+          });
           notifyByEmail(cand.email, {
             type: 'offer',
             title: 'You have received an offer',
             message: msg,
-            link: '/ats/offers-placement',
             email: {
               subject: `Offer letter: ${jobTitle}`,
-              text: plainTextEmailBody(msg, '/ats/offers-placement'),
+              text: offerEmailText,
+              html: offerEmailHtml,
             },
           }).catch(() => {});
         }

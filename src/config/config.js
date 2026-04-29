@@ -130,6 +130,9 @@ const envVarsSchema = Joi.object()
     /** When > 0, MongoDB TTL index deletes ActivityLog documents `expireAfterSeconds` after createdAt (monitor runs ~60s). 0 = disabled. */
     ACTIVITY_LOG_TTL_SECONDS: Joi.number().integer().min(0).optional().default(0),
 
+    /** Candidate scheduler (`employee.scheduler.js`): resign auto-deactivate, joining reminders, role promotion, offer expiry. Default 5 min. */
+    CANDIDATE_SCHEDULER_INTERVAL_MINUTES: Joi.number().integer().min(1).max(1440).optional().default(5),
+
     /**
      * Comma-separated emails: sole accounts for Activity Logs API/UI and support camera invites.
      * When unset or empty, defaults to harvinder@superadmin.in for backward-compatible single-tenant setups.
@@ -416,6 +419,9 @@ const config = {
     preboardingChecklistEnabled: process.env.PREBOARDING_CHECKLIST_ENABLED !== 'false',
     onboardingChecklistEnabled: process.env.ONBOARDING_CHECKLIST_ENABLED !== 'false',
     defaultOnboardingModuleId: (process.env.DEFAULT_ONBOARDING_MODULE_ID || '').trim(),
+  },
+  candidate: {
+    schedulerIntervalMinutes: envVars.CANDIDATE_SCHEDULER_INTERVAL_MINUTES,
   },
 };
 

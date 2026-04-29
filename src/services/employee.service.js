@@ -20,6 +20,20 @@ import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
 
 /**
+ * After Employee.joiningDate is saved, attempt Candidate → Employee user role (same rules as placement Joined + hourly scheduler).
+ * No-op if joining date not yet “arrived” (UTC), user lacks Candidate role, or Employee role missing.
+ */
+const tryPromoteCandidateOwnerAfterJoiningDateSaved = async (ownerUserId, joiningDate, employeeDocId) => {
+  if (!ownerUserId || !joiningDate) return;
+  try {
+    const { promoteCandidateOwnerToEmployeeRole } = await import('./employeeRolePromotion.service.js');
+    await promoteCandidateOwnerToEmployeeRole(ownerUserId, employeeDocId ? { employeeId: employeeDocId } : {});
+  } catch (e) {
+    logger.warn(`tryPromoteCandidateOwnerAfterJoiningDateSaved: ${e?.message || e}`);
+  }
+};
+
+/**
  * When PATCH sends documents without S3 keys (e.g. frontend only sent label+url), keep stored keys/metadata.
  * Matches rows by label (first unused match per label).
  */
@@ -1222,14 +1236,31 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     sanitized.salarySlips = mergeSalarySlipsPreserveKeys(candidate.salarySlips || [], sanitized.salarySlips);
   }
 
+  const prevJoinMs =
+    candidate.joiningDate != null && candidate.joiningDate !== ''
+      ? new Date(candidate.joiningDate).getTime()
+      : null;
+
   // Update the candidate with new data
   Object.assign(candidate, sanitized);
-  
+
   // Automatically recalculate profile completion percentage and completion status
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
   candidate.isCompleted = candidate.isProfileCompleted === 100;
-  
+
   await candidate.save();
+
+  const joinMs =
+    candidate.joiningDate != null && candidate.joiningDate !== ''
+      ? new Date(candidate.joiningDate).getTime()
+      : null;
+  const joiningUpdated =
+    Object.prototype.hasOwnProperty.call(sanitized, 'joiningDate') ||
+    prevJoinMs !== joinMs;
+
+  if (joiningUpdated && candidate.joiningDate) {
+    await tryPromoteCandidateOwnerAfterJoiningDateSaved(candidate.owner, candidate.joiningDate, candidate._id);
+  }
 
   await syncReferralPipelineStatusForCandidate(candidate._id).catch((err) =>
     logger.warn('syncReferralPipelineStatusForCandidate:', err?.message)
@@ -2621,6 +2652,8 @@ const updateJoiningDate = async (candidateId, joiningDate, user) => {
     await student.save();
   }
 
+  await tryPromoteCandidateOwnerAfterJoiningDateSaved(candidate.owner, candidate.joiningDate, candidate._id);
+
   // Populate fields
   await candidate.populate([
     { path: 'owner', select: 'name email' },
@@ -2896,6 +2929,9 @@ const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
   if (hasDegree) candidate.degree = String(degree).trim();
   if (hasSalary) candidate.salaryRange = String(salaryRange).trim();
   await candidate.save();
+  if (hasJoin && candidate.joiningDate && candidate.owner) {
+    await tryPromoteCandidateOwnerAfterJoiningDateSaved(candidate.owner, candidate.joiningDate, candidate._id);
+  }
   return candidate;
 };
 

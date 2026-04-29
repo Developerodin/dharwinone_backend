@@ -25,7 +25,7 @@ import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { mintJobOpenReferralRefWithAudit } from '../services/referralAttribution.service.js';
 import { syncReferralPipelineStatusForCandidate } from '../services/referralLeads.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
-import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
+import { userHasRecruiterRole, userCanViewAllJobsForListing } from '../utils/roleHelpers.js';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import * as activityLogService from '../services/activityLog.service.js';
@@ -78,6 +78,7 @@ const list = catchAsync(async (req, res) => {
 
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
+  filter.platformSuperUser = req.user.platformSuperUser;
 
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobs(filter, options);
@@ -90,10 +91,10 @@ const get = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
 
-  const isAdmin = await userIsAdmin(req.user);
+  const fullVisibility = await userCanViewAllJobsForListing(req.user);
   const isOwner = String(job.createdBy?._id || job.createdBy) === String(req.user.id || req.user._id);
   const isActiveJob = job.status === 'Active';
-  if (!isAdmin && !isOwner && !isActiveJob) {
+  if (!fullVisibility && !isOwner && !isActiveJob) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
@@ -140,6 +141,7 @@ const exportExcel = catchAsync(async (req, res) => {
 
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
+  filter.platformSuperUser = req.user.platformSuperUser;
 
   const excelBuffer = await exportJobsToExcel(filter);
 
@@ -201,6 +203,7 @@ const listTemplates = catchAsync(async (req, res) => {
 
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
+  filter.platformSuperUser = req.user.platformSuperUser;
 
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobTemplates(filter, options);
@@ -213,10 +216,10 @@ const getTemplate = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job template not found');
   }
 
-  const isAdmin = await userIsAdmin(req.user);
+  const fullVisibility = await userCanViewAllJobsForListing(req.user);
   const isOwner =
     String(template.createdBy?._id || template.createdBy) === String(req.user.id || req.user._id);
-  if (!isAdmin && !isOwner) {
+  if (!fullVisibility && !isOwner) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
@@ -256,9 +259,9 @@ const shareJobEmail = catchAsync(async (req, res) => {
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
-  const isAdmin = await userIsAdmin(req.user);
+  const fullVisibility = await userCanViewAllJobsForListing(req.user);
   const isOwner = String(job.createdBy?._id || job.createdBy) === String(req.user.id || req.user._id);
-  if (!isAdmin && !isOwner) {
+  if (!fullVisibility && !isOwner) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const { to, message } = req.body;

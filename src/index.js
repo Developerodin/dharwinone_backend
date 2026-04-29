@@ -38,7 +38,11 @@ mongoose
       logger.info(`Listening on port ${port}`);
       if (config.env !== 'test') {
         startAttendanceScheduler();
-        candidateSchedulerId = startCandidateScheduler(config.candidate?.schedulerIntervalMinutes ?? 60);
+        const candidateSchedulerMinutes = Math.min(
+          1440,
+          Math.max(1, Number(config.candidate?.schedulerIntervalMinutes) || 5)
+        );
+        candidateSchedulerId = startCandidateScheduler(candidateSchedulerMinutes);
         jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
         callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
         applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(2);
