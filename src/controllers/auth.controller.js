@@ -40,6 +40,7 @@ import {
   verifyReferralToken,
   logReferralEvent,
 } from '../services/referralAttribution.service.js';
+import { syncReferralPipelineStatusForCandidate } from '../services/referralLeads.service.js';
 // import { authService, userService, tokenService, emailService } from '../services/index.js';
 // import { authService, userService, tokenService, emailService } from '../services';
 
@@ -144,7 +145,7 @@ const register = catchAsync(async (req, res) => {
           ActivityActions.REFERRAL_CLAIM,
           EntityTypes.CANDIDATE,
           candidate._id,
-          { source: 'invite_onboard', claimStage: 'onboard_invite' },
+          { source: 'invite_onboard', claimStage: 'onboard_invite', jti: inviterRef.jti },
           req
         );
       } catch (e) {
@@ -324,6 +325,11 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     } else {
       logReferralEvent('referral_token_invalid', { error: v.error });
     }
+  }
+  if (candidate?._id) {
+    await syncReferralPipelineStatusForCandidate(candidate._id).catch((e) =>
+      logReferralEvent('referral_pipeline_sync_failed', { message: e?.message })
+    );
   }
   res.status(httpStatus.CREATED).send({
     user,

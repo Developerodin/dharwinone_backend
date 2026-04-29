@@ -11,7 +11,8 @@ import { runJoiningDateReminders } from './placementReminders.service.js';
 const autoDeactivateResignedCandidates = async () => {
   try {
     const now = new Date();
-    now.setHours(0, 0, 0, 0);
+    // Use UTC midnight for consistent comparison against UTC-stored dates.
+    now.setUTCHours(0, 0, 0, 0);
 
     const candidatesToDeactivate = await Employee.find({
       resignDate: { $lte: now },
@@ -123,6 +124,16 @@ const startCandidateScheduler = (intervalMinutes = 60) => {
       }
     } catch (e) {
       logger.error(`promoteAllEligibleCandidateOwnersFromScheduler: ${e.message}`);
+    }
+    // EC-4: Auto-expire offers whose validity date has passed.
+    try {
+      const { autoExpireOffers } = await import('./offer.service.js');
+      const expired = await autoExpireOffers();
+      if (expired > 0) {
+        logger.info(`[scheduler] Auto-expired ${expired} offer(s) past validity date`);
+      }
+    } catch (e) {
+      logger.error(`autoExpireOffers: ${e.message}`);
     }
   };
   run();

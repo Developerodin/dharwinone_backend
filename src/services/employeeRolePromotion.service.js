@@ -29,8 +29,12 @@ async function resolveCandidateAndEmployeeRoles() {
   if (cachedRolePair) return cachedRolePair;
   const candidateRole = await getRoleByName('Candidate');
   const employeeRole = await getRoleByName('Employee');
-  cachedRolePair = { candidateRole, employeeRole };
-  return cachedRolePair;
+  // Only cache when both roles exist — avoids serving a stale null
+  // if roles were not yet seeded at startup.
+  if (candidateRole && employeeRole) {
+    cachedRolePair = { candidateRole, employeeRole };
+  }
+  return { candidateRole, employeeRole };
 }
 
 /**
@@ -53,7 +57,12 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId) {
   }
 
   const emp = await Employee.findOne({ owner: ownerUserId }).select('joiningDate').lean();
-  if (!emp?.joiningDate || !joinCalendarDayHasArrived(emp.joiningDate)) {
+  if (!emp?.joiningDate) return false;
+  if (!joinCalendarDayHasArrived(emp.joiningDate)) {
+    // Joining date is in the future — scheduler will promote on the correct day.
+    logger.debug(
+      `[employeeRolePromotion] Skipping promotion for user ${ownerUserId} — joining date ${joinDateYmdUtc(emp.joiningDate)} not yet arrived`
+    );
     return false;
   }
 
@@ -83,12 +92,15 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId) {
     return false;
   }
 
+  // MongoDB does not allow $pull and $addToSet on the same path in one operation.
+  // Add Employee role first so the user is never left with zero roles.
   await User.updateOne(
     { _id: ownerUserId },
-    {
-      $pull: { roleIds: candId },
-      $addToSet: { roleIds: employeeRole._id },
-    }
+    { $addToSet: { roleIds: employeeRole._id } }
+  );
+  await User.updateOne(
+    { _id: ownerUserId },
+    { $pull: { roleIds: candId } }
   );
   const Student = (await import('../models/student.model.js')).default;
   await Student.updateMany({ user: ownerUserId }, { $set: { joiningDate: emp.joiningDate } });
@@ -106,9 +118,14 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
   const { employeeRole } = await resolveCandidateAndEmployeeRoles();
   if (!employeeRole) return 0;
 
+  // Only fetch employees whose joining date has arrived (today or past).
+  // This avoids scanning the entire collection on every scheduler tick.
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+
   const rows = await Employee.find({
     owner: { $exists: true, $ne: null },
-    joiningDate: { $exists: true, $ne: null },
+    joiningDate: { $exists: true, $ne: null, $lte: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1) },
   })
     .select('owner joiningDate')
     .lean();

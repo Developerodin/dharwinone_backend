@@ -3,6 +3,7 @@ import logger from '../config/logger.js';
 import config from '../config/config.js';
 import bolnaService from './bolna.service.js';
 import callRecordService from './callRecord.service.js';
+import { normalizePhone } from '../utils/phone.js';
 import { initiateJobPostingVerificationCall } from './bolnaJobPostingVerification.service.js';
 
 async function runJobVerificationCalls() {
@@ -22,6 +23,8 @@ async function runJobVerificationCalls() {
 
     for (const job of jobs) {
       if (!job.organisation?.phone) continue;
+      const rawPhone = String(job.organisation.phone).trim();
+      const phone = normalizePhone(rawPhone) || rawPhone;
       const contactLabel = job.organisation?.name || job.title || 'Organisation contact';
       const result = await initiateJobPostingVerificationCall({
         agentId: config.bolna.agentId,
@@ -38,15 +41,14 @@ async function runJobVerificationCalls() {
             },
           }
         );
-        await callRecordService.updateCallRecordByExecutionId(
-          result.executionId,
-          {
-            purpose: 'job_posting_verification',
-            job: job._id,
-            status: 'initiated',
-          },
-          { upsert: true }
-        );
+        await callRecordService.createRecord({
+          executionId: result.executionId,
+          recipientPhone: phone,
+          recipientName: job.organisation?.name || job.title || 'Organisation',
+          purpose: 'job_posting_verification',
+          relatedJob: job._id,
+          status: 'initiated',
+        });
         logger.info(`Job verification call initiated for job ${job._id}, executionId ${result.executionId}`);
       } else {
         logger.warn(`Job verification call failed for job ${job._id}: ${result.error || 'unknown'}`);
@@ -59,14 +61,22 @@ async function runJobVerificationCalls() {
 
 async function syncCallRecordsFromBolna() {
   try {
+    // Only sync records that belong to job-posting verification calls.
+    // Candidate call records are synced by the application verification scheduler.
     const records = await callRecordService.findRecordsNeedingSync(10);
-    for (const rec of records) {
+    const jobRecords = records.filter(
+      (r) => !r.purpose || r.purpose.toLowerCase().includes('job_posting_verification') || r.purpose.toLowerCase().includes('job_verification')
+    );
+
+    for (const rec of jobRecords) {
       const executionId = rec.executionId;
       if (!executionId) continue;
       const result = await bolnaService.getExecutionDetails(executionId);
       if (!result.success || !result.details) continue;
 
       const details = result.details;
+
+      // Execution expired in Bolna (404) — mark terminal so we stop polling.
       if (details.status === 'unknown' && details.error_message?.includes('not found')) {
         await callRecordService.updateCallRecordByExecutionId(executionId, {
           status: 'expired',
@@ -79,8 +89,8 @@ async function syncCallRecordsFromBolna() {
         setCompletedAt: true,
         setErrorMessage: true,
       });
-      if (updated) {
-        logger.info(`Synced call record ${executionId} with transcript/recording from Bolna`);
+      if (updated?.transcript || updated?.recordingUrl) {
+        logger.info(`Synced job call record ${executionId} with transcript/recording from Bolna`);
       }
     }
   } catch (e) {

@@ -132,8 +132,15 @@ const recomputeOnboardingStatus = (placement) => {
   if (!Array.isArray(tasks) || tasks.length === 0) return;
   const required = tasks.filter((t) => t.required);
   if (required.length === 0) return;
+  // BUG-5 FIX: Record when all required onboarding tasks are completed.
+  // This enables the frontend to show a "Onboarding complete" indicator.
   if (required.every((t) => t.done)) {
-    // keep placement.status as Joined; tasks complete is informational
+    if (!placement.onboardingCompletedAt) {
+      placement.onboardingCompletedAt = new Date();
+    }
+  } else {
+    // Reset if tasks are un-done after completion
+    placement.onboardingCompletedAt = null;
   }
 };
 
@@ -257,6 +264,21 @@ const queryPlacements = async (filter, options, currentUser) => {
 
   if (result.results?.length) {
     await Promise.all(result.results.map((d) => reconcilePlacementJoiningDateWithAcceptedOffer(d)));
+  }
+
+  // Add daysUntilJoining as a convenience field for the frontend timeline/countdown.
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
+  for (const doc of result.results || []) {
+    const plain = doc.toObject ? doc.toObject() : doc;
+    if (plain.joiningDate) {
+      const jd = new Date(plain.joiningDate);
+      jd.setUTCHours(0, 0, 0, 0);
+      plain.daysUntilJoining = Math.round((jd - todayUtc) / (24 * 60 * 60 * 1000));
+    } else {
+      plain.daysUntilJoining = null;
+    }
+    Object.assign(doc, { daysUntilJoining: plain.daysUntilJoining });
   }
 
   if (result.results && currentUser) {
@@ -433,6 +455,8 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     const nextY = placement.joiningDate ? joinDateYmdUtc(placement.joiningDate) : '';
     if (nextY && nextY !== prevY) {
       joiningDateChangedForNotify = true;
+      // Reset ALL reminder dedup flags so the full T-7 / T-1 / T-0 sequence fires again.
+      placement.set('reminderSentAt', { t7: null, t1Recruiter: null, t1Candidate: null, t1ByAgent: {} });
       placement.set('onboardingJoinRemindersSentAt', { t1: null, t0: null });
     }
   }
@@ -491,6 +515,64 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       await sendJoiningDateFinalizedEmails(placement._id);
     } catch (e) {
       logger.warn(`sendJoiningDateFinalizedEmails: ${e?.message || e}`);
+    }
+  }
+
+  // ── Milestone notifications ────────────────────────────────────────────────────
+  // Fire when pre-boarding tasks drive preBoardingStatus to Completed for the first time.
+  if (
+    Array.isArray(updateBody.preBoardingTasks) &&
+    placement.preBoardingStatus === 'Completed'
+  ) {
+    try {
+      const { notify, plainTextEmailBody } = await import('./notification.service.js');
+      const emp = await Employee.findById(placement.candidate).select('fullName').lean();
+      const candName = emp?.fullName || 'The candidate';
+      const creatorId = placement.createdBy;
+      if (creatorId) {
+        const msg = `${candName} has completed all pre-boarding tasks and is ready to join. You can now mark them as Joined.`;
+        notify(creatorId, {
+          type: 'placement',
+          title: 'Pre-boarding complete',
+          message: msg,
+          link: '/ats/pre-boarding',
+          email: {
+            subject: `Pre-boarding complete: ${candName}`,
+            text: plainTextEmailBody(msg, '/ats/pre-boarding'),
+          },
+        }).catch(() => {});
+      }
+    } catch (e) {
+      logger.warn(`preBoardingComplete notify: ${e?.message || e}`);
+    }
+  }
+
+  // Fire when onboarding tasks are all done for the first time in this save.
+  if (
+    Array.isArray(updateBody.onboardingTasks) &&
+    placement.onboardingCompletedAt &&
+    placement.isModified('onboardingCompletedAt')
+  ) {
+    try {
+      const { notify, plainTextEmailBody } = await import('./notification.service.js');
+      const emp = await Employee.findById(placement.candidate).select('fullName').lean();
+      const candName = emp?.fullName || 'The candidate';
+      const creatorId = placement.createdBy;
+      if (creatorId) {
+        const msg = `${candName} has completed all onboarding tasks. Their onboarding is now complete.`;
+        notify(creatorId, {
+          type: 'placement',
+          title: 'Onboarding complete',
+          message: msg,
+          link: '/ats/onboarding',
+          email: {
+            subject: `Onboarding complete: ${candName}`,
+            text: plainTextEmailBody(msg, '/ats/onboarding'),
+          },
+        }).catch(() => {});
+      }
+    } catch (e) {
+      logger.warn(`onboardingComplete notify: ${e?.message || e}`);
     }
   }
 
@@ -567,11 +649,14 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
         }).catch(() => {});
       }
     }
-    try {
-      await assignDefaultTrainingOnJoined(placement);
-    } catch (e) {
-      const log = (await import('../config/logger.js')).default;
-      log.warn(`assignDefaultTrainingOnJoined failed: ${e?.message || e}`);
+    // EC-7 FIX: Guard against double training assignment on Deferred → Joined re-entry.
+    if (!placement.trainingAssignedAt) {
+      try {
+        await assignDefaultTrainingOnJoined(placement);
+      } catch (e) {
+        const log = (await import('../config/logger.js')).default;
+        log.warn(`assignDefaultTrainingOnJoined failed: ${e?.message || e}`);
+      }
     }
   }
 

@@ -78,6 +78,10 @@ export function buildJobPostingVerificationKnowledge(job) {
   const knowledgeBlock = [
     '=== COMPLETE JOB LISTING (use this to verify details with the contact) ===',
     '',
+    'SCOPE (read carefully): Organisation fields below describe the EMPLOYER who posted the job on Dharwin.',
+    'They are third-party listing facts. They are NOT your identity and NOT your employer.',
+    'You represent only the Dharwin platform when speaking.',
+    '',
     '--- Organisation ---',
     `Name: ${org.name || 'Not specified'}`,
     `Website: ${org.website || 'Not provided'}`,

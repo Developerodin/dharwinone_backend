@@ -96,6 +96,7 @@ const offerSchema = new mongoose.Schema(
     letterDate: { type: Date },
     offerLetterGeneratedAt: { type: Date },
     sentAt: { type: Date },
+    underNegotiationAt: { type: Date },
     acceptedAt: { type: Date },
     rejectedAt: { type: Date },
     rejectionReason: { type: String, trim: true },

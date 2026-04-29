@@ -65,22 +65,24 @@ export const runJoiningDateReminders = async () => {
 
     if (d === 1) {
       const r = pl.reminderSentAt || {};
-      // eslint-disable-next-line no-await-in-loop
-      const offer = await Offer.findById(pl.offer).select('createdBy').lean();
-      if (!r.t1Recruiter && offer?.createdBy) {
-        const msg = 'A pending hire joins tomorrow.';
-        const path = '/ats/pre-boarding';
+      if (!r.t1Recruiter) {
         // eslint-disable-next-line no-await-in-loop
-        notify(offer.createdBy, {
-          type: 'placement',
-          title: 'Joining tomorrow',
-          message: msg,
-          link: path,
-          email: { subject: 'Placement: joining tomorrow', text: plainTextEmailBody(msg, path) },
-        }).catch(() => {});
-        // eslint-disable-next-line no-await-in-loop
-        await Placement.updateOne({ _id: pl._id }, { $set: { 'reminderSentAt.t1Recruiter': new Date() } });
-        t1n += 1;
+        const offer = await Offer.findById(pl.offer).select('createdBy').lean();
+        if (offer?.createdBy) {
+          const msg = 'A pending hire joins tomorrow.';
+          const path = '/ats/pre-boarding';
+          // eslint-disable-next-line no-await-in-loop
+          notify(offer.createdBy, {
+            type: 'placement',
+            title: 'Joining tomorrow',
+            message: msg,
+            link: path,
+            email: { subject: 'Placement: joining tomorrow', text: plainTextEmailBody(msg, path) },
+          }).catch(() => {});
+          // eslint-disable-next-line no-await-in-loop
+          await Placement.updateOne({ _id: pl._id }, { $set: { 'reminderSentAt.t1Recruiter': new Date() } });
+          t1n += 1;
+        }
       }
 
       if (!pl.suppressCandidateNotifications && !r.t1Candidate) {

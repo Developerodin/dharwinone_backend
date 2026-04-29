@@ -88,6 +88,12 @@ async function initiateCall(params) {
     Object.assign(userData, extraUserData);
   }
 
+  // Job-posting verification lists use employer fields under organisation_name / listing_employer_name.
+  // Generic `organisation` is often wired to assistant identity in Bolna templates — strip it for this flow only.
+  if (userData.call_type === 'job_posting_verification') {
+    delete userData.organisation;
+  }
+
   const payload = {
     agent_id: agentId || defaultAgentId,
     recipient_phone_number: recipientPhone,

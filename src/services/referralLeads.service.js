@@ -16,6 +16,141 @@ import { userIsSalesAgent } from '../utils/roleHelpers.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Job application statuses → funnel priority for picking primary row + pipeline stage (higher = further along). */
+const APP_STAGE_RANK = {
+  Hired: 6,
+  Offered: 5,
+  Interview: 4,
+  Screening: 3,
+  Applied: 2,
+  Rejected: 1,
+};
+
+const isProfileCompleteLean = (candidate) =>
+  Boolean(candidate?.isCompleted || candidate?.isProfileCompleted === 100);
+
+/**
+ * Derive referral pipeline status from all applications for this candidate (must be non-empty array).
+ */
+const derivePipelineFromApplications = (apps) => {
+  if (apps.some((a) => a.status === 'Hired')) return 'hired';
+  if (apps.some((a) => ['Screening', 'Interview', 'Offered'].includes(a.status))) return 'in_review';
+  if (apps.some((a) => a.status === 'Applied')) return 'applied';
+  if (apps.length && apps.every((a) => a.status === 'Rejected')) return 'rejected';
+  return 'applied';
+};
+
+/**
+ * Prefer the furthest-along application for denormalised job column (tie-break: most recently updated).
+ */
+const pickPrimaryApplication = (apps) => {
+  if (!apps?.length) return null;
+  return [...apps].sort((a, b) => {
+    const ra = APP_STAGE_RANK[a.status] ?? 0;
+    const rb = APP_STAGE_RANK[b.status] ?? 0;
+    if (rb !== ra) return rb - ra;
+    const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return tb - ta;
+  })[0];
+};
+
+/**
+ * Single source of truth for `referralPipelineStatus` / denormalised job fields on referred candidates.
+ *
+ * - With applications: maps ATS application statuses → applied | in_review | hired | rejected; updates referralJob*.
+ * - With none: pending/profile_complete while idle; withdrawn after last application deleted; preserves job_removed / withdrawn unless applications appear again.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} candidateId
+ * @param {object} [options]
+ * @param {boolean} [options.fromApplicationDeletion] - Last JobApplication row was removed (withdraw / admin delete).
+ * @param {import('mongoose').Types.ObjectId|string|null} [options.withdrawalJobId] - Job ref from deleted application (also accepts withdrawnJobId).
+ */
+export async function syncReferralPipelineStatusForCandidate(candidateId, options = {}) {
+  const withdrawalJobId = options.withdrawalJobId ?? options.withdrawnJobId ?? null;
+  const fromApplicationDeletion =
+    options.fromApplicationDeletion === true || options.fromApplicationWithdrawal === true;
+
+  const cid =
+    candidateId != null && typeof candidateId.toString === 'function'
+      ? candidateId.toString()
+      : String(candidateId || '');
+  if (!mongoose.Types.ObjectId.isValid(cid)) return;
+
+  const c = await Employee.findById(cid)
+    .select(
+      'referredByUserId referralPipelineStatus referralJobId referralJobTitle referralContext isCompleted isProfileCompleted'
+    )
+    .lean();
+
+  if (!c?.referredByUserId) return;
+
+  const current = c.referralPipelineStatus || 'pending';
+
+  const apps = await JobApplication.find({ candidate: cid })
+    .sort({ updatedAt: -1 })
+    .select('job status updatedAt createdAt')
+    .lean();
+
+  if (!apps.length) {
+    if (fromApplicationDeletion) {
+      let jobOid = null;
+      let title = null;
+      if (withdrawalJobId && mongoose.Types.ObjectId.isValid(String(withdrawalJobId))) {
+        jobOid =
+          withdrawalJobId instanceof mongoose.Types.ObjectId
+            ? withdrawalJobId
+            : new mongoose.Types.ObjectId(String(withdrawalJobId));
+        const job = await Job.findById(jobOid).select('title').lean();
+        title = job?.title || null;
+      }
+      await Employee.updateOne(
+        { _id: cid },
+        {
+          $set: {
+            referralPipelineStatus: 'withdrawn',
+            referralJobId: jobOid,
+            referralJobTitle: title,
+          },
+        }
+      );
+      return;
+    }
+
+    /** Idle: no applications — do not clobber terminal/job-deletion rows unless profile catches up. */
+    if (current === 'job_removed' || current === 'withdrawn') {
+      return;
+    }
+
+    const nextStatus = isProfileCompleteLean(c) ? 'profile_complete' : 'pending';
+    if (nextStatus === current) return;
+
+    await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: nextStatus } });
+    return;
+  }
+
+  /** Active pipeline — applications exist (clears withdrawn/job_removed semantics). */
+  const nextPipeline = derivePipelineFromApplications(apps);
+  const primary = pickPrimaryApplication(apps);
+  const jobOid = primary?.job || null;
+  let title = null;
+  if (jobOid) {
+    const job = await Job.findById(jobOid).select('title').lean();
+    title = job?.title || null;
+  }
+
+  await Employee.updateOne(
+    { _id: cid },
+    {
+      $set: {
+        referralPipelineStatus: nextPipeline,
+        referralJobId: jobOid,
+        referralJobTitle: title,
+      },
+    }
+  );
+}
+
 /**
  * Who may see the full org referral-lead list (else scoped to their own `referredByUserId`).
  * - `candidates.manage`: ATS admins
@@ -219,9 +354,7 @@ const buildGlobalTopReferrerMatch = (query) => {
 };
 
 /**
- * After a job application is deleted (candidate withdraw or admin): keep referral leads accurate.
- * - No applications left + pipeline was post-apply → `withdrawn` (still listed; job kept from withdrawn application when provided).
- * - Still has applications → re-point job + `applied` to the latest application.
+ * After a job application is deleted (candidate withdraw or admin): delegates to {@link syncReferralPipelineStatusForCandidate}.
  *
  * @param {import('mongoose').Types.ObjectId|string} candidateId
  * @param {object} [options]
@@ -229,46 +362,10 @@ const buildGlobalTopReferrerMatch = (query) => {
  */
 export const syncReferralPipelineAfterApplicationWithdrawal = async (candidateId, options = {}) => {
   if (!candidateId) return;
-  const withdrawnJobId = options.withdrawnJobId;
-  const remaining = await JobApplication.find({ candidate: candidateId })
-    .sort({ createdAt: -1 })
-    .select('job')
-    .lean();
-
-  if (!remaining.length) {
-    const c = await Employee.findById(candidateId)
-      .select('referredByUserId referralPipelineStatus')
-      .lean();
-    if (!c?.referredByUserId) return;
-    const pipeline = c.referralPipelineStatus || 'pending';
-    if (pipeline === 'withdrawn') return;
-    if (['applied', 'in_review', 'hired'].includes(pipeline)) {
-      const setDoc = { referralPipelineStatus: 'withdrawn' };
-      if (withdrawnJobId && mongoose.Types.ObjectId.isValid(String(withdrawnJobId))) {
-        const job = await Job.findById(withdrawnJobId).select('title').lean();
-        setDoc.referralJobId = withdrawnJobId;
-        setDoc.referralJobTitle = job?.title || null;
-      } else {
-        setDoc.referralJobId = null;
-        setDoc.referralJobTitle = null;
-      }
-      await Employee.updateOne({ _id: candidateId }, { $set: setDoc });
-    }
-    return;
-  }
-
-  const latest = remaining[0];
-  const job = await Job.findById(latest.job).select('title').lean();
-  await Employee.updateOne(
-    { _id: candidateId },
-    {
-      $set: {
-        referralJobId: latest.job,
-        referralJobTitle: job?.title || null,
-        referralPipelineStatus: 'applied',
-      },
-    }
-  );
+  await syncReferralPipelineStatusForCandidate(candidateId, {
+    fromApplicationDeletion: true,
+    withdrawalJobId: options.withdrawnJobId ?? options.withdrawalJobId ?? null,
+  });
 };
 
 /**
@@ -779,6 +876,9 @@ export const overrideReferralAttribution = async (req) => {
   }
 
   const prev = c.referredByUserId;
+  if (String(prev) === String(newReferredByUserId)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'New referrer is the same as the current referrer — no change made');
+  }
   c.referralLastOverride = {
     previousReferredByUserId: prev,
     newReferredByUserId,

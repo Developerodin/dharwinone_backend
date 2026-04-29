@@ -23,6 +23,7 @@ import {
 import { sendJobShareEmail } from '../services/email.service.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { mintJobOpenReferralRefWithAudit } from '../services/referralAttribution.service.js';
+import { syncReferralPipelineStatusForCandidate } from '../services/referralLeads.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userIsAdmin, userHasRecruiterRole } from '../utils/roleHelpers.js';
 import Employee from '../models/employee.model.js';
@@ -334,6 +335,7 @@ const browseApply = catchAsync(async (req, res) => {
     referralRef,
     req,
   });
+  await syncReferralPipelineStatusForCandidate(candidate._id);
   res.status(httpStatus.CREATED).send({ application, candidateId: candidate._id });
 });
 

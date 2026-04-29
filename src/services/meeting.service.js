@@ -14,6 +14,7 @@ import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { getPublicMeetingUrl } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
+import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 /**
  * Display name for join link / email (hosts, candidate, recruiter, or email local-part).
@@ -94,10 +95,23 @@ const createMeeting = async (body, userId) => {
       jobObjId = j?._id;
     }
     if (jobObjId) {
-      JobApplication.updateOne(
-        { candidate: new mongoose.Types.ObjectId(candId), job: jobObjId, status: { $in: ['Applied', 'Screening'] } },
-        { status: 'Interview' }
-      ).catch((err) => logger.warn('Failed to update JobApplication to Interview:', err?.message || err));
+      try {
+        const ur = await JobApplication.updateOne(
+          {
+            candidate: new mongoose.Types.ObjectId(candId),
+            job: jobObjId,
+            status: { $in: ['Applied', 'Screening'] },
+          },
+          { status: 'Interview' }
+        );
+        if (ur.modifiedCount > 0) {
+          await syncReferralPipelineStatusForCandidate(candId).catch((err) =>
+            logger.warn('referral pipeline sync after interview schedule:', err?.message || err)
+          );
+        }
+      } catch (err) {
+        logger.warn('Failed to update JobApplication to Interview:', err?.message || err);
+      }
     }
   }
 

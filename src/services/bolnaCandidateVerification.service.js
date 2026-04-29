@@ -81,10 +81,19 @@ export async function initiateCandidateVerificationCall({
       logger.info(`Bolna candidate agent prompt updated (promptHash=${promptHash})`);
     }
 
+    // Pass confirmation + skill-matched opportunities context to Bolna userData.
     const userData = {
-      ...promptContext,
-      other_openings: promptContext.other_openings,
-      total_other_openings: promptContext.total_other_openings,
+      candidate_name: promptContext.candidate_name,
+      candidate_phone: promptContext.candidate_phone,
+      candidate_email: promptContext.candidate_email,
+      candidate_email_spoken: promptContext.candidate_email_spoken,
+      candidate_location: promptContext.candidate_location,
+      candidate_skills: promptContext.candidate_skills || '',
+      job_title: promptContext.job_title,
+      company_name: promptContext.company_name,
+      application_date: promptContext.application_date,
+      matched_jobs_count: promptContext.matched_jobs_count ?? 0,
+      matched_jobs_spoken: promptContext.matched_jobs_spoken || '',
     };
 
     return bolnaService.initiateCall({
@@ -93,10 +102,6 @@ export async function initiateCandidateVerificationCall({
       agentId,
       jobTitle: promptContext.job_title,
       organisation: promptContext.company_name,
-      jobType: promptContext.job_type,
-      location: promptContext.job_location,
-      experienceLevel: promptContext.experience_level,
-      salaryRange: promptContext.salary_range,
       userData,
       ...initiateExtras,
     });

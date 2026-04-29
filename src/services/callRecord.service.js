@@ -14,6 +14,10 @@ function businessNameFromBolnaUserData(userData, purposeLower) {
   const ud = userData;
   const p = purposeLower || '';
   if (p.includes('job_posting_verification') || p.includes('job_verification') || p.includes('recruiter')) {
+    if (ud.organisation_name != null && String(ud.organisation_name).trim()) return String(ud.organisation_name).trim();
+    if (ud.listing_employer_name != null && String(ud.listing_employer_name).trim()) {
+      return String(ud.listing_employer_name).trim();
+    }
     if (ud.organisation != null && String(ud.organisation).trim()) return String(ud.organisation).trim();
     if (ud.name != null && String(ud.name).trim()) return String(ud.name).trim();
     return null;

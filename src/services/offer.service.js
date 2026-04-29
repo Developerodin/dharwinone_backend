@@ -8,6 +8,7 @@ import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
+import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
 
@@ -85,6 +86,7 @@ const formatStartDate = (d) => {
 /**
  * Onboarding reads Placement.joiningDate; Employees list HRMS joining date reads Employee.joiningDate.
  * When Accepted offer joining date changes (offer letter / PATCH), mirror to placement + candidate.
+ * Also resets joining reminder dedup so T-7/T-1 emails re-fire for the new date.
  */
 const syncJoiningDateFromAcceptedOfferToPlacementAndEmployee = async (offer) => {
   if (!offer || offer.status !== 'Accepted') return;
@@ -94,7 +96,20 @@ const syncJoiningDateFromAcceptedOfferToPlacementAndEmployee = async (offer) => 
   const oid = offer._id ?? offer.id;
   if (!oid) return;
 
-  await Placement.updateOne({ offer: oid }, { $set: { joiningDate: jd } });
+  // BUG-4 FIX: Reset reminder dedup fields so T-7/T-1 emails fire again for the new joining date.
+  await Placement.updateOne(
+    { offer: oid },
+    {
+      $set: {
+        joiningDate: jd,
+        'reminderSentAt.t7': null,
+        'reminderSentAt.t1Recruiter': null,
+        'reminderSentAt.t1Candidate': null,
+        'onboardingJoinRemindersSentAt.t1': null,
+        'onboardingJoinRemindersSentAt.t0': null,
+      },
+    }
+  );
 
   const cand = offer.candidate && typeof offer.candidate === 'object' && offer.candidate !== null
     ? offer.candidate._id ?? offer.candidate.id
@@ -384,6 +399,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
   });
 
   await application.updateOne({ status: 'Offered' });
+  await syncReferralPipelineStatusForCandidate(application.candidate._id);
 
   return getOfferById(offer._id);
 };
@@ -456,28 +472,59 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     offer.status = newStatus;
     if (newStatus === 'Sent' && oldStatus === 'Draft') {
       offer.sentAt = new Date();
+    } else if (newStatus === 'Under Negotiation' && oldStatus !== 'Under Negotiation') {
+      // Track when negotiation started for analytics and audit.
+      offer.underNegotiationAt = new Date();
     } else if (newStatus === 'Accepted') {
       if (oldStatus !== 'Accepted') {
         offer.acceptedAt = new Date();
       }
       if (offer.jobApplication) {
         await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
+        await syncReferralPipelineStatusForCandidate(offer.candidate);
       }
       const candidate = await Employee.findById(offer.candidate).select('employeeId joiningDate').lean();
-      const hasPlacement = await Placement.exists({ offer: offer._id });
-      if (!hasPlacement) {
+      // BUG-3 FIX: Use findOneAndUpdate upsert to avoid race condition between exists() check and create().
+      // BUG-1 FIX: Only include joiningDate in the placement when it is set — Placement schema requires it.
+      // EC-1 FIX: If the existing placement is Cancelled or Deferred (from a previous accept cycle),
+      //           create a fresh Pending placement instead of leaving the candidate in a terminal state.
+      const existingPlacement = await Placement.findOne({ offer: offer._id }).select('status').lean();
+      const needsFreshPlacement = !existingPlacement || existingPlacement.status === 'Cancelled';
+      const placementBase = {
+        offer: offer._id,
+        candidate: offer.candidate,
+        job: offer.job,
+        employeeId: candidate?.employeeId || null,
+        status: 'Pending',
+        createdBy: offer.createdBy,
+        preBoardingStatus: 'Pending',
+        preBoardingTasks: [],
+        onboardingTasks: [],
+      };
+      if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
+
+      if (needsFreshPlacement) {
         try {
-          await Placement.create({
-            offer: offer._id,
-            candidate: offer.candidate,
-            job: offer.job,
-            joiningDate: offer.joiningDate || null,
-            employeeId: candidate?.employeeId || null,
-            status: 'Pending',
-            createdBy: offer.createdBy,
-          });
+          if (existingPlacement?.status === 'Cancelled') {
+            // EC-1 FIX: Re-accept after cancel.
+            // The Placement schema has unique:true on `offer`, so we must detach the old
+            // Cancelled record's offer ref before creating a fresh Pending one.
+            // The old record stays for audit history (soft detach: offer → null).
+            await Placement.updateOne(
+              { _id: existingPlacement._id },
+              { $set: { _cancelledOfferRef: offer._id }, $unset: { offer: 1 } }
+            );
+            await Placement.create(placementBase);
+          } else {
+            // Normal first accept: atomic upsert to avoid race condition.
+            await Placement.findOneAndUpdate(
+              { offer: offer._id },
+              { $setOnInsert: placementBase },
+              { upsert: true, new: false }
+            );
+          }
         } catch (e) {
-          /* Unique index on offer: idempotent on duplicate accept / concurrent requests */
+          // E11000: another concurrent request beat us — safe to ignore.
           if (e?.code !== 11000) throw e;
         }
       }
@@ -488,42 +535,88 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       offer.rejectedAt = new Date();
       offer.rejectionReason = updateBody.rejectionReason || '';
       await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Rejected' });
+      await syncReferralPipelineStatusForCandidate(offer.candidate);
     }
     delete updateBody.status;
 
     const { notifyByEmail, notify, plainTextEmailBody } = await import('./notification.service.js');
     const jobObj = offer.job && typeof offer.job === 'object' && offer.job.title ? offer.job : await getJobById(offer.job);
     const jobTitle = jobObj?.title || 'Job';
+
+    // ── Format joining date as human-readable string for notifications ─────────────
+    const joiningDateDisplay = offer.joiningDate
+      ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(offer.joiningDate))
+      : null;
+    const validityDisplay = offer.offerValidityDate
+      ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(offer.offerValidityDate))
+      : null;
+
     if (newStatus === 'Sent') {
       if (!options.skipSentNotification) {
-        const cand = await Employee.findById(offer.candidate).select('email').lean();
+        const cand = await Employee.findById(offer.candidate).select('email fullName').lean();
         if (cand?.email) {
-          const msg = `An offer for "${jobTitle}" has been sent to you.`;
+          // Richer candidate notification — includes validity deadline and joining date if set.
+          const deadlineLine = validityDisplay ? ` Please respond by ${validityDisplay}.` : '';
+          const joiningLine = joiningDateDisplay ? ` Your proposed joining date is ${joiningDateDisplay}.` : '';
+          const msg = `An offer for "${jobTitle}" has been sent to you.${joiningLine}${deadlineLine}`;
           notifyByEmail(cand.email, {
             type: 'offer',
-            title: 'Offer sent to you',
+            title: 'You have received an offer',
             message: msg,
             link: '/ats/offers-placement',
             email: {
-              subject: `Offer: ${jobTitle}`,
+              subject: `Offer letter: ${jobTitle}`,
               text: plainTextEmailBody(msg, '/ats/offers-placement'),
             },
           }).catch(() => {});
         }
       }
-    } else if (newStatus === 'Accepted' || newStatus === 'Rejected') {
+    } else if (newStatus === 'Under Negotiation') {
+      // Notify creator that candidate has entered negotiation.
       const creatorId = offer.createdBy?._id || offer.createdBy;
       if (creatorId) {
         const offersPath = '/ats/offers-placement';
-        const offerUpdMsg = `The offer for "${jobTitle}" was ${newStatus.toLowerCase()} by the candidate.`;
+        const msg = `The candidate has opened negotiations on the offer for "${jobTitle}". Review and respond.`;
         notify(creatorId, {
           type: 'offer',
-          title: `Offer ${newStatus.toLowerCase()}`,
-          message: offerUpdMsg,
+          title: 'Offer under negotiation',
+          message: msg,
+          link: offersPath,
+          email: { subject: `Offer negotiation: ${jobTitle}`, text: plainTextEmailBody(msg, offersPath) },
+        }).catch(() => {});
+      }
+    } else if (newStatus === 'Accepted') {
+      const creatorId = offer.createdBy?._id || offer.createdBy;
+      if (creatorId) {
+        const preBoardingPath = '/ats/pre-boarding';
+        // Richer acceptance message includes joining date so the creator immediately knows
+        // the start date without having to open the record.
+        const joiningLine = joiningDateDisplay ? ` Joining date: ${joiningDateDisplay}.` : ' No joining date set yet.';
+        const acceptMsg = `The offer for "${jobTitle}" has been accepted.${joiningLine} Pre-boarding has started.`;
+        notify(creatorId, {
+          type: 'offer',
+          title: 'Offer accepted — pre-boarding started',
+          message: acceptMsg,
+          link: preBoardingPath,
+          email: {
+            subject: `Offer accepted: ${jobTitle}`,
+            text: plainTextEmailBody(acceptMsg, preBoardingPath),
+          },
+        }).catch(() => {});
+      }
+    } else if (newStatus === 'Rejected') {
+      const creatorId = offer.createdBy?._id || offer.createdBy;
+      if (creatorId) {
+        const offersPath = '/ats/offers-placement';
+        const rejMsg = `The offer for "${jobTitle}" was rejected by the candidate.`;
+        notify(creatorId, {
+          type: 'offer',
+          title: 'Offer rejected',
+          message: rejMsg,
           link: offersPath,
           email: {
-            subject: `Offer ${newStatus}: ${jobTitle}`,
-            text: plainTextEmailBody(offerUpdMsg, offersPath),
+            subject: `Offer rejected: ${jobTitle}`,
+            text: plainTextEmailBody(rejMsg, offersPath),
           },
         }).catch(() => {});
       }
@@ -671,7 +764,9 @@ const queryOffers = async (filter, options, currentUser) => {
 };
 
 /**
- * Delete offer (only Draft)
+ * Delete offer (only Draft).
+ * BUG-6 FIX: Also cleans up the synthetic Employee + JobApplication created by
+ * createStandaloneApplicationForOfferLetter (identifiable by the noreply email pattern).
  */
 const deleteOfferById = async (id, currentUser) => {
   const offer = await Offer.findById(id);
@@ -682,7 +777,27 @@ const deleteOfferById = async (id, currentUser) => {
   if (offer.status !== 'Draft') {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Only draft offers can be deleted');
   }
-  await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Interview' });
+
+  // BUG-2 FIX: Only roll back to Interview if the application was set to Offered by createOffer.
+  if (offer.jobApplication) {
+    const app = await JobApplication.findById(offer.jobApplication).select('status candidate').lean();
+    if (app?.status === 'Offered') {
+      await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Interview' });
+      await syncReferralPipelineStatusForCandidate(app.candidate);
+    }
+    // BUG-6 FIX: If this was a standalone offer (synthetic candidate), clean up orphan records.
+    // Synthetic candidates are identifiable by their noreply@dharwin.offers.local email.
+    if (app?.candidate) {
+      const synthCandidate = await Employee.findById(app.candidate)
+        .select('email')
+        .lean();
+      if (synthCandidate?.email && /\.noreply@dharwin\.offers\.local$/.test(synthCandidate.email)) {
+        await JobApplication.findByIdAndDelete(offer.jobApplication);
+        await Employee.findByIdAndDelete(app.candidate);
+      }
+    }
+  }
+
   await offer.deleteOne();
   return offer;
 };
@@ -714,6 +829,72 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
 };
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);
+
+/**
+ * EC-4: Auto-expire offers whose offerValidityDate has passed and are still Sent/Under Negotiation.
+ * Called by the candidate scheduler on each run. Does NOT affect Draft/Accepted/Rejected offers.
+ * @returns {Promise<number>} number of offers expired
+ */
+export const autoExpireOffers = async () => {
+  const now = new Date();
+
+  // Fetch IDs first so we can cascade to job applications using the same set.
+  const toExpire = await Offer.find(
+    {
+      status: { $in: ['Sent', 'Under Negotiation'] },
+      offerValidityDate: { $lt: now },
+    },
+    { _id: 1, jobApplication: 1 }
+  ).lean();
+
+  if (!toExpire.length) return 0;
+
+  const offerIds = toExpire.map((o) => o._id);
+  const appIds = toExpire.map((o) => o.jobApplication).filter(Boolean);
+
+  await Offer.updateMany(
+    { _id: { $in: offerIds } },
+    {
+      $set: {
+        status: 'Rejected',
+        rejectedAt: now,
+        rejectionReason: 'Offer expired: validity date passed without candidate response.',
+      },
+    }
+  );
+
+  if (appIds.length) {
+    await JobApplication.updateMany({ _id: { $in: appIds } }, { $set: { status: 'Rejected' } });
+    const candidateIds = await JobApplication.distinct('candidate', { _id: { $in: appIds } });
+    await Promise.all(
+      candidateIds.map((cid) => syncReferralPipelineStatusForCandidate(cid).catch(() => undefined))
+    );
+  }
+
+  // Notify each offer creator so they know which offers have lapsed.
+  try {
+    const { notify, plainTextEmailBody } = await import('./notification.service.js');
+    for (const o of toExpire) {
+      const creatorId = o.createdBy;
+      if (!creatorId) continue;
+      const jobObj = o.job && typeof o.job === 'object' ? o.job : null;
+      const title = jobObj?.title || 'a role';
+      const msg = `The offer for "${title}" has expired. The validity date passed without a candidate response. The offer has been automatically rejected.`;
+      notify(creatorId, {
+        type: 'offer',
+        title: 'Offer expired automatically',
+        message: msg,
+        link: '/ats/offers-placement',
+        email: {
+          subject: `Offer expired: ${title}`,
+          text: plainTextEmailBody(msg, '/ats/offers-placement'),
+        },
+      }).catch(() => {});
+    }
+  } catch (_) { /* non-fatal */ }
+
+  return toExpire.length;
+};
 
 export {
   createOffer,

@@ -14,6 +14,7 @@ import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { resolveCompanyEmailSettingsUserId } from './emailConnectionPolicy.service.js';
+import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -1229,6 +1230,10 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   candidate.isCompleted = candidate.isProfileCompleted === 100;
   
   await candidate.save();
+
+  await syncReferralPipelineStatusForCandidate(candidate._id).catch((err) =>
+    logger.warn('syncReferralPipelineStatusForCandidate:', err?.message)
+  );
 
   if (Object.prototype.hasOwnProperty.call(sanitized, 'companyAssignedEmail')) {
     await syncCompanyEmailHubForCandidate(candidate);

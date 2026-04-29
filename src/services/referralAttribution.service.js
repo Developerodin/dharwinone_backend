@@ -113,6 +113,8 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
   const tokenEmail = String(verifiedPayload.e || '')
     .trim()
     .toLowerCase();
+  // Only open job-share links (source='job' with a jobId but no email) are allowed to skip email binding.
+  // Onboard tokens (source='onboard') always require a matching email.
   const unboundJob =
     !tokenEmail && verifiedPayload.s === 'job' && verifiedPayload.j;
   if (!unboundJob && email !== tokenEmail) {
@@ -125,6 +127,10 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
   }
   if (c.referredByUserId) {
     return { applied: false, reason: 'already_attributed' };
+  }
+  // Guard: referrer cannot refer themselves (same user id as candidate owner)
+  if (c.owner && String(c.owner) === String(verifiedPayload.t)) {
+    return { applied: false, reason: 'self_referral' };
   }
 
   c.referredByUserId = verifiedPayload.t;
@@ -162,18 +168,28 @@ export const applyOnboardInviteReferral = async (candidateId, inviteeEmail, invi
   if (c.referredByUserId) {
     return { applied: false, reason: 'already_attributed' };
   }
-  if (String(c.email || '')
-    .trim()
-    .toLowerCase() !== email) {
+  // Guard: referrer cannot refer themselves
+  if (c.owner && String(c.owner) === String(inviterUserId)) {
+    return { applied: false, reason: 'self_referral' };
+  }
+  if (
+    String(c.email || '')
+      .trim()
+      .toLowerCase() !== email
+  ) {
     return { applied: false, reason: 'email_mismatch' };
   }
+  // Generate a pseudo-JTI for the onboard-invite path so audit entries have a consistent identifier.
+  const jti = crypto.randomBytes(16).toString('hex');
   c.referredByUserId = inviterUserId;
   c.referralContext = CTX_ONBOARD;
   c.referredAt = new Date();
+  c.referralJti = jti;
+  c.referralBatchId = null;
   c.referralPipelineStatus = 'pending';
   c.attributionLockedAt = new Date();
   await c.save();
-  return { applied: true };
+  return { applied: true, jti };
 };
 
 /**

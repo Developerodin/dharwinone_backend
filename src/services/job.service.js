@@ -11,6 +11,7 @@ import logger from '../config/logger.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import callRecordService from './callRecord.service.js';
 import { syncPublishedJobForExternal } from './externalJobPublishedJob.service.js';
+import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 /** Matches mirrored external listings in Job (explicit origin or legacy externalRef-only rows). */
 const MIRROR_EXTERNAL_OR = {
@@ -648,27 +649,16 @@ const deleteJobTemplateById = async (id, currentUser) => {
 };
 
 /**
- * After JobApplication is created: set referral pipeline job + status for Referral leads / ATS.
+ * After JobApplication is created: sync referral pipeline from application status(es).
  * Onboard-invited candidates often have SHARE_CANDIDATE_ONBOARD attribution but no ?ref on browse apply,
- * so applyJobReferralFromRef never runs — this keeps job column and status in sync.
+ * so applyJobReferralFromRef never runs — sync still keeps job column and status correct.
  *
  * @param {import('mongoose').Types.ObjectId|string} jobId
  * @param {import('mongoose').Types.ObjectId|string} candidateId
- * @param {object} [jobDoc] - job from getJobById (avoids extra query)
+ * @param {object} [jobDoc] - unused; kept for call-site compatibility
  */
-const syncReferralPipelineAfterJobApplication = async (jobId, candidateId, jobDoc) => {
-  const j = jobDoc || (await getJobById(jobId));
-  if (!j) return;
-  await Employee.updateOne(
-    { _id: candidateId },
-    {
-      $set: {
-        referralJobId: j._id,
-        referralJobTitle: j.title || null,
-        referralPipelineStatus: 'applied',
-      },
-    }
-  );
+const syncReferralPipelineAfterJobApplication = async (_jobId, candidateId, _jobDoc) => {
+  await syncReferralPipelineStatusForCandidate(candidateId);
 };
 
 const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser) => {
@@ -741,10 +731,11 @@ const createJobFromTemplate = async (templateId, createdById, jobData) => {
  * @param {string|undefined|null} params.referralRef
  * @param {import('express').Request} [params.req]
  */
-const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, referralRef, req }) => {
-  if (!referralRef || !String(referralRef).trim() || !candidate?._id) {
-    return;
-  }
+const applyJobReferralFromRef = async ({ jobId, job: _job, candidate, applicantEmail, referralRef, req }) => {
+  const cid = candidate?._id;
+  if (!cid) return;
+  if (!referralRef || !String(referralRef).trim()) return;
+
   const emailNormalized = String(applicantEmail || '')
     .toLowerCase()
     .trim();
@@ -753,75 +744,70 @@ const applyJobReferralFromRef = async ({ jobId, job, candidate, applicantEmail, 
   );
   const { createActivityLog } = await import('./activityLog.service.js');
   const { ActivityActions, EntityTypes } = await import('../config/activityLog.js');
-  const v = verifyReferralToken(String(referralRef).trim());
-  if (v.ok) {
-    const jobScoped = v.data.s === 'job' && v.data.j;
-    if (jobScoped && String(v.data.j) !== String(jobId)) {
-      logReferralEvent('referral_job_mismatch', { jobId: String(jobId), tokenJob: String(v.data.j) });
-    } else {
-      const r = await applyReferralToCandidate(candidate._id, emailNormalized, v.data);
-      const cRef = await Employee.findById(candidate._id);
-      if (r.applied) {
-        if (cRef) {
-          cRef.referralJobTitle = job?.title || null;
-          if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
-          cRef.referralPipelineStatus = 'applied';
-          await cRef.save();
-        }
-        try {
-          await createActivityLog(
-            v.data.t,
-            ActivityActions.REFERRAL_CLAIM,
-            EntityTypes.CANDIDATE,
-            candidate._id,
-            {
-              jti: v.data.jti,
-              source: v.data.s,
-              org: v.data.o,
-              jobId: String(jobId),
-              claimStage: 'job_apply',
-            },
-            req
-          );
-        } catch (e) {
-          logReferralEvent('referral_activity_log_failed', { message: e?.message });
-        }
-        try {
-          await createActivityLog(
-            v.data.t,
-            ActivityActions.REFERRAL_JOB_APPLIED,
-            EntityTypes.CANDIDATE,
-            candidate._id,
-            { jobId: String(jobId), claimStage: 'job_apply', pipelineStatus: 'applied' },
-            req
-          );
-        } catch (e) {
-          logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
-        }
-      } else if (r.reason === 'already_attributed' && cRef && v.data.t && String(cRef.referredByUserId) === String(v.data.t)) {
-        cRef.referralJobTitle = job?.title || null;
-        if (!cRef.referralJobId) cRef.referralJobId = job?._id || jobId;
-        cRef.referralPipelineStatus = 'applied';
-        await cRef.save();
-        try {
-          await createActivityLog(
-            v.data.t,
-            ActivityActions.REFERRAL_JOB_APPLIED,
-            EntityTypes.CANDIDATE,
-            candidate._id,
-            { jobId: String(jobId), claimStage: 'job_apply_attributed_earlier', pipelineStatus: 'applied' },
-            req
-          );
-        } catch (e) {
-          logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
-        }
-        logReferralEvent('referral_job_pipeline_update', { candidateId: String(candidate._id), jobId: String(jobId) });
+
+  try {
+    const v = verifyReferralToken(String(referralRef).trim());
+    if (v.ok) {
+      const jobScoped = v.data.s === 'job' && v.data.j;
+      if (jobScoped && String(v.data.j) !== String(jobId)) {
+        logReferralEvent('referral_job_mismatch', { jobId: String(jobId), tokenJob: String(v.data.j) });
       } else {
-        logReferralEvent('referral_claim_skipped', { reason: r.reason, candidateId: String(candidate._id) });
+        const r = await applyReferralToCandidate(candidate._id, emailNormalized, v.data);
+        const cRef = await Employee.findById(candidate._id);
+        if (r.applied) {
+          try {
+            await createActivityLog(
+              v.data.t,
+              ActivityActions.REFERRAL_CLAIM,
+              EntityTypes.CANDIDATE,
+              candidate._id,
+              {
+                jti: v.data.jti,
+                source: v.data.s,
+                org: v.data.o,
+                jobId: String(jobId),
+                claimStage: 'job_apply',
+              },
+              req
+            );
+          } catch (e) {
+            logReferralEvent('referral_activity_log_failed', { message: e?.message });
+          }
+          try {
+            await createActivityLog(
+              v.data.t,
+              ActivityActions.REFERRAL_JOB_APPLIED,
+              EntityTypes.CANDIDATE,
+              candidate._id,
+              { jobId: String(jobId), claimStage: 'job_apply', pipelineStatus: 'applied' },
+              req
+            );
+          } catch (e) {
+            logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
+          }
+        } else if (r.reason === 'already_attributed' && cRef && v.data.t && String(cRef.referredByUserId) === String(v.data.t)) {
+          try {
+            await createActivityLog(
+              v.data.t,
+              ActivityActions.REFERRAL_JOB_APPLIED,
+              EntityTypes.CANDIDATE,
+              candidate._id,
+              { jobId: String(jobId), claimStage: 'job_apply_attributed_earlier', pipelineStatus: 'applied' },
+              req
+            );
+          } catch (e) {
+            logReferralEvent('referral_job_applied_log_failed', { message: e?.message });
+          }
+          logReferralEvent('referral_job_pipeline_update', { candidateId: String(candidate._id), jobId: String(jobId) });
+        } else {
+          logReferralEvent('referral_claim_skipped', { reason: r.reason, candidateId: String(candidate._id) });
+        }
       }
+    } else {
+      logReferralEvent('referral_token_invalid', { error: v.error });
     }
-  } else {
-    logReferralEvent('referral_token_invalid', { error: v.error });
+  } finally {
+    await syncReferralPipelineStatusForCandidate(cid);
   }
 };
 
@@ -974,8 +960,6 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   });
   logger.info('✅ Job application created:', { _id: application._id, candidate: application.candidate, job: application.job });
 
-  await syncReferralPipelineAfterJobApplication(jobId, candidate._id, job);
-
   await application.populate([
     { path: 'candidate', select: 'fullName email phoneNumber' },
     { path: 'job', select: 'title organisation' },
@@ -997,6 +981,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     referralRef,
     req: options.req,
   });
+
+  await syncReferralPipelineStatusForCandidate(candidate._id);
 
   const verifyEmailToken = await generateVerifyEmailToken(user);
   const { sendVerificationEmail } = await import('./email.service.js');

@@ -2,7 +2,7 @@ import httpStatus from 'http-status';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
-import { syncReferralPipelineAfterApplicationWithdrawal } from './referralLeads.service.js';
+import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
 
 const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
@@ -84,6 +84,7 @@ const createJobApplication = async (body, currentUser) => {
     notes: body.notes,
     appliedBy: currentUser.id,
   });
+  await syncReferralPipelineStatusForCandidate(body.candidate);
   await application.populate([
     { path: 'job', select: 'title organisation status' },
     { path: 'candidate', select: 'fullName email phoneNumber' },
@@ -155,6 +156,7 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
   }
 
   await application.save();
+  await syncReferralPipelineStatusForCandidate(application.candidate);
   await application.populate([
     { path: 'job', select: 'title organisation status' },
     { path: 'candidate', select: 'fullName email phoneNumber' },

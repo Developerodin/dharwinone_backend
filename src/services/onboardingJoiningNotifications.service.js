@@ -113,6 +113,15 @@ export async function runJoinedOnboardingJoiningReminders() {
   let t1n = 0;
   let t0n = 0;
 
+  // Batch-load all candidate Employee docs in one query instead of one per placement.
+  const candidateIds = [...new Set(joined.map((p) => String(p.candidate)).filter(Boolean))];
+  const candidateDocs = candidateIds.length
+    ? await Employee.find({ _id: { $in: candidateIds } })
+        .populate({ path: 'assignedAgent', select: 'email name' })
+        .lean()
+    : [];
+  const candidateMap = new Map(candidateDocs.map((e) => [String(e._id), e]));
+
   for (const pl of joined) {
     const jd = pl.joiningDate ? new Date(pl.joiningDate) : null;
     if (!jd || Number.isNaN(jd.getTime())) continue;
@@ -120,7 +129,7 @@ export async function runJoinedOnboardingJoiningReminders() {
     const d = daysBetweenUtc(jd, today);
 
     const sent = pl.onboardingJoinRemindersSentAt || {};
-    const rm = await Employee.findById(pl.candidate).populate({ path: 'assignedAgent', select: 'email name' }).lean();
+    const rm = candidateMap.get(String(pl.candidate));
     if (!rm) continue;
 
     const name = rm.fullName || rm.email || 'Candidate';

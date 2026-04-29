@@ -128,6 +128,10 @@ const placementSchema = new mongoose.Schema(
     },
     trainingModuleId: { type: mongoose.Schema.Types.ObjectId, ref: 'TrainingModule', default: null },
     trainingAssignedAt: { type: Date, default: null },
+    /** Soft audit ref: set when a Cancelled placement's offer link is detached on re-accept (EC-1). */
+    _cancelledOfferRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Offer', default: null },
+    /** Set when all required onboarding tasks are completed. Cleared if any task is un-done. */
+    onboardingCompletedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
