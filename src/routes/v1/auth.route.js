@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as authValidation from '../../validations/auth.validation.js';
@@ -9,6 +10,11 @@ import requireAdministratorRole from '../../middlewares/requireAdministratorRole
 import { authLoginLimiter, authStrictFlowLimiter } from '../../middlewares/rateLimiter.js';
 
 const router = express.Router();
+
+const resumeSkillsUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 router.post(
   '/register',
@@ -39,6 +45,20 @@ router.get('/me', auth(), authController.getMe);
 router.patch('/me', auth(), validate(authValidation.updateMe), authController.updateMe);
 router.get('/me/with-candidate', auth(), authController.getMeWithCandidate);
 router.patch('/me/with-candidate', auth(), validate(authValidation.updateMeWithCandidate), authController.updateMeWithCandidate);
+router.post(
+  '/me/extract-skills-from-resume',
+  auth(),
+  authStrictFlowLimiter,
+  resumeSkillsUpload.single('file'),
+  authController.extractSkillsFromResume
+);
+router.post(
+  '/me/recommend-skills-by-role',
+  auth(),
+  authStrictFlowLimiter,
+  validate(authValidation.recommendSkillsByRole),
+  authController.recommendSkillsByRole
+);
 router.post('/me/send-verification-email', auth(), authStrictFlowLimiter, authController.sendMyVerificationEmail);
 router.get('/my-permissions', auth(), authController.getMyPermissions);
 router.post('/impersonate', auth(), requireAdministratorRole(), validate(authValidation.impersonate), authController.impersonate);

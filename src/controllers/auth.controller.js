@@ -27,6 +27,10 @@ import {
   updateUserAndCandidateForMe,
   applyInitialCandidateProfileFromAdmin,
 } from '../services/employee.service.js';
+import {
+  extractSkillsFromResumeBuffer,
+  recommendSkillsForJobRole,
+} from '../services/resumeSkillsExtract.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
@@ -704,6 +708,42 @@ const updateMeWithCandidate = catchAsync(async (req, res) => {
 });
 
 /**
+ * POST /auth/me/extract-skills-from-resume — multipart field `file` (PDF/DOCX).
+ * Uses OPENAI_API_KEY server-side; requires a candidate profile linked to the user.
+ */
+const extractSkillsFromResume = catchAsync(async (req, res) => {
+  const candidate = await getCandidateByOwnerForMe(req.user.id);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
+  }
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'file is required (multipart field name: file)');
+  }
+  const orig = file.originalname || 'resume.pdf';
+  const mime = file.mimetype || '';
+  const lower = orig.toLowerCase();
+  const okMime =
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const okExt = lower.endsWith('.pdf') || lower.endsWith('.docx');
+  if (!okMime && !okExt) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Upload a PDF or DOCX resume.');
+  }
+  const result = await extractSkillsFromResumeBuffer(file.buffer, mime || 'application/octet-stream', orig);
+  res.send(result);
+});
+
+/**
+ * POST /auth/me/recommend-skills-by-role — JSON body `{ role, currentSkills? }`.
+ * Uses OPENAI_API_KEY; sends target role + employee's existing skills only; returns NEW skills to develop (same shape as resume extraction).
+ */
+const recommendSkillsByRole = catchAsync(async (req, res) => {
+  const result = await recommendSkillsForJobRole(req.body?.role, req.body?.currentSkills);
+  res.send(result);
+});
+
+/**
  * Update own profile (PATCH /auth/me).
  * Allows any authenticated user to update name, notificationPreferences, profilePicture.
  * Email cannot be changed via this route; only admins can change email via PATCH /users/:userId.
@@ -817,6 +857,8 @@ export {
   updateMe,
   getMeWithCandidate,
   updateMeWithCandidate,
+  extractSkillsFromResume,
+  recommendSkillsByRole,
   getMyPermissions,
   impersonate,
   stopImpersonation,

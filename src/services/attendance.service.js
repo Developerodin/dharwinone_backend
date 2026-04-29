@@ -1233,6 +1233,18 @@ const assignLeavesToStudents = async (studentIds, dates, leaveType, notes, _user
 
 const DAY_NAMES_ATTENDANCE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+/** Best-effort message for per-entry failures in regularize (Mongoose / driver errors sometimes omit .message). */
+const regularizeEntryErrorMessage = (err) => {
+  if (err == null) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (typeof err.message === 'string' && err.message.trim()) return err.message;
+  if (typeof err.toString === 'function') {
+    const s = err.toString();
+    if (s && s !== '[object Object]') return s;
+  }
+  return 'Unknown error';
+};
+
 /**
  * Regularize attendance: admin creates back-dated attendance records for a student.
  * @param {string} studentId
@@ -1242,15 +1254,14 @@ const DAY_NAMES_ATTENDANCE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thurs
 const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
   const student = await Student.findById(studentId)
     .populate('user', 'name email')
-    .populate('shift', 'name timezone startTime endTime')
-    .select('joiningDate');
+    .populate('shift', 'name timezone startTime endTime');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
   const studentEmail = student.user?.email ?? student.email ?? '';
   const studentName = student.user?.name ?? '';
   const shift = student.shift && (student.shift.startTime || student.shift.timezone) ? student.shift : null;
-  const joiningMidnight = student.joiningDate ? getUtcMidnight(student.joiningDate) : null;
+  /* Do not enforce joiningDate here — punch-in still does. Regularize is an admin/agent override for corrections/backfill. */
 
   if (!Array.isArray(attendanceEntries) || attendanceEntries.length === 0) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'At least one attendance entry is required');
@@ -1275,11 +1286,6 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
 
       if (normalizedDate >= todayUTC) {
         throw new ApiError(httpStatus.BAD_REQUEST, `Entry ${i + 1}: Back-dated attendance must be for past dates only`);
-      }
-
-      if (joiningMidnight && normalizedDate < joiningMidnight) {
-        errors.push({ index: i, date: entry.date, reason: 'Date is before joining date' });
-        continue;
       }
 
       let punchIn = new Date(entry.punchIn);
@@ -1352,7 +1358,7 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
       errors.push({
         entryIndex: i + 1,
         date: entry.date,
-        error: err.message || 'Failed',
+        error: regularizeEntryErrorMessage(err),
       });
     }
   }
@@ -1360,7 +1366,7 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
   if (createdOrUpdated.length === 0 && errors.length > 0) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      `Failed to add attendance: ${errors.map((e) => `${e.date} (${e.error})`).join('; ')}`
+      `Failed to add attendance: ${errors.map((e) => `${e.date} (${e.error ?? e.reason ?? 'Unknown'})`).join('; ')}`
     );
   }
 

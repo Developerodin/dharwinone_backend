@@ -3053,6 +3053,7 @@ const updateUserAndCandidateForMe = async (userId, body) => {
       Object.assign(candidate, candidatePayload);
       if (candidatePayload.documents !== undefined) candidate.markModified('documents');
       if (candidatePayload.salarySlips !== undefined) candidate.markModified('salarySlips');
+      if (candidatePayload.skills !== undefined) candidate.markModified('skills');
       candidate.isProfileCompleted = calculateProfileCompletion(candidate);
       candidate.isCompleted = candidate.isProfileCompleted === 100;
       await candidate.save({ session });

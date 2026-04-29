@@ -405,6 +405,23 @@ const updateMeWithCandidate = {
     .min(1),
 };
 
+const recommendSkillsByRole = {
+  body: Joi.object().keys({
+    role: Joi.string().trim().min(2).max(500).required(),
+    currentSkills: Joi.array()
+      .max(500)
+      .items(
+        Joi.object({
+          name: Joi.string().trim().min(1).max(300).required(),
+          level: Joi.string().trim().max(50).optional().allow('', null),
+          category: Joi.string().trim().max(200).optional().allow('', null),
+        })
+      )
+      .optional()
+      .default([]),
+  }),
+};
+
 export {
   register,
   registerCandidate,
@@ -422,5 +439,6 @@ export {
   sendCandidateInvitation,
   updateMe,
   updateMeWithCandidate,
+  recommendSkillsByRole,
 };
 
