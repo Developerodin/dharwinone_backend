@@ -20,11 +20,12 @@ const emailLogSchema = mongoose.Schema(
       default: null,
       index: true,
     },
+    // `schema.index({ status: 1 })` is declared below; `index: true` here would create
+    // the same single-field index twice and emit the "Duplicate schema index" warning.
     status: {
       type: String,
       enum: ['pending', 'sent', 'failed'],
       default: 'pending',
-      index: true,
     },
     error: {
       type: String,

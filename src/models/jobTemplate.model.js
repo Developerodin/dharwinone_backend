@@ -15,12 +15,12 @@ const jobTemplateSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Ownership
+    // `schema.index({ createdBy: 1 })` is declared below; `index: true` here would
+    // create the same single-field index twice ("Duplicate schema index" warning).
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
     },
 
     // Usage tracking

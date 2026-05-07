@@ -2,8 +2,11 @@ import mongoose from 'mongoose';
 
 const conversationMemorySchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    // (userId, adminId) is covered by the unique compound index declared below;
+    // field-level `index: true` here creates redundant single-field indexes
+    // and emits the "Duplicate schema index" warning on boot.
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     summary: { type: String, default: '' },
     turnCount: { type: Number, default: 0 },
     /**

@@ -50,6 +50,10 @@ export async function ensureIndex() {
   }
 }
 
+// Pinecone caps records-per-upsert; chunk to bound memory + payload size.
+// 1536-dim float vector ≈ 6 KB; 100 vecs ≈ 600 KB per HTTP call (safe for 512 MB Render dynos).
+const PINECONE_UPSERT_BATCH = Number(process.env.PINECONE_UPSERT_BATCH || 100);
+
 /**
  * @param {string} namespace  'students' | 'jobs' | 'employees' | 'kb_chunks'
  * @param {{ id: string, values: number[], metadata: Record<string,string|boolean> }[]} vectors
@@ -65,10 +69,17 @@ export async function pineconeUpsert(namespace, vectors) {
     logger.warn(`[Pinecone] upsert ${namespace}: skipped ${vectors.length - valid.length} records with missing values`);
   }
   const index = getIndex();
-  // This SDK build's UpsertCommand.validator reads options.records, so wrap in { records }.
-  // (Plain array throws "Must pass in at least 1 record to upsert.")
-  const result = await index.namespace(namespace).upsert({ records: valid });
-  logger.info(`[Pinecone] upsert ${namespace}: sent=${valid.length} upserted=${result?.upsertedCount ?? 'n/a'}`);
+  let totalUpserted = 0;
+  for (let i = 0; i < valid.length; i += PINECONE_UPSERT_BATCH) {
+    const slice = valid.slice(i, i + PINECONE_UPSERT_BATCH);
+    // This SDK build's UpsertCommand.validator reads options.records, so wrap in { records }.
+    // eslint-disable-next-line no-await-in-loop -- sequential upserts avoid Pinecone rate limits within one namespace
+    const result = await index.namespace(namespace).upsert({ records: slice });
+    totalUpserted += Number(result?.upsertedCount ?? slice.length);
+    // Drop slice ref so the previous batch's vectors can be GCed before the next batch
+    slice.length = 0;
+  }
+  logger.info(`[Pinecone] upsert ${namespace}: sent=${valid.length} upserted=${totalUpserted}`);
 }
 
 /**

@@ -6,11 +6,12 @@ import mongoose from 'mongoose';
  */
 const supportCameraInviteSchema = new mongoose.Schema(
   {
+    // `unique: true` on token already creates a unique index; `index: true` here
+    // would create the same single-field index twice ("Duplicate schema index" warning).
     token: {
       type: String,
       required: true,
       unique: true,
-      index: true,
     },
     roomName: {
       type: String,
@@ -28,10 +29,11 @@ const supportCameraInviteSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    // TTL index declared below via `schema.index({expiresAt: 1}, {expireAfterSeconds: 0})`;
+    // `index: true` here creates a redundant non-TTL index alongside the TTL one.
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
   },
   { timestamps: true }

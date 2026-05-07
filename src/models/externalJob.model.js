@@ -26,13 +26,14 @@ const externalJobSchema = new mongoose.Schema(
     platformUrl: { type: String, trim: true },
     postedAt: { type: Date },
     timePosted: { type: String, trim: true },
+    // savedBy / savedAt are indexed below via schema.index — `index: true` here would
+    // create the same indexes twice and emit the "Duplicate schema index" warning.
     savedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
     },
-    savedAt: { type: Date, default: Date.now, index: true },
+    savedAt: { type: Date, default: Date.now },
     publishedJobId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Job',

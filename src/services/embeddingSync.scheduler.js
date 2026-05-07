@@ -8,10 +8,48 @@ import { embedTexts } from '../utils/embedding.util.js';
 import { pineconeUpsert, ensureIndex } from '../utils/pinecone.util.js';
 import logger from '../config/logger.js';
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || 50);
+const BACKFILL_INTER_BATCH_DELAY_MS = Number(process.env.EMBEDDING_BACKFILL_DELAY_MS || 200);
 
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Streams a Mongoose query in fixed-size chunks via cursor (constant memory)
+ * and hands each chunk to `handler`. Replaces the prior skip()/limit() pattern,
+ * which is O(n²) on the DB side and grows offsets in RAM as collections grow.
+ */
+async function processCursor(query, handler, batchSize, label) {
+  const cursor = query.lean().cursor({ batchSize });
+  let buf = [];
+  let processed = 0;
+  try {
+    // eslint-disable-next-line no-restricted-syntax -- cursor must be drained sequentially
+    for await (const doc of cursor) {
+      buf.push(doc);
+      if (buf.length >= batchSize) {
+        // eslint-disable-next-line no-await-in-loop -- back-pressure to keep RAM bounded
+        await handler(buf);
+        processed += buf.length;
+        logger.info(`[EmbeddingSync] ${label} ${processed}`);
+        buf = []; // release ref so the previous batch's docs/embeddings/vectors can be GCed
+        if (BACKFILL_INTER_BATCH_DELAY_MS > 0) {
+          // eslint-disable-next-line no-await-in-loop
+          await sleep(BACKFILL_INTER_BATCH_DELAY_MS);
+        }
+      }
+    }
+    if (buf.length) {
+      await handler(buf);
+      processed += buf.length;
+      logger.info(`[EmbeddingSync] ${label} ${processed}`);
+      buf = [];
+    }
+  } finally {
+    if (typeof cursor.close === 'function') await cursor.close().catch(() => {});
+  }
+  return processed;
 }
 
 // ── Text builders ──────────────────────────────────────────────────────────────
@@ -298,106 +336,77 @@ async function upsertAttendance(records) {
 // ── Backfill ───────────────────────────────────────────────────────────────────
 
 export async function runEmbeddingBackfill() {
+  // Hard gate: full re-embedding of every collection is heavy. Default off in production
+  // so a Render restart doesn't trigger another full backfill (each restart was re-embedding
+  // ~all employees + 180d attendance, spiking RAM and OpenAI cost). Set
+  // EMBEDDING_BACKFILL_ON_BOOT=1 for a one-time intentional backfill, then unset it.
+  const enabled = ['1', 'true', 'yes'].includes(
+    String(process.env.EMBEDDING_BACKFILL_ON_BOOT ?? '').trim().toLowerCase()
+  );
+  if (!enabled) {
+    logger.info('[EmbeddingSync] backfill skipped (EMBEDDING_BACKFILL_ON_BOOT not set)');
+    return;
+  }
+
   logger.info('[EmbeddingSync] backfill started');
   await ensureIndex();
 
   let step = 'init';
   try {
     step = 'students';
-    const studentCount = await Student.countDocuments();
-    logger.info(`[EmbeddingSync] student count: ${studentCount}`);
-    let processed = 0;
-    while (processed < studentCount) {
-      const batch = await Student.find({}, { user: 1, skills: 1, experience: 1 })
-        .skip(processed)
-        .limit(BATCH_SIZE)
-        .lean();
-      if (!batch.length) break;
-      await upsertStudents(batch);
-      processed += batch.length;
-      logger.info(`[EmbeddingSync] students ${processed}/${studentCount}`);
-      await sleep(200);
-    }
+    await processCursor(
+      Student.find({}, { user: 1, skills: 1, experience: 1 }),
+      upsertStudents,
+      BATCH_SIZE,
+      'students'
+    );
 
     step = 'jobs';
-    const jobCount = await Job.countDocuments();
-    logger.info(`[EmbeddingSync] job count: ${jobCount}`);
-    processed = 0;
-    while (processed < jobCount) {
-      const batch = await Job.find({}, {
+    await processCursor(
+      Job.find({}, {
         title: 1, jobDescription: 1, skillTags: 1, skillRequirements: 1,
         createdBy: 1, status: 1, jobType: 1, location: 1, experienceLevel: 1,
         organisation: 1, salaryRange: 1, jobOrigin: 1, externalRef: 1, externalPlatformUrl: 1,
-      })
-        .skip(processed)
-        .limit(BATCH_SIZE)
-        .lean();
-      if (!batch.length) break;
-      await upsertJobs(batch);
-      processed += batch.length;
-      logger.info(`[EmbeddingSync] jobs ${processed}/${jobCount}`);
-      await sleep(200);
-    }
+      }),
+      upsertJobs,
+      BATCH_SIZE,
+      'jobs'
+    );
 
     step = 'external_jobs';
-    const extJobCount = await ExternalJob.countDocuments();
-    logger.info(`[EmbeddingSync] external job count: ${extJobCount}`);
-    processed = 0;
-    while (processed < extJobCount) {
-      const batch = await ExternalJob.find({}, {
+    await processCursor(
+      ExternalJob.find({}, {
         title: 1, company: 1, location: 1, description: 1, jobType: 1, experienceLevel: 1,
         source: 1, savedBy: 1, isRemote: 1, salaryMin: 1, salaryMax: 1, currency: 1,
         skills: 1, platformUrl: 1,
-      })
-        .skip(processed)
-        .limit(BATCH_SIZE)
-        .lean();
-      if (!batch.length) break;
-      await upsertExternalJobs(batch);
-      processed += batch.length;
-      logger.info(`[EmbeddingSync] external_jobs ${processed}/${extJobCount}`);
-      await sleep(200);
-    }
+      }),
+      upsertExternalJobs,
+      BATCH_SIZE,
+      'external_jobs'
+    );
 
     step = 'employees';
     const empFilter = { adminId: { $exists: true, $ne: null }, status: { $ne: 'deleted' } };
-    const empCount = await User.countDocuments(empFilter);
-    logger.info(`[EmbeddingSync] company user count: ${empCount}`);
-    processed = 0;
-    while (processed < empCount) {
-      const batch = await User.find(empFilter, { name: 1, domain: 1, location: 1, profileSummary: 1, adminId: 1, status: 1 })
-        .skip(processed)
-        .limit(BATCH_SIZE)
-        .lean();
-      if (!batch.length) break;
-      await upsertEmployeeUsers(batch);
-      processed += batch.length;
-      logger.info(`[EmbeddingSync] employees ${processed}/${empCount}`);
-      await sleep(200);
-    }
+    await processCursor(
+      User.find(empFilter, { name: 1, domain: 1, location: 1, profileSummary: 1, adminId: 1, status: 1 }),
+      upsertEmployeeUsers,
+      BATCH_SIZE,
+      'employees'
+    );
 
     step = 'attendance';
     // Cap to last 180 days to avoid embedding decade-old records.
     const attendanceCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
     const attFilter = { user: { $exists: true, $ne: null }, date: { $gte: attendanceCutoff } };
-    const attCount = await Attendance.countDocuments(attFilter);
-    logger.info(`[EmbeddingSync] attendance count (180d): ${attCount}`);
-    processed = 0;
-    while (processed < attCount) {
-      const batch = await Attendance.find(attFilter, {
+    await processCursor(
+      Attendance.find(attFilter, {
         user: 1, date: 1, day: 1, status: 1, leaveType: 1, notes: 1,
         duration: 1, timezone: 1, isActive: 1,
-      })
-        .sort({ date: -1 })
-        .skip(processed)
-        .limit(BATCH_SIZE)
-        .lean();
-      if (!batch.length) break;
-      await upsertAttendance(batch);
-      processed += batch.length;
-      logger.info(`[EmbeddingSync] attendance ${processed}/${attCount}`);
-      await sleep(200);
-    }
+      }).sort({ date: -1 }),
+      upsertAttendance,
+      BATCH_SIZE,
+      'attendance'
+    );
 
     logger.info('[EmbeddingSync] backfill complete');
   } catch (err) {

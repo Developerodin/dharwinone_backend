@@ -232,7 +232,22 @@ const config = {
   port: envVars.PORT,
   mongoose: {
     url: envVars.MONGODB_URL + (envVars.NODE_ENV === 'test' ? '-test' : ''),
-    options: {},
+    options: {
+      // Production: indexes are managed by deploys/migrations, not by every Node boot.
+      // autoIndex=true makes mongoose ensure every schema index on connect — that
+      // serializes index builds and spikes RAM during startup (each duplicate-index
+      // warning we ship today turns into a real `createIndexes` call). Set
+      // MONGOOSE_AUTO_INDEX=1 once when you intentionally want to apply new indexes,
+      // then unset it.
+      autoIndex: envVars.NODE_ENV !== 'production'
+        || ['1', 'true'].includes(String(process.env.MONGOOSE_AUTO_INDEX || '').toLowerCase()),
+      // Bound the connection pool — Render dynos can OOM if mongoose opens unlimited sockets
+      // (each socket buffers replies). 20 is enough for a single-region web dyno.
+      maxPoolSize: Number(process.env.MONGOOSE_MAX_POOL || 20),
+      minPoolSize: Number(process.env.MONGOOSE_MIN_POOL || 2),
+      serverSelectionTimeoutMS: Number(process.env.MONGOOSE_SERVER_SELECTION_MS || 10000),
+      socketTimeoutMS: Number(process.env.MONGOOSE_SOCKET_TIMEOUT_MS || 45000),
+    },
   },
   jwt: {
     secret: envVars.JWT_SECRET,

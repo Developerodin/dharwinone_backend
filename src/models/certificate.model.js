@@ -83,9 +83,10 @@ certificateSchema.pre('save', async function (next) {
 });
 
 // Indexes
+// `certificateId` and `verificationCode` already get unique indexes from `unique: true`
+// on the field definitions above; redeclaring them here triggers the
+// "Duplicate schema index" warning and a redundant createIndexes call on boot.
 certificateSchema.index({ student: 1, module: 1 }, { unique: true });
-certificateSchema.index({ certificateId: 1 }, { unique: true });
-certificateSchema.index({ verificationCode: 1 }, { unique: true });
 
 certificateSchema.plugin(toJSON);
 certificateSchema.plugin(paginate);

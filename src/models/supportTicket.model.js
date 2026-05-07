@@ -47,27 +47,28 @@ const SLA_TARGETS = {
 
 const supportTicketSchema = new mongoose.Schema(
   {
+    // `unique: true` on ticketId already creates a unique index; redundant schema.index
+    // on `ticketId` is removed below to avoid the "Duplicate schema index" warning.
     ticketId: { type: String, unique: true, trim: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },
+    // status / priority / createdBy use compound indexes below ({field:1, createdAt:-1});
+    // a field-level `index: true` here adds a redundant single-field index.
     status: {
       type: String,
       enum: ['Open', 'In Progress', 'Resolved', 'Closed'],
       default: 'Open',
-      index: true,
     },
     priority: {
       type: String,
       enum: ['Low', 'Medium', 'High', 'Urgent'],
       default: 'Medium',
-      index: true,
     },
     category: { type: String, trim: true, default: 'General' },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
@@ -99,10 +100,11 @@ const supportTicketSchema = new mongoose.Schema(
 );
 
 // Indexes
+// `ticketId` already gets a unique index from `unique: true` on the field — a separate
+// `schema.index({ ticketId: 1 })` triggers the "Duplicate schema index" warning.
 supportTicketSchema.index({ createdBy: 1, createdAt: -1 });
 supportTicketSchema.index({ status: 1, createdAt: -1 });
 supportTicketSchema.index({ priority: 1, createdAt: -1 });
-supportTicketSchema.index({ ticketId: 1 });
 supportTicketSchema.index({ title: 'text', description: 'text' });
 
 // Pre-save: generate unique ticket ID

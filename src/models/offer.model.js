@@ -29,23 +29,23 @@ const offerSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // job / candidate / status all have explicit `schema.index(...)` declarations below;
+    // re-declaring `index: true` here triggers the "Duplicate schema index" warning
+    // and a redundant createIndexes call on every boot.
     job: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Job',
       required: true,
-      index: true,
     },
     candidate: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
       required: true,
-      index: true,
     },
     status: {
       type: String,
       enum: ['Draft', 'Active', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'],
       default: 'Draft',
-      index: true,
     },
     ctcBreakdown: {
       type: ctcBreakdownSchema,
