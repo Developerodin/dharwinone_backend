@@ -175,6 +175,20 @@ const trainingModuleSchema = mongoose.Schema(
 trainingModuleSchema.plugin(toJSON);
 trainingModuleSchema.plugin(paginate);
 
+// --- Indexes for list + search performance (perf audit 2026-05) ---
+trainingModuleSchema.index({ status: 1, createdAt: -1 });
+trainingModuleSchema.index({ categories: 1, createdAt: -1 });
+trainingModuleSchema.index({ moduleName: 1 });
+trainingModuleSchema.index({ createdAt: -1 });
+trainingModuleSchema.index(
+  { moduleName: 'text', shortDescription: 'text' },
+  {
+    name: 'training_module_text_idx',
+    weights: { moduleName: 5, shortDescription: 1 },
+    default_language: 'english',
+  }
+);
+
 // Include createdAt and updatedAt in API response
 const originalToJSON = trainingModuleSchema.options.toJSON?.transform;
 trainingModuleSchema.options.toJSON = trainingModuleSchema.options.toJSON || {};

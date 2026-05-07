@@ -13,6 +13,10 @@ const userSchema = mongoose.Schema(
       required: true,
       trim: true,
     },
+    /** Rename history — chatbot entity resolution matches against these. */
+    previousNames: { type: [String], default: [] },
+    /** Alternate names / nicknames the user is known by. */
+    aliases: { type: [String], default: [] },
     email: {
       type: String,
       required: true,
@@ -125,6 +129,9 @@ const userSchema = mongoose.Schema(
   }
 );
 
+userSchema.index({ previousNames: 1 });
+userSchema.index({ aliases: 1 });
+
 // add plugin that converts mongoose to json
 userSchema.plugin(toJSON);
 userSchema.plugin(paginate);
@@ -162,8 +169,20 @@ userSchema.methods.isPasswordMatch = async function (password) {
   return bcrypt.compare(password, user.password);
 };
 
+userSchema.post('init', function postUserInit() {
+  this.$locals = this.$locals || {};
+  this.$locals.priorName = this.name;
+});
+
 userSchema.pre('save', async function (next) {
   const user = this;
+  // Capture previous name before overwriting so chatbot lookups by old name still resolve.
+  if (user.isModified('name') && !user.isNew) {
+    const prior = user.$locals?.priorName;
+    if (prior && prior !== user.name) {
+      user.previousNames = [...new Set([...(user.previousNames || []), prior])];
+    }
+  }
   // Satisfy unique index on username: default to email so we never store null (multiple nulls violate unique)
   if (!user.username) {
     user.username = user.email;

@@ -212,6 +212,7 @@ async function getExecutionDetails(executionId) {
     if (res.status === 404) {
       return {
         success: true,
+        notFound: true,
         details: {
           execution_id: executionId,
           id: executionId,
@@ -362,11 +363,40 @@ async function updateAgentPrompt(agentId, systemPrompt, options = {}) {
   }
 }
 
+/**
+ * Verify a Bolna executionId actually exists upstream before persisting it.
+ *
+ * Returns:
+ *   { exists: true,  details }              — Bolna 200, real execution
+ *   { exists: false, notFound: true }       — Bolna 404, no such execution (ghost)
+ *   { exists: false, error: '<msg>' }       — transport error / 5xx (caller
+ *                                             should NOT persist on this signal)
+ *
+ * Why this exists:
+ *   Webhook + backfill paths used to insert CallRecord blindly off whatever
+ *   `executionId` the payload carried. A replayed webhook, a foreign-tenant
+ *   exec leaking under a shared agent_id, or a typo'd payload would land
+ *   permanently as a "ghost call" in our DB. Routing through this helper at
+ *   every entry point makes Bolna the single source of truth.
+ */
+async function verifyExecutionExistsInBolna(executionId) {
+  if (!executionId) return { exists: false, error: 'missing_execution_id' };
+  const result = await getExecutionDetails(String(executionId));
+  if (!result.success) {
+    return { exists: false, error: result.error || 'transport_error' };
+  }
+  if (result.notFound === true) {
+    return { exists: false, notFound: true };
+  }
+  return { exists: true, details: result.details };
+}
+
 export default {
   initiateCall,
   getExecutionDetails,
   getAgentExecutions,
   getConfig,
   updateAgentPrompt,
+  verifyExecutionExistsInBolna,
 };
 

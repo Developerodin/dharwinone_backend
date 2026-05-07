@@ -531,6 +531,7 @@ const updateMeetingById = async (id, updateBody, userId) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
   const previousInterviewResult = meeting.interviewResult;
+  const previousStatus = meeting.status;
   const safeBody = { ...updateBody };
   const dur = Number(safeBody.durationMinutes);
   if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
@@ -540,6 +541,20 @@ const updateMeetingById = async (id, updateBody, userId) => {
   }
   Object.assign(meeting, safeBody);
   await meeting.save();
+
+  // If admin flips status -> 'ended' via PATCH, mirror endMeetingByRoomPublic:
+  // stop active egress + wait for finalize before deleting LiveKit room. Without
+  // this, the recorder participant kept running and S3 upload never finalized.
+  if (previousStatus !== 'ended' && meeting.status === 'ended' && meeting.meetingId) {
+    try {
+      await deleteInterviewRoom(meeting.meetingId);
+    } catch (err) {
+      logger.warn('[updateMeetingById] LiveKit deleteInterviewRoom failed', {
+        meetingId: meeting.meetingId,
+        err: err?.message || err,
+      });
+    }
+  }
 
   const newInterviewResult = meeting.interviewResult;
 
@@ -590,6 +605,18 @@ const deleteMeetingById = async (id) => {
   const meeting = await Meeting.findById(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  // Stop egress + wait for finalize BEFORE removing the meeting doc, otherwise
+  // a live recording is orphaned in EGRESS_ACTIVE with no DB row to reconcile.
+  if (meeting.meetingId) {
+    try {
+      await deleteInterviewRoom(meeting.meetingId);
+    } catch (err) {
+      logger.warn('[deleteMeetingById] LiveKit deleteInterviewRoom failed', {
+        meetingId: meeting.meetingId,
+        err: err?.message || err,
+      });
+    }
   }
   await meeting.deleteOne();
   return meeting;

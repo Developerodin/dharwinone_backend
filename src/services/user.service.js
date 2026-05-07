@@ -258,6 +258,16 @@ const deleteUserById = async (userId) => {
     Token.deleteMany({ user: userId }),
   ]);
 
+  // --- Chatbot cascade: drop Pinecone embeddings, ConversationMemory refs,
+  //     and per-admin context cache BEFORE removing the User row. Best-effort
+  //     — failures here must not block the delete.
+  try {
+    const { cascadeUserRemoval } = await import('./chatAssistant/entityCleanup.js');
+    await cascadeUserRemoval({ userId, adminId: user.adminId ?? user._id });
+  } catch (err) {
+    logger.warn(`[deleteUserById] cascadeUserRemoval failed for ${userId}: ${err.message}`);
+  }
+
   // --- Delete the user ---
   await user.deleteOne();
 

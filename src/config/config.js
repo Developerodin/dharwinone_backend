@@ -191,6 +191,9 @@ const envVarsSchema = Joi.object()
 
     PINECONE_API_KEY: Joi.string().optional().allow('').description('Pinecone API key for vector search'),
     PINECONE_INDEX: Joi.string().optional().default('dharwin-hr').description('Pinecone index name'),
+
+    // Chatbot — two-stage pipeline (classifier + scoped fetcher)
+    CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
   })
   .unknown();
 
@@ -437,6 +440,9 @@ const config = {
   pinecone: {
     apiKey: envVars.PINECONE_API_KEY || '',
     indexName: envVars.PINECONE_INDEX || 'dharwin-hr',
+  },
+  chatbot: {
+    twoStage: envVars.CHATBOT_TWO_STAGE,
   },
 };
 

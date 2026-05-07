@@ -35,9 +35,12 @@ const getAssigneeCountsByRoleId = async (roleDocs) => {
   const ids = roleDocs.map((r) => r._id).filter(Boolean);
   if (ids.length === 0) return {};
 
+  // Exclude the platform super-admin from per-role assignee counts so the
+  // settings/roles page doesn't show the seed/owner account in the user count.
+  const excludeSuper = { platformSuperUser: { $ne: true } };
   const [totals, activePending] = await Promise.all([
     User.aggregate([
-      { $match: { roleIds: { $in: ids } } },
+      { $match: { roleIds: { $in: ids }, ...excludeSuper } },
       { $unwind: '$roleIds' },
       { $match: { roleIds: { $in: ids } } },
       { $group: { _id: '$roleIds', count: { $sum: 1 } } },
@@ -47,6 +50,7 @@ const getAssigneeCountsByRoleId = async (roleDocs) => {
         $match: {
           roleIds: { $in: ids },
           status: { $in: ['active', 'pending'] },
+          ...excludeSuper,
         },
       },
       { $unwind: '$roleIds' },

@@ -119,13 +119,28 @@ export function verifyBolnaSecret(headerSecret) {
 }
 
 /**
+ * Map applyEvent source values to the canonical `source` enum stored on
+ * CallRecord. Webhook + webhook_candidate collapse to 'webhook' since they
+ * differ only in agent identity, not provenance.
+ */
+function canonicalSource(source) {
+  if (source === 'webhook' || source === 'webhook_candidate') return 'webhook';
+  if (source === 'reconciliation') return 'reconciliation';
+  if (source === 'backfill') return 'backfill';
+  if (source === 'initiate') return 'initiate';
+  return 'legacy';
+}
+
+/**
  * Apply a Bolna state change to CallRecord.
  *
  * @param {object} payload Raw Bolna payload (webhook body OR /execution/:id response)
  * @param {'webhook'|'webhook_candidate'|'reconciliation'|'backfill'} source
+ * @param {object} [meta]
+ * @param {string} [meta.requestId] correlation id for tracing the originating HTTP request
  * @returns {Promise<{ record: object|null, applied: boolean, reason?: string }>}
  */
-export async function applyEvent(payload, source) {
+export async function applyEvent(payload, source, meta = {}) {
   if (!payload || typeof payload !== 'object') {
     return { record: null, applied: false, reason: 'invalid_payload' };
   }
@@ -244,9 +259,46 @@ export async function applyEvent(payload, source) {
     // status=unknown rows with no caller/recipient — the exact junk the
     // UI was showing under Telephony source.
     if (source === 'backfill') {
+      logger.info(
+        `[callSync] backfill skip unseeded executionId=${executionId} status=${status} agentId=${norm.agentId || ''}`
+      );
       return { record: null, applied: false, reason: 'unseeded_backfill_skipped' };
     }
-    // Webhook / reconciliation arrived before initiate-time seed. Stub-create.
+
+    // For webhook + reconciliation we used to stub-create blindly. That was
+    // ghost-call vector #1: a replayed Bolna webhook (or one mis-routed from a
+    // sibling tenant under the same secret) would persist a row our backend
+    // had no provenance over. Now: verify upstream first. If Bolna 404s the
+    // executionId, drop the event and log an anomaly. If Bolna is reachable
+    // and confirms the execution, stub-create AND tag bolnaVerifiedAt so the
+    // ghost-cleanup cron can distinguish verified-but-unseeded rows from
+    // truly orphaned ones.
+    let bolnaVerifiedAt = null;
+    try {
+      const bolnaService = (await import('./bolna.service.js')).default;
+      const verify = await bolnaService.verifyExecutionExistsInBolna(executionId);
+      if (verify.notFound === true) {
+        logger.warn(
+          `[callSync] anomaly: ${source} for executionId=${executionId} not found in Bolna — dropping`
+        );
+        return { record: null, applied: false, reason: 'bolna_not_found' };
+      }
+      if (verify.exists !== true) {
+        // Transport / 5xx — DON'T persist on fuzzy signal. Webhook will retry,
+        // reconciliation cron will retry. Better silence than ghost.
+        logger.warn(
+          `[callSync] verify upstream failed source=${source} executionId=${executionId} err=${verify.error || ''} — deferring`
+        );
+        return { record: null, applied: false, reason: 'bolna_verify_unavailable' };
+      }
+      bolnaVerifiedAt = new Date();
+    } catch (err) {
+      logger.warn(
+        `[callSync] verify exception source=${source} executionId=${executionId}: ${err.message} — deferring`
+      );
+      return { record: null, applied: false, reason: 'bolna_verify_exception' };
+    }
+
     // Race-safe via executionId unique index — losing race re-checks.
     try {
       const stub = await CallRecord.create({
@@ -257,9 +309,15 @@ export async function applyEvent(payload, source) {
         purpose: norm.purpose || null,
         agentId: norm.agentId || null,
         businessName: norm.businessName || null,
+        source: canonicalSource(source),
+        createdBy: null,
+        requestId: meta.requestId || null,
+        bolnaVerifiedAt,
         raw: payload,
       });
-      logger.info(`[callSync] stub-created for ${executionId} (event arrived before seed)`);
+      logger.info(
+        `[callSync] stub-created for ${executionId} source=${source} bolnaVerified=${Boolean(bolnaVerifiedAt)}`
+      );
       const lean = stub.toObject();
       emitUpdate(lean);
       return { record: lean, applied: true, reason: 'stub_created' };
@@ -302,6 +360,8 @@ export async function seedRecord({
   agentId,
   recipientPhone,
   businessName,
+  createdBy,
+  requestId,
 }) {
   if (!executionId) throw new Error('seedRecord: executionId required');
 
@@ -318,6 +378,12 @@ export async function seedRecord({
     toPhoneNumber: recipientPhone || null,
     phone: recipientPhone || null,
     businessName: businessName || null,
+    // Provenance — initiate is the trusted path. Bolna POST /call already
+    // returned this executionId so we don't need a second verify hit.
+    source: 'initiate',
+    createdBy: createdBy || null,
+    requestId: requestId || null,
+    bolnaVerifiedAt: new Date(),
   };
 
   // Upsert by executionId, only set on insert. Existing rows untouched.

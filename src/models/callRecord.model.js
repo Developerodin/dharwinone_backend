@@ -39,14 +39,52 @@ export function isTerminal(status) {
   return TERMINAL_STATUSES.includes(String(status).toLowerCase());
 }
 
+/**
+ * Allowed `source` values. Every CallRecord MUST be tagged with origin so the
+ * ghost-cleanup cron can reason about provenance:
+ *   - initiate:       seeded by our backend at Bolna POST /call response time
+ *   - webhook:        stub-created when Bolna webhook arrived before seed
+ *   - reconciliation: stub-created during cron GET /execution/:id reconcile
+ *   - backfill:       inserted from agent-list backfill (foreign-call risk)
+ *   - legacy:         pre-source-tagging row (treat as untrusted)
+ */
+export const CALL_RECORD_SOURCES = [
+  'initiate',
+  'webhook',
+  'reconciliation',
+  'backfill',
+  'legacy',
+];
+
 const callRecordSchema = mongoose.Schema(
   {
+    /**
+     * Bolna execution id. Required — every CallRecord MUST trace to a Bolna
+     * execution. Unique index prevents duplicates.
+     */
     executionId: {
       type: String,
+      required: true,
       index: true,
       unique: true,
-      sparse: true,
     },
+    /** Origin of this row. Drives ghost-cleanup decisions. */
+    source: {
+      type: String,
+      enum: CALL_RECORD_SOURCES,
+      default: 'legacy',
+      index: true,
+    },
+    /** User who initiated (when source='initiate'). Null for webhook/backfill stubs. */
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    /** HTTP request id / correlation id for tracing. */
+    requestId: { type: String, default: null },
+    /**
+     * Set when the cleanup cron has independently confirmed this execution
+     * exists in Bolna (GET /execution/:id 200). Stub rows with this null past
+     * their grace window are candidates for ghost-cleanup.
+     */
+    bolnaVerifiedAt: { type: Date, default: null, index: true },
     status: {
       type: String,
       default: 'unknown',

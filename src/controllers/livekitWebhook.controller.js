@@ -114,25 +114,60 @@ async function handleParticipantLeft(payload) {
 
 /**
  * On room_finished: catch any egress that was still active (e.g. last
- * participant disconnected without explicit end). Stop them.
+ * participant disconnected without explicit end). Stop them, and atomically
+ * close any `ChatCall` whose livekitRoom matches — without this the chat call
+ * sat in `ongoing` until the 6h cron, surfacing as a ghost call.
  */
 async function handleRoomFinished(payload) {
   const roomName = payload?.room?.name;
   if (!roomName) return;
   const egressClient = livekitService.getEgressClient?.();
-  if (!egressClient) return;
-  try {
-    const active = await egressClient.listEgress({ roomName });
-    for (const eg of active) {
-      if (eg.status === EgressStatus.EGRESS_ACTIVE) {
-        logger.info('[LiveKit Webhook] room_finished: stopping egress', { roomName, egressId: eg.egressId });
-        livekitService
-          .stopRecording(eg.egressId, roomName, 'room_finished')
-          .catch((err) => logger.warn(`[LiveKit Webhook] room_finished stop failed: ${err.message}`));
+
+  if (egressClient) {
+    try {
+      const active = await egressClient.listEgress({ roomName });
+      for (const eg of active) {
+        if (eg.status === EgressStatus.EGRESS_ACTIVE) {
+          logger.info('[LiveKit Webhook] room_finished: stopping egress', { roomName, egressId: eg.egressId });
+          livekitService
+            .stopRecording(eg.egressId, roomName, 'room_finished')
+            .catch((err) => logger.warn(`[LiveKit Webhook] room_finished stop failed: ${err.message}`));
+        }
       }
+    } catch (err) {
+      logger.warn(`[LiveKit Webhook] room_finished listEgress failed: ${err.message}`);
     }
-  } catch (err) {
-    logger.warn(`[LiveKit Webhook] room_finished listEgress failed: ${err.message}`);
+  }
+
+  // Close any ChatCall tied to this room. Conditional update never regresses
+  // completed/declined/missed rows. duration is computed in the aggregation
+  // pipeline so it stays consistent with startedAt at the moment of close.
+  if (roomName.startsWith('chat-')) {
+    try {
+      const res = await ChatCall.updateOne(
+        { livekitRoom: roomName, status: { $in: ['ringing', 'ongoing'] } },
+        [
+          {
+            $set: {
+              status: { $cond: [{ $eq: ['$status', 'ringing'] }, 'missed', 'completed'] },
+              endedAt: '$$NOW',
+              duration: {
+                $cond: [
+                  { $ifNull: ['$startedAt', false] },
+                  { $round: [{ $divide: [{ $subtract: ['$$NOW', '$startedAt'] }, 1000] }, 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        ]
+      );
+      if (res.modifiedCount) {
+        logger.info('[LiveKit Webhook] room_finished: closed ChatCall', { roomName });
+      }
+    } catch (err) {
+      logger.warn(`[LiveKit Webhook] room_finished ChatCall close failed: ${err.message}`);
+    }
   }
 }
 
@@ -143,24 +178,104 @@ async function handleRoomFinished(payload) {
  */
 async function handleEgressEnded(payload) {
   const info = payload.egressInfo || {};
-  const egressId = info.egressId || info.id;
+  // LiveKit ships snake_case in raw HTTP webhook JSON (egress_id, room_name,
+  // file_results, started_at, ended_at, error_code, error) but camelCase via
+  // the SDK proto bridge. Read both. Spec:
+  // https://docs.livekit.io/reference/other/egress/api/#egressinfo
+  const egressId = info.egressId || info.egress_id || info.id;
   if (!egressId) {
     logger.warn('[LiveKit Webhook] egress_ended missing egressId', payload);
     return;
   }
 
-  const endedMs = nsToMs(info.endedAt) || Date.now();
+  const endedAtRaw = info.endedAt ?? info.ended_at;
+  const endedMs = nsToMs(endedAtRaw) || Date.now();
   const completedAt = new Date(endedMs);
 
   const fileResults = info.fileResults || info.file_results || info.fileResultsList;
-  const f0 = fileResults?.[0] || info.files?.[0] || {};
+  // Legacy SDK / API may emit file output under singular `file` (or oneof
+  // `result.file`) instead of `file_results` array — accept both shapes,
+  // otherwise EGRESS_COMPLETE webhooks would route to `missing` even when
+  // LiveKit successfully wrote a real file to S3.
+  const f0 =
+    fileResults?.[0] ||
+    info.files?.[0] ||
+    info.file ||
+    info.result?.file ||
+    info.result?.value ||
+    {};
   const filePath = f0.filename || f0.filepath || f0.location;
   const bytesFromEgress = Number(f0.size || f0.bytes || 0) || null;
+  // file_results[].duration is reported in nanoseconds. Prefer it over the
+  // computed startedAt→completedAt delta because Egress finalize timestamps
+  // can drift several seconds after the encoder actually stopped.
+  const durationFromEgressMs = (() => {
+    const d = f0.duration ?? f0.durationNs;
+    if (d == null || d === '') return null;
+    const ms = nsToMs(d);
+    return Number.isFinite(ms) && ms > 0 && ms < 24 * 60 * 60 * 1000 ? ms : null;
+  })();
+  // Spec fields for failure context — `error` + `error_code` populated for
+  // FAILED/ABORTED, `details` for additional context. Surface to ops via lastError.
+  const errorMsg = info.error || info.errorMessage || null;
+  const errorCode = info.errorCode ?? info.error_code ?? null;
+  const details = info.details || null;
+  const errorContext = [errorMsg, errorCode != null ? `code=${errorCode}` : null, details]
+    .filter(Boolean)
+    .join(' | ') || null;
+
+  // Egress status drives DB state, NOT just file presence. Previously this
+  // function only branched on S3 verify; an ABORTED egress with partial bytes
+  // landed as `completed` and surfaced to UI as a valid recording.
+  const statusNum = Number(info.status);
+  const isComplete = info.status === 'EGRESS_COMPLETE' || statusNum === 3;
+  const isFailed = info.status === 'EGRESS_FAILED' || statusNum === 4;
+  const isAborted = info.status === 'EGRESS_ABORTED' || statusNum === 5;
+  const isLimit = info.status === 'EGRESS_LIMIT_REACHED' || statusNum === 6;
+
+  if (isAborted) {
+    await recordingSyncService.transitionRecording(egressId, 'aborted', {
+      completedAt,
+      filePath: filePath || null,
+      bytes: bytesFromEgress,
+      durationMs: durationFromEgressMs,
+      lastError: ['LiveKit egress_ended status=EGRESS_ABORTED', errorContext].filter(Boolean).join(' :: '),
+    });
+    logger.warn('[LiveKit Webhook] egress aborted', { egressId, filePath, errorContext });
+    return;
+  }
+
+  if (isFailed || isLimit) {
+    await recordingSyncService.transitionRecording(egressId, 'failed', {
+      completedAt,
+      filePath: filePath || null,
+      bytes: bytesFromEgress,
+      durationMs: durationFromEgressMs,
+      lastError: [
+        isFailed ? 'LiveKit egress_ended status=EGRESS_FAILED' : 'LiveKit egress_ended status=EGRESS_LIMIT_REACHED',
+        errorContext,
+      ].filter(Boolean).join(' :: '),
+    });
+    logger.warn('[LiveKit Webhook] egress failed', { egressId, status: info.status, errorContext });
+    return;
+  }
 
   if (!filePath) {
     await recordingSyncService.transitionRecording(egressId, 'missing', {
       completedAt,
       lastError: 'egress_ended without filePath',
+    });
+    return;
+  }
+
+  // Only EGRESS_COMPLETE reaches here. Refuse to mark `completed` for unknown
+  // statuses — better a `missing` row than a ghost recording in the UI.
+  if (!isComplete) {
+    logger.warn('[LiveKit Webhook] unknown egress status on egress_ended; routing → missing', { egressId, status: info.status });
+    await recordingSyncService.transitionRecording(egressId, 'missing', {
+      completedAt,
+      filePath,
+      lastError: `Unknown egress status: ${info.status}`,
     });
     return;
   }
@@ -175,10 +290,15 @@ async function handleEgressEnded(payload) {
   // Verify S3 actually has the object with non-zero bytes.
   const verified = await headRecordingObject(filePath);
   if (verified.ok && (verified.size || bytesFromEgress || 0) > 0) {
-    const recordingForDuration = await Recording.findOne({ egressId }).select('startedAt').lean();
-    const durationMs = recordingForDuration?.startedAt
-      ? Math.max(0, completedAt.getTime() - new Date(recordingForDuration.startedAt).getTime())
-      : null;
+    // Prefer the egress-reported duration (file_results[].duration in ns) per
+    // LiveKit spec; fall back to startedAt-completedAt delta.
+    let durationMs = durationFromEgressMs;
+    if (durationMs == null) {
+      const recordingForDuration = await Recording.findOne({ egressId }).select('startedAt').lean();
+      durationMs = recordingForDuration?.startedAt
+        ? Math.max(0, completedAt.getTime() - new Date(recordingForDuration.startedAt).getTime())
+        : null;
+    }
 
     const updated = await recordingSyncService.transitionRecording(egressId, 'completed', {
       completedAt,
@@ -255,9 +375,14 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
   }
 
   const event = payload?.event;
+  // Snake_case is the wire format per LiveKit egress spec; camelCase comes via
+  // SDK proto bridge. Read both at every entry point.
+  const egInfo = payload?.egressInfo || {};
+  const topEgressId = egInfo.egressId || egInfo.egress_id || egInfo.id;
   logger.info('[LiveKit Webhook] Received', {
     event,
-    egressId: payload?.egressInfo?.egressId,
+    egressId: topEgressId,
+    egressStatus: egInfo.status,
     room: payload?.room?.name,
   });
 
@@ -265,15 +390,16 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
 
   try {
     if (event === 'egress_started') {
-      const egressId = payload.egressInfo?.egressId || payload.egressInfo?.id;
+      const egressId = topEgressId;
       if (egressId) {
+        const startedRaw = egInfo.startedAt ?? egInfo.started_at;
         await recordingSyncService.transitionRecording(egressId, 'recording', {
-          startedAt: new Date(nsToMs(payload.egressInfo.startedAt) || Date.now()),
+          startedAt: new Date(nsToMs(startedRaw) || Date.now()),
         });
       }
     } else if (event === 'egress_updated') {
-      const egressId = payload.egressInfo?.egressId || payload.egressInfo?.id;
-      const status = payload.egressInfo?.status;
+      const egressId = topEgressId;
+      const status = egInfo.status;
       // EGRESS_ENDING: 2 (numeric) OR string 'EGRESS_ENDING'
       if (egressId && (status === 'EGRESS_ENDING' || Number(status) === 2)) {
         await recordingSyncService.transitionRecording(egressId, 'stopping', {});

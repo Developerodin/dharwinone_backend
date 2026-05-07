@@ -35,7 +35,18 @@ export async function transitionRecording(egressId, nextStatus, patch = {}, opts
 
   // Allow same-rank enrichment (e.g. finalizing → finalizing with bytes filled in,
   // completed terminal staying terminal but adding s3Bucket/s3Key).
-  const filter = { egressId, statusRank: { $lte: nextRank } };
+  // Legacy rows (created before the `statusRank` field existed) have no
+  // statusRank — `$lte` does NOT match documents where the field is absent,
+  // so without the $or clause those rows would silently no-op forever and
+  // stay stuck on `recording` even after a successful sync.
+  const filter = {
+    egressId,
+    $or: [
+      { statusRank: { $lte: nextRank } },
+      { statusRank: { $exists: false } },
+      { statusRank: null },
+    ],
+  };
   const updated = await Recording.findOneAndUpdate(filter, update, { new: true }).lean();
 
   if (!updated) {

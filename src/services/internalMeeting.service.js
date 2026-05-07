@@ -5,6 +5,7 @@ import config from '../config/config.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
+import { deleteInterviewRoom } from './livekit.service.js';
 
 const getPublicMeetingUrl = (meetingId, invite = {}) => {
   const base = (config.frontendBaseUrl || '').replace(/\/$/, '');
@@ -216,6 +217,13 @@ const endInternalMeetingByRoomPublic = async (roomName, hostEmail) => {
   }
   meeting.status = 'ended';
   await meeting.save();
+  // Stop egress + wait for finalization, then evict participants + delete LiveKit room.
+  // Without this, recording was orphaned in EGRESS_ACTIVE and S3 upload never finalized.
+  try {
+    await deleteInterviewRoom(roomName);
+  } catch (err) {
+    logger.warn('[endInternalMeetingByRoomPublic] LiveKit deleteInterviewRoom failed', { roomName, err: err?.message || err });
+  }
   const doc = meeting.toJSON();
   doc.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
   return doc;
@@ -234,6 +242,12 @@ const autoEndExpiredInternalMeetings = async () => {
   for (const m of meetings) {
     try {
       await InternalMeeting.updateOne({ _id: m._id }, { status: 'ended' });
+      // Mirror Meeting.autoEndExpiredMeetings: stop egress + wait for finalize before
+      // deleting LiveKit room. Skipping this step is what kept recordings stuck in
+      // EGRESS_ACTIVE for internal meetings until the 8h cron force-resolved them.
+      await deleteInterviewRoom(m.meetingId).catch((err) =>
+        logger.warn(`[autoEndExpiredInternalMeetings] LiveKit delete failed ${m.meetingId}:`, err?.message || err)
+      );
       count += 1;
       logger.info(`[autoEndExpiredInternalMeetings] Auto-ended internal meeting ${m.meetingId} (${m.title})`);
     } catch (err) {

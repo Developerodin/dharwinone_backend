@@ -5,7 +5,21 @@ import Student from '../models/student.model.js';
 import Mentor from '../models/mentor.model.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
 import logger from '../config/logger.js';
+
+const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
+
+// Heavy fields excluded from list-view payload — saves megabytes per response.
+// Detail view (getTrainingModuleById) still returns the full doc.
+const LIST_EXCLUDE_FIELDS = [
+  '-playlist.videoFile',
+  '-playlist.pdfDocument',
+  '-playlist.blogContent',
+  '-playlist.quiz',
+  '-playlist.essay',
+  '-playlist.testLinkOrReference',
+].join(' ');
 
 const normalizeQuizQuestions = (questions = []) =>
   questions.map((q) => ({
@@ -186,39 +200,54 @@ const queryTrainingModules = async (filter, options) => {
 
   if (search && search.trim()) {
     const trimmed = search.trim();
-    const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    mongoFilter.$or = [
-      { moduleName: { $regex: searchRegex } },
-      { shortDescription: { $regex: searchRegex } },
-    ];
+    // $text uses the training_module_text_idx for sub-millisecond search on
+    // alphanumeric queries. Fall back to anchored regex on short / regex-
+    // unsafe queries (which can still use the moduleName btree index for
+    // prefix matches).
+    const isTextSafe = trimmed.length >= 3 && /^[\p{L}\p{N}\s'-]+$/u.test(trimmed);
+    if (isTextSafe) {
+      mongoFilter.$text = { $search: trimmed };
+    } else {
+      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const prefix = new RegExp('^' + escaped, 'i');
+      const anywhere = new RegExp(escaped, 'i');
+      mongoFilter.$or = [
+        { moduleName: prefix },
+        { moduleName: anywhere },
+        { shortDescription: anywhere },
+      ];
+    }
   }
 
-  if (category) {
-    mongoFilter.categories = category;
-  }
+  if (category) mongoFilter.categories = category;
+  if (status) mongoFilter.status = status;
 
-  if (status) {
-    mongoFilter.status = status;
-  }
-
+  // Note: lean:true is intentionally NOT used. The toJSON plugin renames
+  // _id -> id only on Mongoose docs, and the FE filters by `id` on modules,
+  // categories, and mentors. Lean docs would ship `_id` and FE folder
+  // grouping silently fails (every folder appears empty).
   const modules = await TrainingModule.paginate(mongoFilter, {
     ...options,
-    // Populate categories, students (with user), mentors (with user)
-    populate: 'categories,students,mentorsAssigned,students.user,mentorsAssigned.user',
+    select: LIST_EXCLUDE_FIELDS,
+    populate: [
+      { path: 'categories', select: 'name' },
+      { path: 'students', select: 'user', populate: { path: 'user', select: 'name' } },
+      { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } },
+    ],
   });
 
-  // Regenerate presigned URLs for cover images
-  if (modules.results && modules.results.length > 0) {
-    for (const module of modules.results) {
-      if (module.coverImage?.key) {
+  // Parallel cover-image URL regeneration (cached).
+  if (modules.results?.length) {
+    await Promise.all(
+      modules.results.map(async (m) => {
+        if (!m.coverImage?.key) return;
         try {
-          const url = await generatePresignedDownloadUrl(module.coverImage.key, 7 * 24 * 3600);
-          module.coverImage.url = url;
+          m.coverImage.url = await signedDownloadUrl(m.coverImage.key, 7 * 24 * 3600);
         } catch (error) {
           logger.error('Failed to regenerate cover image URL:', error);
         }
-      }
-    }
+      })
+    );
   }
 
   return modules;
@@ -240,36 +269,32 @@ const getTrainingModuleById = async (id) => {
     return null;
   }
 
-  // Regenerate presigned URLs
+  // Regenerate presigned URLs (cached + parallel — was sequential N+1).
+  const tasks = [];
   if (module.coverImage?.key) {
-    try {
-      const url = await generatePresignedDownloadUrl(module.coverImage.key, 7 * 24 * 3600);
-      module.coverImage.url = url;
-    } catch (error) {
-      logger.error('Failed to regenerate cover image URL:', error);
-    }
+    tasks.push(
+      signedDownloadUrl(module.coverImage.key, 7 * 24 * 3600)
+        .then((url) => { module.coverImage.url = url; })
+        .catch((error) => logger.error('Failed to regenerate cover image URL:', error))
+    );
   }
-
-  // Regenerate URLs for playlist items
   for (const item of module.playlist) {
     if (item.videoFile?.key) {
-      try {
-        const url = await generatePresignedDownloadUrl(item.videoFile.key, 7 * 24 * 3600);
-        item.videoFile.url = url;
-      } catch (error) {
-        logger.error('Failed to regenerate video URL:', error);
-      }
+      tasks.push(
+        signedDownloadUrl(item.videoFile.key, 7 * 24 * 3600)
+          .then((url) => { item.videoFile.url = url; })
+          .catch((error) => logger.error('Failed to regenerate video URL:', error))
+      );
     }
-
     if (item.pdfDocument?.key) {
-      try {
-        const url = await generatePresignedDownloadUrl(item.pdfDocument.key, 7 * 24 * 3600);
-        item.pdfDocument.url = url;
-      } catch (error) {
-        logger.error('Failed to regenerate PDF URL:', error);
-      }
+      tasks.push(
+        signedDownloadUrl(item.pdfDocument.key, 7 * 24 * 3600)
+          .then((url) => { item.pdfDocument.url = url; })
+          .catch((error) => logger.error('Failed to regenerate PDF URL:', error))
+      );
     }
   }
+  await Promise.all(tasks);
 
   return module;
 };

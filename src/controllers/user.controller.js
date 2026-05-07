@@ -4,6 +4,7 @@ import ApiError from '../utils/ApiError.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as userService from '../services/user.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
+import { clearContextCache } from '../services/chatAssistant.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import config from '../config/config.js';
 import { userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
@@ -27,6 +28,7 @@ const createUser = catchAsync(async (req, res) => {
     { roleIds: user.roleIds, ...pickUserDisplayForActivityLog(user) },
     req
   );
+  clearContextCache();
   res.status(httpStatus.CREATED).send(user);
 });
 
@@ -81,6 +83,17 @@ const updateUser = catchAsync(async (req, res) => {
   }
   const previousStatus = target.status;
   const user = await userService.updateUserById(req.params.userId, updateBody);
+  // Bust chatbot context cache when role / status / identity fields change so the
+  // baseline 60s snapshot reflects the new role membership immediately. Tool calls
+  // already hit DB live; this only affects the cached company headcount summary.
+  if (
+    Array.isArray(updateBody.roleIds) ||
+    'status' in updateBody ||
+    'name' in updateBody ||
+    'email' in updateBody
+  ) {
+    clearContextCache();
+  }
   const metadata = { ...pickUserDisplayForActivityLog(user) };
   if (req.body.status !== undefined) {
     metadata.field = 'status';
@@ -134,6 +147,7 @@ const deleteUser = catchAsync(async (req, res) => {
     );
   }
   await userService.deleteUserById(req.params.userId);
+  clearContextCache();
   res.status(httpStatus.NO_CONTENT).send();
 });
 

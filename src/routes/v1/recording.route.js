@@ -20,4 +20,16 @@ router
     recordingController.listAll
   );
 
+/**
+ * POST /recordings/sync
+ * Pull every egress from LiveKit + upsert Recording rows. Idempotent.
+ * Use when DB is out of sync with LiveKit (missed webhooks, fresh deploy, etc.).
+ */
+router.post(
+  '/sync',
+  auth(),
+  requirePermissions('meetings.record'),
+  recordingController.syncFromLiveKit
+);
+
 export default router;

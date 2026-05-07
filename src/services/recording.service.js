@@ -1,9 +1,34 @@
-import Recording from '../models/recording.model.js';
+import { EgressStatus } from 'livekit-server-sdk';
+import Recording, { recordingRank } from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
-import { generatePresignedRecordingPlaybackUrl } from '../config/s3.js';
+import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
+import { getEgressClient } from './livekit.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
+import logger from '../config/logger.js';
+
+/**
+ * Convert LiveKit timestamp (ns bigint/string, ms number, or seconds) to ms epoch.
+ */
+const tsToMs = (v) => {
+  if (v == null || v === '') return null;
+  let n;
+  if (typeof v === 'bigint') n = Number(v);
+  else if (typeof v === 'number') n = v;
+  else {
+    const s = String(v).trim();
+    if (!/^\d+(\.\d+)?$/.test(s)) {
+      const p = Date.parse(s);
+      return Number.isNaN(p) ? null : p;
+    }
+    try { n = Number(BigInt(s.split('.')[0])); } catch { n = Number(s); }
+  }
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1e16) return Math.floor(n / 1e6); // ns
+  if (n >= 1e10) return Math.floor(n);       // ms
+  return Math.floor(n * 1000);               // seconds
+};
 
 const PLAYBACK_URL_EXPIRY_SECONDS = 3600; // 1 hour
 
@@ -66,7 +91,12 @@ const listByMeetingId = async (meetingIdOrMongoId) => {
       durationMs,
       bytes: rec.bytes ?? null,
     };
-    if (rec.status === 'completed' && rec.filePath) {
+    // Generate playback URL for any row that has a real S3 file, even if status
+    // is `aborted` — LiveKit may have flushed partial bytes before terminating
+    // and the user can still recover something. Frontend shows a warning badge.
+    const hasPotentialFile =
+      rec.filePath && (rec.status === 'completed' || rec.status === 'aborted');
+    if (hasPotentialFile) {
       try {
         item.playbackUrl = await generatePresignedRecordingPlaybackUrl(
           rec.filePath,
@@ -76,6 +106,10 @@ const listByMeetingId = async (meetingIdOrMongoId) => {
         item.playbackUrl = null;
         item.playbackError = err.message || 'Failed to generate playback URL';
       }
+    }
+    // Surface the LiveKit error so ops can see WHY a row is aborted/failed/missing.
+    if (['aborted', 'failed', 'missing'].includes(rec.status) && rec.lastError) {
+      item.lastError = rec.lastError;
     }
     result.push(item);
   }
@@ -92,7 +126,16 @@ const listAll = async (options = {}) => {
   const limit = Math.min(100, Math.max(1, parseInt(options.limit, 10) || 20));
   const skip = (page - 1) * limit;
 
-  const query = { status: { $ne: 'missing' } };
+  // Show every meaningful row so ops can see WHAT happened, not just clean
+  // completions. Frontend differentiates by `status`:
+  //   recording/stopping/finalizing → live badge
+  //   completed                     → playback link
+  //   aborted/failed/missing        → red "Recording failed" badge with reason
+  // Only `expired` (cron force-resolved >8h non-terminal) is hidden — those
+  // are stuck rows with no useful info for the user.
+  const query = {
+    status: { $in: ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing'] },
+  };
   const [recordings, total] = await Promise.all([
     Recording.find(query)
       .sort({ startedAt: -1 })
@@ -142,7 +185,12 @@ const listAll = async (options = {}) => {
       durationMs,
       bytes: rec.bytes ?? null,
     };
-    if (rec.status === 'completed' && rec.filePath) {
+    // Generate playback URL for any row that has a real S3 file, even if status
+    // is `aborted` — LiveKit may have flushed partial bytes before terminating
+    // and the user can still recover something. Frontend shows a warning badge.
+    const hasPotentialFile =
+      rec.filePath && (rec.status === 'completed' || rec.status === 'aborted');
+    if (hasPotentialFile) {
       try {
         item.playbackUrl = await generatePresignedRecordingPlaybackUrl(
           rec.filePath,
@@ -152,6 +200,10 @@ const listAll = async (options = {}) => {
         item.playbackUrl = null;
         item.playbackError = err.message || 'Failed to generate playback URL';
       }
+    }
+    // Surface the LiveKit error so ops can see WHY a row is aborted/failed/missing.
+    if (['aborted', 'failed', 'missing'].includes(rec.status) && rec.lastError) {
+      item.lastError = rec.lastError;
     }
     result.push(item);
   }
@@ -165,8 +217,383 @@ const listAll = async (options = {}) => {
   };
 };
 
+/**
+ * Simple sync: pull every egress from LiveKit, upsert Recording rows so the DB
+ * matches LiveKit truth. Idempotent — safe to run as often as you want.
+ *
+ *   - EGRESS_COMPLETE  + S3 file present  → upsert as `completed`
+ *   - EGRESS_COMPLETE  + S3 missing/empty → upsert as `missing`
+ *   - EGRESS_ABORTED                      → upsert as `aborted`
+ *   - EGRESS_FAILED / EGRESS_LIMIT_REACHED → upsert as `failed`
+ *   - in-progress (STARTING/ACTIVE/ENDING) → upsert as `recording`/`stopping`
+ *
+ * `meetingId` on the Recording row is set from `egressInfo.roomName`. If we
+ * have a Meeting / InternalMeeting with that meetingId, the row will surface
+ * via `listByMeetingId`. If not, the row still appears in `listAll` for ops.
+ */
+const syncFromLiveKit = async () => {
+  const egressClient = getEgressClient();
+  if (!egressClient) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'LiveKit egress client not initialized');
+  }
+
+  // Pull all egresses LiveKit still retains. Use both filters to maximize coverage.
+  const seen = new Map();
+  for (const filter of [{}, { active: false }]) {
+    let list = [];
+    try {
+      list = await egressClient.listEgress(filter);
+    } catch (err) {
+      logger.warn(`[Recording sync] listEgress(${JSON.stringify(filter)}) failed: ${err.message}`);
+      continue;
+    }
+    for (const info of list || []) {
+      const id = info.egressId || info.egress_id;
+      if (id && !seen.has(id)) seen.set(id, info);
+    }
+  }
+
+  let upserted = 0;
+  let skipped = 0;
+  const results = [];
+
+  for (const [egressId, info] of seen) {
+    // LiveKit JS SDK returns info.status as either a string ("EGRESS_COMPLETE")
+    // or a numeric enum (3) depending on version. Accept BOTH at every check —
+    // previous numeric-only comparison silently failed on string returns and
+    // left rows stuck on `recording`.
+    const statusStr = typeof info.status === 'string' ? info.status : null;
+    const statusNum = Number(info.status);
+    const isStarting = statusStr === 'EGRESS_STARTING'      || statusNum === 0;
+    const isActive   = statusStr === 'EGRESS_ACTIVE'        || info.status === EgressStatus.EGRESS_ACTIVE        || statusNum === 1;
+    const isEnding   = statusStr === 'EGRESS_ENDING'        || info.status === EgressStatus.EGRESS_ENDING        || statusNum === 2;
+    const isComplete = statusStr === 'EGRESS_COMPLETE'      || info.status === EgressStatus.EGRESS_COMPLETE      || statusNum === 3;
+    const isFailed   = statusStr === 'EGRESS_FAILED'        || info.status === EgressStatus.EGRESS_FAILED        || statusNum === 4;
+    const isAborted  = statusStr === 'EGRESS_ABORTED'       || info.status === EgressStatus.EGRESS_ABORTED       || statusNum === 5;
+    const isLimit    = statusStr === 'EGRESS_LIMIT_REACHED' || info.status === EgressStatus.EGRESS_LIMIT_REACHED || statusNum === 6;
+
+    const fr = info.fileResults || info.file_results || info.fileResultsList;
+    // Some SDK / API versions return file output via the legacy singular
+    // `file` (or oneof `result.file`) instead of the `file_results` array.
+    // Without these fallbacks, listEgress sweeps would mark every row as
+    // "EGRESS_COMPLETE without filePath" and stuff them into `missing`.
+    const f0 = fr?.[0] || info.files?.[0] || info.file || info.result?.file || info.result?.value || {};
+    const filePath = f0.filename || f0.filepath || f0.location || null;
+    const bytesFromEgress = Number(f0.size || f0.bytes || 0) || null;
+    const fileDurationMs = tsToMs(f0.duration ?? f0.durationNs);
+
+    const meetingId = info.roomName || info.room_name || 'unknown';
+    const startedAt = tsToMs(info.startedAt ?? info.started_at);
+    const endedAt = tsToMs(info.endedAt ?? info.ended_at);
+
+    // Resolve target status.
+    let targetStatus;
+    let s3Verified = null;
+    let lastError = null;
+    let resolvedFilePath = filePath;
+    const errCtx = [
+      info.error || info.errorMessage,
+      (info.errorCode ?? info.error_code) != null ? `code=${info.errorCode ?? info.error_code}` : null,
+      info.details,
+    ].filter(Boolean).join(' | ') || null;
+
+    if (isAborted) {
+      targetStatus = 'aborted';
+      lastError = ['EGRESS_ABORTED', errCtx].filter(Boolean).join(' :: ');
+    } else if (isFailed || isLimit) {
+      targetStatus = 'failed';
+      lastError = [isFailed ? 'EGRESS_FAILED' : 'EGRESS_LIMIT_REACHED', errCtx].filter(Boolean).join(' :: ');
+    } else if (isComplete) {
+      // LiveKit's listEgress sometimes returns EgressInfo without fileResults
+      // (varies by SDK version, retention age, and direct vs. composite egress).
+      // Fall back to the predicted S3 key the row carries from attachEgressId,
+      // otherwise EGRESS_COMPLETE rows would all go to `missing` even though
+      // the file is sitting in S3.
+      let probeKey = filePath;
+      if (!probeKey) {
+        const known = await Recording.findOne({ egressId }).select('filePath').lean();
+        probeKey = known?.filePath || null;
+      }
+      if (probeKey) {
+        s3Verified = await headRecordingObject(probeKey);
+        if (s3Verified.ok && (s3Verified.size || bytesFromEgress || 0) > 0) {
+          targetStatus = 'completed';
+          resolvedFilePath = probeKey;
+        } else {
+          targetStatus = 'missing';
+          lastError = s3Verified.ok ? 'EGRESS_COMPLETE but zero bytes in S3' : `EGRESS_COMPLETE but S3 unreachable: ${s3Verified.error}`;
+        }
+      } else {
+        targetStatus = 'missing';
+        lastError = 'EGRESS_COMPLETE without filePath (and no predicted key on existing row)';
+      }
+    } else if (isEnding) {
+      targetStatus = 'stopping';
+    } else if (isActive || isStarting) {
+      targetStatus = 'recording';
+    } else {
+      skipped += 1;
+      continue;
+    }
+
+    // Build the patch — only include real values so we don't clobber existing data.
+    const patch = {
+      status: targetStatus,
+      statusRank: recordingRank(targetStatus),
+      meetingId,
+    };
+    if (resolvedFilePath) patch.filePath = resolvedFilePath;
+    if (s3Verified?.ok && s3Verified.bucket) {
+      patch.s3Bucket = s3Verified.bucket;
+      patch.s3Key = s3Verified.key || filePath;
+    }
+    const finalBytes = s3Verified?.size || bytesFromEgress || null;
+    if (finalBytes) patch.bytes = finalBytes;
+    if (startedAt) patch.startedAt = new Date(startedAt);
+    if (endedAt) patch.completedAt = new Date(endedAt);
+    if (fileDurationMs) patch.durationMs = fileDurationMs;
+    else if (startedAt && endedAt) patch.durationMs = Math.max(0, endedAt - startedAt);
+    if (lastError) patch.lastError = lastError;
+
+    // Look up by egressId, then either update existing row by _id (avoiding
+    // the upsert+11000 dance that previously masked failures) or insert a new
+    // row. Monotonic guard: only overwrite if new rank >= existing rank. Treat
+    // missing statusRank as 0 — legacy rows from before the field existed
+    // must not be excluded, otherwise `recording` rows stay stuck forever.
+    const existing = await Recording.findOne({ egressId })
+      .select('_id status statusRank meetingId filePath bytes')
+      .lean();
+
+    let r = null;
+    if (existing) {
+      const existingRank = Number.isFinite(existing.statusRank) ? existing.statusRank : 0;
+      if (existingRank <= patch.statusRank) {
+        await Recording.updateOne({ _id: existing._id }, { $set: patch });
+        r = await Recording.findById(existing._id).lean();
+      } else {
+        r = existing;
+      }
+    } else {
+      try {
+        const created = await Recording.create({ ...patch, egressId });
+        r = created.toObject ? created.toObject() : created;
+      } catch (err) {
+        if (err.code === 11000) {
+          const raced = await Recording.findOne({ egressId }).lean();
+          if (raced) {
+            const racedRank = Number.isFinite(raced.statusRank) ? raced.statusRank : 0;
+            if (racedRank <= patch.statusRank) {
+              await Recording.updateOne({ _id: raced._id }, { $set: patch });
+              r = await Recording.findById(raced._id).lean();
+            } else {
+              r = raced;
+            }
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (r) {
+      upserted += 1;
+      results.push({
+        egressId,
+        meetingId,
+        status: r.status,
+        livekitStatus: info.status,
+        filePath: r.filePath,
+        bytes: r.bytes,
+      });
+    } else {
+      skipped += 1;
+    }
+  }
+
+  // Phase 2: backfill DB rows stuck in non-terminal status that LiveKit's
+  // listEgress sweep didn't return (egress retention may have purged them).
+  // Resolve each via per-egressId lookup or, failing that, S3 HEAD on the
+  // predicted filePath set during startRecording.
+  const STUCK_THRESHOLD_MS = 2 * 60 * 1000; // anything stuck >2 min
+  const stuck = await Recording.find({
+    status: { $in: ['pending', 'recording', 'stopping', 'finalizing'] },
+    startedAt: { $lt: new Date(Date.now() - STUCK_THRESHOLD_MS) },
+  })
+    .limit(500)
+    .lean();
+
+  let backfilled = 0;
+  let stuckSkipped = 0;
+  for (const rec of stuck) {
+    if (rec.egressId && seen.has(rec.egressId)) {
+      // Already handled in Phase 1 sweep above.
+      continue;
+    }
+    try {
+      // Try direct egressId lookup first.
+      let info = null;
+      if (rec.egressId) {
+        try {
+          const direct = await egressClient.listEgress({ egressId: rec.egressId });
+          info = direct?.[0] || null;
+        } catch {
+          info = null;
+        }
+      }
+
+      if (info) {
+        const sNum = Number(info.status);
+        const sStr = typeof info.status === 'string' ? info.status : null;
+        const isCpl = sStr === 'EGRESS_COMPLETE' || info.status === EgressStatus.EGRESS_COMPLETE || sNum === 3;
+        const isFld = sStr === 'EGRESS_FAILED' || info.status === EgressStatus.EGRESS_FAILED || sNum === 4;
+        const isAbt = sStr === 'EGRESS_ABORTED' || info.status === EgressStatus.EGRESS_ABORTED || sNum === 5;
+        const isLmt = sStr === 'EGRESS_LIMIT_REACHED' || info.status === EgressStatus.EGRESS_LIMIT_REACHED || sNum === 6;
+        const fr = info.fileResults || info.file_results || info.fileResultsList;
+        const f0 = fr?.[0] || info.files?.[0] || info.file || info.result?.file || info.result?.value || {};
+        const fp = f0.filename || f0.filepath || f0.location || null;
+        const fpBytes = Number(f0.size || f0.bytes || 0) || null;
+        const endedAt = tsToMs(info.endedAt ?? info.ended_at);
+
+        let nextStatus = null;
+        let patchExtra = {};
+        if (isAbt) {
+          nextStatus = 'aborted';
+          patchExtra.lastError = 'Backfilled from LiveKit: EGRESS_ABORTED';
+        } else if (isFld || isLmt) {
+          nextStatus = 'failed';
+          patchExtra.lastError = `Backfilled from LiveKit: ${isFld ? 'EGRESS_FAILED' : 'EGRESS_LIMIT_REACHED'}`;
+        } else if (isCpl && fp) {
+          const v = await headRecordingObject(fp);
+          if (v.ok && (v.size || fpBytes || 0) > 0) {
+            nextStatus = 'completed';
+            patchExtra = { filePath: fp, s3Bucket: v.bucket, s3Key: v.key, bytes: v.size || fpBytes };
+          } else {
+            nextStatus = 'missing';
+            patchExtra.lastError = v.ok ? 'Backfill: COMPLETE but zero bytes' : `Backfill: S3 unreachable: ${v.error}`;
+            patchExtra.filePath = fp;
+          }
+        } else if (isCpl && !fp) {
+          nextStatus = 'missing';
+          patchExtra.lastError = 'Backfill: COMPLETE without filePath';
+        }
+
+        if (nextStatus) {
+          // Treat missing/null statusRank as 0 so legacy rows aren't excluded.
+          const filter = {
+            _id: rec._id,
+            $or: [
+              { statusRank: { $lte: recordingRank(nextStatus) } },
+              { statusRank: { $exists: false } },
+              { statusRank: null },
+            ],
+          };
+          await Recording.updateOne(filter, {
+            $set: {
+              status: nextStatus,
+              statusRank: recordingRank(nextStatus),
+              completedAt: endedAt ? new Date(endedAt) : new Date(),
+              ...patchExtra,
+            },
+          });
+          backfilled += 1;
+          logger.info(`[Recording sync] backfilled stuck row egressId=${rec.egressId} → ${nextStatus}`);
+          continue;
+        }
+      }
+
+      // No info from LiveKit (egress purged or never had egressId). Fall back
+      // to S3 HEAD on the predicted filePath set at startRecording time.
+      if (rec.filePath) {
+        const v = await headRecordingObject(rec.filePath);
+        if (v.ok && v.size > 0) {
+          await Recording.updateOne(
+            {
+              _id: rec._id,
+              $or: [
+                { statusRank: { $lte: recordingRank('completed') } },
+                { statusRank: { $exists: false } },
+                { statusRank: null },
+              ],
+            },
+            {
+              $set: {
+                status: 'completed',
+                statusRank: recordingRank('completed'),
+                completedAt: rec.completedAt || new Date(),
+                s3Bucket: v.bucket,
+                s3Key: v.key,
+                bytes: v.size,
+              },
+            }
+          );
+          backfilled += 1;
+          logger.info(`[Recording sync] backfilled via S3 HEAD egressId=${rec.egressId} bytes=${v.size}`);
+          continue;
+        }
+        // S3 has no file: mark missing if old enough (>30 min old likely never finalized).
+        const ageMs = Date.now() - new Date(rec.startedAt).getTime();
+        if (ageMs > 30 * 60 * 1000) {
+          await Recording.updateOne(
+            {
+              _id: rec._id,
+              $or: [
+                { statusRank: { $lte: recordingRank('missing') } },
+                { statusRank: { $exists: false } },
+                { statusRank: null },
+              ],
+            },
+            {
+              $set: {
+                status: 'missing',
+                statusRank: recordingRank('missing'),
+                completedAt: new Date(),
+                lastError: v.ok ? 'Backfill: S3 file zero bytes after 30min' : `Backfill: S3 HEAD failed: ${v.error}`,
+              },
+            }
+          );
+          backfilled += 1;
+          continue;
+        }
+      }
+
+      stuckSkipped += 1;
+    } catch (err) {
+      logger.warn(`[Recording sync] backfill row ${rec._id} failed: ${err?.message || err}`);
+      stuckSkipped += 1;
+    }
+  }
+
+  // Cross-link to Meeting / InternalMeeting for ops visibility (informational).
+  const meetingIds = [...new Set(results.map((r) => r.meetingId))].filter((m) => m && m !== 'unknown');
+  const [meetings, internalMeetings] = await Promise.all([
+    Meeting.find({ meetingId: { $in: meetingIds } }).select('meetingId title').lean(),
+    InternalMeeting.find({ meetingId: { $in: meetingIds } }).select('meetingId title').lean(),
+  ]);
+  const meetingMap = Object.fromEntries(
+    [...meetings, ...internalMeetings].map((m) => [m.meetingId, m.title])
+  );
+  for (const r of results) {
+    r.meetingTitle = meetingMap[r.meetingId] || null;
+    r.matched = !!meetingMap[r.meetingId];
+  }
+
+  logger.info(
+    `[Recording sync] swept=${seen.size} upserted=${upserted} skipped=${skipped} stuckScanned=${stuck.length} backfilled=${backfilled}`
+  );
+  return {
+    swept: seen.size,
+    upserted,
+    skipped,
+    stuckScanned: stuck.length,
+    backfilled,
+    stuckSkipped,
+    results,
+  };
+};
+
 export default {
   listByMeetingId,
   listAll,
   resolveMeetingId,
+  syncFromLiveKit,
 };

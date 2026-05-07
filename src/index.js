@@ -25,6 +25,10 @@ import applicationVerificationCallScheduler from './services/applicationVerifica
 import { logBolnaAgentConfigHealth } from './utils/bolnaAgentConfig.js';
 import { seedVoiceAgentsFromEnv } from './services/voiceAgent.service.js';
 import { registerEmbeddingHooks, runEmbeddingBackfill } from './services/embeddingSync.scheduler.js';
+import {
+  startMemorySweepScheduler,
+  stopMemorySweepScheduler,
+} from './services/chatAssistant/memorySweep.scheduler.js';
 
 let server;
 let candidateSchedulerId;
@@ -59,6 +63,7 @@ mongoose
         recordingDiscoverySchedulerId = startRecordingDiscoveryScheduler();
         registerEmbeddingHooks();
         runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
+        startMemorySweepScheduler({ intervalHours: 24 });
       }
     });
   })
@@ -79,6 +84,7 @@ const exitHandler = () => {
       stopMeetingScheduler();
       stopRecordingScheduler();
       stopRecordingDiscoveryScheduler(recordingDiscoverySchedulerId);
+      stopMemorySweepScheduler();
       process.exit(1);
     });
   } else {

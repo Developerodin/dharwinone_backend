@@ -8,4 +8,13 @@ const listAll = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { listAll };
+/**
+ * Sync recordings from LiveKit egress: pulls every egress LiveKit knows about
+ * and upserts our DB so each row reflects the real LiveKit status. Idempotent.
+ */
+const syncFromLiveKit = catchAsync(async (req, res) => {
+  const result = await recordingService.syncFromLiveKit();
+  res.send(result);
+});
+
+export { listAll, syncFromLiveKit };

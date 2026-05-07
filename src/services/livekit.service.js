@@ -314,6 +314,21 @@ const startRecording = async (roomName) => {
     !isLiveKitCloud &&
     (config.env !== 'production' || !config.aws?.accessKeyId || !config.aws?.secretAccessKey);
 
+  // FAIL LOUD in production with no S3 creds. The previous behavior silently fell
+  // through to a MinIO config pointing at `http://minio:9000` — unreachable in
+  // prod, so Egress upload would fail and recordings vanish without diagnostics.
+  if (config.env === 'production' && isLocalDev) {
+    logger.error('[LiveKit] Production S3 creds missing; refusing to start egress with MinIO fallback', {
+      hasAccessKey: !!config.aws?.accessKeyId,
+      hasSecret: !!config.aws?.secretAccessKey,
+      isLiveKitCloud,
+    });
+    throw new ApiError(
+      httpStatus.SERVICE_UNAVAILABLE,
+      'Recording storage is not configured for production (missing AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Refusing to start egress with MinIO fallback.'
+    );
+  }
+
   const s3Config = isLocalDev
     ? {
         // Local MinIO configuration
@@ -433,6 +448,17 @@ const stopRecording = async (egressId, roomName = null, reason = 'manual') => {
     if (!recording) {
       throw new ApiError(httpStatus.FORBIDDEN, 'Recording does not belong to this room');
     }
+  }
+
+  // De-dupe: if a stop is already in flight or the row reached a terminal/finalizing
+  // state, do NOT issue another stopEgress. Concurrent calls (manual end + participant_left
+  // webhook + room_finished webhook) are the leading cause of EGRESS_ABORTED — LiveKit
+  // sees a redundant stop after it already started shutting down and reports abort
+  // instead of complete.
+  const existing = await Recording.findOne({ egressId }).select('status statusRank').lean();
+  if (existing && ['stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing', 'expired'].includes(existing.status)) {
+    logger.info('[LiveKit] stopRecording skipped — row already at/past stopping', { egressId, currentStatus: existing.status, reason });
+    return { egressId, status: 'idempotent_noop', currentDbStatus: existing.status };
   }
 
   // Mark stopping; subsequent stop calls become idempotent.
@@ -578,6 +604,24 @@ const isLiveKitEgressRecorderIdentity = (identity) => {
 };
 
 /**
+ * Spec-aware recorder check. Per LiveKit ParticipantInfo schema the egress
+ * recorder participant carries `kind === EGRESS` and is typically `hidden`.
+ * Falls back to identity-prefix heuristic for older SDKs that don't surface
+ * `kind`. Accepts the full ParticipantInfo object.
+ * Spec: https://docs.livekit.io/reference/other/roomservice-api/#participantinfo
+ */
+const isLiveKitEgressRecorderParticipant = (p) => {
+  if (!p) return false;
+  // ParticipantInfo.kind enum: STANDARD=0, INGRESS=1, EGRESS=2, SIP=3, AGENT=4
+  if (p.kind != null) {
+    const k = typeof p.kind === 'number' ? p.kind : Number(p.kind);
+    if (k === 2 || p.kind === 'EGRESS') return true;
+  }
+  if (p.permission?.recorder === true) return true;
+  return isLiveKitEgressRecorderIdentity(p.identity);
+};
+
+/**
  * Get waiting participants (participants who can subscribe but not publish)
  * Uses listParticipants() which returns ParticipantInfo with permission.canPublish
  * @param {string} roomName - Room name
@@ -606,7 +650,18 @@ const getWaitingParticipants = async (roomName) => {
     // Exclude identities already admitted (DB/memory): LiveKit still shows canPublish=false until they reconnect
     const waitingParticipants = participants
       .filter((p) => {
-        if (isLiveKitEgressRecorderIdentity(p.identity)) {
+        // Spec-aware recorder skip (kind=EGRESS or permission.recorder).
+        if (isLiveKitEgressRecorderParticipant(p)) {
+          return false;
+        }
+        // Skip hidden participants per ParticipantPermission spec — they are
+        // not real users (typically agents/recorders).
+        if (p.permission?.hidden === true) {
+          return false;
+        }
+        // Skip already-disconnected participants (state=3 per ParticipantInfo_State).
+        const stateNum = typeof p.state === 'number' ? p.state : Number(p.state);
+        if (stateNum === 3 || p.state === 'DISCONNECTED') {
           return false;
         }
         if (dbAdmitted.has(p.identity) || memAdmitted.has(p.identity)) {
@@ -814,6 +869,21 @@ const disconnectAllParticipants = async (roomName) => {
     const participants = await roomService.listParticipants(roomName);
     if (!participants || participants.length === 0) return;
     for (const p of participants) {
+      // NEVER evict the egress recorder participant. Removing it mid-finalize
+      // truncates the MP4 and aborts the S3 upload — the exact reason recordings
+      // were being lost on room close. Use the spec-aware check (kind=EGRESS or
+      // permission.recorder) with EG_-identity fallback.
+      if (isLiveKitEgressRecorderParticipant(p)) {
+        logger.info('[LiveKit] Skipping egress recorder during disconnectAll', { roomName, identity: p.identity, kind: p.kind });
+        continue;
+      }
+      // ParticipantInfo.state enum: JOINING=0, JOINED=1, ACTIVE=2, DISCONNECTED=3.
+      // Skip already-disconnected participants — removeParticipant on them is a
+      // no-op that just generates noise.
+      const stateNum = typeof p.state === 'number' ? p.state : Number(p.state);
+      if (stateNum === 3 || p.state === 'DISCONNECTED') {
+        continue;
+      }
       try {
         await roomService.removeParticipant(roomName, p.identity);
         logger.info('[LiveKit] Disconnected participant (call ended)', { roomName, identity: p.identity });
@@ -831,7 +901,10 @@ const disconnectAllParticipants = async (roomName) => {
  * Safe to call if the room no longer exists.
  * @param {string} roomName
  */
-const FINALIZE_GRACE_MS = 30 * 1000;
+// 2-minute grace gives Egress room to ship final MP4 chunks to S3 even on
+// large composite recordings before we evict humans + delete the room.
+// 30s was too tight for multi-hundred-MB uploads, surfacing as `missing` rows.
+const FINALIZE_GRACE_MS = 120 * 1000;
 
 const deleteInterviewRoom = async (roomName) => {
   const rid = String(roomName || '').trim();

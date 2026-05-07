@@ -3,6 +3,7 @@ import catchAsync from '../utils/catchAsync.js';
 import * as chatAssistantService from '../services/chatAssistant.service.js';
 import { clearContextCache } from '../services/chatAssistant.service.js';
 import * as chatbotConfigService from '../services/chatbotConfig.service.js';
+import ConversationMemory from '../models/conversationMemory.model.js';
 
 /**
  * Normalize and validate messages before sending to service/OpenAI
@@ -83,8 +84,13 @@ export const streamMessage = async (req, res) => {
       messages,
       user: req.user,
       onToken: (token) => send({ token }),
-      onDone: () => {
-        send({ done: true });
+      onDone: (envelopePayload) => {
+        const payload = { done: true };
+        if (envelopePayload && typeof envelopePayload === 'object') {
+          if (Array.isArray(envelopePayload.blocks)) payload.blocks = envelopePayload.blocks;
+          if (envelopePayload.meta) payload.meta = envelopePayload.meta;
+        }
+        send(payload);
         res.end();
       },
     });
@@ -104,6 +110,27 @@ export const refreshCache = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).json({
     success: true,
     message: 'Context cache cleared',
+  });
+});
+
+/**
+ * Clear chatbot conversation: drop the persisted ConversationMemory row for
+ * this user+admin AND bust the per-admin context cache. Frontend invokes
+ * this from the "Clear conversation" button so the next turn starts fresh
+ * (no summary, no lastEntities, no stale snapshot).
+ */
+export const clearConversation = catchAsync(async (req, res) => {
+  const userId = req.user?.id;
+  const adminId = req.user?.adminId ?? userId;
+  if (!userId) {
+    return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: 'Unauthorized' });
+  }
+  const { deletedCount } = await ConversationMemory.deleteOne({ userId, adminId });
+  clearContextCache(adminId);
+  res.status(httpStatus.OK).json({
+    success: true,
+    message: 'Conversation cleared',
+    deletedMemoryRow: deletedCount > 0,
   });
 });
 

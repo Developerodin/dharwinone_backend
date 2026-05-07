@@ -69,6 +69,8 @@ const initiateCall = catchAsync(async (req, res) => {
       agentId: config.bolna.agentId,
       recipientPhone: job.organisation?.phone || body.phone || null,
       businessName: job.organisation?.name || null,
+      createdBy: req.user?._id || req.user?.id || null,
+      requestId: req.id || req.headers?.['x-request-id'] || null,
     });
   }
   res.status(httpStatus.OK).send({
@@ -159,6 +161,8 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     agentId: candidateAgentId,
     recipientPhone: formattedPhone,
     businessName: candidate.fullName,
+    createdBy: req.user?._id || req.user?.id || null,
+    requestId: req.id || req.headers?.['x-request-id'] || null,
   });
 
   // Update JobApplication with call details
@@ -335,7 +339,9 @@ const receiveWebhook = catchAsync(async (req, res) => {
     });
   }
 
-  const result = await callSyncService.applyEvent(payload, 'webhook');
+  const result = await callSyncService.applyEvent(payload, 'webhook', {
+    requestId: req.id || req.headers?.['x-request-id'] || null,
+  });
   const record = result.record;
 
   if (record?.executionId) {
@@ -372,7 +378,9 @@ const receiveCandidateWebhook = catchAsync(async (req, res) => {
   // Tag purpose so applyEvent's stub-create path categorizes correctly when
   // the webhook beats the seed.
   const enriched = { ...payload, purpose: payload.purpose || 'job_application_verification' };
-  const result = await callSyncService.applyEvent(enriched, 'webhook_candidate');
+  const result = await callSyncService.applyEvent(enriched, 'webhook_candidate', {
+    requestId: req.id || req.headers?.['x-request-id'] || null,
+  });
   const record = result.record;
 
   if (record?.executionId) {

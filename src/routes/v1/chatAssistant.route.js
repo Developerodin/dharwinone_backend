@@ -44,4 +44,11 @@ router
   .route('/refresh')
   .post(auth(), chatAssistantController.refreshCache);
 
+// Clear this user's persisted conversation (ConversationMemory row) AND bust
+// the per-admin context cache. Wired to the chatbot's "Clear conversation"
+// button so the next turn starts from a clean slate.
+router
+  .route('/clear')
+  .post(auth(), chatAssistantController.clearConversation);
+
 export default router;

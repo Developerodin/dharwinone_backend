@@ -16,6 +16,7 @@
 import { EgressStatus } from 'livekit-server-sdk';
 import Recording from '../models/recording.model.js';
 import recordingSyncService from './recordingSync.service.js';
+import { headRecordingObject } from '../config/s3.js';
 import logger from '../config/logger.js';
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -73,12 +74,20 @@ const resolveStaleRecording = async (recording, egressClient) => {
   }
 
   const egressStatus = egressInfo.status;
-  const isTerminal =
-    egressStatus === EgressStatus.EGRESS_COMPLETE ||
-    egressStatus === EgressStatus.EGRESS_FAILED ||
-    egressStatus === EgressStatus.EGRESS_ABORTED ||
-    egressStatus === EgressStatus.EGRESS_LIMIT_REACHED ||
-    Number(egressStatus) >= 3;
+  // LiveKit JS SDK ships status as string or number depending on version.
+  // Accept both forms — numeric-only comparison was leaving COMPLETE rows
+  // stuck on `recording` because the SDK was returning the string name.
+  const statusStr = typeof egressStatus === 'string' ? egressStatus : null;
+  const statusNum = Number(egressStatus);
+  const isComplete =
+    statusStr === 'EGRESS_COMPLETE' || egressStatus === EgressStatus.EGRESS_COMPLETE || statusNum === 3;
+  const isFailed =
+    statusStr === 'EGRESS_FAILED' || egressStatus === EgressStatus.EGRESS_FAILED || statusNum === 4;
+  const isAborted =
+    statusStr === 'EGRESS_ABORTED' || egressStatus === EgressStatus.EGRESS_ABORTED || statusNum === 5;
+  const isLimit =
+    statusStr === 'EGRESS_LIMIT_REACHED' || egressStatus === EgressStatus.EGRESS_LIMIT_REACHED || statusNum === 6;
+  const isTerminal = isComplete || isFailed || isAborted || isLimit || statusNum >= 3;
 
   if (!isTerminal) {
     const startedAt = new Date(recording.startedAt);
@@ -100,13 +109,47 @@ const resolveStaleRecording = async (recording, egressClient) => {
   // Terminal in LiveKit; figure out filePath + status.
   const fileResults =
     egressInfo.fileResults || egressInfo.file_results || egressInfo.fileResultsList;
-  const f0 = fileResults?.[0] || egressInfo.files?.[0] || {};
-  const filePath = f0.filename || f0.filepath || f0.location;
+  // Legacy SDK / API may emit file output under singular `file` instead of
+  // the `file_results` array — accept both, otherwise terminal rows fall
+  // through to `missing` even when LiveKit wrote a real file.
+  const f0 =
+    fileResults?.[0] ||
+    egressInfo.files?.[0] ||
+    egressInfo.file ||
+    egressInfo.result?.file ||
+    egressInfo.result?.value ||
+    {};
+  // Fall back to the predicted S3 key the row carries from attachEgressId
+  // when listEgress returns EgressInfo without file data.
+  const filePath = f0.filename || f0.filepath || f0.location || recording.filePath;
   const bytes = Number(f0.size || f0.bytes || 0) || null;
+  // file_results[].duration in ns per LiveKit egress spec. Prefer it for the
+  // playback duration shown in UI.
+  const fileDurationMs = (() => {
+    const d = f0.duration ?? f0.durationNs;
+    if (d == null || d === '') return null;
+    if (typeof d === 'bigint') return Math.floor(Number(d) / 1e6);
+    if (typeof d === 'number' && Number.isFinite(d)) {
+      return d >= 1e10 ? Math.floor(d / 1e6) : Math.floor(d);
+    }
+    const s = String(d).trim();
+    if (/^\d+$/.test(s)) {
+      try { return Math.floor(Number(BigInt(s)) / 1e6); } catch { return null; }
+    }
+    return null;
+  })();
+  // Spec error fields populated for FAILED/ABORTED.
+  const liveKitError = egressInfo.error || egressInfo.errorMessage || null;
+  const liveKitErrorCode = egressInfo.errorCode ?? egressInfo.error_code ?? null;
+  const liveKitDetails = egressInfo.details || null;
+  const errorContext = [
+    liveKitError,
+    liveKitErrorCode != null ? `code=${liveKitErrorCode}` : null,
+    liveKitDetails,
+  ].filter(Boolean).join(' | ') || null;
 
-  // LiveKit endedAt: ns (bigint/string), ms, or seconds. Branch by magnitude
-  // to avoid the 1970-date bug from the prior unconditional ns conversion.
-  const endedAtRaw = egressInfo.endedAt;
+  // LiveKit endedAt: ns (bigint/string), ms, or seconds. Branch by magnitude.
+  const endedAtRaw = egressInfo.endedAt ?? egressInfo.ended_at;
   let endedMs = null;
   if (endedAtRaw != null && endedAtRaw !== '') {
     let n;
@@ -124,21 +167,69 @@ const resolveStaleRecording = async (recording, egressClient) => {
       }
     }
     if (Number.isFinite(n) && n > 0) {
-      if (n >= 1e16) endedMs = Math.floor(n / 1e6);       // ns
-      else if (n >= 1e10) endedMs = Math.floor(n);        // ms
-      else endedMs = Math.floor(n * 1000);                // seconds
+      if (n >= 1e16) endedMs = Math.floor(n / 1e6);
+      else if (n >= 1e10) endedMs = Math.floor(n);
+      else endedMs = Math.floor(n * 1000);
     }
   }
   const completedAt = endedMs ? new Date(endedMs) : now;
 
+  // ABORTED is its own terminal — never report as `completed`, even if a partial
+  // file landed in S3. UI must hide aborted recordings. Capture key/bucket so
+  // ops can investigate, but mark `aborted` so listAll filters it out.
+  if (isAborted) {
+    await recordingSyncService.transitionRecording(egressId, 'aborted', {
+      completedAt,
+      filePath: filePath || null,
+      bytes: bytes || null,
+      durationMs: fileDurationMs,
+      lastError: [
+        `LiveKit reported EGRESS_ABORTED (status=${egressStatus})`,
+        errorContext,
+      ].filter(Boolean).join(' :: '),
+    });
+    logger.warn('[Recording cron] Resolved → aborted', { egressId, recordingId: String(_id), filePath, errorContext });
+    return 'aborted';
+  }
+
+  if (isFailed || isLimit) {
+    await recordingSyncService.transitionRecording(egressId, 'failed', {
+      completedAt,
+      filePath: filePath || null,
+      bytes: bytes || null,
+      durationMs: fileDurationMs,
+      lastError: [
+        `LiveKit reported ${isFailed ? 'EGRESS_FAILED' : 'EGRESS_LIMIT_REACHED'} (status=${egressStatus})`,
+        errorContext,
+      ].filter(Boolean).join(' :: '),
+    });
+    logger.warn('[Recording cron] Resolved → failed', { egressId, recordingId: String(_id), errorContext });
+    return 'failed';
+  }
+
+  // EGRESS_COMPLETE path: only mark `completed` after S3 HEAD verifies size > 0.
+  // This closes the gap where webhook delivery failed but cron ran first.
   if (filePath) {
-    await recordingSyncService.transitionRecording(egressId, 'completed', {
+    const verified = await headRecordingObject(filePath);
+    if (verified.ok && (verified.size || bytes || 0) > 0) {
+      await recordingSyncService.transitionRecording(egressId, 'completed', {
+        completedAt,
+        filePath,
+        bytes: verified.size || bytes,
+        s3Bucket: verified.bucket,
+        s3Key: verified.key,
+        durationMs: fileDurationMs,
+      });
+      logger.info('[Recording cron] Resolved → completed (S3 verified)', { egressId, recordingId: String(_id) });
+      return 'completed';
+    }
+    await recordingSyncService.transitionRecording(egressId, 'missing', {
       completedAt,
       filePath,
-      bytes,
-    });
-    logger.info('[Recording cron] Resolved → completed', { egressId, recordingId: String(_id) });
-    return 'completed';
+      lastError: `S3 verify failed during reconcile: ${verified.error || 'object not found or zero bytes'}`,
+    }, { inc: { verifyAttempts: 1 } });
+    logger.warn('[Recording cron] Resolved → missing (S3 verify failed)', { egressId, recordingId: String(_id), error: verified.error });
+    return 'missing';
   }
 
   await recordingSyncService.transitionRecording(egressId, 'missing', {

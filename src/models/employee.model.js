@@ -98,6 +98,8 @@ const employeeSchema = new mongoose.Schema(
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     employeeId: { type: String, trim: true, unique: true, sparse: true, index: true },
     fullName: { type: String, required: true, trim: true },
+    /** Rename history — chatbot resolves prior names against this list. */
+    previousNames: { type: [String], default: [] },
     email: { type: String, required: true, trim: true, lowercase: true, unique: true },
     /** Company-provided work mailbox (Google Workspace / M365); distinct from login email. */
     companyAssignedEmail: { type: String, trim: true, lowercase: true, default: '', index: true },
@@ -280,6 +282,22 @@ employeeSchema.pre('save', async function (next) {
   next();
 });
 
+employeeSchema.post('init', function postEmployeeInit() {
+  this.$locals = this.$locals || {};
+  this.$locals.priorFullName = this.fullName;
+});
+
+employeeSchema.pre('save', function captureFullNameRename(next) {
+  if (this.isModified('fullName') && !this.isNew) {
+    const prior = this.$locals?.priorFullName;
+    if (prior && prior !== this.fullName) {
+      this.previousNames = [...new Set([...(this.previousNames || []), prior])];
+    }
+  }
+  next();
+});
+
+employeeSchema.index({ previousNames: 1 });
 employeeSchema.index({ referredByUserId: 1, referredAt: -1 });
 employeeSchema.index({ 'skills.name': 'text' });
 employeeSchema.plugin(toJSON);

@@ -15,12 +15,18 @@ import toJSON from './plugins/toJSON.plugin.js';
  *   completed
  *
  * Failure terminals (any state → terminal, never regress):
- *   failed   — Egress reported EGRESS_FAILED / EGRESS_ABORTED, or stop never succeeded
+ *   aborted  — Egress reported EGRESS_ABORTED. Distinct from failed so UI can
+ *              hide aborted recordings even when partial bytes landed in S3.
+ *   failed   — Egress reported EGRESS_FAILED / EGRESS_LIMIT_REACHED, or stop
+ *              retries exhausted before any terminal webhook.
  *   missing  — egress_ended without filePath, OR S3 HEAD returned 404 / size 0
  *   expired  — never reached terminal after FORCE_RESOLVE_THRESHOLD (cron)
  */
 
-export const RECORDING_TERMINAL = ['completed', 'failed', 'missing', 'expired'];
+export const RECORDING_TERMINAL = ['completed', 'aborted', 'failed', 'missing', 'expired'];
+
+/** Which terminal states are user-visible recordings (have a real, playable file). */
+export const RECORDING_VALID_TERMINAL = ['completed'];
 
 export const RECORDING_RANK = {
   pending: 0,
@@ -28,6 +34,7 @@ export const RECORDING_RANK = {
   stopping: 2,
   finalizing: 3,
   completed: 10,
+  aborted: 10,
   failed: 10,
   missing: 10,
   expired: 10,
@@ -62,7 +69,7 @@ const recordingSchema = mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['pending', 'recording', 'stopping', 'finalizing', 'completed', 'failed', 'missing', 'expired'],
+      enum: ['pending', 'recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing', 'expired'],
       default: 'pending',
       index: true,
     },

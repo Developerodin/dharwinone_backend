@@ -1,4 +1,4 @@
-import CallRecord from '../models/callRecord.model.js';
+import CallRecord, { TERMINAL_STATUSES, rankOf, isTerminal } from '../models/callRecord.model.js';
 import Job from '../models/job.model.js';
 import Employee from '../models/employee.model.js';
 import config from '../config/config.js';
@@ -132,11 +132,18 @@ function normalizePayload(payload) {
   };
 }
 
+/**
+ * Legacy webhook fallback. Now strictly executionId-gated — payloads without
+ * a Bolna executionId are dropped instead of persisted as null-id ghosts.
+ * The active path is callSyncService.applyEvent; this remains only for any
+ * external integration still pointing here.
+ */
 async function createFromWebhook(payload) {
   const doc = normalizePayload(payload);
   if (!doc.executionId) {
-    const record = await CallRecord.create(doc);
-    return record;
+    // Pre-fix: this branch created a row with executionId=null — the original
+    // ghost-call factory. Reject loudly instead.
+    return null;
   }
   const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
   if (existing) {
@@ -149,7 +156,13 @@ async function createFromWebhook(payload) {
     ).lean();
     return updated;
   }
-  const record = await CallRecord.create(doc);
+  // Tag provenance so the cleanup cron can age it out if it never matches a
+  // verified Bolna execution.
+  const record = await CallRecord.create({
+    ...doc,
+    source: 'webhook',
+    bolnaVerifiedAt: null,
+  });
   return record;
 }
 
@@ -392,6 +405,32 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
     update.status = norm.status;
   }
 
+  // Monotonic rank guard. Bolna 404s on aged executions and returns
+  // status='unknown' (rank 0); without this guard, a completed/failed/etc.
+  // (rank 10) row gets clobbered by raw $set, and the cron reconciler then
+  // escalates the regressed status to 'expired'. Mirror callSync.applyEvent's
+  // contract: never let status walk backward.
+  if (update.status) {
+    const existingRankRow = await CallRecord.findOne({ executionId: String(executionId) })
+      .select('status statusRank')
+      .lean();
+    if (existingRankRow) {
+      const existingRank = existingRankRow.statusRank ?? rankOf(existingRankRow.status);
+      const incomingRank = rankOf(update.status);
+      const sameRankTerminalEnrichment =
+        incomingRank === existingRank && isTerminal(update.status) && isTerminal(existingRankRow.status);
+      if (incomingRank < existingRank || (incomingRank === existingRank && !sameRankTerminalEnrichment)) {
+        delete update.status;
+      } else {
+        update.statusRank = incomingRank;
+        update.statusUpdatedAt = new Date();
+      }
+    } else {
+      update.statusRank = rankOf(update.status);
+      update.statusUpdatedAt = new Date();
+    }
+  }
+
   if (norm.fromPhoneNumber) update.fromPhoneNumber = String(norm.fromPhoneNumber);
   if (telephony.from_number && !update.fromPhoneNumber) {
     update.fromPhoneNumber = String(telephony.from_number);
@@ -483,7 +522,13 @@ async function createRecord(body) {
     delete rest.executionId;
     return CallRecord.findOneAndUpdate({ executionId: doc.executionId }, { $set: rest }, { new: true }).lean();
   }
-  return CallRecord.create(doc);
+  // Scheduler-seeded inserts come straight from a successful Bolna POST /call,
+  // so executionId is already authoritative — tag bolnaVerifiedAt now.
+  return CallRecord.create({
+    ...doc,
+    source: 'initiate',
+    bolnaVerifiedAt: new Date(),
+  });
 }
 
 async function updateCallRecordByExecutionId(executionId, updateData, options = {}) {
@@ -502,9 +547,15 @@ async function deleteCallRecord(id) {
 }
 
 async function findRecordsNeedingSync(limit = 20) {
+  // Terminal statuses are off-limits for re-poll. Including 'completed' here
+  // matters: a completed call without recording/transcript would otherwise be
+  // re-polled by syncMissingData → updateFromExecutionDetails (raw $set, no
+  // rank guard). If Bolna ages the execution out and 404s, we'd regress
+  // completed (rank 10) → unknown (rank 0); the cron reconciler then escalates
+  // unknown → expired. End state: recently-completed call shows as 'expired'.
   const list = await CallRecord.find({
     executionId: { $exists: true, $nin: [null, ''] },
-    status: { $nin: ['expired'] },
+    status: { $nin: TERMINAL_STATUSES },
     $or: [{ transcript: { $in: [null, ''] } }, { recordingUrl: { $in: [null, ''] } }],
   })
     .sort({ createdAt: -1 })
@@ -597,12 +648,39 @@ function executionToCallRecordDoc(exec, agentId) {
   return doc;
 }
 
+/**
+ * Decide whether a Bolna execution returned by the agent-list endpoint is
+ * actually OURS, not a foreign-tenant call leaking under a shared agent_id.
+ * Two ownership signals (any one is enough):
+ *   1. telephony_data.from_number matches BOLNA_FROM_PHONE_NUMBER (our caller id)
+ *   2. user_data carries one of our DB identifiers (job_id / candidate_id / application_id)
+ * If neither, we skip — better a missing row than a permanent ghost.
+ */
+function execLooksOwned(exec, ourFromPhone) {
+  const telephony = exec.telephony_data || {};
+  if (ourFromPhone) {
+    const from = String(telephony.from_number || '').replace(/\D/g, '');
+    const ours = String(ourFromPhone).replace(/\D/g, '');
+    if (ours && from && (from === ours || from.endsWith(ours.slice(-10)))) return true;
+  }
+  const ud = exec.user_data || {};
+  const idCandidates = [
+    ud.job_id, ud.jobId,
+    ud.candidate_id, ud.candidateId,
+    ud.application_id, ud.applicationId,
+  ];
+  if (idCandidates.some((v) => v != null && String(v).trim().length > 0)) return true;
+  return false;
+}
+
 async function backfillFromBolna(options = {}) {
   const bolnaService = (await import('./bolna.service.js')).default;
   const config = (await import('../config/config.js')).default;
   const maxPages = Math.min(Number(options.maxPages) || 2, 10);
+  const ourFromPhone = config.bolna?.fromPhoneNumber || '';
   let backfilled = 0;
   let errors = 0;
+  let skippedForeign = 0;
 
   // Backfill from both job recruiter agent and candidate agent
   const agentIds = [
@@ -628,12 +706,36 @@ async function backfillFromBolna(options = {}) {
         if (!doc) continue;
         try {
           const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
+          // Foreign-call guard: only allow inserts (not updates) for execs
+          // that look like ours. An existing row may legitimately be ours
+          // even if user_data is sparse (Bolna sometimes drops it on aged
+          // executions), so we let updates through unconditionally.
+          if (!existing && !execLooksOwned(exec, ourFromPhone)) {
+            skippedForeign += 1;
+            continue;
+          }
           if (existing) {
+            // Rank guard. Bolna's agent-list can return status='unknown' for
+            // executions that are queued / aged / errored in a way Bolna no
+            // longer knows about. Letting raw $set overwrite a terminal row
+            // (rank 10) lets the cron reconciler later escalate to 'expired'.
+            const existingRank = existing.statusRank ?? rankOf(existing.status);
+            const incomingRank = rankOf(doc.status);
+            const sameRankTerminalEnrichment =
+              incomingRank === existingRank &&
+              isTerminal(doc.status) &&
+              isTerminal(existing.status);
+            const allowStatusWrite =
+              incomingRank > existingRank || sameRankTerminalEnrichment;
             await CallRecord.updateOne(
               { executionId: doc.executionId },
             {
               $set: {
-                status: doc.status,
+                ...(allowStatusWrite && {
+                  status: doc.status,
+                  statusRank: incomingRank,
+                  statusUpdatedAt: new Date(),
+                }),
                 ...(doc.agentId && { agentId: doc.agentId }),
                 ...(doc.toPhoneNumber && {
                   toPhoneNumber: doc.toPhoneNumber,
@@ -653,7 +755,13 @@ async function backfillFromBolna(options = {}) {
             }
             );
           } else {
-            await CallRecord.create(doc);
+            // Tag provenance + Bolna-verified (we just got it from Bolna's
+            // agent-list, so by definition it exists upstream).
+            await CallRecord.create({
+              ...doc,
+              source: 'backfill',
+              bolnaVerifiedAt: new Date(),
+            });
             backfilled += 1;
           }
         } catch (_) {
@@ -663,7 +771,11 @@ async function backfillFromBolna(options = {}) {
     if (!result.has_more) break;
   }
   }
-  return { backfilled, errors };
+  if (skippedForeign > 0) {
+    const logger = (await import('../config/logger.js')).default;
+    logger.info(`[callRecord backfill] skipped ${skippedForeign} foreign exec(s) lacking ownership marker`);
+  }
+  return { backfilled, errors, skippedForeign };
 }
 
 async function fillMissingBusinessNameFromJobs(limit = 100) {

@@ -74,8 +74,29 @@ router.post(
   livekitController.removeParticipantPublic
 );
 
-// Recording start/stop require authentication.
-// Use POST /v1/livekit/recording/start and /stop (auth + meetings.record permission).
+/**
+ * POST /v1/public/recording/start
+ * Public recording start (no auth). Host email verified server-side via isParticipantHost.
+ * Body: { roomName, hostEmail }
+ */
+router.post(
+  '/recording/start',
+  publicWriteLimiter,
+  validate(livekitValidation.startRecordingPublic),
+  livekitController.startRecordingPublic
+);
+
+/**
+ * POST /v1/public/recording/stop
+ * Public recording stop (no auth). Host email verified server-side via isParticipantHost.
+ * Body: { egressId, roomName, hostEmail }
+ */
+router.post(
+  '/recording/stop',
+  publicWriteLimiter,
+  validate(livekitValidation.stopRecordingPublic),
+  livekitController.stopRecordingPublic
+);
 
 /**
  * GET /v1/public/recording/status/:roomName

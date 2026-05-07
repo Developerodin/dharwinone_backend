@@ -1,3 +1,9 @@
 node_modules
 bin
 src/docs/swaggerDef.js
+# Tests use top-level `await import()` (ES2022) — current eslintrc parser
+# is pinned at ecmaVersion 2020. Until the parser bump, ignore these files
+# rather than weaken global lint coverage.
+src/services/chatAssistant.semantic.test.js
+src/services/embeddingSync.scheduler.test.js
+src/utils/pinecone.util.test.js
