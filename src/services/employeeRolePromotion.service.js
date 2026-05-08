@@ -64,6 +64,43 @@ async function resolveApplicantCandidateRoleIdForUser(userRoleIds, canonicalCand
   return null;
 }
 
+/**
+ * Generate the `DBS<n>` employeeId for the Employee profile owned by `userId` when the user has
+ * just received (or already holds) the HR Employee role and the profile lacks an employeeId.
+ * Idempotent: if the profile already has an employeeId, returns it unchanged.
+ *
+ * - Picks the most-recently-updated Employee row for that owner (matches promotion logic above).
+ * - Triggers the gated pre-save in employee.model.js by setting `$locals.assignEmployeeIdNow = true`.
+ * - The model's persistence hook then locks the value forever; future saves can't clear it.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} userId - Login user id (Employee.owner)
+ * @param {{ employeeDocId?: import('mongoose').Types.ObjectId|string }} [opts] - Pin a specific Employee row
+ * @returns {Promise<string>} the employeeId now stored on the Employee doc, or '' if no profile exists
+ */
+export async function ensureEmployeeIdForOwner(userId, opts = {}) {
+  if (!userId) return '';
+  const pinnedId = opts.employeeDocId != null ? String(opts.employeeDocId) : '';
+  const emp = pinnedId
+    ? await Employee.findById(pinnedId)
+    : await Employee.findOne({ owner: userId }).sort({ updatedAt: -1 });
+  if (!emp) return '';
+  if (emp.employeeId && String(emp.employeeId).trim() !== '') {
+    return emp.employeeId;
+  }
+  emp.$locals = emp.$locals || {};
+  emp.$locals.assignEmployeeIdNow = true;
+  try {
+    await emp.save();
+  } catch (err) {
+    logger.warn(`[employeeRolePromotion] ensureEmployeeIdForOwner failed user=${String(userId)}: ${err?.message || err}`);
+    return emp.employeeId || '';
+  }
+  logger.info(
+    `[employeeRolePromotion] assigned employeeId=${emp.employeeId} to user=${String(userId)} employeeDoc=${String(emp._id)}`
+  );
+  return emp.employeeId || '';
+}
+
 let cachedRolePair = null;
 
 async function resolveCandidateAndEmployeeRoles() {
@@ -190,6 +227,9 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
 
   // Already using Employee role; drop legacy Candidate if both are present.
   if (hasEmployee) {
+    // User already holds HR Employee role: ensure their profile has an employeeId regardless of whether
+    // the duplicate-Candidate cleanup runs (covers users promoted earlier when ID gen was off).
+    await ensureEmployeeIdForOwner(promoteUid, { employeeDocId: emp._id });
     if (hasCandidate && candId) {
       await User.updateOne({ _id: promoteUid }, { $pull: { roleIds: candId } });
       const Student = (await import('../models/student.model.js')).default;
@@ -232,6 +272,8 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
     { _id: promoteUid },
     { $pull: { roleIds: candId } }
   );
+  // First-time promotion to HR Employee: generate persistent DBS<n> id on the profile.
+  await ensureEmployeeIdForOwner(promoteUid, { employeeDocId: emp._id });
   const Student = (await import('../models/student.model.js')).default;
   await Student.updateMany({ user: promoteUid }, { $set: { joiningDate: emp.joiningDate } });
   logger.info(

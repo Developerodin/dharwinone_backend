@@ -25,6 +25,9 @@ const jobApplicationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// B12 doc: One application per (job, candidate) — DB-enforced. A re-apply by the same candidate
+// to the same job is rejected at the User layer (account-exists 409) and would otherwise hit this
+// E11000 index violation. Intentional — pipeline status transitions act on the existing row.
 jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 
 jobApplicationSchema.plugin(toJSON);

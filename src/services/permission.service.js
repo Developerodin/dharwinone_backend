@@ -3,6 +3,21 @@ import User from '../models/user.model.js';
 import config from '../config/config.js';
 
 /**
+ * Domain prefixes whose resource name collides with another domain's resource (e.g. both
+ * `candidate.courses:` and `training.courses:` would derive to `courses.read` under the
+ * default rule). For these, we additionally emit a namespaced API permission
+ * (`<module>-<resource>.read/manage`) so route guards can target the specific domain
+ * without granting the other.
+ *
+ * Keep this list small — only add a key when removing the owning role permission must
+ * NOT silently still authorize via a sibling domain.
+ */
+const NAMESPACED_RESOURCE_KEYS = new Set([
+  'candidate.courses',
+  'training.courses',
+]);
+
+/**
  * Derive API permissions from raw domain permissions using a single rule:
  * - Permission format: "category.resource:view,create,edit,delete" (e.g. "settings.users:view,create,edit,delete").
  * - Rule: use the part after the first dot as the API resource name, then add .read / .manage.
@@ -11,8 +26,13 @@ import config from '../config/config.js';
  * - So "ats.jobs:view,..." → jobs.read, jobs.manage.
  * - So "logs.activity:view,..." → activity.read, activity.manage.
  *
- * No hardcoded mapping table: any new permission string follows the same rule, so new APIs
- * and frontend nav links stay in sync (resource name = part after first dot).
+ * Additionally: keys in NAMESPACED_RESOURCE_KEYS emit a namespaced permission
+ * (`<module>-<resource>.read/manage`) on top of the legacy resource form so colliding
+ * domains stay distinguishable on the API side.
+ *
+ * No hardcoded mapping table for the legacy form: any new permission string follows the
+ * same rule, so new APIs and frontend nav links stay in sync (resource name = part after
+ * first dot).
  *
  * @param {Set<string>} rawPermissions
  * @returns {Set<string>}
@@ -30,11 +50,18 @@ const deriveApiPermissions = (rawPermissions) => {
     if (!resource) continue;
 
     const actions = actionsPart.split(',').map((a) => a.trim().toLowerCase());
-    if (actions.includes('view')) {
-      apiPermissions.add(`${resource}.read`);
-    }
-    if (actions.some((a) => ['create', 'edit', 'delete'].includes(a))) {
-      apiPermissions.add(`${resource}.manage`);
+    const hasView = actions.includes('view');
+    const hasManage = actions.some((a) => ['create', 'edit', 'delete'].includes(a));
+
+    if (hasView) apiPermissions.add(`${resource}.read`);
+    if (hasManage) apiPermissions.add(`${resource}.manage`);
+
+    // Namespaced form for colliding resources (e.g. candidate.courses vs training.courses).
+    if (dotIndex >= 0 && NAMESPACED_RESOURCE_KEYS.has(key.trim())) {
+      const moduleId = key.substring(0, dotIndex).trim();
+      const namespaced = `${moduleId}-${resource}`;
+      if (hasView) apiPermissions.add(`${namespaced}.read`);
+      if (hasManage) apiPermissions.add(`${namespaced}.manage`);
     }
   }
 

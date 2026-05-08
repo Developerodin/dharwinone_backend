@@ -28,6 +28,7 @@ import jobRoute from './job.route.js';
 import externalJobRoute from './externalJob.route.js';
 import recruiterActivityRoute from './recruiterActivity.route.js';
 import recruiterExcelRoute from './recruiterExcel.route.js';
+import recruiterNoteRoute from './recruiterNote.route.js';
 import docsRoute from './docs.route.js';
 import openApiRoute from './openapi.route.js';
 import config from '../../config/config.js';
@@ -178,6 +179,10 @@ const defaultRoutes = [
   {
     path: '/recruiters',
     route: recruiterExcelRoute,
+  },
+  {
+    path: '/recruiters',
+    route: recruiterNoteRoute,
   },
   {
     path: '/ats/analytics',

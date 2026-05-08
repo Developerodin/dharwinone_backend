@@ -9,7 +9,7 @@ const ctcBreakdown = Joi.object({
   specialAllowances: Joi.number().optional().min(0),
   otherAllowances: Joi.number().optional().min(0),
   gross: Joi.number().optional().min(0),
-  currency: Joi.string().optional().trim().default('INR'),
+  currency: Joi.string().optional().trim().default('USD'),
 });
 
 const jobTypeLetter = Joi.string().valid('FT_40', 'PT_25', 'INTERN_UNPAID');

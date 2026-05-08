@@ -22,7 +22,9 @@ const getAuditLog = {
       type: Joi.string().valid(
         'leave', 'task', 'offer', 'meeting', 'meeting_reminder',
         'course', 'certificate', 'job_application', 'project',
-        'account', 'recruiter', 'assignment', 'sop', 'support_ticket', 'general'
+        'account', 'recruiter', 'assignment', 'sop', 'support_ticket',
+        'chat_message', 'joining_reminder', 'placement_update',
+        'onboarding_reminder', 'system', 'general'
       ),
       from: Joi.date().iso(),
       to: Joi.date().iso(),

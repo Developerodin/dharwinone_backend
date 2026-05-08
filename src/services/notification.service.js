@@ -2,6 +2,7 @@ import Notification from '../models/notification.model.js';
 import User from '../models/user.model.js';
 import logger from '../config/logger.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
+import { resolveNotificationLink } from '../utils/notificationLink.js';
 
 /**
  * In-app + queued notification entry points: `notify`, `notifyByEmail`, `createNotification`.
@@ -104,16 +105,28 @@ export const pushToSse = (userId, data) => {
  * @returns {Promise<Notification>}
  */
 export const createNotification = async (userId, options) => {
-  const { type = 'general', title, message, link = null, triggeredBy = null, relatedEntity = null } = options;
+  const {
+    type = 'general',
+    title,
+    message,
+    link = null,
+    triggeredBy = null,
+    relatedEntity = null,
+    metadata = null,
+  } = options;
+  // Auto-fill link from resolver when emitter omits it, so every stored
+  // notification carries a navigable destination for the frontend.
+  const finalLink = link || resolveNotificationLink({ type, link, relatedEntity, metadata });
   const doc = await Notification.create({
     user: userId,
     type,
     title,
     message,
-    link,
+    link: finalLink,
     read: false,
     ...(triggeredBy && { triggeredBy }),
     ...(relatedEntity?.type && { relatedEntity }),
+    ...(metadata && { metadata }),
   });
   const payload = doc.toJSON ? doc.toJSON() : doc;
   pushToSse(userId, { type: 'notification', notification: payload });
@@ -136,6 +149,18 @@ export const getUserNotifications = async (userId, options = {}) => {
     limit: options.limit || 20,
     sortBy: 'createdAt:desc',
   });
+  // Legacy docs may have null/invalid link — backfill via resolver so every
+  // notification returned to the client is navigable. Read-only enrichment;
+  // does not mutate stored docs.
+  if (Array.isArray(result?.results)) {
+    result.results = result.results.map((n) => {
+      const obj = n?.toObject ? n.toObject() : n;
+      if (!obj?.link || typeof obj.link !== 'string' || !obj.link.startsWith('/')) {
+        obj.link = resolveNotificationLink(obj);
+      }
+      return obj;
+    });
+  }
   return result;
 };
 
@@ -192,14 +217,14 @@ export const getUnreadCount = async (userId) => {
  * @returns {Promise<Notification|null>}
  */
 export const notifyByEmail = async (email, options) => {
-  const { type, title, message, link, email: emailBody } = options;
+  const { type, title, message, link, relatedEntity, metadata, triggeredBy, email: emailBody } = options;
   const normalized = String(email).trim().toLowerCase();
   const user = await User.findOne({ email: normalized }).select('_id email notificationPreferences').lean();
   if (!user?._id) return null;
 
   let doc = null;
   if (isChannelAllowed(type, 'inApp', user.notificationPreferences)) {
-    doc = await createNotification(user._id, { type, title, message, link });
+    doc = await createNotification(user._id, { type, title, message, link, relatedEntity, metadata, triggeredBy });
   }
 
   if (emailBody?.subject && (emailBody.text || emailBody.html)) {
@@ -233,12 +258,12 @@ export const notifyByEmail = async (email, options) => {
  * @returns {Promise<Notification>}
  */
 export const notify = async (userId, options) => {
-  const { type, title, message, link, email: emailOptions } = options;
+  const { type, title, message, link, relatedEntity, metadata, triggeredBy, email: emailOptions } = options;
   const user = await User.findById(userId).select('email notificationPreferences').lean();
 
   let doc = null;
   if (!user || isChannelAllowed(type, 'inApp', user?.notificationPreferences)) {
-    doc = await createNotification(userId, { type, title, message, link });
+    doc = await createNotification(userId, { type, title, message, link, relatedEntity, metadata, triggeredBy });
   }
 
   if (emailOptions?.subject && (emailOptions.text || emailOptions.html) && user?.email) {

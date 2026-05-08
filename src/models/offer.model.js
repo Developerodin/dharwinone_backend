@@ -9,7 +9,7 @@ const ctcBreakdownSchema = new mongoose.Schema(
     specialAllowances: { type: Number, default: 0 },
     otherAllowances: { type: Number, default: 0 },
     gross: { type: Number, default: 0 },
-    currency: { type: String, default: 'INR', trim: true },
+    currency: { type: String, default: 'USD', trim: true },
   },
   { _id: false }
 );

@@ -34,7 +34,9 @@ const placementSchema = new mongoose.Schema(
     employeeId: { type: String, trim: true, index: true },
     status: {
       type: String,
-      enum: ['Pending', 'Joined', 'Deferred', 'Cancelled'],
+      // Lifecycle: Pending (offer accepted, pre-boarding running) → Onboarding
+      // (pre-boarding done, awaiting joining-day) → Joined. Deferred/Cancelled are off-ramps.
+      enum: ['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled'],
       default: 'Pending',
       index: true,
     },
@@ -132,6 +134,21 @@ const placementSchema = new mongoose.Schema(
     _cancelledOfferRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Offer', default: null },
     /** Set when all required onboarding tasks are completed. Cleared if any task is un-done. */
     onboardingCompletedAt: { type: Date, default: null },
+    // ── B2 fix: Denormalized referral attribution (mirrors Employee.referredByUserId at offer-accept time) ──
+    referredByUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    referralLeadJti: { type: String, default: null, index: true, sparse: true },
+    referralAttributionLockedAt: { type: Date, default: null },
+    referralContext: {
+      type: String,
+      enum: ['SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY', null],
+      default: null,
+    },
+    referralJobTitle: { type: String, trim: true, default: null },
   },
   { timestamps: true }
 );

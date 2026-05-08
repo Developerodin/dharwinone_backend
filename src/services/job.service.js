@@ -860,11 +860,25 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   const emailNormalized = String(email || '').toLowerCase().trim();
 
   // Check if user with this email already exists
-  const existingUser = await User.findOne({ email: emailNormalized });
+  const existingUser = await User.findOne({ email: emailNormalized }).select('isEmailVerified status').lean();
   if (existingUser) {
+    // B8/B18 fix: differentiate verified vs unverified accounts so the candidate sees the right next step.
+    const isVerified = !!existingUser.isEmailVerified || existingUser.status === 'active';
+    if (isVerified) {
+      throw new ApiError(
+        httpStatus.CONFLICT,
+        'An account with this email already exists. Please log in and apply from your candidate dashboard.',
+        true,
+        '',
+        { errorCode: 'ACCOUNT_EXISTS_VERIFIED' }
+      );
+    }
     throw new ApiError(
       httpStatus.CONFLICT,
-      'An account with this email already exists. Please login to apply.'
+      'An account with this email already exists but is not yet verified. Check your inbox for the verification link, or request a new one before reapplying.',
+      true,
+      '',
+      { errorCode: 'ACCOUNT_EXISTS_UNVERIFIED' }
     );
   }
 
@@ -1016,40 +1030,54 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     accountContext: 'job application',
   });
 
+  // B5 fix: notify the job owner / recruiter that a new application has arrived.
+  try {
+    if (job.createdBy) {
+      const { notify, plainTextEmailBody } = await import('./notification.service.js');
+      const reviewPath = `/ats/jobs`;
+      const recruiterMsg = `${fullName} applied to "${job.title || 'your job'}".`;
+      notify(job.createdBy, {
+        type: 'application',
+        title: 'New job application',
+        message: recruiterMsg,
+        link: reviewPath,
+        email: {
+          subject: `New application: ${job.title || 'Job'}`,
+          text: plainTextEmailBody(recruiterMsg, reviewPath),
+        },
+      }).catch(() => {});
+    }
+  } catch (e) {
+    const log = (await import('../config/logger.js')).default;
+    log.warn(`recruiter notify on public apply failed: ${e?.message || e}`);
+  }
+
   // Initiate verification call via Bolna (async, don't wait) — skip for external listings
   if (phoneNumber && countryCode && job.jobOrigin !== 'external') {
     try {
       const config = (await import('../config/config.js')).default;
       const { initiateCandidateVerificationCall } = await import('./bolnaCandidateVerification.service.js');
 
+      // B16 fix: centralized E.164 normalization. Single source of truth for the digit/prefix
+      // dance — used for the Bolna call. Persistence schema keeps phone+countryCode separate so
+      // legacy data is unchanged; the normalized string is derived on the fly here.
+      const formatPhoneE164 = (raw, cc) => {
+        let d = String(raw || '').replace(/\D/g, '');
+        const known = ['91', '1', '44', '61'];
+        if (!known.some((p) => d.startsWith(p))) {
+          const prefix =
+            cc === 'IN' ? '91'
+            : cc === 'US' ? '1'
+            : cc === 'GB' ? '44'
+            : cc === 'AU' ? '61'
+            : '1';
+          d = prefix + d;
+        }
+        return '+' + d;
+      };
+
       logger.info(`Processing phone for ${fullName}: Raw="${phoneNumber}", Country="${countryCode}"`);
-
-      let formattedPhone = String(phoneNumber).replace(/\D/g, '');
-
-      logger.info(`After digit extraction: "${formattedPhone}"`);
-
-      if (
-        !formattedPhone.startsWith('91') &&
-        !formattedPhone.startsWith('1') &&
-        !formattedPhone.startsWith('44') &&
-        !formattedPhone.startsWith('61')
-      ) {
-        const countryPrefix =
-          countryCode === 'IN'
-            ? '91'
-            : countryCode === 'US'
-              ? '1'
-              : countryCode === 'GB'
-                ? '44'
-                : countryCode === 'AU'
-                  ? '61'
-                  : '1';
-        formattedPhone = countryPrefix + formattedPhone;
-        logger.info(`Added country prefix: "${formattedPhone}"`);
-      }
-
-      formattedPhone = '+' + formattedPhone;
-
+      const formattedPhone = formatPhoneE164(phoneNumber, countryCode);
       logger.info(`Final formatted phone: "${formattedPhone}" (length: ${formattedPhone.length})`);
 
       const digitsOnly = formattedPhone.replace(/\D/g, '');
@@ -1103,10 +1131,25 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
                 );
               } else {
                 logger.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
+                // B15 fix: surface Bolna failure on the JobApplication so the UI can stop showing
+                // "verification pending" forever. Status set to 'failed' (existing enum value).
+                JobApplication.updateOne(
+                  { _id: application._id },
+                  { $set: { verificationCallStatus: 'failed' } }
+                ).catch((err) => {
+                  logger.error('Failed to mark application verificationCallStatus=failed:', err);
+                });
               }
             })
             .catch((err) => {
               logger.error('Failed to initiate verification call:', err);
+              // B15 fix: thrown errors should also surface — mark the application failed.
+              JobApplication.updateOne(
+                { _id: application._id },
+                { $set: { verificationCallStatus: 'failed' } }
+              ).catch((updateErr) => {
+                logger.error('Failed to mark application verificationCallStatus=failed:', updateErr);
+              });
             });
         }
       }
@@ -1137,6 +1180,103 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   };
 };
 
+async function listJobBookmarks(jobId, userId) {
+  const job = await Job.findById(jobId).select('bookmarks').lean();
+  if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  const uid = String(userId);
+  return (job.bookmarks || [])
+    .filter((b) => b.visibility === 'public' || String(b.user) === uid)
+    .map((b) => ({
+      id: String(b._id),
+      jobId: String(jobId),
+      note: b.note,
+      visibility: b.visibility,
+      user: String(b.user),
+      createdAt: b.createdAt,
+    }))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+async function addJobBookmark(jobId, userId, { note, visibility = 'public' }) {
+  if (!note || !note.trim()) throw new ApiError(httpStatus.BAD_REQUEST, 'Note is required');
+  if (!['public', 'private'].includes(visibility)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid visibility');
+  }
+  const job = await Job.findById(jobId).select('_id');
+  if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  const entry = { user: userId, note: note.trim(), visibility, createdAt: new Date() };
+  const updated = await Job.findByIdAndUpdate(
+    jobId,
+    { $push: { bookmarks: entry } },
+    { new: true, projection: { bookmarks: { $slice: -1 } } }
+  ).lean();
+  const created = updated.bookmarks[updated.bookmarks.length - 1];
+  return {
+    id: String(created._id),
+    jobId: String(jobId),
+    note: created.note,
+    visibility: created.visibility,
+    user: String(created.user),
+    createdAt: created.createdAt,
+  };
+}
+
+async function deleteJobBookmark(jobId, bookmarkId, user) {
+  const job = await Job.findById(jobId).select('bookmarks');
+  if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  const bm = (job.bookmarks || []).find((b) => String(b._id) === String(bookmarkId));
+  if (!bm) throw new ApiError(httpStatus.NOT_FOUND, 'Note not found');
+  const uid = String(user.id || user._id);
+  if (String(bm.user) !== uid && !userIsAdmin(user)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You can only delete your own notes');
+  }
+  await Job.updateOne({ _id: jobId }, { $pull: { bookmarks: { _id: bookmarkId } } });
+  return { ok: true };
+}
+
+async function getJobStats(jobId) {
+  const job = await Job.findById(jobId).select('title status createdAt').lean();
+  if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  const objId = new mongoose.Types.ObjectId(jobId);
+
+  const [funnelAgg, total, recent] = await Promise.all([
+    JobApplication.aggregate([
+      { $match: { job: objId } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]),
+    JobApplication.countDocuments({ job: objId }),
+    JobApplication.find({ job: objId })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate('candidate', 'fullName email')
+      .lean(),
+  ]);
+
+  const statusOrder = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+  const counts = Object.fromEntries(statusOrder.map((s) => [s, 0]));
+  for (const row of funnelAgg) {
+    if (row._id && counts[row._id] != null) counts[row._id] = row.count;
+  }
+  const hired = counts.Hired || 0;
+  const conversionRate = total > 0 ? Math.round((hired / total) * 1000) / 10 : 0;
+
+  return {
+    jobId: String(jobId),
+    jobTitle: job.title,
+    jobStatus: job.status,
+    totalApplications: total,
+    funnel: statusOrder.map((status) => ({ status, count: counts[status] })),
+    conversionRate,
+    recentApplications: recent.map((a) => ({
+      id: String(a._id),
+      candidateName: a.candidate?.fullName || '',
+      candidateEmail: a.candidate?.email || '',
+      status: a.status,
+      appliedAt: a.createdAt,
+    })),
+  };
+}
+
 export {
   createJob,
   queryJobs,
@@ -1157,4 +1297,8 @@ export {
   isOwnerOrAdmin,
   publicApplyToJobService,
   applyJobReferralFromRef,
+  listJobBookmarks,
+  addJobBookmark,
+  deleteJobBookmark,
+  getJobStats,
 };

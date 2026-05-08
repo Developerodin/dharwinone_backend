@@ -133,6 +133,11 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
    * Self-referral: block when the **applicant's login user** is the same as the token referrer.
    * Do not use `Employee.owner` — public job apply sets owner to `job.createdBy` (recruiter), so
    * owner often equals the sharer's user id even for a legitimate external referral.
+   *
+   * B17 doc — known edge case: a user who refers themselves under a *different* email is not
+   * blocked here (no User row matches and the comparison short-circuits). Acceptable —
+   * detecting cross-email self-referral would need fuzzy matching on phone / IP / device id and
+   * is out of scope. Org-wide audit catches abuse via the activity-log override trail.
    */
   if (email) {
     const applicantUser = await User.findOne({ email }).select('_id').lean();

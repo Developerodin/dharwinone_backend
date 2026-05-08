@@ -93,6 +93,17 @@ const jobSchema = new mongoose.Schema(
       source: { type: String, trim: true },
     },
     externalPlatformUrl: { type: String, trim: true },
+
+    // Per-user bookmark notes. visibility='public' visible to all who can read the job;
+    // 'private' visible only to the note's owner.
+    bookmarks: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+        note: { type: String, required: true, trim: true, maxlength: 2000 },
+        visibility: { type: String, enum: ['public', 'private'], default: 'public' },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

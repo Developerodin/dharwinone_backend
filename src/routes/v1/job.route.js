@@ -68,6 +68,24 @@ router
   .post(auth(), validate(jobValidation.shareJobEmail), jobController.shareJobEmail);
 
 router
+  .route('/:jobId/bookmarks')
+  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.listBookmarks), jobController.listBookmarks)
+  .post(auth(), requirePermissions('jobs.read'), validate(jobValidation.addBookmark), jobController.addBookmark);
+
+router
+  .route('/:jobId/bookmarks/:bookmarkId')
+  .delete(
+    auth(),
+    requirePermissions('jobs.read'),
+    validate(jobValidation.deleteBookmark),
+    jobController.deleteBookmark
+  );
+
+router
+  .route('/:jobId/stats')
+  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobStats), jobController.jobStats);
+
+router
   .route('/:jobId')
   .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJob), jobController.get)
   .patch(auth(), requirePermissions('jobs.manage'), validate(jobValidation.updateJob), jobController.update)

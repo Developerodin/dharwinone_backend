@@ -20,6 +20,10 @@ import {
   canUserAccessJobTemplate,
   applyCandidateToJob,
   applyJobReferralFromRef,
+  listJobBookmarks,
+  addJobBookmark,
+  deleteJobBookmark,
+  getJobStats,
 } from '../services/job.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
@@ -431,10 +435,32 @@ const getPublicJob = catchAsync(async (req, res) => {
 const publicApplyToJob = catchAsync(async (req, res) => {
   // Import publicApplyToJobService dynamically
   const { publicApplyToJobService } = await import('../services/job.service.js');
-  
+
   const result = await publicApplyToJobService(req.params.jobId, req.body, req.files, { req });
-  
+
   res.status(httpStatus.CREATED).send(result);
+});
+
+const listBookmarks = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const results = await listJobBookmarks(req.params.jobId, userId);
+  res.send({ results });
+});
+
+const addBookmark = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const created = await addJobBookmark(req.params.jobId, userId, req.body);
+  res.status(httpStatus.CREATED).send(created);
+});
+
+const deleteBookmark = catchAsync(async (req, res) => {
+  await deleteJobBookmark(req.params.jobId, req.params.bookmarkId, req.user);
+  res.status(httpStatus.NO_CONTENT).send();
+});
+
+const jobStats = catchAsync(async (req, res) => {
+  const result = await getJobStats(req.params.jobId);
+  res.send(result);
 });
 
 export {
@@ -460,4 +486,8 @@ export {
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,
+  listBookmarks,
+  addBookmark,
+  deleteBookmark,
+  jobStats,
 };

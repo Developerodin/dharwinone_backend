@@ -181,6 +181,25 @@ const updateUserById = async (userId, updateBody) => {
     await ensureCandidateProfileForUser(user.id).catch((err) => {
       logger.warn(`ensureCandidateProfileForUser failed after updateUserById userId=${userId}: ${err?.message || err}`);
     });
+
+    // When admin assigns the HR Employee role from User Management, mint the persistent DBS<n>
+    // employeeId on this user's Employee profile (idempotent — no-op if already assigned).
+    try {
+      const { getRoleByName } = await import('./role.service.js');
+      const hrEmployeeRole = await getRoleByName('Employee');
+      if (hrEmployeeRole?._id) {
+        const hasHrEmployeeRole = (user.roleIds || []).some(
+          (id) => id && id.toString() === hrEmployeeRole._id.toString()
+        );
+        if (hasHrEmployeeRole) {
+          // eslint-disable-next-line import/no-cycle
+          const { ensureEmployeeIdForOwner } = await import('./employeeRolePromotion.service.js');
+          await ensureEmployeeIdForOwner(user.id);
+        }
+      }
+    } catch (err) {
+      logger.warn(`ensureEmployeeIdForOwner failed after updateUserById userId=${userId}: ${err?.message || err}`);
+    }
   }
   return user;
 };

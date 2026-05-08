@@ -32,16 +32,19 @@ export const permissionAliases = {
     'training.modules:create,edit,delete',
     'training.modules:view,create,edit,delete',
   ],
-  // Student courses: permission.service derives candidate.courses:view → courses.read (resource = "courses").
-  // So authContext.permissions has "courses.read" / "courses.manage", not "candidate.courses:view".
-  'students.courses.read': ['students.courses.read', 'students.read', 'students.manage', 'courses.read', 'courses.manage'],
-  'students.courses.manage': ['students.courses.manage', 'students.manage', 'courses.manage', 'courses.read'],
+  // Student courses: permission.service emits the namespaced `candidate-courses.read` /
+  // `candidate-courses.manage` for `candidate.courses:*` (in addition to the legacy
+  // `courses.read` / `courses.manage`). The student-courses route MUST gate on the
+  // namespaced form so that a Training admin who only has `training.courses:*` (which
+  // also derives to `courses.read`) cannot access the candidate-side student courses.
+  'students.courses.read': ['students.courses.read', 'candidate-courses.read', 'candidate-courses.manage'],
+  'students.courses.manage': ['students.courses.manage', 'candidate-courses.manage'],
   'students.quizzes.take': [
     'students.quizzes.take',
     'students.courses.read',
     'students.courses.manage',
-    'courses.read',
-    'courses.manage',
+    'candidate-courses.read',
+    'candidate-courses.manage',
   ],
   // Training analytics: allow modules.read / training.modules so analytics page is available to training users
   'training.analytics': ['training.analytics', 'training.analytics:view', 'training.modules.read', 'modules.read'],

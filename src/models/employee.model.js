@@ -230,23 +230,48 @@ const employeeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/**
+ * Compute the next `DBS<n>` serial from a list of existing employeeIds.
+ * Pure helper, exported for unit tests.
+ * @param {Array<{employeeId?: string}>} candidates
+ * @returns {number} next serial (1-based)
+ */
+export const nextDbsEmployeeIdSerial = (candidates) => {
+  let maxNumber = 0;
+  for (const c of candidates || []) {
+    const match = String(c?.employeeId || '').match(/^DBS(\d+)$/i);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNumber) maxNumber = num;
+    }
+  }
+  return maxNumber + 1;
+};
+
+/**
+ * Decide whether the gated pre-save should mint a fresh employeeId for this doc.
+ * Pure helper, exported for unit tests.
+ * @param {{ $locals?: { assignEmployeeIdNow?: boolean }, employeeId?: string }} doc
+ */
+export const shouldAssignEmployeeIdNow = (doc) => {
+  const flagged = doc?.$locals?.assignEmployeeIdNow === true;
+  const unset = !doc?.employeeId || String(doc.employeeId).trim() === '';
+  return flagged && unset;
+};
+
+/**
+ * Generate `DBS<n>` employeeId. Fires ONLY when caller sets `doc.$locals.assignEmployeeIdNow = true`
+ * AND no employeeId is currently set on the doc. Triggered by the role-promotion path when a user
+ * receives the HR Employee role — never on plain candidate/profile creation.
+ * Once generated and saved, the persistence hook below prevents clearing/rewriting.
+ */
 employeeSchema.pre('save', async function (next) {
-  if (this.isNew && (!this.employeeId || this.employeeId.trim() === '')) {
+  if (shouldAssignEmployeeIdNow(this)) {
     try {
       const candidatesWithIds = await this.constructor
         .find({ employeeId: { $exists: true, $ne: null, $regex: /^DBS\d+$/i } }, { employeeId: 1 })
         .lean();
-      let maxNumber = 0;
-      candidatesWithIds.forEach((candidate) => {
-        if (candidate.employeeId) {
-          const match = candidate.employeeId.match(/^DBS(\d+)$/i);
-          if (match) {
-            const num = parseInt(match[1], 10);
-            if (num > maxNumber) maxNumber = num;
-          }
-        }
-      });
-      this.employeeId = `DBS${maxNumber + 1}`;
+      this.employeeId = `DBS${nextDbsEmployeeIdSerial(candidatesWithIds)}`;
     } catch (error) {
       return next(error);
     }
@@ -270,9 +295,14 @@ employeeSchema.pre('save', function (next) {
   next();
 });
 
-// Resigned employees must keep their employee ID for records; do not allow clearing or changing it.
+/**
+ * employeeId is permanent once assigned — survives role changes, resignations, and any update path.
+ * If the persisted doc already has an employeeId, force the in-memory doc to the stored value before save.
+ * Allows transitioning from empty -> value (admin override / promotion-time gen), but never value -> empty
+ * and never value -> different value via plain saves.
+ */
 employeeSchema.pre('save', async function (next) {
-  if (this.isNew || !this.resignDate || !this.isModified('employeeId')) return next();
+  if (this.isNew) return next();
   try {
     const existing = await this.constructor.findById(this._id).select('employeeId').lean();
     if (existing?.employeeId) this.employeeId = existing.employeeId;

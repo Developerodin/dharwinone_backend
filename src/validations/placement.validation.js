@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
-const PLACEMENT_STATUSES = ['Pending', 'Joined', 'Deferred', 'Cancelled'];
+const PLACEMENT_STATUSES = ['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled'];
 
 const getPlacements = {
   query: Joi.object().keys({
@@ -70,7 +70,7 @@ const updatePlacement = {
   }),
   body: Joi.object()
     .keys({
-      status: Joi.string().valid('Pending', 'Joined', 'Deferred', 'Cancelled').optional(),
+      status: Joi.string().valid('Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled').optional(),
       preBoardingStatus: Joi.string().valid('Pending', 'In Progress', 'Completed').optional(),
       joiningDate: Joi.date().optional(),
       notes: Joi.string().trim().optional().allow('', null),

@@ -15,6 +15,7 @@ import { getPublicMeetingUrl } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 
 /** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
 const PIPELINE_STATUSES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'];
@@ -248,13 +249,37 @@ const createMeeting = async (body, userId) => {
   const meetingObj = meeting.toJSON();
   meetingObj.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
 
+  const rawCandId = meeting.candidate?.id;
+  const candidateIdForLog =
+    rawCandId && mongoose.Types.ObjectId.isValid(rawCandId) && String(new mongoose.Types.ObjectId(rawCandId)) === String(rawCandId)
+      ? rawCandId
+      : undefined;
+  logRecruiterActivity(userId, 'interview_scheduled', {
+    candidateId: candidateIdForLog,
+    meetingId: meeting._id,
+    description: `Scheduled interview: ${meeting.title || meeting.meetingId}`,
+    metadata: {
+      interviewType: meeting.interviewType,
+      jobPosition: meeting.jobPosition,
+      scheduledAt: meeting.scheduledAt,
+      durationMinutes: meeting.durationMinutes,
+      ...(candidateIdForLog ? {} : { candidateRawId: rawCandId || null }),
+    },
+  }).catch((err) => logger.warn('logRecruiterActivity interview_scheduled:', err?.message || err));
+
   // Update JobApplication to Interview when scheduling (candidate + job present)
   const candId = meeting.candidate?.id;
   const jobPos = (meeting.jobPosition || '').trim();
   if (candId && mongoose.Types.ObjectId.isValid(candId) && jobPos) {
     let jobObjId = null;
     if (/^[0-9a-fA-F]{24}$/.test(jobPos)) {
-      jobObjId = new mongoose.Types.ObjectId(jobPos);
+      // B6 fix: confirm the job still exists before referencing it. A bare ObjectId cast
+      // could leave the Meeting / JobApplication referencing a deleted job (silent inconsistency).
+      const j = await Job.findById(jobPos).select('_id').lean();
+      jobObjId = j?._id || null;
+      if (!jobObjId) {
+        logger.warn(`createMeeting: jobPosition ${jobPos} resolved to no existing Job; skipping JobApplication transition`);
+      }
     } else {
       const j = await Job.findOne({ title: { $regex: new RegExp(`^${jobPos.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }).select('_id').lean();
       jobObjId = j?._id;
@@ -489,7 +514,7 @@ const createPlacementFromInterview = async (meeting, userId) => {
     await offerService.createOffer(
       application._id.toString(),
       {
-        ctcBreakdown: { base: 0, hra: 0, gross: 0, currency: 'INR' },
+        ctcBreakdown: { base: 0, hra: 0, gross: 0, currency: 'USD' },
         joiningDate: defaultJoiningDateForInterviewOffer(),
       },
       userId

@@ -66,6 +66,10 @@ const notificationSchema = mongoose.Schema(
       },
       _id: false,
     },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
   },
   {
     timestamps: true,

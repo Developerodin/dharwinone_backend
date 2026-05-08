@@ -168,6 +168,19 @@ const createJobTemplate = {
       'string.empty': 'Job description cannot be empty',
     }),
     visibility: Joi.string().valid('public', 'private').optional(),
+    // Optional structured defaults — same shape as Job, none required.
+    jobType: Joi.string()
+      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+      .optional()
+      .allow(null, ''),
+    location: Joi.string().optional().trim().allow(null, ''),
+    skillTags: Joi.array().items(Joi.string().trim()).optional(),
+    salaryRange: salaryRange.optional(),
+    experienceLevel: Joi.string()
+      .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
+      .optional()
+      .allow(null, ''),
+    education: Joi.string().optional().trim().allow(null, ''),
   }).required(),
 };
 
@@ -196,6 +209,18 @@ const updateJobTemplate = {
       title: Joi.string().optional().trim(),
       jobDescription: Joi.string().optional().trim(),
       visibility: Joi.string().valid('public', 'private').optional(),
+      jobType: Joi.string()
+        .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+        .optional()
+        .allow(null, ''),
+      location: Joi.string().optional().trim().allow(null, ''),
+      skillTags: Joi.array().items(Joi.string().trim()).optional(),
+      salaryRange: salaryRange.optional(),
+      experienceLevel: Joi.string()
+        .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
+        .optional()
+        .allow(null, ''),
+      education: Joi.string().optional().trim().allow(null, ''),
     })
     .min(1),
 };
@@ -322,6 +347,29 @@ const publicApplyToJob = {
   }).required(),
 };
 
+const listBookmarks = {
+  params: Joi.object().keys({ jobId: Joi.string().custom(objectId).required() }),
+};
+
+const addBookmark = {
+  params: Joi.object().keys({ jobId: Joi.string().custom(objectId).required() }),
+  body: Joi.object().keys({
+    note: Joi.string().required().trim().max(2000),
+    visibility: Joi.string().valid('public', 'private').default('public'),
+  }),
+};
+
+const deleteBookmark = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+    bookmarkId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const getJobStats = {
+  params: Joi.object().keys({ jobId: Joi.string().custom(objectId).required() }),
+};
+
 export {
   createJob,
   getJobs,
@@ -343,4 +391,8 @@ export {
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,
+  listBookmarks,
+  addBookmark,
+  deleteBookmark,
+  getJobStats,
 };

@@ -15,6 +15,29 @@ const jobTemplateSchema = new mongoose.Schema(
       index: true,
     },
 
+    // -------------------------------------------------------------------
+    // Optional structured defaults — mirror the Job model so a recruiter
+    // who saves a template can prefill an entire job, not just the JD.
+    // None are required; templates remain valid with title + JD only.
+    // -------------------------------------------------------------------
+    jobType: {
+      type: String,
+      enum: ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'],
+    },
+    location: { type: String, trim: true },
+    skillTags: [{ type: String, trim: true }],
+    salaryRange: {
+      min: { type: Number },
+      max: { type: Number },
+      currency: { type: String, default: 'USD', trim: true },
+    },
+    experienceLevel: {
+      type: String,
+      enum: ['Entry Level', 'Mid Level', 'Senior Level', 'Executive'],
+      trim: true,
+    },
+    education: { type: String, trim: true },
+
     // `schema.index({ createdBy: 1 })` is declared below; `index: true` here would
     // create the same single-field index twice ("Duplicate schema index" warning).
     createdBy: {

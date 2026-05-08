@@ -65,14 +65,23 @@ const syncJoiningDateFromPlacement = async (placement) => {
   await Promise.all(tasks);
 };
 
-const VALID_STATUS = new Set(['Pending', 'Joined', 'Deferred', 'Cancelled']);
+const VALID_STATUS = new Set(['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled']);
 
+/**
+ * Lifecycle:
+ *   Pending    → Onboarding | Joined | Deferred | Cancelled  (pre-boarding queue; Joined kept for legacy/admin)
+ *   Onboarding → Pending | Joined | Deferred | Cancelled     (pre-boarding done, pre-join window)
+ *   Joined     → Deferred                                    (rare reversal)
+ *   Deferred   → Pending | Onboarding | Joined | Cancelled
+ *   Cancelled  → Pending | Onboarding | Deferred             (re-open)
+ */
 const allowedTransitions = {
-  Pending: new Set(['Joined', 'Deferred', 'Cancelled']),
+  Pending: new Set(['Onboarding', 'Joined', 'Deferred', 'Cancelled']),
+  Onboarding: new Set(['Pending', 'Joined', 'Deferred', 'Cancelled']),
   Joined: new Set(['Deferred']),
-  Deferred: new Set(['Pending', 'Joined', 'Cancelled']),
+  Deferred: new Set(['Pending', 'Onboarding', 'Joined', 'Cancelled']),
   /** Re-open a cancelled hire back into the pre-boarding queue. */
-  Cancelled: new Set(['Pending', 'Deferred']),
+  Cancelled: new Set(['Pending', 'Onboarding', 'Deferred']),
 };
 
 /**
@@ -472,8 +481,11 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
         { errorCode: 'PLACEMENT_STATUS_TRANSITION_INVALID' }
       );
     }
-    if (updateBody.status === 'Joined') {
-      if (!placement.joiningDate) {
+    // B4 fix: gate now enforced for both → Onboarding and → Joined.
+    // Previously only Joined was gated, allowing Pending → Onboarding to enter the onboarding stage
+    // (and set `onboardingCompletedAt`) while pre-boarding tasks were still incomplete.
+    if (updateBody.status === 'Onboarding' || updateBody.status === 'Joined') {
+      if (updateBody.status === 'Joined' && !placement.joiningDate) {
         throw new ApiError(
           httpStatus.UNPROCESSABLE_ENTITY,
           'Joining date is required before marking as Joined',
@@ -498,14 +510,16 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
           action: 'PREBOARDING_GATE_BYPASSED',
           actorId,
           fromValue: String(previousStatus),
-          toValue: 'Joined',
+          toValue: String(updateBody.status),
           details: {
             preBoardingStatus: placement.preBoardingStatus,
             effectiveSnapshotPreBoardingStatus: gateBasis.preBoardingStatus,
           },
         });
       }
-      placement.joinedAt = new Date();
+      if (updateBody.status === 'Joined') {
+        placement.joinedAt = new Date();
+      }
     }
     if (updateBody.status !== previousStatus) {
       if (updateBody.status === 'Deferred') {
@@ -635,7 +649,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   ) {
     try {
       const { notify, plainTextEmailBody } = await import('./notification.service.js');
-      const emp = await Employee.findById(placement.candidate).select('fullName').lean();
+      const emp = await Employee.findById(placement.candidate).select('fullName referredByUserId').lean();
       const candName = emp?.fullName || 'The candidate';
       const creatorId = placement.createdBy;
       if (creatorId) {
@@ -648,6 +662,20 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
           email: {
             subject: `Onboarding complete: ${candName}`,
             text: plainTextEmailBody(msg, '/ats/onboarding'),
+          },
+        }).catch(() => {});
+      }
+      // B1 fix: notify the original referrer when their referral completes onboarding.
+      if (emp?.referredByUserId && String(emp.referredByUserId) !== String(creatorId)) {
+        const referrerMsg = `Your referral ${candName} has completed onboarding.`;
+        notify(emp.referredByUserId, {
+          type: 'placement',
+          title: 'Your referral completed onboarding',
+          message: referrerMsg,
+          link: '/ats/onboarding',
+          email: {
+            subject: `Your referral ${candName} is fully onboarded`,
+            text: plainTextEmailBody(referrerMsg, '/ats/onboarding'),
           },
         }).catch(() => {});
       }
@@ -706,6 +734,25 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       } catch (e) {
         const log = (await import('../config/logger.js')).default;
         log.warn(`referral hire joined activity log failed: ${e?.message || e}`);
+      }
+      // B1 fix: notify the original referrer when their referral has joined.
+      if (String(emp.referredByUserId) !== String(placement.createdBy)) {
+        try {
+          const referrerMsg = `Your referral ${emp.fullName || 'a candidate'} has joined the company.`;
+          notify(emp.referredByUserId, {
+            type: 'placement',
+            title: 'Your referral has joined',
+            message: referrerMsg,
+            link: '/ats/onboarding',
+            email: {
+              subject: `Your referral ${emp.fullName || 'a candidate'} has joined`,
+              text: plainTextEmailBody(referrerMsg, '/ats/onboarding'),
+            },
+          }).catch(() => {});
+        } catch (e) {
+          const log = (await import('../config/logger.js')).default;
+          log.warn(`referrer hire-joined notify failed: ${e?.message || e}`);
+        }
       }
     }
     if (!placement.suppressCandidateNotifications) {

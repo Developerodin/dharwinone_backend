@@ -118,7 +118,13 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
     }
 
     /** Idle: no applications — do not clobber terminal/job-deletion rows unless profile catches up. */
+    // B10 fix: allow withdrawn/job_removed candidates to restore to 'profile_complete' once their
+    // profile is filled. Without this, a withdrawn referral stays terminally withdrawn even after
+    // the candidate completes their profile, blocking future pipeline visibility.
     if (current === 'job_removed' || current === 'withdrawn') {
+      if (isProfileCompleteLean(c) && current !== 'profile_complete') {
+        await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: 'profile_complete' } });
+      }
       return;
     }
 

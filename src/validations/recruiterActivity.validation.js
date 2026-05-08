@@ -10,7 +10,10 @@ const getActivityLogs = {
         'candidate_screened',
         'interview_scheduled',
         'note_added',
-        'feedback_added'
+        'feedback_added',
+        'offer_sent',
+        'offer_accepted',
+        'offer_rejected'
       )
       .optional(),
     startDate: Joi.date().optional(),

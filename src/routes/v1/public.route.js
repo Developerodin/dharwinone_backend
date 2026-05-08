@@ -135,10 +135,26 @@ router.get('/jobs/:jobId', validate(jobValidation.getPublicJob), jobController.g
  * POST /v1/public/jobs/:jobId/apply
  * Public job application (no auth). Creates user, candidate with resume, and job application.
  * Returns auth tokens for auto-login.
+ *
+ * B11 fix: lightweight CAPTCHA gate. When CAPTCHA_REQUIRED=true the request must include a
+ * non-empty `x-captcha-token` header (or `captchaToken` body field). Real verification (hCaptcha /
+ * reCaptcha / Cloudflare Turnstile) plugs into this middleware later — wire the provider call
+ * and reject on failure. Default ships open so existing clients keep working.
  */
+const captchaGate = (req, res, next) => {
+  if (String(process.env.CAPTCHA_REQUIRED || '').toLowerCase() !== 'true') return next();
+  const token = req.headers['x-captcha-token'] || req.body?.captchaToken;
+  if (!token || String(token).trim().length === 0) {
+    return res.status(400).json({ code: 400, message: 'Captcha verification required', errorCode: 'CAPTCHA_REQUIRED' });
+  }
+  // TODO: verify token with provider (hCaptcha / reCaptcha / Turnstile) before next().
+  return next();
+};
+
 router.post(
   '/jobs/:jobId/apply',
   publicRegistrationLimiter,
+  captchaGate,
   uploadJobApplicationFiles,
   validate(jobValidation.publicApplyToJob),
   jobController.publicApplyToJob

@@ -12,7 +12,16 @@ const recruiterActivityLogSchema = new mongoose.Schema(
     },
     activityType: {
       type: String,
-      enum: ['job_posting_created', 'candidate_screened', 'interview_scheduled', 'note_added', 'feedback_added'],
+      enum: [
+        'job_posting_created',
+        'candidate_screened',
+        'interview_scheduled',
+        'note_added',
+        'feedback_added',
+        'offer_sent',
+        'offer_accepted',
+        'offer_rejected',
+      ],
       required: true,
       index: true,
     },

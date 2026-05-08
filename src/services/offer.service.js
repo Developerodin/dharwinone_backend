@@ -9,6 +9,8 @@ import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
+import logger from '../config/logger.js';
 
 const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
 
@@ -383,7 +385,7 @@ const createOffer = async (jobApplicationId, payload, userId) => {
     specialAllowances: payload.ctcBreakdown?.specialAllowances ?? 0,
     otherAllowances: payload.ctcBreakdown?.otherAllowances ?? 0,
     gross,
-    currency: payload.ctcBreakdown?.currency ?? 'INR',
+    currency: payload.ctcBreakdown?.currency ?? 'USD',
   };
 
   const offer = await Offer.create({
@@ -463,7 +465,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       specialAllowances: cb.specialAllowances ?? offer.ctcBreakdown?.specialAllowances ?? 0,
       otherAllowances: cb.otherAllowances ?? offer.ctcBreakdown?.otherAllowances ?? 0,
       gross: cb.gross ?? offer.ctcBreakdown?.gross ?? 0,
-      currency: cb.currency ?? offer.ctcBreakdown?.currency ?? 'INR',
+      currency: cb.currency ?? offer.ctcBreakdown?.currency ?? 'USD',
     };
     delete updateBody.ctcBreakdown;
   }
@@ -490,6 +492,17 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       // Track when negotiation started for analytics and audit.
       offer.underNegotiationAt = new Date();
     } else if (newStatus === 'Accepted') {
+      // B7 fix: a placement requires a joiningDate. Reject Accept transitions when no joining date is set
+      // so Placement is never created with a missing/null joiningDate (Placement schema requires it).
+      if (!offer.joiningDate) {
+        throw new ApiError(
+          httpStatus.UNPROCESSABLE_ENTITY,
+          'Joining date must be set on the offer before it can be accepted.',
+          true,
+          '',
+          { errorCode: 'OFFER_JOINING_DATE_REQUIRED' }
+        );
+      }
       if (oldStatus !== 'Accepted') {
         offer.acceptedAt = new Date();
       }
@@ -497,7 +510,9 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
         await syncReferralPipelineStatusForCandidate(offer.candidate);
       }
-      const candidate = await Employee.findById(offer.candidate).select('employeeId joiningDate').lean();
+      const candidate = await Employee.findById(offer.candidate)
+        .select('employeeId joiningDate referredByUserId referralJti attributionLockedAt referralContext referralJobTitle')
+        .lean();
       // BUG-3 FIX: Use findOneAndUpdate upsert to avoid race condition between exists() check and create().
       // BUG-1 FIX: Only include joiningDate in the placement when it is set — Placement schema requires it.
       // EC-1 FIX: If the existing placement is Cancelled or Deferred (from a previous accept cycle),
@@ -514,6 +529,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         preBoardingStatus: 'Pending',
         preBoardingTasks: [],
         onboardingTasks: [],
+        // B2 fix: denormalize referral attribution onto placement.
+        referredByUserId: candidate?.referredByUserId || null,
+        referralLeadJti: candidate?.referralJti || null,
+        referralAttributionLockedAt: candidate?.attributionLockedAt || null,
+        referralContext: candidate?.referralContext || null,
+        referralJobTitle: candidate?.referralJobTitle || null,
       };
       if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
 
@@ -603,6 +624,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           }).catch(() => {});
         }
       }
+      // B3 fix: log offer_sent activity.
+      logRecruiterActivity(currentUser?._id || offer.createdBy, 'offer_sent', {
+        candidateId: offer.candidate,
+        description: `Sent offer for ${jobTitle}`,
+        metadata: { offerId: offer._id, jobTitle, joiningDate: offer.joiningDate },
+      }).catch((err) => logger.warn('logRecruiterActivity offer_sent:', err?.message || err));
     } else if (newStatus === 'Under Negotiation') {
       // Notify creator that candidate has entered negotiation.
       const creatorId = offer.createdBy?._id || offer.createdBy;
@@ -636,6 +663,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           },
         }).catch(() => {});
       }
+      // B3 fix: log offer_accepted activity.
+      logRecruiterActivity(currentUser?._id || creatorId, 'offer_accepted', {
+        candidateId: offer.candidate,
+        description: `Offer accepted for ${jobTitle}`,
+        metadata: { offerId: offer._id, jobTitle, joiningDate: offer.joiningDate },
+      }).catch((err) => logger.warn('logRecruiterActivity offer_accepted:', err?.message || err));
     } else if (newStatus === 'Rejected') {
       const creatorId = offer.createdBy?._id || offer.createdBy;
       if (creatorId) {
@@ -652,6 +685,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           },
         }).catch(() => {});
       }
+      // B3 fix: log offer_rejected activity.
+      logRecruiterActivity(currentUser?._id || creatorId, 'offer_rejected', {
+        candidateId: offer.candidate,
+        description: `Offer rejected for ${jobTitle}`,
+        metadata: { offerId: offer._id, jobTitle, rejectionReason: offer.rejectionReason || null },
+      }).catch((err) => logger.warn('logRecruiterActivity offer_rejected:', err?.message || err));
     }
   }
 
@@ -691,7 +730,7 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
       specialAllowances: cb.specialAllowances ?? offer.ctcBreakdown?.specialAllowances ?? 0,
       otherAllowances: cb.otherAllowances ?? offer.ctcBreakdown?.otherAllowances ?? 0,
       gross: cb.gross ?? offer.ctcBreakdown?.gross ?? 0,
-      currency: cb.currency ?? offer.ctcBreakdown?.currency ?? 'INR',
+      currency: cb.currency ?? offer.ctcBreakdown?.currency ?? 'USD',
     };
     delete updateBody.ctcBreakdown;
   }
@@ -837,6 +876,12 @@ const deleteOfferById = async (id, currentUser) => {
 /**
  * Validate and persist offer letter fields (POST /offers/:id/generate-letter).
  * Server-side PDF generation was removed; clients use browser print / Save as PDF only.
+ *
+ * B13 doc: there is no concurrent-PDF-overwrite risk because the server does NOT write the
+ * binary. The legacy `offerLetterKey/Url/Hash/GeneratedAt` fields are unset here so any cached
+ * S3 reference becomes stale-by-design when letter fields change. If S3 PDF storage is ever
+ * reintroduced, gate the upload behind a conditional update keyed on `offerLetterHash` to keep
+ * concurrent regenerates atomic.
  */
 const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const offer = await getOfferById(id, currentUser);

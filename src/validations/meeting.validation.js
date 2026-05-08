@@ -6,8 +6,16 @@ const hostSchema = Joi.object({
   email: Joi.string().trim().email().required(),
 });
 
-// id can be a MongoDB ObjectId or any string (e.g. mock/legacy ids from dropdowns)
-const optionalRefId = Joi.string().trim().allow('', null).max(128);
+// B9 fix: when an id is supplied it must be a 24-hex MongoDB ObjectId.
+// Empty string / null are still allowed for "no candidate selected" / "no recruiter selected".
+// Previously any free-form string passed (e.g. mock id "1"), which silently broke downstream
+// JobApplication.updateOne() (the candidate→Interview transition) and recruiter activity logging.
+const optionalRefId = Joi.string()
+  .trim()
+  .allow('', null)
+  .max(128)
+  .pattern(/^[0-9a-fA-F]{24}$/, { name: 'objectId' })
+  .messages({ 'string.pattern.name': 'must be a valid 24-character hex MongoDB id' });
 
 const candidateRefSchema = Joi.object({
   id: optionalRefId,
