@@ -194,6 +194,28 @@ const envVarsSchema = Joi.object()
 
     // Chatbot — two-stage pipeline (classifier + scoped fetcher)
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
+
+    // === AI Meeting Summary (Phase 1 — see docs/superpowers/specs/2026-05-11-...) ===
+    OPENAI_MODEL_SUMMARY: Joi.string().default('gpt-4o-mini'),
+    OPENAI_MODEL_EXTRACTION: Joi.string().default('gpt-4o'),
+    OPENAI_MAX_INPUT_TOKENS: Joi.number().default(120000),
+    SUMMARY_FINALIZE_TIMEOUT_MS: Joi.number().default(300000),
+    SUMMARY_WORKER_CONCURRENCY: Joi.number().default(4),
+    SUMMARY_MAP_WINDOW_TOKENS: Joi.number().default(6000),
+    SUMMARY_MAP_PARALLELISM: Joi.number().default(5),
+    AI_TRANSCRIPT_SEGMENT_WINDOW_MS: Joi.number().default(30000),
+    AI_TRANSCRIPT_SEGMENT_BATCH_LIMIT: Joi.number().default(50),
+    MAX_MEETING_DURATION_MINUTES: Joi.number().default(240),
+    MAX_TRANSCRIPT_TOKENS: Joi.number().default(200000),
+    REDIS_URL: Joi.string().default('redis://localhost:6379'),
+    REDIS_QUEUE_DB: Joi.number().default(1),
+    REDIS_PARTIAL_TRANSCRIPT_DB: Joi.number().default(2),
+    TRANSCRIPT_RETENTION_DAYS: Joi.number().default(365),
+    SUMMARY_RETENTION_DAYS: Joi.number().default(365),
+    AGENT_DISPATCH_RETENTION_DAYS: Joi.number().default(30),
+    PROCESSED_WEBHOOK_RETENTION_DAYS: Joi.number().default(7),
+    DLQ_RETENTION_DAYS: Joi.number().default(90),
+    PRESIGN_EXPIRY_SECONDS: Joi.number().default(900),
   })
   .unknown();
 
@@ -458,6 +480,32 @@ const config = {
   },
   chatbot: {
     twoStage: envVars.CHATBOT_TWO_STAGE,
+  },
+  ai: {
+    summaryModel: envVars.OPENAI_MODEL_SUMMARY,
+    extractionModel: envVars.OPENAI_MODEL_EXTRACTION,
+    maxInputTokens: envVars.OPENAI_MAX_INPUT_TOKENS,
+    finalizeTimeoutMs: envVars.SUMMARY_FINALIZE_TIMEOUT_MS,
+    workerConcurrency: envVars.SUMMARY_WORKER_CONCURRENCY,
+    mapWindowTokens: envVars.SUMMARY_MAP_WINDOW_TOKENS,
+    mapParallelism: envVars.SUMMARY_MAP_PARALLELISM,
+    segmentWindowMs: envVars.AI_TRANSCRIPT_SEGMENT_WINDOW_MS,
+    segmentBatchLimit: envVars.AI_TRANSCRIPT_SEGMENT_BATCH_LIMIT,
+    maxMeetingDurationMinutes: envVars.MAX_MEETING_DURATION_MINUTES,
+    maxTranscriptTokens: envVars.MAX_TRANSCRIPT_TOKENS,
+    presignExpirySeconds: envVars.PRESIGN_EXPIRY_SECONDS,
+  },
+  redis: {
+    url: envVars.REDIS_URL,
+    queueDb: envVars.REDIS_QUEUE_DB,
+    partialDb: envVars.REDIS_PARTIAL_TRANSCRIPT_DB,
+  },
+  retention: {
+    transcriptDays: envVars.TRANSCRIPT_RETENTION_DAYS,
+    summaryDays: envVars.SUMMARY_RETENTION_DAYS,
+    agentDispatchDays: envVars.AGENT_DISPATCH_RETENTION_DAYS,
+    processedWebhookDays: envVars.PROCESSED_WEBHOOK_RETENTION_DAYS,
+    dlqDays: envVars.DLQ_RETENTION_DAYS,
   },
 };
 
