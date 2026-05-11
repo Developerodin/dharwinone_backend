@@ -14,7 +14,48 @@ import { renderEmployees }    from './employees.js';
 import { renderPeople }       from './people.js';
 import { renderAttendance }   from './attendance.js';
 import { renderGenericCount } from './genericCount.js';
+import { renderJobs }         from './jobs.js';
 import { buildFallback, isEmptyResult, moduleForKind } from '../fallbackGenerator.js';
+
+// User-intent detector — distinguishes "how many jobs?" (wants a count card)
+// from "list all jobs" / "show every employee" (wants the full record set).
+// On list intent we suppress count-summary blocks for kinds whose only
+// structured renderer is renderGenericCount, so the LLM-streamed markdown
+// (which already carries the detailed list) renders through on the frontend
+// instead of being clobbered by a "Jobs (45) / Total: 45" card.
+const LIST_INTENT_RE = new RegExp(
+  [
+    '\\b(list|show|display|give|present|tell|enumerate)\\s+(me\\s+)?(all|every|each|complete|full|the)\\b',
+    '\\b(complete|full|detailed?|entire)\\s+list\\b',
+    '\\blist\\s+(jobs?|candidates?|employees?|offers?|placements?|leaves?|leave\\s+requests?|positions?|openings?|roles?|backdated\\s+\\w+)\\b',
+    '\\bshow\\s+(jobs?|candidates?|employees?|offers?|placements?|leaves?|positions?|openings?)\\b',
+    '\\bdetails?\\s+of\\s+(all|every|each)\\b',
+    '\\bwho\\s+(are|is)\\s+(all|every|the)\\b',
+  ].join('|'),
+  'i'
+);
+
+/**
+ * @param {string} msg
+ * @returns {boolean}
+ */
+export function detectListIntent(msg) {
+  if (!msg || typeof msg !== 'string') return false;
+  return LIST_INTENT_RE.test(msg);
+}
+
+// Kinds whose registered renderer is generic-count only (no per-record table).
+// On list intent these emit no block so the streamed markdown carries detail.
+// `fetch_jobs` is intentionally excluded — its dedicated renderer emits a
+// TableBlock when records exist (which paginates on the frontend) and decides
+// internally whether to fall back to count card / null based on list intent.
+const COUNT_ONLY_KINDS = new Set([
+  'fetch_leave_requests',
+  'fetch_backdated_attendance_requests',
+  'fetch_roles',
+  'fetch_placements',
+  'fetch_offers',
+]);
 
 // Kinds whose render output requires the matching `fetched` payload to be
 // present and non-empty (records, perDay rows, etc.). Generic-count kinds
@@ -54,8 +95,43 @@ const KIND_RENDERERS = {
     renderAttendance(fetched?.fetch_attendance_summary, ctx),
   fetch_leave_requests:                (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_backdated_attendance_requests: (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
-  fetch_jobs:                          (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
-  fetch_candidates:                    (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
+  fetch_jobs:                          (fact, fetched, ctx)  => renderJobs(fetched?.fetch_jobs, ctx, fact),
+  // fetch_candidates carries record rows (name/email/phone/status). Render as
+  // a TableBlock when records are present so "list them" shows actual people;
+  // fall back to count-only group block when no records were fetched.
+  fetch_candidates: (fact, fetched, ctx) => {
+    const data = fetched?.fetch_candidates;
+    const records = Array.isArray(data?.records) ? data.records : [];
+    if (records.length) {
+      const reshaped = {
+        records: records.map((r) => {
+          const roleNames = Array.isArray(r.roleNames) && r.roleNames.length
+            ? r.roleNames
+            : (Array.isArray(r.roleIds) && r.roleIds.length
+                ? r.roleIds.map((x) => (typeof x === 'object' ? x.name : x)).filter(Boolean)
+                : ['Candidate']);
+          return {
+            name: r.name,
+            email: r.email,
+            phone: r.phoneNumber || r.phone,
+            roleNames,
+            role: roleNames,
+            department: r.department || r.designation || null,
+            employmentState: r.status || 'active',
+          };
+        }),
+        total: data.total ?? records.length,
+        requestedRole: 'Candidate',
+      };
+      const out = renderEmployees(reshaped, { role: 'Candidate', ...ctx });
+      if (out) return out;
+    }
+    // No records: on list intent suppress the count card so the streamed
+    // markdown list (or fallback explanation) shows through. Otherwise
+    // keep the count summary for "how many candidates" style questions.
+    if (ctx?.listIntent) return null;
+    return renderGenericCount(fact, ctx);
+  },
   fetch_roles:                         (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_placements:                    (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_offers:                        (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
@@ -104,10 +180,21 @@ export function blocksFromFacts(facts, fetched, ctx = {}) {
     if (f && f !== facts.primary) order.push(f);
   }
 
+  const listIntent = detectListIntent(ctx.queryArg);
+  const renderCtx = { ...ctx, listIntent };
+
   for (const fact of order) {
     if (!fact?.kind) continue;
     const sourceKey = KIND_TO_FETCHED_KEY[fact.kind] || fact.kind;
     if (usedSourceKeys.has(sourceKey)) continue;
+
+    // List intent + count-only kind → suppress the count card so the LLM's
+    // streamed markdown list renders instead of being overridden by a
+    // summary block on the frontend (which gates content on blocks.length).
+    if (listIntent && COUNT_ONLY_KINDS.has(fact.kind)) {
+      usedSourceKeys.add(sourceKey);
+      continue;
+    }
 
     const sourcePayload = fetched ? fetched[sourceKey] : null;
 
@@ -130,7 +217,7 @@ export function blocksFromFacts(facts, fetched, ctx = {}) {
       continue;
     }
 
-    const out = renderBlock(fact.kind, fact, fetched, ctx);
+    const out = renderBlock(fact.kind, fact, fetched, renderCtx);
     if (!out) continue;
     usedSourceKeys.add(sourceKey);
 

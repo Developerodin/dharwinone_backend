@@ -278,43 +278,96 @@ async function fetchUsersByRole({ role, cursor, size, search, User, Role }) {
   };
 }
 
-async function fetchStudents({ cursor, size, search, Student }) {
-  const cursorClause = buildKeysetCursorClause(cursor);
-  const searchClause = search
-    ? { $or: [
-        { name:  { $regex: escapeRegex(search), $options: 'i' } },
-        { email: { $regex: escapeRegex(search), $options: 'i' } },
-      ] }
-    : {};
-  // No adminId filter — global fetch.
-  const filter = { ...cursorClause, ...searchClause };
+async function fetchStudents({ cursor, size, search, Student, User, Role }) {
+  // Student docs themselves carry no name/email — those live on the linked User.
+  // Resolve Administrator role ids so we can drop Student rows whose linked
+  // User also holds Administrator (regression fix — admins were bleeding into
+  // the student list when a Student doc referenced an admin owner).
+  let adminRoleIds = [];
+  if (Role) {
+    try {
+      const adminDocs = await Role.find(
+        { name: { $in: ['Administrator'] }, status: 'active' },
+        { _id: 1 }
+      ).lean();
+      adminRoleIds = adminDocs.map((d) => d._id);
+    } catch {
+      adminRoleIds = [];
+    }
+  }
+  const adminIdSet = new Set(adminRoleIds.map((id) => String(id)));
 
-  const [pageDocs, total] = await Promise.all([
-    Student.find(filter).sort({ _id: 1 }).limit(size + 1).lean(),
-    Student.countDocuments({ ...searchClause }),
+  const cursorClause = buildKeysetCursorClause(cursor);
+  const docFilter = { ...cursorClause };
+
+  // Pull more than `size` so admin / search filtering still leaves a full page.
+  const fetchSize = Math.max(size * 3, size + 5);
+  const [pageDocs, totalRaw] = await Promise.all([
+    Student.find(docFilter).sort({ _id: 1 }).limit(fetchSize + 1).lean(),
+    Student.countDocuments({}),
   ]);
 
-  const hasMore = pageDocs.length > size;
-  const records = pageDocs.slice(0, size);
+  const userIds = pageDocs.map((s) => s.user).filter(Boolean);
+  const users = User && userIds.length
+    ? await User.find(
+        { _id: { $in: userIds } },
+        { _id: 1, name: 1, email: 1, phoneNumber: 1, roleIds: 1 }
+      ).lean()
+    : [];
+  const userById = new Map(users.map((u) => [String(u._id), u]));
+
+  const safeSearch = search ? escapeRegex(search) : null;
+  const searchRe = safeSearch ? new RegExp(safeSearch, 'i') : null;
+
+  const filtered = [];
+  for (const s of pageDocs) {
+    const u = userById.get(String(s.user));
+    // Strict-equality role guard — never `.includes("admin")`. Drop students
+    // whose linked User carries any Administrator role id.
+    if (u?.roleIds?.some((rid) => adminIdSet.has(String(rid)))) continue;
+    if (searchRe) {
+      const hay = `${u?.name || ''} ${u?.email || ''}`.trim();
+      if (!searchRe.test(hay)) continue;
+    }
+    filtered.push({ s, u });
+    if (filtered.length >= size + 1) break;
+  }
+
+  const hasMore = filtered.length > size;
+  const records = filtered.slice(0, size);
 
   if (records.length === 0 && search) {
     return { records: [], page: emptyPage(), notFound: true, searchedFor: search, source: 'mongo:student:search' };
   }
 
-  const out = records.map((s) => ({
+  // Authoritative total = students whose linked User is non-admin. Compute via
+  // an adminUserIds set; falls back to raw count when Role isn't seeded.
+  let total = totalRaw;
+  if (adminRoleIds.length && User) {
+    const adminUserIds = (await User.find(
+      { roleIds: { $in: adminRoleIds } },
+      { _id: 1 }
+    ).lean()).map((u) => u._id);
+    if (adminUserIds.length) {
+      const adminStudentCount = await Student.countDocuments({ user: { $in: adminUserIds } });
+      total = Math.max(0, totalRaw - adminStudentCount);
+    }
+  }
+
+  const out = records.map(({ s, u }) => ({
     _id: s._id,
-    name: s.name || s.email || 'Unknown',
-    email: s.email || null,
-    phone: s.phoneNumber || null,
+    name: u?.name || u?.email || 'Unknown',
+    email: u?.email || null,
+    phone: u?.phoneNumber || s.phone || null,
     role: ['Student'],
     roleNames: ['Student'],
     designation: null,
     department: null,
     employmentState: 'active',
-    _orphan: false,
+    _orphan: !u,
   }));
 
-  const last = records[records.length - 1];
+  const last = records[records.length - 1]?.s;
   const nextCursor = hasMore && last ? { lastId: last._id } : null;
 
   return {
@@ -357,7 +410,7 @@ export async function fetchPeople({
       });
     }
     if (slug === 'student') {
-      return await fetchStudents({ cursor, size, search, Student });
+      return await fetchStudents({ cursor, size, search, Student, User, Role });
     }
     return await fetchUsersByRole({ role, cursor, size, search, User, Role });
   } catch (err) {

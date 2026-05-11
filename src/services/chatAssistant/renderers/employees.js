@@ -37,11 +37,31 @@ const stateTone = (s) => {
   return 'neutral';
 };
 
-const roleOf = (r) => {
-  if (Array.isArray(r.roleNames) && r.roleNames.length) return r.roleNames.join(', ');
-  if (Array.isArray(r.role) && r.role.length) return r.role.join(', ');
-  return r.role || '—';
+const roleNamesOf = (r) => {
+  if (Array.isArray(r.roleNames) && r.roleNames.length) return r.roleNames;
+  if (Array.isArray(r.role) && r.role.length) return r.role;
+  if (r.role) return [r.role];
+  return [];
 };
+
+const roleOf = (r) => {
+  const names = roleNamesOf(r);
+  return names.length ? names.join(', ') : '—';
+};
+
+const isEmployeeRecord = (r) => roleNamesOf(r).some((n) => /employee/i.test(String(n)));
+
+const formatDate = (d) => {
+  if (!d) return '';
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return '';
+  return t.toISOString().slice(0, 10);
+};
+
+// Accept legacy/alternate backend field names for employee ID + resign date.
+const pickEmployeeId = (r) => r.employeeId || r.empId || r.employee_code || '';
+const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
+const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
 
 // Full set of keys this renderer KNOWS how to populate. The visibility
 // layer picks the subset that the viewer + query actually deserve.
@@ -52,6 +72,8 @@ const CANDIDATE_COLUMNS = [
   { key: 'email',       label: 'Email',        priority: 'secondary' },
   { key: 'role',        label: 'Role',         priority: 'secondary' },
   { key: 'department',  label: 'Dept',         priority: 'secondary' },
+  { key: 'joinDate',    label: 'Join Date',    priority: 'secondary', format: 'date' },
+  { key: 'resignDate',  label: 'Resign Date',  priority: 'secondary', format: 'date' },
   { key: 'status',      label: 'Status',       priority: 'primary',   format: 'badge' },
 ];
 
@@ -70,15 +92,21 @@ export function renderEmployees(data, ctx = {}) {
   const titleNoun = role ? `${role}s` : 'Employees';
   const viewerRole = ctx.viewerRole || VIEWER_ROLES.OTHER;
 
-  // Build full-fat rows; the visibility layer strips keys the viewer is
-  // not allowed to see, so private data never reaches the wire.
+  // Build full-fat rows. Employee ID is gated PER ROW — only records whose
+  // role contains "Employee" get an ID rendered; admins/clients/candidates/
+  // students see a blank cell (rendered as "—"; pruned away if every row in
+  // the table is blank, e.g. an agents-only table).
+  // Resign date is blanked when unset OR still in the future (filed but not
+  // yet effective). Join date is shown whenever present.
   const rawRows = records.map((r) => ({
     name:        cell(r.name),
-    employeeId:  cell(r.employeeId),
+    employeeId:  cell(isEmployeeRecord(r) ? pickEmployeeId(r) : ''),
     appliedRole: cell(r.appliedRole || r.designation),
     email:       cell(r.email),
     role:        roleOf(r),
     department:  cell(r.department || r.designation),
+    joinDate:    cell(formatDate(pickJoinDate(r))),
+    resignDate:  cell(formatDate(pickResignDate(r))),
     status:      { v: cell(r.employmentState), tone: stateTone(r.employmentState) },
   }));
 

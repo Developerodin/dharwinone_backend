@@ -28,10 +28,10 @@ test('renderEmployees produces TableBlock with status tone + markdown twin', () 
   assert.equal(out.block.rows.length, 2);
   assert.equal(out.block.rows[0].status.tone, 'success');
   assert.equal(out.block.rows[1].status.tone, 'neutral');
-  // Agent profile defaults: Name + Status only — no Role/Dept/EmployeeId.
+  // Agent profile defaults: Name + Role + Status (email pruned — empty in test rows).
   const colKeys = out.block.columns.map((c) => c.key);
-  assert.deepEqual(colKeys, ['name', 'status']);
-  assert.match(out.markdown, /\| Name \| Status \|/);
+  assert.deepEqual(colKeys, ['name', 'role', 'status']);
+  assert.match(out.markdown, /\| Name \| Role \| Status \|/);
   assert.match(out.markdown, /Alice/);
 });
 
@@ -48,7 +48,7 @@ test('renderEmployees Agent query never reveals employeeId, even to viewerRole=e
   assert.equal(colKeys.includes('employeeId'), false);
 });
 
-test('renderEmployees Employee query exposes employeeId only to viewerRole=employee', () => {
+test('renderEmployees Employee query exposes employeeId to every viewer (record-side gate)', () => {
   const data = {
     requestedRole: 'Employee',
     total: 1,
@@ -56,11 +56,24 @@ test('renderEmployees Employee query exposes employeeId only to viewerRole=emplo
   };
   const asAdmin    = renderEmployees(data, { viewerRole: 'admin' });
   const asEmployee = renderEmployees(data, { viewerRole: 'employee' });
-  assert.equal(asAdmin.block.columns.some((c) => c.key === 'employeeId'),    false);
+  assert.equal(asAdmin.block.columns.some((c) => c.key === 'employeeId'),    true);
   assert.equal(asEmployee.block.columns.some((c) => c.key === 'employeeId'), true);
-  // Row payload mirrors the column ACL — admin's wire never carries the value.
-  assert.equal('employeeId' in asAdmin.block.rows[0],    false);
-  assert.equal('employeeId' in asEmployee.block.rows[0], true);
+  assert.equal(asAdmin.block.rows[0].employeeId,    'DBS01');
+  assert.equal(asEmployee.block.rows[0].employeeId, 'DBS01');
+});
+
+test('renderEmployees blanks employeeId per-row when record role is not Employee', () => {
+  const data = {
+    requestedRole: 'Employee',
+    total: 2,
+    records: [
+      { name: 'Alice', employeeId: 'DBS01', employmentState: 'Active', roleNames: ['Employee'] },
+      { name: 'Bob',   employeeId: 'ADM01', employmentState: 'Active', roleNames: ['Administrator'] },
+    ],
+  };
+  const out = renderEmployees(data, { viewerRole: 'admin' });
+  assert.equal(out.block.rows[0].employeeId, 'DBS01');
+  assert.equal(out.block.rows[1].employeeId, '—');
 });
 
 test('renderEmployees opts in role/dept only when query explicitly asks', () => {
@@ -173,9 +186,9 @@ test('renderPeople populated → TableBlock with profile-driven columns', () => 
   const out = renderPeople(data);
   assert.equal(out.block.type, 'table');
   assert.equal(out.block.tableType, 'agents');
-  // Agent profile = Name + Status. Legacy Role/Dept/EmpID columns dropped.
-  assert.deepEqual(out.block.columns.map((c) => c.key), ['name', 'status']);
-  assert.match(out.markdown, /\| Name \| Status \|/);
+  // Agent profile = Name + Role + Status (email pruned — empty in test rows).
+  assert.deepEqual(out.block.columns.map((c) => c.key), ['name', 'role', 'status']);
+  assert.match(out.markdown, /\| Name \| Role \| Status \|/);
 });
 
 test('renderPeople notFound → block null + legacy notFound markdown', () => {
@@ -273,4 +286,98 @@ test('blocksFromFacts returns empty arrays for null facts', () => {
   const out = blocksFromFacts(null, {}, {});
   assert.deepEqual(out.blocks, []);
   assert.deepEqual(out.markdownParts, []);
+});
+
+// ── list-intent suppression ────────────────────────────────────────────
+
+test('blocksFromFacts suppresses count-only kinds on list intent', () => {
+  const facts = {
+    primary: { kind: 'fetch_jobs', label: 'jobs', total: 45 },
+    counts: [{ kind: 'fetch_jobs', label: 'jobs', total: 45 }],
+  };
+  const out = blocksFromFacts(facts, {}, { queryArg: 'list all jobs' });
+  assert.equal(out.blocks.length, 0);
+});
+
+test('blocksFromFacts still emits count card without list intent', () => {
+  const facts = {
+    primary: { kind: 'fetch_jobs', label: 'jobs', total: 45 },
+    counts: [{ kind: 'fetch_jobs', label: 'jobs', total: 45 }],
+  };
+  const out = blocksFromFacts(facts, {}, { queryArg: 'how many jobs do we have' });
+  assert.equal(out.blocks.length, 1);
+  assert.equal(out.blocks[0].type, 'group');
+});
+
+test('blocksFromFacts list intent on candidates with no records suppresses card', () => {
+  const facts = {
+    primary: { kind: 'fetch_candidates', label: 'candidates', total: 3 },
+    counts: [{ kind: 'fetch_candidates', label: 'candidates', total: 3 }],
+  };
+  const out = blocksFromFacts(
+    facts,
+    { fetch_candidates: { records: [], total: 3 } },
+    { queryArg: 'show all candidates' }
+  );
+  assert.equal(out.blocks.length, 0);
+});
+
+test('blocksFromFacts list intent on jobs with records emits TableBlock for pagination', () => {
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    title: `Job ${i + 1}`,
+    jobType: 'Full-time',
+    location: 'Bangalore',
+    status: 'Active',
+    experienceLevel: 'Mid',
+    salaryRange: { min: 10, max: 20, currency: '₹' },
+    organisation: { name: 'Acme' },
+    jobOrigin: 'internal',
+  }));
+  const facts = {
+    primary: { kind: 'fetch_jobs', label: 'jobs', total: 12 },
+    counts: [{ kind: 'fetch_jobs', label: 'jobs', total: 12 }],
+  };
+  const fetched = { fetch_jobs: { records, counts: { internal: 12, external: 0, total: 12 }, label: 'job' } };
+  const out = blocksFromFacts(facts, fetched, { queryArg: 'list all jobs' });
+  assert.equal(out.blocks.length, 1);
+  assert.equal(out.blocks[0].type, 'table');
+  assert.equal(out.blocks[0].rows.length, 12);
+  assert.ok(out.blocks[0].columns.length > 0);
+});
+
+test('blocksFromFacts no-list-intent jobs without records still emits count card', () => {
+  const facts = {
+    primary: { kind: 'fetch_jobs', label: 'jobs', total: 45 },
+    counts: [{ kind: 'fetch_jobs', label: 'jobs', total: 45 }],
+  };
+  const out = blocksFromFacts(facts, { fetch_jobs: { records: [], counts: { total: 45 } } }, { queryArg: 'how many jobs' });
+  assert.equal(out.blocks.length, 1);
+  assert.equal(out.blocks[0].type, 'group');
+});
+
+test('blocksFromFacts list intent on jobs without records suppresses card', () => {
+  const facts = {
+    primary: { kind: 'fetch_jobs', label: 'jobs', total: 3 },
+    counts: [{ kind: 'fetch_jobs', label: 'jobs', total: 3 }],
+  };
+  const out = blocksFromFacts(facts, { fetch_jobs: { records: [], counts: { total: 3 } } }, { queryArg: 'list all jobs' });
+  assert.equal(out.blocks.length, 0);
+});
+
+test('blocksFromFacts list intent on candidates with records still emits table', () => {
+  const facts = {
+    primary: { kind: 'fetch_candidates', label: 'candidates', total: 1 },
+    counts: [{ kind: 'fetch_candidates', label: 'candidates', total: 1 }],
+  };
+  const fetched = {
+    fetch_candidates: {
+      records: [
+        { name: 'A', email: 'a@x.com', phoneNumber: '1', status: 'active', roleNames: ['Candidate'] },
+      ],
+      total: 1,
+    },
+  };
+  const out = blocksFromFacts(facts, fetched, { queryArg: 'list all candidates' });
+  assert.ok(out.blocks.length >= 1);
+  assert.equal(out.blocks[0].type, 'table');
 });

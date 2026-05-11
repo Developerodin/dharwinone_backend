@@ -21,22 +21,20 @@ import {
   applyColumnVisibility,
 } from '../columnVisibility.js';
 
-// ── canRenderEmployeeId — single source of truth for the hard rule ─────
+// ── canRenderEmployeeId — legacy predicate, now record-side gated ──────
 
-test('canRenderEmployeeId is true ONLY for the employee tier', () => {
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.EMPLOYEE),  true);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.ADMIN),     false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.AGENT),     false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.HR),        false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.RECRUITER), false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.CANDIDATE), false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.STUDENT),   false);
-  assert.equal(canRenderEmployeeId(VIEWER_ROLES.OTHER),     false);
-  assert.equal(canRenderEmployeeId(undefined),              false);
+test('canRenderEmployeeId is open for every viewer tier (record-side gate)', () => {
+  for (const tier of [
+    VIEWER_ROLES.EMPLOYEE, VIEWER_ROLES.ADMIN, VIEWER_ROLES.AGENT,
+    VIEWER_ROLES.HR, VIEWER_ROLES.RECRUITER, VIEWER_ROLES.CANDIDATE,
+    VIEWER_ROLES.STUDENT, VIEWER_ROLES.OTHER, undefined,
+  ]) {
+    assert.equal(canRenderEmployeeId(tier), true, `tier=${tier}`);
+  }
 });
 
-test('COLUMN_VISIBILITY_RULES.employeeId locks down to the employee tier', () => {
-  assert.deepEqual(COLUMN_VISIBILITY_RULES.employeeId.visibleFor, [VIEWER_ROLES.EMPLOYEE]);
+test('COLUMN_VISIBILITY_RULES is empty (record-side gate replaces viewer ACL)', () => {
+  assert.equal(COLUMN_VISIBILITY_RULES.employeeId, undefined);
 });
 
 // ── resolveViewerRole deterministic branches ───────────────────────────
@@ -61,23 +59,26 @@ test('isColumnAllowedForRole — unrestricted columns pass for any tier', () => 
   assert.equal(isColumnAllowedForRole({ key: 'status' }, VIEWER_ROLES.AGENT), true);
 });
 
-test('isColumnAllowedForRole — employeeId blocked for non-employee tiers', () => {
+test('isColumnAllowedForRole — employeeId is unrestricted (record-side gate)', () => {
   for (const tier of [VIEWER_ROLES.ADMIN, VIEWER_ROLES.AGENT, VIEWER_ROLES.HR,
                       VIEWER_ROLES.RECRUITER, VIEWER_ROLES.CANDIDATE,
-                      VIEWER_ROLES.STUDENT, VIEWER_ROLES.OTHER]) {
-    assert.equal(isColumnAllowedForRole({ key: 'employeeId' }, tier), false, `tier=${tier}`);
+                      VIEWER_ROLES.STUDENT, VIEWER_ROLES.OTHER,
+                      VIEWER_ROLES.EMPLOYEE]) {
+    assert.equal(isColumnAllowedForRole({ key: 'employeeId' }, tier), true, `tier=${tier}`);
   }
-  assert.equal(isColumnAllowedForRole({ key: 'employeeId' }, VIEWER_ROLES.EMPLOYEE), true);
 });
 
 // ── profileForRole ─────────────────────────────────────────────────────
 
 test('profileForRole maps queried role → default column whitelist', () => {
-  assert.deepEqual(profileForRole('Agent').defaultColumns,     ['name', 'status']);
-  assert.deepEqual(profileForRole('agents').defaultColumns,    ['name', 'status']);
-  assert.deepEqual(profileForRole('Recruiter').defaultColumns, ['name', 'status']);
-  assert.deepEqual(profileForRole('Candidate').defaultColumns, ['name', 'appliedRole', 'status']);
-  assert.deepEqual(profileForRole('Employee').defaultColumns,  ['name', 'employeeId', 'status', 'email']);
+  assert.deepEqual(profileForRole('Agent').defaultColumns,     ['name', 'email', 'role', 'status']);
+  assert.deepEqual(profileForRole('agents').defaultColumns,    ['name', 'email', 'role', 'status']);
+  assert.deepEqual(profileForRole('Recruiter').defaultColumns, ['name', 'email', 'role', 'status']);
+  assert.deepEqual(profileForRole('Candidate').defaultColumns, ['name', 'appliedRole', 'email', 'status']);
+  assert.deepEqual(
+    profileForRole('Employee').defaultColumns,
+    ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'],
+  );
   assert.deepEqual(profileForRole('').defaultColumns,          TABLE_PROFILES.people.defaultColumns);
   assert.deepEqual(profileForRole(null).defaultColumns,        TABLE_PROFILES.people.defaultColumns);
 });
@@ -118,7 +119,7 @@ test('pruneEmptyColumns is a no-op on empty rows', () => {
 
 // ── applyColumnVisibility — orchestrator ───────────────────────────────
 
-test('applyColumnVisibility strips employeeId for non-employee viewer', () => {
+test('applyColumnVisibility keeps employeeId for every viewer when rows carry it', () => {
   const candidates = [
     { key: 'name',       label: 'Name'  },
     { key: 'employeeId', label: 'Employee ID' },
@@ -126,23 +127,16 @@ test('applyColumnVisibility strips employeeId for non-employee viewer', () => {
   ];
   const rows = [{ name: 'Alice', employeeId: 'DBS01', status: { v: 'Active', tone: 'success' } }];
 
-  const asAdmin = applyColumnVisibility({
-    candidateColumns: candidates,
-    rows,
-    viewerRole: VIEWER_ROLES.ADMIN,
-    profile: TABLE_PROFILES.employees,
-  });
-  assert.equal(asAdmin.columns.some((c) => c.key === 'employeeId'), false);
-  assert.equal('employeeId' in asAdmin.rows[0], false);
-
-  const asEmployee = applyColumnVisibility({
-    candidateColumns: candidates,
-    rows,
-    viewerRole: VIEWER_ROLES.EMPLOYEE,
-    profile: TABLE_PROFILES.employees,
-  });
-  assert.equal(asEmployee.columns.some((c) => c.key === 'employeeId'), true);
-  assert.equal(asEmployee.rows[0].employeeId, 'DBS01');
+  for (const tier of [VIEWER_ROLES.ADMIN, VIEWER_ROLES.EMPLOYEE, VIEWER_ROLES.AGENT]) {
+    const out = applyColumnVisibility({
+      candidateColumns: candidates,
+      rows,
+      viewerRole: tier,
+      profile: TABLE_PROFILES.employees,
+    });
+    assert.equal(out.columns.some((c) => c.key === 'employeeId'), true, `tier=${tier}`);
+    assert.equal(out.rows[0].employeeId, 'DBS01', `tier=${tier}`);
+  }
 });
 
 test('applyColumnVisibility honours queryArg opt-in for role/dept', () => {
@@ -173,7 +167,7 @@ test('applyColumnVisibility honours queryArg opt-in for role/dept', () => {
   assert.equal(askDept.columns.some((c) => c.key === 'department'), true);
 });
 
-test('applyColumnVisibility forceInclude bypasses profile gate but NOT RBAC', () => {
+test('applyColumnVisibility forceInclude bypasses profile gate (no RBAC)', () => {
   const candidates = [
     { key: 'name',       label: 'Name' },
     { key: 'employeeId', label: 'Employee ID' },
@@ -187,6 +181,6 @@ test('applyColumnVisibility forceInclude bypasses profile gate but NOT RBAC', ()
     profile: TABLE_PROFILES.agents,        // profile excludes employeeId
     forceInclude: ['employeeId'],          // caller insists
   });
-  // Profile bypass succeeds, but RBAC still blocks employeeId for admin.
-  assert.equal(out.columns.some((c) => c.key === 'employeeId'), false);
+  assert.equal(out.columns.some((c) => c.key === 'employeeId'), true);
+  assert.equal(out.rows[0].employeeId, 'DBS01');
 });

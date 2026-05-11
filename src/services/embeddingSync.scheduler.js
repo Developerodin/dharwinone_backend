@@ -429,7 +429,7 @@ export function registerEmbeddingHooks() {
         { id: `student_${doc._id}`, values: emb, metadata: { adminId: String(u.adminId), mongoId: String(doc._id), isActive: true } },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] student hook error:', err.message);
+      logger.error(`[EmbeddingSync] student hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
@@ -458,7 +458,7 @@ export function registerEmbeddingHooks() {
         },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] job hook error:', err.message);
+      logger.error(`[EmbeddingSync] job hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
@@ -490,7 +490,7 @@ export function registerEmbeddingHooks() {
         },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] external job hook error:', err.message);
+      logger.error(`[EmbeddingSync] external job hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
@@ -526,7 +526,7 @@ export function registerEmbeddingHooks() {
         },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] user/employee hook error:', err.message);
+      logger.error(`[EmbeddingSync] user/employee hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
@@ -556,7 +556,7 @@ export function registerEmbeddingHooks() {
         },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] employee profile hook error:', err.message);
+      logger.error(`[EmbeddingSync] employee profile hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
@@ -588,7 +588,7 @@ export function registerEmbeddingHooks() {
         },
       ]);
     } catch (err) {
-      logger.warn('[EmbeddingSync] attendance hook error:', err.message);
+      logger.error(`[EmbeddingSync] attendance hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 

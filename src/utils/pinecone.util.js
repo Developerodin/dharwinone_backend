@@ -4,6 +4,7 @@ import logger from '../config/logger.js';
 
 let _client = null;
 let _index = null;
+let _ensureIndexPromise = null;
 
 function getClient() {
   if (_client) return _client;
@@ -17,6 +18,17 @@ function getIndex() {
   const client = getClient();
   _index = client.index(config.pinecone.indexName);
   return _index;
+}
+
+// Called once per process on first upsert. Without this, a rotated PINECONE_API_KEY
+// pointing at an empty project 404s every live hook silently.
+async function ensureIndexOnce() {
+  if (_ensureIndexPromise) return _ensureIndexPromise;
+  _ensureIndexPromise = ensureIndex().catch((err) => {
+    _ensureIndexPromise = null;
+    throw err;
+  });
+  return _ensureIndexPromise;
 }
 
 export async function ensureIndex() {
@@ -68,6 +80,7 @@ export async function pineconeUpsert(namespace, vectors) {
   if (valid.length < vectors.length) {
     logger.warn(`[Pinecone] upsert ${namespace}: skipped ${vectors.length - valid.length} records with missing values`);
   }
+  await ensureIndexOnce();
   const index = getIndex();
   let totalUpserted = 0;
   for (let i = 0; i < valid.length; i += PINECONE_UPSERT_BATCH) {

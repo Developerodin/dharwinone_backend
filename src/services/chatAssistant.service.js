@@ -78,13 +78,37 @@ const ROLE_ALIAS_MAP = {
   applicants:      'Candidate',
   student:         'Student',
   students:        'Student',
+  intern:          'Student',
+  interns:         'Student',
+  trainee:         'Student',
+  trainees:        'Student',
   employee:        'Employee',
   employees:       'Employee',
+  staff:           'Employee',
   admin:           'Administrator',
   admins:          'Administrator',
+  'super admin':   'Administrator',
+  superadmin:      'Administrator',
   administrator:   'Administrator',
   administrators:  'Administrator',
 };
+
+// Canonical role groups. Strict normalized-equality matching — never `.includes()` —
+// so "Administrator" never accidentally falls into Student or vice-versa.
+// Candidate and Employee are DISTINCT roles in Dharwin — never merged.
+// Resolution order at runtime: registry first (DB roles + previousNames),
+// then this map as cold-cache fallback.
+export const ROLE_GROUPS = {
+  employee:   ['Employee'],
+  candidate:  ['Candidate'],
+  student:    ['Student'],
+  salesAgent: ['SalesAgent', 'Sales Agent'],
+  agent:      ['Agent'],
+  recruiter:  ['Recruiter'],
+  admin:      ['Administrator'],
+};
+
+const ADMIN_ROLE_NAMES = ROLE_GROUPS.admin;
 
 export function normalizeRole(input) {
   if (!input) return null;
@@ -946,6 +970,21 @@ async function fetchModule(name, args, user) {
           roleIds: { $in: roleIdSet },
           platformSuperUser: { $ne: true },
         };
+        // Strict-group guard: when asking for Students, exclude users who also
+        // carry an Administrator role so admins never bleed into the student
+        // list (regression fix — student docs sometimes link to admin owners).
+        // Apply the same guard whenever a non-admin role is requested.
+        if (!ADMIN_ROLE_NAMES.includes(canonicalRole)) {
+          const adminRoleIdSet = new Set();
+          for (const adminName of ADMIN_ROLE_NAMES) {
+            const r = await resolveRoleIds(adminName);
+            for (const id of r.ids) adminRoleIdSet.add(String(id));
+          }
+          if (adminRoleIdSet.size) {
+            const adminIds = [...adminRoleIdSet].map((id) => new mongoose.Types.ObjectId(id));
+            baseQuery.roleIds = { $in: roleIdSet, $nin: adminIds };
+          }
+        }
         total = await User.countDocuments(baseQuery);
       } else {
         // Name search or fallback — span all roles for cross-role lookup.
@@ -1735,23 +1774,30 @@ async function fetchModule(name, args, user) {
       const limit = Math.min(args.limit || 100, 200);
       logger.info(`[ChatAssistant][fetch_candidates] userId=${userId} adminId=${adminId} limit=${limit} args=${JSON.stringify(args)}`);
 
-      // MongoDB is source of truth for candidates — Pinecone returns top-K by
-      // cosine similarity (often Employees, not Candidates), so role-based filtering
-      // through the vector index drops most or all matches → 0 results.
-      const candidateRole = await Role.findOne(
-        { name: { $regex: /^(candidate|applicant)$/i } },
+      // Candidate role lookup: strict name-equality on Role.name. The registry's
+      // resolveRoleIds resolves previousNames too, which (post Candidate→Employee
+      // rename history) pulls the Employee role doc into Candidate lookups —
+      // listing employees under "candidates". Direct Role.find keeps the two
+      // populations strictly separate.
+      const candidateRoleDocs = await Role.find(
+        { name: { $in: ROLE_GROUPS.candidate }, status: 'active' },
         { _id: 1, name: 1 }
       ).lean();
-      logger.info(`[ChatAssistant][fetch_candidates] candidateRole=${candidateRole?.name ?? 'NOT_FOUND'}`);
+      const candidateRoleIdList = candidateRoleDocs.map((d) => d._id);
+      logger.info(`[ChatAssistant][fetch_candidates] candidateRoleIds=${candidateRoleIdList.length} names=${candidateRoleDocs.map((d) => d.name).join(',')}`);
 
-      if (!candidateRole) {
+      if (!candidateRoleIdList.length) {
         return { total: 0, records: [], notFound: true, searchedFor: 'Candidate role', label: 'candidate' };
       }
 
+      // Parity with fetch_employees: NO adminId filter (global), use
+      // visibleUserStatusClause so pending candidates also surface — matches
+      // the Users module list exactly. The legacy adminId+status='active' pair
+      // excluded most candidates → total=0 even with 16 candidates on file.
       const baseQuery = {
-        status: 'active',
-        adminId: adminId,
-        roleIds: candidateRole._id,
+        status: visibleUserStatusClause(),
+        platformSuperUser: { $ne: true },
+        roleIds: { $in: candidateRoleIdList },
       };
       if (args.domain)   baseQuery.domain   = { $regex: escapeRegex(args.domain),   $options: 'i' };
       if (args.location) baseQuery.location = { $regex: escapeRegex(args.location), $options: 'i' };
@@ -2716,22 +2762,36 @@ function summarizeData(fetchedData) {
         ? `--- employees (${shown} shown of ${total} total${ebTag}${partialTag}) ---`
         : `--- employees (${total} total${ebTag}${partialTag}) ---`;
       const lines = [header];
+      const fmtDate = (d) => {
+        if (!d) return '';
+        const t = new Date(d);
+        return Number.isNaN(t.getTime()) ? '' : t.toISOString().slice(0, 10);
+      };
       for (const e of records) {
         const domains = Array.isArray(e.domain) && e.domain.length ? e.domain.join(', ') : 'None';
-        const roles = Array.isArray(e.roleNames) && e.roleNames.length
-          ? e.roleNames.join(', ')
+        const roleList = Array.isArray(e.roleNames) && e.roleNames.length
+          ? e.roleNames
           : (Array.isArray(e.roleIds) && e.roleIds.length
-              ? e.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean).join(', ')
-              : 'N/A');
-        let line =
-          `NAME: ${e.name || 'N/A'} | EMPLOYEE_ID: ${e.employeeId || 'N/A'} | ROLE: ${roles}` +
-          ` | EMAIL: ${e.email || 'N/A'} | PHONE: ${e.phoneNumber || 'N/A'}` +
+              ? e.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean)
+              : []);
+        const roles = roleList.length ? roleList.join(', ') : 'N/A';
+        const isEmployeeRole = roleList.some((r) => /employee/i.test(String(r)));
+        // Support alternate backend field names per spec.
+        const empIdVal  = e.employeeId || e.empId || e.employee_code || '';
+        const joinVal   = fmtDate(e.joiningDate || e.joinDate || e.dateOfJoining);
+        const resignVal = fmtDate(e.resignDate || e.resignationDate || e.exitDate);
+        let line = `NAME: ${e.name || 'N/A'}`;
+        // EMPLOYEE_ID only for users carrying the Employee role.
+        if (isEmployeeRole && empIdVal) line += ` | EMPLOYEE_ID: ${empIdVal}`;
+        line += ` | ROLE: ${roles} | EMAIL: ${e.email || 'N/A'} | PHONE: ${e.phoneNumber || 'N/A'}` +
           ` | LOCATION: ${e.location || 'N/A'} | DOMAINS: ${domains} | STATUS: ${e.status || 'N/A'}`;
         if (e.designation)   line += ` | DESIGNATION: ${e.designation}`;
         if (e.department)    line += ` | DEPARTMENT: ${e.department}`;
         if (e.shortBio)      line += ` | BIO: ${e.shortBio}`;
-        if (e.joiningDate)   line += ` | JOINING_DATE: ${new Date(e.joiningDate).toISOString().slice(0, 10)}`;
-        if (e.resignDate)    line += ` | RESIGN_DATE: ${new Date(e.resignDate).toISOString().slice(0, 10)}`;
+        if (joinVal)         line += ` | JOIN_DATE: ${joinVal}`;
+        // Show resign date whenever it exists (past OR future). Per spec, do
+        // NOT hide resign date for resigned employees.
+        if (resignVal)       line += ` | RESIGN_DATE: ${resignVal}`;
         if (e.employmentState) line += ` | EMPLOYMENT_STATE: ${e.employmentState}`;
         if (Array.isArray(e.skills) && e.skills.length) {
           const skillStr = e.skills.map((s) => s.name + (s.level ? ` (${s.level})` : '')).join(', ');
@@ -2889,8 +2949,12 @@ function summarizeData(fetchedData) {
       const employmentBits = [];
       if (e.designation) employmentBits.push(`DESIGNATION: ${e.designation}`);
       if (e.department) employmentBits.push(`DEPARTMENT: ${e.department}`);
-      if (e.joiningDate) employmentBits.push(`JOINING: ${new Date(e.joiningDate).toISOString().slice(0, 10)}`);
-      if (e.resignDate) employmentBits.push(`RESIGN: ${new Date(e.resignDate).toISOString().slice(0, 10)}`);
+      const _joinSrc = e.joiningDate || e.joinDate || e.dateOfJoining;
+      if (_joinSrc) employmentBits.push(`JOIN_DATE: ${new Date(_joinSrc).toISOString().slice(0, 10)}`);
+      // Show resign date whenever set (past OR future) — never hide for
+      // resigned employees, per spec.
+      const _resignSrc = e.resignDate || e.resignationDate || e.exitDate;
+      if (_resignSrc) employmentBits.push(`RESIGN_DATE: ${new Date(_resignSrc).toISOString().slice(0, 10)}`);
       if (e.isActive !== null && e.isActive !== undefined) employmentBits.push(`ACTIVE: ${e.isActive ? 'Yes' : 'No'}`);
       if (e.leavesAllowed != null) employmentBits.push(`LEAVES_ALLOWED: ${e.leavesAllowed}`);
       if (employmentBits.length) lines.push(`EMPLOYMENT: ${employmentBits.join(' | ')}`);
@@ -3553,13 +3617,21 @@ function buildSystemPrompt(user, dataContext, memorySummary, lastEntities) {
     `17. STRICT FACTUAL MODE FOR COUNTS: numeric facts (employee counts, agent counts, attendance totals, leave counts, candidate counts, applicant counts, project totals, role counts, offer/placement totals, attendance breakdown numbers) MUST be quoted EXACTLY from the section headers / AUTHORITATIVE_COUNT_FOR_HOW_MANY tags / EMPLOYMENT_TOTALS lines. NEVER use words like "approximately", "around", "about", "roughly", "estimated", or "summarised". NEVER recompute by counting NAME lines. NEVER round. If two numbers conflict in the data context, prefer the AUTHORITATIVE tag and surface the conflict in the reply (one short sentence). The post-LLM validator will overwrite any number you produce that disagrees with the retrieval layer — saving you from being wrong, but you should not rely on it.\n` +
     `18. ENTITY-TYPE LOCK: when the retrieval call carried a specific role (Agent, Recruiter, Administrator, SalesAgent, Student, Candidate) the noun in your reply MUST be that role — never a parent category. "How many agents?" with retrieval role=Agent must answer "7 agents", NEVER "7 employees" even if every agent is also an employee. The "Last referenced entities → role" line in this prompt and any non-empty <role> in the data section header are LOCKED for the entire turn AND for follow-up turns ("are you sure?", "list them", "show me", "yes") until the user names a different role. Mixing entity types ("agents" → "employees" → "people") between count and list within the SAME conversation is a hallucination — the retrieval layer always returns ONE entity type per call.\n` +
     `19. USER_FACING_TEMPLATE: when a section contains a "USER_FACING_TEMPLATE:" block, prefer that prose over the generic fallback in rule 6. Mirror it: keep the contextual reasons, the suggested next actions, and the specific query name. You may lightly rewrite tone for the current conversation, but do NOT add new reasons, do NOT change the suggested actions, and do NOT invent details not present in the template.\n` +
-    `20. BLOCKS_INVENTORY: if the data context contains a "--- BLOCKS_INVENTORY ---" section, the listed blocks (tables, fallbacks, KV summaries, badge rows) WILL be rendered below your reply automatically. Do NOT re-render rows, counts, or per-record fields as a Markdown table inline — you would duplicate the structured view. Instead, write a short prose intro (one or two sentences) and reference the block by name: e.g. "Here are all 7 agents — see the table below." or "I couldn't find a match — details below.". Authoritative counts from headers / AUTHORITATIVE_COUNT_FOR_HOW_MANY tags MUST still appear in your prose so the count reads naturally. When BLOCKS_INVENTORY is empty or absent, fall back to the normal RESPONSE FORMAT rules below.\n\n` +
+    `20. BLOCKS_INVENTORY: if the data context contains a "--- BLOCKS_INVENTORY ---" section, the listed blocks (tables, fallbacks, KV summaries, badge rows) WILL be rendered below your reply automatically. Do NOT re-render rows, counts, or per-record fields as a Markdown table inline — you would duplicate the structured view. Instead, write a short prose intro (one or two sentences) and reference the block by name: e.g. "Here are all 7 agents — see the table below." or "I couldn't find a match — details below.". Authoritative counts from headers / AUTHORITATIVE_COUNT_FOR_HOW_MANY tags MUST still appear in your prose so the count reads naturally. When BLOCKS_INVENTORY is empty or absent, fall back to the normal RESPONSE FORMAT rules below.\n` +
+    `21. PERSON FIELD VISIBILITY:\n` +
+    `   - ALWAYS show (when present): Name, Email, Role, Join Date, Status.\n` +
+    `   - Show **Employee ID** ONLY when ROLE contains "Employee". For Admins, Clients, Candidates, or any other role, OMIT the Employee ID line entirely — do not write "Employee ID: N/A" or "—". Backend may emit the field under any of: employeeId, empId, employee_code.\n` +
+    `   - Show **Resign Date** WHENEVER it exists on the record — past OR future. Never hide it for resigned employees. Backend may emit the field under any of: resignDate, resignationDate, exitDate. Omit only when none of those are set.\n` +
+    `   - Backend may emit join date under any of: joiningDate, joinDate, dateOfJoining.\n` +
+    `   - Use compact vertical labels (one field per line). Do not render employee details as a wide horizontal Markdown table — the chat bubble is narrow and tables overflow.\n\n` +
     `RESPONSE FORMAT (use Markdown):\n` +
     `- Write naturally, like a helpful HR colleague.\n` +
-    `- For a single person: use bold labels followed by the value on separate lines, e.g.:\n` +
-    `  **Name:** Prakhar Sharma\n  **Employee ID:** DBS70\n  **Designation:** Full Stack Developer\n  **Department:** Engineering\n  **Email:** prakhar@example.com\n  **Phone:** 9999999999\n  **Skills:** React (Intermediate), Node.js (Intermediate)\n` +
-    `- For a list of people: use a numbered or bulleted list, one person per line with key info inline.\n` +
-    `- For jobs or structured data with multiple fields: use a markdown table.\n` +
+    `- For a single person: bold labels, value on separate lines. Always include Name, Email, Role, Join Date, Status when present. Include Employee ID ONLY for users with the Employee role. Include Resign Date whenever the record has one (past OR future). Example for an employee (resigned):\n` +
+    `  **Name:** Sai Ram\n  **Email:** sairam90804@gmail.com\n  **Role:** Employee\n  **Employee ID:** DBS70\n  **Join Date:** 2025-02-10\n  **Resign Date:** 2026-04-20\n  **Status:** Resigned\n` +
+    `  Example for an admin / non-employee role (no Employee ID, no Resign Date when none set):\n` +
+    `  **Name:** Anjali Rao\n  **Email:** anjali@example.com\n  **Role:** Administrator\n  **Join Date:** 2023-08-04\n  **Status:** Active\n` +
+    `- For a list of people: vertical bulleted list, one field per line per person — Name, Email, Role, Employee ID (Employee role only), Join Date, Resign Date (whenever set), Status. Do NOT render a wide Markdown table — chat width is narrow.\n` +
+    `- For jobs or structured non-person data with multiple fields: a markdown table is OK (the renderer paginates and word-wraps).\n` +
     `- For counts/stats: bold the number, then one sentence of context.\n` +
     `- Use **bold** for labels and important values. Use \`---\` as a section divider only when showing multiple distinct sections.\n` +
     `- Keep responses concise. No filler like "Let me know if you need more information!". Just answer.\n` +

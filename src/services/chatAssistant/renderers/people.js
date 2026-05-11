@@ -26,6 +26,26 @@ const stateTone = (s) => {
   return 'neutral';
 };
 
+const roleNamesOf = (r) => {
+  if (Array.isArray(r.roleNames) && r.roleNames.length) return r.roleNames;
+  if (Array.isArray(r.role) && r.role.length) return r.role;
+  if (r.role) return [r.role];
+  return [];
+};
+
+const isEmployeeRecord = (r) => roleNamesOf(r).some((n) => /employee/i.test(String(n)));
+
+const formatDate = (d) => {
+  if (!d) return '';
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return '';
+  return t.toISOString().slice(0, 10);
+};
+
+const pickEmployeeId = (r) => r.employeeId || r.empId || r.employee_code || '';
+const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
+const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
+
 const CANDIDATE_COLUMNS = [
   { key: 'name',        label: 'Name',         priority: 'primary' },
   { key: 'employeeId',  label: 'Employee ID',  priority: 'primary',   format: 'mono' },
@@ -33,6 +53,8 @@ const CANDIDATE_COLUMNS = [
   { key: 'email',       label: 'Email',        priority: 'secondary' },
   { key: 'role',        label: 'Role',         priority: 'secondary' },
   { key: 'department',  label: 'Dept',         priority: 'secondary' },
+  { key: 'joinDate',    label: 'Join Date',    priority: 'secondary', format: 'date' },
+  { key: 'resignDate',  label: 'Resign Date',  priority: 'secondary', format: 'date' },
   { key: 'status',      label: 'Status',       priority: 'primary',   format: 'badge' },
 ];
 
@@ -71,11 +93,13 @@ export function renderPeople(data, ctx = {}) {
 
   const rawRows = records.map((r) => ({
     name:        cell(r.name),
-    employeeId:  cell(r.employeeId),
+    employeeId:  cell(isEmployeeRecord(r) ? pickEmployeeId(r) : ''),
     appliedRole: cell(r.appliedRole || r.designation),
     email:       cell(r.email),
     role:        Array.isArray(r.role) ? r.role.join(', ') : cell(r.role),
     department:  cell(r.department || r.designation),
+    joinDate:    cell(formatDate(pickJoinDate(r))),
+    resignDate:  cell(formatDate(pickResignDate(r))),
     status:      { v: cell(r.employmentState), tone: stateTone(r.employmentState) },
   }));
 

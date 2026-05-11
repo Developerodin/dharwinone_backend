@@ -14,9 +14,11 @@
 // rows, then route through `applyColumnVisibility` so RBAC/profile/prune
 // decisions live in one place — no scattered conditionals in renderers.
 //
-// HARD RULE: Employee ID is visible ONLY to viewers whose effective role is
-// 'employee'. Admin / Agent / Recruiter / HR / Candidate / Student / Other
-// never see it, even if the row carries one.
+// RECORD-SIDE RULE: Employee ID is rendered ONLY for rows whose record role
+// contains "Employee" (admins, clients, candidates, etc. get a blank cell —
+// see the renderer). Any viewer may see the column when at least one row
+// qualifies; the renderer-level prune drops the column if every cell is
+// blank.
 
 import Role from '../../models/role.model.js';
 
@@ -72,11 +74,12 @@ export async function resolveViewerRole(user) {
 }
 
 /**
- * RBAC predicate. Sole consumer of the "only employees see employee IDs"
- * rule — everywhere else routes through this helper so the rule cannot drift.
+ * RBAC predicate (legacy). Retained for tests / external callers. The
+ * record-side gate in the renderer now blanks Employee ID per row when the
+ * record's role is not "Employee", so no viewer-side restriction is needed.
  */
-export function canRenderEmployeeId(viewerRole) {
-  return viewerRole === VIEWER_ROLES.EMPLOYEE;
+export function canRenderEmployeeId(_viewerRole) {
+  return true;
 }
 
 // ── Column-level ACL ────────────────────────────────────────────────────
@@ -85,9 +88,7 @@ export function canRenderEmployeeId(viewerRole) {
 // of viewer tiers allowed to see the column — anything else strips the
 // column AND its row values before the wire.
 
-export const COLUMN_VISIBILITY_RULES = Object.freeze({
-  employeeId: { visibleFor: [VIEWER_ROLES.EMPLOYEE] },
-});
+export const COLUMN_VISIBILITY_RULES = Object.freeze({});
 
 /**
  * @param {{ key:string }} column
@@ -108,12 +109,12 @@ export function isColumnAllowedForRole(column, viewerRole) {
 // ROLE / DEPT columns from the agent + employee + candidate tables.
 
 export const TABLE_PROFILES = Object.freeze({
-  employees:  { defaultColumns: ['name', 'employeeId', 'status', 'email'] },
-  agents:     { defaultColumns: ['name', 'status'] },
-  recruiters: { defaultColumns: ['name', 'status'] },
-  candidates: { defaultColumns: ['name', 'appliedRole', 'status'] },
-  students:   { defaultColumns: ['name', 'status'] },
-  people:     { defaultColumns: ['name', 'employeeId', 'status'] },
+  employees:  { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'] },
+  agents:     { defaultColumns: ['name', 'email', 'role', 'status'] },
+  recruiters: { defaultColumns: ['name', 'email', 'role', 'status'] },
+  candidates: { defaultColumns: ['name', 'appliedRole', 'email', 'status'] },
+  students:   { defaultColumns: ['name', 'email', 'role', 'status'] },
+  people:     { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'] },
 });
 
 const ROLE_TO_PROFILE = {
