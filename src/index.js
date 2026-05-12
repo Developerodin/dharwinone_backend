@@ -32,6 +32,7 @@ import {
 import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js';
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
 import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
+import { startRetentionEnforcer, stopRetentionEnforcer } from './jobs/retentionEnforcer.js';
 
 let server;
 let candidateSchedulerId;
@@ -70,6 +71,7 @@ mongoose
         startSummaryWorker();
         startStuckDispatchSweeper();
         startStuckFinalizeSweeper();
+        startRetentionEnforcer();
       }
     });
   })
@@ -94,6 +96,7 @@ const exitHandler = () => {
       stopSummaryWorker().catch(() => {});
       stopStuckDispatchSweeper();
       stopStuckFinalizeSweeper();
+      stopRetentionEnforcer();
       process.exit(1);
     });
   } else {
