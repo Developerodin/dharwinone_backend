@@ -11,6 +11,11 @@ import config from '../config/config.js';
 import { headRecordingObject } from '../config/s3.js';
 import recordingSyncService from '../services/recordingSync.service.js';
 import * as livekitService from '../services/livekit.service.js';
+import {
+  computeEventId,
+  computeBodyHash,
+  claimWebhookEvent,
+} from '../services/webhookIdempotency.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RECORDINGS_DIR = path.resolve(__dirname, '../../recordings');
@@ -375,6 +380,22 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
   }
 
   const event = payload?.event;
+
+  // Idempotency guard: LiveKit may redeliver webhooks; suppress duplicates.
+  const explicitId = req.get('x-livekit-webhook-id') || req.get('webhook-id') || null;
+  const timestamp = req.get('x-livekit-timestamp') || req.get('webhook-timestamp') || '';
+  const eventId = computeEventId({ explicitId, timestamp, body: raw });
+  const bodyHash = computeBodyHash(raw);
+  const isFresh = await claimWebhookEvent({
+    eventId,
+    event,
+    roomName: payload?.room?.name,
+    bodyHash,
+  });
+  if (!isFresh) {
+    return res.status(httpStatus.OK).json({ status: 'duplicate_suppressed' });
+  }
+
   // Snake_case is the wire format per LiveKit egress spec; camelCase comes via
   // SDK proto bridge. Read both at every entry point.
   const egInfo = payload?.egressInfo || {};
