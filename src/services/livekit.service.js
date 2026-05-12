@@ -410,6 +410,32 @@ const startRecording = async (roomName) => {
   }
 
   logger.info('[LiveKit] Recording started', { roomName, egressId: egressInfo.egressId });
+
+  // AI Meeting Summary dispatch — fire-and-forget. Agent failure must NOT abort egress recording flow.
+  (async () => {
+    try {
+      const { dispatchSummaryAgent } = await import('./agentDispatch.service.js');
+      const dispatchId = await dispatchSummaryAgent({
+        meetingId: roomName,
+        recordingId: pending?._id || null,
+      });
+      await Recording.findByIdAndUpdate(pending._id, {
+        aiProcessingStatus: 'dispatching',
+        agentDispatchId: dispatchId,
+      });
+    } catch (err) {
+      logger.warn('[LiveKit] agent dispatch failed (recording continues)', { roomName, error: err.message });
+      try {
+        await Recording.findByIdAndUpdate(pending._id, {
+          aiProcessingStatus: 'failed',
+          aiProcessingError: `dispatch failed: ${err.message}`,
+        });
+      } catch (innerErr) {
+        logger.warn('[LiveKit] failed to mark recording.aiProcessingStatus=failed', { error: innerErr.message });
+      }
+    }
+  })();
+
   return {
     egressId: egressInfo.egressId,
     roomName,
