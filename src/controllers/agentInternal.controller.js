@@ -5,6 +5,7 @@ import Recording from '../models/recording.model.js';
 import TranscriptSegment from '../models/transcriptSegment.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+import { appendPartials } from '../services/partialTranscript.service.js';
 
 /** POST /v1/internal/meetings/:meetingId/agent-joined */
 export const agentJoined = catchAsync(async (req, res) => {
@@ -88,4 +89,20 @@ export const transcriptSegments = catchAsync(async (req, res) => {
   });
 
   return res.status(httpStatus.OK).json({ inserted, skipped });
+});
+
+/** POST /v1/internal/meetings/:meetingId/partial-transcripts */
+export const partialTranscripts = catchAsync(async (req, res) => {
+  const { meetingId } = req.params;
+  const partials = Array.isArray(req.body?.partials) ? req.body.partials : [];
+  const out = await appendPartials(meetingId, partials);
+  return res.status(httpStatus.OK).json(out);
+});
+
+/** POST /v1/internal/meetings/:meetingId/heartbeat */
+export const heartbeat = catchAsync(async (req, res) => {
+  await AgentDispatch.findByIdAndUpdate(req.agentDispatch.id, {
+    $set: { lastHeartbeat: new Date() },
+  });
+  return res.status(httpStatus.OK).json({ status: 'ok' });
 });

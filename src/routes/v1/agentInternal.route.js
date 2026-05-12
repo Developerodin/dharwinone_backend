@@ -6,10 +6,10 @@ const router = express.Router();
 
 router.post('/meetings/:meetingId/agent-joined', verifyAgentHmac, agentInternal.agentJoined);
 router.post('/meetings/:meetingId/transcript-segments', verifyAgentHmac, agentInternal.transcriptSegments);
+router.post('/meetings/:meetingId/partial-transcripts', verifyAgentHmac, agentInternal.partialTranscripts);
+router.post('/meetings/:meetingId/heartbeat', verifyAgentHmac, agentInternal.heartbeat);
 
 // Remaining endpoints registered in later tasks:
-//   - partial-transcripts  (Task 20)
-//   - heartbeat            (Task 20)
 //   - finalize             (Task 29)
 
 export default router;
