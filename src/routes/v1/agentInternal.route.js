@@ -8,8 +8,6 @@ router.post('/meetings/:meetingId/agent-joined', verifyAgentHmac, agentInternal.
 router.post('/meetings/:meetingId/transcript-segments', verifyAgentHmac, agentInternal.transcriptSegments);
 router.post('/meetings/:meetingId/partial-transcripts', verifyAgentHmac, agentInternal.partialTranscripts);
 router.post('/meetings/:meetingId/heartbeat', verifyAgentHmac, agentInternal.heartbeat);
-
-// Remaining endpoints registered in later tasks:
-//   - finalize             (Task 29)
+router.post('/meetings/:meetingId/finalize', verifyAgentHmac, agentInternal.finalize);
 
 export default router;

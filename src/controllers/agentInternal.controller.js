@@ -6,6 +6,7 @@ import TranscriptSegment from '../models/transcriptSegment.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { appendPartials } from '../services/partialTranscript.service.js';
+import { enqueueFinalize } from '../queues/summaryQueue.js';
 
 /** POST /v1/internal/meetings/:meetingId/agent-joined */
 export const agentJoined = catchAsync(async (req, res) => {
@@ -105,4 +106,41 @@ export const heartbeat = catchAsync(async (req, res) => {
     $set: { lastHeartbeat: new Date() },
   });
   return res.status(httpStatus.OK).json({ status: 'ok' });
+});
+
+/** POST /v1/internal/meetings/:meetingId/finalize */
+export const finalize = catchAsync(async (req, res) => {
+  const { meetingId } = req.params;
+  const { totalSegments, durationMs } = req.body || {};
+
+  const dispatch = await AgentDispatch.findById(req.agentDispatch.id);
+  if (dispatch?.lastSegmentSentAt) {
+    const sinceLast = Date.now() - new Date(dispatch.lastSegmentSentAt).getTime();
+    if (sinceLast < 5000) {
+      return res
+        .status(httpStatus.ACCEPTED)
+        .json({ status: 'grace_period_active', sinceLastMs: sinceLast });
+    }
+  }
+
+  const segmentCount = await TranscriptSegment.countDocuments({ meetingId });
+  if (typeof totalSegments === 'number' && totalSegments !== segmentCount) {
+    return res.status(httpStatus.CONFLICT).json({
+      message: 'segment count mismatch — agent should retry after flushing',
+      expected: totalSegments,
+      have: segmentCount,
+    });
+  }
+
+  await Recording.findOneAndUpdate(
+    { meetingId, aiProcessingStatus: { $nin: ['finalizing', 'completed'] } },
+    { $set: { aiProcessingStatus: 'finalizing' } }
+  );
+  await AgentDispatch.findByIdAndUpdate(req.agentDispatch.id, {
+    $set: { status: 'completed', leftAt: new Date() },
+  });
+
+  const recordingId = req.agentDispatch.recordingId;
+  const job = await enqueueFinalize({ meetingId, recordingId });
+  return res.status(httpStatus.ACCEPTED).json({ status: 'queued', jobId: job.id, durationMs });
 });
