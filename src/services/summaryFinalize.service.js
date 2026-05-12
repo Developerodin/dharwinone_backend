@@ -24,6 +24,29 @@ export function applyCostGate({ estTokens, durationMinutes }) {
   return { ok: true };
 }
 
+export function splitUtterancesIntoWindows(utterances = [], maxTokens = config.ai.mapWindowTokens) {
+  if (!utterances.length) return [];
+  const windows = [];
+  let current = [];
+  let tokens = 0;
+  let prevSpeaker = null;
+
+  for (const u of utterances) {
+    const t = Math.ceil((u.text || '').length / CHARS_PER_TOKEN);
+    const speakerChanged = prevSpeaker !== null && u.speaker !== prevSpeaker;
+    if (tokens + t > maxTokens && speakerChanged && current.length > 0) {
+      windows.push(current);
+      current = [];
+      tokens = 0;
+    }
+    current.push(u);
+    tokens += t;
+    prevSpeaker = u.speaker;
+  }
+  if (current.length) windows.push(current);
+  return windows;
+}
+
 // finalizeSummary + mapReduceSummarize + helpers filled in subsequent tasks.
 export async function finalizeSummary(_payload) {
   throw new Error('not yet implemented');
