@@ -21,13 +21,27 @@ function matchesClause(d, clause) {
   return false;
 }
 
+function statusMatches(docStatus, clause) {
+  if (clause == null) return true;
+  if (typeof clause === 'string') return docStatus === clause;
+  if (typeof clause === 'object') {
+    if (Array.isArray(clause.$in)) return clause.$in.includes(docStatus);
+    if (Array.isArray(clause.$nin)) return !clause.$nin.includes(docStatus);
+  }
+  return true;
+}
+
 function mockModel(docs) {
   return {
     find: (filter) => {
       const status = filter.status;
+      const idClause = filter._id;
       const ors = filter.$or || [];
       const matches = docs.filter((d) => {
-        if (status && d.status !== status) return false;
+        if (status !== undefined && !statusMatches(d.status, status)) return false;
+        if (idClause && typeof idClause === 'object' && Array.isArray(idClause.$in)) {
+          if (!idClause.$in.includes(d._id)) return false;
+        }
         if (!ors.length) return true;
         return ors.some((clause) => matchesClause(d, clause));
       });
