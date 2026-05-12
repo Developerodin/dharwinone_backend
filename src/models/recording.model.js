@@ -89,6 +89,19 @@ const recordingSchema = mongoose.Schema(
     lastError: { type: String, default: null },
     /** Audit: 'manual' | 'host_leave' | 'room_finished' | 'room_close' | 'cron'. */
     stopReason: { type: String, default: null },
+
+    aiProcessingStatus: {
+      type: String,
+      enum: ['none', 'pending', 'dispatching', 'transcribing', 'finalizing', 'completed', 'failed'],
+      default: 'none',
+      index: true,
+    },
+    aiProcessingError: { type: String, default: null },
+    transcriptId: { type: mongoose.Schema.Types.ObjectId, ref: 'TranscriptSegment', default: null },
+    summaryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Summary', default: null },
+    transcriptUrl: { type: String, default: null },
+    summaryUrl: { type: String, default: null },
+    agentDispatchId: { type: String, default: null },
   },
   { timestamps: true }
 );
