@@ -37,6 +37,7 @@ import livekitRoute from './livekit.route.js';
 import meetingRoute from './meeting.route.js';
 import internalMeetingRoute from './internalMeeting.route.js';
 import agentInternalRoute from './agentInternal.route.js';
+import adminAiDlqRoute from './adminAiDlq.route.js';
 import notificationRoute from './notification.route.js';
 import recordingRoute from './recording.route.js';
 import atsAnalyticsRoute from './atsAnalytics.route.js';
@@ -276,6 +277,10 @@ const defaultRoutes = [
   {
     path: '/internal',
     route: agentInternalRoute,
+  },
+  {
+    path: '/admin/ai',
+    route: adminAiDlqRoute,
   },
   {
     path: '/notifications',
