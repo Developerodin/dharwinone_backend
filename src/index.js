@@ -29,6 +29,7 @@ import {
   startMemorySweepScheduler,
   stopMemorySweepScheduler,
 } from './services/chatAssistant/memorySweep.scheduler.js';
+import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js';
 
 let server;
 let candidateSchedulerId;
@@ -64,6 +65,7 @@ mongoose
         registerEmbeddingHooks();
         runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
         startMemorySweepScheduler({ intervalHours: 24 });
+        startSummaryWorker();
       }
     });
   })
@@ -85,6 +87,7 @@ const exitHandler = () => {
       stopRecordingScheduler();
       stopRecordingDiscoveryScheduler(recordingDiscoverySchedulerId);
       stopMemorySweepScheduler();
+      stopSummaryWorker().catch(() => {});
       process.exit(1);
     });
   } else {
