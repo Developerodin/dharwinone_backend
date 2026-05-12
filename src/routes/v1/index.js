@@ -38,6 +38,7 @@ import meetingRoute from './meeting.route.js';
 import internalMeetingRoute from './internalMeeting.route.js';
 import agentInternalRoute from './agentInternal.route.js';
 import adminAiDlqRoute from './adminAiDlq.route.js';
+import aiHealthRoute from './aiHealth.route.js';
 import notificationRoute from './notification.route.js';
 import recordingRoute from './recording.route.js';
 import atsAnalyticsRoute from './atsAnalytics.route.js';
@@ -281,6 +282,10 @@ const defaultRoutes = [
   {
     path: '/admin/ai',
     route: adminAiDlqRoute,
+  },
+  {
+    path: '/health',
+    route: aiHealthRoute,
   },
   {
     path: '/notifications',
