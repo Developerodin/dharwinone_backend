@@ -1,0 +1,9 @@
+{
+  "meetingId": "meeting_fixture_short",
+  "durationMs": 180000,
+  "utterances": [
+    { "speaker": "u_alice", "speakerName": "Alice", "text": "Let's decide on the agent runtime. I think Python is better.", "startMs": 1000, "endMs": 6000, "confidence": 0.92 },
+    { "speaker": "u_bob", "speakerName": "Bob", "text": "Agreed, Python has the richest plugins. Action item: Alice will write the spec.", "startMs": 6100, "endMs": 12000, "confidence": 0.94 },
+    { "speaker": "u_alice", "speakerName": "Alice", "text": "I'll get a draft out by Friday. Blocker: we still need Deepgram API keys.", "startMs": 12100, "endMs": 18000, "confidence": 0.93 }
+  ]
+}
