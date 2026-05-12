@@ -174,6 +174,14 @@ async function handleRoomFinished(payload) {
       logger.warn(`[LiveKit Webhook] room_finished ChatCall close failed: ${err.message}`);
     }
   }
+
+  // Cancel any orphan AI summary dispatch tied to this room.
+  try {
+    const { cancelDispatch } = await import('../services/agentDispatch.service.js');
+    await cancelDispatch(roomName);
+  } catch (err) {
+    logger.warn('[LiveKit Webhook] cancelDispatch failed', { roomName, error: err.message });
+  }
 }
 
 /**
