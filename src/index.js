@@ -31,6 +31,7 @@ import {
 } from './services/chatAssistant/memorySweep.scheduler.js';
 import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js';
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
+import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
 
 let server;
 let candidateSchedulerId;
@@ -68,6 +69,7 @@ mongoose
         startMemorySweepScheduler({ intervalHours: 24 });
         startSummaryWorker();
         startStuckDispatchSweeper();
+        startStuckFinalizeSweeper();
       }
     });
   })
@@ -91,6 +93,7 @@ const exitHandler = () => {
       stopMemorySweepScheduler();
       stopSummaryWorker().catch(() => {});
       stopStuckDispatchSweeper();
+      stopStuckFinalizeSweeper();
       process.exit(1);
     });
   } else {
