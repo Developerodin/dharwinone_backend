@@ -184,6 +184,11 @@ const listAll = async (options = {}) => {
       completedAt: rec.completedAt,
       durationMs,
       bytes: rec.bytes ?? null,
+      aiProcessingStatus: rec.aiProcessingStatus ?? 'none',
+      aiProcessingError: rec.aiProcessingError ?? null,
+      summaryId: rec.summaryId ?? null,
+      transcriptUrl: rec.transcriptUrl ?? null,
+      summaryUrl: rec.summaryUrl ?? null,
     };
     // Generate playback URL for any row that has a real S3 file, even if status
     // is `aborted` — LiveKit may have flushed partial bytes before terminating
