@@ -1,5 +1,11 @@
+import OpenAI from 'openai';
 import config from '../config/config.js';
 import { costForUsage } from '../config/llmPricing.js';
+import TranscriptSegment from '../models/transcriptSegment.model.js';
+import Summary from '../models/summary.model.js';
+import Recording from '../models/recording.model.js';
+import logger from '../config/logger.js';
+import { uploadJsonToS3 } from './aiArtifactStorage.service.js';
 
 const CHARS_PER_TOKEN = 4;
 
@@ -170,7 +176,137 @@ export async function mapReduceSummarize({ utterances, durationMs, openai }) {
   };
 }
 
-// finalizeSummary orchestrator filled in Task 25.
-export async function finalizeSummary(_payload) {
-  throw new Error('not yet implemented');
+export function buildTranscriptJson(meetingId, segments, durationMs) {
+  const utterances = [];
+  for (const s of segments) {
+    for (const u of s.utterances || []) utterances.push(u);
+  }
+  return { meetingId, durationMs, utterances };
+}
+
+let openaiClient = null;
+function getOpenai() {
+  if (openaiClient) return openaiClient;
+  openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return openaiClient;
+}
+
+export async function finalizeSummary({ meetingId, recordingId, openai: openaiOverride } = {}) {
+  if (!meetingId) throw new Error('meetingId required');
+  const openai = openaiOverride || getOpenai();
+
+  const claim = await Recording.findOneAndUpdate(
+    { meetingId, aiProcessingStatus: { $nin: ['finalizing', 'completed'] } },
+    { $set: { aiProcessingStatus: 'finalizing', finalizingAt: new Date() } },
+    { new: true }
+  );
+  if (!claim) {
+    logger.info('[Finalize] another worker already finalizing or already completed', { meetingId });
+    return { skipped: true };
+  }
+
+  try {
+    const segments = await TranscriptSegment.find({ meetingId }).sort({ sequenceNumber: 1 }).lean();
+    if (!segments.length) {
+      await Summary.findOneAndUpdate(
+        { meetingId },
+        {
+          $setOnInsert: { meetingId, recordingId: recordingId || claim._id },
+          $set: {
+            executiveSummary: '[no speech captured]',
+            bulletSummary: [],
+            partial: true,
+            generatedAt: new Date(),
+          },
+        },
+        { upsert: true, new: true }
+      );
+      await Recording.findByIdAndUpdate(claim._id, { aiProcessingStatus: 'completed' });
+      return { summaryId: null, version: 1, durationMs: 0, llmCostUsd: 0, partial: true };
+    }
+
+    const utterances = segments.flatMap((s) => s.utterances || []);
+    const lastSeg = segments[segments.length - 1];
+    const durationMs = lastSeg.windowEndMs;
+    const durationMinutes = Math.round(durationMs / 60000);
+
+    const estTokens = estimateTranscriptTokens(segments);
+    const gate = applyCostGate({ estTokens, durationMinutes });
+    if (!gate.ok) {
+      await Recording.findByIdAndUpdate(claim._id, {
+        aiProcessingStatus: 'failed',
+        aiProcessingError: gate.reason,
+      });
+      logger.warn('[Finalize] cost gate tripped', { meetingId, reason: gate.reason });
+      return { failed: true, reason: gate.reason };
+    }
+
+    const transcriptJson = buildTranscriptJson(meetingId, segments, durationMs);
+    const transcriptUrl = await uploadJsonToS3({
+      key: `meetings/${meetingId}/transcript.json`,
+      data: transcriptJson,
+    });
+
+    const summaryPayload = await mapReduceSummarize({ utterances, durationMs, openai });
+
+    const prev = await Summary.findOne({ meetingId }).lean();
+    const nextVersion = prev ? (prev.version || 1) + 1 : 1;
+    const summaryDoc = await Summary.findOneAndUpdate(
+      { meetingId },
+      {
+        $set: {
+          recordingId: recordingId || claim._id,
+          executiveSummary: summaryPayload.executiveSummary,
+          bulletSummary: summaryPayload.bulletSummary,
+          actionItems: summaryPayload.actionItems,
+          decisions: summaryPayload.decisions,
+          blockers: summaryPayload.blockers,
+          nextSteps: summaryPayload.nextSteps,
+          participantsActive: summaryPayload.participantsActive,
+          durationMs,
+          llmCostUsd: summaryPayload.llmCostUsd,
+          generatedAt: new Date(),
+          version: nextVersion,
+          partial: !!summaryPayload.partial,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    const summaryUrl = await uploadJsonToS3({
+      key: `meetings/${meetingId}/summary.json`,
+      data: summaryDoc.toObject(),
+    });
+
+    const firstSeg = segments[0];
+    await Recording.findByIdAndUpdate(claim._id, {
+      aiProcessingStatus: 'completed',
+      aiProcessingError: null,
+      transcriptId: firstSeg._id,
+      summaryId: summaryDoc._id,
+      transcriptUrl,
+      summaryUrl,
+    });
+
+    logger.info('[Finalize] completed', {
+      meetingId,
+      version: nextVersion,
+      llmCostUsd: summaryPayload.llmCostUsd,
+      partial: summaryPayload.partial,
+    });
+
+    return {
+      summaryId: summaryDoc._id,
+      version: nextVersion,
+      durationMs,
+      llmCostUsd: summaryPayload.llmCostUsd,
+      partial: !!summaryPayload.partial,
+    };
+  } catch (err) {
+    await Recording.findByIdAndUpdate(claim._id, {
+      aiProcessingStatus: 'failed',
+      aiProcessingError: err.message,
+    }).catch(() => {});
+    throw err;
+  }
 }
