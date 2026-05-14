@@ -59,6 +59,91 @@ const FALLBACK_ANSWER =
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// ─── Timezone-safe date formatter (Asia/Kolkata / IST) ──────────────────────
+// Mongo stores dates as UTC; rendering them with raw `.toISOString().slice(0,10)`
+// can shift the visible day backwards for users east of UTC (issue 8). Always
+// render through IST so the chatbot reply matches what the user saved in the
+// HRM UI. Returns YYYY-MM-DD or empty string for falsy / invalid input.
+const DISPLAY_TZ = 'Asia/Kolkata';
+function formatDateIST(value) {
+  if (!value && value !== 0) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleDateString('en-CA', { timeZone: DISPLAY_TZ });
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+function formatTimeIST(value) {
+  if (!value) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleTimeString('en-GB', { timeZone: DISPLAY_TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return d.toISOString().slice(11, 16);
+  }
+}
+
+// ─── Future-date guard (issue 11) ───────────────────────────────────────────
+function isFutureDateISO(iso) {
+  if (!iso || typeof iso !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const todayIST = formatDateIST(new Date());
+  return iso > todayIST;
+}
+
+// ─── Fast-path argument inference ───────────────────────────────────────────
+// The fast-path intent matcher (INTENT_PATTERNS) fires with whatever literal
+// args are declared on the pattern. For free-form modifiers like "resigned",
+// "active", admin scope hints, etc. we previously dropped the qualifier on
+// the floor → bug 1 ("show resigned employees" returned only active people)
+// and bugs 9/10 (admin asking org-wide leaves/backdated got "scope=mine" empty
+// set). Re-scan the user message to inject the missing filter args.
+function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx) {
+  const out = { ...(baseArgs || {}) };
+  if (!userMsg || !moduleName) return out;
+  const t = String(userMsg).toLowerCase();
+  const isAdminCue = /\b(company|company[\s-]?wide|all employees?|whole (team|company|org)|org[- ]?wide|everyone'?s|everyones|every employee|team[- ]?wide|across (the )?(company|team|org)|all (leave|leaves|requests?|backdated|missed))\b/i;
+  if (moduleName === 'fetch_employees') {
+    if (!out.employmentStatus) {
+      if (/\b(resigned|retired|former|past employees?|left|ex[\s-]?employees?|ex[\s-]?staff)\b/.test(t)) {
+        out.employmentStatus = 'resigned';
+      } else if (/\ball (employees?|staff|people)\b/.test(t) || /\bboth (active and resigned|current and resigned)\b/.test(t)) {
+        out.employmentStatus = 'all';
+      } else if (/\b(currently[- ]?working|on[- ]?roll|on[- ]?the[- ]?rolls?|active employees?|current employees?)\b/.test(t)) {
+        out.employmentStatus = 'active';
+      }
+    }
+  }
+  if (moduleName === 'fetch_jobs') {
+    if (!out.status) {
+      if (/\b(active|open|live|currently[- ]?open)\b.*\bjobs?\b/.test(t) || /\bjobs?\b.*\b(active|open|live)\b/.test(t)) out.status = 'Active';
+      else if (/\b(closed|filled)\b.*\bjobs?\b/.test(t) || /\bjobs?\b.*\b(closed|filled)\b/.test(t)) out.status = 'Closed';
+      else if (/\b(draft|drafts?)\b.*\bjobs?\b/.test(t)) out.status = 'Draft';
+      else if (/\b(archived)\b.*\bjobs?\b/.test(t)) out.status = 'Archived';
+    }
+  }
+  if (moduleName === 'fetch_leave_requests' || moduleName === 'fetch_backdated_attendance_requests') {
+    if (!out.scope && !out.employee && userCtx?.isAdmin && isAdminCue.test(t)) {
+      out.scope = 'all';
+    }
+    if (!out.status) {
+      if (/\b(approved|accepted|granted)\b/.test(t)) out.status = 'approved';
+      else if (/\b(rejected|denied|declined)\b/.test(t)) out.status = 'rejected';
+      else if (/\b(pending|awaiting|unreviewed)\b/.test(t)) out.status = 'pending';
+      else if (/\b(cancelled|canceled|withdrawn)\b/.test(t)) out.status = 'cancelled';
+    }
+    if (moduleName === 'fetch_leave_requests' && !out.leaveType) {
+      if (/\bsick\s+leaves?\b/.test(t))    out.leaveType = 'sick';
+      else if (/\bcasual\s+leaves?\b/.test(t)) out.leaveType = 'casual';
+      else if (/\bunpaid\s+leaves?\b/.test(t)) out.leaveType = 'unpaid';
+    }
+  }
+  return out;
+}
+
 // ─── Role normalization ─────────────────────────────────────────────────────
 // Single source of truth for role aliases. Used by fetch_employees, intent
 // detection, and the system prompt entity tags. "Agent" and "Sales Agent" are
@@ -225,25 +310,27 @@ function resolveDateWindow({ date, month, fromDate, toDate, defaultDays }) {
   const single = parseISO(singleSrc);
   if (single) {
     const to = new Date(Date.UTC(single.getUTCFullYear(), single.getUTCMonth(), single.getUTCDate(), 23, 59, 59, 999));
-    return { from: single, to, label: singleSrc, missing: false, single: true };
+    return { from: single, to, label: singleSrc, missing: false, single: true, future: isFutureDateISO(singleSrc) };
   }
   if (typeof month === 'string' && /^\d{4}-\d{2}$/.test(month)) {
     const [y, mm] = month.split('-').map(Number);
     const from = new Date(Date.UTC(y, mm - 1, 1));
     const to = new Date(Date.UTC(y, mm, 0, 23, 59, 59, 999));
-    return { from, to, label: month, missing: false, single: false };
+    // Whole month in future iff first day > today (IST)
+    const firstIso = `${month}-01`;
+    return { from, to, label: month, missing: false, single: false, future: isFutureDateISO(firstIso) };
   }
   const f = parseISO(fromDate);
   const t = parseISO(toDate);
   if (f && t) {
     const to = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), 23, 59, 59, 999));
-    return { from: f, to, label: `${fromDate} to ${toDate}`, missing: false, single: false };
+    return { from: f, to, label: `${fromDate} to ${toDate}`, missing: false, single: false, future: isFutureDateISO(fromDate) };
   }
   if (defaultDays) {
     const from = new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000);
-    return { from, to: new Date(), label: `last ${defaultDays} days`, missing: true, single: false };
+    return { from, to: new Date(), label: `last ${defaultDays} days`, missing: true, single: false, future: false };
   }
-  return { from: null, to: null, label: 'unspecified', missing: true, single: false };
+  return { from: null, to: null, label: 'unspecified', missing: true, single: false, future: false };
 }
 const MAX_HISTORY_TURNS = 6;
 const MAX_CONTEXT_CHARS = 20000;
@@ -377,6 +464,7 @@ const ROUTING_TOOLS = [
         'Retrieve candidate applications — pipeline stages, hiring status, applicant count, applicant detail. ' +
         'Returns total application count, breakdown by status, and a list of applicants with name, email, status, application date, and job title. ' +
         'Filter by jobId (Mongo _id), jobTitle (partial match), or applicantName (partial match) to drill into a specific job\'s applicants or a specific candidate\'s applications. ' +
+        'STRICT RULE: when the user names a specific job (e.g. "applicants for Senior Engineer", "candidates of the Marketing role", "who applied to <Title>"), YOU MUST set jobTitle to that exact phrase. Without it the query returns every application company-wide, which is almost never what the user wants. If the user is referring back to a job named in a previous turn ("applicants for that job", "show their candidates"), reuse the prior turn\'s jobTitle from Last referenced entities. ' +
         'Use for: "how many applications", "applicants for <job>", "applicants for jobId X", "show me John Doe\'s applications", "applicant details", "applicant pipeline".',
       parameters: {
         type: 'object',
@@ -1333,10 +1421,26 @@ async function fetchModule(name, args, user) {
         return [];
       }
 
+      // Hydrate filter is the SOURCE OF TRUTH for filtering — Pinecone is a
+      // semantic-rank assist only. Build it once and reuse for both the
+      // record query and the authoritative counts so the chatbot can never
+      // claim "5 active jobs" while showing closed ones (issue 2).
+      const hydrateFilter = {};
+      if (args.jobType)         hydrateFilter.jobType = args.jobType;
+      if (args.experienceLevel) hydrateFilter.experienceLevel = args.experienceLevel;
+      if (args.status)          hydrateFilter.status = args.status; // Job.status enum: Draft|Active|Closed|Archived
+      if (args.jobOrigin)       hydrateFilter.jobOrigin = args.jobOrigin;
+      if (args.company)         hydrateFilter['organisation.name'] = { $regex: escapeRegex(args.company), $options: 'i' };
+      if (args.location)        hydrateFilter.location = { $regex: escapeRegex(args.location), $options: 'i' };
+      // Specific-job lookup: regex on title so "details of Software Engineer"
+      // returns only matching rows instead of the embedding's top-K (issue 3).
+      if (args.search)          hydrateFilter.title = { $regex: escapeRegex(args.search), $options: 'i' };
+
       let merged = [];
+      let usedSemanticRank = false;
       try {
         const f = {};
-        if (args.status)          f.isActive = { $eq: args.status === 'Active' };
+        if (args.status)          f.status = { $eq: args.status };
         if (args.jobOrigin)       f.jobOrigin = { $eq: args.jobOrigin };
         if (args.jobType)         f.jobType = { $eq: args.jobType };
         if (args.location)        f.location = { $eq: args.location };
@@ -1344,43 +1448,72 @@ async function fetchModule(name, args, user) {
         const matches = await pineconeQuery('jobs', qEmb, limit, f);
         const ids = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
         if (ids.length) {
-          const hQ = { _id: { $in: ids } };
-          if (args.jobType)         hQ.jobType = args.jobType;
-          if (args.experienceLevel) hQ.experienceLevel = args.experienceLevel;
-          if (args.status)          hQ.status = args.status;
-          if (args.jobOrigin)       hQ.jobOrigin = args.jobOrigin;
-          if (args.company)         hQ['organisation.name'] = { $regex: escapeRegex(args.company), $options: 'i' };
-          if (args.location)        hQ.location = { $regex: escapeRegex(args.location), $options: 'i' };
+          const hQ = { ...hydrateFilter, _id: { $in: ids } };
           const docs = await Job.find(hQ)
             .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
             .sort({ createdAt: -1 })
             .lean();
           merged = docs.map((d) => ({ ...d, _origin: d.jobOrigin === 'external' ? 'External (mirrored)' : 'Internal' }));
+          usedSemanticRank = true;
         }
       } catch (err) {
         logger.warn(`[ChatAssistant][fetch_jobs] Pinecone error: ${err.message}`);
       }
 
-      // Authoritative counts from Mongo. Both internal and external counts come from the
-      // Job collection (mirrored external = Job rows with jobOrigin='external', shown on
-      // the Jobs page). Raw ExternalJob (External Jobs ATS page) is NOT counted here.
-      // Hard delete is standardized — no soft-deleted ghosts.
+      // Fallback: when Pinecone returned nothing but caller supplied explicit
+      // structured filters (status/title/etc.), serve those directly from Mongo
+      // so the chatbot doesn't claim "no jobs" when there clearly are.
+      if (merged.length === 0 && Object.keys(hydrateFilter).length > 0) {
+        const docs = await Job.find(hydrateFilter)
+          .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean();
+        merged = docs.map((d) => ({ ...d, _origin: d.jobOrigin === 'external' ? 'External (mirrored)' : 'Internal' }));
+      }
+
+      // Authoritative counts honour the same filter set. If args.status='Active'
+      // is passed, "how many jobs" must answer with the count of active jobs only.
+      const internalFilter = { ...hydrateFilter, jobOrigin: { $ne: 'external' } };
+      const externalFilter = { ...hydrateFilter, jobOrigin: 'external' };
+      // Reset any jobOrigin override coming from hydrateFilter so internal/external
+      // counts stay meaningful per-bucket.
+      if (args.jobOrigin === 'internal') {
+        // user constrained to internal — external count should be 0
+      } else if (args.jobOrigin === 'external') {
+        // user constrained to external — internal count should be 0
+      }
       const [internalTotal, externalMirroredTotal] = await Promise.all([
-        wantInternal ? Job.countDocuments({ jobOrigin: { $ne: 'external' } }) : 0,
-        wantExternal ? Job.countDocuments({ jobOrigin: 'external' })          : 0,
+        wantInternal && args.jobOrigin !== 'external' ? Job.countDocuments(internalFilter) : 0,
+        wantExternal && args.jobOrigin !== 'internal' ? Job.countDocuments(externalFilter) : 0,
       ]);
 
       const counts = {
         internal: internalTotal,
         external: externalMirroredTotal,
+        externalListings: externalMirroredTotal,
+        externalMirrored: externalMirroredTotal,
         total: internalTotal + externalMirroredTotal,
       };
 
+      // Single-job detail signal — when caller searched by a specific title /
+      // origin and exactly one record remains, flag it so renderers/jobs.js
+      // can switch from a full TableBlock to a KV detail block (issue 3).
+      const wantDetail = !!(args.search || args.jobId) && merged.length === 1;
+
       logger.info(
-        `[ChatAssistant][fetch_jobs] origin=${args.jobOrigin || 'any'} returned=${merged.length} ` +
-        `counts=int:${counts.internal}+ext:${counts.external}=${counts.total}`
+        `[ChatAssistant][fetch_jobs] origin=${args.jobOrigin || 'any'} status=${args.status || 'any'} ` +
+        `returned=${merged.length} semanticRank=${usedSemanticRank} wantDetail=${wantDetail} ` +
+        `counts=int:${counts.internal}+ext:${counts.external}=${counts.total} filter=${JSON.stringify(hydrateFilter)}`
       );
-      return { records: merged, counts, label: 'job' };
+      return {
+        records: merged,
+        counts,
+        label: 'job',
+        statusFilter: args.status || null,
+        searchedFor: args.search || null,
+        wantDetail,
+      };
     }
 
     case 'fetch_external_jobs': {
@@ -1544,6 +1677,16 @@ async function fetchModule(name, args, user) {
       if (win.missing) {
         return { needsTimeWindow: true, label: 'attendance summary' };
       }
+      if (win.future) {
+        logger.info(`[ChatAssistant][fetch_attendance_summary] future_date_short_circuit window=${win.label}`);
+        return {
+          futureDate: true,
+          notFound: true,
+          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
+          windowLabel: win.label,
+          label: 'attendance summary',
+        };
+      }
       const { aggregateOrgAttendance } = await import('./chatAssistant/attendanceAggregator.js');
       const result = await aggregateOrgAttendance({
         adminId,
@@ -1577,12 +1720,20 @@ async function fetchModule(name, args, user) {
       const normalizedType = VALID_TYPES.includes(rawType) ? rawType : null;
       if (normalizedType) q.leaveType = normalizedType;
 
-      let scope = args.scope === 'all' ? 'all' : 'mine';
+      const callerIsAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
+      // Default scope: admins asking a generic "leaves / leave requests" question
+      // expect company-wide data. The previous default ('mine') silently emptied
+      // the result for any admin who didn't think to say "all" — issue 9. Non-admin
+      // users still default to 'mine' so they only see their own records.
+      let scope;
+      if (args.scope === 'all') scope = 'all';
+      else if (args.scope === 'mine') scope = 'mine';
+      else if (args.employee) scope = 'employee';
+      else scope = callerIsAdmin ? 'all' : 'mine';
       let resolvedEmployee = null;
 
       if (args.employee) {
-        const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-        if (!isAdmin) {
+        if (!callerIsAdmin) {
           return { notFound: true, reason: 'Only administrators can look up another person\'s leave requests.', label: 'leave request' };
         }
         const match = await resolveEmployeeMatch(args.employee);
@@ -1604,8 +1755,7 @@ async function fetchModule(name, args, user) {
       } else if (scope === 'mine') {
         q.requestedBy = userId;
       } else {
-        const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-        if (!isAdmin) {
+        if (!callerIsAdmin) {
           return { notFound: true, reason: 'Only administrators can list company-wide leave requests.', label: 'leave request' };
         }
         const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
@@ -1692,9 +1842,10 @@ async function fetchModule(name, args, user) {
 
       const totalAll = await Task.countDocuments(q);
       const records = await Task.find(q)
-        .select('title description status dueDate tags taskCode projectId assignedTo createdBy')
+        .select('title description status dueDate tags taskCode projectId assignedTo createdBy createdAt updatedAt')
         .populate({ path: 'assignedTo', select: 'name email' })
         .populate({ path: 'createdBy', select: 'name email' })
+        .populate({ path: 'projectId', select: 'name' })
         .sort({ createdAt: -1 })
         .limit(limit)
         .lean();
@@ -2087,6 +2238,17 @@ async function fetchModule(name, args, user) {
       if (win.missing) {
         return { needsTimeWindow: true, label: 'attendance calendar', searchedFor: ident };
       }
+      if (win.future) {
+        logger.info(`[ChatAssistant][fetch_employee_attendance_calendar] future_date_short_circuit window=${win.label}`);
+        return {
+          futureDate: true,
+          notFound: true,
+          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
+          searchedFor: ident,
+          windowLabel: win.label,
+          label: 'attendance calendar',
+        };
+      }
 
       const match = await resolveEmployeeMatch(ident);
       if (match.kind === 'notFound') {
@@ -2136,7 +2298,7 @@ async function fetchModule(name, args, user) {
       const byDate = {};
       for (const r of attRecs) {
         if (!r.date) continue;
-        const k = new Date(r.date).toISOString().slice(0, 10);
+        const k = formatDateIST(r.date);
         (byDate[k] = byDate[k] || []).push(r);
       }
 
@@ -2157,7 +2319,7 @@ async function fetchModule(name, args, user) {
       const joinMs = employee.joiningDate ? new Date(employee.joiningDate).getTime() : 0;
       const resignMs = employee.resignDate ? new Date(employee.resignDate).getTime() : Number.POSITIVE_INFINITY;
 
-      const fmtTime = (d) => (d ? new Date(d).toISOString().slice(11, 16) : null);
+      const fmtTime = (d) => (d ? (formatTimeIST(d) || null) : null);
       const days = [];
       for (let cursor = new Date(win.from); cursor <= win.to; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
         const iso = cursor.toISOString().slice(0, 10);
@@ -2295,6 +2457,17 @@ async function fetchModule(name, args, user) {
           searchedFor: ident,
         };
       }
+      if (window.future) {
+        logger.info(`[ChatAssistant][fetch_employee_attendance] future_date_short_circuit window=${window.label}`);
+        return {
+          futureDate: true,
+          notFound: true,
+          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
+          searchedFor: ident,
+          windowLabel: window.label,
+          label: 'employee attendance',
+        };
+      }
 
       const limit = Math.min(args.limit || 200, 400);
 
@@ -2364,21 +2537,37 @@ async function fetchModule(name, args, user) {
 
     case 'fetch_offers': {
       const limit = Math.min(args.limit || 25, 100);
-      // Scope to company via createdBy in companyUserIds (Offer has no adminId).
+      // Scope to company. Offer.createdBy may be the admin OR any company user
+      // (recruiter / sales agent). Widen the createdBy match AND also accept
+      // candidates whose Employee.adminId points to this company — issue 5:
+      // recruiter-issued offers were being missed by the createdBy-only scope.
       const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-      const q = { createdBy: { $in: companyUserIds } };
-      if (args.status) q.status = args.status;
+      const companyEmpIds = await Employee.find({
+        $or: [{ adminId }, { owner: { $in: companyUserIds } }],
+      }).distinct('_id');
+      const scopeOr = [
+        { createdBy: { $in: companyUserIds } },
+      ];
+      if (companyEmpIds.length) scopeOr.push({ candidate: { $in: companyEmpIds } });
+      const q = { $or: scopeOr };
+
+      const statusNorm = String(args.status || '').trim();
+      if (statusNorm) q.status = statusNorm;
 
       // Resolve candidate filter (Offer.candidate refs Employee — translate name to Employee._ids)
       if (args.candidateName) {
         const safe = escapeRegex(args.candidateName);
         const matchUsers = await User.find(
-          { adminId, name: { $regex: safe, $options: 'i' } },
+          { name: { $regex: safe, $options: 'i' } },
           { _id: 1 }
         ).limit(50).lean();
         const ownerIds = matchUsers.map((u) => u._id);
-        const empIds = await Employee.find({ owner: { $in: ownerIds } }).distinct('_id');
-        if (empIds.length) q.candidate = { $in: empIds };
+        const ownerEmpIds = ownerIds.length
+          ? await Employee.find({ owner: { $in: ownerIds } }).distinct('_id')
+          : [];
+        const fullNameEmpIds = await Employee.find({ fullName: { $regex: safe, $options: 'i' } }).distinct('_id');
+        const allEmpIds = [...new Set([...ownerEmpIds.map(String), ...fullNameEmpIds.map(String)])];
+        if (allEmpIds.length) q.candidate = { $in: allEmpIds };
         else return { total: 0, records: [], notFound: true, searchedFor: args.candidateName, label: 'offer' };
       }
 
@@ -2389,31 +2578,59 @@ async function fetchModule(name, args, user) {
         else return { total: 0, records: [], notFound: true, searchedFor: args.jobTitle, label: 'offer' };
       }
 
-      const total = await Offer.countDocuments(q);
-      const records = await Offer.find(q)
-        .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
-        .populate({ path: 'job', select: 'title location' })
-        .populate({ path: 'createdBy', select: 'name' })
-        .select('offerCode status joiningDate offerValidityDate ctcBreakdown jobType workLocation sentAt acceptedAt rejectedAt rejectionReason createdAt')
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
+      // Status breakdown (issue 5: chatbot must report exact totals per state).
+      const baseQ = { ...q };
+      delete baseQ.status;
+      const [total, statusAgg, records] = await Promise.all([
+        Offer.countDocuments(q),
+        Offer.aggregate([{ $match: baseQ }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Offer.find(q)
+          .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
+          .populate({ path: 'job', select: 'title location' })
+          .populate({ path: 'createdBy', select: 'name' })
+          .select('offerCode status joiningDate offerValidityDate ctcBreakdown jobType workLocation sentAt acceptedAt rejectedAt rejectionReason createdAt')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean(),
+      ]);
+      const breakdown = { Draft: 0, Sent: 0, Accepted: 0, Rejected: 0, Withdrawn: 0, Expired: 0 };
+      for (const row of statusAgg) {
+        if (row?._id) breakdown[row._id] = (breakdown[row._id] || 0) + row.count;
+      }
+      const baseTotal = statusAgg.reduce((s, r) => s + (r.count || 0), 0);
 
-      logger.info(`[ChatAssistant][fetch_offers] total=${total} fetched=${records.length}`);
-      return { total: Math.max(total, records.length), records, label: 'offer' };
+      logger.info(`[ChatAssistant][fetch_offers] total=${total} baseTotal=${baseTotal} fetched=${records.length} breakdown=${JSON.stringify(breakdown)} statusFilter=${statusNorm || 'none'}`);
+      return {
+        total: Math.max(total, records.length),
+        baseTotal,
+        breakdown,
+        statusFilter: statusNorm || null,
+        records,
+        label: 'offer',
+      };
     }
 
     case 'fetch_placements': {
       const limit = Math.min(args.limit || 25, 100);
-      const days = Math.min(args.days || 90, 365);
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      // Default: NO joining-date window — chatbot "how many placements" must
+      // report the lifetime total. Applying the 90-day default silently dropped
+      // older joiners and made the count read too low (issue 5). A window is
+      // applied only when the caller passes args.days explicitly.
+      const explicitDays = Number.isFinite(args.days) ? Math.min(args.days, 730) : null;
+      const since = explicitDays ? new Date(Date.now() - explicitDays * 24 * 60 * 60 * 1000) : null;
+
       const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
+      const companyEmpIds = await Employee.find({
+        $or: [{ adminId }, { owner: { $in: companyUserIds } }],
+      }).distinct('_id');
+      const scopeOr = [
+        { createdBy: { $in: companyUserIds } },
+      ];
+      if (companyEmpIds.length) scopeOr.push({ candidate: { $in: companyEmpIds } });
       // Universal deleted-data guard: Placement uses cancelledAt/status='Cancelled'
       // for soft-cancel + the schema has no deletedAt/isDeleted fields. Filter
-      // cancelled placements out of every onboarding query unless the user has
-      // explicitly asked for status: 'Cancelled'. Prevents stale onboarding rows
-      // (issue 5: "showing deleted/wrong onboarding data").
-      const q = { createdBy: { $in: companyUserIds } };
+      // cancelled placements out unless caller explicitly asked for them.
+      const q = { $or: scopeOr };
       if (args.status) {
         q.status = args.status;
       } else {
@@ -2424,30 +2641,51 @@ async function fetchModule(name, args, user) {
       if (args.candidateName) {
         const safe = escapeRegex(args.candidateName);
         const matchUsers = await User.find(
-          { adminId, name: { $regex: safe, $options: 'i' } },
+          { name: { $regex: safe, $options: 'i' } },
           { _id: 1 }
         ).limit(50).lean();
         const ownerIds = matchUsers.map((u) => u._id);
-        const empIds = await Employee.find({ owner: { $in: ownerIds } }).distinct('_id');
-        if (empIds.length) q.candidate = { $in: empIds };
+        const ownerEmpIds = ownerIds.length
+          ? await Employee.find({ owner: { $in: ownerIds } }).distinct('_id')
+          : [];
+        const fullNameEmpIds = await Employee.find({ fullName: { $regex: safe, $options: 'i' } }).distinct('_id');
+        const allEmpIds = [...new Set([...ownerEmpIds.map(String), ...fullNameEmpIds.map(String)])];
+        if (allEmpIds.length) q.candidate = { $in: allEmpIds };
         else return { total: 0, records: [], notFound: true, searchedFor: args.candidateName, label: 'placement' };
       }
 
-      // joiningDate window only when no specific candidate name passed.
-      if (!args.candidateName) q.joiningDate = { $gte: since };
+      // Apply the date window only when the caller asked for one.
+      if (since && !args.candidateName) q.joiningDate = { $gte: since };
 
-      const total = await Placement.countDocuments(q);
-      const records = await Placement.find(q)
-        .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
-        .populate({ path: 'job', select: 'title location' })
-        .populate({ path: 'offer', select: 'offerCode' })
-        .select('status preBoardingStatus joiningDate joinedAt employeeId backgroundVerification onboardingCompletedAt deferredAt cancelledAt createdAt')
-        .sort({ joiningDate: -1, createdAt: -1 })
-        .limit(limit)
-        .lean();
+      const baseQ = { ...q };
+      delete baseQ.status;
+      const [total, statusAgg, records] = await Promise.all([
+        Placement.countDocuments(q),
+        Placement.aggregate([{ $match: baseQ }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Placement.find(q)
+          .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
+          .populate({ path: 'job', select: 'title location' })
+          .populate({ path: 'offer', select: 'offerCode' })
+          .select('status preBoardingStatus joiningDate joinedAt employeeId backgroundVerification onboardingCompletedAt deferredAt cancelledAt createdAt')
+          .sort({ joiningDate: -1, createdAt: -1 })
+          .limit(limit)
+          .lean(),
+      ]);
+      const breakdown = {};
+      for (const row of statusAgg) {
+        if (row?._id) breakdown[row._id] = row.count;
+      }
+      const baseTotal = statusAgg.reduce((s, r) => s + (r.count || 0), 0);
 
-      logger.info(`[ChatAssistant][fetch_placements] total=${total} fetched=${records.length}`);
-      return { total: Math.max(total, records.length), records, label: 'placement' };
+      logger.info(`[ChatAssistant][fetch_placements] total=${total} baseTotal=${baseTotal} fetched=${records.length} breakdown=${JSON.stringify(breakdown)} window=${explicitDays ? explicitDays + 'd' : 'lifetime'}`);
+      return {
+        total: Math.max(total, records.length),
+        baseTotal,
+        breakdown,
+        windowDays: explicitDays,
+        records,
+        label: 'placement',
+      };
     }
 
     case 'fetch_shifts': {
@@ -2533,13 +2771,20 @@ async function fetchModule(name, args, user) {
         q.status = normalizedStatus;
       }
 
-      let scope = args.scope === 'all' ? 'all' : 'mine';
+      const callerIsAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
+      // Default scope: admins asking a generic backdated-attendance question
+      // expect company-wide data. Previous default 'mine' silently emptied the
+      // result for admins who didn't say "all" (issue 10). Non-admins keep 'mine'.
+      let scope;
+      if (args.scope === 'all') scope = 'all';
+      else if (args.scope === 'mine') scope = 'mine';
+      else if (args.employee) scope = 'employee';
+      else scope = callerIsAdmin ? 'all' : 'mine';
       let resolvedEmployee = null;
 
       // Per-employee mode (admin only) — overrides scope.
       if (args.employee) {
-        const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-        if (!isAdmin) {
+        if (!callerIsAdmin) {
           return { notFound: true, reason: 'Only administrators can look up another person\'s backdated attendance requests.', label: 'backdated attendance request' };
         }
         const match = await resolveEmployeeMatch(args.employee);
@@ -2579,8 +2824,7 @@ async function fetchModule(name, args, user) {
         q.requestedBy = userId;
       } else {
         // admin scope: requests from any company user
-        const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-        if (!isAdmin) {
+        if (!callerIsAdmin) {
           return { notFound: true, reason: 'Only administrators can list company-wide backdated attendance requests.', label: 'backdated attendance request' };
         }
         const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
@@ -2702,6 +2946,19 @@ function summarizeData(fetchedData) {
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
 
+    // Future-date short-circuit (issue 11). Returned by all attendance handlers
+    // when the user asks for tomorrow / next week / a future month. Emit a
+    // single deterministic directive so the LLM doesn't try to invent data.
+    if (data?.futureDate) {
+      const win = data.windowLabel || 'the requested period';
+      parts.push(
+        `--- ${data.label || key} ---\n` +
+        `FUTURE_DATE_NO_DATA: ${data.reason || `No attendance exists for future dates (${win}).`}\n` +
+        `USER_FACING_REPLY: Tell the user verbatim — "No attendance exists for future dates (${win})." Do not invent records or status counts.`
+      );
+      continue;
+    }
+
     // Shared ambiguity block — applies to every employee-targeted tool that uses
     // resolveEmployeeMatch. The LLM is instructed (prompt rule 9x) to ask the user
     // which person they meant before doing anything else.
@@ -2762,11 +3019,7 @@ function summarizeData(fetchedData) {
         ? `--- employees (${shown} shown of ${total} total${ebTag}${partialTag}) ---`
         : `--- employees (${total} total${ebTag}${partialTag}) ---`;
       const lines = [header];
-      const fmtDate = (d) => {
-        if (!d) return '';
-        const t = new Date(d);
-        return Number.isNaN(t.getTime()) ? '' : t.toISOString().slice(0, 10);
-      };
+      const fmtDate = formatDateIST;
       for (const e of records) {
         const domains = Array.isArray(e.domain) && e.domain.length ? e.domain.join(', ') : 'None';
         const roleList = Array.isArray(e.roleNames) && e.roleNames.length
@@ -2873,7 +3126,7 @@ function summarizeData(fetchedData) {
         const candEmail = r.candidate?.owner?.email || r.candidate?.email || 'N/A';
         const empId = r.candidate?.employeeId || 'N/A';
         const jobTitle = r.job?.title || 'N/A';
-        const applied = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : 'N/A';
+        const applied = formatDateIST(r.createdAt) || 'N/A';
         let line = `APPLICANT: ${candName} | EMPLOYEE_ID: ${empId} | EMAIL: ${candEmail} | JOB: ${jobTitle} | STATUS: ${r.status || 'N/A'} | APPLIED_ON: ${applied}`;
         if (r.verificationCallStatus) line += ` | VERIFICATION_CALL: ${r.verificationCallStatus}`;
         if (r.notes) line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
@@ -2894,8 +3147,11 @@ function summarizeData(fetchedData) {
           ? t.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean).join(', ')
           : 'Unassigned';
         const creator = typeof t.createdBy === 'object' ? t.createdBy?.name : (t.createdBy || 'N/A');
-        const due = t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'No deadline';
-        let line = `TASK: ${t.title || 'N/A'} | CODE: ${t.taskCode || 'N/A'} | STATUS: ${t.status || 'N/A'} | DUE: ${due} | ASSIGNED_TO: ${assignees} | CREATED_BY: ${creator || 'N/A'}`;
+        const due = formatDateIST(t.dueDate) || 'No deadline';
+        const created = formatDateIST(t.createdAt) || 'N/A';
+        const project = typeof t.projectId === 'object' ? (t.projectId?.name || '') : '';
+        let line = `TASK: ${t.title || 'N/A'} | CODE: ${t.taskCode || 'N/A'} | STATUS: ${t.status || 'N/A'} | CREATED: ${created} | DUE: ${due} | ASSIGNED_TO: ${assignees} | CREATED_BY: ${creator || 'N/A'}`;
+        if (project)                              line += ` | PROJECT: ${project}`;
         if (Array.isArray(t.tags) && t.tags.length) line += ` | TAGS: ${t.tags.join(', ')}`;
         lines.push(line);
       }
@@ -2915,8 +3171,8 @@ function summarizeData(fetchedData) {
           : 'Unassigned';
         const pm = typeof p.projectManager === 'object' ? p.projectManager?.name : (p.projectManager || 'N/A');
         const creator = typeof p.createdBy === 'object' ? p.createdBy?.name : (p.createdBy || 'N/A');
-        const start = p.startDate ? new Date(p.startDate).toISOString().slice(0, 10) : 'N/A';
-        const end = p.endDate ? new Date(p.endDate).toISOString().slice(0, 10) : 'N/A';
+        const start = formatDateIST(p.startDate) || 'N/A';
+        const end = formatDateIST(p.endDate) || 'N/A';
         const progress = `${p.completedTasks ?? 0}/${p.totalTasks ?? 0}`;
         lines.push(
           `PROJECT: ${p.name || 'N/A'} | STATUS: ${p.status || 'N/A'} | PRIORITY: ${p.priority || 'N/A'}` +
@@ -2950,11 +3206,11 @@ function summarizeData(fetchedData) {
       if (e.designation) employmentBits.push(`DESIGNATION: ${e.designation}`);
       if (e.department) employmentBits.push(`DEPARTMENT: ${e.department}`);
       const _joinSrc = e.joiningDate || e.joinDate || e.dateOfJoining;
-      if (_joinSrc) employmentBits.push(`JOIN_DATE: ${new Date(_joinSrc).toISOString().slice(0, 10)}`);
+      if (_joinSrc) employmentBits.push(`JOIN_DATE: ${formatDateIST(_joinSrc)}`);
       // Show resign date whenever set (past OR future) — never hide for
       // resigned employees, per spec.
       const _resignSrc = e.resignDate || e.resignationDate || e.exitDate;
-      if (_resignSrc) employmentBits.push(`RESIGN_DATE: ${new Date(_resignSrc).toISOString().slice(0, 10)}`);
+      if (_resignSrc) employmentBits.push(`RESIGN_DATE: ${formatDateIST(_resignSrc)}`);
       if (e.isActive !== null && e.isActive !== undefined) employmentBits.push(`ACTIVE: ${e.isActive ? 'Yes' : 'No'}`);
       if (e.leavesAllowed != null) employmentBits.push(`LEAVES_ALLOWED: ${e.leavesAllowed}`);
       if (employmentBits.length) lines.push(`EMPLOYMENT: ${employmentBits.join(' | ')}`);
@@ -2989,8 +3245,8 @@ function summarizeData(fetchedData) {
       } else {
         lines.push(`HOLIDAYS_ASSIGNED (${hols.length}):`);
         for (const h of hols) {
-          const dt = h.date ? new Date(h.date).toISOString().slice(0, 10) : 'N/A';
-          lines.push(`  HOLIDAY: ${h.title || 'N/A'} | DATE: ${dt}${h.endDate ? ` → ${new Date(h.endDate).toISOString().slice(0, 10)}` : ''}`);
+          const dt = formatDateIST(h.date) || 'N/A';
+          lines.push(`  HOLIDAY: ${h.title || 'N/A'} | DATE: ${dt}${h.endDate ? ` → ${formatDateIST(h.endDate)}` : ''}`);
         }
       }
 
@@ -2999,7 +3255,7 @@ function summarizeData(fetchedData) {
       if (aLeaves.length) {
         lines.push(`ASSIGNED_LEAVES (admin-set, ${aLeaves.length}):`);
         for (const l of aLeaves) {
-          const dt = l.date ? new Date(l.date).toISOString().slice(0, 10) : 'N/A';
+          const dt = formatDateIST(l.date) || 'N/A';
           lines.push(`  ASSIGNED_LEAVE: ${dt} | type: ${l.leaveType || 'N/A'}${l.notes ? ` | notes: ${String(l.notes).slice(0, 80)}` : ''}`);
         }
       }
@@ -3010,7 +3266,7 @@ function summarizeData(fetchedData) {
       } else {
         for (const l of leaves) {
           const dates = Array.isArray(l.dates) && l.dates.length
-            ? l.dates.map((d) => new Date(d).toISOString().slice(0, 10)).join(', ')
+            ? l.dates.map((d) => formatDateIST(d)).join(', ')
             : 'N/A';
           let line = `  LEAVE: type=${l.leaveType || 'N/A'} | dates=${dates} | status=${l.status || 'N/A'}`;
           if (l.adminComment) line += ` | admin_comment=${l.adminComment}`;
@@ -3027,7 +3283,7 @@ function summarizeData(fetchedData) {
       } else {
         for (const l of fut) {
           const dates = Array.isArray(l.dates) && l.dates.length
-            ? l.dates.map((d) => new Date(d).toISOString().slice(0, 10)).join(', ')
+            ? l.dates.map((d) => formatDateIST(d)).join(', ')
             : 'N/A';
           lines.push(`  FUTURE_LEAVE: type=${l.leaveType || 'N/A'} | dates=${dates} | status=${l.status || 'N/A'}`);
         }
@@ -3040,9 +3296,9 @@ function summarizeData(fetchedData) {
         lines.push(`  None`);
       } else {
         for (const r of bd) {
-          const created = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : 'N/A';
+          const created = formatDateIST(r.createdAt) || 'N/A';
           const entries = (r.attendanceEntries || []).map((x) => {
-            const d = x.date ? new Date(x.date).toISOString().slice(0, 10) : '?';
+            const d = formatDateIST(x.date) || '?';
             return d;
           }).join(', ');
           let line = `  REQUEST: submitted=${created} | status=${r.status || 'N/A'} | entries=${entries || 'N/A'}`;
@@ -3156,8 +3412,8 @@ function summarizeData(fetchedData) {
       const win = data?.window || 'unspecified';
       const lines = [`--- employee attendance for ${who} — period: ${win} (${recs.length} records — ${breakdown} | total worked: ${totalHrs}h | source: ${src} — ENTITY_TYPE: employee) ---`];
       for (const r of recs) {
-        const date = r.date ? new Date(r.date).toISOString().slice(0, 10) : 'N/A';
-        const fmt = (d) => (d ? new Date(d).toISOString().slice(11, 16) : '—');
+        const date = formatDateIST(r.date) || 'N/A';
+        const fmt = (d) => (d ? (formatTimeIST(d) || '—') : '—');
         const dur = r.duration ? `${(r.duration / 3600000).toFixed(2)}h` : '—';
         let line = `DATE: ${date} | DAY: ${r.day || 'N/A'} | STATUS: ${r.status || 'N/A'} | IN: ${fmt(r.punchIn)} | OUT: ${fmt(r.punchOut)} | DURATION: ${dur}`;
         if (r.leaveType) line += ` | LEAVE_TYPE: ${r.leaveType}`;
@@ -3180,8 +3436,8 @@ function summarizeData(fetchedData) {
       const breakdown = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
       const lines = [`--- attendance (${recs.length} records — ${breakdown} | total worked: ${totalHrs}h) ---`];
       for (const r of recs) {
-        const date = r.date ? new Date(r.date).toISOString().slice(0, 10) : 'N/A';
-        const fmt = (d) => (d ? new Date(d).toISOString().slice(11, 16) : '—');
+        const date = formatDateIST(r.date) || 'N/A';
+        const fmt = (d) => (d ? (formatTimeIST(d) || '—') : '—');
         const ms = effectiveSessionDurationMs(r);
         const dur = ms == null ? '—' : ms < 60000 ? '<1m' : `${(ms / 3600000).toFixed(2)}h`;
         let line = `DATE: ${date} | DAY: ${r.day || 'N/A'} | STATUS: ${r.status || 'N/A'} | IN: ${fmt(r.punchIn)} | OUT: ${fmt(r.punchOut)} | DURATION: ${dur}`;
@@ -3233,13 +3489,17 @@ function summarizeData(fetchedData) {
       }
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
-      const lines = [`--- offers (${records.length} of ${total} total — ENTITY_TYPE: candidate) ---`];
+      const baseTotal = data?.baseTotal ?? total;
+      const bd = data?.breakdown || {};
+      const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
+      const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
+      const lines = [`--- offers (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many offers" / "total offers". Do not count rows. | BREAKDOWN: ${bdStr}${filterTag} — ENTITY_TYPE: candidate) ---`];
       for (const o of records) {
         const candName = o.candidate?.owner?.name ?? o.candidate?.fullName ?? 'N/A';
         const candEmail = o.candidate?.owner?.email ?? 'N/A';
         const empId = o.candidate?.employeeId ?? 'N/A';
         const jobTitle = o.job?.title ?? 'N/A';
-        const join = o.joiningDate ? new Date(o.joiningDate).toISOString().slice(0, 10) : 'N/A';
+        const join = formatDateIST(o.joiningDate) || 'N/A';
         const ctc = o.ctcBreakdown?.gross ? `${o.ctcBreakdown.gross} ${o.ctcBreakdown.currency || ''}`.trim() : 'N/A';
         let line = `OFFER: ${o.offerCode || 'N/A'} | CANDIDATE: ${candName} (${empId}) | EMAIL: ${candEmail} | JOB: ${jobTitle} | STATUS: ${o.status || 'N/A'} | JOINING: ${join} | CTC: ${ctc}`;
         if (o.rejectionReason) line += ` | REJECT_REASON: ${o.rejectionReason}`;
@@ -3256,13 +3516,17 @@ function summarizeData(fetchedData) {
       }
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
-      const lines = [`--- placements (${records.length} of ${total} total — ENTITY_TYPE: candidate) ---`];
+      const baseTotal = data?.baseTotal ?? total;
+      const bd = data?.breakdown || {};
+      const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
+      const windowTag = data?.windowDays ? ` | WINDOW: last ${data.windowDays}d` : ' | WINDOW: lifetime (no joining-date filter)';
+      const lines = [`--- placements (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many placements" / "total placements" / "total joiners". Do not count rows. | BREAKDOWN: ${bdStr}${windowTag} — ENTITY_TYPE: candidate) ---`];
       for (const p of records) {
         const candName = p.candidate?.owner?.name ?? p.candidate?.fullName ?? 'N/A';
         const empId = p.employeeId ?? p.candidate?.employeeId ?? 'N/A';
         const jobTitle = p.job?.title ?? 'N/A';
-        const join = p.joiningDate ? new Date(p.joiningDate).toISOString().slice(0, 10) : 'N/A';
-        const joined = p.joinedAt ? new Date(p.joinedAt).toISOString().slice(0, 10) : '—';
+        const join = formatDateIST(p.joiningDate) || 'N/A';
+        const joined = formatDateIST(p.joinedAt) || '—';
         let line = `PLACEMENT: ${p.offer?.offerCode || 'N/A'} | CANDIDATE: ${candName} (${empId}) | JOB: ${jobTitle} | STATUS: ${p.status || 'N/A'} | PRE_BOARDING: ${p.preBoardingStatus || 'N/A'} | JOINING_DATE: ${join} | JOINED_AT: ${joined}`;
         if (p.backgroundVerification?.status) line += ` | BGV: ${p.backgroundVerification.status}`;
         lines.push(line);
@@ -3337,9 +3601,9 @@ function summarizeData(fetchedData) {
       for (const r of records) {
         const requester = typeof r.requestedBy === 'object' ? (r.requestedBy?.name || 'N/A') : 'N/A';
         const dates = Array.isArray(r.dates) && r.dates.length
-          ? r.dates.map((d) => new Date(d).toISOString().slice(0, 10)).join(', ')
+          ? r.dates.map((d) => formatDateIST(d)).join(', ')
           : 'N/A';
-        const created = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : 'N/A';
+        const created = formatDateIST(r.createdAt) || 'N/A';
         let line = `LEAVE: requester=${requester} | type=${r.leaveType || 'N/A'} | dates=${dates} | status=${r.status || 'N/A'} | submitted=${created}`;
         if (r.adminComment) line += ` | admin_comment=${String(r.adminComment).slice(0, 120)}`;
         if (r.notes)        line += ` | notes=${String(r.notes).slice(0, 120)}`;
@@ -3374,11 +3638,11 @@ function summarizeData(fetchedData) {
       for (const r of records) {
         const requester = r.requestedBy?.name ?? 'N/A';
         const reqEmail = r.requestedBy?.email ?? '';
-        const created = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : 'N/A';
+        const created = formatDateIST(r.createdAt) || 'N/A';
         const entries = (r.attendanceEntries || []).map((e) => {
-          const d = e.date ? new Date(e.date).toISOString().slice(0, 10) : '?';
-          const tin = e.punchIn ? new Date(e.punchIn).toISOString().slice(11, 16) : '—';
-          const tout = e.punchOut ? new Date(e.punchOut).toISOString().slice(11, 16) : '—';
+          const d = formatDateIST(e.date) || '?';
+          const tin = formatTimeIST(e.punchIn) || '—';
+          const tout = formatTimeIST(e.punchOut) || '—';
           return `${d}(${tin}-${tout})`;
         }).join('; ');
         let line = `REQUEST: ${requester} ${reqEmail ? `<${reqEmail}>` : ''} | STATUS: ${r.status || 'N/A'} | SUBMITTED: ${created} | ENTRIES: ${entries}`;
@@ -3743,7 +4007,7 @@ async function buildSystemContext(adminId, userId, user) {
 
   lines.push(`\n=== ${taskHeader} (${tasks.length}) ===`);
   for (const t of tasks) {
-    const due = t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'No deadline';
+    const due = formatDateIST(t.dueDate) || 'No deadline';
     const assignees = Array.isArray(t.assignedTo) && t.assignedTo.length
       ? t.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean).join(', ')
       : 'Unassigned';
@@ -3815,7 +4079,7 @@ const INTENT_PATTERNS = [
   // External jobs (saved from job boards)
   { re: /\b(external jobs?|saved jobs?|linkedin jobs?|scraped jobs?|job board|external listing|aggregated jobs?)\b/i, modules: ['fetch_external_jobs'] },
   // Jobs (internal company postings)
-  { re: /\b(open jobs?|hiring|vacanc|job opening|position available|internal jobs?)\b/i,  modules: ['fetch_jobs'] },
+  { re: /\b(open jobs?|active jobs?|closed jobs?|draft jobs?|archived jobs?|live jobs?|hiring|vacanc|job opening|position available|internal jobs?|how many jobs?|total jobs?|list( all)? jobs?)\b/i, modules: ['fetch_jobs'] },
   // Tasks
   { re: /\b(my tasks?|tasks? (of|for|assigned)|assigned to|task list)\b/i, modules: ['fetch_tasks'] },
   { re: /\b(overdue|past due|missed deadline|late tasks?)\b/i,             modules: ['fetch_tasks'] },
@@ -3950,29 +4214,69 @@ async function prepareContext(client, history, user) {
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const adminId = user?.adminId ?? user?.id;
 
-  // 0. Continuation pre-routing — phrases like "list them", "yes", "are you
-  //    sure" carry NO topic of their own. If conversation memory has a
-  //    locked role (e.g. user just asked about agents), reuse that role for
-  //    the next fetch instead of letting the LLM widen to all employees.
-  //    This is what stops "How many agents?" → "Are you sure?" from drifting
-  //    to "We have 126 employees."
-  const CONTINUATION_RE = /^\s*(yes|yeah|yep|no|nope|sure\??|really\??|are you sure\??|are you certain\??|list them\.?|list all\.?|show( me)? them\.?|show all\.?|how many\??|more|next|continue|and\??|ok\.?|okay\.?|that'?s it\.?|right\??|correct\??|please|kindly)\s*$/i;
+  // 0. Continuation pre-routing — phrases like "list them", "yes", "give
+  //    detail", "are you sure" carry NO topic of their own. If conversation
+  //    memory has a locked role / topic / job / person, reuse it for the next
+  //    fetch instead of letting the LLM widen the population. This is what
+  //    stops "How many placements?" → "Give detail" drifting to a generic
+  //    company snapshot (issue 6).
+  const CONTINUATION_RE = /^\s*(yes|yeah|yep|no|nope|sure\??|really\??|are you sure\??|are you certain\??|list them\.?|list all\.?|list( the)? names\??|show( me)? them\.?|show all\.?|show( me)? names\??|how many\??|more|next|continue|and\??|ok\.?|okay\.?|that'?s it\.?|right\??|correct\??|please|kindly|details?\.?|give (me )?(more )?(detail|details|info|information)\.?|more (detail|details|info|information)\.?|elaborate\.?|expand\.?|tell me more\.?|what about (it|them|those|these)\??|who are they\??|names please\.?)\s*$/i;
   if (CONTINUATION_RE.test(lastUserMsg)) {
     try {
       const memDoc = await ConversationMemory.findOne({
         userId: user?.id,
         adminId,
       }).lean();
-      const lastRole = memDoc?.lastEntities?.role;
-      if (lastRole) {
-        const argsJson = JSON.stringify({ role: lastRole });
+      const le = memDoc?.lastEntities || {};
+      const lastRole = le.role;
+      const lastTopic = (le.lastTopic || '').toLowerCase();
+      // Map remembered topic → tool name so "give detail" after "placements"
+      // re-runs the placements query rather than dropping to the cached
+      // headcount snapshot.
+      const TOPIC_TOOL_MAP = {
+        placement:  'fetch_placements',
+        placements: 'fetch_placements',
+        offer:      'fetch_offers',
+        offers:     'fetch_offers',
+        application: 'fetch_job_applications',
+        applications: 'fetch_job_applications',
+        applicant:  'fetch_job_applications',
+        applicants: 'fetch_job_applications',
+        job:        'fetch_jobs',
+        jobs:       'fetch_jobs',
+        task:       'fetch_tasks',
+        tasks:      'fetch_tasks',
+        project:    'fetch_projects',
+        projects:   'fetch_projects',
+        leave:      'fetch_leave_requests',
+        leaves:     'fetch_leave_requests',
+        attendance: 'fetch_attendance_summary',
+        backdated:  'fetch_backdated_attendance_requests',
+      };
+      let toolName = null;
+      const toolArgs = {};
+      if (lastTopic && TOPIC_TOOL_MAP[lastTopic]) {
+        toolName = TOPIC_TOOL_MAP[lastTopic];
+        // Carry forward identity hints so the same record set is fetched.
+        if (le.jobTitle && toolName === 'fetch_job_applications') toolArgs.jobTitle = le.jobTitle;
+        if (le.jobId && toolName === 'fetch_job_applications')    toolArgs.jobId = le.jobId;
+        if (le.person && (toolName === 'fetch_leave_requests' || toolName === 'fetch_backdated_attendance_requests')) {
+          toolArgs.employee = le.person;
+        }
+        if (le.lastDate && (toolName === 'fetch_attendance_summary')) toolArgs.date = le.lastDate;
+      } else if (lastRole) {
+        toolName = 'fetch_employees';
+        toolArgs.role = lastRole;
+      }
+      if (toolName) {
+        const argsJson = JSON.stringify(toolArgs);
         const fetched = await executeFetches(
-          [{ function: { name: 'fetch_employees', arguments: argsJson } }],
+          [{ function: { name: toolName, arguments: argsJson } }],
           user,
         );
         const dataContext = summarizeData(fetched);
         logger.info(
-          `[ChatAssistant] intent=continuation role=${lastRole} ctx=${dataContext.length}c user=${user?.id}`,
+          `[ChatAssistant] intent=continuation tool=${toolName} args=${argsJson} ctx=${dataContext.length}c user=${user?.id}`,
         );
         return { dataContext, moduleCount: 1, fetched };
       }
@@ -3984,12 +4288,19 @@ async function prepareContext(client, history, user) {
   // 1. Fast path — regex pre-routing: skip the LLM routing call for obvious intents.
   const intent = detectIntent(lastUserMsg);
   if (intent && !fastPathNeedsArgs(intent.modules, intent.args)) {
-    const argsJson = JSON.stringify(intent.args || {});
-    const toolCalls = intent.modules.map((n) => ({ function: { name: n, arguments: argsJson } }));
+    // Per-module arg inference: scan the user message for modifiers the
+    // pattern itself can't carry (resigned/active employment, status filter,
+    // admin scope). Without this the fast-path silently strips qualifiers
+    // (issues 1, 2, 9, 10).
+    const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
+    const toolCalls = intent.modules.map((n) => {
+      const moduleArgs = extractFastPathArgs(lastUserMsg, n, intent.args || {}, fastUserCtx);
+      return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
+    });
     try {
       const fetched = await executeFetches(toolCalls, user);
       const dataContext = summarizeData(fetched);
-      logger.info(`[ChatAssistant] intent=fast modules=[${intent.modules}] args=${argsJson} ctx=${dataContext.length}c user=${user?.id}`);
+      logger.info(`[ChatAssistant] intent=fast modules=[${intent.modules}] argsByModule=${JSON.stringify(toolCalls.map((t) => t.function.arguments))} ctx=${dataContext.length}c user=${user?.id}`);
       return { dataContext, moduleCount: intent.modules.length, fetched };
     } catch (err) {
       logger.warn(`[ChatAssistant] fast-path fetch failed: ${err.message}`);
@@ -4007,11 +4318,50 @@ async function prepareContext(client, history, user) {
   }
 
   if (toolCalls.length > 0) {
+    // Memory-driven arg injection (issues 4 & 7): when the LLM picks a tool
+    // but forgets to pass the entity filter the user previously named (e.g.
+    // "applicants for that job"), backfill from conversation memory so we
+    // don't return the entire company population. The LLM's args win when
+    // present; we only fill blanks.
+    try {
+      const memDoc = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
+      const le = memDoc?.lastEntities || {};
+      for (const tc of toolCalls) {
+        let parsed = {};
+        try { parsed = JSON.parse(tc.function?.arguments || '{}'); } catch { /* keep empty */ }
+        const name = tc.function?.name;
+        if (name === 'fetch_job_applications') {
+          if (!parsed.jobId && !parsed.jobTitle && !parsed.applicantName) {
+            if (le.jobId)         parsed.jobId = String(le.jobId);
+            else if (le.jobTitle) parsed.jobTitle = le.jobTitle;
+            else if (le.person)   parsed.applicantName = le.person;
+          }
+        }
+        if (name === 'fetch_offers' || name === 'fetch_placements') {
+          if (!parsed.candidateName && !parsed.jobTitle) {
+            if (le.person)        parsed.candidateName = le.person;
+            else if (le.jobTitle) parsed.jobTitle = le.jobTitle;
+          }
+        }
+        if (name === 'fetch_leave_requests' || name === 'fetch_backdated_attendance_requests') {
+          if (!parsed.employee && !parsed.scope && le.person) parsed.employee = le.person;
+        }
+        if (name === 'fetch_employee_attendance' || name === 'fetch_employee_attendance_calendar') {
+          if (!parsed.employee && le.person) parsed.employee = le.person;
+          if (!parsed.date && !parsed.month && !parsed.fromDate && !parsed.toDate && le.lastDate) {
+            parsed.date = le.lastDate;
+          }
+        }
+        tc.function.arguments = JSON.stringify(parsed);
+      }
+    } catch (err) {
+      logger.warn(`[ChatAssistant] memory enrichment failed: ${err.message}`);
+    }
     try {
       const fetched = await executeFetches(toolCalls, user);
       const dataContext = summarizeData(fetched);
       logger.info(
-        `[ChatAssistant] intent=llm modules=[${Object.keys(fetched).join(',')}] ctx=${dataContext.length}c user=${user?.id}`
+        `[ChatAssistant] intent=llm modules=[${Object.keys(fetched).join(',')}] argsByModule=${JSON.stringify(toolCalls.map((t) => t.function.arguments))} ctx=${dataContext.length}c user=${user?.id}`
       );
       return { dataContext, moduleCount: toolCalls.length, fetched };
     } catch (err) {
@@ -4201,6 +4551,17 @@ function extractEntities(turnText, fetched) {
   if (!turnText) return out;
   // Carry temporal + topic hints forward (e.g. "yesterday" → 2026-05-06).
   Object.assign(out, extractTemporalContext(turnText));
+
+  // Strong topic capture — fires when the user message names a primary entity
+  // bucket (placements, applications, jobs, …). Lets the continuation
+  // pre-router re-dispatch follow-ups ("give detail", "more info") to the
+  // same tool instead of falling back to the generic snapshot (issue 6).
+  const TOPIC_RE = /\b(placements?|offers?|applications?|applicants?|jobs?|tasks?|projects?|leaves?|leave\s+requests?|backdated|attendance|interviews?|candidates?|employees?|recruiters?|agents?|admins?|administrators?|students?)\b/i;
+  const topicMatch = turnText.match(TOPIC_RE);
+  if (topicMatch) {
+    const t = topicMatch[1].toLowerCase().replace(/\s+requests?$/, '').replace(/s$/, '');
+    if (t) out.lastTopic = t;
+  }
 
   const empIdMatch = turnText.match(EMP_ID_RE);
   if (empIdMatch) out.employeeId = empIdMatch[0].replace(/\s+/g, '').toUpperCase();

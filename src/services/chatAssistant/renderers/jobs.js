@@ -67,6 +67,42 @@ export function renderJobs(data, ctx = {}, fact) {
     return fact ? renderGenericCount(fact, ctx) : null;
   }
 
+  // Single-job detail intent (issue 3): when the caller asked for a specific
+  // job (search/jobId) and exactly one record came back, render a KV detail
+  // block instead of a multi-row table. Same when exactly one job exists.
+  // Prevents the UI from "rendering all jobs" when the user only asked one.
+  const wantDetail = !!data?.wantDetail || records.length === 1;
+  if (wantDetail && records.length === 1) {
+    const r = records[0];
+    const pairs = [
+      { k: 'Title',      v: cell(r.title) },
+      { k: 'Company',    v: cell(formatOrg(r)) },
+      { k: 'Type',       v: cell(r.jobType) },
+      { k: 'Location',   v: cell(r.location) },
+      { k: 'Experience', v: cell(r.experienceLevel) },
+      { k: 'Salary',     v: cell(formatSalary(r)) },
+      { k: 'Status',     v: cell(r.status || 'Active') },
+      { k: 'Origin',     v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')) },
+    ].filter((p) => p.v && p.v !== '—');
+    if (Array.isArray(r.skillTags) && r.skillTags.length) {
+      pairs.push({ k: 'Skills', v: r.skillTags.join(', ') });
+    }
+    if (r.jobDescription) {
+      pairs.push({ k: 'Description', v: String(r.jobDescription).replace(/\s+/g, ' ').slice(0, 480) });
+    }
+    if (r.externalPlatformUrl) {
+      pairs.push({ k: 'Source URL', v: r.externalPlatformUrl });
+    }
+    const block = {
+      type: 'kv',
+      id: 'job-detail',
+      title: `Job: ${cell(r.title)}`,
+      pairs,
+    };
+    const markdown = `Here are the details for **${cell(r.title)}** — see below.`;
+    return { block, markdown };
+  }
+
   const rows = records.map((r) => ({
     title:           cell(r.title),
     organisation:    cell(formatOrg(r)),
