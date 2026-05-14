@@ -189,14 +189,63 @@ const createTrainingModule = async (moduleBody, currentUser) => {
 };
 
 /**
- * Query for training modules
- * @param {Object} filter - Mongo filter
- * @param {Object} options - Query options
+ * Resolve the Student / Mentor ObjectIds that belong to the given app user.
+ * Returns { studentId, mentorId } — either may be null when the user has no
+ * such profile.
+ */
+const resolveAssignmentIdsForUser = async (currentUser) => {
+  if (!currentUser) return { studentId: null, mentorId: null };
+  const userId = currentUser.id || currentUser._id;
+  if (!userId) return { studentId: null, mentorId: null };
+  const [student, mentor] = await Promise.all([
+    Student.findOne({ user: userId }).select('_id').lean(),
+    Mentor.findOne({ user: userId }).select('_id').lean(),
+  ]);
+  return {
+    studentId: student?._id ?? null,
+    mentorId: mentor?._id ?? null,
+  };
+};
+
+/**
+ * Query for training modules.
+ *
+ * Visibility rules (applied here so it cannot be bypassed by FE state):
+ * - `mine=true`           → modules where the caller is in `students` or
+ *                           `mentorsAssigned`. Status forced to `published`
+ *                           unless explicitly overridden.
+ * - `status` not provided + non-admin caller (no modules.manage permission)
+ *                         → default to `published` (drafts/archived hidden).
+ *
+ * @param {Object} filter - Mongo filter (search/category/status/mine)
+ * @param {Object} options - Query options (sortBy/limit/page)
+ * @param {Object} [currentUser] - Authenticated user (req.user). Optional for
+ *                                 internal/admin callers.
  * @returns {Promise<QueryResult>}
  */
-const queryTrainingModules = async (filter, options) => {
-  const { search, category, status, ...restFilter } = filter;
+const queryTrainingModules = async (filter, options, currentUser) => {
+  const { search, category, status, mine, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
+
+  if (mine === true || mine === 'true') {
+    const { studentId, mentorId } = await resolveAssignmentIdsForUser(currentUser);
+    const orClauses = [];
+    if (studentId) orClauses.push({ students: studentId });
+    if (mentorId) orClauses.push({ mentorsAssigned: mentorId });
+    if (orClauses.length === 0) {
+      // No student/mentor profile → no assignments → empty result.
+      return { results: [], page: Number(options.page) || 1, limit: Number(options.limit) || 10, totalPages: 0, totalResults: 0 };
+    }
+    mongoFilter.$or = orClauses;
+  }
+
+  // Non-admin callers only ever see published modules unless they explicitly
+  // ask for a different status (FE may pass status=draft from an admin
+  // dashboard; permission gate above ensures the route is still authorised).
+  const callerPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];
+  const canManageModules = callerPermissions.some((p) =>
+    ['modules.manage', 'training.modules.manage', 'training.modules:create,edit,delete', 'training.modules:view,create,edit,delete'].includes(p)
+  );
 
   if (search && search.trim()) {
     const trimmed = search.trim();
@@ -211,16 +260,30 @@ const queryTrainingModules = async (filter, options) => {
       const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const prefix = new RegExp('^' + escaped, 'i');
       const anywhere = new RegExp(escaped, 'i');
-      mongoFilter.$or = [
+      const searchOr = [
         { moduleName: prefix },
         { moduleName: anywhere },
         { shortDescription: anywhere },
       ];
+      // If `mine` already set a $or for assignment, merge under $and so the
+      // user's assignments AND the search match must both hold (otherwise the
+      // search $or silently overwrites the assignment scope).
+      if (Array.isArray(mongoFilter.$or)) {
+        const mineOr = mongoFilter.$or;
+        delete mongoFilter.$or;
+        mongoFilter.$and = [{ $or: mineOr }, { $or: searchOr }];
+      } else {
+        mongoFilter.$or = searchOr;
+      }
     }
   }
 
   if (category) mongoFilter.categories = category;
-  if (status) mongoFilter.status = status;
+  if (status) {
+    mongoFilter.status = status;
+  } else if (!canManageModules) {
+    mongoFilter.status = 'published';
+  }
 
   // Note: lean:true is intentionally NOT used. The toJSON plugin renames
   // _id -> id only on Mongoose docs, and the FE filters by `id` on modules,

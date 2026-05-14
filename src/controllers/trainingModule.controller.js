@@ -71,9 +71,9 @@ const createTrainingModule = catchAsync(async (req, res) => {
 });
 
 const getTrainingModules = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['search', 'category', 'status']);
+  const filter = pick(req.query, ['search', 'category', 'status', 'mine']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const result = await trainingModuleService.queryTrainingModules(filter, options);
+  const result = await trainingModuleService.queryTrainingModules(filter, options, req.user);
   res.send(result);
 });
 

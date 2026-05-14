@@ -35,6 +35,8 @@ const playlistItemSchema = Joi.object({
     is: 'youtube-link',
     then: Joi.required(),
     otherwise: Joi.optional().allow('', null),
+  }).messages({
+    'string.uri': 'YouTube URL must be a valid URL',
   }),
   blogContent: Joi.string().when('contentType', {
     is: 'blog',
@@ -134,6 +136,7 @@ const getTrainingModules = {
     search: Joi.string(),
     category: Joi.custom(objectId),
     status: Joi.string().valid('draft', 'published', 'archived'),
+    mine: Joi.boolean(),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
     page: Joi.number().integer(),
