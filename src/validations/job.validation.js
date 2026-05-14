@@ -1,16 +1,23 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
+const COMPANY_SIZE_BUCKETS = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5000+'];
+
 const organisation = Joi.object({
   name: Joi.string().required().trim().messages({
     'any.required': 'Organisation name is required',
     'string.empty': 'Organisation name cannot be empty',
   }),
-  website: Joi.string().uri().optional().trim().allow('', null),
+  website: Joi.string().uri().optional().trim().allow('', null).messages({
+    'string.uri': 'Website must be a valid URL',
+  }),
   email: Joi.string().email().optional().trim().allow('', null),
   phone: Joi.string().optional().trim().allow('', null),
   address: Joi.string().optional().trim().allow('', null),
   description: Joi.string().optional().trim().allow('', null),
+  industry: Joi.string().optional().trim().max(120).allow('', null),
+  founded: Joi.number().integer().min(1800).max(new Date().getFullYear()).optional().allow(null),
+  companySize: Joi.string().valid(...COMPANY_SIZE_BUCKETS).optional().allow('', null),
 });
 
 const salaryRange = Joi.object({
@@ -51,6 +58,9 @@ const createJob = {
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
       .optional()
       .allow(null),
+    minExperience: Joi.number().min(0).max(80).optional().allow(null),
+    maxExperience: Joi.number().min(0).max(80).optional().allow(null),
+    vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
     status: Joi.string()
       .valid('Draft', 'Active', 'Closed', 'Archived')
       .optional()
@@ -106,6 +116,9 @@ const updateJob = {
         .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
         .optional()
         .allow(null),
+      minExperience: Joi.number().min(0).max(80).optional().allow(null),
+      maxExperience: Joi.number().min(0).max(80).optional().allow(null),
+      vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
       status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
       templateId: Joi.string().custom(objectId).optional(),
     })

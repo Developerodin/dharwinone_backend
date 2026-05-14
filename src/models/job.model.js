@@ -10,6 +10,15 @@ const organisationSchema = new mongoose.Schema(
     phone: { type: String, trim: true },
     address: { type: String, trim: true },
     description: { type: String, trim: true },
+    // Company-information fields surfaced in the job details panel.
+    // Optional, additive — older jobs without these simply render blank.
+    industry: { type: String, trim: true },
+    founded: { type: Number, min: 1800, max: 2100 },
+    companySize: {
+      type: String,
+      enum: ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5000+'],
+      trim: true,
+    },
   },
   { _id: false }
 );
@@ -57,6 +66,14 @@ const jobSchema = new mongoose.Schema(
       enum: ['Entry Level', 'Mid Level', 'Senior Level', 'Executive'],
       trim: true,
     },
+    // Numeric experience range (years). Single source of truth for the
+    // "Experience" string rendered across listing + details. Optional —
+    // falls back to experienceLevel bucket when absent (see jobMappers).
+    minExperience: { type: Number, min: 0, max: 80 },
+    maxExperience: { type: Number, min: 0, max: 80 },
+    // Number of openings / vacancies for this job posting.
+    // Optional — older jobs without this remain valid; UI falls back to "—".
+    vacancies: { type: Number, min: 1, default: 1 },
     status: {
       type: String,
       enum: ['Draft', 'Active', 'Closed', 'Archived'],
