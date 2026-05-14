@@ -6,9 +6,21 @@ const jobApplicationSchema = new mongoose.Schema(
   {
     job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', required: true, index: true },
     candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
+    /**
+     * Universal applicant user identity — set on creation from Employee.owner of the
+     * applying candidate. NULL for synthetic offer-letter standalone applications
+     * (no real applicant). NEVER set to the creator/recruiter/admin. Drives dedupe
+     * and email resolution.
+     */
+    applicantUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
-      enum: ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'],
+      enum: ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'],
       default: 'Applied',
     },
     coverLetter: { type: String, trim: true },

@@ -5,7 +5,9 @@ import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
 
-const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'];
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Narrow application query to jobs that still exist with status Active.
@@ -48,7 +50,12 @@ const isActiveJobsOnlyFlag = (filter) => {
 const getJobApplicationById = async (id) => {
   const application = await JobApplication.findById(id)
     .populate('job', 'title organisation status createdBy')
-    .populate('candidate', 'fullName email phoneNumber countryCode address')
+    .populate({
+      path: 'candidate',
+      select: 'fullName email phoneNumber countryCode address owner',
+      populate: { path: 'owner', select: 'name email' },
+    })
+    .populate('applicantUser', 'name email')
     .populate('appliedBy', 'name email');
   return application;
 };
@@ -76,9 +83,17 @@ const createJobApplication = async (body, currentUser) => {
   if (existing) {
     throw new ApiError(httpStatus.CONFLICT, 'This candidate has already applied to this job');
   }
+  // applicantUser is intentionally left NULL here. We do not auto-derive it from
+  // Employee.owner: for recruiter-created candidates, Employee.owner IS the recruiter's
+  // User and would leak the recruiter's email into the applicant row. A reliable
+  // applicant-user link is only available when the candidate self-registers, which goes
+  // through a different create path. Frontend resolver falls back to candidate.email
+  // (the Employee's own email) for these rows — which is correct.
+  const applicantUserId = null;
   const application = await JobApplication.create({
     job: body.job,
     candidate: body.candidate,
+    applicantUser: applicantUserId,
     status: body.status || 'Applied',
     coverLetter: body.coverLetter,
     notes: body.notes,
@@ -224,6 +239,57 @@ const queryJobApplications = async (filter, options, currentUser) => {
   if (filter.status) {
     query.status = filter.status;
   }
+  if (filter.recruiterId) {
+    query.appliedBy = filter.recruiterId;
+  }
+
+  // Drop synthetic offer-letter applications (placeholder candidates with relay emails).
+  // Default is to keep them; pass excludeInternal=true to filter them out (Applications page).
+  const RELAY_EMAIL_RE = /(\.noreply@dharwin\.offers\.local$)|(\.(local|internal|invalid)$)/i;
+  const wantExcludeInternal =
+    filter.excludeInternal === true ||
+    filter.excludeInternal === 'true' ||
+    filter.excludeInternal === 1 ||
+    filter.excludeInternal === '1';
+  if (wantExcludeInternal) {
+    const syntheticRows = await Employee.find(
+      { email: RELAY_EMAIL_RE },
+      { _id: 1 }
+    ).lean();
+    if (syntheticRows.length > 0) {
+      const syntheticIds = syntheticRows.map((r) => r._id);
+      if (query.candidate == null) {
+        query.candidate = { $nin: syntheticIds };
+      } else if (typeof query.candidate === 'object' && Array.isArray(query.candidate.$in)) {
+        const blocked = new Set(syntheticIds.map(String));
+        query.candidate = {
+          $in: query.candidate.$in.filter((id) => !blocked.has(String(id))),
+        };
+      } else if (syntheticIds.some((id) => String(id) === String(query.candidate))) {
+        const limit = options.limit || 10;
+        return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+      }
+    }
+  }
+  if (filter.dateFrom || filter.dateTo) {
+    query.createdAt = {};
+    if (filter.dateFrom) query.createdAt.$gte = new Date(filter.dateFrom);
+    if (filter.dateTo) query.createdAt.$lte = new Date(filter.dateTo);
+  }
+
+  // Department filter — resolve candidate ids whose Employee.department matches
+  let departmentCandidateIds = null;
+  if (filter.department) {
+    const depRows = await Employee.find(
+      { department: new RegExp(`^${escapeRegex(filter.department)}$`, 'i') },
+      { _id: 1 }
+    ).lean();
+    departmentCandidateIds = depRows.map((r) => r._id);
+    if (departmentCandidateIds.length === 0) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+    }
+  }
 
   // Only include applications from active candidates whose owner user account is also active/pending.
   // This ensures the list count matches the analytics dashboard count exactly.
@@ -238,7 +304,41 @@ const queryJobApplications = async (filter, options, currentUser) => {
         { _id: 1 }
       ).lean()
     ).map((c) => c._id);
-    query.candidate = { $in: activeCandidateIds };
+    if (departmentCandidateIds) {
+      const allowed = new Set(activeCandidateIds.map(String));
+      const intersected = departmentCandidateIds.filter((id) => allowed.has(String(id)));
+      if (intersected.length === 0) {
+        const limit = options.limit || 10;
+        return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+      }
+      query.candidate = { $in: intersected };
+    } else {
+      query.candidate = { $in: activeCandidateIds };
+    }
+  } else if (departmentCandidateIds && !query.candidate) {
+    query.candidate = { $in: departmentCandidateIds };
+  } else if (departmentCandidateIds && query.candidate) {
+    if (!departmentCandidateIds.some((id) => String(id) === String(query.candidate))) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+    }
+  }
+
+  // Text search: match candidate fullName/email OR job title
+  if (filter.q && filter.q.trim()) {
+    const Job = (await import('../models/job.model.js')).default;
+    const qRegex = new RegExp(escapeRegex(filter.q.trim()), 'i');
+    const [candRows, jobRows] = await Promise.all([
+      Employee.find({ $or: [{ fullName: qRegex }, { email: qRegex }] }, { _id: 1 }).lean(),
+      Job.find({ title: qRegex }, { _id: 1 }).lean(),
+    ]);
+    const candIds = candRows.map((r) => r._id);
+    const jobIds = jobRows.map((r) => r._id);
+    if (candIds.length === 0 && jobIds.length === 0) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+    }
+    query.$or = [{ candidate: { $in: candIds } }, { job: { $in: jobIds } }];
   }
 
   const isAdmin = await userIsAdmin(currentUser);
@@ -268,15 +368,114 @@ const queryJobApplications = async (filter, options, currentUser) => {
     }
   }
 
+  // Dedupe applicants by universal user identity (Employee.owner → User._id).
+  // Falls back to the candidate Employee _id when owner is missing (legacy rows / synthetic
+  // standalone-offer Employees). Latest application per (job, applicant) wins.
+  // Default ON; opt out via filter.includeDuplicates=true (analytics/exports).
+  const wantDedupe =
+    filter.includeDuplicates !== true &&
+    filter.includeDuplicates !== 'true' &&
+    filter.includeDuplicates !== 1 &&
+    filter.includeDuplicates !== '1';
+  if (wantDedupe) {
+    // JS-side dedupe (not aggregation): Mongoose find() auto-casts string ObjectIds, avoids
+    // $match casting gotchas, and never silently drops applications whose Employee.owner
+    // lookup misses (employee/internal/legacy rows still surface — we fall back to the
+    // candidate _id as the identity key).
+    const candDocs = await JobApplication.find(query)
+      .select('_id job candidate applicantUser createdAt')
+      .lean();
+    if (candDocs.length === 0) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+    }
+
+    candDocs.sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      return String(b._id).localeCompare(String(a._id));
+    });
+
+    // Identity key: applicantUser when set (authoritative), else candidate Employee _id.
+    // We deliberately do NOT fall back to Employee.owner — for recruiter-created candidates
+    // Employee.owner is the recruiter's User account, which would collapse multiple
+    // distinct applicants into one row and leak admin/recruiter email into the resolver.
+    const seenByJobAndApplicant = new Set();
+    const uniqueIds = [];
+    for (const d of candDocs) {
+      const applicantUserKey = d.applicantUser ? String(d.applicantUser) : null;
+      const applicantKey = applicantUserKey || String(d.candidate);
+      const composite = `${String(d.job ?? '')}::${applicantKey}`;
+      if (seenByJobAndApplicant.has(composite)) continue;
+      seenByJobAndApplicant.add(composite);
+      uniqueIds.push(d._id);
+    }
+
+    if (uniqueIds.length === 0) {
+      const limit = options.limit || 10;
+      return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+    }
+    query._id = { $in: uniqueIds };
+  }
+
   const result = await JobApplication.paginate(query, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber countryCode isActive address' },
+      {
+        path: 'candidate',
+        select:
+          'fullName email phoneNumber countryCode isActive address department designation documents profilePicture owner',
+        populate: { path: 'owner', select: 'name email' },
+      },
+      { path: 'applicantUser', select: 'name email' },
       { path: 'appliedBy', select: 'name email' },
     ],
   });
+
+  // Temporary diagnostic — enabled with ?debug=1. Emits one structured line per row so we
+  // can pin down exactly why a given row resolves to "Email hidden" (missing applicantUser,
+  // synthetic candidate, etc.). Remove once data audit is complete.
+  if (filter.debug === '1' || filter.debug === 1 || filter.debug === true) {
+    for (const r of result.results || []) {
+      const cand = r.candidate || {};
+      const applicantUser = r.applicantUser || null;
+      const appliedBy = r.appliedBy || null;
+      const candEmail = typeof cand.email === 'string' ? cand.email : null;
+      const isSyntheticCandidate = candEmail ? RELAY_EMAIL_RE.test(candEmail) : false;
+      let resolvedEmail = null;
+      let resolvedSource = null;
+      if (isSyntheticCandidate) {
+        resolvedEmail = null;
+        resolvedSource = 'synthetic_candidate_suppressed';
+      } else if (applicantUser?.email && !RELAY_EMAIL_RE.test(applicantUser.email)) {
+        resolvedEmail = applicantUser.email;
+        resolvedSource = 'applicantUser.email';
+      } else if (candEmail && !RELAY_EMAIL_RE.test(candEmail)) {
+        resolvedEmail = candEmail;
+        resolvedSource = 'candidate.email';
+      } else {
+        resolvedSource = 'no_public_email';
+      }
+      // eslint-disable-next-line no-console
+      console.log('[applicants:debug]', JSON.stringify({
+        applicationId: String(r._id ?? r.id ?? ''),
+        jobId: String(r.job?._id ?? r.job?.id ?? r.job ?? ''),
+        candidateId: String(cand._id ?? cand.id ?? ''),
+        applicantUserId: applicantUser ? String(applicantUser._id ?? applicantUser.id ?? '') : null,
+        appliedByUserId: appliedBy ? String(appliedBy._id ?? appliedBy.id ?? '') : null,
+        candidateOwnerUserId: cand.owner ? String(cand.owner._id ?? cand.owner.id ?? cand.owner ?? '') : null,
+        candidateEmail: candEmail,
+        applicantUserEmail: applicantUser?.email ?? null,
+        appliedByEmail: appliedBy?.email ?? null,
+        isSyntheticCandidate,
+        resolvedEmail,
+        resolvedSource,
+      }));
+    }
+  }
 
   return result;
 };

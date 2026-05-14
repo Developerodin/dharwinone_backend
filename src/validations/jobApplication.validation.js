@@ -56,9 +56,14 @@ const getJobApplications = {
   query: Joi.object().keys({
     jobId: Joi.string().custom(objectId).optional(),
     candidateId: Joi.string().custom(objectId).optional(),
+    recruiterId: Joi.string().custom(objectId).optional(),
     status: Joi.string()
       .valid(...STATUS_VALUES)
       .optional(),
+    q: Joi.string().trim().allow('').optional(),
+    department: Joi.string().trim().allow('').optional(),
+    dateFrom: Joi.date().iso().optional(),
+    dateTo: Joi.date().iso().optional(),
     /** Only applications for jobs that exist with status Active (excludes closed/archived/deleted-job orphans). */
     activeJobsOnly: Joi.alternatives()
       .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))

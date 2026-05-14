@@ -338,6 +338,10 @@ const createStandaloneApplicationForOfferLetter = async (payload, userId) => {
   const application = await JobApplication.create({
     job: job._id,
     candidate: candidate._id,
+    // No real applicant — synthetic Employee.owner points to the admin who created the
+    // offer. Leaving applicantUser NULL is mandatory so the applicant resolver never
+    // leaks the admin's email into UI rows.
+    applicantUser: null,
     status: 'Applied',
   });
 

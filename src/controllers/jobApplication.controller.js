@@ -55,7 +55,20 @@ const updateStatus = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['jobId', 'candidateId', 'status', 'activeJobsOnly']);
+  const filter = pick(req.query, [
+    'jobId',
+    'candidateId',
+    'recruiterId',
+    'status',
+    'q',
+    'department',
+    'dateFrom',
+    'dateTo',
+    'activeJobsOnly',
+    'excludeInternal',
+    'includeDuplicates',
+    'debug',
+  ]);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobApplications(filter, options, req.user);
   res.send(result);
