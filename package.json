@@ -23,7 +23,15 @@
     "docker:livekit": "docker compose -f docker-compose.livekit-local.yml up -d",
     "docker:livekit:down": "docker compose -f docker-compose.livekit-local.yml down",
     "docker:livekit:full": "docker compose -f livekit/docker-compose.yml up -d",
-    "docker:livekit:full:down": "docker compose -f livekit/docker-compose.yml down"
+    "docker:livekit:full:down": "docker compose -f livekit/docker-compose.yml down",
+    "agent:install": "cd ../uat.dharwin.agents/meeting_summary && python -m venv .venv && .\\.venv\\Scripts\\python.exe -m pip install -U pip && .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+    "agent:dev": "cd ../uat.dharwin.agents/meeting_summary && .\\.venv\\Scripts\\python.exe agent.py dev",
+    "agent:start": "cd ../uat.dharwin.agents/meeting_summary && .\\.venv\\Scripts\\python.exe agent.py start",
+    "agent:docker": "docker compose -f livekit/docker-compose.yml up -d --build summary-agent",
+    "agent:docker:logs": "docker compose -f livekit/docker-compose.yml logs -f summary-agent",
+    "agent:docker:down": "docker compose -f livekit/docker-compose.yml rm -sf summary-agent",
+    "stack:up": "docker compose -f livekit/docker-compose.yml up -d --build && npm run dev",
+    "stack:down": "docker compose -f livekit/docker-compose.yml down"
   },
   "keywords": [
     "node",

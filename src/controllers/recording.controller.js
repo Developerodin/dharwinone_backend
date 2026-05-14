@@ -17,4 +17,13 @@ const syncFromLiveKit = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { listAll, syncFromLiveKit };
+/**
+ * GET /recordings/:recordingId/transcript — return all transcript segments for
+ * a recording (ordered by sequenceNumber). Empty `segments[]` if none ingested.
+ */
+const getTranscript = catchAsync(async (req, res) => {
+  const result = await recordingService.getTranscriptByRecordingId(req.params.recordingId);
+  res.send(result);
+});
+
+export { listAll, syncFromLiveKit, getTranscript };

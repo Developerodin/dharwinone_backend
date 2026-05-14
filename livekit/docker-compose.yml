@@ -14,7 +14,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: livekit-redis
-    # No port mapping - Redis is internal only (LiveKit/Egress use it via docker network)
+    # Shared by LiveKit/Egress (internal network) AND backend BullMQ (host port 6379).
+    # Stop any standalone redis container before bringing this up — they will fight for 6379.
+    ports:
+      - '6379:6379'
     volumes:
       - redis-data:/data
     restart: unless-stopped
@@ -93,6 +96,37 @@ services:
         mc mb myminio/recordings --ignore-existing 2>/dev/null || true
         mc anonymous set download myminio/recordings 2>/dev/null || true
         echo "Bucket recordings ready"
+    networks:
+      - livekit-network
+
+  summary-agent:
+    build:
+      context: ../../uat.dharwin.agents/meeting_summary
+      dockerfile: Dockerfile
+    image: dharwin-summary-agent:latest
+    container_name: dharwin-summary-agent
+    environment:
+      # livekit-server reachable as `livekit:7880` on shared network
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret123456789012345678901234}
+      # Node backend runs on host (npm run dev). host.docker.internal -> host on Docker Desktop.
+      BACKEND_URL: ${AGENT_BACKEND_URL:-http://host.docker.internal:3000}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      DEEPGRAM_MODEL: ${DEEPGRAM_MODEL:-nova-2-meeting}
+      DEEPGRAM_LANGUAGE: ${DEEPGRAM_LANGUAGE:-en}
+      AGENT_FLUSH_INTERVAL_S: ${AGENT_FLUSH_INTERVAL_S:-10}
+      AGENT_FLUSH_CHUNK_LIMIT: ${AGENT_FLUSH_CHUNK_LIMIT:-20}
+      AGENT_HEARTBEAT_INTERVAL_S: ${AGENT_HEARTBEAT_INTERVAL_S:-30}
+      AGENT_PARTIAL_FLUSH_S: ${AGENT_PARTIAL_FLUSH_S:-1.5}
+      AGENT_MAX_RUNTIME_S: ${AGENT_MAX_RUNTIME_S:-14400}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AGENT_NAME: ${AGENT_NAME:-meeting-summary-agent}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - livekit
+    restart: unless-stopped
     networks:
       - livekit-network
 

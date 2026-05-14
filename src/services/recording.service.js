@@ -1,7 +1,9 @@
 import { EgressStatus } from 'livekit-server-sdk';
+import mongoose from 'mongoose';
 import Recording, { recordingRank } from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
+import TranscriptSegment from '../models/transcriptSegment.model.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import ApiError from '../utils/ApiError.js';
@@ -596,9 +598,80 @@ const syncFromLiveKit = async () => {
   };
 };
 
+/**
+ * Fetch transcript segments for a recording. Looks up by `recordingId` first
+ * (post Task 9 — direct FK). Falls back to `meetingId` for legacy rows whose
+ * segments were ingested before the recordingId link existed.
+ *
+ * @param {string} recordingId - Mongo ObjectId of the Recording row.
+ * @returns {Promise<{ recording, meetingTitle, segments, totalSegments, source }>}
+ */
+const getTranscriptByRecordingId = async (recordingId) => {
+  if (!recordingId || !mongoose.isValidObjectId(recordingId)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid recording id');
+  }
+  const recording = await Recording.findById(recordingId).lean();
+  if (!recording) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Recording not found');
+  }
+
+  let segments = await TranscriptSegment.find({ recordingId: recording._id })
+    .sort({ sequenceNumber: 1 })
+    .lean();
+  let source = 'recordingId';
+
+  if (segments.length === 0 && recording.meetingId) {
+    segments = await TranscriptSegment.find({ meetingId: recording.meetingId })
+      .sort({ sequenceNumber: 1 })
+      .lean();
+    source = 'meetingId';
+  }
+
+  const meeting =
+    (await Meeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean()) ||
+    (await InternalMeeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean());
+
+  return {
+    recording: {
+      id: recording._id?.toString(),
+      meetingId: recording.meetingId,
+      egressId: recording.egressId,
+      status: recording.status,
+      startedAt: recording.startedAt,
+      completedAt: recording.completedAt,
+      durationMs: recording.durationMs ?? null,
+      aiProcessingStatus: recording.aiProcessingStatus ?? 'none',
+      aiProcessingError: recording.aiProcessingError ?? null,
+    },
+    meetingTitle: meeting?.title || recording.meetingId,
+    segments: segments.map((s) => ({
+      id: s._id?.toString(),
+      sequenceNumber: s.sequenceNumber,
+      windowStartMs: s.windowStartMs,
+      windowEndMs: s.windowEndMs,
+      combinedText: s.combinedText,
+      utteranceCount: s.utteranceCount,
+      utterances: (s.utterances || []).map((u) => ({
+        speaker: u.speaker ?? null,
+        speakerName: u.speakerName ?? null,
+        speakerLabel: u.speakerLabel ?? null,
+        speakerSource: u.speakerSource ?? null,
+        text: u.text,
+        startMs: u.startMs,
+        endMs: u.endMs,
+        confidence: u.confidence ?? null,
+      })),
+      createdAt: s.createdAt,
+    })),
+    totalSegments: segments.length,
+    source,
+  };
+};
+
 export default {
   listByMeetingId,
   listAll,
   resolveMeetingId,
   syncFromLiveKit,
+  getTranscriptByRecordingId,
 };

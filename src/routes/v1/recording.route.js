@@ -32,4 +32,18 @@ router.post(
   recordingController.syncFromLiveKit
 );
 
+/**
+ * GET /recordings/:recordingId/transcript
+ * Return transcript segments for a recording (sequenceNumber asc). Empty
+ * `segments` array if AI pipeline hasn't run or produced no output.
+ */
+router
+  .route('/:recordingId/transcript')
+  .get(
+    auth(),
+    requirePermissions('meetings.record'),
+    validate(recordingValidation.getTranscript),
+    recordingController.getTranscript
+  );
+
 export default router;

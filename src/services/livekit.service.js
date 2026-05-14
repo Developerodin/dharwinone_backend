@@ -232,6 +232,23 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   }
 
   logger.info('[LiveKit] Token generated successfully', { roomName, isHost, meetingEndAt });
+
+  // Fire-and-forget: when the host first joins a real meeting room, dispatch the
+  // interactive meeting-assistant-agent (wake-phrase gated). Idempotent — repeat
+  // host tokens (reconnects) are no-ops because dispatchAssistantAgent checks
+  // for an active dispatch in AgentDispatch. Skip chat rooms and rooms without a
+  // backing Meeting record. Failures must not break token issuance.
+  if (isHost && meeting && !roomName.startsWith('chat-')) {
+    (async () => {
+      try {
+        const { dispatchAssistantAgent } = await import('./agentDispatch.service.js');
+        await dispatchAssistantAgent({ meetingId: roomName });
+      } catch (err) {
+        logger.warn('[LiveKit] assistant dispatch failed (token still issued)', { roomName, error: err.message });
+      }
+    })();
+  }
+
   return { token: jwt, isHost, canPublish, meetingEndAt };
 };
 

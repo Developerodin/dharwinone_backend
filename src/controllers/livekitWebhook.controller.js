@@ -175,12 +175,12 @@ async function handleRoomFinished(payload) {
     }
   }
 
-  // Cancel any orphan AI summary dispatch tied to this room.
+  // Cancel any orphan AI agent dispatches (summary + assistant) tied to this room.
   try {
-    const { cancelDispatch } = await import('../services/agentDispatch.service.js');
-    await cancelDispatch(roomName);
+    const { cancelAllDispatches } = await import('../services/agentDispatch.service.js');
+    await cancelAllDispatches(roomName);
   } catch (err) {
-    logger.warn('[LiveKit Webhook] cancelDispatch failed', { roomName, error: err.message });
+    logger.warn('[LiveKit Webhook] cancelAllDispatches failed', { roomName, error: err.message });
   }
 }
 
