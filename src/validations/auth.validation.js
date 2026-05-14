@@ -387,7 +387,9 @@ const updateMeWithCandidate = {
       socialLinks: Joi.array().items(
         Joi.object({
           platform: Joi.string().required(),
-          url: Joi.string().uri().required(),
+          url: Joi.string().uri().required().messages({
+            'string.uri': 'Social link URL must be a valid URL',
+          }),
         })
       ),
       salarySlips: Joi.array().items(

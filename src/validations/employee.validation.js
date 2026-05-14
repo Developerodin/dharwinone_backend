@@ -56,7 +56,9 @@ const skill = Joi.object({
 
 const socialLink = Joi.object({
   platform: Joi.string().required(),
-  url: Joi.string().uri().required(),
+  url: Joi.string().uri().required().messages({
+    'string.uri': 'Social link URL must be a valid URL',
+  }),
 });
 
 const salarySlip = Joi.object({

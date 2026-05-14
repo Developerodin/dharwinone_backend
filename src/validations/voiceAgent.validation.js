@@ -60,7 +60,9 @@ const kbUrlIngest = {
   }),
   body: Joi.object()
     .keys({
-      url: Joi.string().uri().required().trim().max(4000),
+      url: Joi.string().uri().required().trim().max(4000).messages({
+        'string.uri': 'URL must be a valid URL',
+      }),
     })
     .required(),
 };
