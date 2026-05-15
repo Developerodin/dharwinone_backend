@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
-const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'];
 
 const createJobApplication = {
   body: Joi.object()
@@ -66,6 +66,18 @@ const getJobApplications = {
     dateTo: Joi.date().iso().optional(),
     /** Only applications for jobs that exist with status Active (excludes closed/archived/deleted-job orphans). */
     activeJobsOnly: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
+    /** Hide synthetic offer-letter placeholder applications (no real applicant). */
+    excludeInternal: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
+    /** Return all applications including duplicate (job, applicant) rows. */
+    includeDuplicates: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
+    /** Emit one structured log line per row for applicant-email diagnostics. */
+    debug: Joi.alternatives()
       .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
       .optional(),
     sortBy: Joi.string().optional(),
