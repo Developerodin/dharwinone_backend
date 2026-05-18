@@ -1,9 +1,18 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 
-const teamGroupSchema = new mongoose.Schema(
+const teamSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, trim: true, unique: true },
+    name:        { type: String, required: true, trim: true, unique: true },
+    teamLead:    { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', index: true },
+    department:  { type: String, trim: true, index: true },
+    description: { type: String, trim: true },
+    source: {
+      type: String,
+      enum: ['manual', 'excel-import', 'ai-generated'],
+      default: 'manual',
+      index: true,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -11,11 +20,12 @@ const teamGroupSchema = new mongoose.Schema(
       index: true,
     },
   },
-  { timestamps: true }
+  { timestamps: true, collation: { locale: 'en', strength: 2 } }
 );
 
-teamGroupSchema.index({ name: 'text' });
-teamGroupSchema.plugin(toJSON);
+teamSchema.index({ name: 'text' });
+teamSchema.plugin(toJSON);
 
-const TeamGroup = mongoose.model('TeamGroup', teamGroupSchema);
-export default TeamGroup;
+// Model renamed to 'Team' but physical collection stays 'teamgroups' — avoids prod rename.
+const Team = mongoose.model('Team', teamSchema, 'teamgroups');
+export default Team;
