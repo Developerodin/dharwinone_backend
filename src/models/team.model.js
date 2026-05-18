@@ -19,6 +19,14 @@ const teamMemberSchema = new mongoose.Schema(
       index: true,
     },
     teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'TeamGroup', index: true },
+    employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', index: true },
+    seniority: { type: String, trim: true, default: 'Member' },
+    assignmentMode: {
+      type: String,
+      enum: ['manual', 'excel-import', 'position-auto', 'ai-suggested'],
+      default: 'manual',
+      index: true,
+    },
     onlineStatus: {
       type: String,
       enum: ['online', 'offline'],
@@ -38,6 +46,7 @@ const teamMemberSchema = new mongoose.Schema(
 
 teamMemberSchema.index({ name: 'text', email: 'text', position: 'text' });
 teamMemberSchema.index({ createdAt: -1 });
+teamMemberSchema.index({ teamId: 1, employeeId: 1 }, { unique: true, sparse: true });
 
 teamMemberSchema.plugin(toJSON);
 
