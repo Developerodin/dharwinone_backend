@@ -445,3 +445,57 @@ export function buildSummaryWorkbookBuffer({ summary, fileMeta }) {
 
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
+
+export function _defangCell(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /^[=+\-@]/.test(s) ? `'${s}` : s;
+}
+
+export function buildExportWorkbookBuffer({ teams, membersByTeam, activeCount }) {
+  const headers = [
+    'Team Name', 'Team Lead Name', 'Team Lead Email', 'Department', 'Description',
+    'Employee Internal ID', 'Employee ID', 'Employee Email', 'Employee Name',
+    'Team Seniority', 'Active', 'Source', 'Joined',
+  ];
+  const aoa = [[`Active Member Count: ${activeCount}`], [], headers];
+  for (const t of teams) {
+    const members = membersByTeam[t.name] || [];
+    for (const m of members) {
+      const e = m.employeeId || {};
+      aoa.push([
+        t.name,
+        t.teamLead?.name || '',
+        t.teamLead?.email || '',
+        t.department || '',
+        t.description || '',
+        String(e._id || ''),
+        e.employeeId || '',
+        e.email || '',
+        e.name || '',
+        m.seniority || 'Member',
+        e.isActive ? 'Yes' : 'No',
+        m.assignmentMode || 'manual',
+        m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 10) : '',
+      ].map(_defangCell));
+    }
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+export async function runExport({ filter = {}, includeInactive = false }) {
+  const teams = await Team.find(filter).populate('teamLead', 'name email').lean();
+  const membersByTeam = {};
+  let activeCount = 0;
+  for (const t of teams) {
+    const members = await TeamMember.find({ teamId: t._id })
+      .populate('employeeId', '_id employeeId name email isActive').lean();
+    const filtered = includeInactive ? members : members.filter((m) => m.employeeId?.isActive);
+    activeCount += filtered.length;
+    membersByTeam[t.name] = filtered;
+  }
+  return buildExportWorkbookBuffer({ teams, membersByTeam, activeCount });
+}
