@@ -2,6 +2,7 @@ import XLSX from 'xlsx';
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import ApiError from '../utils/ApiError.js';
 import Employee from '../models/employee.model.js';
 import Team from '../models/teamGroup.model.js';
@@ -9,6 +10,9 @@ import TeamMember from '../models/team.model.js';
 import TeamImportLog from '../models/teamImportLog.model.js';
 import { isIgnoredEmployee } from '../utils/teamImportPatterns.js';
 import { normalizeRows } from '../utils/normalizeTeamRows.js';
+import { s3Client, generatePresignedDownloadUrl } from '../config/s3.js';
+import config from '../config/config.js';
+import logger from '../config/logger.js';
 
 export const REQUIRED_HEADERS = ['Team Name'];
 export const MAX_ROWS_PER_IMPORT = 5000;
@@ -356,5 +360,88 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
     skipReasonCounts: summary.skipReasonCounts,
   });
 
-  return { summary, importLogId: String(log._id) };
+  const sumBuf = buildSummaryWorkbookBuffer({
+    summary,
+    fileMeta: {
+      fileName,
+      uploadedBy: String(currentUserId),
+      uploadedAt: new Date().toISOString(),
+      fileHash,
+    },
+  });
+  const summaryFileKey = `team-imports/${new Date().toISOString().slice(0, 10)}/${log._id}-summary.xlsx`;
+
+  let summaryFileUrl;
+  let summaryUploadFailed = false;
+  try {
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: config.aws.bucketName,
+        Key: summaryFileKey,
+        Body: sumBuf,
+        ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+    );
+    summaryFileUrl = await generatePresignedDownloadUrl(summaryFileKey, 7 * 24 * 3600);
+    await TeamImportLog.updateOne({ _id: log._id }, { $set: { summaryFileKey } });
+  } catch (e) {
+    summaryUploadFailed = true;
+    summary.details.warnings.push({
+      type: 'summary_upload_failed',
+      message: String(e?.message || e),
+    });
+    logger.warn(`teams.import: summary upload failed for log ${log._id}: ${e?.message}`);
+  }
+
+  return { summary, importLogId: String(log._id), summaryFileUrl, summaryUploadFailed };
+}
+
+/**
+ * Build an in-memory .xlsx workbook summarising a team-import run.
+ *
+ * Sheets:
+ *  - Overview: file metadata + headline counters
+ *  - Created:  one row per newly-created team
+ *  - Updated:  one row per existing team that gained members
+ *  - Skipped:  one row per skipped member (reason + identifier)
+ *
+ * Pure function — no I/O. Used by `runImport` to produce the buffer that is
+ * then uploaded to S3 with a try/catch fallback (upload failure does NOT
+ * fail the import; a warning is appended to `summary.details.warnings`).
+ *
+ * @param {{ summary: object, fileMeta: { fileName: string, uploadedBy: string, uploadedAt: string, fileHash: string } }} args
+ * @returns {Buffer}
+ */
+export function buildSummaryWorkbookBuffer({ summary, fileMeta }) {
+  const wb = XLSX.utils.book_new();
+  const overview = XLSX.utils.aoa_to_sheet([
+    ['Field', 'Value'],
+    ['Uploaded By', fileMeta.uploadedBy], ['Uploaded At', fileMeta.uploadedAt],
+    ['File Name', fileMeta.fileName], ['File Hash', fileMeta.fileHash],
+    ['Rows Processed', summary.rowsProcessed],
+    ['Teams Created', summary.teamsCreated], ['Teams Updated', summary.teamsUpdated],
+    ['Employees Added', summary.employeesAdded], ['Employees Ignored', summary.employeesIgnored],
+    ['Duplicates Skipped', summary.duplicatesSkipped], ['Ambiguous Names', summary.ambiguousNames],
+    ['Team Lead Skipped', summary.teamLeadSkipped], ['Metadata Conflicts', summary.metadataConflicts],
+  ]);
+  XLSX.utils.book_append_sheet(wb, overview, 'Overview');
+
+  const created = XLSX.utils.json_to_sheet(summary._created || []);
+  XLSX.utils.book_append_sheet(wb, created, 'Created');
+
+  const updated = XLSX.utils.json_to_sheet(summary._updated || []);
+  XLSX.utils.book_append_sheet(wb, updated, 'Updated');
+
+  const skipped = XLSX.utils.json_to_sheet(
+    (summary.details.skipped || []).map((s, i) => ({
+      Row: i + 1,
+      Team: s.team,
+      Identifier: s.identifier,
+      Reason: s.reason,
+      Detail: s.matchCount ? `matched ${s.matchCount} candidates` : '',
+    }))
+  );
+  XLSX.utils.book_append_sheet(wb, skipped, 'Skipped');
+
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
