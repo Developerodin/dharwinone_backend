@@ -67,6 +67,26 @@ const chatAssistantLimiter = rateLimit({
   message: { message: 'Too many requests. Please try again in a minute.' },
 });
 
+/** Bulk team import — 5/hour per authenticated user (falls back to IP). */
+const teamsImport = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { code: 429, message: 'Too many team imports — try again later' },
+});
+
+/** Bulk team export — 20/hour per authenticated user (falls back to IP). */
+const teamsExport = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { code: 429, message: 'Too many team exports — try again later' },
+});
+
 export {
   authLoginLimiter,
   authStrictFlowLimiter,
@@ -75,5 +95,7 @@ export {
   attendancePunchLimiter,
   jobsBrowseLimiter,
   chatAssistantLimiter,
+  teamsImport,
+  teamsExport,
 };
 
