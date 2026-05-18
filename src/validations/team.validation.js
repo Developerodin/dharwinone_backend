@@ -76,11 +76,32 @@ const deleteTeamMember = {
     .required(),
 };
 
+const importTeams = { body: Joi.object({}) };  // file handled by multer
+
+const exportTeams = {
+  query: Joi.object({
+    teamId:          Joi.string().custom(objectId),
+    department:      Joi.string().trim(),
+    includeInactive: Joi.boolean(),
+  }),
+};
+
+const listImportLogs = {
+  query: Joi.object({
+    page:   Joi.number().integer().min(1).default(1),
+    limit:  Joi.number().integer().min(1).max(50).default(10),
+    sortBy: Joi.string().valid('-createdAt', 'createdAt'),
+  }),
+};
+
 export {
   createTeamMember,
   getTeamMembers,
   getTeamMember,
   updateTeamMember,
   deleteTeamMember,
+  importTeams,
+  exportTeams,
+  listImportLogs,
 };
 
