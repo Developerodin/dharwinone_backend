@@ -26,6 +26,9 @@ const teamSchema = new mongoose.Schema(
 teamSchema.index({ name: 'text' });
 teamSchema.plugin(toJSON);
 
-// Model renamed to 'Team' but physical collection stays 'teamgroups' — avoids prod rename.
-const Team = mongoose.model('Team', teamSchema, 'teamgroups');
+// Mongoose model name stays 'TeamGroup' so existing `ref: 'TeamGroup'` populate
+// calls in project.model.js and team.model.js (TeamMember.teamId) keep working.
+// Only the exported variable is renamed to 'Team' to match the spec's vocabulary.
+// Physical collection 'teamgroups' is mongoose's default pluralization of 'TeamGroup'.
+const Team = mongoose.model('TeamGroup', teamSchema);
 export default Team;
