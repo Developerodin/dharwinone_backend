@@ -290,6 +290,7 @@ export function _mergeTeamResult(s, { team, isNewTeam, plan, metadataConflicts =
 }
 
 export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
+  const startedAt = Date.now();
   const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
   const { rows } = parseWorkbook(buffer);
@@ -393,6 +394,12 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
     logger.warn(`teams.import: summary upload failed for log ${log._id}: ${e?.message}`);
   }
 
+  logger.info(JSON.stringify(_buildImportMetric({
+    importLogId: String(log._id), uploadedBy: currentUserId, startedAt,
+    summary, transactionRollbacks: 0, summaryUploadFailed,
+    fileMeta: { size: fileSize, hash: fileHash },
+  })));
+
   return { summary, importLogId: String(log._id), summaryFileUrl, summaryUploadFailed };
 }
 
@@ -487,16 +494,25 @@ export function buildExportWorkbookBuffer({ teams, membersByTeam, activeCount })
 }
 
 export async function runExport({ filter = {}, includeInactive = false }) {
+  const startedAt = Date.now();
   const teams = await Team.find(filter).populate('teamLead', 'name email').lean();
   const membersByTeam = {};
   let activeCount = 0;
+  let membersExported = 0;
   for (const t of teams) {
     const members = await TeamMember.find({ teamId: t._id })
       .populate('employeeId', '_id employeeId name email isActive').lean();
     const filtered = includeInactive ? members : members.filter((m) => m.employeeId?.isActive);
     activeCount += filtered.length;
+    membersExported += filtered.length;
     membersByTeam[t.name] = filtered;
   }
+  const teamsExported = teams.length;
+
+  logger.info(JSON.stringify(_buildExportMetric({
+    startedAt, teamsExported, membersExported, includeInactive,
+  })));
+
   return buildExportWorkbookBuffer({ teams, membersByTeam, activeCount });
 }
 
@@ -522,4 +538,35 @@ export function buildTemplateWorkbookBuffer() {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   XLSX.utils.book_append_sheet(wb, ws, 'Teams');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+export function _buildImportMetric({ importLogId, uploadedBy, startedAt, summary, transactionRollbacks, summaryUploadFailed, fileMeta }) {
+  const rows = Math.max(1, summary.rowsProcessed);
+  return {
+    event: 'teams.import.completed',
+    importLogId,
+    uploadedBy: String(uploadedBy),
+    durationMs: Date.now() - startedAt,
+    rowsProcessed:     summary.rowsProcessed,
+    teamsCreated:      summary.teamsCreated,
+    teamsUpdated:      summary.teamsUpdated,
+    employeesAdded:    summary.employeesAdded,
+    employeesIgnored:  summary.employeesIgnored,
+    duplicatesSkipped: summary.duplicatesSkipped,
+    ambiguousNames:    summary.ambiguousNames,
+    metadataConflicts: summary.metadataConflicts,
+    transactionRollbacks: transactionRollbacks || 0,
+    summaryUploadFailed: !!summaryUploadFailed,
+    skippedRatio:   Number((summary.employeesIgnored / rows).toFixed(3)),
+    duplicateRatio: Number((summary.duplicatesSkipped / rows).toFixed(3)),
+    fileSize: fileMeta?.size, fileHash: fileMeta?.hash,
+  };
+}
+
+export function _buildExportMetric({ startedAt, teamsExported, membersExported, includeInactive }) {
+  return {
+    event: 'teams.export.completed',
+    durationMs: Date.now() - startedAt,
+    teamsExported, membersExported, includeInactive: !!includeInactive,
+  };
 }
