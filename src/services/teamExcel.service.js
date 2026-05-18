@@ -1,11 +1,14 @@
 import XLSX from 'xlsx';
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import ApiError from '../utils/ApiError.js';
 import Employee from '../models/employee.model.js';
 import Team from '../models/teamGroup.model.js';
 import TeamMember from '../models/team.model.js';
+import TeamImportLog from '../models/teamImportLog.model.js';
 import { isIgnoredEmployee } from '../utils/teamImportPatterns.js';
+import { normalizeRows } from '../utils/normalizeTeamRows.js';
 
 export const REQUIRED_HEADERS = ['Team Name'];
 export const MAX_ROWS_PER_IMPORT = 5000;
@@ -234,4 +237,124 @@ export async function upsertOneTeam({ teamName, meta, memberRows, currentUserId,
   });
   session.endSession();
   return result;
+}
+
+export function _emptySummary() {
+  return {
+    teamsCreated: 0, teamsUpdated: 0, employeesAdded: 0,
+    employeesIgnored: 0, duplicatesSkipped: 0, ambiguousNames: 0,
+    teamLeadSkipped: 0, metadataConflicts: 0, rowsProcessed: 0,
+    details: { skipped: [], duplicates: [], metadataConflicts: [], teamLeadSkipped: [], warnings: [] },
+    skipReasonCounts: {},
+    _created: [], _updated: [],
+  };
+}
+
+export function _mergeTeamResult(s, { team, isNewTeam, plan, metadataConflicts = [], teamLeadSkipped = null }) {
+  if (isNewTeam) {
+    s.teamsCreated++;
+    s._created.push({ name: team.name, members: plan.toInsert.length });
+  } else {
+    s.teamsUpdated++;
+    s._updated.push({ name: team.name, newMembers: plan.toInsert.length });
+  }
+  s.employeesAdded += plan.toInsert.length;
+
+  for (const d of plan.duplicates) {
+    s.duplicatesSkipped++;
+    s.details.duplicates.push({ team: team.name, employeeId: d.employeeId, reason: 'already_in_team' });
+  }
+  for (const sk of plan.skipped) {
+    s.skipReasonCounts[sk.reason] = (s.skipReasonCounts[sk.reason] || 0) + 1;
+    if (sk.reason === 'ambiguous_employee_name') s.ambiguousNames++;
+    else s.employeesIgnored++;
+    s.details.skipped.push({
+      team: team.name,
+      identifier: sk.row.employeeEmail || sk.row.employeeId || sk.row.employeeName || sk.row.employeeInternalId,
+      reason: sk.reason,
+      ...(sk.matchCount ? { matchCount: sk.matchCount } : {}),
+    });
+  }
+  for (const mc of metadataConflicts) {
+    s.metadataConflicts++;
+    s.details.metadataConflicts.push({ team: team.name, field: mc.field, kept: mc.kept, ignored: [mc.ignored] });
+  }
+  if (teamLeadSkipped) {
+    s.teamLeadSkipped++;
+    s.details.teamLeadSkipped.push({ team: team.name, ...teamLeadSkipped });
+  }
+}
+
+export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
+  const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
+
+  const { rows } = parseWorkbook(buffer);
+  const { teams: grouped, warnings: parseWarnings } = normalizeRows(rows);
+
+  const summary = _emptySummary();
+  summary.rowsProcessed = rows.length;
+
+  const priorImport = await TeamImportLog.findOne({ fileHash })
+    .sort({ createdAt: -1 }).select('createdAt').lean();
+  if (priorImport) {
+    summary.details.warnings.push({
+      type: 'duplicate_file_hash',
+      previousImportAt: priorImport.createdAt.toISOString(),
+    });
+  }
+  if (parseWarnings.unknownColumns.length) {
+    summary.details.warnings.push({
+      type: 'unknown_columns', columns: parseWarnings.unknownColumns,
+    });
+  }
+
+  const allMemberRows = [];
+  for (const [, t] of grouped) for (const r of t.memberRows) allMemberRows.push(r);
+  const leadEmails = [...grouped.values()].map((t) => t.meta.teamLeadEmail).filter(Boolean);
+  const leadAsRows = leadEmails.map((email) => ({ employeeEmail: email }));
+
+  const lookups = await buildEmployeeLookups([...allMemberRows, ...leadAsRows]);
+  const resolved = resolveEmployeesFromRows(allMemberRows, lookups);
+
+  let idx = 0;
+  for (const t of grouped.values()) {
+    t.resolvedMemberRows = [];
+    for (let i = 0; i < t.memberRows.length; i++, idx++) t.resolvedMemberRows.push(resolved[idx]);
+  }
+
+  for (const [, t] of grouped) {
+    let teamLeadEmployeeId = null;
+    let teamLeadSkippedInfo = null;
+    if (t.meta.teamLeadEmail) {
+      const leadMatch = lookups.byEmail.get(t.meta.teamLeadEmail);
+      const verdict = leadMatch ? isIgnoredEmployee(leadMatch) : { ignored: true, reason: 'employee_not_found' };
+      if (leadMatch && !verdict.ignored) teamLeadEmployeeId = leadMatch._id;
+      else teamLeadSkippedInfo = { providedLeadEmail: t.meta.teamLeadEmail, reason: verdict.reason };
+    }
+    const { team, isNewTeam, plan } = await upsertOneTeam({
+      teamName: t.teamName,
+      meta: t.meta,
+      memberRows: t.resolvedMemberRows,
+      currentUserId,
+      teamLeadEmployeeId,
+    });
+    _mergeTeamResult(summary, {
+      team, isNewTeam, plan,
+      metadataConflicts: t.metadataConflicts,
+      teamLeadSkipped: teamLeadSkippedInfo,
+    });
+  }
+
+  const log = await TeamImportLog.create({
+    uploadedBy: currentUserId,
+    fileName, fileSize, fileHash,
+    rowsProcessed: summary.rowsProcessed,
+    teamsCreated: summary.teamsCreated, teamsUpdated: summary.teamsUpdated,
+    employeesAdded: summary.employeesAdded, employeesIgnored: summary.employeesIgnored,
+    duplicatesSkipped: summary.duplicatesSkipped, ambiguousNames: summary.ambiguousNames,
+    teamLeadSkipped: summary.teamLeadSkipped, metadataConflicts: summary.metadataConflicts,
+    skipReasonCounts: summary.skipReasonCounts,
+  });
+
+  return { summary, importLogId: String(log._id) };
 }
