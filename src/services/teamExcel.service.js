@@ -1,7 +1,11 @@
 import XLSX from 'xlsx';
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import Employee from '../models/employee.model.js';
+import Team from '../models/teamGroup.model.js';
+import TeamMember from '../models/team.model.js';
+import { isIgnoredEmployee } from '../utils/teamImportPatterns.js';
 
 export const REQUIRED_HEADERS = ['Team Name'];
 export const MAX_ROWS_PER_IMPORT = 5000;
@@ -144,4 +148,90 @@ export async function buildEmployeeLookups(rows) {
     byName.get(k).push(d);
   }
   return { byInternalId, byEmployeeId, byEmail, byName };
+}
+
+export function _planTeamMutations(existingEmpIdSet, memberRows) {
+  const toInsert = [];
+  const duplicates = [];
+  const skipped = [];
+
+  for (const row of memberRows) {
+    if (!row.matched) {
+      skipped.push({ row, reason: row.skipReason || 'employee_not_found' });
+      continue;
+    }
+    const verdict = isIgnoredEmployee(row.matched);
+    if (verdict.ignored) {
+      skipped.push({ row, reason: verdict.reason });
+      continue;
+    }
+    const empIdKey = String(row.matched._id);
+    if (existingEmpIdSet.has(empIdKey)) {
+      duplicates.push({ row, employeeId: empIdKey, reason: 'already_in_team' });
+      continue;
+    }
+    toInsert.push({
+      employeeId: row.matched._id,
+      seniority: row.teamSeniority || 'Member',
+    });
+    existingEmpIdSet.add(empIdKey);
+  }
+  return { toInsert, duplicates, skipped };
+}
+
+export async function upsertOneTeam({ teamName, meta, memberRows, currentUserId, teamLeadEmployeeId }) {
+  const session = await mongoose.startSession();
+  let result;
+  await session.withTransaction(async () => {
+    const setOnInsert = { createdBy: currentUserId, source: 'excel-import' };
+    const setFields = {};
+    if (meta.department)  setFields.department  = meta.department;
+    if (meta.description) setFields.description = meta.description;
+    if (teamLeadEmployeeId) setFields.teamLead = teamLeadEmployeeId;
+
+    const before = await Team.findOne({ name: teamName })
+      .collation({ locale: 'en', strength: 2 }).session(session);
+    const team = await Team.findOneAndUpdate(
+      { name: teamName },
+      { $setOnInsert: setOnInsert, ...(Object.keys(setFields).length ? { $set: setFields } : {}) },
+      { upsert: true, new: true, setDefaultsOnInsert: true, session,
+        collation: { locale: 'en', strength: 2 } }
+    );
+    const isNewTeam = !before;
+
+    const existing = await TeamMember.find({ teamId: team._id })
+      .select('employeeId').session(session).lean();
+    const existingEmpIds = new Set(existing.map((m) => String(m.employeeId)).filter(Boolean));
+
+    const plan = _planTeamMutations(existingEmpIds, memberRows);
+    if (plan.toInsert.length) {
+      try {
+        await TeamMember.insertMany(
+          plan.toInsert.map((p) => ({
+            teamId: team._id, createdBy: currentUserId,
+            employeeId: p.employeeId, seniority: p.seniority,
+            assignmentMode: 'excel-import',
+          })),
+          { session, ordered: false }
+        );
+      } catch (e) {
+        // Race-tolerant: a concurrent import may have inserted the same
+        // (teamId, employeeId) pair. E11000 duplicates are converted to
+        // duplicatesSkipped counts; other write errors propagate.
+        const writeErrors = e?.writeErrors || (e?.code === 11000 ? [e] : []);
+        const dupKeys = new Set(
+          writeErrors.filter((w) => (w.code || w.err?.code) === 11000)
+            .map((w) => String(w.err?.op?.employeeId || w.op?.employeeId))
+        );
+        if (!dupKeys.size) throw e;
+        plan.toInsert = plan.toInsert.filter((p) => !dupKeys.has(String(p.employeeId)));
+        for (const empId of dupKeys) {
+          plan.duplicates.push({ employeeId: empId, reason: 'already_in_team' });
+        }
+      }
+    }
+    result = { team, isNewTeam, plan };
+  });
+  session.endSession();
+  return result;
 }
