@@ -4,13 +4,25 @@ import { objectId } from './custom.validation.js';
 const TEAM_GROUPS = ['team_ui', 'team_react', 'team_testing'];
 
 const createTeamMember = {
-  body: Joi.object().keys({
-    employeeId:     Joi.string().custom(objectId).required(),
-    teamId:         Joi.string().custom(objectId).required(),
-    seniority:      Joi.string().trim().default('Member'),
-    assignmentMode: Joi.string().valid('manual', 'excel-import', 'position-auto', 'ai-suggested').default('manual'),
-    isStarred:      Joi.boolean(),
-  }),
+  body: Joi.object()
+    .keys({
+      name: Joi.string().required().trim(),
+      email: Joi.string().email().required().trim(),
+      memberSinceLabel: Joi.string().optional().trim().allow('', null),
+      projectsCount: Joi.number().integer().min(0).optional(),
+      position: Joi.string().optional().trim().allow('', null),
+      coverImageUrl: Joi.string().uri().optional().allow('', null),
+      avatarImageUrl: Joi.string().uri().optional().allow('', null),
+      teamGroup: Joi.string()
+        .valid(...TEAM_GROUPS)
+        .optional()
+        .default('team_ui'),
+      teamId: Joi.string().custom(objectId).optional(),
+      onlineStatus: Joi.string().valid('online', 'offline').optional(),
+      lastSeenLabel: Joi.string().optional().trim().allow('', null),
+      isStarred: Joi.boolean().optional(),
+    })
+    .required(),
 };
 
 const getTeamMembers = {
