@@ -499,3 +499,27 @@ export async function runExport({ filter = {}, includeInactive = false }) {
   }
   return buildExportWorkbookBuffer({ teams, membersByTeam, activeCount });
 }
+
+/**
+ * Build an in-memory .xlsx workbook that serves as the canonical import
+ * template for the Teams bulk-import flow. Contains the header row plus
+ * two example rows demonstrating team-lead row + member row shape.
+ *
+ * Pure function — no I/O. Served by the GET /v1/teams/import-template route.
+ *
+ * @returns {Buffer}
+ */
+export function buildTemplateWorkbookBuffer() {
+  const aoa = [
+    ['Team Name', 'Team Lead Email', 'Department', 'Description',
+     'Employee Internal ID', 'Employee ID', 'Employee Email', 'Employee Name', 'Team Seniority'],
+    ['Alpha Team', 'lead@dharwin.com', 'Engineering', 'Core platform squad',
+     '', 'DBS101', 'asha@dharwin.com', '', 'Lead'],
+    ['Alpha Team', '', '', '',
+     '', 'DBS102', 'bharat@dharwin.com', '', 'Member'],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
