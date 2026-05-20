@@ -18,9 +18,9 @@ const TASK_DESC_MAX = 8000;
 const TASK_TAG_MAX_LEN = 64;
 const TASK_TAGS_MAX = 20;
 const TASK_REQUIRED_SKILLS_MAX = 15;
-const TASK_BREAKDOWN_MAX_TASKS = 30;
+const TASK_BREAKDOWN_MAX_TASKS = 60;
 const FEEDBACK_MAX = 1000;
-const PRIOR_TASKS_MAX = 30;
+const PRIOR_TASKS_MAX = 60;
 const ASSIGNMENT_ROW_NOTES_MAX = 500;
 
 const breakdownContext = Joi.object()
@@ -44,6 +44,7 @@ const breakdownContext = Joi.object()
       )
       .optional(),
     extraNotes: Joi.string().trim().allow('').max(500).optional(),
+    tasksPerEmployee: Joi.number().integer().min(1).max(10).optional(),
   })
   .unknown(true);
 
@@ -66,6 +67,7 @@ const previewTaskBreakdown = {
           .unknown(false)
       )
       .optional(),
+    continuationOf: Joi.string().trim().uuid().optional(),
   }),
 };
 
@@ -90,6 +92,7 @@ const breakdownContextOverride = Joi.object()
       )
       .optional(),
     extraNotes: Joi.string().trim().allow('').max(500).optional(),
+    tasksPerEmployee: Joi.number().integer().min(1).max(10).optional(),
   })
   .unknown(true);
 
@@ -99,7 +102,7 @@ const refineTaskBreakdown = {
     .keys({
       previousPreviewId: Joi.string().trim().uuid().required(),
       feedback: Joi.string().trim().min(1).max(FEEDBACK_MAX).required(),
-      lockedTaskIds: Joi.array().max(40).items(Joi.string().trim().max(64)).optional(),
+      lockedTaskIds: Joi.array().max(60).items(Joi.string().trim().max(64)).optional(),
       breakdownContextOverride: breakdownContextOverride.optional(),
     })
     .required(),

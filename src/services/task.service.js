@@ -2,18 +2,82 @@ import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
+import Sprint from '../models/sprint.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
+import { reserveTaskSeqRange, formatTaskCode } from './pmTaskCode.js';
 
 const TASK_LIST_LIMIT_MAX = 200;
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseCommaList = (value) =>
+  String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const applyCommaFilter = (filter, key, transform = (v) => v) => {
+  if (filter[key] == null || filter[key] === '') return;
+  const values = parseCommaList(filter[key]).map(transform);
+  if (!values.length) {
+    delete filter[key];
+    return;
+  }
+  filter[key] = values.length === 1 ? values[0] : { $in: values };
+};
+
+/**
+ * Tasks created via raw insertMany often omit priority; the schema default is
+ * "medium" but is not applied. UI treats missing as medium — match that here.
+ */
+const expandPriorityFilterForDefaultMedium = (filter) => {
+  const p = filter.priority;
+  if (p == null) return;
+
+  const includeMissing = () => {
+    if (typeof p === 'string') {
+      filter.priority = { $in: ['medium', null, ''] };
+      return;
+    }
+    if (p && typeof p === 'object' && Array.isArray(p.$in)) {
+      const next = [...p.$in];
+      if (!next.includes(null)) next.push(null);
+      if (!next.includes('')) next.push('');
+      filter.priority = { $in: next };
+    }
+  };
+
+  if (p === 'medium') {
+    includeMissing();
+    return;
+  }
+  if (p && typeof p === 'object' && Array.isArray(p.$in) && p.$in.includes('medium')) {
+    includeMissing();
+  }
+};
+
 const sanitizeTaskWritePayload = (payload = {}) => {
   const next = { ...payload };
   // Server-managed counters; never trust direct client writes.
   delete next.likesCount;
   delete next.commentsCount;
+  delete next.attachmentsCount;
+  delete next.taskSeq;
+  delete next.taskCode;
+  if (next.sprintId === '') next.sprintId = null;
   return next;
+};
+
+const assertSprintMatchesTaskProject = async (sprintId, projectId) => {
+  if (!sprintId) return;
+  const sprint = await Sprint.findById(sprintId).select('projectId').lean();
+  if (!sprint) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Sprint not found');
+  }
+  if (projectId && String(sprint.projectId) !== String(projectId)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Sprint must belong to the same project as the task');
+  }
 };
 
 /**
@@ -57,15 +121,24 @@ const canManageTask = async (user, resource) => {
 
 const createTask = async (createdById, payload) => {
   const safePayload = sanitizeTaskWritePayload(payload);
+  await assertSprintMatchesTaskProject(safePayload.sprintId, safePayload.projectId);
+  let numbering = {};
+  if (safePayload.projectId) {
+    const seq = await reserveTaskSeqRange(safePayload.projectId, 1);
+    const project = await Project.findById(safePayload.projectId).select('projectKey').lean();
+    numbering = { taskSeq: seq, taskCode: formatTaskCode(project?.projectKey || 'PRJ', seq) };
+  }
   const task = await Task.create({
     createdBy: createdById,
     ...safePayload,
+    ...numbering,
   });
   // Keep Project.totalTasks/completedTasks in sync whenever a task is added under a project.
   await recomputeProjectCounters(task.projectId);
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
+    { path: 'sprintId', select: 'name status' },
   ]);
   const assignedIds = [...new Set((task.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
   const creatorStr = String(createdById);
@@ -92,6 +165,11 @@ const createTask = async (createdById, payload) => {
 };
 
 const queryTasks = async (filter, options) => {
+  applyCommaFilter(filter, 'priority');
+  expandPriorityFilterForDefaultMedium(filter);
+  applyCommaFilter(filter, 'sprintId', (id) => new mongoose.Types.ObjectId(id));
+  applyCommaFilter(filter, 'createdBy', (id) => new mongoose.Types.ObjectId(id));
+
   if (filter.search) {
     const searchRegex = new RegExp(escapeRegex(filter.search), 'i');
     filter.$or = [
@@ -175,7 +253,11 @@ const queryTasks = async (filter, options) => {
       .sort(sort)
       .skip(skip)
       .limit(limit)
-      .populate([{ path: 'createdBy', select: 'name email' }, { path: 'projectId', select: 'name' }])
+      .populate([
+        { path: 'createdBy', select: 'name email' },
+        { path: 'projectId', select: 'name' },
+        { path: 'sprintId', select: 'name status' },
+      ])
       .exec(),
     Task.countDocuments(finalFilter).exec(),
   ]);
@@ -190,6 +272,7 @@ const getTaskById = async (id) => {
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
+    { path: 'sprintId', select: 'name status' },
     { path: 'comments.commentedBy', select: 'name email' },
   ]);
   return task;
@@ -206,7 +289,12 @@ const updateTaskById = async (id, updateBody, currentUser) => {
   }
   const prevAssigned = new Set((task.assignedTo || []).map((u) => String(u._id || u)));
   const prevProjectId = task.projectId?._id || task.projectId;
-  Object.assign(task, sanitizeTaskWritePayload(updateBody));
+  const safePayload = sanitizeTaskWritePayload(updateBody);
+  const nextProjectId = safePayload.projectId ?? prevProjectId;
+  const nextSprintId =
+    safePayload.sprintId !== undefined ? safePayload.sprintId : task.sprintId?._id || task.sprintId;
+  await assertSprintMatchesTaskProject(nextSprintId, nextProjectId);
+  Object.assign(task, safePayload);
   await task.save();
   // Resync counters: status or projectId may have changed. If the task moved between
   // projects, recompute both old and new so the previous tile drops the count.
@@ -218,6 +306,7 @@ const updateTaskById = async (id, updateBody, currentUser) => {
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
+    { path: 'sprintId', select: 'name status' },
   ]);
   const newAssigned = new Set((task.assignedTo || []).map((u) => String(u._id || u)));
   const currentStr = String(currentUser.id || currentUser._id);
@@ -266,6 +355,7 @@ const updateTaskStatusById = async (id, status, order, currentUser) => {
   await task.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'projectId', select: 'name' },
+    { path: 'sprintId', select: 'name status' },
   ]);
   const { notify, plainTextEmailBody } = await import('./notification.service.js');
   const currentStr = String(currentUser.id || currentUser._id);
@@ -389,4 +479,8 @@ export {
   deleteTaskById,
   getTaskComments,
   addTaskComment,
+  parseCommaList,
+  applyCommaFilter,
+  expandPriorityFilterForDefaultMedium,
+  sanitizeTaskWritePayload,
 };

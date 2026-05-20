@@ -56,6 +56,9 @@ export const listImportLogs = catchAsync(async (req, res) => {
     TeamImportLog.countDocuments({}),
   ]);
   for (const r of results) {
+    // .lean() skips the toJSON plugin, so map _id -> id for the client.
+    r.id = String(r._id);
+    if (r.uploadedBy?._id) r.uploadedBy.id = String(r.uploadedBy._id);
     if (r.summaryFileKey) {
       r.summaryFileUrl = await generatePresignedDownloadUrl(r.summaryFileKey, 7 * 24 * 3600);
     }

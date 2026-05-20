@@ -7,6 +7,9 @@ const teamSchema = new mongoose.Schema(
     teamLead:    { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', index: true },
     department:  { type: String, trim: true, index: true },
     description: { type: String, trim: true },
+    relatedPositions: [
+      { type: mongoose.Schema.Types.ObjectId, ref: 'Position' },
+    ],
     source: {
       type: String,
       enum: ['manual', 'excel-import', 'ai-generated'],
@@ -24,6 +27,7 @@ const teamSchema = new mongoose.Schema(
 );
 
 teamSchema.index({ name: 'text' });
+teamSchema.index({ relatedPositions: 1 }); // multikey — reverse lookup Team-by-Position
 teamSchema.plugin(toJSON);
 
 // Mongoose model name stays 'TeamGroup' so existing `ref: 'TeamGroup'` populate

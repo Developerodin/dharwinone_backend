@@ -12,6 +12,7 @@ import * as morgan from './config/morgan.js';
 import { jwtStrategy } from './config/passport.js';
 import routes from './routes/v1/index.js';
 import { errorConverter, errorHandler } from './middlewares/error.js';
+import requestId from './middlewares/requestId.js';
 import { verifyBolnaWebhook } from './middlewares/verifyWebhook.js';
 import ApiError from './utils/ApiError.js';
 import * as bolnaController from './controllers/bolna.controller.js';
@@ -29,6 +30,8 @@ if (config.trustProxyHops > 0) {
 
 // Security headers first (before request logging / parsers)
 app.use(helmet());
+
+app.use(requestId);
 
 if (config.env !== 'test') {
   app.use(morgan.successHandler);

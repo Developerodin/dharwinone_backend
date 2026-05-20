@@ -35,3 +35,21 @@ test('unknown columns appear in warnings.unknownColumns', () => {
   const out = normalizeRows([{ 'Team Name': 'X', 'Manager': 'Y' }]);
   assert.deepEqual(out.warnings.unknownColumns, ['Manager']);
 });
+
+test('canonical headers match case-insensitively with collapsed whitespace', () => {
+  const out = normalizeRows([
+    {
+      '  TEAM   NAME ': ' Gamma ',
+      'employee EMAIL': 'G@DHARWIN.com',
+      'Team Lead Email': 'lead@x.com',
+      Department: 'Ops',
+    },
+  ]);
+  assert.equal(out.teams.size, 1);
+  const g = out.teams.get('gamma');
+  assert.ok(g);
+  assert.equal(g.teamName, 'Gamma');
+  assert.equal(g.meta.teamLeadEmail, 'lead@x.com');
+  assert.equal(g.meta.department, 'Ops');
+  assert.equal(g.memberRows[0].employeeEmail, 'g@dharwin.com');
+});

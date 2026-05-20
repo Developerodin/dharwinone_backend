@@ -18,12 +18,20 @@ test('_mergeTeamResult increments correct counters', () => {
     team: { name: 'Alpha' },
     isNewTeam: true,
     plan: {
-      toInsert:  [{ employeeId: 'o1' }, { employeeId: 'o2' }],
+      toInsert: [{ employeeId: 'o1' }, { employeeId: 'o2' }],
       duplicates: [{ employeeId: 'o3', reason: 'already_in_team' }],
-      skipped:   [{ reason: 'inactive_or_resigned', row: { employeeEmail: 'x@y.com' } },
-                  { reason: 'ambiguous_employee_name', row: { employeeName: 'X' }, matchCount: 3 }],
+      skipped: [
+        { reason: 'inactive_or_resigned', row: { employeeEmail: 'x@y.com' } },
+        { reason: 'ambiguous_employee_name', row: { employeeName: 'X' }, matchCount: 3 },
+      ],
     },
     metadataConflicts: [{ field: 'department', kept: 'A', ignored: 'B' }],
+    createdSheetExtras: {
+      department: 'Engineering',
+      leadName: 'Pat',
+      leadEmail: 'pat@x.com',
+      providedLeadEmail: '',
+    },
   });
   assert.equal(s.teamsCreated, 1);
   assert.equal(s.employeesAdded, 2);
@@ -31,4 +39,10 @@ test('_mergeTeamResult increments correct counters', () => {
   assert.equal(s.employeesIgnored, 1);
   assert.equal(s.ambiguousNames, 1);
   assert.equal(s.metadataConflicts, 1);
+  assert.deepEqual(s._created[0], {
+    'Team Name': 'Alpha',
+    Lead: 'Pat — pat@x.com',
+    Department: 'Engineering',
+    'Members count': 2,
+  });
 });

@@ -21,6 +21,20 @@ const assignmentRowSchema = new mongoose.Schema(
     rank: { type: Number, default: 1 },
     scores: { type: mongoose.Schema.Types.Mixed },
     gap: { type: Boolean, default: false },
+    gapReason: {
+      type: {
+        missingSkills: [{ type: String, trim: true }],
+        noQualifiedMember: { type: Boolean },
+        closestCandidates: [
+          {
+            employeeId: { type: String, trim: true },
+            name: { type: String, trim: true },
+            matchedSkills: [{ type: String, trim: true }],
+          },
+        ],
+      },
+      default: null,
+    },
     recommendedJobDraft: { type: mongoose.Schema.Types.Mixed },
     notes: { type: String, trim: true },
   },

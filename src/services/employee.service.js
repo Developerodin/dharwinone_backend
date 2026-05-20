@@ -426,6 +426,14 @@ const mapExperienceLevel = (years) => {
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * Whitespace-tolerant regex source — collapses runs of whitespace in the input
+ * and maps each literal space to `\s+` so "Mohammed Osman" matches names stored
+ * with extra spaces / tabs / NBSP (e.g. "Mohammed  Osman").
+ */
+const whitespaceTolerantRegexSource = (value) =>
+  escapeRegex(String(value ?? '').trim().replace(/\s+/g, ' ')).replace(/ /g, '\\s+');
+
+/**
  * Build MongoDB query for advanced filtering
  */
 const buildAdvancedFilter = (filter) => {
@@ -435,7 +443,7 @@ const buildAdvancedFilter = (filter) => {
   // Basic filters
   if (filter.owner) mongoFilter.owner = filter.owner;
   if (filter.fullName) {
-    mongoFilter.fullName = { $regex: escapeRegex(filter.fullName), $options: 'i' };
+    mongoFilter.fullName = { $regex: whitespaceTolerantRegexSource(filter.fullName), $options: 'i' };
   }
   if (filter.email) {
     mongoFilter.email = { $regex: escapeRegex(filter.email), $options: 'i' };
@@ -575,17 +583,17 @@ const buildAdvancedFilter = (filter) => {
 };
 
 /**
- * Repair historical drift: active/pending users with the Candidate role must also have a Candidate profile.
- * Returns the eligible user ids used for ATS owner scoping; null means Candidate role is not configured.
+ * Repair historical drift: active/pending users with Employee **or** Candidate role must have an ATS profile.
+ * Returns eligible owner user ids for employees list scoping; null means neither role exists in DB.
  * @returns {Promise<import('mongoose').Types.ObjectId[]|null>}
  */
 const ensureCandidateProfilesForActiveCandidateUsers = async () => {
-  const { getEmployeeRole } = await import('./role.service.js');
-  const candidateRole = await getEmployeeRole();
-  if (!candidateRole) return null;
+  const { getAtsJobSeekerRoleIds } = await import('./role.service.js');
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!atsRoleIds?.length) return null;
 
   const usersWithCandidateRole = await User.find(
-    { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+    { roleIds: { $in: atsRoleIds }, status: { $in: ['active', 'pending'] } },
     { _id: 1 }
   ).lean();
   const ownerIdsWithCandidateRole = usersWithCandidateRole.map((u) => u._id);
@@ -600,7 +608,7 @@ const ensureCandidateProfilesForActiveCandidateUsers = async () => {
 
   if (missingOwnerIds.length > 0) {
     logger.warn(
-      `Reconciling ${missingOwnerIds.length} missing Candidate profile(s) for active/pending Candidate-role user(s)`
+      `Reconciling ${missingOwnerIds.length} missing ATS profile(s) for active/pending Employee/Candidate-role user(s)`
     );
     await Promise.all(
       missingOwnerIds.map(async (id) => {
@@ -619,17 +627,17 @@ const ensureCandidateProfilesForActiveCandidateUsers = async () => {
 };
 
 /**
- * User ids with Candidate role (active/pending). Same owner scope as ATS `listCandidates` when the Candidate role exists.
- * Read-only — does not create missing Candidate profiles (unlike {@link ensureCandidateProfilesForActiveCandidateUsers}).
- * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if the Candidate role is not configured
+ * User ids with Employee **or** Candidate role (active/pending). Same owner scope as ATS `listCandidates`.
+ * Read-only — does not create missing profiles (unlike {@link ensureCandidateProfilesForActiveCandidateUsers}).
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if neither ATS job-seeker role exists
  */
 const getCandidateRoleOwnerIdsForAssignmentRoster = async () => {
-  const { getEmployeeRole } = await import('./role.service.js');
-  const candidateRole = await getEmployeeRole();
-  if (!candidateRole) return null;
+  const { getAtsJobSeekerRoleIds } = await import('./role.service.js');
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!atsRoleIds?.length) return null;
 
   const usersWithCandidateRole = await User.find(
-    { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+    { roleIds: { $in: atsRoleIds }, status: { $in: ['active', 'pending'] } },
     { _id: 1 }
   ).lean();
   return usersWithCandidateRole.map((u) => u._id);
@@ -677,8 +685,7 @@ const queryCandidates = async (filter, options) => {
     mongoFilter.isActive = filter.isActive;
   }
 
-  // Only show candidates whose owner (User) has the Candidate role – exclude Students, Recruiters, etc. who have a candidate record but not the role
-  const { getRoleByName } = await import('./role.service.js');
+  // Only show candidates whose owner (User) has Employee or Candidate role — exclude Students, Recruiters, etc.
   const ownerIdsWithCandidateRole = await ensureCandidateProfilesForActiveCandidateUsers();
   if (ownerIdsWithCandidateRole !== null) {
     if (filter.owner) {
@@ -689,6 +696,8 @@ const queryCandidates = async (filter, options) => {
       mongoFilter.owner = ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
     }
   }
+
+  const { getRoleByName } = await import('./role.service.js');
 
   // Filter by assigned training agent: explicit IDs (from checklist) or name/email substring `filter.agent`
   if (filter.agentIds?.trim()) {
@@ -2289,11 +2298,11 @@ const ownerRosterDisplayForAgentUi = (roleNames) => {
  * Each candidate has at most one assignedAgent; many candidates may share the same agent.
  */
 const listStudentAgentAssignments = async () => {
-  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
+  const { getRoleByName, getAtsJobSeekerRoleIds } = await import('./role.service.js');
   const Role = (await import('../models/role.model.js')).default;
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getEmployeeRole();
-  if (!studentRole && !candidateRole) {
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!studentRole && !atsRoleIds?.length) {
     const agents = await listAgentUsersForAssignment();
     return {
       students: [],
@@ -2310,8 +2319,16 @@ const listStudentAgentAssignments = async () => {
     ).lean();
     rows.forEach((u) => ownerIdSet.add(u._id));
   };
+  const addOwnersWithAtsRoles = async () => {
+    if (!atsRoleIds?.length) return;
+    const rows = await User.find(
+      { roleIds: { $in: atsRoleIds }, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    rows.forEach((u) => ownerIdSet.add(u._id));
+  };
   await addOwnersWithRole(studentRole);
-  await addOwnersWithRole(candidateRole);
+  await addOwnersWithAtsRoles();
 
   const ownerIds = [...ownerIdSet];
 
@@ -2466,11 +2483,11 @@ const assignAgentToCandidate = async (candidateId, agentId) => {
  * Same roster as agent assignment UI, with company work email fields for Settings → Company email.
  */
 const listCompanyEmailAssignments = async () => {
-  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
+  const { getRoleByName, getAtsJobSeekerRoleIds } = await import('./role.service.js');
   const Role = (await import('../models/role.model.js')).default;
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getEmployeeRole();
-  if (!studentRole && !candidateRole) {
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!studentRole && !atsRoleIds?.length) {
     return { students: [] };
   }
 
@@ -2483,8 +2500,16 @@ const listCompanyEmailAssignments = async () => {
     ).lean();
     rows.forEach((u) => ownerIdSet.add(u._id));
   };
+  const addOwnersWithAtsRoles = async () => {
+    if (!atsRoleIds?.length) return;
+    const rows = await User.find(
+      { roleIds: { $in: atsRoleIds }, status: { $in: ['active', 'pending'] } },
+      { _id: 1 }
+    ).lean();
+    rows.forEach((u) => ownerIdSet.add(u._id));
+  };
   await addOwnersWithRole(studentRole);
-  await addOwnersWithRole(candidateRole);
+  await addOwnersWithAtsRoles();
 
   const ownerIds = [...ownerIdSet];
   if (ownerIds.length === 0) {
@@ -2554,15 +2579,17 @@ const listCompanyEmailAssignments = async () => {
 };
 
 const assertAssignableStudentOrCandidateOwner = async (candidate) => {
-  const { getRoleByName, getEmployeeRole } = await import('./role.service.js');
+  const { getRoleByName, getAtsJobSeekerRoleIds } = await import('./role.service.js');
   const studentRole = await getRoleByName('Student');
-  const candidateRole = await getEmployeeRole();
-  if (!studentRole && !candidateRole) {
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!studentRole && !atsRoleIds?.length) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Student or Employee role must be configured');
   }
   const ownerOr = [];
   if (studentRole) ownerOr.push({ roleIds: studentRole._id });
-  if (candidateRole) ownerOr.push({ roleIds: candidateRole._id });
+  for (const rid of atsRoleIds || []) {
+    ownerOr.push({ roleIds: rid });
+  }
   const ownerEligible =
     ownerOr.length > 0
       ? await User.exists({
@@ -2842,15 +2869,15 @@ const assignShiftToCandidates = async (candidateIds, shiftId, user) => {
  * @returns {Promise<Candidate|null>}
  */
 const ensureCandidateProfileForUser = async (userId) => {
-  const { getEmployeeRole } = await import('./role.service.js');
-  const candidateRole = await getEmployeeRole();
-  if (!candidateRole) return null;
+  const { getAtsJobSeekerRoleIds } = await import('./role.service.js');
+  const atsRoleIds = await getAtsJobSeekerRoleIds();
+  if (!atsRoleIds?.length) return null;
 
   const user = await User.findById(userId);
   if (!user) return null;
 
-  const hasCandidateRole = (user.roleIds || []).some(
-    (id) => id && id.toString() === candidateRole._id.toString()
+  const hasCandidateRole = (user.roleIds || []).some((rid) =>
+    atsRoleIds.some((atsId) => String(atsId) === String(rid))
   );
   if (!hasCandidateRole) return null;
 

@@ -64,6 +64,8 @@ import fileStorageRoute from './fileStorage.route.js';
 import supportCameraInviteRoute from './supportCameraInvite.route.js';
 import hrmWebRtcRoute from './hrmWebRtc.route.js';
 import chatAssistantRoute from './chatAssistant.route.js';
+import sprintRoute from './sprint.route.js';
+import featureFlagRoute from './featureFlag.route.js';
 
 /**
  * RBAC inventory: Most mounted routers use requirePermissions (see each *.route.js).
@@ -212,6 +214,10 @@ const defaultRoutes = [
     route: taskRoute,
   },
   {
+    path: '/sprints',
+    route: sprintRoute,
+  },
+  {
     path: '/teams',
     route: teamRoute,
   },
@@ -334,6 +340,10 @@ const defaultRoutes = [
   {
     path: '/chat-assistant',
     route: chatAssistantRoute,
+  },
+  {
+    path: '/feature-flags',
+    route: featureFlagRoute,
   },
 ];
 

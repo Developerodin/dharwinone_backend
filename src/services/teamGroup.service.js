@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
 import TeamGroup from '../models/teamGroup.model.js';
+import Position from '../models/position.model.js';
 import TeamMember from '../models/team.model.js';
 import Project from '../models/project.model.js';
 import ApiError from '../utils/ApiError.js';
@@ -8,6 +9,26 @@ import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const TEAM_GROUP_LIST_LIMIT_MAX = 200;
+
+/**
+ * @param {Array<string>} requestedIds
+ * @param {Array<string>} foundIds
+ * @returns {Array<string>} requested ids not present in foundIds
+ */
+export const findMissingPositionIds = (requestedIds, foundIds) => {
+  const found = new Set((foundIds || []).map(String));
+  return (requestedIds || []).map(String).filter((id) => !found.has(id));
+};
+
+/** Throws ApiError if any relatedPositions id does not resolve to a Position. */
+const assertRelatedPositionsExist = async (ids) => {
+  if (!ids || !ids.length) return;
+  const found = await Position.find({ _id: { $in: ids } }).distinct('_id');
+  const missing = findMissingPositionIds(ids, found);
+  if (missing.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `TEAM_RELATED_POSITION_NOT_FOUND: ${missing.join(', ')}`);
+  }
+};
 
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
@@ -29,6 +50,7 @@ const canManageTeamGroup = async (user, resource) => {
 };
 
 const createTeamGroup = async (createdById, payload) => {
+  await assertRelatedPositionsExist(payload.relatedPositions);
   const team = await TeamGroup.create({
     createdBy: createdById,
     ...payload,
@@ -118,6 +140,9 @@ const updateTeamGroupById = async (id, updateBody, currentUser) => {
   const canUpdate = await canManageTeamGroup(currentUser, team);
   if (!canUpdate) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+  }
+  if (updateBody.relatedPositions !== undefined) {
+    await assertRelatedPositionsExist(updateBody.relatedPositions);
   }
   Object.assign(team, updateBody);
   await team.save();

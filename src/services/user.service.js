@@ -65,8 +65,11 @@ const queryUsers = async (filter, options, requester = null) => {
     }
   }
   if (search && search.trim()) {
-    const trimmed = search.trim();
-    const searchRegex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    // Whitespace-tolerant: collapse runs of whitespace in the input, then map each
+    // literal space to `\s+` so "Mohammed Osman" matches "Mohammed  Osman" (and tabs / NBSP).
+    const collapsed = search.trim().replace(/\s+/g, ' ');
+    const escaped = collapsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const searchRegex = new RegExp(escaped.replace(/ /g, '\\s+'), 'i');
     mongoFilter.$or = [
       { name: { $regex: searchRegex } },
       { email: { $regex: searchRegex } },

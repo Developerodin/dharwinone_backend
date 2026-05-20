@@ -21,7 +21,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'projectId', 'search', 'assignedToMe']);
+  const filter = pick(req.query, ['status', 'projectId', 'search', 'assignedToMe', 'priority', 'sprintId', 'createdBy']);
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;
   filter.apiPermissions = req.authContext?.permissions;

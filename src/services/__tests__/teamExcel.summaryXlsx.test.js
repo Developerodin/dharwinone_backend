@@ -13,7 +13,14 @@ test('buildSummaryWorkbookBuffer produces a workbook with 4 named sheets', () =>
         skipped: [{ team: 'Alpha', identifier: 'x@y.com', reason: 'inactive_or_resigned' }],
         duplicates: [], metadataConflicts: [], teamLeadSkipped: [], warnings: [],
       },
-      _created: [{ name: 'Alpha', members: 2 }],
+      _created: [
+        {
+          'Team Name': 'Alpha',
+          Lead: 'Pat — pat@x.com',
+          Department: 'Engineering',
+          'Members count': 2,
+        },
+      ],
       _updated: [],
     },
     fileMeta: { fileName: 't.xlsx', uploadedBy: 'u1', uploadedAt: new Date().toISOString(), fileHash: 'h' },

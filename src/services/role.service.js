@@ -131,15 +131,36 @@ const getEmployeeRole = async () => {
 };
 
 /**
- * User ids that own ATS candidate profiles: users with the Employee (or legacy Candidate) role (active or pending).
- * Supports multi-role users (role id in roleIds array).
- * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if no employee role document exists; otherwise id list (may be empty)
+ * Distinct Role `_id`s for ATS job-seeker accounts when **Employee** and **Candidate** are separate documents.
+ * Must stay aligned with {@link userHasCandidateRole} (either role qualifies).
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if neither role exists
+ */
+const getAtsJobSeekerRoleIds = async () => {
+  const ids = [];
+  const seen = new Set();
+  for (const name of EMPLOYEE_ROLE_NAME_ALIASES) {
+    const r = await getRoleByName(name);
+    if (r?._id) {
+      const s = String(r._id);
+      if (!seen.has(s)) {
+        seen.add(s);
+        ids.push(r._id);
+      }
+    }
+  }
+  return ids.length ? ids : null;
+};
+
+/**
+ * User ids that own ATS candidate profiles: users with Employee **or** Candidate role (active or pending).
+ * When both role documents exist, either role id on `User.roleIds` qualifies (matches employees list scope).
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if neither role exists in DB; otherwise id list (may be empty)
  */
 const getOwnerIdsWithCandidateRole = async () => {
-  const employeeRole = await getEmployeeRole();
-  if (!employeeRole) return null;
+  const roleIds = await getAtsJobSeekerRoleIds();
+  if (!roleIds?.length) return null;
   const users = await User.find(
-    { roleIds: employeeRole._id, status: { $in: ['active', 'pending'] } },
+    { roleIds: { $in: roleIds }, status: { $in: ['active', 'pending'] } },
     { _id: 1 }
   ).lean();
   return users.map((u) => u._id);
@@ -226,6 +247,7 @@ export {
   getRoleById,
   getRoleByName,
   getEmployeeRole,
+  getAtsJobSeekerRoleIds,
   getOwnerIdsWithCandidateRole,
   updateRoleById,
   deleteRoleById,

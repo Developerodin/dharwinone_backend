@@ -5,6 +5,7 @@ const createTeamGroup = {
   body: Joi.object()
     .keys({
       name: Joi.string().required().trim(),
+      relatedPositions: Joi.array().items(Joi.string().custom(objectId)).optional(),
     })
     .required(),
 };
@@ -35,6 +36,7 @@ const updateTeamGroup = {
   body: Joi.object()
     .keys({
       name: Joi.string().optional().trim(),
+      relatedPositions: Joi.array().items(Joi.string().custom(objectId)).optional(),
     })
     .min(1),
 };

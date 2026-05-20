@@ -8,6 +8,7 @@ const previewTaskBreakdown = catchAsync(async (req, res) => {
     feedback: req.body?.feedback,
     priorTasks: req.body?.priorTasks,
     breakdownContext: req.body?.breakdownContext,
+    continuationOf: req.body?.continuationOf,
   });
   res.status(httpStatus.OK).send(out);
 });

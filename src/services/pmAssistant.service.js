@@ -14,14 +14,23 @@ import AssignmentRow from '../models/assignmentRow.model.js';
 import { getProjectById, updateProjectById } from './project.service.js';
 import TeamMember from '../models/team.model.js';
 import { createTeamGroup, getTeamGroupById } from './teamGroup.service.js';
-import { createTeamMember } from './team.service.js';
-import { getCandidateRoleOwnerIdsForAssignmentRoster } from './employee.service.js';
+import { createTeamMemberRow } from './team.service.js';
+import { normalizeEmail } from '../utils/normalizeEmail.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import { pmChatJsonObject, hashPmPrompt } from './pmOpenAI.service.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { notify } from './notification.service.js';
 import { CANDIDATE_PROJECT_TASK_TYPE_SLUGS } from '../constants/candidateProjectTaskTypes.js';
+import { reserveTaskSeqRange, formatTaskCode } from './pmTaskCode.js';
+import {
+  loadProjectGroupMembers,
+  buildGroupMembersForPrompt,
+  buildGroupCapabilitySummary,
+  coerceMoreTasksLikely,
+  extractCoveredThemes,
+  buildGapReason,
+} from './pmGroup.js';
 
 const ASSIGNMENT_ROW_NOTES_MAX = 500;
 
@@ -116,7 +125,8 @@ function hashIdempotencyKey(key) {
   return crypto.createHash('sha256').update(String(key)).digest('hex');
 }
 
-const TASK_BREAKDOWN_PREVIEW_MAX = 30;
+const TASK_BREAKDOWN_PREVIEW_MAX = 60;
+const HARD_TASK_CEILING = 180;
 const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 
 const PROJECT_TYPES = new Set(['software', 'marketing', 'operations', 'research', 'design', 'other']);
@@ -158,6 +168,10 @@ function normalizeBreakdownContextInput(raw) {
   }
   if (typeof o.extraNotes === 'string' && o.extraNotes.trim()) {
     out.extraNotes = o.extraNotes.trim().slice(0, 500);
+  }
+  if (Number.isFinite(Number(o.tasksPerEmployee))) {
+    const n = Math.floor(Number(o.tasksPerEmployee));
+    if (n >= 1 && n <= 10) out.tasksPerEmployee = n;
   }
   return out;
 }
@@ -222,7 +236,11 @@ async function persistTaskBreakdownPreview({ projectId, userId, breakdownContext
   return previewId;
 }
 
-export async function previewTaskBreakdown(projectId, user, { extraBrief, feedback, priorTasks, breakdownContext: bcIn } = {}) {
+export async function previewTaskBreakdown(
+  projectId,
+  user,
+  { extraBrief, feedback, priorTasks, breakdownContext: bcIn, continuationOf } = {}
+) {
   ensurePmAssistantEnabled();
   ensureOpenAIConfigured();
   const project = await getProjectById(projectId);
@@ -243,6 +261,27 @@ export async function previewTaskBreakdown(projectId, user, { extraBrief, feedba
     .limit(80)
     .lean();
 
+  let priorBatchTasks = [];
+  if (typeof continuationOf === 'string' && continuationOf.trim()) {
+    const prior = await TaskBreakdownPreview.findOne({
+      previewId: continuationOf.trim(),
+      projectId: projectOid,
+      userId: userOid,
+    }).lean();
+    priorBatchTasks = Array.isArray(prior?.tasks) ? prior.tasks : [];
+  }
+  const coveredThemes = extractCoveredThemes(priorBatchTasks);
+
+  const groupEmployees = await loadProjectGroupMembers(project);
+  const groupMembers = buildGroupMembersForPrompt(groupEmployees);
+  const groupCapabilitySummary =
+    groupMembers.length > 15 ? buildGroupCapabilitySummary(groupMembers) : null;
+  const tasksPerEmployee = bc?.tasksPerEmployee;
+  const softTargetTasks =
+    tasksPerEmployee && groupMembers.length
+      ? Math.min(TASK_BREAKDOWN_PREVIEW_MAX, groupMembers.length * tasksPerEmployee)
+      : null;
+
   const hasDraftIteration = Array.isArray(priorTasks) && priorTasks.length > 0;
   const userFeedbackForModel = hasDraftIteration && typeof feedback === 'string' ? feedback.trim().slice(0, 1000) : '';
 
@@ -256,7 +295,11 @@ Specialist workflow slugs (exact spelling, hyphenated — put each in "tags" and
   - orchestrating-swarms: parallel multi-agent work, swarm-style orchestration, coordinated specialist pipelines.
 Prefer at most one primary slug per task unless the work genuinely spans two areas.
 Do not duplicate titles that already exist in existingTasks. Max ${TASK_BREAKDOWN_PREVIEW_MAX} new tasks.
-If userFeedback is provided, revise the draft to satisfy it while keeping strong tasks from priorTasksDraft unless the user asked to remove them.`;
+If userFeedback is provided, revise the draft to satisfy it while keeping strong tasks from priorTasksDraft unless the user asked to remove them.
+
+When "groupMembers" is present in the user JSON it is the team that will execute this project, each with a job position ("designation") and skills. Shape the task set so it collectively covers every member's role and skill — each member should map to at least one task fitting their position and skill set. Tailor each task's "requiredSkills" to skills actually present in the group. "groupCapabilitySummary" (when present) is a designation->count map describing team shape.
+Also return "moreTasksLikely": boolean — true when the project scope clearly needs more tasks than this batch. When "alreadyGeneratedTitles" is present, generate only the NEXT set of tasks, never repeat those titles, and stay within the workstreams listed in "coveredThemes" — do not invent new architectural directions.
+When "softTargetTasks" is present, aim for approximately that many tasks — but keep every task meaningful and realistically scoped. Do NOT split work into artificial microtasks just to reach the number; fewer well-scoped tasks beat hitting the target exactly.`;
 
   const priorForPrompt = Array.isArray(priorTasks)
     ? priorTasks.slice(0, TASK_BREAKDOWN_PREVIEW_MAX).map((p) => ({
@@ -277,17 +320,25 @@ If userFeedback is provided, revise the draft to satisfy it while keeping strong
     userFeedback: userFeedbackForModel,
     priorTasksDraft: priorForPrompt,
     existingTasks: existingTasks.map((t) => t.title),
+    groupMembers: groupMembers.length ? groupMembers : null,
+    groupCapabilitySummary,
+    alreadyGeneratedTitles: priorBatchTasks.map((t) => String(t.title || '')).filter(Boolean),
+    coveredThemes: coveredThemes.length ? coveredThemes : null,
+    softTargetTasks,
   });
 
   const promptHash = hashPmPrompt(['task-breakdown-v2', projectId, userMsg.slice(0, 2400)]);
   const { data, modelUsed, promptTokens, completionTokens } = await pmChatJsonObject(
     { system, user: userMsg, context: 'pm-task-breakdown' },
-    { maxTokens: 3500 }
+    { maxTokens: 9000 }
   );
 
   const rawTasks = Array.isArray(data.tasks) ? data.tasks : [];
-  const trimmed = rawTasks.slice(0, TASK_BREAKDOWN_PREVIEW_MAX);
-  const withIds = attachPreviewTaskIds(trimmed);
+  const newTrimmed = rawTasks.slice(0, TASK_BREAKDOWN_PREVIEW_MAX);
+  const newWithIds = attachPreviewTaskIds(newTrimmed);
+  const withIds = [...priorBatchTasks, ...newWithIds].slice(0, HARD_TASK_CEILING);
+  const moreTasksLikely =
+    withIds.length < HARD_TASK_CEILING && coerceMoreTasksLikely(data.moreTasksLikely);
   const confidenceScore = computeTaskBreakdownConfidence(withIds, bc);
   const previewId = await persistTaskBreakdownPreview({
     projectId: projectOid,
@@ -304,6 +355,7 @@ If userFeedback is provided, revise the draft to satisfy it while keeping strong
     tasks: withIds,
     previewId,
     confidenceScore,
+    moreTasksLikely,
   };
 }
 
@@ -324,6 +376,9 @@ export async function refineTaskBreakdown(
   const uid = user.id || user._id;
   const userOid = mongoose.Types.ObjectId.isValid(String(uid)) ? new mongoose.Types.ObjectId(String(uid)) : uid;
   const projectOid = project._id;
+
+  const groupEmployees = await loadProjectGroupMembers(project);
+  const groupMembers = buildGroupMembersForPrompt(groupEmployees);
 
   const feedbackText = typeof feedback === 'string' ? feedback.trim().slice(0, 1000) : '';
   const prevId = typeof previousPreviewId === 'string' ? previousPreviewId.trim() : '';
@@ -396,7 +451,8 @@ export async function refineTaskBreakdown(
   const system = `You refine a subset of project tasks. Return a single JSON object with key "revisedUnlocked" (array).
 The array length MUST be exactly ${ulen}. Each item: { "title" (required), "description", "status", "tags", "requiredSkills", "order" } — same as task breakdown.
 Use specialist workflow slugs where appropriate: ${specialistSlugHint}.
-Populate "requiredSkills" for staffing. Do not include "id" in output; order must match "unlockedTasksToRegenerate" in the user JSON.`;
+Populate "requiredSkills" for staffing. Do not include "id" in output; order must match "unlockedTasksToRegenerate" in the user JSON.
+When "groupMembers" is present, keep revised tasks aligned to the team's positions and skills.`;
 
   const userMsg = JSON.stringify({
     projectName: project.name,
@@ -405,12 +461,13 @@ Populate "requiredSkills" for staffing. Do not include "id" in output; order mus
     lockedTasks: locked,
     unlockedTasksToRegenerate: unlocked,
     userFeedback: feedbackText,
+    groupMembers: groupMembers.length ? groupMembers : null,
   });
 
   const promptHash = hashPmPrompt(['task-breakdown-refine', projectId, prevId, userMsg.slice(0, 2400)]);
   const { data, modelUsed, promptTokens, completionTokens } = await pmChatJsonObject(
     { system, user: userMsg, context: 'pm-task-breakdown-refine' },
-    { maxTokens: 3500 }
+    { maxTokens: 9000 }
   );
 
   const revisedRaw = Array.isArray(data.revisedUnlocked) ? data.revisedUnlocked : [];
@@ -475,6 +532,13 @@ export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKe
         previewId: previewIdRaw,
         projectId: String(projectOid),
       });
+    }
+  }
+  if (previewIdRaw) {
+    const snap = await TaskBreakdownPreview.findOne({ previewId: previewIdRaw, projectId: projectOid }).lean();
+    const tpe = snap?.breakdownContext?.tasksPerEmployee;
+    if (Number.isInteger(tpe) && tpe >= 1 && tpe <= 10) {
+      await Project.updateOne({ _id: projectOid }, { $set: { tasksPerEmployee: tpe } });
     }
   }
 
@@ -611,9 +675,15 @@ export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKe
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
+      const startSeq = await reserveTaskSeqRange(projectOid, normalizedRows.length, session);
+      const projectKey =
+        (await Project.findById(projectOid).select('projectKey').lean().session(session))?.projectKey || 'PRJ';
+      let seqCursor = startSeq;
       for (const row of normalizedRows) {
         const orderValue = row.order != null ? row.order : nextSequential;
         if (row.order == null) nextSequential += 1;
+        const taskSeq = seqCursor;
+        seqCursor += 1;
         // eslint-disable-next-line no-await-in-loop
         const [task] = await Task.create(
           [{
@@ -625,6 +695,8 @@ export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKe
             tags: row.tags.length ? row.tags : undefined,
             requiredSkills: row.requiredSkills.length ? row.requiredSkills : undefined,
             order: orderValue,
+            taskSeq,
+            taskCode: formatTaskCode(projectKey, taskSeq),
           }],
           { session }
         );
@@ -818,33 +890,28 @@ function buildPerTaskAssignmentCandidateIds(tasks, eligibleCandidates) {
   return map;
 }
 
-/** Same “current employment” rule as ATS `listCandidates` default (exclude resignDate on or before today). */
-function candidateCurrentEmploymentMongoMatch() {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  return {
-    $or: [{ resignDate: null }, { resignDate: { $exists: false } }, { resignDate: { $gt: todayStart } }],
-  };
-}
-
-function buildAssignmentMatcherSystemSingle(rosterQueryLimit, taskCount) {
-  return `You match ATS candidates to project tasks. This request includes ALL ${taskCount} tasks in one payload — return one JSON object.
-- "supervisorName": string — best person to supervise this project (from candidates or short rationale).
+function buildAssignmentMatcherSystemSingle(taskCount, tasksPerEmployee, memberCount) {
+  const distributionRule =
+    tasksPerEmployee && memberCount
+      ? `Distribution (hard, within skill pool): Each task lists "assignmentCandidateIds" — the members qualified for it. Distribute tasks so that, within each task's qualified set, load is as even as possible and every member trends toward ${tasksPerEmployee} tasks total. NEVER assign a task to a member outside its "assignmentCandidateIds" for the sake of balance. When a task's qualified set is a single member, that member takes it even if it pushes them past their share.`
+      : `Same person, multiple tasks: You **may** assign the **same candidateId** to **many** tasks when their skills fit each task. Prefer fit over forcing different names.`;
+  return `You match candidates to project tasks. This request includes ALL ${taskCount} tasks in one payload — return one JSON object.
+- "supervisorName": string — best person to supervise this project.
 - "rows": array of { "taskId": string, "candidateId": string|null, "gap": boolean, "notes": string, "jobDraft": null|{ "title": string, "descriptionOutline": string, "mustHaveSkills": string[], "seniority": string } }.
-You MUST return exactly ${taskCount} objects in "rows", one per task "id" in the input tasks array, each taskId exactly once.
+You MUST return exactly ${taskCount} objects in "rows", one per task "id", each taskId exactly once.
 
 Rules:
 - When gap is false: "candidateId" MUST be one of that task's "assignmentCandidateIds" — never invent an id. Set jobDraft to null.
-- When gap is true: candidateId null; you MUST include "jobDraft" (title; descriptionOutline 3–5 sentences; mustHaveSkills with at least 4 strings; seniority) for external hiring.
-- Tasks may include tags/requiredSkills with specialist slugs (${CANDIDATE_PROJECT_TASK_TYPE_SLUGS.join(', ')}); use them as strong signals of the intended workflow when writing "notes" and when judging fit.
+- When gap is true: candidateId null; you MUST include "jobDraft" (title; descriptionOutline 3–5 sentences; mustHaveSkills with at least 4 strings; seniority).
+- Tasks may include specialist slugs (${CANDIDATE_PROJECT_TASK_TYPE_SLUGS.join(', ')}); use them as fit signals.
 
-**notes (required on every row):** "notes" MUST be a non-empty string for every row — never "" or whitespace only.
-  - If gap is false: 1–3 sentences on why this candidate fits (skills, tags, title, relevant experience).
-  - If gap is true: 1–3 sentences on why no ATS candidate was suitable and that jobDraft supports posting a role.
+**notes (required on every row):** non-empty string for every row.
+  - gap false: 1–3 sentences on why this candidate fits.
+  - gap true: 1–3 sentences on why no group member was suitable.
 
-Same person, multiple tasks: You **may** assign the **same candidateId** to **many** tasks in this project when their skills, tags, and experience fit each task — that is encouraged when one strong match covers several related items. Prefer fit over forcing different names. Only split work across more people when it clearly improves coverage (e.g. unrelated domains or parallel critical work).
+${distributionRule}
 
-Candidate pool: assignees plus ATS (cap ${rosterQueryLimit} after union); capacity filtering was already applied.`;
+Candidate pool: members of the project's assigned group only.`;
 }
 
 function isBackfilledAssignmentNotes(notes) {
@@ -882,76 +949,15 @@ export async function generateAssignmentRun(projectId, user) {
     .limit(100)
     .lean();
 
-  const assigneeUserIds = [
-    ...new Set((project.assignedTo || []).map((u) => String(u?._id || u || '')).filter(Boolean)),
-  ];
-  const assigneeOids = assigneeUserIds
-    .filter((id) => mongoose.Types.ObjectId.isValid(id))
-    .map((id) => new mongoose.Types.ObjectId(id));
-
-  /** Max candidates after assignee union; pool = all active ATS rows (capacity filter still applies). */
-  const rosterQueryLimit = 250;
-  /** @type {'admin_capacity_filtered'} */
-  const rosterScope = 'admin_capacity_filtered';
-  /** Fixed in code: full active ATS pool (not env-driven). */
-  const rosterPoolMode = 'all';
-
-  /** Always load assignees’ candidate docs (even if adminId ≠ project.createdBy), then fill remaining slots from ATS pool. */
-  let assigneeCandidates = [];
-  if (assigneeOids.length > 0) {
-    assigneeCandidates = await Employee.find({
-      owner: { $in: assigneeOids },
-      isActive: { $ne: false },
-      ...candidateCurrentEmploymentMongoMatch(),
-    })
-      .select('fullName email skills experiences experience owner')
-      .lean();
-  }
-
-  const candidateRoleOwnerIds = await getCandidateRoleOwnerIdsForAssignmentRoster();
-
-  let poolCandidates = [];
-  const remainingSlots = Math.max(0, rosterQueryLimit - assigneeCandidates.length);
-  if (remainingSlots > 0) {
-    const poolBase = {
-      isActive: { $ne: false },
-      ...candidateCurrentEmploymentMongoMatch(),
-    };
-    if (candidateRoleOwnerIds === null) {
-      if (assigneeOids.length) poolBase.owner = { $nin: assigneeOids };
-    } else if (candidateRoleOwnerIds.length === 0) {
-      poolBase.owner = { $in: [] };
-    } else if (assigneeOids.length) {
-      poolBase.owner = { $in: candidateRoleOwnerIds, $nin: assigneeOids };
-    } else {
-      poolBase.owner = { $in: candidateRoleOwnerIds };
-    }
-    poolCandidates = await Employee.find(poolBase)
-      .select('fullName email skills experiences experience owner')
-      .sort({ isProfileCompleted: -1, updatedAt: -1 })
-      .limit(remainingSlots)
-      .lean();
-  }
-
-  const byId = new Map();
-  for (const c of assigneeCandidates) {
-    byId.set(String(c._id), c);
-  }
-  for (const c of poolCandidates) {
-    if (!byId.has(String(c._id))) byId.set(String(c._id), c);
-  }
-  const candidates = [...byId.values()];
-
+  const groupEmployees = await loadProjectGroupMembers(project);
+  const candidates = groupEmployees;
   const rosterEmptyBeforeCapacity = candidates.length === 0;
+  const groupCount = (project.assignedTeams || []).filter(Boolean).length;
 
-  const projectAssignees = new Set(
-    (project.assignedTo || []).map((u) => String(u?._id || u || '')).filter(Boolean)
-  );
   const ownerIdsForAgg = candidates.map((c) => (c.owner ? String(c.owner) : '')).filter(Boolean);
   const atCapacityOwners = await ownersAtAssigneeCapacityElsewhere(ownerIdsForAgg, project._id);
-
   let excludedMissingOwner = 0;
-  let excludedAtCapacity = 0;
+  const atCapacityCandidateIds = new Set();
   const eligibleCandidates = [];
   for (const c of candidates) {
     const oid = c.owner ? String(c.owner) : '';
@@ -959,14 +965,7 @@ export async function generateAssignmentRun(projectId, user) {
       excludedMissingOwner += 1;
       continue;
     }
-    if (projectAssignees.has(oid)) {
-      eligibleCandidates.push(c);
-      continue;
-    }
-    if (atCapacityOwners.has(oid)) {
-      excludedAtCapacity += 1;
-      continue;
-    }
+    if (atCapacityOwners.has(oid)) atCapacityCandidateIds.add(String(c._id));
     eligibleCandidates.push(c);
   }
 
@@ -984,17 +983,11 @@ export async function generateAssignmentRun(projectId, user) {
   }
 
   const generationMeta = {
-    rosterFetched: candidates.length,
-    excludedMissingOwner,
-    excludedAtCapacity,
+    groupCount,
+    groupMemberCount: candidates.length,
     eligibleForAi: eligibleCandidates.length,
-    rosterScope,
-    rosterPoolMode,
-    projectAssigneeCount: assigneeOids.length,
-    rosterQueryLimit,
-    rosterAtsCurrentEmployment: true,
-    rosterPoolOwnerScope: candidateRoleOwnerIds === null ? 'unscoped_fallback' : 'candidate_role',
-    candidateRoleOwnerCount: candidateRoleOwnerIds === null ? undefined : candidateRoleOwnerIds.length,
+    excludedMissingOwner,
+    atCapacityFlaggedCount: atCapacityCandidateIds.size,
     assignmentAllTasksSingleRequest: true,
     assignmentBatchCount: 1,
     skillPrefilter: {
@@ -1027,10 +1020,12 @@ export async function generateAssignmentRun(projectId, user) {
 
   if (eligibleCandidates.length === 0) {
     let gapNotes =
-      'No eligible candidates after roster screening (everyone is already on 2+ other active projects as assignee, or missing a user link).';
-    if (rosterEmptyBeforeCapacity) {
+      'No group members available. Assign a group with active members to this project, then run AI staffing again.';
+    if (groupCount === 0) {
+      gapNotes = 'This project has no group assigned. Assign a group before running AI staffing.';
+    } else if (rosterEmptyBeforeCapacity) {
       gapNotes =
-        'No active candidates in the ATS pool. Add or activate candidates, then run assignment again.';
+        'No active linked members in the assigned group. Link employees to the group, then run AI staffing again.';
     }
     const rowDocsNoAi = tasks.map((t) => ({
       runId: run._id,
@@ -1079,7 +1074,11 @@ export async function generateAssignmentRun(projectId, user) {
     String(compactCandidates.length),
   ]);
 
-  const system = buildAssignmentMatcherSystemSingle(rosterQueryLimit, tasks.length);
+  const system = buildAssignmentMatcherSystemSingle(
+    tasks.length,
+    project.tasksPerEmployee,
+    eligibleCandidates.length
+  );
   const userMsg = JSON.stringify({
     project: { name: project.name, description: (project.description || '').slice(0, 2000), tags: project.tags || [] },
     tasks: compactTasks,
@@ -1160,6 +1159,24 @@ export async function generateAssignmentRun(projectId, user) {
   });
 
   fillEmptyNotesForAssignedRows(finalRows, tasks, eligibleCandidates);
+
+  const taskByIdForGap = new Map(tasks.map((t) => [String(t._id), t]));
+  for (const row of finalRows) {
+    if (row.gap) {
+      const t = taskByIdForGap.get(String(row.taskId));
+      row.gapReason = t ? buildGapReason(t, eligibleCandidates) : null;
+    }
+  }
+  for (const row of finalRows) {
+    if (row.gap || !row.recommendedCandidateId) continue;
+    if (atCapacityCandidateIds.has(String(row.recommendedCandidateId))) {
+      const prev = String(row.notes || '').trim();
+      row.notes = `${prev ? `${prev} ` : ''}At capacity (2+ active projects) — confirm before apply.`.slice(
+        0,
+        ASSIGNMENT_ROW_NOTES_MAX
+      );
+    }
+  }
 
   const backfilledCount = finalRows.filter((row) => isBackfilledAssignmentNotes(row.notes)).length;
   if (backfilledCount > 0) {
@@ -1453,26 +1470,24 @@ export async function syncAiStaffedCandidatesToProjectTeam(project, user, rows) 
     await updateProjectById(String(pid), { assignedTeams: merged }, user);
   }
 
-  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let membersAdded = 0;
   for (const cid of candidateIds) {
     const c = await Employee.findById(cid).select('fullName email').lean();
     if (!c) continue;
     const emailRaw = String(c.email || '').trim();
-    const email = emailRaw || `candidate-${cid}@project-roster.local`;
-    const name = String(c.fullName || '').trim() || email.split('@')[0] || 'Teammate';
+    const emailNorm = normalizeEmail(emailRaw || `candidate-${cid}@project-roster.local`);
+    const name = String(c.fullName || '').trim() || emailNorm.split('@')[0] || 'Teammate';
     const existing = await TeamMember.findOne({
       teamId: teamGroup._id,
-      email: new RegExp(`^${escapeRe(email)}$`, 'i'),
+      legacyEmail: emailNorm,
     }).exec();
     if (existing) continue;
-    await createTeamMember(uid, {
-      name,
-      email,
+    await createTeamMemberRow(uid, {
       teamId: teamGroup._id,
-      teamGroup: 'team_react',
-      position: 'Project squad',
-      onlineStatus: 'offline',
+      legacyName: name,
+      legacyEmail: emailNorm,
+      assignmentMode: 'ai-suggested',
+      orphanReason: 'manual_create',
     });
     membersAdded += 1;
   }

@@ -1,25 +1,25 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
-const TEAM_GROUPS = ['team_ui', 'team_react', 'team_testing'];
+const ASSIGNMENT_MODES = ['manual', 'excel-import', 'position-auto', 'ai-suggested'];
 
 const createTeamMember = {
   body: Joi.object()
     .keys({
-      name: Joi.string().required().trim(),
-      email: Joi.string().email().required().trim(),
-      memberSinceLabel: Joi.string().optional().trim().allow('', null),
-      projectsCount: Joi.number().integer().min(0).optional(),
-      position: Joi.string().optional().trim().allow('', null),
-      coverImageUrl: Joi.string().uri().optional().allow('', null),
-      avatarImageUrl: Joi.string().uri().optional().allow('', null),
-      teamGroup: Joi.string()
-        .valid(...TEAM_GROUPS)
-        .optional()
-        .default('team_ui'),
-      teamId: Joi.string().custom(objectId).optional(),
-      onlineStatus: Joi.string().valid('online', 'offline').optional(),
-      lastSeenLabel: Joi.string().optional().trim().allow('', null),
+      teamId: Joi.string().custom(objectId).required(),
+      employeeId: Joi.string().custom(objectId).optional(),
+      legacyName: Joi.string().trim().max(120).when('employeeId', {
+        is: Joi.exist(),
+        then: Joi.forbidden(),
+        otherwise: Joi.required(),
+      }),
+      legacyEmail: Joi.string().email().lowercase().when('employeeId', {
+        is: Joi.exist(),
+        then: Joi.forbidden(),
+        otherwise: Joi.required(),
+      }),
+      seniority: Joi.string().trim().max(80).optional(),
+      assignmentMode: Joi.string().valid(...ASSIGNMENT_MODES).default('manual'),
       isStarred: Joi.boolean().optional(),
     })
     .required(),
@@ -27,8 +27,8 @@ const createTeamMember = {
 
 const getTeamMembers = {
   query: Joi.object().keys({
-    teamGroup: Joi.string().valid(...TEAM_GROUPS).optional(),
     teamId: Joi.string().custom(objectId).optional(),
+    includeInactive: Joi.boolean().default(false),
     search: Joi.string().optional(),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(200).optional(),
@@ -45,25 +45,13 @@ const getTeamMember = {
 };
 
 const updateTeamMember = {
-  params: Joi.object()
-    .keys({
-      teamMemberId: Joi.string().custom(objectId).required(),
-    })
-    .required(),
+  params: Joi.object().keys({ teamMemberId: Joi.string().custom(objectId).required() }).required(),
   body: Joi.object()
     .keys({
-      name: Joi.string().optional().trim(),
-      email: Joi.string().email().optional().trim(),
-      memberSinceLabel: Joi.string().optional().trim().allow('', null),
-      projectsCount: Joi.number().integer().min(0).optional(),
-      position: Joi.string().optional().trim().allow('', null),
-      coverImageUrl: Joi.string().uri().optional().allow('', null),
-      avatarImageUrl: Joi.string().uri().optional().allow('', null),
-      teamGroup: Joi.string().valid(...TEAM_GROUPS).optional(),
-      teamId: Joi.string().custom(objectId).optional(),
-      onlineStatus: Joi.string().valid('online', 'offline').optional(),
-      lastSeenLabel: Joi.string().optional().trim().allow('', null),
+      seniority: Joi.string().trim().max(80).optional(),
+      assignmentMode: Joi.string().valid(...ASSIGNMENT_MODES).optional(),
       isStarred: Joi.boolean().optional(),
+      isActive: Joi.boolean().optional(),
     })
     .min(1),
 };
@@ -76,20 +64,35 @@ const deleteTeamMember = {
     .required(),
 };
 
-const importTeams = { body: Joi.object({}) };  // file handled by multer
+const linkOrphan = {
+  params: Joi.object().keys({ teamMemberId: Joi.string().custom(objectId).required() }).required(),
+  body: Joi.object().keys({ employeeId: Joi.string().custom(objectId).required() }).required(),
+};
+
+const softRemoveTeamMember = {
+  params: Joi.object().keys({ teamMemberId: Joi.string().custom(objectId).required() }).required(),
+  body: Joi.object().keys({ removedReason: Joi.string().trim().max(500).required() }).required(),
+};
+
+const moveTeamMember = {
+  params: Joi.object().keys({ teamMemberId: Joi.string().custom(objectId).required() }).required(),
+  body: Joi.object().keys({ teamId: Joi.string().custom(objectId).required() }).required(),
+};
+
+const importTeams = { body: Joi.object({}) }; // file handled by multer
 
 const exportTeams = {
   query: Joi.object({
-    teamId:          Joi.string().custom(objectId),
-    department:      Joi.string().trim(),
+    teamId: Joi.string().custom(objectId),
+    department: Joi.string().trim(),
     includeInactive: Joi.boolean(),
   }),
 };
 
 const listImportLogs = {
   query: Joi.object({
-    page:   Joi.number().integer().min(1).default(1),
-    limit:  Joi.number().integer().min(1).max(50).default(10),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(50).default(10),
     sortBy: Joi.string().valid('-createdAt', 'createdAt'),
   }),
 };
@@ -100,8 +103,10 @@ export {
   getTeamMember,
   updateTeamMember,
   deleteTeamMember,
+  linkOrphan,
+  softRemoveTeamMember,
+  moveTeamMember,
   importTeams,
   exportTeams,
   listImportLogs,
 };
-

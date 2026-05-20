@@ -9,10 +9,11 @@ import Team from '../models/teamGroup.model.js';
 import TeamMember from '../models/team.model.js';
 import TeamImportLog from '../models/teamImportLog.model.js';
 import { isIgnoredEmployee } from '../utils/teamImportPatterns.js';
-import { normalizeRows } from '../utils/normalizeTeamRows.js';
+import { canonicalHeadersPresent, normalizeRows } from '../utils/normalizeTeamRows.js';
 import { s3Client, generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+import { describeNetworkError } from '../utils/describeNetworkError.js';
 
 export const REQUIRED_HEADERS = ['Team Name'];
 export const MAX_ROWS_PER_IMPORT = 5000;
@@ -49,8 +50,8 @@ export function parseWorkbook(buffer) {
       { type: 'row_limit_exceeded', limit: MAX_ROWS_PER_IMPORT, received: rows.length },
     ]);
   }
-  const headers = Object.keys(rows[0] || {});
-  const missing = REQUIRED_HEADERS.filter((h) => !headers.includes(h));
+  const headersPresent = canonicalHeadersPresent(rows[0] || {});
+  const missing = REQUIRED_HEADERS.filter((h) => !headersPresent.has(h));
   if (missing.length) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
@@ -254,10 +255,29 @@ export function _emptySummary() {
   };
 }
 
-export function _mergeTeamResult(s, { team, isNewTeam, plan, metadataConflicts = [], teamLeadSkipped = null }) {
+export function _mergeTeamResult(s, {
+  team,
+  isNewTeam,
+  plan,
+  metadataConflicts = [],
+  teamLeadSkipped = null,
+  createdSheetExtras = null,
+}) {
   if (isNewTeam) {
     s.teamsCreated++;
-    s._created.push({ name: team.name, members: plan.toInsert.length });
+    const leadParts = [];
+    if (createdSheetExtras?.leadName) leadParts.push(createdSheetExtras.leadName);
+    if (createdSheetExtras?.leadEmail) leadParts.push(createdSheetExtras.leadEmail);
+    let leadCol = leadParts.join(' — ');
+    if (!leadCol && createdSheetExtras?.providedLeadEmail) {
+      leadCol = createdSheetExtras.providedLeadEmail;
+    }
+    s._created.push({
+      'Team Name': team.name,
+      Lead: leadCol,
+      Department: createdSheetExtras?.department ?? '',
+      'Members count': plan.toInsert.length,
+    });
   } else {
     s.teamsUpdated++;
     s._updated.push({ name: team.name, newMembers: plan.toInsert.length });
@@ -330,8 +350,9 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
   for (const [, t] of grouped) {
     let teamLeadEmployeeId = null;
     let teamLeadSkippedInfo = null;
+    let leadMatch = null;
     if (t.meta.teamLeadEmail) {
-      const leadMatch = lookups.byEmail.get(t.meta.teamLeadEmail);
+      leadMatch = lookups.byEmail.get(t.meta.teamLeadEmail);
       const verdict = leadMatch ? isIgnoredEmployee(leadMatch) : { ignored: true, reason: 'employee_not_found' };
       if (leadMatch && !verdict.ignored) teamLeadEmployeeId = leadMatch._id;
       else teamLeadSkippedInfo = { providedLeadEmail: t.meta.teamLeadEmail, reason: verdict.reason };
@@ -344,9 +365,19 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
       teamLeadEmployeeId,
     });
     _mergeTeamResult(summary, {
-      team, isNewTeam, plan,
+      team,
+      isNewTeam,
+      plan,
       metadataConflicts: t.metadataConflicts,
       teamLeadSkipped: teamLeadSkippedInfo,
+      createdSheetExtras: isNewTeam
+        ? {
+            department: t.meta.department || '',
+            leadName: teamLeadSkippedInfo ? '' : leadMatch?.name || '',
+            leadEmail: teamLeadSkippedInfo ? '' : leadMatch?.email || '',
+            providedLeadEmail: teamLeadSkippedInfo ? t.meta.teamLeadEmail || '' : '',
+          }
+        : null,
     });
   }
 
@@ -387,11 +418,21 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
     await TeamImportLog.updateOne({ _id: log._id }, { $set: { summaryFileKey } });
   } catch (e) {
     summaryUploadFailed = true;
+    const detail = describeNetworkError(e) || String(e?.message || e);
     summary.details.warnings.push({
       type: 'summary_upload_failed',
-      message: String(e?.message || e),
+      message: detail,
     });
-    logger.warn(`teams.import: summary upload failed for log ${log._id}: ${e?.message}`);
+    logger.warn(`teams.import: summary upload failed for log ${log._id}: ${detail}`);
+    if (e?.stack) logger.warn(`teams.import: summary upload stack: ${e.stack}`);
+    const agg = e?.errors;
+    if (Array.isArray(agg)) {
+      agg.forEach((sub, i) => {
+        const line = describeNetworkError(sub);
+        if (line) logger.warn(`teams.import: summary upload cause[${i}] ${line}`);
+        if (sub?.stack) logger.warn(sub.stack);
+      });
+    }
   }
 
   logger.info(JSON.stringify(_buildImportMetric({

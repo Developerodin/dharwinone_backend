@@ -10,6 +10,16 @@ const positionSchema = mongoose.Schema(
       trim: true,
       unique: true,
     },
+    department: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
+    skillsSuggested: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -26,6 +36,8 @@ positionSchema.options.toJSON.transform = function (doc, ret, options) {
   if (originalToJSON) originalToJSON(doc, ret, options);
   ret.createdAt = doc.createdAt;
   ret.updatedAt = doc.updatedAt;
+  ret.department = doc.department ?? '';
+  ret.skillsSuggested = doc.skillsSuggested ?? [];
   return ret;
 };
 

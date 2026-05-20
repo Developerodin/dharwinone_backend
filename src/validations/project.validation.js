@@ -18,9 +18,9 @@ const createProject = {
         .optional()
         .default('Inprogress'),
       priority: Joi.string()
-        .valid('High', 'Medium', 'Low')
+        .valid('low', 'medium', 'high', 'urgent')
         .optional()
-        .default('Medium'),
+        .default('medium'),
       assignedTo: Joi.array().items(Joi.string().custom(objectId)).optional(),
       assignedTeams: Joi.array().items(Joi.string().custom(objectId)).optional(),
       tags: Joi.array().items(Joi.string().trim()).optional(),
@@ -33,7 +33,7 @@ const getProjects = {
   query: Joi.object().keys({
     search: Joi.string().optional(),
     status: Joi.string().valid('Inprogress', 'On hold', 'completed').optional(),
-    priority: Joi.string().valid('High', 'Medium', 'Low').optional(),
+    priority: Joi.string().valid('low', 'medium', 'high', 'urgent').optional(),
     /** When true, restrict to projects created by the current user (even for admins). */
     mine: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
     sortBy: Joi.string().optional(),
@@ -65,7 +65,7 @@ const updateProject = {
       startDate: Joi.date().optional().allow(null),
       endDate: Joi.date().optional().allow(null),
       status: Joi.string().valid('Inprogress', 'On hold', 'completed').optional(),
-      priority: Joi.string().valid('High', 'Medium', 'Low').optional(),
+      priority: Joi.string().valid('low', 'medium', 'high', 'urgent').optional(),
       assignedTo: Joi.array().items(Joi.string().custom(objectId)).optional(),
       assignedTeams: Joi.array().items(Joi.string().custom(objectId)).optional(),
       tags: Joi.array().items(Joi.string().trim()).optional(),

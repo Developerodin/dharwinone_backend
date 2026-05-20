@@ -4,6 +4,8 @@ import { objectId } from './custom.validation.js';
 const createPosition = {
   body: Joi.object().keys({
     name: Joi.string().required().trim(),
+    department: Joi.string().trim().max(100).allow('').optional(),
+    skillsSuggested: Joi.array().items(Joi.string().trim().max(80)).max(50).optional(),
   }),
 };
 
@@ -30,6 +32,8 @@ const updatePosition = {
   body: Joi.object()
     .keys({
       name: Joi.string().trim(),
+      department: Joi.string().trim().max(100).allow('').optional(),
+      skillsSuggested: Joi.array().items(Joi.string().trim().max(80)).max(50).optional(),
     })
     .min(1),
 };

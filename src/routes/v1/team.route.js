@@ -47,6 +47,20 @@ router.get(
   teamExcelController.listImportLogs
 );
 
+router.route('/orphans/retry-match').post(auth(), requirePermissions('teams.manage'), teamController.retryOrphanMatch);
+
+router
+  .route('/:teamMemberId/move')
+  .post(auth(), requirePermissions('teams.manage'), validate(teamValidation.moveTeamMember), teamController.moveToTeam);
+
+router
+  .route('/:teamMemberId/link')
+  .post(auth(), requirePermissions('teams.manage'), validate(teamValidation.linkOrphan), teamController.linkOrphan);
+
+router
+  .route('/:teamMemberId/remove')
+  .post(auth(), requirePermissions('teams.manage'), validate(teamValidation.softRemoveTeamMember), teamController.softRemove);
+
 router
   .route('/:teamMemberId')
   .get(auth(), requirePermissions('teams.read'), validate(teamValidation.getTeamMember), teamController.get)

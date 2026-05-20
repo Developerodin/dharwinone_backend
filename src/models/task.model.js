@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 
 const TASK_STATUSES = ['new', 'todo', 'on_going', 'in_review', 'completed'];
+const TASK_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
 const taskCommentSchema = new mongoose.Schema(
   {
@@ -27,6 +28,13 @@ const taskSchema = new mongoose.Schema(
       default: 'new',
       index: true,
     },
+    priority: {
+      type: String,
+      enum: TASK_PRIORITIES,
+      default: 'medium',
+      index: true,
+    },
+    sprintId: { type: mongoose.Schema.Types.ObjectId, ref: 'Sprint', index: true },
     dueDate: { type: Date },
     tags: [{ type: String, trim: true }],
     /** Optional hints from AI task breakdown for staffing (e.g. Python, React). */
@@ -35,8 +43,11 @@ const taskSchema = new mongoose.Schema(
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', index: true },
     likesCount: { type: Number, default: 0 },
     commentsCount: { type: Number, default: 0 },
+    attachmentsCount: { type: Number, default: 0 },
     imageUrl: { type: String, trim: true },
     order: { type: Number, default: 0 },
+    /** Project-scoped sequential number; pairs with taskCode (e.g. 1 -> "DHRW-001"). */
+    taskSeq: { type: Number },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -53,8 +64,12 @@ const taskSchema = new mongoose.Schema(
 
 taskSchema.index({ title: 'text', description: 'text' });
 taskSchema.index({ projectId: 1, status: 1 });
+taskSchema.index({ sprintId: 1, status: 1 });
+taskSchema.index({ priority: 1, projectId: 1 });
 taskSchema.index({ assignedTo: 1, projectId: 1 });
 taskSchema.index({ createdAt: -1 });
+taskSchema.index({ projectId: 1, taskSeq: 1 });
+taskSchema.index({ taskCode: 1 });
 
 taskSchema.plugin(toJSON);
 
@@ -71,4 +86,4 @@ taskSchema.options.toJSON.transform = function taskToJSONTransform(doc, ret, opt
 const Task = mongoose.model('Task', taskSchema);
 
 export default Task;
-export { TASK_STATUSES };
+export { TASK_STATUSES, TASK_PRIORITIES };

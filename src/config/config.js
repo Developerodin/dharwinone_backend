@@ -216,6 +216,14 @@ const envVarsSchema = Joi.object()
     PROCESSED_WEBHOOK_RETENTION_DAYS: Joi.number().default(7),
     DLQ_RETENTION_DAYS: Joi.number().default(90),
     PRESIGN_EXPIRY_SECONDS: Joi.number().default(900),
+
+    /** Task board V2 runtime flag (GET /v1/feature-flags/taskboard-v2). V2 is the only UI; default all. */
+    FEATURE_FLAG_TASKBOARD_V2_ROLLOUT: Joi.string()
+      .valid('off', 'internal', 'tenant-allowlist', 'all')
+      .optional()
+      .default('all'),
+    /** Comma-separated user emails always enabled for taskboard-v2 (even when rollout is off). */
+    FEATURE_FLAG_TASKBOARD_V2_ALLOWLIST: Joi.string().optional().allow(''),
   })
   .unknown();
 
@@ -267,7 +275,11 @@ const config = {
       // (each socket buffers replies). 20 is enough for a single-region web dyno.
       maxPoolSize: Number(process.env.MONGOOSE_MAX_POOL || 20),
       minPoolSize: Number(process.env.MONGOOSE_MIN_POOL || 2),
-      serverSelectionTimeoutMS: Number(process.env.MONGOOSE_SERVER_SELECTION_MS || 10000),
+      // Atlas / VPN / Docker DNS can exceed 10s; dev default is more forgiving. Override with MONGOOSE_SERVER_SELECTION_MS.
+      serverSelectionTimeoutMS: Number(
+        process.env.MONGOOSE_SERVER_SELECTION_MS ??
+          (envVars.NODE_ENV === 'development' ? 30000 : 10000)
+      ),
       socketTimeoutMS: Number(process.env.MONGOOSE_SOCKET_TIMEOUT_MS || 45000),
     },
   },
@@ -506,6 +518,17 @@ const config = {
     agentDispatchDays: envVars.AGENT_DISPATCH_RETENTION_DAYS,
     processedWebhookDays: envVars.PROCESSED_WEBHOOK_RETENTION_DAYS,
     dlqDays: envVars.DLQ_RETENTION_DAYS,
+  },
+  featureFlags: {
+    taskboardV2: {
+      rollout: envVars.FEATURE_FLAG_TASKBOARD_V2_ROLLOUT || 'off',
+      allowlistEmails: new Set(
+        (envVars.FEATURE_FLAG_TASKBOARD_V2_ALLOWLIST || '')
+          .split(',')
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    },
   },
 };
 

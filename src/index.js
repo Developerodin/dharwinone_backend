@@ -33,6 +33,10 @@ import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
 import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
 import { startRetentionEnforcer, stopRetentionEnforcer } from './jobs/retentionEnforcer.js';
+import {
+  startWorkforceReconciliationScheduler,
+  stopWorkforceReconciliationScheduler,
+} from './jobs/workforceReconciliation.scheduler.js';
 
 let server;
 let candidateSchedulerId;
@@ -72,11 +76,16 @@ mongoose
         startStuckDispatchSweeper();
         startStuckFinalizeSweeper();
         startRetentionEnforcer();
+        startWorkforceReconciliationScheduler({ intervalHours: 24 });
       }
     });
   })
   .catch((err) => {
-    logger.error('MongoDB connection error', err);
+    const hint =
+      'MongoDB did not respond in time. Check MONGODB_URL in .env (reachable host/port), that MongoDB is running ' +
+      '(e.g. local mongod or Docker), and Atlas IP access list / VPN if using Atlas.';
+    logger.error(`${hint} Details: ${err?.message || err}`);
+    if (err?.stack) logger.error(err.stack);
     process.exit(1);
   });
 

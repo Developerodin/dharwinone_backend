@@ -4,11 +4,13 @@ import Project from '../models/project.model.js';
 import Task from '../models/task.model.js';
 import AssignmentRun from '../models/assignmentRun.model.js';
 import TaskBreakdownIdempotency from '../models/taskBreakdownIdempotency.model.js';
+import Sprint from '../models/sprint.model.js';
 import TeamGroup from '../models/teamGroup.model.js';
 import ApiError from '../utils/ApiError.js';
 import { buildSpecialistTaskSlugOrConditions } from '../constants/candidateProjectTaskTypes.js';
 import { userIsAdmin, userHasCandidateRole } from '../utils/roleHelpers.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
+import { assignUniqueProjectKey, isProjectKeyDuplicateError } from './pmTaskCode.js';
 
 /** Safe substring search — user input is literal, not a RegExp pattern. */
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -35,20 +37,35 @@ const canManageProject = async (user, resource) => {
 };
 
 const PROJECT_LIST_LIMIT_MAX = 200;
+
 const sanitizeProjectWritePayload = (payload = {}) => {
   const next = { ...payload };
   // Server-managed metrics; derive from tasks only.
   delete next.completedTasks;
   delete next.totalTasks;
+  delete next.projectKey;
+  delete next.nextTaskSeq;
   return next;
 };
 
 const createProject = async (createdById, payload) => {
   const safePayload = sanitizeProjectWritePayload(payload);
-  const project = await Project.create({
-    createdBy: createdById,
-    ...safePayload,
-  });
+  let project;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const projectKey = await assignUniqueProjectKey(safePayload.name);
+    try {
+      project = await Project.create({
+        createdBy: createdById,
+        projectKey,
+        nextTaskSeq: 1,
+        ...safePayload,
+      });
+      break;
+    } catch (err) {
+      if (isProjectKeyDuplicateError(err) && attempt < 5) continue;
+      throw err;
+    }
+  }
   await project.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'assignedTo', select: 'name email' },
@@ -245,6 +262,7 @@ const deleteProjectById = async (id, currentUser) => {
         Task.deleteMany({ projectId: projectOid }).session(session),
         TaskBreakdownIdempotency.deleteMany({ projectId: projectOid }).session(session),
         AssignmentRun.deleteMany({ projectId: projectOid }).session(session),
+        Sprint.deleteMany({ projectId: projectOid }).session(session),
       ]);
       await Project.deleteOne({ _id: projectOid }).session(session);
     });

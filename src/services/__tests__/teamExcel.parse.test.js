@@ -21,6 +21,16 @@ test('parseWorkbook returns rows on valid file', () => {
   assert.equal(rows[0]['Team Name'], 'Alpha');
 });
 
+test('parseWorkbook accepts case-variant Team Name header', () => {
+  const buf = xlsxBuffer([
+    ['team name', 'Employee Email'],
+    ['Alpha', 'a@x.com'],
+  ]);
+  const { rows } = parseWorkbook(buf);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]['team name'], 'Alpha');
+});
+
 test('parseWorkbook throws 400 on missing Team Name header', () => {
   const buf = xlsxBuffer([['Employee Email'], ['a@x.com']]);
   assert.throws(
