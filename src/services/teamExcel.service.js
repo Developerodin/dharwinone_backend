@@ -135,10 +135,11 @@ export async function buildEmployeeLookups(rows) {
       ids.length ? { _id: { $in: ids } } : null,
       dbsIds.length ? { employeeId: { $in: dbsIds } } : null,
       emails.length ? { email: { $in: emails } } : null,
-      names.length ? { name: { $in: names } } : null,
+      // Employee has no root `name` field — the display name is `fullName`.
+      names.length ? { fullName: { $in: names } } : null,
     ].filter(Boolean),
   })
-    .select('_id employeeId name email isActive department position')
+    .select('_id employeeId fullName email isActive department position')
     .lean();
 
   const byInternalId = new Map(docs.map((d) => [String(d._id), d]));
@@ -150,22 +151,51 @@ export async function buildEmployeeLookups(rows) {
   );
   const byName = new Map();
   for (const d of docs) {
-    if (!d.name) continue;
-    const k = String(d.name).toLowerCase().trim();
+    if (!d.fullName) continue;
+    const k = String(d.fullName).toLowerCase().trim();
     if (!byName.has(k)) byName.set(k, []);
     byName.get(k).push(d);
   }
   return { byInternalId, byEmployeeId, byEmail, byName };
 }
 
+/**
+ * Map a row's `skipReason` to a valid TeamMember `orphanReason` enum value
+ * (see team.model.js). An ambiguous name became unmatched because >1 Employee
+ * shares it; everything else is an identifier that resolved to no Employee.
+ * @param {string|undefined} skipReason
+ * @returns {'ambiguous_match'|'no_email_match'}
+ */
+function orphanReasonForSkip(skipReason) {
+  return skipReason === 'ambiguous_employee_name' ? 'ambiguous_match' : 'no_email_match';
+}
+
 export function _planTeamMutations(existingEmpIdSet, memberRows) {
   const toInsert = [];
   const duplicates = [];
   const skipped = [];
+  // Unmatched rows that DO carry a typed name/email — kept as orphan
+  // TeamMembers (legacyName/legacyEmail) instead of being silently dropped.
+  const orphans = [];
 
   for (const row of memberRows) {
     if (!row.matched) {
-      skipped.push({ row, reason: row.skipReason || 'employee_not_found' });
+      const legacyName = String(row.employeeName || '').trim();
+      const legacyEmail = String(row.employeeEmail || '').trim().toLowerCase();
+      // Only create an orphan when there is something to display. A row with
+      // no identifiers at all (missing_identifiers) has no name/email — there
+      // is nothing meaningful to persist, so it stays a plain skip.
+      if (legacyName || legacyEmail) {
+        orphans.push({
+          row,
+          legacyName,
+          legacyEmail,
+          seniority: row.teamSeniority || 'Member',
+          orphanReason: orphanReasonForSkip(row.skipReason),
+        });
+      } else {
+        skipped.push({ row, reason: row.skipReason || 'employee_not_found' });
+      }
       continue;
     }
     const verdict = isIgnoredEmployee(row.matched);
@@ -184,7 +214,7 @@ export function _planTeamMutations(existingEmpIdSet, memberRows) {
     });
     existingEmpIdSet.add(empIdKey);
   }
-  return { toInsert, duplicates, skipped };
+  return { toInsert, duplicates, skipped, orphans };
 }
 
 export async function upsertOneTeam({ teamName, meta, memberRows, currentUserId, teamLeadEmployeeId }) {
@@ -238,6 +268,24 @@ export async function upsertOneTeam({ teamName, meta, memberRows, currentUserId,
         }
       }
     }
+    // Orphan rows: no employeeId, so the (teamId, employeeId) partial unique
+    // index does not apply — insert them separately. Display name is carried
+    // on legacyName/legacyEmail (deriveDisplayFields reads these for orphans).
+    if (plan.orphans?.length) {
+      const orphanDetectedAt = new Date();
+      await TeamMember.insertMany(
+        plan.orphans.map((o) => ({
+          teamId: team._id, createdBy: currentUserId,
+          seniority: o.seniority,
+          assignmentMode: 'excel-import',
+          legacyName: o.legacyName || undefined,
+          legacyEmail: o.legacyEmail || undefined,
+          orphanReason: o.orphanReason,
+          orphanDetectedAt,
+        })),
+        { session, ordered: false }
+      );
+    }
     result = { team, isNewTeam, plan };
   });
   session.endSession();
@@ -249,7 +297,10 @@ export function _emptySummary() {
     teamsCreated: 0, teamsUpdated: 0, employeesAdded: 0,
     employeesIgnored: 0, duplicatesSkipped: 0, ambiguousNames: 0,
     teamLeadSkipped: 0, metadataConflicts: 0, rowsProcessed: 0,
-    details: { skipped: [], duplicates: [], metadataConflicts: [], teamLeadSkipped: [], warnings: [] },
+    // Rows that matched no Employee but carried a typed name/email — persisted
+    // as orphan TeamMembers (legacyName) instead of being dropped.
+    orphansCreated: 0,
+    details: { skipped: [], duplicates: [], metadataConflicts: [], teamLeadSkipped: [], orphans: [], warnings: [] },
     skipReasonCounts: {},
     _created: [], _updated: [],
   };
@@ -283,6 +334,16 @@ export function _mergeTeamResult(s, {
     s._updated.push({ name: team.name, newMembers: plan.toInsert.length });
   }
   s.employeesAdded += plan.toInsert.length;
+
+  for (const o of plan.orphans || []) {
+    s.orphansCreated++;
+    s.details.orphans.push({
+      team: team.name,
+      legacyName: o.legacyName || '',
+      legacyEmail: o.legacyEmail || '',
+      orphanReason: o.orphanReason,
+    });
+  }
 
   for (const d of plan.duplicates) {
     s.duplicatesSkipped++;
@@ -378,6 +439,16 @@ export async function runImport({ buffer, fileName, fileSize, currentUserId }) {
             providedLeadEmail: teamLeadSkippedInfo ? t.meta.teamLeadEmail || '' : '',
           }
         : null,
+    });
+  }
+
+  if (summary.orphansCreated > 0) {
+    summary.details.warnings.push({
+      type: 'orphan_members_created',
+      count: summary.orphansCreated,
+      message:
+        `${summary.orphansCreated} row(s) matched no employee and were added as ` +
+        'unlinked (orphan) team members — review and link them to an employee.',
     });
   }
 

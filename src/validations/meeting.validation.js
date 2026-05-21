@@ -1,5 +1,6 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
+import { normalizeTimezone, isValidTimezone } from '../utils/timezone.js';
 
 const hostSchema = Joi.object({
   nameOrRole: Joi.string().allow('', null).trim(),
@@ -30,13 +31,35 @@ const recruiterRefSchema = Joi.object({
   email: Joi.string().email().allow('', null),
 });
 
+const agentRefSchema = Joi.object({
+  id: optionalRefId,
+  name: Joi.string().allow('', null).trim(),
+  email: Joi.string().email().allow('', null),
+});
+
+/**
+ * Accepts blank (model default applies) or any IANA zone. Legacy aliases are
+ * normalized before validation so old clients are not rejected.
+ */
+const timezoneField = Joi.string()
+  .allow('', null)
+  .trim()
+  .custom((value, helpers) => {
+    if (value === '' || value == null) return value;
+    const normalized = normalizeTimezone(value);
+    if (!isValidTimezone(normalized)) return helpers.error('any.invalid');
+    return normalized;
+  }, 'IANA timezone')
+  .messages({ 'any.invalid': 'timezone must be a valid IANA zone' });
+
 const createMeeting = {
   body: Joi.object()
     .keys({
       title: Joi.string().required().trim(),
       description: Joi.string().allow('', null).trim(),
       scheduledAt: Joi.date().required(),
-      timezone: Joi.string().allow('', null).trim(),
+      timezone: timezoneField,
+      agents: Joi.array().items(agentRefSchema).default([]),
       durationMinutes: Joi.number().integer().min(1).max(480).default(60),
       maxParticipants: Joi.number().integer().min(1).max(100).default(10),
       allowGuestJoin: Joi.boolean().default(true),
@@ -81,7 +104,8 @@ const updateMeeting = {
       title: Joi.string().trim(),
       description: Joi.string().allow('', null).trim(),
       scheduledAt: Joi.date(),
-      timezone: Joi.string().allow('', null).trim(),
+      timezone: timezoneField,
+      agents: Joi.array().items(agentRefSchema),
       durationMinutes: Joi.number().integer().min(1).max(480),
       maxParticipants: Joi.number().integer().min(1).max(100),
       allowGuestJoin: Joi.boolean(),

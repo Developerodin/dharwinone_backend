@@ -16,6 +16,12 @@ import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
+import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
+
+const REMINDER_MAX_ATTEMPTS = 3;
+const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
+const reminderWindowEndMin = () => Number(process.env.REMINDER_WINDOW_END_MIN) || 20;
+const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 600000;
 
 /** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
 const PIPELINE_STATUSES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'];
@@ -226,6 +232,9 @@ const getInvitationEmails = (meeting) => {
   if (meeting.recruiter?.email && meeting.recruiter.email.trim()) {
     set.add(meeting.recruiter.email.trim().toLowerCase());
   }
+  (meeting.agents || []).forEach((a) => {
+    if (a?.email && String(a.email).trim()) set.add(String(a.email).trim().toLowerCase());
+  });
   return [...set];
 };
 
@@ -797,7 +806,15 @@ const autoEndExpiredMeetings = async () => {
   let count = 0;
   for (const m of meetings) {
     try {
-      await Meeting.updateOne({ _id: m._id }, { status: 'ended' });
+      await Meeting.updateOne(
+        { _id: m._id },
+        {
+          $set: {
+            status: 'ended',
+            ...(m.interviewCompletedAt ? {} : { interviewCompletedAt: now }),
+          },
+        }
+      );
       await deleteInterviewRoom(m.meetingId).catch((err) =>
         logger.warn(`[autoEndExpiredMeetings] LiveKit delete failed ${m.meetingId}:`, err?.message || err)
       );
@@ -835,53 +852,230 @@ const autoEndExpiredMeetings = async () => {
 };
 
 /**
- * Send in-app + optional email reminders for meetings starting in ~15 minutes.
- * Called by meeting scheduler. Uses DB-backed reminderSentAt to survive restarts.
+ * T-15 reminder pass. For every scheduled interview starting within the
+ * configured window, lease-claim it, deliver email + in-app reminders through
+ * the dispatcher, and record success / retry / failure.
+ * @returns {Promise<{sent:number, retried:number, failed:number, staleRecovered:number}>}
  */
 export const sendUpcomingMeetingReminders = async () => {
   const now = new Date();
-  const windowStart = new Date(now.getTime() + 10 * 60 * 1000);
-  const windowEnd = new Date(now.getTime() + 20 * 60 * 1000);
+  const windowStart = new Date(now.getTime() + reminderWindowStartMin() * 60000);
+  const windowEnd = new Date(now.getTime() + reminderWindowEndMin() * 60000);
+  const leaseFloor = new Date(now.getTime() - reminderLeaseTtlMs());
+
   const meetings = await Meeting.find({
     status: 'scheduled',
-    scheduledAt: { $gte: windowStart, $lte: windowEnd },
     reminderSentAt: null,
+    scheduledAt: { $gte: windowStart, $lte: windowEnd },
+    'reminderRetry.attempts': { $lt: REMINDER_MAX_ATTEMPTS },
+    $or: [{ 'reminderRetry.claimedAt': null }, { 'reminderRetry.claimedAt': { $lt: leaseFloor } }],
   })
-    .populate('candidate', 'email')
-    .populate('recruiter', 'email')
+    .limit(200)
     .lean();
 
-  const User = (await import('../models/user.model.js')).default;
+  const stats = { sent: 0, retried: 0, failed: 0, staleRecovered: 0 };
+  if (!meetings.length) return stats;
+
   const { notify } = await import('./notification.service.js');
+  const { sendMeetingReminderEmail } = await import('./email.service.js');
+  const User = (await import('../models/user.model.js')).default;
 
   for (const m of meetings) {
-    await Meeting.updateOne({ _id: m._id, reminderSentAt: null }, { $set: { reminderSentAt: now } });
+    const claim = await Meeting.findOneAndUpdate(
+      {
+        _id: m._id,
+        reminderSentAt: null,
+        'reminderRetry.attempts': { $lt: REMINDER_MAX_ATTEMPTS },
+        $or: [{ 'reminderRetry.claimedAt': null }, { 'reminderRetry.claimedAt': { $lt: leaseFloor } }],
+      },
+      { $set: { 'reminderRetry.claimedAt': now }, $inc: { 'reminderRetry.attempts': 1 } },
+      { new: true }
+    ).lean();
+    if (!claim) continue;
+    if (m.reminderRetry?.claimedAt) stats.staleRecovered += 1;
+
+    const title = m.title || 'Interview';
+    const message = `Your interview "${title}" starts soon.`;
     const emails = getInvitationEmails(m);
-    const title = m.title || 'Meeting';
-    const message = `Your meeting "${title}" starts in 15 minutes.`;
-    const remindedUserIds = new Set();
-    for (const email of emails) {
-      const inviteName = resolveInviteeDisplayName(m, email);
-      const publicUrl = getPublicMeetingUrl(m.meetingId, { name: inviteName, email });
-      const user = await User.findOne({ email: new RegExp(`^${String(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
-        .select('_id')
-        .lean();
-      const uid = user?._id ? String(user._id) : '';
-      if (user && uid && !remindedUserIds.has(uid)) {
-        remindedUserIds.add(uid);
-        notify(user._id, {
-          type: 'meeting_reminder',
-          title: 'Meeting reminder',
-          message,
-          link: publicUrl,
-          email: {
-            subject: `Reminder: ${title} starts soon`,
-            text: `${message}\n\n${publicUrl}`,
-          },
-        }).catch(() => {});
+    const recipients = emails.map((email) => ({ email }));
+
+    const result = await dispatchReminder({
+      kind: 'interviewT15',
+      recipients,
+      deliver: async ({ email }) => {
+        const inviteName = resolveInviteeDisplayName(m, email);
+        const link = getPublicMeetingUrl(m.meetingId, { name: inviteName, email });
+        const user = await User.findOne({
+          email: new RegExp(`^${String(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+        })
+          .select('_id')
+          .lean();
+        if (user?._id) {
+          try {
+            await notify(user._id, {
+              type: 'meeting_reminder',
+              title: 'Interview reminder',
+              message,
+              link,
+            });
+          } catch (err) {
+            logger.warn(`T-15 in-app notify failed for ${email}: ${err?.message || err}`);
+          }
+        }
+        await sendMeetingReminderEmail(email, {
+          title,
+          scheduledAt: m.scheduledAt,
+          timezone: m.timezone || 'UTC',
+          publicMeetingUrl: link,
+          inviteeName: inviteName,
+        });
+      },
+    });
+
+    if (result.ok) {
+      await Meeting.updateOne(
+        { _id: m._id },
+        { $set: { reminderSentAt: now, 'reminderRetry.claimedAt': null } }
+      );
+      stats.sent += 1;
+    } else {
+      const retryable = isRetryableCategory(result.errorCategory);
+      const exhausted = (claim.reminderRetry?.attempts || 0) >= REMINDER_MAX_ATTEMPTS;
+      const update = {
+        'reminderRetry.claimedAt': null,
+        'reminderRetry.lastError': result.error,
+        'reminderRetry.lastErrorAt': now,
+        'reminderRetry.lastErrorCategory': result.errorCategory,
+      };
+      if (!retryable || exhausted) {
+        update['reminderRetry.failedAt'] = now;
+        stats.failed += 1;
+      } else {
+        stats.retried += 1;
       }
+      await Meeting.updateOne({ _id: m._id }, { $set: update });
     }
   }
+
+  return stats;
+};
+
+const CONCLUSION_MAX_ATTEMPTS = 3;
+const conclusionDelayMin = () => Number(process.env.CONCLUSION_DELAY_MIN) || 15;
+
+/**
+ * Conclusion reminder pass. For every ended interview whose result is still
+ * pending and whose anchor plus the delay has passed, notify the recruiter side.
+ * @returns {Promise<{sent:number, retried:number, failed:number, staleRecovered:number}>}
+ */
+export const sendInterviewConclusionNotifications = async () => {
+  const now = new Date();
+  const leaseFloor = new Date(now.getTime() - reminderLeaseTtlMs());
+  const delayMs = conclusionDelayMin() * 60000;
+
+  const meetings = await Meeting.find({
+    status: 'ended',
+    interviewResult: 'pending',
+    conclusionNotifiedAt: null,
+    'conclusionRetry.attempts': { $lt: CONCLUSION_MAX_ATTEMPTS },
+    $or: [{ 'conclusionRetry.claimedAt': null }, { 'conclusionRetry.claimedAt': { $lt: leaseFloor } }],
+  })
+    .limit(200)
+    .lean();
+
+  const stats = { sent: 0, retried: 0, failed: 0, staleRecovered: 0 };
+  if (!meetings.length) return stats;
+
+  const { notify } = await import('./notification.service.js');
+  const { sendInterviewConclusionEmail } = await import('./email.service.js');
+
+  for (const m of meetings) {
+    const anchor = m.interviewCompletedAt
+      ? new Date(m.interviewCompletedAt)
+      : new Date(new Date(m.scheduledAt).getTime() + (m.durationMinutes || 60) * 60000);
+    if (anchor.getTime() + delayMs > now.getTime()) continue;
+
+    const claim = await Meeting.findOneAndUpdate(
+      {
+        _id: m._id,
+        conclusionNotifiedAt: null,
+        'conclusionRetry.attempts': { $lt: CONCLUSION_MAX_ATTEMPTS },
+        $or: [{ 'conclusionRetry.claimedAt': null }, { 'conclusionRetry.claimedAt': { $lt: leaseFloor } }],
+      },
+      { $set: { 'conclusionRetry.claimedAt': now }, $inc: { 'conclusionRetry.attempts': 1 } },
+      { new: true }
+    ).lean();
+    if (!claim) continue;
+    if (m.conclusionRetry?.claimedAt) stats.staleRecovered += 1;
+
+    const title = m.title || 'Interview';
+    const link = getPublicMeetingUrl(m.meetingId);
+    const message = `The interview "${title}" has ended — please record the result.`;
+
+    const emailRecipients = [];
+    const inAppUserIds = new Set();
+    if (m.recruiter?.email) emailRecipients.push(m.recruiter.email.trim().toLowerCase());
+    if (m.recruiter?.id) inAppUserIds.add(String(m.recruiter.id));
+    for (const a of m.agents || []) {
+      if (a?.email) emailRecipients.push(String(a.email).trim().toLowerCase());
+      if (a?.id) inAppUserIds.add(String(a.id));
+    }
+    if (m.createdBy) inAppUserIds.add(String(m.createdBy));
+
+    const recipients = [
+      ...[...new Set(emailRecipients)].map((email) => ({ kind: 'email', email })),
+      ...[...inAppUserIds].map((userId) => ({ kind: 'inApp', userId })),
+    ];
+
+    const result = await dispatchReminder({
+      kind: 'conclusion',
+      recipients,
+      deliver: async (r) => {
+        if (r.kind === 'email') {
+          await sendInterviewConclusionEmail(r.email, {
+            title,
+            scheduledAt: m.scheduledAt,
+            timezone: m.timezone,
+            candidateName: m.candidate?.name,
+            link,
+          });
+        } else {
+          await notify(r.userId, {
+            type: 'meeting',
+            title: 'Interview ended — record result',
+            message,
+            link,
+          });
+        }
+      },
+    });
+
+    if (result.ok) {
+      await Meeting.updateOne(
+        { _id: m._id },
+        { $set: { conclusionNotifiedAt: now, 'conclusionRetry.claimedAt': null } }
+      );
+      stats.sent += 1;
+    } else {
+      const retryable = isRetryableCategory(result.errorCategory);
+      const exhausted = (claim.conclusionRetry?.attempts || 0) >= CONCLUSION_MAX_ATTEMPTS;
+      const update = {
+        'conclusionRetry.claimedAt': null,
+        'conclusionRetry.lastError': result.error,
+        'conclusionRetry.lastErrorAt': now,
+        'conclusionRetry.lastErrorCategory': result.errorCategory,
+      };
+      if (!retryable || exhausted) {
+        update['conclusionRetry.failedAt'] = now;
+        stats.failed += 1;
+      } else {
+        stats.retried += 1;
+      }
+      await Meeting.updateOne({ _id: m._id }, { $set: update });
+    }
+  }
+
+  return stats;
 };
 
 export {
@@ -898,4 +1092,5 @@ export {
   getPublicMeetingUrl,
   endMeetingByRoomPublic,
   autoEndExpiredMeetings,
+  getInvitationEmails,
 };

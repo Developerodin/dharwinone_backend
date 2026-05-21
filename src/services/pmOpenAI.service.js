@@ -50,7 +50,15 @@ export async function pmChatJsonObject({ system, user, context = 'pm-assistant' 
       temperature: opts.temperature ?? 0.2,
     });
   }
-  const text = completion.choices?.[0]?.message?.content || '{}';
+  const choice = completion.choices?.[0];
+  // A truncated response (hit max_tokens) is not valid JSON. Fail with a clear,
+  // actionable message instead of a generic parse error.
+  if (choice?.finish_reason === 'length') {
+    throw new Error(
+      `OpenAI response hit the max_tokens limit (${maxTokens}) and was truncated — the request is too large for one call`
+    );
+  }
+  const text = choice?.message?.content || '{}';
   const parsed = parseJsonWithRepair(text, context);
   return {
     data: parsed,

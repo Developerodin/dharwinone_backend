@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveEmployeesFromRows, _matchOne } from '../teamExcel.service.js';
 
-const ASHA = { _id: 'o1', employeeId: 'DBS101', name: 'Asha Sharma', email: 'asha@x.com', isActive: true };
-const BOB1 = { _id: 'o2', employeeId: 'DBS201', name: 'John Doe', email: 'jd1@x.com', isActive: true };
-const BOB2 = { _id: 'o3', employeeId: 'DBS202', name: 'John Doe', email: 'jd2@x.com', isActive: true };
+// Employee docs expose the display name as `fullName` (employee.model.js),
+// matching the field teamExcel.service.js now selects/indexes.
+const ASHA = { _id: 'o1', employeeId: 'DBS101', fullName: 'Asha Sharma', email: 'asha@x.com', isActive: true };
+const BOB1 = { _id: 'o2', employeeId: 'DBS201', fullName: 'John Doe', email: 'jd1@x.com', isActive: true };
+const BOB2 = { _id: 'o3', employeeId: 'DBS202', fullName: 'John Doe', email: 'jd2@x.com', isActive: true };
 
 const lookups = {
   byInternalId: new Map([['o1', ASHA]]),

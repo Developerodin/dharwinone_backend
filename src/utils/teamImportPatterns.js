@@ -10,7 +10,9 @@ export const IGNORED_EMAIL_PATTERNS = [
 export function isIgnoredEmployee(emp) {
   if (!emp)                   return { ignored: true, reason: 'employee_not_found' };
   if (emp.isActive === false) return { ignored: true, reason: 'inactive_or_resigned' };
-  const name = String(emp.name || '').trim();
+  // Employee docs expose the display name as `fullName`; fall back to `name`
+  // for legacy/synthetic shapes that still use the old field.
+  const name = String(emp.fullName || emp.name || '').trim();
   if (IGNORED_NAME_PATTERNS.some((re) => re.test(name)))
     return { ignored: true, reason: 'dummy_name_pattern' };
   const email = String(emp.email || '').trim().toLowerCase();

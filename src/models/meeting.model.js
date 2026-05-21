@@ -37,7 +37,7 @@ const meetingSchema = mongoose.Schema(
     timezone: {
       type: String,
       trim: true,
-      default: 'Asia/Calcutta',
+      default: 'UTC',
     },
     durationMinutes: {
       type: Number,
@@ -89,6 +89,18 @@ const meetingSchema = mongoose.Schema(
       name: { type: String, trim: true },
       email: { type: String, trim: true },
     },
+    /**
+     * Assigned interview agents — denormalized snapshot, captured at schedule
+     * time. Mirrors the candidate/recruiter embedded pattern; `id` is retained
+     * for live user lookup.
+     */
+    agents: [
+      {
+        id: { type: String, trim: true },
+        name: { type: String, trim: true },
+        email: { type: String, trim: true },
+      },
+    ],
     notes: {
       type: String,
       trim: true,
@@ -109,6 +121,42 @@ const meetingSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
+    /** Success marker for the post-interview "Conclusion of Meeting" reminder. */
+    conclusionNotifiedAt: {
+      type: Date,
+      default: null,
+    },
+    /** Set (set-if-null) when the meeting transitions to status 'ended'. */
+    interviewCompletedAt: {
+      type: Date,
+      default: null,
+    },
+    /** Lease + retry + observability metadata for the T-15 reminder. */
+    reminderRetry: {
+      attempts: { type: Number, default: 0 },
+      claimedAt: { type: Date, default: null },
+      lastError: { type: String, default: null },
+      lastErrorAt: { type: Date, default: null },
+      lastErrorCategory: {
+        type: String,
+        enum: ['timeout', 'invalid_recipient', 'template_failure', 'provider_failure', 'unknown'],
+        default: null,
+      },
+      failedAt: { type: Date, default: null },
+    },
+    /** Lease + retry + observability metadata for the Conclusion reminder. */
+    conclusionRetry: {
+      attempts: { type: Number, default: 0 },
+      claimedAt: { type: Date, default: null },
+      lastError: { type: String, default: null },
+      lastErrorAt: { type: Date, default: null },
+      lastErrorCategory: {
+        type: String,
+        enum: ['timeout', 'invalid_recipient', 'template_failure', 'provider_failure', 'unknown'],
+        default: null,
+      },
+      failedAt: { type: Date, default: null },
+    },
     /** Interview result: pending (not decided), selected, rejected */
     interviewResult: {
       type: String,
@@ -128,6 +176,11 @@ const meetingSchema = mongoose.Schema(
 
 meetingSchema.plugin(toJSON);
 meetingSchema.plugin(paginate);
+
+// Scheduler query indexes (see meeting.service.js reminder passes).
+meetingSchema.index({ status: 1, reminderSentAt: 1, scheduledAt: 1 });
+meetingSchema.index({ status: 1, conclusionNotifiedAt: 1, scheduledAt: 1 });
+meetingSchema.index({ 'candidate.id': 1 });
 
 /**
  * Generate unique meetingId

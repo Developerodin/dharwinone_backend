@@ -28,9 +28,32 @@ const runAutoEndMeetings = async () => {
 
 const runUpcomingMeetingReminders = async () => {
   try {
-    await Promise.all([meetingService.sendUpcomingMeetingReminders(), sendUpcomingInternalMeetingReminders()]);
+    const [stats] = await Promise.all([
+      meetingService.sendUpcomingMeetingReminders(),
+      sendUpcomingInternalMeetingReminders(),
+    ]);
+    if (stats && (stats.sent || stats.retried || stats.failed || stats.staleRecovered)) {
+      logger.info(
+        `[Meeting scheduler] T-15 pass — sent:${stats.sent} retried:${stats.retried} ` +
+          `failed:${stats.failed} staleRecovered:${stats.staleRecovered}`
+      );
+    }
   } catch (err) {
     logger.error('[Meeting scheduler] Upcoming reminders failed:', err?.message || err);
+  }
+};
+
+const runInterviewConclusionNotifications = async () => {
+  try {
+    const stats = await meetingService.sendInterviewConclusionNotifications();
+    if (stats.sent || stats.retried || stats.failed || stats.staleRecovered) {
+      logger.info(
+        `[Meeting scheduler] Conclusion pass — sent:${stats.sent} retried:${stats.retried} ` +
+          `failed:${stats.failed} staleRecovered:${stats.staleRecovered}`
+      );
+    }
+  } catch (err) {
+    logger.error('[Meeting scheduler] Conclusion notifications failed:', err?.message || err);
   }
 };
 
@@ -40,9 +63,11 @@ export const startMeetingScheduler = () => {
   const intervalMs = intervalMinutes * 60 * 1000;
   runAutoEndMeetings();
   runUpcomingMeetingReminders();
+  runInterviewConclusionNotifications();
   intervalId = setInterval(() => {
     runAutoEndMeetings();
     runUpcomingMeetingReminders();
+    runInterviewConclusionNotifications();
   }, intervalMs);
   logger.info(`[Meeting scheduler] Started (interval: ${intervalMinutes} min)`);
 };

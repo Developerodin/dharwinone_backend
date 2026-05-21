@@ -3,6 +3,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import EmailLog from '../models/emailLog.model.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
+import { formatInZone } from '../utils/timezone.js';
 
 
 const transport = nodemailer.createTransport(config.email.smtp);
@@ -712,6 +713,77 @@ const sendMeetingInvitationEmail = async (to, payload) => {
   );
 };
 
+const buildMeetingReminderEmail = ({ title, scheduledAt, timezone, publicMeetingUrl, inviteeName }) => {
+  const subject = `Reminder: ${title || 'Interview'} starts soon`;
+  const scheduled = formatDateTime(scheduledAt, timezone);
+  const introLines = [`Your interview "${title || 'Interview'}" is starting in about 15 minutes.`];
+  const detailRows = [
+    { label: 'Meeting', value: title || 'Interview' },
+    { label: 'Scheduled time', value: scheduled },
+    { label: 'Timezone', value: timezone || 'UTC' },
+  ];
+  const primaryAction = { label: 'Join interview', href: publicMeetingUrl };
+  const text = buildPlainTextEmail({
+    title: 'Interview reminder',
+    greeting: inviteeName || 'there',
+    introLines,
+    detailRows,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText: 'Interview reminder',
+    title: title || 'Interview reminder',
+    greeting: inviteeName || 'there',
+    introLines,
+    detailRows,
+    primaryAction,
+    preheader: `Your interview starts soon — ${scheduled}`,
+  });
+  return { subject, text, html };
+};
+
+const sendMeetingReminderEmail = async (to, payload) => {
+  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting_reminder'))) {
+    logger.debug(`Skipping meeting reminder email to ${to} (notification preferences)`);
+    return;
+  }
+  const { subject, text, html } = buildMeetingReminderEmail(payload);
+  await sendEmail(to, subject, text, html, 'meeting_reminder');
+};
+
+/**
+ * Build the "Conclusion of Meeting" email content. Pure — no I/O — so it is
+ * unit-testable. Time is rendered in the meeting's stored timezone.
+ */
+const buildInterviewConclusionEmail = ({ title, scheduledAt, timezone, candidateName, link }) => {
+  const safeTitle = title || 'Interview';
+  const when = formatInZone(scheduledAt, timezone);
+  const who = candidateName ? ` with ${candidateName}` : '';
+  const subject = `Action needed: record the result for ${safeTitle}`;
+  const text =
+    `The interview "${safeTitle}"${who} (${when}) has concluded.\n\n` +
+    `Please log in and record the candidate's result.\n\n${link}\n`;
+  const html =
+    `<p>The interview <strong>${safeTitle}</strong>${who} (${when}) has concluded.</p>` +
+    `<p>Please log in and record the candidate's result.</p>` +
+    `<p><a href="${link}">Open the interview</a></p>`;
+  return { subject, text, html };
+};
+
+/**
+ * Send the "Conclusion of Meeting" email.
+ */
+const sendInterviewConclusionEmail = async (to, payload) => {
+  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    logger.debug(`Skipping interview conclusion email to ${to} (notification preferences)`);
+    return;
+  }
+  const { subject, text, html } = buildInterviewConclusionEmail(payload);
+  return sendEmail(to, subject, text, html, 'interview_conclusion');
+};
+
 /**
  * Send job share email
  * @param {string} to
@@ -966,6 +1038,10 @@ export {
   sendCandidateProfileShareEmail,
   sendCandidateAccountActivationEmail,
   sendMeetingInvitationEmail,
+  buildMeetingReminderEmail,
+  sendMeetingReminderEmail,
+  buildInterviewConclusionEmail,
+  sendInterviewConclusionEmail,
   sendJobShareEmail,
   sendJobApplicationWelcomeEmail,
   sendPostCallThankYouEmail,
