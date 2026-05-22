@@ -10,7 +10,10 @@ import {
   deleteOfferById,
   generateOfferLetter,
   getLetterDefaultsForTitle,
+  deriveRoleResponsibilities,
+  shareOfferWithCandidate,
 } from '../services/offer.service.js';
+import * as jobService from '../services/job.service.js';
 import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 
 const create = catchAsync(async (req, res) => {
@@ -47,8 +50,18 @@ const remove = catchAsync(async (req, res) => {
 });
 
 const letterDefaults = catchAsync(async (req, res) => {
-  const positionTitle = String(req.query.positionTitle || '');
-  res.send(getLetterDefaultsForTitle(positionTitle));
+  const base = getLetterDefaultsForTitle(String(req.query.positionTitle || ''));
+  if (req.query.jobId) {
+    const job = await jobService.getJobById(req.query.jobId);
+    const derived = deriveRoleResponsibilities(job);
+    if (derived.length) base.roleResponsibilities = derived;
+  }
+  res.send(base);
+});
+
+const shareOffer = catchAsync(async (req, res) => {
+  const result = await shareOfferWithCandidate(req.params.offerId, req.user, req.body);
+  res.send(result);
 });
 
 const generateLetter = catchAsync(async (req, res) => {
@@ -93,4 +106,5 @@ export {
   letterDefaults,
   generateLetter,
   enhanceRoles,
+  shareOffer,
 };
