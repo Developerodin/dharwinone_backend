@@ -1,23 +1,17 @@
 import InternalMeeting from '../models/internalMeeting.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import config from '../config/config.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
+import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 
-const getPublicMeetingUrl = (meetingId, invite = {}) => {
-  const base = (config.frontendBaseUrl || '').replace(/\/$/, '');
-  const params = new URLSearchParams();
-  params.set('room', meetingId);
-  const n = typeof invite.name === 'string' ? invite.name.trim() : '';
-  const e = typeof invite.email === 'string' ? invite.email.trim() : '';
-  if (n) params.set('name', n);
-  if (e) params.set('email', e);
-  const qs = params.toString();
-  return base ? `${base}/join/room?${qs}` : `/join/room?${qs}`;
-};
+const internalMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
+  link: getInAppMeetingLink(meeting.meetingId, invite),
+  relatedEntity: { type: 'meeting', id: meeting.meetingId },
+  metadata: { meetingId: meeting.meetingId, meetingKind: 'internal', ...extra },
+});
 
 const resolveInviteeDisplayName = (meeting, emailAddress) => {
   if (!emailAddress || typeof emailAddress !== 'string') return 'Guest';
@@ -95,7 +89,7 @@ const createInternalMeeting = async (body, userId) => {
           type: 'meeting',
           title: meeting.title || 'Meeting invitation',
           message: `Scheduled: ${scheduled}`,
-          link: personalUrl,
+          ...internalMeetingNotificationFields(meeting, { name: inviteName, email: to }),
         }).catch(() => {});
       })
       .catch(() => {});
@@ -198,7 +192,7 @@ const resendInternalMeetingInvitations = async (id) => {
       type: 'meeting',
       title: meeting.title || 'Meeting invitation',
       message: `Scheduled: ${scheduled}`,
-      link: personalUrl,
+      ...internalMeetingNotificationFields(meeting, { name: inviteName, email: to }),
     }).catch(() => {});
   });
 
@@ -296,7 +290,7 @@ export const sendUpcomingInternalMeetingReminders = async () => {
           type: 'meeting_reminder',
           title: 'Meeting reminder',
           message,
-          link: publicUrl,
+          ...internalMeetingNotificationFields(m, { name: inviteName, email }),
           email: {
             subject: `Reminder: ${title} starts soon`,
             text: `${message}\n\n${publicUrl}`,

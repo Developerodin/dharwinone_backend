@@ -26,6 +26,8 @@ const jobApplicationSchema = new mongoose.Schema(
     },
     coverLetter: { type: String, trim: true },
     appliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    /** P3: explicit tenant boundary. Denormalized from job.tenantId at creation time. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     notes: { type: String, trim: true },
     // Bolna verification call fields
     verificationCallExecutionId: { type: String, trim: true, index: true, sparse: true },
@@ -42,6 +44,9 @@ const jobApplicationSchema = new mongoose.Schema(
 // to the same job is rejected at the User layer (account-exists 409) and would otherwise hit this
 // E11000 index violation. Intentional — pipeline status transitions act on the existing row.
 jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
+// P3: tenant-safe compound indexes for scoped list/count/search queries.
+jobApplicationSchema.index({ tenantId: 1, candidate: 1 });
+jobApplicationSchema.index({ tenantId: 1, appliedBy: 1 });
 
 jobApplicationSchema.plugin(toJSON);
 jobApplicationSchema.plugin(paginate);

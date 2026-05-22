@@ -68,6 +68,8 @@ const userSchema = mongoose.Schema(
     phoneNumber: { type: String, trim: true },
     countryCode: { type: String, trim: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    /** P3: explicit tenant boundary. Mirrors adminId until full tenant backfill is complete. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     education: { type: String, trim: true },
     domain: { type: [String], default: [] },
     location: { type: String, trim: true },

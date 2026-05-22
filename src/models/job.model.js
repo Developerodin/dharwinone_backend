@@ -93,6 +93,8 @@ const jobSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** P3: explicit tenant boundary. Populated from creator's adminId at creation time. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
 
     // Job posting verification call (Bolna)
     verificationCallExecutionId: { type: String, default: null, index: true },
@@ -149,6 +151,9 @@ jobSchema.index(
 
 jobSchema.plugin(toJSON);
 jobSchema.plugin(paginate);
+// P3: tenant-safe compound indexes.
+jobSchema.index({ tenantId: 1, createdBy: 1 });
+jobSchema.index({ tenantId: 1, status: 1 });
 
 // Include createdAt (and updatedAt) in API response so Posted Date is available in the UI
 const originalJobToJSON = jobSchema.options.toJSON?.transform;

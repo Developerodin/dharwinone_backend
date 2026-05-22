@@ -11,6 +11,7 @@ import config from './config/config.js';
 import * as morgan from './config/morgan.js';
 import { jwtStrategy } from './config/passport.js';
 import routes from './routes/v1/index.js';
+import tenantResolver from './middlewares/tenantResolver.js';
 import { errorConverter, errorHandler } from './middlewares/error.js';
 import requestId from './middlewares/requestId.js';
 import { verifyBolnaWebhook } from './middlewares/verifyWebhook.js';
@@ -142,6 +143,8 @@ app.get('/health', (req, res) => {
   res.status(httpStatus.OK).json({ status: 'ok' });
 });
 
+// P3: resolve tenant from authenticated user before all v1 routes.
+app.use('/v1', tenantResolver);
 // v1 api routes
 app.use('/v1', routes);
 

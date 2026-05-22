@@ -8,6 +8,10 @@ import logger from './logger.js';
  * so multiple Queue/Worker instances can spawn their own connections cleanly.
  *
  * For direct ioredis usage (partial transcripts), use the live-client helper.
+ *
+ * Production (Render): set REDIS_URL env var to the Render Redis internal URL,
+ * e.g. redis://default:<password>@<host>:6379
+ * enableReadyCheck: false prevents crashes on Render cold-start before Redis is ready.
  */
 
 const parsed = (() => {
@@ -15,32 +19,42 @@ const parsed = (() => {
   return {
     host: url.hostname,
     port: Number(url.port) || 6379,
-    password: url.password || undefined,
-    username: url.username || undefined,
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    username: url.username ? decodeURIComponent(url.username) : undefined,
     tls: url.protocol === 'rediss:' ? {} : undefined,
   };
 })();
 
+/** Base options shared by all connection types */
+const BASE_OPTS = {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+};
+
 export function redisConnection() {
   return {
     ...parsed,
+    ...BASE_OPTS,
     db: config.redis.queueDb,
-    maxRetriesPerRequest: null,
   };
 }
 
 export function redisPartialConnection() {
   return {
     ...parsed,
+    ...BASE_OPTS,
     db: config.redis.partialDb,
-    maxRetriesPerRequest: null,
   };
 }
 
 let partialClient = null;
 export function partialRedis() {
   if (partialClient) return partialClient;
-  partialClient = new IORedis({ ...redisPartialConnection() });
+  partialClient = new IORedis({
+    ...redisPartialConnection(),
+    lazyConnect: true,
+  });
   partialClient.on('error', (err) => logger.warn('[Redis] partial client error', { error: err.message }));
   return partialClient;
 }

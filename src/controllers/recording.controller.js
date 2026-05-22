@@ -3,8 +3,8 @@ import catchAsync from '../utils/catchAsync.js';
 import recordingService from '../services/recording.service.js';
 
 const listAll = catchAsync(async (req, res) => {
-  const options = pick(req.query, ['page', 'limit']);
-  const result = await recordingService.listAll(options);
+  const options = pick(req.query, ['page', 'limit', 'status', 'q', 'dateFrom', 'dateTo', 'source']);
+  const result = await recordingService.listAll(options, req.user);
   res.send(result);
 });
 

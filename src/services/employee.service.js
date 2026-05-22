@@ -6,6 +6,7 @@ import Job from '../models/job.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import Token from '../models/token.model.js';
+import Offer from '../models/offer.model.js';
 import { createUser, getUserByEmail, updateUserById, getUserById } from './user.service.js';
 import { generateVerifyEmailToken } from './token.service.js';
 import { sendVerificationEmail } from './email.service.js';
@@ -331,6 +332,8 @@ const createCandidate = async (ownerId, payload) => {
         adminId: candidateData.adminId || resolvedOwnerId,
         joiningDate,
         ...rest,
+        // Admin-entered compensation on the employee form is provenance 'manual'.
+        ...(rest.compensationType ? { compensationSource: 'manual' } : {}),
       };
 
       // Create candidate with calculated profile completion
@@ -1229,6 +1232,11 @@ const getCandidateById = async (id) => {
         })
       );
     }
+
+    // compensationLocked: true when the employee came from an accepted offer —
+    // its compensation is a frozen payroll snapshot and must stay read-only.
+    const hasAcceptedOffer = await Offer.exists({ candidate: candidate._id, status: 'Accepted' });
+    candidate.set('compensationLocked', Boolean(hasAcceptedOffer), { strict: false });
   }
   return candidate;
 };
@@ -1270,6 +1278,17 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   }
   if (sanitized.salarySlips !== undefined) {
     sanitized.salarySlips = mergeSalarySlipsPreserveKeys(candidate.salarySlips || [], sanitized.salarySlips);
+  }
+
+  // Compensation override: editable only for directly-created employees.
+  // Offer-sourced employees keep the frozen snapshot (ATS plan interpretation #7).
+  if (sanitized.compensationType !== undefined) {
+    if (candidate.get('compensationLocked')) {
+      delete sanitized.compensationType;
+      delete sanitized.compensationSource;
+    } else {
+      sanitized.compensationSource = 'manual';
+    }
   }
 
   const prevJoinMs =

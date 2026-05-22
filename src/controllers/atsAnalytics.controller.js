@@ -30,7 +30,7 @@ const applicationsOverTimeByCandidates = catchAsync(async (req, res) => {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  const result = await atsAnalyticsService.getApplicationsOverTimeByCandidates(candidateIds);
+  const result = await atsAnalyticsService.getApplicationsOverTimeByCandidates(candidateIds, req.user);
   res.send(result);
 });
 

@@ -97,6 +97,8 @@ const employeeSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    /** P3: explicit tenant boundary. Mirrors adminId until full tenant backfill is complete. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     employeeId: { type: String, trim: true, unique: true, sparse: true, index: true },
     fullName: { type: String, required: true, trim: true },
     /** Rename history — chatbot resolves prior names against this list. */
@@ -347,6 +349,9 @@ employeeSchema.pre('save', function captureFullNameRename(next) {
 employeeSchema.index({ previousNames: 1 });
 employeeSchema.index({ referredByUserId: 1, referredAt: -1 });
 employeeSchema.index({ 'skills.name': 'text' });
+// P3: tenant-safe compound indexes.
+employeeSchema.index({ tenantId: 1, owner: 1 });
+employeeSchema.index({ tenantId: 1, referredByUserId: 1 });
 employeeSchema.plugin(toJSON);
 employeeSchema.plugin(paginate);
 

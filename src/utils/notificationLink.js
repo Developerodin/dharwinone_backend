@@ -8,15 +8,36 @@
 
 const stripId = (v) => (v == null ? '' : String(v));
 
+/**
+ * Convert stored notification links to in-app paths. Absolute URLs (legacy) become pathname+search.
+ * @param {string|null|undefined} link
+ * @returns {string|null}
+ */
+export const normalizeNotificationLink = (link) => {
+  if (!link || typeof link !== 'string') return null;
+  const trimmed = link.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/')) return trimmed;
+  try {
+    const u = new URL(trimmed);
+    const path = u.pathname || '/';
+    return `${path}${u.search || ''}`;
+  } catch (_) {
+    return null;
+  }
+};
+
+const meetingRoute = ({ relatedEntity, metadata }) => {
+  if (metadata?.navTarget === 'interviews_list') return '/ats/interviews';
+  if (metadata?.navTarget === 'meetings_list') return '/communication/meetings';
+  const id = stripId(relatedEntity?.id) || stripId(metadata?.meetingId);
+  if (id) return `/join/room?room=${encodeURIComponent(id)}`;
+  return metadata?.meetingKind === 'internal' ? '/communication/meetings' : '/ats/interviews';
+};
+
 const ROUTE_MAP = {
-  meeting: ({ relatedEntity, metadata }) => {
-    const id = stripId(relatedEntity?.id) || stripId(metadata?.meetingId);
-    return id ? `/meeting/${id}` : '/meeting';
-  },
-  meeting_reminder: ({ relatedEntity, metadata }) => {
-    const id = stripId(relatedEntity?.id) || stripId(metadata?.meetingId);
-    return id ? `/meeting/${id}` : '/meeting';
-  },
+  meeting: meetingRoute,
+  meeting_reminder: meetingRoute,
   chat_message: ({ relatedEntity, metadata }) => {
     const id = stripId(relatedEntity?.id) || stripId(metadata?.conversationId);
     return id ? `/communication/chats?conv=${id}` : '/communication/chats';
@@ -73,7 +94,8 @@ const ROUTE_MAP = {
  * @returns {string} a path beginning with `/`
  */
 export const resolveNotificationLink = (notif = {}) => {
-  if (notif.link && typeof notif.link === 'string' && notif.link.startsWith('/')) return notif.link;
+  const normalized = normalizeNotificationLink(notif.link);
+  if (normalized) return normalized;
   const fn = ROUTE_MAP[notif.type];
   if (fn) {
     try {

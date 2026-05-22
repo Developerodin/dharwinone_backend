@@ -2,7 +2,7 @@ import Notification from '../models/notification.model.js';
 import User from '../models/user.model.js';
 import logger from '../config/logger.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
-import { resolveNotificationLink } from '../utils/notificationLink.js';
+import { resolveNotificationLink, normalizeNotificationLink } from '../utils/notificationLink.js';
 
 /**
  * In-app + queued notification entry points: `notify`, `notifyByEmail`, `createNotification`.

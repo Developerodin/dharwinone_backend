@@ -459,7 +459,7 @@ const deleteBookmark = catchAsync(async (req, res) => {
 });
 
 const jobStats = catchAsync(async (req, res) => {
-  const result = await getJobStats(req.params.jobId);
+  const result = await getJobStats(req.params.jobId, req.user);
   res.send(result);
 });
 

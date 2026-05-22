@@ -125,6 +125,7 @@ const singleCandidateSchema = Joi.object().keys({
   position: Joi.string().custom(objectId).optional().allow(null),
   companyAssignedEmail: Joi.string().email().allow('', null),
   companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
+  compensationType: Joi.string().valid('paid', 'unpaid').optional(),
 });
 
 const createCandidate = {
@@ -166,6 +167,7 @@ const listCandidatesQueryKeys = {
   visaType: Joi.string().trim(),
   skillMatchMode: Joi.string().valid('all', 'any').default('any'),
   employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
+  compensationType: Joi.string().valid('paid', 'unpaid').allow(''),
   /** When true, each list row includes openSopCount (extra DB work per candidate). */
   includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
 };
@@ -246,6 +248,7 @@ const updateCandidate = {
       salarySlips: Joi.array().items(salarySlip),
       companyAssignedEmail: Joi.string().email().allow('', null),
       companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
+      compensationType: Joi.string().valid('paid', 'unpaid').optional(),
     })
     .min(1),
 };

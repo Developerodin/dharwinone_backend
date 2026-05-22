@@ -102,6 +102,8 @@ const recordingSchema = mongoose.Schema(
     transcriptUrl: { type: String, default: null },
     summaryUrl: { type: String, default: null },
     agentDispatchId: { type: String, default: null },
+    /** P3: explicit tenant boundary. Populated from meeting.tenantId at recording creation. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   },
   { timestamps: true }
 );
@@ -109,6 +111,9 @@ const recordingSchema = mongoose.Schema(
 recordingSchema.index({ meetingId: 1, status: 1 });
 recordingSchema.index({ status: 1, startedAt: -1 });
 recordingSchema.index({ statusRank: 1, startedAt: -1 });
+// P3: tenant-safe compound indexes.
+recordingSchema.index({ tenantId: 1, meetingId: 1 });
+recordingSchema.index({ tenantId: 1, status: 1 });
 
 recordingSchema.plugin(toJSON);
 

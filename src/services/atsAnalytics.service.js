@@ -6,6 +6,7 @@ import User from '../models/user.model.js';
 import { getActivityStatistics, getActivityLogsSummary } from './recruiterActivity.service.js';
 import { ensureCandidateProfilesForActiveCandidateUsers, queryCandidates } from './employee.service.js';
 import { userHasRecruiterRole } from '../utils/roleHelpers.js';
+import { buildApplicantQuery } from './applicantQuery.service.js';
 
 const TIME_BUCKETS = 12;
 
@@ -65,10 +66,6 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
 
   const activeUserIds = (await User.find({ status: { $in: ['active', 'pending'] } }, { _id: 1 }).lean()).map((u) => u._id);
 
-  const recruiterJobIds = isRecruiter
-    ? (await Job.find({ createdBy: user._id }, { _id: 1 }).lean()).map((j) => j._id)
-    : null;
-
   await ensureCandidateProfilesForActiveCandidateUsers();
 
   const candidateMatch = {
@@ -78,18 +75,13 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
   const jobMatch = isRecruiter ? { createdBy: user._id } : {};
   const activityFilter = isRecruiter ? { recruiterId: user._id } : {};
 
-  const appDateMatch = dateRange ? { createdAt: { $gte: dateRange.start, $lte: dateRange.end } } : {};
-
-  const activeCandidateIds = (
-    await Employee.find({ isActive: { $ne: false }, owner: { $in: activeUserIds } }, { _id: 1 }).lean()
-  ).map((c) => c._id);
-
-  const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
-
-  const appMatch = {
-    candidate: { $in: activeCandidateIds },
-    job: { $in: isRecruiter ? recruiterJobIds : existingJobIds },
+  const appFilter = {
+    includeDuplicates: true,
+    includeInactive: false,
+    ...(dateRange ? { dateFrom: dateRange.start.toISOString(), dateTo: dateRange.end.toISOString() } : {}),
   };
+  const { query: appMatch } = await buildApplicantQuery(appFilter, user);
+  const appDateMatch = dateRange ? { createdAt: { $gte: dateRange.start, $lte: dateRange.end } } : {};
 
   const [
     totalCandidates,
@@ -185,17 +177,33 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
       ...(dateRange ? { startDate: dateRange.start, endDate: dateRange.end } : {}),
     }),
     dateRange
-      ? JobApplication.countDocuments({
-          ...appMatch,
-          createdAt: { $gte: dateRange.previousStart, $lte: dateRange.previousEnd },
-        })
+      ? (async () => {
+          const { query } = await buildApplicantQuery(
+            {
+              includeDuplicates: true,
+              includeInactive: false,
+              dateFrom: dateRange.previousStart.toISOString(),
+              dateTo: dateRange.previousEnd.toISOString(),
+            },
+            user
+          );
+          return JobApplication.countDocuments(query);
+        })()
       : Promise.resolve(null),
     dateRange
-      ? JobApplication.countDocuments({
-          ...appMatch,
-          status: 'Hired',
-          createdAt: { $gte: dateRange.previousStart, $lte: dateRange.previousEnd },
-        })
+      ? (async () => {
+          const { query } = await buildApplicantQuery(
+            {
+              includeDuplicates: true,
+              includeInactive: false,
+              status: 'Hired',
+              dateFrom: dateRange.previousStart.toISOString(),
+              dateTo: dateRange.previousEnd.toISOString(),
+            },
+            user
+          );
+          return JobApplication.countDocuments(query);
+        })()
       : Promise.resolve(null),
   ]);
 
@@ -244,23 +252,10 @@ const getDrillDown = async (params, user = {}) => {
   const skip = (page - 1) * limit;
 
   if (type === 'applicationStatus' || type === 'applicationFunnel') {
-    const ownerIdsWithCandidateRole = await ensureCandidateProfilesForActiveCandidateUsers();
-    const ownerClause =
-      ownerIdsWithCandidateRole === null
-        ? {}
-        : { owner: ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] } };
-    const activeCandidateIds = (
-      await Employee.find({ isActive: { $ne: false }, ...ownerClause }, { _id: 1 }).lean()
-    ).map((c) => c._id);
-
-    const query = { status: value, candidate: { $in: activeCandidateIds } };
-    if (isRecruiter) {
-      const recruiterJobIds = (await Job.find({ createdBy: user._id }, { _id: 1 }).lean()).map((j) => j._id);
-      query.job = { $in: recruiterJobIds };
-    } else {
-      const existingJobIds = (await Job.find({}, { _id: 1 }).lean()).map((j) => j._id);
-      query.job = { $in: existingJobIds };
-    }
+    const { query } = await buildApplicantQuery(
+      { includeDuplicates: true, includeInactive: false, status: value },
+      user
+    );
     const [results, total] = await Promise.all([
       JobApplication.find(query)
         .sort({ createdAt: -1 })
@@ -342,7 +337,7 @@ const getDrillDown = async (params, user = {}) => {
  * @param {string[]} candidateIds - Candidate ObjectIds
  * @returns {Promise<Record<string, number[]>>} Map of candidateId -> [count_week4_ago, ..., count_this_week]
  */
-const getApplicationsOverTimeByCandidates = async (candidateIds = []) => {
+const getApplicationsOverTimeByCandidates = async (candidateIds = [], user = null) => {
   if (!candidateIds || candidateIds.length === 0) return {};
   const ids = candidateIds.filter(Boolean).map((id) => String(id));
   if (ids.length === 0) return {};
@@ -353,12 +348,23 @@ const getApplicationsOverTimeByCandidates = async (candidateIds = []) => {
   const thirtyFiveDaysAgo = new Date();
   thirtyFiveDaysAgo.setDate(thirtyFiveDaysAgo.getDate() - 35);
 
+  let scopedMatch = null;
+  if (user) {
+    const { query } = await buildApplicantQuery(
+      { includeDuplicates: true, includeInactive: false },
+      user
+    );
+    scopedMatch = query;
+  }
+  const baseMatch = {
+    candidate: { $in: validIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    createdAt: { $gte: thirtyFiveDaysAgo, $lte: new Date() },
+  };
+  const aggregateMatch = scopedMatch ? { $and: [scopedMatch, baseMatch] } : baseMatch;
+
   const agg = await JobApplication.aggregate([
     {
-      $match: {
-        candidate: { $in: validIds.map((id) => new mongoose.Types.ObjectId(id)) },
-        createdAt: { $gte: thirtyFiveDaysAgo, $lte: new Date() },
-      },
+      $match: aggregateMatch,
     },
     {
       $addFields: {

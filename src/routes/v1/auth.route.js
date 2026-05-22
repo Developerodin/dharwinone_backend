@@ -75,6 +75,7 @@ router.post(
 router.get('/me/skill-recommendations', auth(), authController.listSkillRecommendations);
 router.post('/me/send-verification-email', auth(), authStrictFlowLimiter, authController.sendMyVerificationEmail);
 router.get('/my-permissions', auth(), authController.getMyPermissions);
+router.get('/page-capabilities', auth(), authController.getMyPageCapabilities);
 router.post('/impersonate', auth(), requireAdministratorRole(), validate(authValidation.impersonate), authController.impersonate);
 router.post('/stop-impersonation', auth(), authController.stopImpersonation);
 router.post('/forgot-password', authStrictFlowLimiter, validate(authValidation.forgotPassword), authController.forgotPassword);

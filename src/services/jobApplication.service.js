@@ -5,6 +5,7 @@ import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
 import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
+import { queryApplicants as queryApplicantsScoped } from './applicantQuery.service.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
 
@@ -228,6 +229,12 @@ const deleteJobApplication = async (id, currentUser) => {
  * @returns {Promise<QueryResult>}
  */
 const queryJobApplications = async (filter, options, currentUser) => {
+  return queryApplicantsScoped(filter, options, currentUser);
+};
+
+// Legacy implementation retained temporarily for rollback/debugging during P1 rollout.
+// eslint-disable-next-line no-unused-vars
+const _queryJobApplicationsLegacy = async (filter, options, currentUser) => {
   const { userIsAdmin } = await import('../utils/roleHelpers.js');
   const query = {};
 

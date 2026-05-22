@@ -6,6 +6,7 @@ import InternalMeeting from '../models/internalMeeting.model.js';
 import TranscriptSegment from '../models/transcriptSegment.model.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
+import { recordingScope } from './visibilityScope.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import logger from '../config/logger.js';
@@ -33,6 +34,15 @@ const tsToMs = (v) => {
 };
 
 const PLAYBACK_URL_EXPIRY_SECONDS = 3600; // 1 hour
+const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing'];
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const mergeQuery = (scopeFilter = {}, query = {}) => {
+  if (!scopeFilter || !Object.keys(scopeFilter).length) return query;
+  if (!query || !Object.keys(query).length) return scopeFilter;
+  return { $and: [scopeFilter, query] };
+};
 
 /**
  * Resolve meeting identifier to meetingId (roomName) for Recording queries.
@@ -123,10 +133,31 @@ const listByMeetingId = async (meetingIdOrMongoId) => {
  * @param {Object} options - { page, limit }
  * @returns {Promise<{ results, page, limit, totalPages, totalResults }>}
  */
-const listAll = async (options = {}) => {
+const listAll = async (options = {}, currentUser = {}) => {
   const page = Math.max(1, parseInt(options.page, 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(options.limit, 10) || 20));
   const skip = (page - 1) * limit;
+
+  const q = String(options.q || '').trim();
+  const dateFrom = options.dateFrom ? new Date(options.dateFrom) : null;
+  const dateTo = options.dateTo ? new Date(options.dateTo) : null;
+  // 'interview' | 'meeting' | '' (all)
+  const sourceFilter = String(options.source || '').trim().toLowerCase();
+  const statusFilter = String(options.status || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const selectedStatuses = statusFilter.length
+    ? statusFilter.filter((s) => LISTABLE_STATUSES.includes(s))
+    : LISTABLE_STATUSES;
+  if (!selectedStatuses.length) {
+    return { results: [], page, limit, totalPages: 0, totalResults: 0 };
+  }
+
+  const { filter: scopeFilter } = await recordingScope(currentUser, 'read');
+  if (scopeFilter?._id?.$in && scopeFilter._id.$in.length === 0) {
+    return { results: [], page, limit, totalPages: 0, totalResults: 0 };
+  }
 
   // Show every meaningful row so ops can see WHAT happened, not just clean
   // completions. Frontend differentiates by `status`:
@@ -135,22 +166,83 @@ const listAll = async (options = {}) => {
   //   aborted/failed/missing        → red "Recording failed" badge with reason
   // Only `expired` (cron force-resolved >8h non-terminal) is hidden — those
   // are stuck rows with no useful info for the user.
-  const query = {
-    status: { $in: ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing'] },
-  };
+  const query = { status: { $in: selectedStatuses } };
+  if (dateFrom || dateTo) {
+    query.startedAt = {};
+    if (dateFrom && !Number.isNaN(dateFrom.getTime())) query.startedAt.$gte = dateFrom;
+    if (dateTo && !Number.isNaN(dateTo.getTime())) query.startedAt.$lte = dateTo;
+  }
+
+  // For source/attendee search we must first resolve matching meetingIds from
+  // the Meeting collection, then filter Recordings by those meetingIds.
+  let searchRestrictedMeetingIds = null; // null = no restriction; [] = no results
+  if (q || sourceFilter) {
+    const qRegex = q ? new RegExp(escapeRegex(q), 'i') : null;
+
+    // Build Meeting-level query for title + attendee name/email search
+    const meetingConditions = [];
+    if (qRegex) {
+      meetingConditions.push(
+        { title: qRegex },
+        { 'candidate.name': qRegex },
+        { 'candidate.email': qRegex },
+        { 'recruiter.name': qRegex },
+        { 'recruiter.email': qRegex },
+        { 'hosts.nameOrRole': qRegex },
+        { 'hosts.email': qRegex },
+        { 'agents.name': qRegex },
+        { 'agents.email': qRegex },
+        { emailInvites: qRegex }
+      );
+    }
+
+    // Source filter: interviews have a candidate.id or jobPosition set; plain
+    // meetings do not.
+    const sourceCondition =
+      sourceFilter === 'interview'
+        ? { $or: [{ 'candidate.id': { $exists: true, $ne: '' } }, { jobPosition: { $exists: true, $ne: '' } }] }
+        : sourceFilter === 'meeting'
+        ? { 'candidate.id': { $in: [null, undefined, ''] }, jobPosition: { $in: [null, undefined, ''] } }
+        : null;
+
+    const combinedMeetingQuery = {};
+    if (qRegex && meetingConditions.length) combinedMeetingQuery.$or = meetingConditions;
+    if (sourceCondition) Object.assign(combinedMeetingQuery, sourceCondition);
+
+    // Also match recordings directly by meetingId (room name) when free-text is present
+    const directIdMatchMeetingIds = qRegex
+      ? (await Recording.find({ meetingId: qRegex }, { meetingId: 1 }).lean()).map((r) => r.meetingId)
+      : [];
+
+    const [matchedMeetings] = await Promise.all([
+      Meeting.find(combinedMeetingQuery, { meetingId: 1 }).lean(),
+    ]);
+    const matchedIds = new Set([
+      ...matchedMeetings.map((m) => m.meetingId),
+      ...directIdMatchMeetingIds,
+    ]);
+
+    searchRestrictedMeetingIds = [...matchedIds];
+    if (searchRestrictedMeetingIds.length === 0) {
+      return { results: [], page, limit, totalPages: 0, totalResults: 0 };
+    }
+    query.meetingId = { $in: searchRestrictedMeetingIds };
+  }
+
+  const scopedQuery = mergeQuery(scopeFilter, query);
   const [recordings, total] = await Promise.all([
-    Recording.find(query)
+    Recording.find(scopedQuery)
       .sort({ startedAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
-    Recording.countDocuments(query),
+    Recording.countDocuments(scopedQuery),
   ]);
 
   const meetingIds = [...new Set(recordings.map((r) => r.meetingId))];
   const [meetings, internalMeetings] = await Promise.all([
     Meeting.find({ meetingId: { $in: meetingIds } })
-      .select('meetingId title')
+      .select('meetingId title candidate recruiter hosts emailInvites agents jobPosition')
       .lean(),
     InternalMeeting.find({ meetingId: { $in: meetingIds } })
       .select('meetingId title')
@@ -175,10 +267,42 @@ const listAll = async (options = {}) => {
     if (durationMs != null && (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > MAX_REASONABLE_MS)) {
       durationMs = null;
     }
+    const mtg = meetingMap[rec.meetingId];
+    // Detect whether this recording came from an interview or a plain meeting.
+    // Interviews always have a candidate.id or a jobPosition set on the Meeting
+    // document; plain scheduled meetings do not.
+    const isInterview = !!(
+      mtg &&
+      ((mtg.candidate?.id && String(mtg.candidate.id).trim()) ||
+        (mtg.jobPosition && String(mtg.jobPosition).trim()))
+    );
+
+    // Build a flat attendee list: candidate + recruiter + hosts + agents + emailInvites.
+    const attendees = [];
+    if (mtg) {
+      if (mtg.candidate?.name || mtg.candidate?.email) {
+        attendees.push({ name: mtg.candidate.name || null, email: mtg.candidate.email || null, role: 'candidate' });
+      }
+      if (mtg.recruiter?.name || mtg.recruiter?.email) {
+        attendees.push({ name: mtg.recruiter.name || null, email: mtg.recruiter.email || null, role: 'recruiter' });
+      }
+      for (const h of mtg.hosts || []) {
+        if (h.email) attendees.push({ name: h.nameOrRole || null, email: h.email, role: 'host' });
+      }
+      for (const a of mtg.agents || []) {
+        if (a.email) attendees.push({ name: a.name || null, email: a.email, role: 'agent' });
+      }
+      for (const email of mtg.emailInvites || []) {
+        if (email) attendees.push({ name: null, email, role: 'invite' });
+      }
+    }
+
     const item = {
       id: rec._id?.toString(),
       meetingId: rec.meetingId,
-      meetingTitle: meetingMap[rec.meetingId]?.title || rec.meetingId,
+      meetingTitle: mtg?.title || rec.meetingId,
+      source: isInterview ? 'interview' : 'meeting',
+      attendees,
       egressId: rec.egressId,
       filePath: rec.filePath,
       status: rec.status,

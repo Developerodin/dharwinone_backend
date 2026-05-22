@@ -160,4 +160,11 @@ describe('promotion flow wiring', () => {
     );
     assert.ok(persistMatch, 'persistence hook restores stored employeeId on update');
   });
+
+  it('promoteCandidateOwnerToEmployeeRole allows employeeId-only when owner is missing', () => {
+    const fn = promotionSrc.split('export async function promoteCandidateOwnerToEmployeeRole')[1] || '';
+    const head = fn.slice(0, 400);
+    assert.match(head, /if\s*\(\s*!ownerUserId\s*&&\s*!preferredId\s*\)/);
+    assert.match(fn, /Employee\.findById\(preferredId\)/);
+  });
 });

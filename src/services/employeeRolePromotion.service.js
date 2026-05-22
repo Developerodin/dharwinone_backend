@@ -146,8 +146,9 @@ async function resolveCandidateLoginUserIdForEmployee(empLean, fallbackUserId) {
  */
 export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options = {}) {
   const fromScheduler = Boolean(options.fromScheduler);
+  const preferredId = options.employeeId != null ? String(options.employeeId) : '';
 
-  if (!ownerUserId) return false;
+  if (!ownerUserId && !preferredId) return false;
   const { candidateRole, employeeRole } = await resolveCandidateAndEmployeeRoles();
 
   if (!employeeRole) {
@@ -156,14 +157,11 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
   }
 
   let emp;
-  const preferredId = options.employeeId != null ? String(options.employeeId) : '';
   if (preferredId) {
     emp = await Employee.findById(preferredId).select('joiningDate owner fullName email').lean();
-    if (!emp?.owner) {
+    if (!emp) {
       if (fromScheduler) {
-        logger.info(
-          `[employeeRolePromotion] no-op user=${String(ownerUserId)} employeeDoc=${preferredId} reason=EMPLOYEE_MISSING_OWNER`
-        );
+        logger.info(`[employeeRolePromotion] no-op employeeDoc=${preferredId} reason=EMPLOYEE_NOT_FOUND`);
       }
       return false;
     }
@@ -282,10 +280,41 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
   return true;
 }
 
+/** Placement statuses shown on ATS Onboarding (pre-join window + joined). */
+const ONBOARDING_PIPELINE_STATUSES = ['Onboarding', 'Joined'];
+
 /**
- * Batch (scheduler): promote Candidate → Employee only for accounts tied to **ATS Onboarding**
- * (`Placement.status === 'Joined'`), joining date calendar-eligible. Each row delegates to
- * {@link promoteCandidateOwnerToEmployeeRole} (resolves Candidate role id from the user’s Role documents).
+ * Align Employee.joiningDate with Placement when they drift (HRMS list reads placement; promotion reads employee).
+ */
+async function syncJoiningDatesFromOnboardingPlacements(candidateIds) {
+  if (!candidateIds?.length) return 0;
+  const placements = await Placement.find({
+    candidate: { $in: candidateIds },
+    status: { $in: ONBOARDING_PIPELINE_STATUSES },
+    joiningDate: { $exists: true, $ne: null },
+  })
+    .select('candidate joiningDate')
+    .lean();
+  let synced = 0;
+  for (const row of placements) {
+    if (!row.candidate || !row.joiningDate) continue;
+    const emp = await Employee.findById(row.candidate).select('joiningDate').lean();
+    if (!emp) continue;
+    const pY = joinDateYmdUtc(row.joiningDate);
+    const eY = emp.joiningDate ? joinDateYmdUtc(emp.joiningDate) : '';
+    if (pY && pY !== eY) {
+      // eslint-disable-next-line no-await-in-loop
+      await Employee.updateOne({ _id: row.candidate }, { $set: { joiningDate: row.joiningDate } });
+      synced += 1;
+    }
+  }
+  return synced;
+}
+
+/**
+ * Batch (scheduler): promote Candidate → Employee for ATS Onboarding pipeline
+ * (`Placement.status` Onboarding or Joined), joining date calendar-eligible (UTC). Each row delegates to
+ * {@link promoteCandidateOwnerToEmployeeRole} (resolves login via employee email when owner is stale).
  *
  * @returns {Promise<number>} number of users updated this run
  */
@@ -296,10 +325,12 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
     return 0;
   }
 
-  /** Matches ATS Onboarding page: Joined placements only (Joined employees – HRMS). */
-  const joinedCandidateRefs = await Placement.distinct('candidate', { status: 'Joined' });
+  /** Matches ATS Onboarding page: Onboarding ∪ Joined. */
+  const joinedCandidateRefs = await Placement.distinct('candidate', {
+    status: { $in: ONBOARDING_PIPELINE_STATUSES },
+  });
   if (!joinedCandidateRefs.length) {
-    logger.info('[scheduler] Candidate→Employee scan (Joined onboarding): no placements');
+    logger.info('[scheduler] Candidate→Employee scan (onboarding pipeline): no placements');
     return 0;
   }
 
@@ -312,10 +343,12 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
   const excludedFromUi = joinedCandidateRefs.length - onboardingEmployeeIds.length;
   if (!onboardingEmployeeIds.length) {
     logger.info(
-      `[scheduler] Candidate→Employee scan (Joined onboarding): joinedDistinctCandidates=${joinedCandidateRefs.length} hrmsVisible=0 (none pass display-name/email filter)`
+      `[scheduler] Candidate→Employee scan (onboarding pipeline): distinctCandidates=${joinedCandidateRefs.length} hrmsVisible=0 (none pass display-name/email filter)`
     );
     return 0;
   }
+
+  const datesSynced = await syncJoiningDatesFromOnboardingPlacements(onboardingEmployeeIds);
 
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
@@ -323,10 +356,13 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
 
   const rows = await Employee.find({
     _id: { $in: onboardingEmployeeIds },
-    owner: { $exists: true, $ne: null },
     joiningDate: { $exists: true, $ne: null, $lte: endOfTodayUtc },
+    $or: [
+      { owner: { $exists: true, $ne: null } },
+      { email: { $type: 'string', $nin: [''] } },
+    ],
   })
-    .select('owner joiningDate')
+    .select('owner joiningDate email')
     .lean();
 
   const eligibleByDate = rows.filter((row) => joinCalendarDayHasArrived(row.joiningDate));
@@ -337,7 +373,7 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
   for (const row of eligibleByDate) {
     promotionAttempted += 1;
     // eslint-disable-next-line no-await-in-loop
-    const did = await promoteCandidateOwnerToEmployeeRole(row.owner, {
+    const did = await promoteCandidateOwnerToEmployeeRole(row.owner ?? null, {
       employeeId: row._id,
       fromScheduler: true,
     });
@@ -345,8 +381,9 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
   }
 
   logger.info(
-    `[scheduler] Candidate→Employee scan (Joined onboarding): joinedDistinctCandidates=${joinedCandidateRefs.length} hrmsVisibleCandidates=${onboardingEmployeeIds.length}` +
+    `[scheduler] Candidate→Employee scan (onboarding pipeline): distinctCandidates=${joinedCandidateRefs.length} hrmsVisibleCandidates=${onboardingEmployeeIds.length}` +
       (excludedFromUi > 0 ? ` excludedFromHrmsList=${excludedFromUi}` : '') +
+      (datesSynced > 0 ? ` joiningDatesSynced=${datesSynced}` : '') +
       ` mongoRows=${rows.length} calendarEligible=${eligibleByDate.length} promotionAttempts=${promotionAttempted} promoted=${updated}`
   );
   return updated;

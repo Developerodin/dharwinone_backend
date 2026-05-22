@@ -35,6 +35,7 @@ import { getRoleByName } from '../services/role.service.js';
 import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
+import { getPageCapabilities } from '../services/pageCapabilities.service.js';
 import { pickUserDisplayForActivityLog } from '../utils/activityLogSubject.util.js';
 import Impersonation from '../models/impersonation.model.js';
 import SkillRecommendation from '../models/skillRecommendation.model.js';
@@ -807,6 +808,11 @@ const getMyPermissions = catchAsync(async (req, res) => {
   res.send(ctx);
 });
 
+const getMyPageCapabilities = catchAsync(async (req, res) => {
+  const capabilities = await getPageCapabilities(req.user);
+  res.send(capabilities);
+});
+
 /**
  * Start impersonation: admin temporarily acts as target user.
  * Requires Administrator role (by roleIds). Sets cookies to impersonated user's session.
@@ -888,6 +894,7 @@ export {
   recommendSkillsByRole,
   listSkillRecommendations,
   getMyPermissions,
+  getMyPageCapabilities,
   impersonate,
   stopImpersonation,
 };

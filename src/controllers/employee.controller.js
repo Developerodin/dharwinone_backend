@@ -467,6 +467,7 @@ const exportAll = catchAsync(async (req, res) => {
     'agent',
     'agentIds',
     'employmentStatus',
+    'compensationType',
     'skills',
     'skillLevel',
     'experienceLevel',

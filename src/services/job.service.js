@@ -12,6 +12,11 @@ import { userIsAdmin, userCanViewAllJobsForListing } from '../utils/roleHelpers.
 import callRecordService from './callRecord.service.js';
 import { syncPublishedJobForExternal } from './externalJobPublishedJob.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import {
+  aggregateApplicantsByStatus,
+  countApplicants,
+  queryApplicants,
+} from './applicantQuery.service.js';
 
 /** Matches mirrored external listings in Job (explicit origin or legacy externalRef-only rows). */
 const MIRROR_EXTERNAL_OR = {
@@ -1234,28 +1239,24 @@ async function deleteJobBookmark(jobId, bookmarkId, user) {
   return { ok: true };
 }
 
-async function getJobStats(jobId) {
+async function getJobStats(jobId, currentUser = {}) {
   const job = await Job.findById(jobId).select('title status createdAt').lean();
   if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
-  const objId = new mongoose.Types.ObjectId(jobId);
 
-  const [funnelAgg, total, recent] = await Promise.all([
-    JobApplication.aggregate([
-      { $match: { job: objId } },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]),
-    JobApplication.countDocuments({ job: objId }),
-    JobApplication.find({ job: objId })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .populate('candidate', 'fullName email')
-      .lean(),
+  const scopedFilter = { jobId: String(jobId) };
+
+  const [funnelAgg, total, recentPage] = await Promise.all([
+    aggregateApplicantsByStatus(scopedFilter, currentUser),
+    countApplicants(scopedFilter, currentUser),
+    queryApplicants(scopedFilter, { limit: 5, page: 1, sortBy: 'createdAt:desc' }, currentUser),
   ]);
+
+  const recent = recentPage?.results || [];
 
   const statusOrder = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
   const counts = Object.fromEntries(statusOrder.map((s) => [s, 0]));
   for (const row of funnelAgg) {
-    if (row._id && counts[row._id] != null) counts[row._id] = row.count;
+    if (row.status && counts[row.status] != null) counts[row.status] = row.count;
   }
   const hired = counts.Hired || 0;
   const conversionRate = total > 0 ? Math.round((hired / total) * 1000) / 10 : 0;
@@ -1268,7 +1269,7 @@ async function getJobStats(jobId) {
     funnel: statusOrder.map((status) => ({ status, count: counts[status] })),
     conversionRate,
     recentApplications: recent.map((a) => ({
-      id: String(a._id),
+      id: String(a._id ?? a.id),
       candidateName: a.candidate?.fullName || '',
       candidateEmail: a.candidate?.email || '',
       status: a.status,

@@ -117,10 +117,11 @@ export const JOB_TYPES = freezeList([
 export const COMPENSATION_TYPES = freezeList(['paid', 'unpaid']);
 
 /**
- * Provenance of a compensationType value. Today everything is jobType-derived;
- * this is the seam for future stipend / contract / grant / external-payroll sources.
+ * Provenance of a compensationType value. `jobTypeDerived` = mirrored from an
+ * offer's job type; `manual` = set directly by an admin on the employee form.
+ * Seam for future stipend / contract / grant / external-payroll sources.
  */
-export const COMPENSATION_SOURCES = freezeList(['jobTypeDerived']);
+export const COMPENSATION_SOURCES = freezeList(['jobTypeDerived', 'manual']);
 
 /** Derive 'paid' | 'unpaid' from an offer job type. Unknown/missing → 'paid'. */
 export const compensationTypeForJobType = (jobType) => {

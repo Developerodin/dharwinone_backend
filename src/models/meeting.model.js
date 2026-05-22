@@ -169,6 +169,8 @@ const meetingSchema = mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    /** P3: explicit tenant boundary. Populated from creator's adminId at creation time. */
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   },
   {
     timestamps: true,

@@ -917,11 +917,76 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const fresh = await getOfferById(id, currentUser);
   validateAndBuildLetterContext(fresh);
 
-  const statusUpdate = fresh.status === 'Draft' ? { $set: { status: 'Accepted' } } : {};
-  await Offer.findByIdAndUpdate(id, {
-    $unset: { offerLetterKey: 1, offerLetterUrl: 1, offerLetterHash: 1, offerLetterGeneratedAt: 1 },
-    ...statusUpdate,
-  });
+  const transitionToAccepted = fresh.status === 'Draft';
+
+  // Mark letter as generated (first save stamps the date; re-saves preserve it).
+  // Only unset S3 PDF refs — offerLetterGeneratedAt must NOT be unset so the
+  // "Update status" action remains visible after the first save.
+  const updateOp = {
+    $unset: { offerLetterKey: 1, offerLetterUrl: 1, offerLetterHash: 1 },
+    $set: {
+      offerLetterGeneratedAt: fresh.offerLetterGeneratedAt ?? new Date(),
+      ...(transitionToAccepted ? { status: 'Accepted', acceptedAt: new Date() } : {}),
+    },
+  };
+  await Offer.findByIdAndUpdate(id, updateOp);
+
+  // When transitioning Draft → Accepted via letter save, create the Placement record
+  // (same lifecycle as updateOfferById Accepted path) so Pre-boarding link appears.
+  if (transitionToAccepted) {
+    const candidateId = fresh.candidate?._id ?? fresh.candidate;
+    const jobId = fresh.job?._id ?? fresh.job;
+    const createdById = fresh.createdBy?._id ?? fresh.createdBy;
+
+    const candidate = await Employee.findById(candidateId)
+      .select('employeeId referredByUserId referralJti attributionLockedAt referralContext referralJobTitle')
+      .lean();
+    const existingPlacement = await Placement.findOne({ offer: fresh._id }).select('status _id').lean();
+    const needsFreshPlacement = !existingPlacement || existingPlacement.status === 'Cancelled';
+
+    const placementBase = {
+      offer: fresh._id,
+      candidate: candidateId,
+      job: jobId,
+      employeeId: candidate?.employeeId || null,
+      status: 'Pending',
+      createdBy: createdById,
+      preBoardingStatus: 'Pending',
+      preBoardingTasks: [],
+      onboardingTasks: [],
+      joiningDate: fresh.joiningDate,
+      referredByUserId: candidate?.referredByUserId || null,
+      referralLeadJti: candidate?.referralJti || null,
+      referralAttributionLockedAt: candidate?.attributionLockedAt || null,
+      referralContext: candidate?.referralContext || null,
+      referralJobTitle: candidate?.referralJobTitle || null,
+    };
+
+    if (needsFreshPlacement) {
+      try {
+        if (existingPlacement?.status === 'Cancelled') {
+          await Placement.updateOne(
+            { _id: existingPlacement._id },
+            { $set: { _cancelledOfferRef: fresh._id }, $unset: { offer: 1 } }
+          );
+          await Placement.create([placementBase]);
+        } else {
+          await Placement.findOneAndUpdate(
+            { offer: fresh._id },
+            { $setOnInsert: placementBase },
+            { upsert: true, new: false }
+          );
+        }
+      } catch (e) {
+        if (e?.code !== 11000) throw e;
+      }
+    }
+
+    if (fresh.jobApplication) {
+      await JobApplication.findByIdAndUpdate(fresh.jobApplication, { status: 'Hired' });
+      await syncReferralPipelineStatusForCandidate(candidateId);
+    }
+  }
 
   return getOfferById(id, currentUser);
 };

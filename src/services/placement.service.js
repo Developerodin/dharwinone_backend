@@ -66,6 +66,37 @@ const syncJoiningDateFromPlacement = async (placement) => {
   await Promise.all(tasks);
 };
 
+const resolveEffectiveJoiningDate = (placement, updateBody = {}) => {
+  if (updateBody.joiningDate !== undefined) {
+    return updateBody.joiningDate ? new Date(updateBody.joiningDate) : null;
+  }
+  return placement.joiningDate ?? null;
+};
+
+const tryPromotePlacementCandidateIfEligible = async (placement) => {
+  if (placement.status !== 'Joined' && placement.status !== 'Onboarding') return;
+  const emp = await Employee.findById(placement.candidate).select('email fullName owner joiningDate').lean();
+  if (!emp?.owner && !emp?.email) return;
+  if (placement.joiningDate) {
+    const pY = joinDateYmdUtc(placement.joiningDate);
+    const eY = emp.joiningDate ? joinDateYmdUtc(emp.joiningDate) : '';
+    if (pY && pY !== eY) {
+      await Employee.findByIdAndUpdate(placement.candidate, { joiningDate: placement.joiningDate });
+    }
+  }
+  try {
+    const { promoteCandidateOwnerToEmployeeRole, joinCalendarDayHasArrived } = await import(
+      './employeeRolePromotion.service.js'
+    );
+    const effectiveJoin = placement.joiningDate ?? emp.joiningDate;
+    if (!joinCalendarDayHasArrived(effectiveJoin)) return;
+    await promoteCandidateOwnerToEmployeeRole(emp.owner ?? null, { employeeId: emp._id });
+  } catch (e) {
+    logger.warn(`promoteCandidateOwnerToEmployeeRole on onboarding placement: ${e?.message || e}`);
+  }
+};
+
+
 const VALID_STATUS = new Set(PLACEMENT_STATUSES);
 
 /**
@@ -127,34 +158,79 @@ const mergeTaskList = (existing, updates) => {
   return Array.from(byId.values());
 };
 
+/**
+ * Derive pre-boarding status from checklist tasks and/or workflow fields (BGV, assets, IT access).
+ * Manual preBoardingStatus is legacy; UI no longer sends it (Task 17).
+ * @param {object} placementLike
+ * @returns {'Pending'|'In Progress'|'Completed'}
+ */
+const derivePreBoardingStatus = (placementLike) => {
+  const tasks = placementLike?.preBoardingTasks;
+  if (Array.isArray(tasks) && tasks.length > 0) {
+    const required = tasks.filter((t) => t.required);
+    if (required.length > 0) {
+      if (required.every((t) => t.done)) return 'Completed';
+      if (required.some((t) => t.done)) return 'In Progress';
+      return 'Pending';
+    }
+  }
+
+  const bvStatus = placementLike?.backgroundVerification?.status ?? 'Pending';
+  if (bvStatus === 'Completed' || bvStatus === 'Verified') return 'Completed';
+  const assets = placementLike?.assetAllocation ?? [];
+  const itAccess = placementLike?.itAccess ?? [];
+  if (
+    bvStatus === 'In Progress' ||
+    (Array.isArray(assets) && assets.length > 0) ||
+    (Array.isArray(itAccess) && itAccess.length > 0)
+  ) {
+    return 'In Progress';
+  }
+  return 'Pending';
+};
+
 const recomputePreBoardingStatus = (placement) => {
-  const tasks = placement.preBoardingTasks;
-  if (!Array.isArray(tasks) || tasks.length === 0) return;
-  const required = tasks.filter((t) => t.required);
-  if (required.length === 0) return;
-  if (required.every((t) => t.done)) placement.preBoardingStatus = 'Completed';
-  else if (required.some((t) => t.done)) placement.preBoardingStatus = 'In Progress';
-  else placement.preBoardingStatus = 'Pending';
+  placement.preBoardingStatus = derivePreBoardingStatus(placement);
+};
+
+const plainSubdoc = (value) => {
+  if (!value) return {};
+  if (typeof value.toObject === 'function') return value.toObject();
+  return { ...value };
+};
+
+/**
+ * Merge incoming PATCH fields into a snapshot used for gate checks and persisted status derivation.
+ */
+const buildPreboardingSnapshot = (placement, updateBody = {}) => {
+  const merged = {
+    preBoardingStatus:
+      updateBody.preBoardingStatus !== undefined ? updateBody.preBoardingStatus : placement.preBoardingStatus,
+    preBoardingTasks: Array.isArray(updateBody.preBoardingTasks)
+      ? mergeTaskList(placement.preBoardingTasks, updateBody.preBoardingTasks) || placement.preBoardingTasks
+      : placement.preBoardingTasks,
+    backgroundVerification: {
+      ...plainSubdoc(placement.backgroundVerification),
+      ...(updateBody.backgroundVerification || {}),
+    },
+    assetAllocation: Array.isArray(updateBody.assetAllocation)
+      ? updateBody.assetAllocation
+      : placement.assetAllocation || [],
+    itAccess: Array.isArray(updateBody.itAccess) ? updateBody.itAccess : placement.itAccess || [],
+  };
+  if (updateBody.preBoardingStatus === undefined) {
+    merged.preBoardingStatus = derivePreBoardingStatus(merged);
+  }
+  return merged;
 };
 
 /**
  * Merge incoming PATCH fields into a plain snapshot so Joined/pre-boarding gate matches what this save will persist.
- * Without this, changing Pre-boarding status + Placement status in one request failed because gate ran on stale DB values.
+ * Without this, changing workflow fields + Placement status in one request failed because gate ran on stale DB values.
  */
 const snapshotPlacementForPreboardingGate = (placement, updateBody) => {
-  let preBoardingStatus = placement.preBoardingStatus;
-  let preBoardingTasks = placement.preBoardingTasks;
-  if (updateBody.preBoardingStatus !== undefined) {
-    preBoardingStatus = updateBody.preBoardingStatus;
-  }
-  if (Array.isArray(updateBody.preBoardingTasks)) {
-    preBoardingTasks = mergeTaskList(placement.preBoardingTasks, updateBody.preBoardingTasks) || placement.preBoardingTasks;
-    const tmp = { preBoardingStatus, preBoardingTasks };
-    recomputePreBoardingStatus(tmp);
-    preBoardingStatus = tmp.preBoardingStatus;
-    preBoardingTasks = tmp.preBoardingTasks;
-  }
-  return { preBoardingStatus, preBoardingTasks };
+  const snap = buildPreboardingSnapshot(placement, updateBody);
+  return { preBoardingStatus: snap.preBoardingStatus, preBoardingTasks: snap.preBoardingTasks };
 };
 
 /**
@@ -204,15 +280,20 @@ const explainPreboardingGateBlock = (placement, updateBody, gateBasis) => {
   }
 
   const pb = gateBasis.preBoardingStatus || 'Pending';
+  const targetStatus = updateBody.status === 'Onboarding' ? 'Onboarding' : 'Joined';
+  const bvStatus =
+    updateBody.backgroundVerification?.status ?? placement.backgroundVerification?.status ?? 'Pending';
   const message = [
-    'Cannot move this hire to Joined yet.',
+    `Cannot move this hire to ${targetStatus} yet.`,
     '',
-    `Reason: pre-boarding must show as Completed before onboarding.`,
+    'Reason: pre-boarding must be completed before onboarding.',
     pb !== 'Completed'
-      ? `After applying your edits, status would still be "${pb}" (saved on server before this update was "${placement.preBoardingStatus ?? 'Pending'}").`
+      ? `After applying your edits, pre-boarding would still be "${pb}" (currently "${placement.preBoardingStatus ?? 'Pending'}" on record).`
       : '',
     '',
-    'What to do: set Pre-boarding status to Completed and save again.',
+    bvStatus !== 'Completed' && bvStatus !== 'Verified'
+      ? 'What to do: set Background verification status to Completed (or Verified), then save again.'
+      : 'What to do: finish required pre-boarding steps (background verification and any checklist items), then save again.',
     'If an approved exception applies, enable “Override pre-boarding gate” and save.',
   ]
     .filter(Boolean)
@@ -290,6 +371,9 @@ const emptyPaginateResult = (options) => {
     totalResults: 0,
   };
 };
+
+const PLACEMENT_LIST_PROMOTION_BACKFILL_MS = 60000;
+let lastPlacementListPromotionBackfillAt = 0;
 
 /**
  * Query placements with filter
@@ -375,6 +459,17 @@ const queryPlacements = async (filter, options, currentUser) => {
         stripPlacementPlain(plain);
         return plain;
       });
+    }
+  }
+
+  const statusFilterRaw = filter.status ? String(filter.status) : '';
+  if (/Onboarding|Joined/.test(statusFilterRaw)) {
+    const now = Date.now();
+    if (now - lastPlacementListPromotionBackfillAt > PLACEMENT_LIST_PROMOTION_BACKFILL_MS) {
+      lastPlacementListPromotionBackfillAt = now;
+      import('./employeeRolePromotion.service.js')
+        .then(({ promoteAllEligibleCandidateOwnersFromScheduler }) => promoteAllEligibleCandidateOwnersFromScheduler())
+        .catch((e) => logger.warn(`onboarding list promotion backfill: ${e?.message || e}`));
     }
   }
 
@@ -485,7 +580,8 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     // Previously only Joined was gated, allowing Pending → Onboarding to enter the onboarding stage
     // (and set `onboardingCompletedAt`) while pre-boarding tasks were still incomplete.
     if (updateBody.status === 'Onboarding' || updateBody.status === 'Joined') {
-      if (updateBody.status === 'Joined' && !placement.joiningDate) {
+      const effectiveJoiningDate = resolveEffectiveJoiningDate(placement, updateBody);
+      if (updateBody.status === 'Joined' && !effectiveJoiningDate) {
         throw new ApiError(
           httpStatus.UNPROCESSABLE_ENTITY,
           'Joining date is required before marking as Joined',
@@ -557,9 +653,6 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   if (updateBody.notes !== undefined) {
     placement.notes = updateBody.notes;
   }
-  if (updateBody.preBoardingStatus) {
-    placement.preBoardingStatus = updateBody.preBoardingStatus;
-  }
   if (updateBody.backgroundVerification && typeof updateBody.backgroundVerification === 'object') {
     if (!placement.backgroundVerification) {
       placement.backgroundVerification = { status: 'Pending' };
@@ -591,6 +684,15 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   }
   if (Array.isArray(updateBody.preBoardingTasks)) {
     placement.preBoardingTasks = mergeTaskList(placement.preBoardingTasks, updateBody.preBoardingTasks) || placement.preBoardingTasks;
+  }
+  if (updateBody.preBoardingStatus) {
+    placement.preBoardingStatus = updateBody.preBoardingStatus;
+  } else if (
+    Array.isArray(updateBody.preBoardingTasks) ||
+    (updateBody.backgroundVerification && typeof updateBody.backgroundVerification === 'object') ||
+    Array.isArray(updateBody.assetAllocation) ||
+    Array.isArray(updateBody.itAccess)
+  ) {
     recomputePreBoardingStatus(placement);
   }
   if (Array.isArray(updateBody.onboardingTasks)) {
@@ -698,15 +800,6 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     const { notify, plainTextEmailBody } = await import('./notification.service.js');
     const { assignDefaultTrainingOnJoined } = await import('./placementTrainingHook.service.js');
     const emp = await Employee.findById(placement.candidate).select('email fullName referredByUserId owner').lean();
-    try {
-      if (emp?.owner) {
-        const { promoteCandidateOwnerToEmployeeRole } = await import('./employeeRolePromotion.service.js');
-        await promoteCandidateOwnerToEmployeeRole(emp.owner, { employeeId: emp._id });
-      }
-    } catch (e) {
-      const log = (await import('../config/logger.js')).default;
-      log.warn(`promoteCandidateOwnerToEmployeeRole on Joined: ${e?.message || e}`);
-    }
     if (emp?.referredByUserId) {
       try {
         const { createActivityLog } = await import('./activityLog.service.js');
@@ -787,7 +880,25 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     }
   }
 
+  const justJoined = placement.status === 'Joined' && previousStatus !== 'Joined';
+  const joiningDateUpdated = updateBody.joiningDate !== undefined;
+  if (
+    (placement.status === 'Joined' || placement.status === 'Onboarding') &&
+    (justJoined || joiningDateUpdated || updateBody.status !== undefined)
+  ) {
+    await tryPromotePlacementCandidateIfEligible(placement);
+  }
+
   return getPlacementById(placement._id, currentUser);
 };
 
-export { queryPlacements, getPlacementById, updatePlacementStatus, listAuditForPlacementId, syncJoiningDateFromPlacement };
+export {
+  queryPlacements,
+  getPlacementById,
+  updatePlacementStatus,
+  listAuditForPlacementId,
+  syncJoiningDateFromPlacement,
+  derivePreBoardingStatus,
+  snapshotPlacementForPreboardingGate,
+  isPreboardingGateSatisfied,
+};

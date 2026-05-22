@@ -6,6 +6,7 @@ import User from '../models/user.model.js';
 import Employee from '../models/employee.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
+import { validatePunchIn as policyValidatePunchIn, validatePunchOut as policyValidatePunchOut } from './attendancePolicy.service.js';
 import {
   aggregateDailyCappedWorkMs,
   computeDurationMs,
@@ -105,13 +106,19 @@ const getHolidayDates = (holiday) => {
  * @param {Object} body - { punchInTime?, notes?, timezone? }
  */
 const punchIn = async (studentId, body = {}) => {
+  const punchInTime = body.punchInTime ? new Date(body.punchInTime) : new Date();
+  const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
+
+  const policyDecision = await policyValidatePunchIn(studentId, punchInTime, timezone);
+  if (!policyDecision.allowed) {
+    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch in not allowed', true, '', policyDecision.reason);
+  }
+
   const student = await Student.findById(studentId).populate('user', 'name email').populate('shift', 'timezone');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  const punchInTime = body.punchInTime ? new Date(body.punchInTime) : new Date();
-  const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
   const notes = body.notes != null ? String(body.notes) : '';
 
   const effectiveTz = student.shift?.timezone || timezone;
@@ -171,12 +178,19 @@ const punchIn = async (studentId, body = {}) => {
  * Punch out for a student. Finds active punch in today, yesterday, or day-before-yesterday.
  */
 const punchOut = async (studentId, body = {}) => {
+  const punchOutTime = body.punchOutTime ? new Date(body.punchOutTime) : new Date();
+  const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
+
+  const policyDecision = await policyValidatePunchOut(studentId, punchOutTime, timezone);
+  if (!policyDecision.allowed) {
+    const errorCode = policyDecision.reason === 'NO_ACTIVE_PUNCH' ? 'NO_ACTIVE_PUNCH' : policyDecision.reason;
+    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch out not allowed', true, '', errorCode);
+  }
+
   const student = await Student.findById(studentId).populate('user', 'email').populate('shift', 'name timezone startTime endTime');
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-
-  const punchOutTime = body.punchOutTime ? new Date(body.punchOutTime) : new Date();
   const notes = body.notes != null ? String(body.notes) : '';
 
   const now = new Date();

@@ -11,7 +11,7 @@ import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
-import { getPublicMeetingUrl } from '../utils/meetingPublicUrl.js';
+import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
@@ -216,8 +216,14 @@ const resolveInviteeDisplayName = (meeting, emailAddress) => {
   return local || 'Guest';
 };
 
+/** In-app notification payload for interview meetings (relative join path + metadata for legacy fallback). */
+const interviewMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
+  link: getInAppMeetingLink(meeting.meetingId, invite),
+  relatedEntity: { type: 'meeting', id: meeting.meetingId },
+  metadata: { meetingId: meeting.meetingId, meetingKind: 'interview', ...extra },
+});
+
 /**
- * Collect all unique emails to send invitation to (hosts + emailInvites + optional candidate/recruiter)
  * @param {Object} meeting
  * @returns {string[]}
  */
@@ -343,7 +349,7 @@ const createMeeting = async (body, userId) => {
         type: 'meeting',
         title: meeting.title || 'Meeting invitation',
         message: `Scheduled: ${scheduled}`,
-        link: personalUrl,
+        ...interviewMeetingNotificationFields(meeting, { name: inviteName, email: to }),
       }).catch(() => {});
     }).catch(() => {});
   });
@@ -705,7 +711,7 @@ const resendMeetingInvitations = async (id) => {
       type: 'meeting',
       title: meeting.title || 'Meeting invitation',
       message: `Scheduled: ${scheduled}`,
-      link: personalUrl,
+      ...interviewMeetingNotificationFields(meeting, { name: inviteName, email: to }),
     }).catch(() => {});
   });
   return { sent };
@@ -919,7 +925,7 @@ export const sendUpcomingMeetingReminders = async () => {
               type: 'meeting_reminder',
               title: 'Interview reminder',
               message,
-              link,
+              ...interviewMeetingNotificationFields(m, { name: inviteName, email }),
             });
           } catch (err) {
             logger.warn(`T-15 in-app notify failed for ${email}: ${err?.message || err}`);
@@ -1047,7 +1053,13 @@ export const sendInterviewConclusionNotifications = async () => {
             type: 'meeting',
             title: 'Interview ended — record result',
             message,
-            link,
+            link: '/ats/interviews',
+            relatedEntity: { type: 'meeting', id: m.meetingId },
+            metadata: {
+              meetingId: m.meetingId,
+              meetingKind: 'interview',
+              navTarget: 'interviews_list',
+            },
           });
         }
       },
