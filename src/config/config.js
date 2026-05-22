@@ -71,6 +71,11 @@ const envVarsSchema = Joi.object()
     MINIO_SECRET_KEY: Joi.string().optional().default('minioadmin123').description('MinIO secret key'),
     MINIO_BUCKET: Joi.string().optional().default('recordings').description('MinIO bucket for recordings'),
     LIVEKIT_S3_BUCKET: Joi.string().optional().description('S3 bucket for recordings (production); must match where Egress uploads'),
+    LIVEKIT_AGENTS_ENABLED: Joi.boolean()
+      .truthy('true', '1')
+      .falsy('false', '0')
+      .default(true)
+      .description('Dispatch meeting-summary and meeting-assistant LiveKit agents (set false to disable)'),
 
     // Bolna Calling
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
@@ -382,6 +387,7 @@ const config = {
       bucket: envVars.MINIO_BUCKET || 'recordings',
     },
     s3Bucket: envVars.LIVEKIT_S3_BUCKET,
+    agentsEnabled: envVars.LIVEKIT_AGENTS_ENABLED,
   },
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',

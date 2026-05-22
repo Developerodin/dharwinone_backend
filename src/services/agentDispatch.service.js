@@ -28,7 +28,15 @@ export function buildDispatchMetadata({ meetingId, recordingId, hmacToken }) {
   });
 }
 
+function agentsEnabled() {
+  return config.livekit?.agentsEnabled !== false;
+}
+
 export async function dispatchSummaryAgent({ meetingId, recordingId }) {
+  if (!agentsEnabled()) {
+    logger.info('[AgentDispatch] summary agent disabled (LIVEKIT_AGENTS_ENABLED=false)', { meetingId });
+    return null;
+  }
   if (!dispatchClient) {
     throw new Error('AgentDispatchClient not initialized — LiveKit credentials missing');
   }
@@ -93,6 +101,10 @@ async function hasActiveDispatch(meetingId, agentName) {
  * Idempotent per meetingId — does nothing if an active assistant dispatch already exists.
  */
 export async function dispatchAssistantAgent({ meetingId }) {
+  if (!agentsEnabled()) {
+    logger.info('[AgentDispatch] assistant agent disabled (LIVEKIT_AGENTS_ENABLED=false)', { meetingId });
+    return null;
+  }
   if (!dispatchClient) {
     throw new Error('AgentDispatchClient not initialized — LiveKit credentials missing');
   }

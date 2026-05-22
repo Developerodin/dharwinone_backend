@@ -436,10 +436,12 @@ const startRecording = async (roomName) => {
         meetingId: roomName,
         recordingId: pending?._id || null,
       });
-      await Recording.findByIdAndUpdate(pending._id, {
-        aiProcessingStatus: 'dispatching',
-        agentDispatchId: dispatchId,
-      });
+      if (dispatchId) {
+        await Recording.findByIdAndUpdate(pending._id, {
+          aiProcessingStatus: 'dispatching',
+          agentDispatchId: dispatchId,
+        });
+      }
     } catch (err) {
       logger.warn('[LiveKit] agent dispatch failed (recording continues)', { roomName, error: err.message });
       try {
