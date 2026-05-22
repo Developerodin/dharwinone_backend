@@ -56,6 +56,8 @@ const createOffer = {
       offerValidityDate: Joi.date().optional().allow(null),
       notes: Joi.string().trim().optional().allow('', null),
       ...letterBodyKeys,
+      compensationType: Joi.forbidden(),
+      compensationSource: Joi.forbidden(),
     })
     .required(),
 };
@@ -79,6 +81,8 @@ const updateOffer = {
       notes: Joi.string().trim().optional().allow('', null),
       rejectionReason: Joi.string().trim().optional().allow('', null),
       ...letterBodyKeys,
+      compensationType: Joi.forbidden(),
+      compensationSource: Joi.forbidden(),
     })
     .min(1),
 };
@@ -86,6 +90,18 @@ const updateOffer = {
 const letterDefaults = {
   query: Joi.object().keys({
     positionTitle: Joi.string().trim().allow(''),
+    jobId: Joi.string().custom(objectId).optional(),
+  }),
+};
+
+const shareOffer = {
+  params: Joi.object().keys({ offerId: Joi.string().custom(objectId).required() }),
+  body: Joi.object().keys({
+    to: Joi.string().email().optional(),
+    cc: Joi.array().items(Joi.string().email()).optional(),
+    bcc: Joi.array().items(Joi.string().email()).optional(),
+    subject: Joi.string().allow('').optional(),
+    body: Joi.string().allow('').optional(),
   }),
 };
 
@@ -143,4 +159,5 @@ export {
   letterDefaults,
   generateLetter,
   enhanceRoles,
+  shareOffer,
 };

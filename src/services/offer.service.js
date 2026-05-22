@@ -11,7 +11,8 @@ import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefa
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import logger from '../config/logger.js';
-import { OFFER_STATUSES } from '../constants/atsPipeline.js';
+import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
+import * as emailService from './email.service.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
 
@@ -132,6 +133,10 @@ const applyLetterFieldsFromUpdate = (offer, updateBody) => {
   take('letterAddress');
   take('positionTitle');
   take('jobType');
+  if (offer.isModified('jobType')) {
+    offer.compensationType = compensationTypeForJobType(offer.jobType);
+    offer.compensationSource = 'jobTypeDerived';
+  }
   if (updateBody.weeklyHours !== undefined) {
     offer.weeklyHours = [25, 40].includes(Number(updateBody.weeklyHours)) ? Number(updateBody.weeklyHours) : 40;
     delete updateBody.weeklyHours;
@@ -417,6 +422,8 @@ const createOffer = async (jobApplicationId, payload, userId) => {
     ...(Array.isArray(payload.employmentEligibilityLines) && { employmentEligibilityLines: payload.employmentEligibilityLines }),
     ...(payload.supervisor != null && typeof payload.supervisor === 'object' && { supervisor: payload.supervisor }),
     ...(payload.letterDate != null && { letterDate: new Date(payload.letterDate) }),
+    compensationType: compensationTypeForJobType(payload.jobType),
+    compensationSource: 'jobTypeDerived',
   });
 
   await application.updateOne({ status: 'Offered' });
@@ -510,66 +517,73 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       }
       if (oldStatus !== 'Accepted') {
         offer.acceptedAt = new Date();
-      }
-      if (offer.jobApplication) {
-        await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' });
-        await syncReferralPipelineStatusForCandidate(offer.candidate);
-      }
-      const candidate = await Employee.findById(offer.candidate)
-        .select('employeeId joiningDate referredByUserId referralJti attributionLockedAt referralContext referralJobTitle')
-        .lean();
-      // BUG-3 FIX: Use findOneAndUpdate upsert to avoid race condition between exists() check and create().
-      // BUG-1 FIX: Only include joiningDate in the placement when it is set — Placement schema requires it.
-      // EC-1 FIX: If the existing placement is Cancelled or Deferred (from a previous accept cycle),
-      //           create a fresh Pending placement instead of leaving the candidate in a terminal state.
-      const existingPlacement = await Placement.findOne({ offer: offer._id }).select('status').lean();
-      const needsFreshPlacement = !existingPlacement || existingPlacement.status === 'Cancelled';
-      const placementBase = {
-        offer: offer._id,
-        candidate: offer.candidate,
-        job: offer.job,
-        employeeId: candidate?.employeeId || null,
-        status: 'Pending',
-        createdBy: offer.createdBy,
-        preBoardingStatus: 'Pending',
-        preBoardingTasks: [],
-        onboardingTasks: [],
-        // B2 fix: denormalize referral attribution onto placement.
-        referredByUserId: candidate?.referredByUserId || null,
-        referralLeadJti: candidate?.referralJti || null,
-        referralAttributionLockedAt: candidate?.attributionLockedAt || null,
-        referralContext: candidate?.referralContext || null,
-        referralJobTitle: candidate?.referralJobTitle || null,
-      };
-      if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
+        const candidate = await Employee.findById(offer.candidate)
+          .select('employeeId joiningDate referredByUserId referralJti attributionLockedAt referralContext referralJobTitle')
+          .lean();
+        const existingPlacement = await Placement.findOne({ offer: offer._id }).select('status _id').lean();
+        const needsFreshPlacement = !existingPlacement || existingPlacement.status === 'Cancelled';
+        const placementBase = {
+          offer: offer._id,
+          candidate: offer.candidate,
+          job: offer.job,
+          employeeId: candidate?.employeeId || null,
+          status: 'Pending',
+          createdBy: offer.createdBy,
+          preBoardingStatus: 'Pending',
+          preBoardingTasks: [],
+          onboardingTasks: [],
+          referredByUserId: candidate?.referredByUserId || null,
+          referralLeadJti: candidate?.referralJti || null,
+          referralAttributionLockedAt: candidate?.attributionLockedAt || null,
+          referralContext: candidate?.referralContext || null,
+          referralJobTitle: candidate?.referralJobTitle || null,
+        };
+        if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
 
-      if (needsFreshPlacement) {
-        try {
-          if (existingPlacement?.status === 'Cancelled') {
-            // EC-1 FIX: Re-accept after cancel.
-            // The Placement schema has unique:true on `offer`, so we must detach the old
-            // Cancelled record's offer ref before creating a fresh Pending one.
-            // The old record stays for audit history (soft detach: offer → null).
-            await Placement.updateOne(
-              { _id: existingPlacement._id },
-              { $set: { _cancelledOfferRef: offer._id }, $unset: { offer: 1 } }
-            );
-            await Placement.create(placementBase);
-          } else {
-            // Normal first accept: atomic upsert to avoid race condition.
-            await Placement.findOneAndUpdate(
-              { offer: offer._id },
-              { $setOnInsert: placementBase },
-              { upsert: true, new: false }
-            );
+        const employeeSnapshot = {
+          compensationType: offer.compensationType || compensationTypeForJobType(offer.jobType),
+          compensationSource: offer.compensationSource || 'jobTypeDerived',
+        };
+        if (offer.joiningDate) employeeSnapshot.joiningDate = offer.joiningDate;
+
+        const persistAcceptLifecycle = async (session) => {
+          const opts = session ? { session } : {};
+          await offer.save(opts);
+          if (offer.jobApplication) {
+            await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' }, opts);
           }
-        } catch (e) {
-          // E11000: another concurrent request beat us — safe to ignore.
-          if (e?.code !== 11000) throw e;
+          if (needsFreshPlacement) {
+            try {
+              if (existingPlacement?.status === 'Cancelled') {
+                await Placement.updateOne(
+                  { _id: existingPlacement._id },
+                  { $set: { _cancelledOfferRef: offer._id }, $unset: { offer: 1 } },
+                  opts
+                );
+                await Placement.create([placementBase], opts);
+              } else {
+                await Placement.findOneAndUpdate(
+                  { offer: offer._id },
+                  { $setOnInsert: placementBase },
+                  { upsert: true, new: false, ...opts }
+                );
+              }
+            } catch (e) {
+              if (e?.code !== 11000) throw e;
+            }
+          }
+          await Employee.findByIdAndUpdate(offer.candidate, employeeSnapshot, opts);
+        };
+
+        const session = await mongoose.startSession();
+        try {
+          await session.withTransaction(() => persistAcceptLifecycle(session));
+        } finally {
+          session.endSession();
         }
-      }
-      if (offer.joiningDate) {
-        await Employee.findByIdAndUpdate(offer.candidate, { joiningDate: offer.joiningDate });
+        if (offer.jobApplication) {
+          await syncReferralPipelineStatusForCandidate(offer.candidate);
+        }
       }
     } else if (newStatus === 'Rejected') {
       offer.rejectedAt = new Date();
@@ -914,6 +928,61 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);
 
+/** Cap on derived responsibilities — long HTML descriptions otherwise explode the PDF/email. */
+const MAX_ROLE_RESPONSIBILITIES = 12;
+
+/**
+ * Derive offer-letter role responsibilities from the selected job.
+ * Precedence: job description (one bullet per line) → skillRequirements summary → [].
+ */
+export const deriveRoleResponsibilities = (job) => {
+  if (!job) return [];
+  const description = typeof job.jobDescription === 'string' ? job.jobDescription : '';
+  const text = description
+    .replace(/<\/(p|div|li|ul|ol|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '');
+  const lines = text
+    .split('\n')
+    .map((l) => l.replace(/^[\s•\-*]+/, '').trim())
+    .filter(Boolean);
+  if (lines.length) return lines.slice(0, MAX_ROLE_RESPONSIBILITIES);
+  if (Array.isArray(job.skillRequirements) && job.skillRequirements.length) {
+    return job.skillRequirements
+      .filter((s) => s && s.name)
+      .map((s) => `Apply ${s.name} in day-to-day responsibilities`)
+      .slice(0, MAX_ROLE_RESPONSIBILITIES);
+  }
+  return [];
+};
+
+/**
+ * Share a saved offer letter with the candidate by email. Idempotent (re-shares allowed).
+ */
+const shareOfferWithCandidate = async (id, currentUser, payload = {}) => {
+  const offer = await getOfferById(id, currentUser);
+  if (!offer.offerLetterGeneratedAt || !offer.offerLetterUrl) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Generate and upload the offer letter before sharing it.'
+    );
+  }
+  const candidate = offer.candidate || {};
+  const to = payload.to || candidate.email;
+  if (!to) throw new ApiError(httpStatus.BAD_REQUEST, 'No candidate email to send to.');
+  await emailService.sendOfferShareEmail(to, {
+    candidateName: candidate.fullName,
+    roleTitle: offer.positionTitle || offer.job?.title,
+    offerLetterUrl: offer.offerLetterUrl,
+    sharedBy: currentUser?.name || currentUser?.email,
+    body: payload.body,
+    subject: payload.subject,
+    cc: payload.cc,
+    bcc: payload.bcc,
+  });
+  return { sharedTo: to };
+};
+
 /**
  * EC-4: Auto-expire offers whose offerValidityDate has passed and are still Sent/Under Negotiation.
  * Called by the candidate scheduler on each run. Does NOT affect Draft/Accepted/Rejected offers.
@@ -988,5 +1057,6 @@ export {
   deleteOfferById,
   generateOfferLetter,
   getLetterDefaultsForTitle,
+  shareOfferWithCandidate,
   STATUS_VALUES,
 };
