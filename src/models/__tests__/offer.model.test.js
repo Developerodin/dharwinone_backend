@@ -36,3 +36,16 @@ test('Offer.compensationType accepts unpaid', () => {
   const err = offer.validateSync();
   assert.ok(!err?.errors?.compensationType, 'unpaid should be valid');
 });
+
+test('Offer.compensationSource rejects values outside the enum', () => {
+  const offer = new Offer({
+    offerCode: 'OFF-TEST-0003',
+    jobApplication: new mongoose.Types.ObjectId(),
+    job: new mongoose.Types.ObjectId(),
+    candidate: new mongoose.Types.ObjectId(),
+    createdBy: new mongoose.Types.ObjectId(),
+    compensationSource: 'manualOverride',
+  });
+  const err = offer.validateSync();
+  assert.ok(err?.errors?.compensationSource, 'expected compensationSource error');
+});
