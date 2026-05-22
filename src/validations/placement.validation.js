@@ -1,7 +1,8 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
+import { PLACEMENT_STATUSES, PRE_BOARDING_STATUSES } from '../constants/atsPipeline.js';
 
-const PLACEMENT_STATUSES = ['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled'];
+const PLACEMENT_STATUS_SET = new Set(PLACEMENT_STATUSES);
 
 const getPlacements = {
   query: Joi.object().keys({
@@ -16,13 +17,15 @@ const getPlacements = {
           .map((s) => s.trim())
           .filter(Boolean);
         for (const p of parts) {
-          if (!PLACEMENT_STATUSES.includes(p)) {
+          if (!PLACEMENT_STATUS_SET.has(p)) {
             return helpers.error('any.invalid');
           }
         }
         return value;
       }),
-    preBoardingStatus: Joi.string().valid('Pending', 'In Progress', 'Completed').optional(),
+    preBoardingStatus: Joi.string()
+      .valid(...PRE_BOARDING_STATUSES)
+      .optional(),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().optional(),
     page: Joi.number().integer().optional(),
@@ -70,8 +73,12 @@ const updatePlacement = {
   }),
   body: Joi.object()
     .keys({
-      status: Joi.string().valid('Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled').optional(),
-      preBoardingStatus: Joi.string().valid('Pending', 'In Progress', 'Completed').optional(),
+      status: Joi.string()
+        .valid(...PLACEMENT_STATUSES)
+        .optional(),
+      preBoardingStatus: Joi.string()
+        .valid(...PRE_BOARDING_STATUSES)
+        .optional(),
       joiningDate: Joi.date().optional(),
       notes: Joi.string().trim().optional().allow('', null),
       preboardingGateBypass: Joi.boolean().optional(),

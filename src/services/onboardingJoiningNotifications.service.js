@@ -49,7 +49,7 @@ export async function sendJoiningDateFinalizedEmails(placementId) {
   if (!pl.suppressCandidateNotifications && emp.email) {
     tasks.push(
       notifyByEmail(emp.email, {
-        type: 'placement',
+        type: 'placement_update',
         title: 'Joining date confirmed',
         message: baseMsgCandidate,
         link: linkCandidate,
@@ -71,7 +71,7 @@ export async function sendJoiningDateFinalizedEmails(placementId) {
     if (agentUser?.email) {
       tasks.push(
         notify(agentId, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Joining date confirmed',
           message: baseMsgAgent,
           link: linkAgent,
@@ -165,7 +165,7 @@ export async function runJoinedOnboardingJoiningReminders() {
       if (!pl.suppressCandidateNotifications && rm.email) {
         promises.push(
           notifyByEmail(rm.email, {
-            type: 'placement',
+            type: 'placement_update',
             title: kind === 't1' ? 'Joining tomorrow' : 'Joining today',
             message: candMsg,
             link: linkC,
@@ -180,7 +180,7 @@ export async function runJoinedOnboardingJoiningReminders() {
       if (agentId) {
         promises.push(
           notify(agentId, {
-            type: 'placement',
+            type: 'placement_update',
             title: kind === 't1' ? 'Joining tomorrow' : 'Joining today',
             message: agMsg,
             link: linkA,

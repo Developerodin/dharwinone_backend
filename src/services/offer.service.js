@@ -11,8 +11,9 @@ import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefa
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import logger from '../config/logger.js';
+import { OFFER_STATUSES } from '../constants/atsPipeline.js';
 
-const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
+const STATUS_VALUES = OFFER_STATUSES;
 
 const DEFAULT_SUPERVISOR = {
   firstName: 'Jason',

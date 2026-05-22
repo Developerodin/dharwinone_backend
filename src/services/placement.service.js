@@ -9,6 +9,7 @@ import { recordPlacementAudit } from './placementAudit.service.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
+import { ALLOWED_TRANSITIONS, PLACEMENT_STATUSES } from '../constants/atsPipeline.js';
 
 /** UTC calendar day string YYYY-MM-DD for stable comparison of stored dates. */
 const joinDateYmdUtc = (d) => {
@@ -65,7 +66,7 @@ const syncJoiningDateFromPlacement = async (placement) => {
   await Promise.all(tasks);
 };
 
-const VALID_STATUS = new Set(['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled']);
+const VALID_STATUS = new Set(PLACEMENT_STATUSES);
 
 /**
  * Lifecycle:
@@ -76,12 +77,11 @@ const VALID_STATUS = new Set(['Pending', 'Onboarding', 'Joined', 'Deferred', 'Ca
  *   Cancelled  → Pending | Onboarding | Deferred             (re-open)
  */
 const allowedTransitions = {
-  Pending: new Set(['Onboarding', 'Joined', 'Deferred', 'Cancelled']),
-  Onboarding: new Set(['Pending', 'Joined', 'Deferred', 'Cancelled']),
-  Joined: new Set(['Deferred']),
-  Deferred: new Set(['Pending', 'Onboarding', 'Joined', 'Cancelled']),
-  /** Re-open a cancelled hire back into the pre-boarding queue. */
-  Cancelled: new Set(['Pending', 'Onboarding', 'Deferred']),
+  Pending: new Set(ALLOWED_TRANSITIONS.placement.Pending),
+  Onboarding: new Set(ALLOWED_TRANSITIONS.placement.Onboarding),
+  Joined: new Set(ALLOWED_TRANSITIONS.placement.Joined),
+  Deferred: new Set(ALLOWED_TRANSITIONS.placement.Deferred),
+  Cancelled: new Set(ALLOWED_TRANSITIONS.placement.Cancelled),
 };
 
 /**
@@ -626,7 +626,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       if (creatorId) {
         const msg = `${candName} has completed all pre-boarding tasks and is ready to join. You can now mark them as Joined.`;
         notify(creatorId, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Pre-boarding complete',
           message: msg,
           link: '/ats/pre-boarding',
@@ -655,7 +655,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       if (creatorId) {
         const msg = `${candName} has completed all onboarding tasks. Their onboarding is now complete.`;
         notify(creatorId, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Onboarding complete',
           message: msg,
           link: '/ats/onboarding',
@@ -669,7 +669,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       if (emp?.referredByUserId && String(emp.referredByUserId) !== String(creatorId)) {
         const referrerMsg = `Your referral ${candName} has completed onboarding.`;
         notify(emp.referredByUserId, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Your referral completed onboarding',
           message: referrerMsg,
           link: '/ats/onboarding',
@@ -740,7 +740,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
         try {
           const referrerMsg = `Your referral ${emp.fullName || 'a candidate'} has joined the company.`;
           notify(emp.referredByUserId, {
-            type: 'placement',
+            type: 'placement_update',
             title: 'Your referral has joined',
             message: referrerMsg,
             link: '/ats/onboarding',
@@ -760,7 +760,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
         const path = '/ats/onboarding';
         const msg = 'Welcome! Your joining record is now active.';
         notify(placement.createdBy, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Placement joined',
           message: `Candidate ${emp.fullName || ''} moved to Joined`,
           link: path,
@@ -768,7 +768,7 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
         // eslint-disable-next-line import/no-extraneous-dependencies
         const emailMod = await import('./notification.service.js');
         emailMod.notifyByEmail(emp.email, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'You have joined',
           message: msg,
           link: path,

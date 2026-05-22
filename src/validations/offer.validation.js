@@ -1,7 +1,8 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
+import { OFFER_STATUSES } from '../constants/atsPipeline.js';
 
-const STATUS_VALUES = ['Draft', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'];
+const STATUS_VALUES = OFFER_STATUSES;
 
 const ctcBreakdown = Joi.object({
   base: Joi.number().optional().min(0),

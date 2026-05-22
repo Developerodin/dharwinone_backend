@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 import { normalizeTimezone, isValidTimezone } from '../utils/timezone.js';
+import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
 
 const hostSchema = Joi.object({
   nameOrRole: Joi.string().allow('', null).trim(),
@@ -80,7 +81,7 @@ const createMeeting = {
 const getMeetings = {
   query: Joi.object().keys({
     title: Joi.string().trim(),
-    status: Joi.string().valid('scheduled', 'ended', 'cancelled'),
+    status: Joi.string().valid(...INTERVIEW_STATUSES),
     sortBy: Joi.string().default('-createdAt'),
     limit: Joi.number().integer().min(1).max(100).default(10),
     page: Joi.number().integer().min(1).default(1),
@@ -117,8 +118,8 @@ const updateMeeting = {
       candidate: candidateRefSchema.allow(null),
       recruiter: recruiterRefSchema.allow(null),
       notes: Joi.string().allow('', null).trim(),
-      status: Joi.string().valid('scheduled', 'ended', 'cancelled'),
-      interviewResult: Joi.string().valid('pending', 'selected', 'rejected'),
+      status: Joi.string().valid(...INTERVIEW_STATUSES),
+      interviewResult: Joi.string().valid(...INTERVIEW_RESULTS),
     })
     .min(1),
 };

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
+import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
 
 const meetingSchema = mongoose.Schema(
   {
@@ -114,7 +115,7 @@ const meetingSchema = mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['scheduled', 'ended', 'cancelled'],
+      enum: INTERVIEW_STATUSES,
       default: 'scheduled',
     },
     reminderSentAt: {
@@ -160,7 +161,7 @@ const meetingSchema = mongoose.Schema(
     /** Interview result: pending (not decided), selected, rejected */
     interviewResult: {
       type: String,
-      enum: ['pending', 'selected', 'rejected'],
+      enum: INTERVIEW_RESULTS,
       default: 'pending',
     },
     createdBy: {

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
+import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 const jobApplicationSchema = new mongoose.Schema(
   {
@@ -20,7 +21,7 @@ const jobApplicationSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'],
+      enum: APPLICATION_STATUSES,
       default: 'Applied',
     },
     coverLetter: { type: String, trim: true },

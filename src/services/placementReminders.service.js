@@ -51,7 +51,7 @@ export const runJoiningDateReminders = async () => {
         const path = '/ats/pre-boarding';
         // eslint-disable-next-line no-await-in-loop
         notify(offer.createdBy, {
-          type: 'placement',
+          type: 'placement_update',
           title: 'Upcoming join date (7 days)',
           message: msg,
           link: path,
@@ -73,7 +73,7 @@ export const runJoiningDateReminders = async () => {
           const path = '/ats/pre-boarding';
           // eslint-disable-next-line no-await-in-loop
           notify(offer.createdBy, {
-            type: 'placement',
+            type: 'placement_update',
             title: 'Joining tomorrow',
             message: msg,
             link: path,
@@ -92,7 +92,7 @@ export const runJoiningDateReminders = async () => {
           const cmsg = 'Reminder: your joining date is tomorrow.';
           // eslint-disable-next-line no-await-in-loop
           notifyByEmail(emp.email, {
-            type: 'placement',
+            type: 'placement_update',
             title: 'Joining tomorrow',
             message: cmsg,
             link: '/ats/my-profile',
@@ -120,7 +120,7 @@ export const runJoiningDateReminders = async () => {
           if (t1Map[uid]) continue;
           // eslint-disable-next-line no-await-in-loop
           notify(u._id, {
-            type: 'placement',
+            type: 'placement_update',
             title: 'Joining tomorrow',
             message: 'A candidate you hosted interviews for has their joining date tomorrow.',
             link: '/ats/pre-boarding',

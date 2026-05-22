@@ -4,8 +4,9 @@ import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
+import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
-const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'];
+const STATUS_VALUES = APPLICATION_STATUSES;
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

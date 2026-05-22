@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
+import { OFFER_STATUSES } from '../constants/atsPipeline.js';
 
 const ctcBreakdownSchema = new mongoose.Schema(
   {
@@ -44,7 +45,7 @@ const offerSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Draft', 'Active', 'Sent', 'Under Negotiation', 'Accepted', 'Rejected'],
+      enum: [...OFFER_STATUSES, 'Active'],
       default: 'Draft',
     },
     ctcBreakdown: {

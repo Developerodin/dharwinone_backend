@@ -1,7 +1,8 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
+import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
-const STATUS_VALUES = ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'];
+const STATUS_VALUES = APPLICATION_STATUSES;
 
 const createJobApplication = {
   body: Joi.object()

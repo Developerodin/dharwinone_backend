@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
+import { PLACEMENT_STATUSES, PRE_BOARDING_STATUSES } from '../constants/atsPipeline.js';
 
 /**
  * Placement - created when an offer is Accepted. Tracks the placed candidate.
@@ -36,13 +37,13 @@ const placementSchema = new mongoose.Schema(
       type: String,
       // Lifecycle: Pending (offer accepted, pre-boarding running) → Onboarding
       // (pre-boarding done, awaiting joining-day) → Joined. Deferred/Cancelled are off-ramps.
-      enum: ['Pending', 'Onboarding', 'Joined', 'Deferred', 'Cancelled'],
+      enum: PLACEMENT_STATUSES,
       default: 'Pending',
       index: true,
     },
     preBoardingStatus: {
       type: String,
-      enum: ['Pending', 'In Progress', 'Completed'],
+      enum: PRE_BOARDING_STATUSES,
       default: 'Pending',
       index: true,
     },

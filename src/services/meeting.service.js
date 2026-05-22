@@ -17,6 +17,7 @@ import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
+import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
@@ -24,7 +25,9 @@ const reminderWindowEndMin = () => Number(process.env.REMINDER_WINDOW_END_MIN) |
 const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 600000;
 
 /** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
-const PIPELINE_STATUSES = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'];
+const PIPELINE_STATUSES = APPLICATION_STATUSES.filter((status) =>
+  ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'].includes(status)
+);
 
 /**
  * Resolve job application for an interview's candidate + jobPosition (shared forward / rollback).
