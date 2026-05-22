@@ -132,7 +132,7 @@ const getEmployeeRole = async () => {
 
 /**
  * Distinct Role `_id`s for ATS job-seeker accounts when **Employee** and **Candidate** are separate documents.
- * Must stay aligned with {@link userHasCandidateRole} (either role qualifies).
+ * Must stay aligned with {@link userHasPersonProfileRole} (Employee or Candidate role qualifies).
  * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if neither role exists
  */
 const getAtsJobSeekerRoleIds = async () => {

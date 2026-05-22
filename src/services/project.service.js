@@ -8,7 +8,7 @@ import Sprint from '../models/sprint.model.js';
 import TeamGroup from '../models/teamGroup.model.js';
 import ApiError from '../utils/ApiError.js';
 import { buildSpecialistTaskSlugOrConditions } from '../constants/candidateProjectTaskTypes.js';
-import { userIsAdmin, userHasCandidateRole } from '../utils/roleHelpers.js';
+import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
 import { assignUniqueProjectKey, isProjectKeyDuplicateError } from './pmTaskCode.js';
 
@@ -127,8 +127,8 @@ const queryProjects = async (filter, options) => {
   }
 
   if (!canSeeAll && userId) {
-    const isCandidate = await userHasCandidateRole({ roleIds: userRoleIds });
-    if (isCandidate && mongoose.Types.ObjectId.isValid(String(userId))) {
+    const hasPersonProfile = await userHasPersonProfileRole({ roleIds: userRoleIds });
+    if (hasPersonProfile && mongoose.Types.ObjectId.isValid(String(userId))) {
       const userOid = new mongoose.Types.ObjectId(String(userId));
       /** My Projects (?mine=1): any assigned task. Main Projects list: specialist-slug tasks only. */
       const taskProjectFilter = mineOnly

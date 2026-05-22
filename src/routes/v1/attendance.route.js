@@ -12,6 +12,12 @@ const router = express.Router();
 
 // Get current user's attendance identity (Student or user for Agent). Admins get 404.
 router.get('/me', auth(), attendanceController.getMyStudentForAttendance);
+router.get(
+  '/me/upcoming-holidays',
+  auth(),
+  validate(attendanceValidation.upcomingHolidaysMe),
+  attendanceController.getMyUpcomingHolidays
+);
 
 // User-based attendance (Agent without Student): /me endpoints — auth only; 403 if not allowed
 router.post(

@@ -327,7 +327,13 @@ const getAttendanceIdentity = async (user) => {
     return getStudentById(student.id);
   }
 
-  // No Student: return user-based identity so any non-admin (Candidate, Agent, Manager, etc.) can access attendance via /me APIs without creating a Student.
+  const employee = await Employee.findOne({ owner: userId }).select('_id').lean();
+  if (employee) {
+    const created = await getOrCreateStudentForAttendance(user);
+    if (created) return created;
+  }
+
+  // No Student: return user-based identity so agents can use /me APIs without creating a Student.
   return {
     type: 'user',
     id: userId.toString(),

@@ -25,6 +25,7 @@ const punchOut = {
   body: Joi.object().keys({
     punchOutTime: Joi.date().iso(),
     notes: Joi.string().allow(''),
+    timezone: Joi.string().trim(),
   }),
 };
 
@@ -40,6 +41,7 @@ const punchOutMe = {
   body: Joi.object().keys({
     punchOutTime: Joi.date().iso(),
     notes: Joi.string().allow(''),
+    timezone: Joi.string().trim(),
   }),
 };
 
@@ -213,6 +215,13 @@ const regularizeAttendance = {
   }),
 };
 
+const upcomingHolidaysMe = {
+  query: Joi.object().keys({
+    limit: Joi.number().integer().min(1).max(20),
+    timezone: Joi.string().trim(),
+  }),
+};
+
 export {
   studentIdParam,
   punchIn,
@@ -231,4 +240,5 @@ export {
   removeHolidaysFromStudents,
   assignLeavesToStudents,
   regularizeAttendance,
+  upcomingHolidaysMe,
 };

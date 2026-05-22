@@ -228,8 +228,20 @@ const regularize = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send({ success: true, message: `Regularized ${result.createdOrUpdated} attendance record(s).`, ...result });
 });
 
+const getMyUpcomingHolidays = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id?.toString?.();
+  const timezone =
+    typeof req.query.timezone === 'string' && req.query.timezone.trim()
+      ? req.query.timezone.trim()
+      : undefined;
+  const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+  const result = await attendanceService.getUpcomingAssignedHolidaysForUser(userId, { timezone, limit });
+  res.send({ success: true, data: result });
+});
+
 export default {
   getMyStudentForAttendance,
+  getMyUpcomingHolidays,
   punchIn,
   punchOut,
   punchInMe,

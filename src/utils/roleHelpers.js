@@ -101,11 +101,45 @@ export const validateRoleIdsForAgent = async (roleIds) => {
 };
 
 /**
- * Check if user has the Employee user role (by roleIds), including legacy "Candidate" role name.
+ * ATS job-seeker role (applicant portal — browse jobs, my applications).
  * @param {Object} user - User object with roleIds
  * @returns {Promise<boolean>}
  */
 export const userHasCandidateRole = async (user) => {
+  if (!user) return false;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: 'Candidate',
+    status: 'active',
+  });
+  return !!hasRole;
+};
+
+/**
+ * Internal HRMS staff role (employee dashboard — attendance, tasks, projects).
+ * @param {Object} user - User object with roleIds
+ * @returns {Promise<boolean>}
+ */
+export const userHasEmployeeRole = async (user) => {
+  if (!user) return false;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: 'Employee',
+    status: 'active',
+  });
+  return !!hasRole;
+};
+
+/**
+ * User has a linked person profile (Employee or Candidate role) — resign gates, /me/with-candidate, project mine scope.
+ * @param {Object} user
+ * @returns {Promise<boolean>}
+ */
+export const userHasPersonProfileRole = async (user) => {
   if (!user) return false;
   const roleIds = user?.roleIds || [];
   if (!roleIds.length) return false;

@@ -11,7 +11,10 @@ import JobApplication from '../models/jobApplication.model.js';
 import Impersonation from '../models/impersonation.model.js';
 import ApiError from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
-import { userHasCandidateRole, STAFF_ROLE_NAMES_SKIP_PUBLIC_CANDIDATE_VERIFY } from '../utils/roleHelpers.js';
+import {
+  userHasPersonProfileRole,
+  STAFF_ROLE_NAMES_SKIP_PUBLIC_CANDIDATE_VERIFY,
+} from '../utils/roleHelpers.js';
 import { getResignStatusByOwnerId } from './employee.service.js';
 import logger from '../config/logger.js';
 import { getRoleByName } from './role.service.js';
@@ -187,8 +190,8 @@ const refreshAuth = async (refreshToken, req = null) => {
     const user = await getUserById(payload.sub);
     if (!user || user.status !== 'active') throw new Error();
 
-    const hasCandidateRole = await userHasCandidateRole(user);
-    if (hasCandidateRole) {
+    const hasPersonProfile = await userHasPersonProfileRole(user);
+    if (hasPersonProfile) {
       const { resigned } = await getResignStatusByOwnerId(user._id);
       if (resigned) {
         throw new ApiError(

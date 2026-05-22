@@ -32,7 +32,12 @@ import {
   recommendSkillsForJobRole,
 } from '../services/resumeSkillsExtract.service.js';
 import { getRoleByName } from '../services/role.service.js';
-import { userHasCandidateRole, userIsAdmin, userIsAgent, validateRoleIdsForAgent } from '../utils/roleHelpers.js';
+import {
+  userHasPersonProfileRole,
+  userIsAdmin,
+  userIsAgent,
+  validateRoleIdsForAgent,
+} from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
 import { getPageCapabilities } from '../services/pageCapabilities.service.js';
@@ -448,8 +453,8 @@ const registerMentor = catchAsync(async (req, res) => {
 const login = catchAsync(async (req, res) => {
   const { email, password } = req.body;
   const user = await loginUserWithEmailAndPassword(email, password);
-  const hasCandidateRole = await userHasCandidateRole(user);
-  if (hasCandidateRole) {
+  const hasPersonProfile = await userHasPersonProfileRole(user);
+  if (hasPersonProfile) {
     const { resigned } = await getResignStatusByOwnerId(user._id);
     if (resigned) {
       throw new ApiError(
@@ -637,8 +642,8 @@ const sendCandidateInvitation = catchAsync(async (req, res) => {
 });
 
 const getMe = catchAsync(async (req, res) => {
-  const hasCandidateRole = await userHasCandidateRole(req.user);
-  if (hasCandidateRole) {
+  const hasPersonProfile = await userHasPersonProfileRole(req.user);
+  if (hasPersonProfile) {
     const { resigned } = await getResignStatusByOwnerId(req.user._id);
     if (resigned) {
       return res.status(httpStatus.FORBIDDEN).json({
@@ -667,8 +672,8 @@ const getMeWithCandidate = catchAsync(async (req, res) => {
   if (req.impersonation) {
     response.impersonation = req.impersonation;
   }
-  const hasCandidateRole = await userHasCandidateRole(req.user);
-  if (!hasCandidateRole) {
+  const hasPersonProfile = await userHasPersonProfileRole(req.user);
+  if (!hasPersonProfile) {
     return res.send(response);
   }
   const candidate = await getCandidateByOwnerForMe(req.user._id);

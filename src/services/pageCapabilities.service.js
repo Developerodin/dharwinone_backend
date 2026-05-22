@@ -2,6 +2,7 @@ import {
   userIsAdmin,
   userIsSalesAgent,
   userHasCandidateRole,
+  userHasEmployeeRole,
   userHasRecruiterRole,
 } from '../utils/roleHelpers.js';
 
@@ -10,15 +11,17 @@ import {
  * The frontend uses this single payload to decide which dashboard variant to render,
  * which widgets to show, and which endpoints to call.
  *
- * Dashboard priority (first match wins): admin > recruiter > salesAgent > candidate > default.
+ * Dashboard priority (first match wins): admin > recruiter > salesAgent > employee > candidate > default.
+ * Employee (HRMS staff) and Candidate (ATS applicant) must stay separate — do not bucket both under candidate.
  *
  * @param {import('../models/user.model.js').default} user
  * @returns {Promise<{ dashboardType: string, widgets: string[], allowedEndpoints: string[], permissionsVersion: string }>}
  */
 const getPageCapabilities = async (user) => {
-  const [isAdmin, isSalesAgent, isCandidate, isRecruiter] = await Promise.all([
+  const [isAdmin, isSalesAgent, isEmployee, isCandidate, isRecruiter] = await Promise.all([
     userIsAdmin(user),
     userIsSalesAgent(user),
+    userHasEmployeeRole(user),
     userHasCandidateRole(user),
     userHasRecruiterRole(user),
   ]);
@@ -74,6 +77,29 @@ const getPageCapabilities = async (user) => {
         '/v1/referral-leads',
         '/v1/ats/job-applications',
         '/v1/ats/analytics/scoped',
+      ],
+      permissionsVersion,
+    };
+  }
+
+  if (isEmployee) {
+    return {
+      dashboardType: 'employee',
+      widgets: [
+        'myAttendance',
+        'myTasks',
+        'myProjects',
+        'myMeetings',
+        'profileCompletion',
+        'upcomingHolidays',
+      ],
+      allowedEndpoints: [
+        '/v1/training/attendance',
+        '/v1/tasks',
+        '/v1/projects',
+        '/v1/meetings',
+        '/v1/dashboard',
+        '/v1/notifications',
       ],
       permissionsVersion,
     };

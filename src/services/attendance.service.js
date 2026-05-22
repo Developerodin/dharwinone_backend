@@ -6,7 +6,15 @@ import User from '../models/user.model.js';
 import Employee from '../models/employee.model.js';
 import Holiday from '../models/holiday.model.js';
 import { hasExceededDurationInTimezone } from '../utils/timezone.js';
-import { validatePunchIn as policyValidatePunchIn, validatePunchOut as policyValidatePunchOut } from './attendancePolicy.service.js';
+import {
+  validatePunchIn as policyValidatePunchIn,
+  validatePunchOut as policyValidatePunchOut,
+  validatePunchInByUser as policyValidatePunchInByUser,
+  validatePunchOutByUser as policyValidatePunchOutByUser,
+  resolveAttendanceDay as policyResolveAttendanceDay,
+  mergeHolidayDocs,
+  holidayToTimestamps,
+} from './attendancePolicy.service.js';
 import {
   aggregateDailyCappedWorkMs,
   computeDurationMs,
@@ -447,6 +455,12 @@ const punchInByUser = async (userId, body = {}) => {
 
   const punchInTime = body.punchInTime ? new Date(body.punchInTime) : new Date();
   const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
+
+  const policyDecision = await policyValidatePunchInByUser(userId, punchInTime, timezone);
+  if (!policyDecision.allowed) {
+    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch in not allowed', true, '', policyDecision.reason);
+  }
+
   const notes = body.notes != null ? String(body.notes) : '';
 
   const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, timezone);
@@ -501,25 +515,18 @@ const punchOutByUser = async (userId, body = {}) => {
   }
 
   const punchOutTime = body.punchOutTime ? new Date(body.punchOutTime) : new Date();
+  const timezone = body.timezone && body.timezone.trim() ? body.timezone.trim() : 'UTC';
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const now = new Date();
-  const today = getUtcMidnight(now);
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const yesterday = new Date(today);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const dayBefore = new Date(today);
-  dayBefore.setUTCDate(dayBefore.getUTCDate() - 2);
+  const policyDecision = await policyValidatePunchOutByUser(userId, punchOutTime, timezone);
+  if (!policyDecision.allowed) {
+    const errorCode = policyDecision.reason === 'NO_ACTIVE_PUNCH' ? 'NO_ACTIVE_PUNCH' : policyDecision.reason;
+    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch out not allowed', true, '', errorCode);
+  }
 
-  const active = await Attendance.findOne({
-    user: userId,
-    date: { $in: [tomorrow, today, yesterday, dayBefore] },
-    punchOut: null,
-    isActive: true,
-    status: { $nin: ['Holiday', 'Leave'] },
-  }).sort({ punchIn: -1 });
-
+  const active = policyDecision.activeRecord
+    ? await Attendance.findById(policyDecision.activeRecord._id)
+    : null;
   if (!active) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'No active punch-in found to punch out', true, '', 'NO_ACTIVE_PUNCH');
   }
@@ -530,7 +537,6 @@ const punchOutByUser = async (userId, body = {}) => {
   active.punchOut = punchOutTime;
   if (notes) active.notes = notes;
   active.status = 'Present';
-  // Same helper as student punch-out; User has no shift today → null → raw ms.
   active.duration = computeDurationMs(active.punchIn, punchOutTime, null);
   await active.save();
   return active;
@@ -997,6 +1003,17 @@ const addHolidaysToStudents = async (studentIds, holidayIds, _user) => {
   // 1. Bulk update: add holiday IDs to all students in one op
   await Student.updateMany({ _id: { $in: studentIds } }, { $addToSet: { holidays: { $each: holidayIds } } });
 
+  const ownerUserIds = students
+    .map((s) => {
+      const u = s.user;
+      if (!u) return null;
+      return typeof u === 'object' ? u._id ?? u.id : u;
+    })
+    .filter(Boolean);
+  if (ownerUserIds.length) {
+    await Employee.updateMany({ owner: { $in: ownerUserIds } }, { $addToSet: { holidays: { $each: holidayIds } } });
+  }
+
   // 2. Build normalized holiday dates (single day or range [date, endDate] per holiday) and find existing in one query
   const holidayInfos = [];
   for (const h of holidays) {
@@ -1112,6 +1129,17 @@ const removeHolidaysFromStudents = async (studentIds, holidayIds, _user) => {
 
   // 1. Bulk update: remove holiday IDs from all students in one op
   await Student.updateMany({ _id: { $in: studentIds } }, { $pull: { holidays: { $in: holidayIds } } });
+
+  const ownerUserIds = students
+    .map((s) => {
+      const u = s.user;
+      if (!u) return null;
+      return typeof u === 'object' ? u._id ?? u.id : u;
+    })
+    .filter(Boolean);
+  if (ownerUserIds.length) {
+    await Employee.updateMany({ owner: { $in: ownerUserIds } }, { $pull: { holidays: { $in: holidayIds } } });
+  }
 
   // 2. Bulk delete: remove all Holiday attendance for these students and dates in one op
   const deleteResult = await Attendance.deleteMany({
@@ -1390,6 +1418,63 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
   };
 };
 
+/**
+ * Upcoming assigned holidays for the current user (Student + linked Employee profile).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ limit?: number, timezone?: string }} [options]
+ */
+const getUpcomingAssignedHolidaysForUser = async (userId, options = {}) => {
+  const limit = Math.min(Math.max(Number(options.limit) || 5, 1), 20);
+  const timezone = options.timezone && String(options.timezone).trim() ? String(options.timezone).trim() : 'UTC';
+
+  const [student, employee] = await Promise.all([
+    Student.findOne({ user: userId }).populate('holidays').populate('shift', 'timezone').lean(),
+    Employee.findOne({ owner: userId }).populate('holidays').populate('shift', 'timezone').lean(),
+  ]);
+
+  const effectiveTz = student?.shift?.timezone || employee?.shift?.timezone || timezone;
+  const { midnight: today } = policyResolveAttendanceDay(new Date(), effectiveTz);
+
+  const mergedHolidays = mergeHolidayDocs(student?.holidays, employee?.holidays).filter(
+    (h) => h && h.isActive !== false && h.date
+  );
+
+  const upcoming = [];
+  for (const h of mergedHolidays) {
+    const start = getUtcMidnight(h.date);
+    const end = h.endDate ? getUtcMidnight(h.endDate) : start;
+    if (end.getTime() < today.getTime()) continue;
+    upcoming.push({
+      id: String(h._id),
+      title: h.title || 'Holiday',
+      date: start.toISOString(),
+      endDate: end.getTime() !== start.getTime() ? end.toISOString() : null,
+    });
+  }
+
+  upcoming.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const todayCheck = mergeHolidayDocs(student?.holidays, employee?.holidays);
+  const todayHoliday = (() => {
+    const result = { blocked: false };
+    for (const h of todayCheck) {
+      if (!h || h.isActive === false || !h.date) continue;
+      const set = holidayToTimestamps(h);
+      if (set.has(today.getTime())) {
+        return { blocked: true, holidayTitle: h.title || 'Holiday' };
+      }
+    }
+    return result;
+  })();
+
+  return {
+    timezone: effectiveTz,
+    todayIsHoliday: todayHoliday.blocked,
+    todayHolidayTitle: todayHoliday.blocked ? todayHoliday.holidayTitle : null,
+    upcoming: upcoming.slice(0, limit),
+  };
+};
+
 export default {
   punchIn,
   punchOut,
@@ -1411,4 +1496,5 @@ export default {
   removeHolidaysFromStudents,
   assignLeavesToStudents,
   regularizeAttendance,
+  getUpcomingAssignedHolidaysForUser,
 };
