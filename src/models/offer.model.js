@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
-import { OFFER_STATUSES } from '../constants/atsPipeline.js';
+import { OFFER_STATUSES, COMPENSATION_TYPES, COMPENSATION_SOURCES } from '../constants/atsPipeline.js';
 
 const ctcBreakdownSchema = new mongoose.Schema(
   {
@@ -76,6 +76,21 @@ const offerSchema = new mongoose.Schema(
     jobType: {
       type: String,
       enum: ['FT_40', 'PT_25', 'INTERN_UNPAID'],
+    },
+    /**
+     * DERIVED from jobType (see compensationTypeForJobType) on every write —
+     * never set directly by clients. Drives payroll/CTC visibility.
+     */
+    compensationType: {
+      type: String,
+      enum: [...COMPENSATION_TYPES],
+      default: 'paid',
+    },
+    /** Provenance of compensationType — seam for future stipend/contract/grant sources. */
+    compensationSource: {
+      type: String,
+      enum: [...COMPENSATION_SOURCES],
+      default: 'jobTypeDerived',
     },
     /** Display hours for intern (25 or 40) */
     weeklyHours: { type: Number, enum: [25, 40], default: 40 },
