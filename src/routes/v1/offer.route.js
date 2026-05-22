@@ -24,6 +24,14 @@ router.post(
 );
 
 router.post(
+  '/:offerId/share',
+  auth(),
+  requirePermissions('candidates.manage'),
+  validate(offerValidation.shareOffer),
+  offerController.shareOffer
+);
+
+router.post(
   '/:offerId/generate-letter',
   auth(),
   requirePermissions('candidates.manage'),

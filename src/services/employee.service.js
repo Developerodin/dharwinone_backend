@@ -655,6 +655,18 @@ const collationForCandidateListSortBy = (sortBy) => {
   return undefined;
 };
 
+const computeCompensationCounts = async (mongoFilter) => {
+  const paid = await Employee.countDocuments({ ...mongoFilter, compensationType: 'paid' });
+  const unpaid = await Employee.countDocuments({ ...mongoFilter, compensationType: 'unpaid' });
+  const total = paid + unpaid;
+  return {
+    paid,
+    unpaid,
+    paidPercentage: total ? Math.round((paid / total) * 100) : 0,
+    unpaidPercentage: total ? Math.round((unpaid / total) * 100) : 0,
+  };
+};
+
 const queryCandidates = async (filter, options) => {
   const wantOpenSop =
     filter.includeOpenSopCount === true ||
@@ -733,6 +745,11 @@ const queryCandidates = async (filter, options) => {
         .lean();
       mongoFilter.assignedAgent = { $in: agentUsers.map((u) => u._id) };
     }
+  }
+
+  const baseMongoFilterForCompensation = { ...mongoFilter };
+  if (filter.compensationType === 'paid' || filter.compensationType === 'unpaid') {
+    mongoFilter.compensationType = filter.compensationType;
   }
 
   // Check if we need aggregation pipeline for experience-based filtering
@@ -959,12 +976,13 @@ const queryCandidates = async (filter, options) => {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-      totalResults: total
+      totalResults: total,
+      compensationCounts: await computeCompensationCounts(baseMongoFilterForCompensation),
     };
   }
   // Use simple pagination for non-experience-based filters (lean + select for faster load)
   const listFields =
-    'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate position degree';
+    'fullName email phoneNumber profilePicture skills qualifications experiences shortBio owner adminId isActive isProfileCompleted employeeId joiningDate resignDate position degree compensationType';
   const paginateOptions = {
     ...options,
     lean: true,
@@ -1055,6 +1073,7 @@ const queryCandidates = async (filter, options) => {
       }
     }
 
+    result.compensationCounts = await computeCompensationCounts(baseMongoFilterForCompensation);
     return result;
 };
 

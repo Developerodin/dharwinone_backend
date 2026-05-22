@@ -1025,6 +1025,47 @@ const sendPostCallThankYouEmail = async (to, data) => {
   );
 };
 
+/**
+ * Send the offer letter to a candidate. Link-based — the offer letter PDF lives at offerLetterUrl.
+ */
+const sendOfferShareEmail = async (to, { candidateName, roleTitle, offerLetterUrl, sharedBy, body, cc, bcc, subject }) => {
+  const detailRows = [
+    { label: 'Candidate', value: candidateName || to },
+    { label: 'Role', value: roleTitle || '—' },
+    { label: 'Shared by', value: sharedBy || 'Dharwin' },
+  ];
+  const sections = [
+    {
+      tone: 'success',
+      bodyLines: [body || 'Please review your offer letter using the button below.'],
+    },
+  ];
+  const primaryAction = offerLetterUrl
+    ? { label: 'View / download offer letter', href: offerLetterUrl }
+    : null;
+  const text = buildPlainTextEmail({
+    title: 'Your offer letter',
+    body: body || 'Please review your offer letter.',
+    actionUrl: offerLetterUrl,
+  });
+  const html = buildEmailHTML({
+    badgeText: 'Offer letter',
+    title: 'Your offer letter',
+    detailRows,
+    sections,
+    primaryAction,
+    preheader: `${sharedBy || 'A team member'} shared your offer letter with you.`,
+  });
+  return sendEmail(
+    to,
+    subject || `Your offer letter${roleTitle ? ` — ${roleTitle}` : ''}`,
+    text,
+    html,
+    'offerShare',
+    { cc, bcc }
+  );
+};
+
 export {
   transport,
   sendEmail,
@@ -1045,5 +1086,6 @@ export {
   sendJobShareEmail,
   sendJobApplicationWelcomeEmail,
   sendPostCallThankYouEmail,
+  sendOfferShareEmail,
 };
 
