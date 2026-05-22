@@ -15,3 +15,15 @@ test('Employee.compensationType enforces the enum', () => {
   const err = emp.validateSync();
   assert.ok(err?.errors?.compensationType, 'expected compensationType validation error');
 });
+
+test('Employee.compensationType accepts unpaid', () => {
+  const emp = new Employee({ compensationType: 'unpaid' });
+  const err = emp.validateSync();
+  assert.ok(!err?.errors?.compensationType, 'unpaid should be valid');
+});
+
+test('Employee.compensationSource rejects values outside the enum', () => {
+  const emp = new Employee({ compensationSource: 'manualOverride' });
+  const err = emp.validateSync();
+  assert.ok(err?.errors?.compensationSource, 'expected compensationSource validation error');
+});
