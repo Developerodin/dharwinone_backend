@@ -10,6 +10,9 @@ import {
   PLACEMENT_STATUSES,
   PRE_BOARDING_STATUSES,
   isAllowedTransition,
+  JOB_TYPES,
+  COMPENSATION_SOURCES,
+  compensationTypeForJobType,
 } from '../atsPipeline.js';
 
 test('atsPipeline exposes expected status sets', () => {
@@ -53,4 +56,27 @@ test('candidate status map has complete coverage', () => {
   assert.deepEqual(Object.keys(CANDIDATE_STATUS_MAP.interviewResult), INTERVIEW_RESULTS);
   assert.deepEqual(Object.keys(CANDIDATE_STATUS_MAP.offer), OFFER_STATUSES);
   assert.deepEqual(Object.keys(CANDIDATE_STATUS_MAP.placement), PLACEMENT_STATUSES);
+});
+
+test('JOB_TYPES maps each job type to a compensation type', () => {
+  const byValue = Object.fromEntries(JOB_TYPES.map((t) => [t.value, t]));
+  assert.equal(byValue.FT_40.compensationType, 'paid');
+  assert.equal(byValue.PT_25.compensationType, 'paid');
+  assert.equal(byValue.INTERN_UNPAID.compensationType, 'unpaid');
+  assert.deepEqual(
+    JOB_TYPES.map((t) => t.value),
+    ['FT_40', 'PT_25', 'INTERN_UNPAID']
+  );
+});
+
+test('compensationTypeForJobType derives compensation, defaults to paid', () => {
+  assert.equal(compensationTypeForJobType('FT_40'), 'paid');
+  assert.equal(compensationTypeForJobType('PT_25'), 'paid');
+  assert.equal(compensationTypeForJobType('INTERN_UNPAID'), 'unpaid');
+  assert.equal(compensationTypeForJobType(undefined), 'paid');
+  assert.equal(compensationTypeForJobType('NONSENSE'), 'paid');
+});
+
+test('COMPENSATION_SOURCES includes the derived seam value', () => {
+  assert.ok(COMPENSATION_SOURCES.includes('jobTypeDerived'));
 });

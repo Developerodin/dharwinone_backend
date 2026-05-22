@@ -99,3 +99,31 @@ export const isAllowedTransition = (workflow, from, to) => {
   if (!transitions) return false;
   return Array.isArray(transitions[from]) && transitions[from].includes(to);
 };
+
+/**
+ * Offer letter job types. `compensationType` is DERIVED from `value` — never stored
+ * or selected manually — so paid/unpaid can never contradict the chosen job type.
+ */
+export const JOB_TYPES = freezeList([
+  Object.freeze({ value: 'FT_40', label: 'Full time — 40 hours/week', compensationType: 'paid' }),
+  Object.freeze({ value: 'PT_25', label: 'Part time — 25 hours/week', compensationType: 'paid' }),
+  Object.freeze({
+    value: 'INTERN_UNPAID',
+    label: 'Training / Unpaid Internship (Full Time)',
+    compensationType: 'unpaid',
+  }),
+]);
+
+export const COMPENSATION_TYPES = freezeList(['paid', 'unpaid']);
+
+/**
+ * Provenance of a compensationType value. Today everything is jobType-derived;
+ * this is the seam for future stipend / contract / grant / external-payroll sources.
+ */
+export const COMPENSATION_SOURCES = freezeList(['jobTypeDerived']);
+
+/** Derive 'paid' | 'unpaid' from an offer job type. Unknown/missing → 'paid'. */
+export const compensationTypeForJobType = (jobType) => {
+  const match = JOB_TYPES.find((t) => t.value === jobType);
+  return match ? match.compensationType : 'paid';
+};
