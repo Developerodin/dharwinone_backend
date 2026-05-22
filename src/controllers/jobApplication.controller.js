@@ -4,6 +4,8 @@ import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import Employee from '../models/employee.model.js';
 import JobApplication from '../models/jobApplication.model.js';
+import Offer from '../models/offer.model.js';
+import Placement from '../models/placement.model.js';
 import {
   getJobApplicationById,
   updateJobApplicationStatus,
@@ -14,6 +16,7 @@ import {
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
+import { serializeCandidateApplication } from '../serializers/candidateApplication.serializer.js';
 
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
@@ -96,6 +99,27 @@ const getMyApplications = catchAsync(async (req, res) => {
       { path: 'appliedBy', select: 'name email' },
     ],
   });
+
+  const appIds = result.results.map((a) => a._id);
+  const offers = await Offer.find({ jobApplication: { $in: appIds } })
+    .select('_id jobApplication')
+    .lean();
+  const offerToApp = new Map(offers.map((o) => [String(o._id), String(o.jobApplication)]));
+  const placements = await Placement.find({ offer: { $in: offers.map((o) => o._id) } })
+    .select('offer status')
+    .lean();
+  const appToPlacementStatus = new Map();
+  for (const p of placements) {
+    const appId = offerToApp.get(String(p.offer));
+    if (appId) appToPlacementStatus.set(appId, p.status);
+  }
+
+  result.results = result.results.map((app) =>
+    serializeCandidateApplication(app, {
+      placementStatus: appToPlacementStatus.get(String(app.id || app._id)),
+    })
+  );
+
   res.send(result);
 });
 
