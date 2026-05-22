@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
+import { COMPENSATION_TYPES, COMPENSATION_SOURCES } from '../constants/atsPipeline.js';
 
 const qualificationSchema = new mongoose.Schema(
   {
@@ -180,6 +181,22 @@ const employeeSchema = new mongoose.Schema(
     shift: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift', default: null, index: true },
     department: { type: String, trim: true, index: true },
     designation: { type: String, trim: true, index: true },
+    /**
+     * Compensation snapshot — FROZEN at offer-acceptance time. Mirrored once from
+     * the accepted Offer (Task 8) and never re-synced, so a later edit to the offer
+     * cannot retroactively corrupt payroll history. Drives Employee List badges.
+     */
+    compensationType: {
+      type: String,
+      enum: [...COMPENSATION_TYPES],
+      default: 'paid',
+      index: true,
+    },
+    compensationSource: {
+      type: String,
+      enum: [...COMPENSATION_SOURCES],
+      default: 'jobTypeDerived',
+    },
     // Position (ref to Position - Java Developer, Data Analyst, etc.) - used during onboarding
     position: { type: mongoose.Schema.Types.ObjectId, ref: 'Position', default: null, index: true },
     reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
