@@ -84,7 +84,7 @@ export const CANDIDATE_STATUS_MAP = Object.freeze({
     Rejected: 'Offer closed',
   }),
   placement: Object.freeze({
-    Pending: 'Pre-boarding',
+    Pending: 'Offer',
     Onboarding: 'Onboarding',
     Joined: 'Joined',
     Deferred: 'On hold',
@@ -126,4 +126,15 @@ export const COMPENSATION_SOURCES = freezeList(['jobTypeDerived']);
 export const compensationTypeForJobType = (jobType) => {
   const match = JOB_TYPES.find((t) => t.value === jobType);
   return match ? match.compensationType : 'paid';
+};
+
+/**
+ * Candidate-facing status for a job application. Pre-boarding is an internal
+ * operational phase: while a Placement sits in 'Pending' the candidate still
+ * sees "Offer" — internal onboarding workflows are never exposed to candidates.
+ * With no active placement, the raw application status is returned unchanged.
+ */
+export const resolveCandidateVisibleStatus = ({ applicationStatus, placementStatus } = {}) => {
+  if (placementStatus === 'Pending') return 'Offer';
+  return applicationStatus;
 };

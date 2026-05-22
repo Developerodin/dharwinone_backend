@@ -13,6 +13,7 @@ import {
   JOB_TYPES,
   COMPENSATION_SOURCES,
   compensationTypeForJobType,
+  resolveCandidateVisibleStatus,
 } from '../atsPipeline.js';
 
 test('atsPipeline exposes expected status sets', () => {
@@ -79,4 +80,23 @@ test('compensationTypeForJobType derives compensation, defaults to paid', () => 
 
 test('COMPENSATION_SOURCES includes the derived seam value', () => {
   assert.ok(COMPENSATION_SOURCES.includes('jobTypeDerived'));
+});
+
+test('placement Pending maps to candidate-visible "Offer"', () => {
+  assert.equal(CANDIDATE_STATUS_MAP.placement.Pending, 'Offer');
+});
+
+test('resolveCandidateVisibleStatus hides internal pre-boarding as "Offer"', () => {
+  assert.equal(
+    resolveCandidateVisibleStatus({ applicationStatus: 'Hired', placementStatus: 'Pending' }),
+    'Offer'
+  );
+});
+
+test('resolveCandidateVisibleStatus falls back to the raw application status', () => {
+  assert.equal(resolveCandidateVisibleStatus({ applicationStatus: 'Interview' }), 'Interview');
+  assert.equal(
+    resolveCandidateVisibleStatus({ applicationStatus: 'Hired', placementStatus: 'Joined' }),
+    'Hired'
+  );
 });
