@@ -170,6 +170,8 @@ const listCandidatesQueryKeys = {
   compensationType: Joi.string().valid('paid', 'unpaid').allow(''),
   /** When true, each list row includes openSopCount (extra DB work per candidate). */
   includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
+  /** When true, only employees without an existing referrer (referral backfill picker). */
+  withoutReferrer: Joi.boolean().truthy('true', '1').falsy('false', '0').optional(),
 };
 
 const getCandidates = {
@@ -194,68 +196,126 @@ const getSopOpenOverview = {
   }),
 };
 
+const updateQualification = Joi.object({
+  degree: Joi.string().allow('', null).optional(),
+  institute: Joi.string().allow('', null).optional(),
+  location: Joi.string().allow('', null),
+  startYear: Joi.number().integer().min(1900).max(3000).allow(null),
+  endYear: Joi.number().integer().min(1900).max(3000).allow(null),
+  description: Joi.string().allow('', null),
+});
+
+const updateExperience = Joi.object({
+  company: Joi.string().allow('', null).optional(),
+  role: Joi.string().allow('', null).optional(),
+  startDate: Joi.date().allow(null),
+  endDate: Joi.date().allow(null),
+  currentlyWorking: Joi.boolean().default(false),
+  description: Joi.string().allow('', null),
+});
+
+const updateSkill = Joi.object({
+  name: Joi.string().allow('', null).optional(),
+  level: Joi.string().valid('Beginner', 'Intermediate', 'Advanced', 'Expert').default('Beginner'),
+  category: Joi.string().allow('', null),
+});
+
+const updateSocialLink = Joi.object({
+  platform: Joi.string().allow('', null).optional(),
+  url: Joi.string().uri().allow('', null).optional().messages({
+    'string.uri': 'Social link URL must be a valid URL',
+  }),
+});
+
+const updateCandidateBodyBase = {
+  fullName: Joi.string(),
+  email: Joi.string().email(),
+  phoneNumber: Joi.string().pattern(/^\d{6,15}$/).messages({
+    'string.pattern.base': 'Phone number must be 6-15 digits',
+  }),
+  profilePicture: Joi.alternatives()
+    .try(
+      Joi.object({
+        url: Joi.string().uri().optional(),
+        key: Joi.string().optional().trim(),
+        originalName: Joi.string().optional().trim(),
+        size: Joi.number().optional().integer().min(0),
+        mimeType: Joi.string().optional().trim(),
+      }),
+      Joi.valid(null)
+    )
+    .optional(),
+  shortBio: Joi.string().allow('', null),
+  sevisId: Joi.string().allow('', null),
+  ead: Joi.string().allow('', null),
+  customVisaType: Joi.string().allow('', null),
+  countryCode: Joi.string().allow('', null),
+  degree: Joi.string().allow('', null),
+  supervisorName: Joi.string().allow('', null),
+  supervisorContact: Joi.string().allow('', null),
+  supervisorCountryCode: Joi.string().allow('', null),
+  department: Joi.string().trim().optional().allow('', null),
+  designation: Joi.string().trim().optional().allow('', null),
+  position: Joi.string().custom(objectId).optional().allow(null),
+  reportingManager: Joi.string().custom(objectId).optional().allow(null),
+  documents: Joi.array().items(document),
+  salarySlips: Joi.array().items(salarySlip),
+  companyAssignedEmail: Joi.string().email().allow('', null),
+  companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
+  compensationType: Joi.string().valid('paid', 'unpaid').optional(),
+};
+
+/** Admin/manager PATCH — optional personal-info fields may be empty. */
+const updateCandidateAdminBody = Joi.object()
+  .keys({
+    ...updateCandidateBodyBase,
+    visaType: Joi.string().allow('', null).optional().trim(),
+    salaryRange: Joi.string().allow('', null).optional().trim(),
+    address: Joi.object({
+      streetAddress: Joi.string().allow('', null).optional().trim(),
+      streetAddress2: Joi.string().allow('', null),
+      city: Joi.string().allow('', null).optional().trim(),
+      state: Joi.string().allow('', null).optional().trim(),
+      zipCode: Joi.string().allow('', null).optional().trim(),
+      country: Joi.string().allow('', null).optional().trim(),
+    }).optional(),
+    qualifications: Joi.array().items(updateQualification),
+    experiences: Joi.array().items(updateExperience),
+    skills: Joi.array().items(updateSkill),
+    socialLinks: Joi.array().items(updateSocialLink),
+  })
+  .min(1);
+
+/** Employee self-service PATCH /employees/me — personal info stays required when sent. */
+const updateMyCandidateBody = Joi.object()
+  .keys({
+    ...updateCandidateBodyBase,
+    visaType: Joi.string().optional().trim(),
+    salaryRange: Joi.string().optional().trim(),
+    address: Joi.object({
+      streetAddress: Joi.string().optional().trim(),
+      streetAddress2: Joi.string().allow('', null),
+      city: Joi.string().optional().trim(),
+      state: Joi.string().optional().trim(),
+      zipCode: Joi.string().optional().trim(),
+      country: Joi.string().optional().trim(),
+    }).optional(),
+    qualifications: Joi.array().items(qualification),
+    experiences: Joi.array().items(experience),
+    skills: Joi.array().items(skill),
+    socialLinks: Joi.array().items(socialLink),
+  })
+  .min(1);
+
 const updateCandidate = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
   }),
-  body: Joi.object()
-    .keys({
-      fullName: Joi.string(),
-      email: Joi.string().email(),
-      phoneNumber: Joi.string().pattern(/^\d{6,15}$/).messages({
-        'string.pattern.base': 'Phone number must be 6-15 digits',
-      }),
-      profilePicture: Joi.alternatives()
-        .try(
-          Joi.object({
-            url: Joi.string().uri().optional(),
-            key: Joi.string().optional().trim(),
-            originalName: Joi.string().optional().trim(),
-            size: Joi.number().optional().integer().min(0),
-            mimeType: Joi.string().optional().trim(),
-          }),
-          Joi.valid(null)
-        )
-        .optional(),
-      shortBio: Joi.string().allow('', null),
-      sevisId: Joi.string().allow('', null),
-      ead: Joi.string().allow('', null),
-      visaType: Joi.string().optional().trim(),
-      customVisaType: Joi.string().allow('', null),
-      countryCode: Joi.string().allow('', null),
-      degree: Joi.string().allow('', null),
-      supervisorName: Joi.string().allow('', null),
-      supervisorContact: Joi.string().allow('', null),
-      supervisorCountryCode: Joi.string().allow('', null),
-      salaryRange: Joi.string().optional().trim(),
-      address: Joi.object({
-        streetAddress: Joi.string().optional().trim(),
-        streetAddress2: Joi.string().allow('', null),
-        city: Joi.string().optional().trim(),
-        state: Joi.string().optional().trim(),
-        zipCode: Joi.string().optional().trim(),
-        country: Joi.string().optional().trim(),
-      }).optional(),
-      department: Joi.string().trim().optional().allow('', null),
-      designation: Joi.string().trim().optional().allow('', null),
-      position: Joi.string().custom(objectId).optional().allow(null),
-      reportingManager: Joi.string().custom(objectId).optional().allow(null),
-      qualifications: Joi.array().items(qualification),
-      experiences: Joi.array().items(experience),
-      documents: Joi.array().items(document),
-      skills: Joi.array().items(skill),
-      socialLinks: Joi.array().items(socialLink),
-      salarySlips: Joi.array().items(salarySlip),
-      companyAssignedEmail: Joi.string().email().allow('', null),
-      companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
-      compensationType: Joi.string().valid('paid', 'unpaid').optional(),
-    })
-    .min(1),
+  body: updateCandidateAdminBody,
 };
 
-/** Same body as updateCandidate, no params (for PATCH /me). */
 const updateMyCandidate = {
-  body: updateCandidate.body,
+  body: updateMyCandidateBody,
 };
 
 const deleteCandidate = {
@@ -551,6 +611,11 @@ const referralLeadsQueryKeys = {
     .allow(''),
   from: Joi.string().trim().allow('').optional(),
   to: Joi.string().trim().allow('').optional(),
+  salesAgentUserId: Joi.string().custom(objectId).allow(''),
+  unassigned: Joi.boolean(),
+  hiredOnly: Joi.boolean(),
+  convertedEmployees: Joi.boolean(),
+  pendingReferrals: Joi.boolean(),
 };
 
 const getReferralLeads = {
@@ -598,6 +663,66 @@ const getReferralAttributionOverrideHistory = {
   }),
 };
 
+const postSalesAgentAssign = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  body: Joi.object({
+    salesAgentUserId: Joi.string().custom(objectId).required(),
+    jobId: Joi.string().custom(objectId).allow(null).default(null),
+    notes: Joi.string().trim().max(2000).allow(''),
+    assignedAt: Joi.date().iso().max('now'),
+  }),
+};
+
+const patchSalesAgentChange = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  body: Joi.object({
+    salesAgentUserId: Joi.string().custom(objectId).required(),
+    jobId: Joi.string().custom(objectId).allow(null).default(null),
+    expectedCurrentAttributionId: Joi.string().custom(objectId).required(),
+    notes: Joi.string().trim().max(2000).allow(''),
+    assignedAt: Joi.date().iso().max('now'),
+  }),
+};
+
+const deleteSalesAgent = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  body: Joi.object({
+    jobId: Joi.string().custom(objectId).allow(null).default(null),
+    expectedCurrentAttributionId: Joi.string().custom(objectId).required(),
+    revokeReason: Joi.string().trim().max(2000).required(),
+  }),
+};
+
+const getSalesAgentHistory = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  query: Joi.object({
+    limit: Joi.number().integer().min(1).max(200).default(50),
+    cursor: Joi.string().base64({ urlSafe: true, paddingRequired: false }),
+  }),
+};
+
+const postReferralBackfill = {
+  body: Joi.object({
+    employeeId: Joi.string().custom(objectId).required(),
+    referredByUserId: Joi.string().custom(objectId).required(),
+    salesAgentUserId: Joi.string().custom(objectId).required(),
+    referralJobId: Joi.string().custom(objectId).allow(null, '').optional(),
+    referredAt: Joi.date().iso().max('now').required(),
+    notes: Joi.string().trim().max(2000).allow('').optional(),
+  }),
+};
+
+const patchAttributionJob = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  body: Joi.object({
+    jobId: Joi.string().custom(objectId).allow(null).required(),
+    reason: Joi.string()
+      .trim()
+      .max(2000)
+      .when('jobId', { is: null, then: Joi.optional(), otherwise: Joi.required() }),
+  }),
+};
+
 export {
   createCandidate,
   getCandidates,
@@ -607,6 +732,12 @@ export {
   postReferralLinkToken,
   postReferralAttributionOverride,
   getReferralAttributionOverrideHistory,
+  postSalesAgentAssign,
+  patchSalesAgentChange,
+  deleteSalesAgent,
+  getSalesAgentHistory,
+  patchAttributionJob,
+  postReferralBackfill,
   getCandidateSopStatus,
   getSopOpenOverview,
   updateCandidate,

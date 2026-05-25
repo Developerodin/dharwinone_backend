@@ -2,8 +2,30 @@ import nodemailer from 'nodemailer';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import EmailLog from '../models/emailLog.model.js';
+import Employee from '../models/employee.model.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { formatInZone } from '../utils/timezone.js';
+
+/**
+ * Resolve delivery address: if recipient (lookup by personal/login email) is an
+ * Employee with a non-empty companyAssignedEmail (professional mailbox), route
+ * mail there; else send to the given address unchanged. External/non-employee
+ * addresses pass through.
+ */
+const resolveDeliveryEmail = async (to) => {
+  if (!to) return to;
+  const normalized = String(to).trim().toLowerCase();
+  try {
+    const emp = await Employee.findOne({ email: normalized })
+      .select('companyAssignedEmail')
+      .lean();
+    const assigned = emp?.companyAssignedEmail?.trim();
+    return assigned || to;
+  } catch (e) {
+    logger.warn(`resolveDeliveryEmail failed: ${e?.message || e}`);
+    return to;
+  }
+};
 
 
 const transport = nodemailer.createTransport(config.email.smtp);
@@ -272,10 +294,11 @@ const buildPlainTextEmail = ({
  * @returns {Promise}
  */
 const sendEmail = async (to, subject, text, html, templateName = null, metadata = {}) => {
+  const deliveryTo = await resolveDeliveryEmail(to);
   let logEntry = null;
   try {
     logEntry = await EmailLog.create({
-      to: String(to).trim().toLowerCase(),
+      to: String(deliveryTo).trim().toLowerCase(),
       subject,
       templateName: templateName || null,
       status: 'pending',
@@ -295,7 +318,7 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
   const msg = {
     from,
     replyTo,
-    to,
+    to: deliveryTo,
     subject,
     text,
     ...(html && { html }),

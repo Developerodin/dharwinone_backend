@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import validator from 'validator';
 import Employee from '../models/employee.model.js';
 import Job from '../models/job.model.js';
+import Position from '../models/position.model.js';
 import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import Token from '../models/token.model.js';
@@ -688,6 +689,17 @@ const queryCandidates = async (filter, options) => {
   // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
 
+  if (
+    filter.withoutReferrer === true ||
+    filter.withoutReferrer === 'true' ||
+    filter.withoutReferrer === '1'
+  ) {
+    mongoFilter.$and = [
+      ...(mongoFilter.$and || []),
+      { $or: [{ referredByUserId: null }, { referredByUserId: { $exists: false } }] },
+    ];
+  }
+
   // Employment status drives isActive: current = active only, resigned = show resigned (isActive false), all = both
   if (filter.employmentStatus === 'resigned') {
     // Resigned: show candidates with resign date on or in past (do not filter by isActive)
@@ -1241,6 +1253,23 @@ const getCandidateById = async (id) => {
   return candidate;
 };
 
+/** Find or create HRMS Position row from a free-text job title (designation). */
+const resolvePositionIdFromDesignation = async (title) => {
+  const trimmed = String(title || '').trim();
+  if (!trimmed) return null;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nameRegex = new RegExp(`^${escaped}$`, 'i');
+  let existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
+  if (existing?._id) return existing._id;
+  try {
+    const created = await Position.create({ name: trimmed });
+    return created._id;
+  } catch (err) {
+    existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
+    return existing?._id ?? null;
+  }
+};
+
 const updateCandidateById = async (id, updateBody, currentUser) => {
   const candidate = await getCandidateById(id);
   if (!candidate) {
@@ -1289,6 +1318,17 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     } else {
       sanitized.compensationSource = 'manual';
     }
+  }
+
+  const designationProvided = Object.prototype.hasOwnProperty.call(sanitized, 'designation');
+  const positionProvided = Object.prototype.hasOwnProperty.call(sanitized, 'position');
+  const designationTrimmed = designationProvided ? String(sanitized.designation ?? '').trim() : '';
+
+  if (designationProvided && designationTrimmed && !positionProvided) {
+    sanitized.position = await resolvePositionIdFromDesignation(designationTrimmed);
+  } else if (positionProvided && sanitized.position && !designationProvided) {
+    const posDoc = await Position.findById(sanitized.position).select('name').lean();
+    if (posDoc?.name) sanitized.designation = posDoc.name;
   }
 
   const prevJoinMs =
@@ -1369,10 +1409,10 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     }
 
     // Sync position to Student if user has a Student profile (for training module assignment)
-    if ('position' in updateBody) {
+    if ('position' in sanitized || (designationProvided && sanitized.position)) {
       const student = await Student.findOne({ user: candidate.owner });
       if (student) {
-        student.position = updateBody.position ?? null;
+        student.position = sanitized.position ?? null;
         await student.save();
       }
     }
@@ -2554,7 +2594,10 @@ const listCompanyEmailAssignments = async () => {
     return { students: [] };
   }
 
-  const candidates = await Employee.find({ owner: { $in: ownerIds } })
+  const candidates = await Employee.find({
+    owner: { $in: ownerIds },
+    email: { $not: /\.noreply@dharwin\.offers\.local$/i },
+  })
     .select('fullName email employeeId owner assignedAgent companyAssignedEmail companyEmailProvider')
     .populate({ path: 'assignedAgent', select: 'name email' })
     .sort({ fullName: 1 })

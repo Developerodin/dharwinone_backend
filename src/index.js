@@ -37,6 +37,10 @@ import {
   startWorkforceReconciliationScheduler,
   stopWorkforceReconciliationScheduler,
 } from './jobs/workforceReconciliation.scheduler.js';
+import {
+  startSalesAgentCacheReconcilerScheduler,
+  stopSalesAgentCacheReconcilerScheduler,
+} from './jobs/salesAgentCacheReconciler.scheduler.js';
 
 let server;
 let candidateSchedulerId;
@@ -77,6 +81,7 @@ mongoose
         startStuckFinalizeSweeper();
         startRetentionEnforcer();
         startWorkforceReconciliationScheduler({ intervalHours: 24 });
+        startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
       }
     });
   })
@@ -106,6 +111,8 @@ const exitHandler = () => {
       stopStuckDispatchSweeper();
       stopStuckFinalizeSweeper();
       stopRetentionEnforcer();
+      stopWorkforceReconciliationScheduler();
+      stopSalesAgentCacheReconcilerScheduler();
       process.exit(1);
     });
   } else {

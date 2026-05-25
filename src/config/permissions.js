@@ -65,6 +65,12 @@ export const permissionAliases = {
     'interviews.manage',
   ],
   'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
+  'candidates.manageSalesAgentAttribution': [
+    'candidates.manageSalesAgentAttribution',
+    'candidates.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
+  'candidates.revokeSalesAgentAttribution': ['candidates.revokeSalesAgentAttribution'],
   // Share candidate form: dedicated ATS sidebar/page permission, while preserving access for existing candidate managers.
   'share-candidate-form.read': [
     'share-candidate-form.read',

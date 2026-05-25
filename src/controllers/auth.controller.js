@@ -27,6 +27,8 @@ import {
   updateUserAndCandidateForMe,
   applyInitialCandidateProfileFromAdmin,
 } from '../services/employee.service.js';
+import { getFeatureFlag } from '../utils/featureFlags.js';
+import { FEATURE_FLAG_NAME } from '../constants/salesAgentAttribution.js';
 import {
   extractSkillsFromResumeBuffer,
   recommendSkillsForJobRole,
@@ -654,7 +656,13 @@ const getMe = catchAsync(async (req, res) => {
   }
   const sessions = await getSessionsForUser(req.user.id);
   const userObj = await enrichUserWithFreshProfilePictureUrl(req.user);
-  const response = { user: userObj, sessions };
+  const response = {
+    user: userObj,
+    sessions,
+    capabilities: {
+      referralSalesAgentAttribution: getFeatureFlag(req.user?.tenantId, FEATURE_FLAG_NAME),
+    },
+  };
   if (req.impersonation) {
     response.impersonation = req.impersonation;
   }

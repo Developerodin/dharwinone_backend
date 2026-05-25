@@ -9,6 +9,8 @@ import * as employeeValidation from '../../validations/employee.validation.js';
 import * as attendanceValidation from '../../validations/attendance.validation.js';
 import attendanceController from '../../controllers/attendance.controller.js';
 import * as employeeController from '../../controllers/employee.controller.js';
+import requireFeatureFlag from '../../middlewares/requireFeatureFlag.js';
+import { FEATURE_FLAG_NAME } from '../../constants/salesAgentAttribution.js';
 
 const router = express.Router();
 
@@ -16,6 +18,17 @@ const canRead = [auth(), requirePermissions('candidates.read')];
 const canManage = [auth(), requirePermissions('candidates.manage')];
 const canUpdateJoiningDate = [auth(), requirePermissions('candidates.joiningDate')];
 const canUpdateResignDate = [auth(), requirePermissions('candidates.resignDate')];
+const canManageSalesAgentAttribution = [
+  auth(),
+  requirePermissions('candidates.manageSalesAgentAttribution'),
+  requireFeatureFlag(FEATURE_FLAG_NAME),
+];
+const canRevokeSalesAgentAttribution = [
+  auth(),
+  requirePermissions('candidates.revokeSalesAgentAttribution'),
+  requireFeatureFlag(FEATURE_FLAG_NAME),
+];
+const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.read'), requireFeatureFlag(FEATURE_FLAG_NAME)];
 
 router
   .route('/')
@@ -58,6 +71,42 @@ router.get(
   ...canRead,
   validate(employeeValidation.getReferralAttributionOverrideHistory),
   employeeController.getReferralAttributionOverrideHistoryHandler
+);
+router.post(
+  '/referral-leads/:candidateId/sales-agent',
+  ...canManageSalesAgentAttribution,
+  validate(employeeValidation.postSalesAgentAssign),
+  employeeController.postSalesAgentAssignHandler
+);
+router.patch(
+  '/referral-leads/:candidateId/sales-agent',
+  ...canManageSalesAgentAttribution,
+  validate(employeeValidation.patchSalesAgentChange),
+  employeeController.patchSalesAgentChangeHandler
+);
+router.delete(
+  '/referral-leads/:candidateId/sales-agent',
+  ...canRevokeSalesAgentAttribution,
+  validate(employeeValidation.deleteSalesAgent),
+  employeeController.deleteSalesAgentHandler
+);
+router.get(
+  '/referral-leads/:candidateId/sales-agent-history',
+  ...canReadSalesAgentAttribution,
+  validate(employeeValidation.getSalesAgentHistory),
+  employeeController.getSalesAgentHistoryHandler
+);
+router.patch(
+  '/referral-leads/:candidateId/attribution-job',
+  ...canManageSalesAgentAttribution,
+  validate(employeeValidation.patchAttributionJob),
+  employeeController.patchAttributionJobHandler
+);
+router.post(
+  '/referral-leads/backfill',
+  ...canManageSalesAgentAttribution,
+  validate(employeeValidation.postReferralBackfill),
+  employeeController.postReferralBackfillHandler
 );
 
 /** Current user's own candidate – auth only (for role 'user' from share-candidate-form). Must be before /:candidateId. */

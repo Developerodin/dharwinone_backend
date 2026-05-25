@@ -245,6 +245,12 @@ const employeeSchema = new mongoose.Schema(
     },
     /** Last UTC date the scheduler sent a joining-date reminder — dedup guard (once per day). */
     joiningReminderSentAt: { type: Date, default: null },
+    /** Anchor for "which job's attribution is canonical" for this candidate/employee. */
+    attributionJobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null, index: true },
+    /** Read-cache: current sales-agent owner for (this Employee, attributionJobId). Reconciled nightly. */
+    currentSalesAgentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    currentSalesAgentAssignedAt: { type: Date, default: null },
+    currentSalesAgentJobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
   },
   { timestamps: true }
 );

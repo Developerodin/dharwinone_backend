@@ -1,0 +1,19 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { applyNewFilters } from '../referralLeadsQueryBuilder.js';
+
+test('applyNewFilters supports pendingReferrals filter', () => {
+  const match = applyNewFilters({ pendingReferrals: true });
+  assert.deepEqual(match.referralPipelineStatus.$in, [
+    'pending',
+    'profile_complete',
+    'applied',
+    'in_review',
+  ]);
+});
+
+test('applyNewFilters supports convertedEmployees filter', () => {
+  const match = applyNewFilters({ convertedEmployees: true });
+  assert.equal(match.isActive, true);
+  assert.ok(match.joiningDate.$lte instanceof Date);
+});

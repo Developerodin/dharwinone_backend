@@ -50,7 +50,17 @@ import {
   exportReferralLeadsCsv,
   overrideReferralAttribution,
   getReferralAttributionOverrideHistory,
+  getReferralLeadById,
+  syncReferralPipelineStatusForCandidate,
 } from '../services/referralLeads.service.js';
+import {
+  assignSalesAgent,
+  changeSalesAgent,
+  revokeSalesAgent,
+  getSalesAgentHistory,
+  pinAttributionJob,
+  backfillReferralLead,
+} from '../services/salesAgentAttribution.service.js';
 import { signReferralToken, logReferralEvent } from '../services/referralAttribution.service.js';
 import { generateCandidateExportCsv } from '../utils/candidateExportCsv.js';
 import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.js';
@@ -270,6 +280,54 @@ const getReferralAttributionOverrideHistoryHandler = catchAsync(async (req, res)
   res.send(out);
 });
 
+const postSalesAgentAssignHandler = catchAsync(async (req, res) => {
+  const { attribution } = await assignSalesAgent(
+    { candidateId: req.params.candidateId, ...req.body },
+    { actor: req.user }
+  );
+  const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
+  res.status(httpStatus.CREATED).json({ attribution, lead });
+});
+
+const patchSalesAgentChangeHandler = catchAsync(async (req, res) => {
+  const { attribution, previousAttribution } = await changeSalesAgent(
+    { candidateId: req.params.candidateId, ...req.body },
+    { actor: req.user }
+  );
+  const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
+  res.json({ attribution, previousAttribution, lead });
+});
+
+const deleteSalesAgentHandler = catchAsync(async (req, res) => {
+  const { revokedAttribution } = await revokeSalesAgent(
+    { candidateId: req.params.candidateId, ...req.body },
+    { actor: req.user }
+  );
+  const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
+  res.json({ revokedAttribution, lead });
+});
+
+const getSalesAgentHistoryHandler = catchAsync(async (req, res) => {
+  const { results, nextCursor, hasMore } = await getSalesAgentHistory(req.params.candidateId, req.query);
+  res.json({ results, nextCursor, hasMore });
+});
+
+const patchAttributionJobHandler = catchAsync(async (req, res) => {
+  const { employee } = await pinAttributionJob(
+    { candidateId: req.params.candidateId, ...req.body },
+    { actor: req.user }
+  );
+  const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
+  res.json({ employee, lead });
+});
+
+const postReferralBackfillHandler = catchAsync(async (req, res) => {
+  const { attribution, employeeId } = await backfillReferralLead(req.body, { actor: req.user });
+  await syncReferralPipelineStatusForCandidate(employeeId);
+  const lead = await getReferralLeadById(employeeId, { tenantId: req.user.tenantId });
+  res.status(httpStatus.CREATED).json({ attribution, lead });
+});
+
 const getSopStatus = catchAsync(async (req, res) => {
   const candidate = await getCandidateById(req.params.candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
@@ -404,6 +462,12 @@ export {
   postReferralLinkToken,
   postReferralAttributionOverride,
   getReferralAttributionOverrideHistoryHandler,
+  postSalesAgentAssignHandler,
+  patchSalesAgentChangeHandler,
+  deleteSalesAgentHandler,
+  getSalesAgentHistoryHandler,
+  patchAttributionJobHandler,
+  postReferralBackfillHandler,
 };
 
 const exportProfile = catchAsync(async (req, res) => {

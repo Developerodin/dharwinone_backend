@@ -13,6 +13,12 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { logReferralEvent } from './referralAttribution.service.js';
 import logger from '../config/logger.js';
 import { userIsSalesAgent, userIsAdmin, userIsAgent } from '../utils/roleHelpers.js';
+import { isActiveEmployee } from '../utils/lifecycleStage.js';
+import {
+  applyNewFilters,
+  buildSalesAgentListEnrichmentStages,
+} from './referralLeadsQueryBuilder.js';
+import ReferralAttribution from '../models/referralAttribution.model.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -79,13 +85,21 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
 
   const c = await Employee.findById(cid)
     .select(
-      'referredByUserId referralPipelineStatus referralJobId referralJobTitle referralContext isCompleted isProfileCompleted'
+      'referredByUserId referralPipelineStatus referralJobId referralJobTitle referralContext isCompleted isProfileCompleted attributionJobId joiningDate isActive'
     )
     .lean();
 
   if (!c?.referredByUserId) return;
 
   const current = c.referralPipelineStatus || 'pending';
+
+  /** Already an active employee — skip ATS application lifecycle; show as hired in referral leads. */
+  if (isActiveEmployee(c)) {
+    if (current !== 'hired') {
+      await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: 'hired' } });
+    }
+    return;
+  }
 
   const apps = await JobApplication.find({ candidate: cid })
     .sort({ updatedAt: -1 })
@@ -145,16 +159,16 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
     title = job?.title || null;
   }
 
-  await Employee.updateOne(
-    { _id: cid },
-    {
-      $set: {
-        referralPipelineStatus: nextPipeline,
-        referralJobId: jobOid,
-        referralJobTitle: title,
-      },
-    }
-  );
+  const willTransitionToHired = nextPipeline === 'hired' && current !== 'hired';
+  const $set = {
+    referralPipelineStatus: nextPipeline,
+    referralJobId: jobOid,
+    referralJobTitle: title,
+  };
+  if (willTransitionToHired && jobOid && !c.attributionJobId) {
+    $set.attributionJobId = jobOid;
+  }
+  await Employee.updateOne({ _id: cid }, { $set });
 }
 
 /**
@@ -532,6 +546,21 @@ const shapeLeadRow = async (row, options = {}) => {
     job,
     referralLastOverride,
     createdAt: o.createdAt,
+    salesAgent: o.currentSalesAgent
+      ? {
+          id: String(o.currentSalesAgent._id || o.currentSalesAgent.id),
+          name: o.currentSalesAgent.name || o.currentSalesAgent.fullName,
+          email: o.currentSalesAgent.email,
+        }
+      : null,
+    salesAgentAssignedAt: o.currentSalesAgentAssignedAt || null,
+    salesAgentJobScope: o.currentSalesAgentJobId == null ? 'candidate' : 'job',
+    salesAgentCurrentAttributionId: o.currentSalesAgentAttributionId
+      ? String(o.currentSalesAgentAttributionId)
+      : null,
+    lifecycleStage: o.lifecycleStage || null,
+    employeeConverted: o.employeeConverted === true,
+    joiningDate: o.joiningDate || null,
   };
 };
 
@@ -675,7 +704,7 @@ export const listReferralLeads = async (req) => {
   const q = req.query || {};
   const limit = Math.min(Math.max(parseInt(q.limit, 10) || 25, 1), 100);
   const baseMatch = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
-  const match = { ...baseMatch };
+  const match = { ...baseMatch, ...applyNewFilters(q) };
   if (baseMatch.$and) {
     match.$and = [...baseMatch.$and];
   }
@@ -695,6 +724,7 @@ export const listReferralLeads = async (req) => {
 
   const pipeline = [
     { $match: match },
+    ...buildSalesAgentListEnrichmentStages(),
     ...referralLeadsRequireExistingOwnerStages(),
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1, _id: -1 } },
@@ -724,10 +754,33 @@ export const listReferralLeads = async (req) => {
 const CONVERTED_STATUSES = ['applied', 'in_review', 'hired'];
 const PENDING_STATUSES = ['pending', 'profile_complete'];
 
+async function computeSalesAgentStats(tenantId, filters = {}) {
+  const match = { isCurrent: true, isRevoked: false };
+  if (tenantId) match.tenantId = tenantId;
+  if (filters.salesAgentUserId && mongoose.Types.ObjectId.isValid(String(filters.salesAgentUserId))) {
+    match.salesAgentUserId = new mongoose.Types.ObjectId(String(filters.salesAgentUserId));
+  }
+
+  const board = await ReferralAttribution.aggregate([
+    { $match: match },
+    { $lookup: { from: 'employees', localField: 'subjectProfileId', foreignField: '_id', as: 'cand' } },
+    { $unwind: '$cand' },
+    { $match: { 'cand.referralPipelineStatus': 'hired' } },
+    { $group: { _id: { agent: '$salesAgentUserId', cand: '$subjectProfileId' } } },
+    { $group: { _id: '$_id.agent', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 5 },
+    { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
+    { $unwind: '$user' },
+    { $project: { userId: '$_id', name: '$user.name', count: 1, _id: 0 } },
+  ]);
+  return board;
+}
+
 export const getReferralLeadsStats = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
-  const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
+  const match = { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
   const matchGlobalTop = buildGlobalTopReferrerMatch(q);
 
   /** Org-wide “top referrer” is sensitive; only Administrator, internal Agent, or platform super user. */
@@ -735,7 +788,7 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
-  const [totalArr, byStatus, topRef] = await Promise.all([
+  const [totalArr, byStatus, topRef, unassignedArr, salesBoard] = await Promise.all([
     Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
     Employee.aggregate([
       { $match: match },
@@ -751,6 +804,12 @@ export const getReferralLeadsStats = async (req) => {
           { $limit: 1 },
         ])
       : Promise.resolve([]),
+    Employee.aggregate([
+      { $match: { ...match, currentSalesAgentUserId: null } },
+      ...ownerStages,
+      { $count: 'c' },
+    ]),
+    computeSalesAgentStats(req.user?.tenantId, q),
   ]);
 
   const totalAgg = totalArr[0]?.c ?? 0;
@@ -779,6 +838,13 @@ export const getReferralLeadsStats = async (req) => {
   }
 
   const conversionRate = totalAgg > 0 ? Math.round((converted / totalAgg) * 1000) / 10 : 0;
+  const unassignedCount = unassignedArr[0]?.c ?? 0;
+  const hiresPerSalesAgent = salesBoard.map((row, idx) => ({
+    userId: String(row.userId),
+    name: row.name || 'Unknown',
+    count: row.count,
+    rank: idx + 1,
+  }));
 
   return {
     totalReferrals: totalAgg,
@@ -788,16 +854,26 @@ export const getReferralLeadsStats = async (req) => {
     hired,
     topReferrer,
     leaderboard: [],
+    unassignedCount,
+    totalReferredHires: hired,
+    hiresPerSalesAgent,
+    topSalesAgent: hiresPerSalesAgent[0]
+      ? {
+          ...hiresPerSalesAgent[0],
+          leaderboardSize: hiresPerSalesAgent.length,
+        }
+      : null,
   };
 };
 
 export const exportReferralLeadsCsv = async (req, res) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = { ...req.query, search: undefined };
-  const match = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
+  const match = { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
   const cap = 5000;
   const rows = await Employee.aggregate([
     { $match: match },
+    ...buildSalesAgentListEnrichmentStages(),
     ...referralLeadsRequireExistingOwnerStages(),
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1 } },
@@ -822,12 +898,23 @@ export const exportReferralLeadsCsv = async (req, res) => {
     'referred_at',
     'attribution_locked_at',
     'org_id',
+    'sales_agent_name',
+    'sales_agent_email',
+    'sales_agent_assigned_at',
+    'sales_agent_scope',
+    'lifecycle_stage',
+    'employee_converted',
+    'joining_date',
+    'attribution_job_id',
+    'attribution_job_title',
   ].join(',');
   res.write(`${header}\n`);
   for (const r of rows) {
     const ref = r.referredByUserId;
     const rid = ref?._id ? String(ref._id) : r.referredByUserId ? String(r.referredByUserId) : '';
     const rname = (ref && ref.name) || '';
+    const salesAgentName = r.currentSalesAgent?.name || r.currentSalesAgent?.fullName || '';
+    const salesAgentEmail = r.currentSalesAgent?.email || '';
     const line = [
       r._id,
       r.fullName,
@@ -843,6 +930,15 @@ export const exportReferralLeadsCsv = async (req, res) => {
       r.referredAt ? new Date(r.referredAt).toISOString() : '',
       r.attributionLockedAt ? new Date(r.attributionLockedAt).toISOString() : '',
       orgId,
+      salesAgentName,
+      salesAgentEmail,
+      r.currentSalesAgentAssignedAt ? new Date(r.currentSalesAgentAssignedAt).toISOString() : '',
+      r.currentSalesAgentJobId == null ? 'candidate' : 'job',
+      r.lifecycleStage || '',
+      r.employeeConverted === true ? 'true' : 'false',
+      r.joiningDate ? new Date(r.joiningDate).toISOString() : '',
+      r.attributionJobId || '',
+      r.referralJobId?.title || r.referralJobTitle || '',
     ];
     res.write(`${line.map((x) => csvCell(x)).join(',')}\n`);
   }
@@ -867,6 +963,29 @@ function csvCell(v) {
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
+
+export const getReferralLeadById = async (candidateId, { tenantId } = {}) => {
+  if (!mongoose.Types.ObjectId.isValid(String(candidateId))) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  const match = {
+    _id: new mongoose.Types.ObjectId(String(candidateId)),
+    referredByUserId: { $exists: true, $ne: null },
+  };
+  if (tenantId && mongoose.Types.ObjectId.isValid(String(tenantId))) {
+    match.tenantId = new mongoose.Types.ObjectId(String(tenantId));
+  }
+  const rows = await Employee.aggregate([
+    { $match: match },
+    ...buildSalesAgentListEnrichmentStages(),
+    ...referralLeadsPopulateReferrerAndJobStages(),
+    { $limit: 1 },
+  ]);
+  if (!rows.length) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  return shapeLeadRow(rows[0]);
+};
 
 export const overrideReferralAttribution = async (req) => {
   if (await userIsSalesAgent(req.user)) {

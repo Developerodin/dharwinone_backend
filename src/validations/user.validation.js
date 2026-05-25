@@ -17,8 +17,8 @@ const getUsers = {
     name: Joi.string(),
     status: Joi.string().valid('active', 'pending', 'disabled', 'deleted'),
     search: Joi.string().allow('').optional(),
-    /** Filter by app role name (e.g. recruiter for interview scheduling dropdown). */
-    role: Joi.string().valid('recruiter', 'referral_eligible').optional(),
+    /** Filter by app role name (e.g. recruiter, sales_agent for pickers). */
+    role: Joi.string().valid('recruiter', 'referral_eligible', 'sales_agent').optional(),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
     page: Joi.number().integer(),

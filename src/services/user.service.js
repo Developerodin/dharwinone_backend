@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 
 import ApiError from '../utils/ApiError.js';
+import { SALES_AGENT_ROLE_NAMES } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
 import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
 import Token from '../models/token.model.js';
@@ -51,12 +52,14 @@ const createUser = async (userBody, options = {}) => {
 const queryUsers = async (filter, options, requester = null) => {
   const { search, role, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
-  if (role === 'recruiter' || role === 'referral_eligible') {
+  if (role === 'recruiter' || role === 'referral_eligible' || role === 'sales_agent') {
     const Role = (await import('../models/role.model.js')).default;
     const targetRoles =
       role === 'recruiter'
         ? ['Recruiter']
-        : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
+        : role === 'sales_agent'
+          ? SALES_AGENT_ROLE_NAMES
+          : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
     const roles = await Role.find({ name: { $in: targetRoles }, status: 'active' }).select('_id').lean();
     if (roles.length > 0) {
       mongoFilter.roleIds = { $in: roles.map((r) => r._id) };
