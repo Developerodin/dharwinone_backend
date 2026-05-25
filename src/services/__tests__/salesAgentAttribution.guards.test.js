@@ -9,7 +9,7 @@ import {
 test('assertSameTenant throws when tenants differ', () => {
   assert.throws(
     () => assertSameTenant({ tenantId: 'a' }, { tenantId: 'b' }),
-    (err) => err.code === 'CROSS_TENANT_ASSIGNMENT_FORBIDDEN'
+    (err) => err.errorCode === 'CROSS_TENANT_ASSIGNMENT_FORBIDDEN'
   );
 });
 
@@ -33,7 +33,7 @@ test('assertSameTenant passes when tenant root admin has only _id', () => {
 
 test('assertSalesAgentRole rejects non-sales-agent', () => {
   assert.throws(() => assertSalesAgentRole({ roles: ['Administrator'] }), (err) =>
-    err.code === 'SALES_AGENT_ROLE_REQUIRED'
+    err.errorCode === 'SALES_AGENT_ROLE_REQUIRED'
   );
 });
 
@@ -47,7 +47,7 @@ test('assertSalesAgentRole passes when role present (populated objects)', () => 
 
 test('assertActorMayAssign blocks sales_agent actor', () => {
   assert.throws(() => assertActorMayAssign({ roles: ['sales_agent'] }), (err) =>
-    err.code === 'SALES_AGENT_CANNOT_ASSIGN'
+    err.errorCode === 'SALES_AGENT_CANNOT_ASSIGN'
   );
 });
 

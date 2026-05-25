@@ -5,6 +5,7 @@ import EmployeeDefault from '../models/employee.model.js';
 import UserDefault from '../models/user.model.js';
 import ActivityLogDefault from '../models/activityLog.model.js';
 import JobApplicationDefault from '../models/jobApplication.model.js';
+import ApiError from '../utils/ApiError.js';
 import { SALES_AGENT_ROLE_NAME, userIsSalesAgent } from '../utils/roleHelpers.js';
 import { withAttributionTransactionRetryOnce } from '../utils/withAttributionTransaction.js';
 import { ATTRIBUTION_SOURCE, ACTIVITY_LOG_ACTION, ERROR_CODE } from '../constants/salesAgentAttribution.js';
@@ -13,10 +14,7 @@ import { deriveLifecycleStage, isActiveEmployee } from '../utils/lifecycleStage.
 const ACTIVE = { isCurrent: true, isRevoked: false };
 
 function throwError(statusCode, code, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  err.code = code;
-  throw err;
+  throw new ApiError(statusCode, message, true, '', { errorCode: code });
 }
 
 /** Mirrors tenantResolver priority — tenantId may be unset or stale on legacy rows. */
