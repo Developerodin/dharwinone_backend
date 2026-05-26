@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
 
-const SOURCES = ['active-jobs-db', 'linkedin-jobs-api'];
+const SOURCES = ['active-jobs-db', 'linkedin-job-search-api', 'linkedin-jobs-api'];
 
 const externalJobSchema = new mongoose.Schema(
   {

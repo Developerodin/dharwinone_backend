@@ -449,7 +449,7 @@ const ROUTING_TOOLS = [
           search:          { type: 'string', description: 'Filter by job title, company, or description (semantic match)' },
           company:         { type: 'string', description: 'Filter by company name' },
           location:        { type: 'string', description: 'Filter by location' },
-          source:          { type: 'string', description: 'Filter by source: active-jobs-db, linkedin-jobs-api' },
+          source:          { type: 'string', description: 'Filter by source: active-jobs-db, linkedin-job-search-api' },
           limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
         },
         required: [],

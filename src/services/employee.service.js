@@ -587,32 +587,49 @@ const buildAdvancedFilter = (filter) => {
 };
 
 /**
- * Repair historical drift: active/pending users with Employee **or** Candidate role must have an ATS profile.
- * Returns eligible owner user ids for employees list scoping; null means neither role exists in DB.
+ * Resolve owner-user role scope for ATS list queries.
+ * @param {'employee'|'jobSeeker'} ownerUserRole
+ * @returns {'employee'|'jobSeeker'}
+ */
+const normalizeOwnerUserRoleScope = (ownerUserRole) =>
+  ownerUserRole === 'jobSeeker' ? 'jobSeeker' : 'employee';
+
+/**
+ * Repair historical drift: active/pending users in scope must have an ATS profile.
+ * Returns eligible owner user ids for list scoping; null when the scoped role(s) are missing in DB.
+ * @param {'employee'|'jobSeeker'} [ownerUserRole='jobSeeker'] — employee = Employee role only; jobSeeker = Employee or Candidate
  * @returns {Promise<import('mongoose').Types.ObjectId[]|null>}
  */
-const ensureCandidateProfilesForActiveCandidateUsers = async () => {
-  const { getAtsJobSeekerRoleIds } = await import('./role.service.js');
-  const atsRoleIds = await getAtsJobSeekerRoleIds();
-  if (!atsRoleIds?.length) return null;
+const ensureProfilesForActiveAtsRoleUsers = async (ownerUserRole = 'jobSeeker') => {
+  const scope = normalizeOwnerUserRoleScope(ownerUserRole);
+  const { getAtsJobSeekerRoleIds, getRoleByName } = await import('./role.service.js');
+  let roleIds;
+  if (scope === 'jobSeeker') {
+    roleIds = await getAtsJobSeekerRoleIds();
+  } else {
+    const employeeRole = await getRoleByName('Employee');
+    roleIds = employeeRole?._id ? [employeeRole._id] : null;
+  }
+  if (!roleIds?.length) return null;
 
-  const usersWithCandidateRole = await User.find(
-    { roleIds: { $in: atsRoleIds }, status: { $in: ['active', 'pending'] } },
+  const usersWithRole = await User.find(
+    { roleIds: { $in: roleIds }, status: { $in: ['active', 'pending'] } },
     { _id: 1 }
   ).lean();
-  const ownerIdsWithCandidateRole = usersWithCandidateRole.map((u) => u._id);
-  if (ownerIdsWithCandidateRole.length === 0) return ownerIdsWithCandidateRole;
+  const ownerIdsWithRole = usersWithRole.map((u) => u._id);
+  if (ownerIdsWithRole.length === 0) return ownerIdsWithRole;
 
   const existingCandidates = await Employee.find(
-    { owner: { $in: ownerIdsWithCandidateRole } },
+    { owner: { $in: ownerIdsWithRole } },
     { owner: 1 }
   ).lean();
   const ownersWithProfile = new Set(existingCandidates.map((c) => String(c.owner)).filter(Boolean));
-  const missingOwnerIds = ownerIdsWithCandidateRole.filter((id) => !ownersWithProfile.has(String(id)));
+  const missingOwnerIds = ownerIdsWithRole.filter((id) => !ownersWithProfile.has(String(id)));
 
   if (missingOwnerIds.length > 0) {
+    const scopeLabel = scope === 'employee' ? 'Employee-role' : 'Employee/Candidate-role';
     logger.warn(
-      `Reconciling ${missingOwnerIds.length} missing ATS profile(s) for active/pending Employee/Candidate-role user(s)`
+      `Reconciling ${missingOwnerIds.length} missing ATS profile(s) for active/pending ${scopeLabel} user(s)`
     );
     await Promise.all(
       missingOwnerIds.map(async (id) => {
@@ -620,15 +637,23 @@ const ensureCandidateProfilesForActiveCandidateUsers = async () => {
           await ensureCandidateProfileForUser(id);
         } catch (err) {
           logger.warn(
-            `ensureCandidateProfilesForActiveCandidateUsers failed userId=${id}: ${err?.message || err}`
+            `ensureProfilesForActiveAtsRoleUsers(${scope}) failed userId=${id}: ${err?.message || err}`
           );
         }
       })
     );
   }
 
-  return ownerIdsWithCandidateRole;
+  return ownerIdsWithRole;
 };
+
+/**
+ * Repair historical drift: active/pending users with Employee **or** Candidate role must have an ATS profile.
+ * Returns eligible owner user ids for job-seeker list scoping; null means neither role exists in DB.
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>}
+ */
+const ensureCandidateProfilesForActiveCandidateUsers = async () =>
+  ensureProfilesForActiveAtsRoleUsers('jobSeeker');
 
 /**
  * User ids with Employee **or** Candidate role (active/pending). Same owner scope as ATS `listCandidates`.
@@ -712,15 +737,22 @@ const queryCandidates = async (filter, options) => {
     mongoFilter.isActive = filter.isActive;
   }
 
-  // Only show candidates whose owner (User) has Employee or Candidate role — exclude Students, Recruiters, etc.
-  const ownerIdsWithCandidateRole = await ensureCandidateProfilesForActiveCandidateUsers();
-  if (ownerIdsWithCandidateRole !== null) {
+  // Owner role scope: Employees tab lists Employee-role users only; explicit owner lookups keep job-seeker scope.
+  const ownerUserRole =
+    filter.ownerUserRole === 'jobSeeker' || filter.ownerUserRole === 'employee'
+      ? filter.ownerUserRole
+      : filter.owner
+        ? 'jobSeeker'
+        : 'employee';
+  const ownerIdsWithScopedRole = await ensureProfilesForActiveAtsRoleUsers(ownerUserRole);
+  if (ownerIdsWithScopedRole !== null) {
     if (filter.owner) {
       const ownerStr = String(filter.owner);
-      const hasRole = ownerIdsWithCandidateRole.some((id) => String(id) === ownerStr);
+      const hasRole = ownerIdsWithScopedRole.some((id) => String(id) === ownerStr);
       mongoFilter.owner = hasRole ? filter.owner : { $in: [] };
     } else {
-      mongoFilter.owner = ownerIdsWithCandidateRole.length > 0 ? { $in: ownerIdsWithCandidateRole } : { $in: [] };
+      mongoFilter.owner =
+        ownerIdsWithScopedRole.length > 0 ? { $in: ownerIdsWithScopedRole } : { $in: [] };
     }
   }
 
@@ -1448,7 +1480,7 @@ const getCandidateIdsMatchingListFilters = async (listFilter, sortBy = 'createdA
 };
 
 /**
- * Org-wide agent workload: counts per Agent user + unassigned, same candidate-owner scope as list (Candidate role owners).
+ * Org-wide agent workload: counts per Agent user + unassigned, same candidate-owner scope as job-seeker list.
  * Ignores agent / agentIds query filters so the report is always full-picture for the employment scope.
  * @param {{ employmentStatus?: string }} [scope]
  */

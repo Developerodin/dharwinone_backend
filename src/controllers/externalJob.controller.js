@@ -10,9 +10,11 @@ import config from '../config/config.js';
 const search = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const body = req.body || {};
-  const source = body.source || 'active-jobs-db';
-  if (!['active-jobs-db', 'linkedin-jobs-api'].includes(source)) {
-    return res.status(httpStatus.BAD_REQUEST).send({ message: 'Invalid source. Use active-jobs-db or linkedin-jobs-api.' });
+  const rawSource = body.source || 'active-jobs-db';
+  const sourceAliases = { 'linkedin-jobs-api': 'linkedin-job-search-api' };
+  const source = sourceAliases[rawSource] || rawSource;
+  if (!['active-jobs-db', 'linkedin-job-search-api'].includes(source)) {
+    return res.status(httpStatus.BAD_REQUEST).send({ message: 'Invalid source. Use active-jobs-db or linkedin-job-search-api.' });
   }
   const filters = {
     job_title: body.job_title || '',

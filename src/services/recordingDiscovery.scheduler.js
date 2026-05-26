@@ -32,6 +32,7 @@ import {
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import Recording, { recordingRank } from '../models/recording.model.js';
+import { resolveTenantIdForMeeting } from './recordingSync.service.js';
 
 // 15-minute reconcile cadence. 1h was too long for the "missing recording in
 // LiveKit but absent from DB" gap users reported. Discovery is idempotent
@@ -245,7 +246,7 @@ async function discoverOnce() {
         const isInProgress = isStarting || isActive || isEnding;
         const isTerminal = isComplete || isFailed || isAborted || isLimit || statusNum >= 3;
 
-        const existing = await Recording.findOne({ egressId }).select('_id status filePath bytes s3Bucket s3Key durationMs').lean();
+        const existing = await Recording.findOne({ egressId }).select('_id status filePath bytes s3Bucket s3Key durationMs meetingId tenantId').lean();
         if (existing) {
           // Reconcile drift: if LiveKit moved to ABORTED/FAILED but our row says
           // recording/completed, override via recordingSync (monotonic guard
@@ -388,6 +389,10 @@ async function discoverOnce() {
           if (key && !existing.s3Key) backfill.s3Key = key;
           if (bytesFromEgress && !existing.bytes) backfill.bytes = bytesFromEgress;
           if (f0DurationMs && !existing.durationMs) backfill.durationMs = f0DurationMs;
+          if (!existing.tenantId) {
+            const tid = await resolveTenantIdForMeeting(existing.meetingId);
+            if (tid) backfill.tenantId = tid;
+          }
 
           // If we have a key but no s3Bucket recorded, verify the object lives
           // in OUR bucket and stamp it. This restores playback for rows where
@@ -436,6 +441,7 @@ async function discoverOnce() {
           const startedRaw = info.startedAt ?? info.started_at;
           const initialStatus = isEnding ? 'stopping' : 'recording';
           try {
+            const tid = await resolveTenantIdForMeeting(roomName);
             await Recording.create({
               meetingId: roomName,
               egressId,
@@ -443,6 +449,7 @@ async function discoverOnce() {
               status: initialStatus,
               statusRank: recordingRank(initialStatus),
               startedAt: nsToMs(startedRaw) ? new Date(nsToMs(startedRaw)) : new Date(),
+              ...(tid ? { tenantId: tid } : {}),
             });
             inserted += 1;
             logger.info(`[recordingDiscovery] inserted in-progress egressId=${egressId} status=${initialStatus} (livekit=${info.status})`);
@@ -464,8 +471,10 @@ async function discoverOnce() {
           // on LiveKit status so the row exists for ops.
           const status = isAborted ? 'aborted' : isFailed || isLimit ? 'failed' : 'missing';
           try {
+            const mid = info.roomName || 'unknown';
+            const tid = await resolveTenantIdForMeeting(mid);
             await Recording.create({
-              meetingId: info.roomName || 'unknown',
+              meetingId: mid,
               egressId,
               filePath: null,
               status,
@@ -473,6 +482,7 @@ async function discoverOnce() {
               startedAt: nsToMs(info.startedAt) ? new Date(nsToMs(info.startedAt)) : new Date(),
               completedAt: nsToMs(info.endedAt) ? new Date(nsToMs(info.endedAt)) : new Date(),
               lastError: `Terminal in LiveKit (status=${info.status}) without filePath`,
+              ...(tid ? { tenantId: tid } : {}),
             });
             inserted += 1;
           } catch (err) {
@@ -531,8 +541,10 @@ async function discoverOnce() {
         }
 
         try {
+          const mid = info.roomName || info.room_name || 'unknown';
+          const tid = await resolveTenantIdForMeeting(mid);
           await Recording.create({
-            meetingId: info.roomName || info.room_name || 'unknown',
+            meetingId: mid,
             egressId,
             filePath: key,
             s3Bucket: s3.ok ? bucket : null,
@@ -547,6 +559,7 @@ async function discoverOnce() {
             durationMs:
               f0Duration ?? (startedAtMs && endedAtMs ? Math.max(0, endedAtMs - startedAtMs) : null),
             lastError,
+            ...(tid ? { tenantId: tid } : {}),
           });
           inserted += 1;
           logger.info(

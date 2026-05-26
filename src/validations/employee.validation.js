@@ -172,6 +172,8 @@ const listCandidatesQueryKeys = {
   includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
   /** When true, only employees without an existing referrer (referral backfill picker). */
   withoutReferrer: Joi.boolean().truthy('true', '1').falsy('false', '0').optional(),
+  /** Owner user role scope: employee (default list) or jobSeeker (Employee + Candidate roles). */
+  ownerUserRole: Joi.string().valid('employee', 'jobSeeker').optional(),
 };
 
 const getCandidates = {

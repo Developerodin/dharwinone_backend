@@ -828,7 +828,7 @@ const getMyPageCapabilities = catchAsync(async (req, res) => {
 
 /**
  * Start impersonation: admin temporarily acts as target user.
- * Requires Administrator role (by roleIds). Sets cookies to impersonated user's session.
+ * Requires Administrator role, platform super user, or `users.impersonate` permission.
  */
 const impersonate = catchAsync(async (req, res) => {
   const adminRefreshToken = req.cookies[REFRESH_TOKEN_COOKIE] || req.body?.refreshToken;
@@ -860,8 +860,12 @@ const impersonate = catchAsync(async (req, res) => {
  * Stop impersonation: restore admin session. Requires current request to be in impersonation mode.
  */
 const stopImpersonation = catchAsync(async (req, res) => {
+  // Idempotent: if the caller is already on an admin session (no impersonation claim
+  // in their access token), treat as a no-op and return the current user. Handles
+  // double-clicks on Exit, multi-tab races, and replays after the first stop already
+  // swapped cookies back to admin tokens.
   if (!req.impersonation) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Not in impersonation mode');
+    return res.send({ user: req.user });
   }
   const currentRefreshToken = req.cookies[REFRESH_TOKEN_COOKIE] || req.body?.refreshToken;
   if (!currentRefreshToken) {

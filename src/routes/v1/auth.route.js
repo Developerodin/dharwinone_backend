@@ -7,6 +7,7 @@ import * as authController from '../../controllers/auth.controller.js';
 import auth from '../../middlewares/auth.js';
 import optionalAuth from '../../middlewares/optionalAuth.js';
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
+import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
 import { authLoginLimiter, authStrictFlowLimiter } from '../../middlewares/rateLimiter.js';
 
 const router = express.Router();
@@ -76,7 +77,7 @@ router.get('/me/skill-recommendations', auth(), authController.listSkillRecommen
 router.post('/me/send-verification-email', auth(), authStrictFlowLimiter, authController.sendMyVerificationEmail);
 router.get('/my-permissions', auth(), authController.getMyPermissions);
 router.get('/page-capabilities', auth(), authController.getMyPageCapabilities);
-router.post('/impersonate', auth(), requireAdministratorRole(), validate(authValidation.impersonate), authController.impersonate);
+router.post('/impersonate', auth(), requireAdministratorOrPermission('users.impersonate', ['Administrator']), validate(authValidation.impersonate), authController.impersonate);
 router.post('/stop-impersonation', auth(), authController.stopImpersonation);
 router.post('/forgot-password', authStrictFlowLimiter, validate(authValidation.forgotPassword), authController.forgotPassword);
 router.post('/reset-password', authStrictFlowLimiter, validate(authValidation.resetPassword), authController.resetPassword);

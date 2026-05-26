@@ -10,11 +10,19 @@ const SOURCES = {
     host: 'active-jobs-db.p.rapidapi.com',
     endpoints: { '24h': '/active-ats-24h', '7d': '/active-ats-7d' },
   },
-  'linkedin-jobs-api': {
-    host: 'linkedin-jobs-api2.p.rapidapi.com',
+  'linkedin-job-search-api': {
+    host: 'linkedin-job-search-api.p.rapidapi.com',
     endpoints: { '24h': '/active-jb-24h', '7d': '/active-jb-7d' },
   },
 };
+
+const LEGACY_SOURCE_ALIASES = {
+  'linkedin-jobs-api': 'linkedin-job-search-api',
+};
+
+function normalizeSource(source) {
+  return LEGACY_SOURCE_ALIASES[source] || source;
+}
 
 const RATE_LIMIT_REQUESTS = 5;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -147,10 +155,12 @@ async function searchFromAPI(filters, source, userId) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'RAPIDAPI_KEY is not configured.');
   }
 
-  const config = SOURCES[source];
+  const canonicalSource = normalizeSource(source);
+  const config = SOURCES[canonicalSource];
   if (!config) {
     throw new ApiError(httpStatus.BAD_REQUEST, `Invalid source: ${source}`);
   }
+  source = canonicalSource;
 
   checkRateLimit(userId);
 
@@ -191,11 +201,13 @@ async function saveJob(userId, jobData) {
   if (!externalId || !source) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'externalId and source are required.');
   }
+  const canonicalSource = normalizeSource(source);
   const doc = await ExternalJob.findOneAndUpdate(
-    { externalId, source, savedBy: userId },
+    { externalId, source: canonicalSource, savedBy: userId },
     {
       $set: {
         ...rest,
+        source: canonicalSource,
         savedBy: userId,
         savedAt: new Date(),
       },
@@ -238,9 +250,12 @@ async function getSavedJobs(userId, options = {}) {
 }
 
 async function unsaveJob(userId, externalId, source) {
+  const sourceFilter = source
+    ? { $in: [source, normalizeSource(source)] }
+    : { $in: ['active-jobs-db', 'linkedin-job-search-api', 'linkedin-jobs-api'] };
   const doc = await ExternalJob.findOne({
     externalId,
-    source: source || { $in: ['active-jobs-db', 'linkedin-jobs-api'] },
+    source: sourceFilter,
     savedBy: userId,
   });
   if (!doc) {

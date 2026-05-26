@@ -7,6 +7,7 @@ import TranscriptSegment from '../models/transcriptSegment.model.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import { recordingScope } from './visibilityScope.service.js';
+import { resolveTenantIdForMeeting } from './recordingSync.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import logger from '../config/logger.js';
@@ -34,7 +35,7 @@ const tsToMs = (v) => {
 };
 
 const PLAYBACK_URL_EXPIRY_SECONDS = 3600; // 1 hour
-const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing'];
+const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing', 'expired'];
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -492,13 +493,18 @@ const syncFromLiveKit = async () => {
     // missing statusRank as 0 — legacy rows from before the field existed
     // must not be excluded, otherwise `recording` rows stay stuck forever.
     const existing = await Recording.findOne({ egressId })
-      .select('_id status statusRank meetingId filePath bytes')
+      .select('_id status statusRank meetingId filePath bytes tenantId')
       .lean();
 
     let r = null;
     if (existing) {
       const existingRank = Number.isFinite(existing.statusRank) ? existing.statusRank : 0;
       if (existingRank <= patch.statusRank) {
+        // Backfill tenantId on existing rows that pre-date tenant stamping.
+        if (!existing.tenantId) {
+          const tid = await resolveTenantIdForMeeting(meetingId);
+          if (tid) patch.tenantId = tid;
+        }
         await Recording.updateOne({ _id: existing._id }, { $set: patch });
         r = await Recording.findById(existing._id).lean();
       } else {
@@ -506,7 +512,8 @@ const syncFromLiveKit = async () => {
       }
     } else {
       try {
-        const created = await Recording.create({ ...patch, egressId });
+        const tid = await resolveTenantIdForMeeting(meetingId);
+        const created = await Recording.create({ ...patch, egressId, ...(tid ? { tenantId: tid } : {}) });
         r = created.toObject ? created.toObject() : created;
       } catch (err) {
         if (err.code === 11000) {
@@ -514,6 +521,10 @@ const syncFromLiveKit = async () => {
           if (raced) {
             const racedRank = Number.isFinite(raced.statusRank) ? raced.statusRank : 0;
             if (racedRank <= patch.statusRank) {
+              if (!raced.tenantId) {
+                const tid = await resolveTenantIdForMeeting(meetingId);
+                if (tid) patch.tenantId = tid;
+              }
               await Recording.updateOne({ _id: raced._id }, { $set: patch });
               r = await Recording.findById(raced._id).lean();
             } else {
@@ -694,6 +705,57 @@ const syncFromLiveKit = async () => {
     }
   }
 
+  // Phase 3: re-verify rows previously marked `missing` against S3. The webhook
+  // (or earlier cron pass) may have lost the race to LiveKit's S3 upload — the
+  // file landed seconds later. Without this resweep, those rows were stuck on
+  // `missing` forever even though playback would have succeeded.
+  const missingRows = await Recording.find({
+    status: 'missing',
+    filePath: { $type: 'string', $ne: '' },
+  })
+    .select('_id egressId filePath bytes s3Bucket s3Key')
+    .limit(500)
+    .lean();
+
+  let missingResweptOk = 0;
+  let missingResweptStillGone = 0;
+  for (const rec of missingRows) {
+    try {
+      const v = await headRecordingObject(rec.filePath);
+      if (!v.ok || !v.size || v.size <= 0) {
+        missingResweptStillGone += 1;
+        continue;
+      }
+      await Recording.updateOne(
+        {
+          _id: rec._id,
+          // Same monotonic guard idiom as elsewhere — allow promotion since
+          // missing and completed share rank 10 (same-rank enrichment).
+          $or: [
+            { statusRank: { $lte: recordingRank('completed') } },
+            { statusRank: { $exists: false } },
+            { statusRank: null },
+          ],
+        },
+        {
+          $set: {
+            status: 'completed',
+            statusRank: recordingRank('completed'),
+            s3Bucket: v.bucket,
+            s3Key: v.key,
+            bytes: v.size,
+            lastError: null,
+          },
+        }
+      );
+      missingResweptOk += 1;
+      logger.info(`[Recording sync] missing→completed via S3 resweep egressId=${rec.egressId} bytes=${v.size}`);
+    } catch (err) {
+      logger.warn(`[Recording sync] missing resweep ${rec._id} failed: ${err?.message || err}`);
+      missingResweptStillGone += 1;
+    }
+  }
+
   // Cross-link to Meeting / InternalMeeting for ops visibility (informational).
   const meetingIds = [...new Set(results.map((r) => r.meetingId))].filter((m) => m && m !== 'unknown');
   const [meetings, internalMeetings] = await Promise.all([
@@ -709,7 +771,7 @@ const syncFromLiveKit = async () => {
   }
 
   logger.info(
-    `[Recording sync] swept=${seen.size} upserted=${upserted} skipped=${skipped} stuckScanned=${stuck.length} backfilled=${backfilled}`
+    `[Recording sync] swept=${seen.size} upserted=${upserted} skipped=${skipped} stuckScanned=${stuck.length} backfilled=${backfilled} missingResweptOk=${missingResweptOk} missingStillGone=${missingResweptStillGone}`
   );
   return {
     swept: seen.size,
@@ -718,6 +780,8 @@ const syncFromLiveKit = async () => {
     stuckScanned: stuck.length,
     backfilled,
     stuckSkipped,
+    missingResweptOk,
+    missingResweptStillGone,
     results,
   };
 };

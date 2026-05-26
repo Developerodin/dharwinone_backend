@@ -193,6 +193,8 @@ const list = catchAsync(async (req, res) => {
     'skillMatchMode',
     'includeOpenSopCount',
     'compensationType',
+    'withoutReferrer',
+    'ownerUserRole',
   ]);
   if (!req.user.canManageCandidates) {
     // Non-managers: default to "my" candidate profile (owner = self). Agents use assignedAgent instead —

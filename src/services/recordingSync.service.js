@@ -12,6 +12,37 @@
 
 import logger from '../config/logger.js';
 import Recording, { recordingRank, isRecordingTerminal } from '../models/recording.model.js';
+import Meeting from '../models/meeting.model.js';
+import InternalMeeting from '../models/internalMeeting.model.js';
+import User from '../models/user.model.js';
+
+/**
+ * Resolve the tenant root ObjectId that should own a Recording for the given
+ * meetingId. Stamping tenantId at insert time is the only mechanism that
+ * keeps a recording visible in the Recordings page after the parent Meeting
+ * row is deleted — without it, the recordingScope filter strips the row.
+ *
+ * Resolution order:
+ *   1. Meeting.findOne({ meetingId }).tenantId        (already stamped)
+ *   2. Meeting.findOne({ meetingId }).createdBy → User → adminId || _id
+ *   3. InternalMeeting equivalents
+ *   4. null  (truly orphan — webhook-only or egress started outside our app)
+ *
+ * @param {string|null|undefined} meetingId
+ * @returns {Promise<mongoose.Types.ObjectId|null>}
+ */
+export async function resolveTenantIdForMeeting(meetingId) {
+  if (!meetingId || meetingId === 'unknown') return null;
+  const m =
+    (await Meeting.findOne({ meetingId }).select('createdBy tenantId').lean()) ||
+    (await InternalMeeting.findOne({ meetingId }).select('createdBy tenantId').lean());
+  if (!m) return null;
+  if (m.tenantId) return m.tenantId;
+  if (!m.createdBy) return null;
+  const u = await User.findById(m.createdBy).select('adminId').lean();
+  if (!u) return m.createdBy;
+  return u.adminId || m.createdBy;
+}
 
 /**
  * Monotonic status update.
@@ -71,14 +102,19 @@ export async function transitionRecording(egressId, nextStatus, patch = {}, opts
  * @param {string} [args.stopReason]   Audit only; usually null at start.
  * @returns {Promise<object>}          Created Mongoose document (NOT lean — caller wants _id).
  */
-export async function createPending({ meetingId, stopReason = null }) {
+export async function createPending({ meetingId, stopReason = null, tenantId = null }) {
   if (!meetingId) throw new Error('createPending: meetingId required');
+  // Resolve tenantId from Meeting/InternalMeeting if caller didn't supply.
+  // Without this, recordings created before tenantId stamping landed are
+  // invisible to admins after the parent Meeting row is deleted.
+  const resolvedTenantId = tenantId || (await resolveTenantIdForMeeting(meetingId));
   return Recording.create({
     meetingId,
     status: 'pending',
     statusRank: recordingRank('pending'),
     startedAt: new Date(),
     stopReason,
+    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : {}),
   });
 }
 
@@ -160,4 +196,5 @@ export default {
   attachEgressId,
   markPendingFailed,
   awaitRecordingTerminal,
+  resolveTenantIdForMeeting,
 };

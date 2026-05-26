@@ -229,6 +229,11 @@ export const permissionAliases = {
   ],
   'placement.audit': ['placement.audit', 'candidates.manage'],
   'preboarding.override': ['preboarding.override', 'candidates.manage'],
+  // Impersonate "login as" action. Raw domain key `settings.users.impersonate:view,...`
+  // derives to `users.impersonate.read` / `users.impersonate.manage` via the standard rule.
+  // Administrator role and platformSuperUser bypass at the middleware layer; all other roles
+  // (including Agent) must be granted the permission via the role-matrix UI.
+  'users.impersonate': ['users.impersonate', 'users.impersonate.read', 'users.impersonate.manage'],
 };
 
 /**
