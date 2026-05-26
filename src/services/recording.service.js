@@ -35,7 +35,7 @@ const tsToMs = (v) => {
 };
 
 const PLAYBACK_URL_EXPIRY_SECONDS = 3600; // 1 hour
-const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing', 'expired'];
+const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'expired'];
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -75,7 +75,7 @@ const resolveMeetingId = async (id) => {
  */
 const listByMeetingId = async (meetingIdOrMongoId) => {
   const meetingId = await resolveMeetingId(meetingIdOrMongoId);
-  const recordings = await Recording.find({ meetingId })
+  const recordings = await Recording.find({ meetingId, status: { $ne: 'missing' } })
     .sort({ startedAt: -1 })
     .lean();
 
@@ -164,9 +164,8 @@ const listAll = async (options = {}, currentUser = {}) => {
   // completions. Frontend differentiates by `status`:
   //   recording/stopping/finalizing → live badge
   //   completed                     → playback link
-  //   aborted/failed/missing        → red "Recording failed" badge with reason
-  // Only `expired` (cron force-resolved >8h non-terminal) is hidden — those
-  // are stuck rows with no useful info for the user.
+  //   aborted/failed                  → red "Recording failed" badge with reason
+  // `missing` and `expired` are hidden from list APIs — no playback and noisy for users.
   const query = { status: { $in: selectedStatuses } };
   if (dateFrom || dateTo) {
     query.startedAt = {};
