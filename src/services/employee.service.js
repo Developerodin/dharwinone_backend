@@ -3112,6 +3112,63 @@ const syncPhoneFromUserToCandidate = async (ownerUserId, fields) => {
   await candidate.save();
 };
 
+/**
+ * Mirror User.name onto the linked Employee profile (owner).
+ * @param {import('mongoose').Types.ObjectId} ownerUserId
+ * @param {string} name
+ */
+const syncNameFromUserToCandidate = async (ownerUserId, name) => {
+  if (name === undefined || name === null) return;
+  const normalized = String(name).trim();
+  if (!normalized) return;
+
+  const candidate = await Employee.findOne({ owner: ownerUserId });
+  if (!candidate) return;
+  if (candidate.fullName === normalized) return;
+
+  candidate.fullName = normalized;
+  await candidate.save();
+};
+
+/**
+ * Mirror User.profilePicture onto the linked Employee profile (owner).
+ * @param {import('mongoose').Types.ObjectId} ownerUserId
+ * @param {object|null|undefined} profilePicture
+ */
+const syncProfilePictureFromUserToCandidate = async (ownerUserId, profilePicture) => {
+  if (profilePicture === undefined) return;
+
+  const candidate = await Employee.findOne({ owner: ownerUserId });
+  if (!candidate) return;
+
+  const next = profilePicture == null ? undefined : profilePicture;
+  const prevKey = candidate.profilePicture?.key || candidate.profilePicture?.url || '';
+  const nextKey = next?.key || next?.url || '';
+  if (prevKey === nextKey) return;
+
+  candidate.profilePicture = next;
+  await candidate.save();
+};
+
+/**
+ * Mirror User login email onto the linked Employee profile (owner).
+ * Called after User is updated (admin PATCH /users, etc.) so ATS employee views stay aligned.
+ * @param {import('mongoose').Types.ObjectId} ownerUserId
+ * @param {string} email - canonical User.email after save
+ */
+const syncEmailFromUserToCandidate = async (ownerUserId, email) => {
+  if (email === undefined || email === null) return;
+  const normalized = String(email).trim().toLowerCase();
+  if (!normalized) return;
+
+  const candidate = await Employee.findOne({ owner: ownerUserId });
+  if (!candidate) return;
+  if (candidate.email === normalized) return;
+
+  candidate.email = normalized;
+  await candidate.save();
+};
+
 /** User fields allowed for self-update via PATCH /auth/me/with-candidate */
 const USER_ME_FIELDS = ['name', 'notificationPreferences', 'profilePicture'];
 
@@ -3209,9 +3266,10 @@ const updateUserAndCandidateForMe = async (userId, body) => {
       if (candidatePayload.email !== undefined) user.email = candidatePayload.email;
       if (candidatePayload.phoneNumber !== undefined) user.phoneNumber = candidatePayload.phoneNumber;
       if (candidatePayload.countryCode !== undefined) user.countryCode = candidatePayload.countryCode;
+      if (candidatePayload.profilePicture !== undefined) user.profilePicture = candidatePayload.profilePicture;
       if (
         Object.keys(candidatePayload).some((k) =>
-          ['fullName', 'email', 'phoneNumber', 'countryCode'].includes(k)
+          ['fullName', 'email', 'phoneNumber', 'countryCode', 'profilePicture'].includes(k)
         )
       ) {
         await user.save({ session });
@@ -3281,6 +3339,9 @@ export {
   applyInitialCandidateProfileFromAdmin,
   updateUserAndCandidateForMe,
   syncPhoneFromUserToCandidate,
+  syncEmailFromUserToCandidate,
+  syncNameFromUserToCandidate,
+  syncProfilePictureFromUserToCandidate,
   getCandidateByOwnerForMe,
   getResignStatusByOwnerId,
   getJobFit,

@@ -1,12 +1,12 @@
-# Graph Report - .  (2026-05-25)
+# Graph Report - .  (2026-05-26)
 
 ## Corpus Check
-- 650 files · ~432,556 words
+- 653 files · ~436,021 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2652 nodes · 4428 edges · 457 communities detected
-- Extraction: 77% EXTRACTED · 23% INFERRED · 0% AMBIGUOUS · INFERRED: 1040 edges (avg confidence: 0.8)
+- 2665 nodes · 4467 edges · 457 communities detected
+- Extraction: 76% EXTRACTED · 24% INFERRED · 0% AMBIGUOUS · INFERRED: 1059 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -469,14 +469,14 @@
 - [[_COMMUNITY_Community 456|Community 456]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `test()` - 73 edges
-2. `get()` - 66 edges
+1. `test()` - 76 edges
+2. `get()` - 67 edges
 3. `userIsAdmin()` - 48 edges
-4. `set()` - 43 edges
+4. `set()` - 44 edges
 5. `paginate()` - 29 edges
 6. `notify()` - 28 edges
-7. `next()` - 24 edges
-8. `getRoleByName()` - 24 edges
+7. `getRoleByName()` - 26 edges
+8. `next()` - 24 edges
 9. `updatePlacementStatus()` - 23 edges
 10. `toJSON()` - 21 edges
 
@@ -524,239 +524,239 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.03
-Nodes (118): requireMeIdentity(), changePassword(), healPendingCandidateAfterStaleVerify(), loginUserWithEmailAndPassword(), refreshAuth(), resetPassword(), startImpersonation(), stopImpersonation() (+110 more)
+Nodes (113): requireMeIdentity(), changePassword(), healPendingCandidateAfterStaleVerify(), loginUserWithEmailAndPassword(), refreshAuth(), resetPassword(), startImpersonation(), stopImpersonation() (+105 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.04
-Nodes (95): apolloPeopleSearch(), buildCompanyVariants(), enrichContacts(), extractLocationToken(), isRemoteLocation(), normaliseCompanyName(), parseErrorMessage(), searchHRContacts() (+87 more)
+Nodes (92): buildCountBanner(), buildRoleUniverseHint(), buildSystemContext(), buildSystemPrompt(), detectIntent(), enrichEntitiesWithRoleId(), escapeRegex(), executeFetches() (+84 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.03
-Nodes (86): resolveCandidateVisibleStatus(), clearAuthCookies(), cookieOptions(), enrichUserWithFreshProfilePictureUrl(), includeAuthTokensInJson(), setAuthCookies(), withOptionalTokens(), serializeCandidateApplication() (+78 more)
+Cohesion: 0.04
+Nodes (92): apolloPeopleSearch(), buildCompanyVariants(), enrichContacts(), extractLocationToken(), isRemoteLocation(), normaliseCompanyName(), parseErrorMessage(), searchHRContacts() (+84 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.03
-Nodes (90): aggregateOrgAttendance(), synthesizeStatus(), runSerializedForBolnaAgent(), fillMissingBusinessNameFromJobs(), clearContextCache(), main(), idStr(), main() (+82 more)
+Nodes (72): queryCannedResponses(), deleteCategoryById(), getCategoryById(), queryCategories(), updateCategoryById(), buildParams(), checkRateLimit(), extractLinkedInJobId() (+64 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.04
-Nodes (89): buildCountBanner(), buildRoleUniverseHint(), buildSystemContext(), buildSystemPrompt(), detectIntent(), enrichEntitiesWithRoleId(), escapeRegex(), executeFetches() (+81 more)
+Nodes (78): aggregateApplicantsByStatus(), applyDedupeIfRequested(), buildApplicantQuery(), countApplicants(), emptyPaginated(), escapeRegex(), mergeScopedQuery(), queryApplicants() (+70 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.03
-Nodes (79): compensationTypeForJobType(), run(), queryCannedResponses(), deleteCategoryById(), getCategoryById(), queryCategories(), updateCategoryById(), deleteHolidayById() (+71 more)
+Cohesion: 0.04
+Nodes (73): runReverse(), aggregateOrgAttendance(), synthesizeStatus(), run(), runSerializedForBolnaAgent(), fillMissingBusinessNameFromJobs(), listCallRecords(), clearContextCache() (+65 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.04
-Nodes (78): main(), numberTasksForProject(), resolveActionPermission(), approveBackdatedAttendanceRequest(), cancelBackdatedAttendanceRequest(), createBackdatedAttendanceRequest(), getBackdatedAttendanceRequestById(), getBackdatedAttendanceRequestsByStudentId() (+70 more)
-
-### Community 7 - "Community 7"
 Cohesion: 0.05
 Nodes (86): batchModifyMessages(), batchModifyThreads(), createLabel(), deleteMessage(), disconnectGmailAccount(), forwardMessage(), getAttachment(), getGmailAccountForUser() (+78 more)
 
+### Community 7 - "Community 7"
+Cohesion: 0.04
+Nodes (73): main(), numberTasksForProject(), resolveActionPermission(), approveBackdatedAttendanceRequest(), cancelBackdatedAttendanceRequest(), createBackdatedAttendanceRequest(), getBackdatedAttendanceRequestById(), getBackdatedAttendanceRequestsByStudentId() (+65 more)
+
 ### Community 8 - "Community 8"
-Cohesion: 0.05
-Nodes (73): aggregateApplicantsByStatus(), applyDedupeIfRequested(), buildApplicantQuery(), countApplicants(), emptyPaginated(), escapeRegex(), mergeScopedQuery(), queryApplicants() (+65 more)
+Cohesion: 0.04
+Nodes (74): clearAuthCookies(), cookieOptions(), enrichUserWithFreshProfilePictureUrl(), includeAuthTokensInJson(), setAuthCookies(), withOptionalTokens(), createBolnaKnowledgebaseFromPdf(), createBolnaKnowledgebaseFromUrl() (+66 more)
 
 ### Community 9 - "Community 9"
-Cohesion: 0.04
-Nodes (36): pickUserDisplayForActivityLog(), requireAdmin(), signAgentRequest(), verifyAgentHmac(), emitSupportCameraIncomingCall(), isDesignatedSuperadminEmail(), describeNetworkError(), errorConverter() (+28 more)
+Cohesion: 0.05
+Nodes (74): buildActivityLogMongoFilter(), createActivityLog(), csvEscape(), displayLocationFromPlain(), enrichActivityLogPlainsForEntityLabels(), enrichPlainForClient(), escapeRegExp(), geoFromTrustedHeaders() (+66 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.04
-Nodes (65): GET /v1/ats/analytics Endpoint, atsAnalytics.service.js, ATS Analytics Drill-Down Modal, ATS Analytics Period Comparison Feature, ATS Analytics Response Shape (totals, funnel, over-time), Backend Documentation Index, candidateMatch Owner Filter Fix in atsAnalytics.service.js, Fix: ATS Analytics Candidate Role Alignment Plan (2026-04-13) (+57 more)
+Cohesion: 0.06
+Nodes (55): endCallByRoom(), autoEndExpiredInternalMeetings(), createInternalMeeting(), endInternalMeetingByRoomPublic(), getInternalMeetingById(), getInvitationEmails(), internalMeetingNotificationFields(), queryInternalMeetings() (+47 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.07
-Nodes (50): findApplicationsNeedingCalls(), mapNormalizedStatusToApplicationVerification(), run(), runApplicationVerificationCalls(), startApplicationVerificationCallScheduler(), syncApplicationCallRecords(), getAgentExecutions(), getCallerId() (+42 more)
+Nodes (58): compensationTypeForJobType(), resolveCandidateVisibleStatus(), sendPostCallEmailAndNotification(), serializeCandidateApplication(), buildEmailHTML(), buildInterviewConclusionEmail(), buildMeetingReminderEmail(), buildPlainTextEmail() (+50 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.05
-Nodes (48): backfillDefaults(), buildBeforeFingerprint(), buildEmployeeEmailIndex(), buildMigrationOps(), createIndexes(), decideOrphanReason(), dedupeActiveLinkedRows(), ensureIndex() (+40 more)
+Cohesion: 0.04
+Nodes (36): pickUserDisplayForActivityLog(), requireAdmin(), signAgentRequest(), verifyAgentHmac(), emitSupportCameraIncomingCall(), isDesignatedSuperadminEmail(), describeNetworkError(), errorConverter() (+28 more)
 
 ### Community 13 - "Community 13"
-Cohesion: 0.05
-Nodes (44): agentsEnabled(), buildDispatchMetadata(), cancelAllDispatches(), cancelDispatch(), dispatchAssistantAgent(), dispatchSummaryAgent(), hasActiveDispatch(), startChatCallRecording() (+36 more)
+Cohesion: 0.04
+Nodes (65): GET /v1/ats/analytics Endpoint, atsAnalytics.service.js, ATS Analytics Drill-Down Modal, ATS Analytics Period Comparison Feature, ATS Analytics Response Shape (totals, funnel, over-time), Backend Documentation Index, candidateMatch Owner Filter Fix in atsAnalytics.service.js, Fix: ATS Analytics Candidate Role Alignment Plan (2026-04-13) (+57 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.08
-Nodes (50): createBolnaKnowledgebaseFromPdf(), createBolnaKnowledgebaseFromUrl(), deleteBolnaKnowledgebase(), getBolnaConfig(), getBolnaKnowledgebase(), isSyncEnabled(), parseBolnaKbResponse(), postKnowledgebase() (+42 more)
+Cohesion: 0.07
+Nodes (51): findApplicationsNeedingCalls(), mapNormalizedStatusToApplicationVerification(), run(), runApplicationVerificationCalls(), startApplicationVerificationCallScheduler(), syncApplicationCallRecords(), getAgentExecutions(), getCallerId() (+43 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.06
-Nodes (35): addParticipants(), assertCallerCanAddRestrictedParticipants(), createCall(), createConversation(), createMessage(), deleteConversation(), deleteMessage(), enrichCallForViewer() (+27 more)
+Nodes (48): backfillDefaults(), buildBeforeFingerprint(), buildEmployeeEmailIndex(), buildMigrationOps(), createIndexes(), decideOrphanReason(), dedupeActiveLinkedRows(), ensureIndex() (+40 more)
 
 ### Community 16 - "Community 16"
+Cohesion: 0.05
+Nodes (46): agentsEnabled(), buildDispatchMetadata(), cancelAllDispatches(), cancelDispatch(), dispatchAssistantAgent(), dispatchSummaryAgent(), hasActiveDispatch(), startChatCallRecording() (+38 more)
+
+### Community 17 - "Community 17"
+Cohesion: 0.06
+Nodes (35): addParticipants(), assertCallerCanAddRestrictedParticipants(), createCall(), createConversation(), createMessage(), deleteConversation(), deleteMessage(), enrichCallForViewer() (+27 more)
+
+### Community 18 - "Community 18"
 Cohesion: 0.07
 Nodes (41): runAutoPunchOut(), startAttendanceScheduler(), addHolidaysToStudents(), assignLeavesToStudents(), autoPunchOut(), effectiveListStartDate(), escapeRegex(), findAllActivePunchIns() (+33 more)
 
-### Community 17 - "Community 17"
+### Community 19 - "Community 19"
 Cohesion: 0.11
 Nodes (45): applyAssignmentRun(), applyTaskBreakdown(), approveAssignmentRun(), assertProjectOwnerOrAdmin(), assignmentRowHasAssignee(), attachPreviewTaskIds(), bootstrapSmartTeamForProject(), buildAssignmentMatcherSystemSingle() (+37 more)
 
-### Community 18 - "Community 18"
-Cohesion: 0.08
-Nodes (36): buildActivityLogMongoFilter(), createActivityLog(), csvEscape(), displayLocationFromPlain(), enrichActivityLogPlainsForEntityLabels(), enrichPlainForClient(), escapeRegExp(), geoFromTrustedHeaders() (+28 more)
-
-### Community 19 - "Community 19"
-Cohesion: 0.1
-Nodes (35): ensureEmployeeIdForOwner(), joinCalendarDayHasArrived(), joinDateYmdUtc(), promoteAllEligibleCandidateOwnersFromScheduler(), promoteCandidateOwnerToEmployeeRole(), resolveApplicantCandidateRoleIdForUser(), resolveCandidateAndEmployeeRoles(), resolveCandidateLoginUserIdForEmployee() (+27 more)
-
 ### Community 20 - "Community 20"
-Cohesion: 0.09
-Nodes (31): bolnaJobAndCandidateAgentsCollide(), logBolnaAgentConfigHealth(), normalizeBolnaAgentId(), getBolnaCandidateAgentSettings(), getBolnaCandidateAgentSettingsDoc(), getBolnaCandidateAgentSettingsForPrompt(), updateBolnaCandidateAgentSettings(), initiateCandidateVerificationCall() (+23 more)
+Cohesion: 0.08
+Nodes (38): embedQuery(), embedTexts(), getClient(), sleep(), attendanceText(), employeeUserText(), externalJobText(), jobText() (+30 more)
 
 ### Community 21 - "Community 21"
 Cohesion: 0.08
-Nodes (22): createCandidateSopTemplate(), dedupeDuplicateCandidateSopTemplateVersions(), getActiveCandidateSopTemplate(), listCandidateSopTemplates(), nextVersion(), canonicalLinkTemplateForChecker(), countOpenSopSteps(), ctxFromRecords() (+14 more)
+Nodes (32): bolnaJobAndCandidateAgentsCollide(), logBolnaAgentConfigHealth(), normalizeBolnaAgentId(), getBolnaCandidateAgentSettings(), getBolnaCandidateAgentSettingsDoc(), getBolnaCandidateAgentSettingsForPrompt(), updateBolnaCandidateAgentSettings(), initiateCandidateVerificationCall() (+24 more)
 
 ### Community 22 - "Community 22"
-Cohesion: 0.16
-Nodes (32): sendPostCallEmailAndNotification(), buildEmailHTML(), buildInterviewConclusionEmail(), buildMeetingReminderEmail(), buildPlainTextEmail(), compactMetadata(), escapeHtml(), formatDateTime() (+24 more)
+Cohesion: 0.1
+Nodes (35): ensureEmployeeIdForOwner(), joinCalendarDayHasArrived(), joinDateYmdUtc(), promoteAllEligibleCandidateOwnersFromScheduler(), promoteCandidateOwnerToEmployeeRole(), resolveApplicantCandidateRoleIdForUser(), resolveCandidateAndEmployeeRoles(), resolveCandidateLoginUserIdForEmployee() (+27 more)
 
 ### Community 23 - "Community 23"
 Cohesion: 0.08
-Nodes (17): applyColumnVisibility(), profileForRole(), pruneEmptyColumns(), queryRequestsDept(), queryRequestsEmail(), queryRequestsRole(), buildMarkdownTwin(), isEmployeeRecord() (+9 more)
+Nodes (22): createCandidateSopTemplate(), dedupeDuplicateCandidateSopTemplateVersions(), getActiveCandidateSopTemplate(), listCandidateSopTemplates(), nextVersion(), canonicalLinkTemplateForChecker(), countOpenSopSteps(), ctxFromRecords() (+14 more)
 
 ### Community 24 - "Community 24"
+Cohesion: 0.08
+Nodes (17): applyColumnVisibility(), profileForRole(), pruneEmptyColumns(), queryRequestsDept(), queryRequestsEmail(), queryRequestsRole(), buildMarkdownTwin(), isEmployeeRecord() (+9 more)
+
+### Community 25 - "Community 25"
 Cohesion: 0.17
 Nodes (33): revokeAllOtherEmailAccounts(), batchModifyMessages(), batchModifyThreads(), buildRawMessage(), buildReplyAllToCc(), createLabel(), createOAuth2Client(), deleteMessage() (+25 more)
 
-### Community 25 - "Community 25"
-Cohesion: 0.12
-Nodes (27): embedQuery(), embedTexts(), getClient(), sleep(), attendanceText(), employeeUserText(), externalJobText(), jobText() (+19 more)
-
 ### Community 26 - "Community 26"
-Cohesion: 0.14
-Nodes (31): appliedJobPostingOrphansForJobApplyApplied(), asObjectIdString(), assertReferralLeadViewAccess(), buildGlobalTopReferrerMatch(), buildReferralLeadsMatch(), canSeeAllReferralLeads(), canUserSeeAllReferralLeads(), computeSalesAgentStats() (+23 more)
-
-### Community 27 - "Community 27"
 Cohesion: 0.14
 Nodes (25): assertActorMayAssign(), assertActorMayAssignResolved(), assertCandidateLevelNotFrozen(), assertSalesAgentRole(), assertSalesAgentRoleResolved(), assertSameTenant(), assertSharesTenantIdentity(), assignSalesAgent() (+17 more)
 
-### Community 28 - "Community 28"
+### Community 27 - "Community 27"
 Cohesion: 0.09
 Nodes (15): autoGenerateCertificateIfEligible(), generateCertificate(), explainQuizCorrectAnswer(), getClient(), gradeEssayAnswer(), gradeEssayAttempt(), normalizeRubricValue(), getOrCreateProgress() (+7 more)
 
-### Community 29 - "Community 29"
+### Community 28 - "Community 28"
 Cohesion: 0.11
 Nodes (15): buildDeadLetterRow(), writeDeadLetter(), appendPartials(), buildMetaKey(), buildPartialKey(), clearPartials(), partialRedis(), redisConnection() (+7 more)
 
-### Community 30 - "Community 30"
+### Community 29 - "Community 29"
 Cohesion: 0.09
 Nodes (25): ActivityLog Collection Model, Activity Logs API, X-Activity-Client-Geo Header (Browser Geolocation), Designated Superadmin Access Control, GET /v1/activity-logs/export, GET /v1/activity-logs, GET /v1/activity-logs/network-preview, geoip-lite GeoLite Database (+17 more)
 
-### Community 31 - "Community 31"
+### Community 30 - "Community 30"
 Cohesion: 0.1
 Nodes (23): EmailAccount Model, Candidate.companyAssignedEmail Field, GET /v1/email/connection-policy, Gmail OAuth Integration, Company Email Hard Lock Enforcement, Company Work Email IT Rollout Guide, Microsoft Entra ID / Outlook OAuth Integration, Production API Domain apis.dharwinone.com (+15 more)
 
-### Community 32 - "Community 32"
+### Community 31 - "Community 31"
 Cohesion: 0.18
 Nodes (13): bucket(), buildArtifactKey(), uploadJsonToS3(), costForUsage(), applyCostGate(), buildTranscriptJson(), callJsonModel(), estimateTranscriptTokens() (+5 more)
 
-### Community 33 - "Community 33"
+### Community 32 - "Community 32"
 Cohesion: 0.43
 Nodes (15): buildHolidayBlockDecision(), hasHolidayAttendanceRow(), holidayBlockFromAttendanceRow(), holidayToTimestamps(), isHoliday(), isLeave(), isWeekOff(), loadEmployeeHolidayProfile() (+7 more)
 
-### Community 34 - "Community 34"
+### Community 33 - "Community 33"
 Cohesion: 0.23
 Nodes (14): BOLNA_CANDIDATE_AGENT_ID - Candidate Verification Agent (Ava), BOLNA_AGENT_ID - Job/Recruiter Verification Agent, Bolna Agent Variables Reference, Bolna Application Calls Setup, CallRecord Model, Bolna Candidate Agent Prompt (Ava / Dharwin), Bolna Job Application Verification Agent Complete Prompt, POST /v1/bolna/candidate-call (+6 more)
 
-### Community 35 - "Community 35"
+### Community 34 - "Community 34"
 Cohesion: 0.14
 Nodes (14): File Storage API (S3-Backed), DELETE /v1/file-storage/object, GET /v1/file-storage/download, GET /v1/file-storage/list, POST /v1/file-storage/upload, AWS S3 File Storage Backend, Frontend Profile Image API (Students & Mentors), LiveKit Cloud Migration Guide (+6 more)
 
-### Community 36 - "Community 36"
+### Community 35 - "Community 35"
 Cohesion: 0.28
 Nodes (12): createFolder(), deleteObject(), getDownloadUrl(), getObjectBufferByKey(), isFileStorageObjectKey(), isKeyAllowed(), listObjects(), normalizeFolderPath() (+4 more)
 
-### Community 37 - "Community 37"
+### Community 36 - "Community 36"
 Cohesion: 0.24
 Nodes (8): collectPairs(), pluralLabel(), renderGenericCount(), cell(), formatOrg(), formatSalary(), originTone(), renderJobs()
 
-### Community 38 - "Community 38"
+### Community 37 - "Community 37"
 Cohesion: 0.18
 Nodes (11): POST /v1/auth/login, POST /v1/auth/logout, GET /v1/auth/me, POST /v1/auth/refresh-tokens, POST /v1/auth/register, Auth & Cookies Frontend Guide, JWT HttpOnly Cookie Authentication Pattern, Administrator Impersonation API (+3 more)
 
-### Community 39 - "Community 39"
+### Community 38 - "Community 38"
 Cohesion: 0.22
 Nodes (0): 
 
-### Community 40 - "Community 40"
+### Community 39 - "Community 39"
 Cohesion: 0.39
 Nodes (6): generateEmailDraftOptions(), getClient(), normalizeOption(), normalizeText(), parseJsonWithRepair(), toSimpleHtml()
 
-### Community 41 - "Community 41"
+### Community 40 - "Community 40"
 Cohesion: 0.57
 Nodes (6): chat(), generateBlog(), generateBlogFromTheme(), getBlogSuggestions(), getClient(), toSimpleHtml()
 
-### Community 42 - "Community 42"
+### Community 41 - "Community 41"
 Cohesion: 0.43
 Nodes (5): normalizeMessages(), streamMessage(), getConfig(), resolveAdminId(), updateConfig()
 
-### Community 43 - "Community 43"
+### Community 42 - "Community 42"
 Cohesion: 0.33
 Nodes (0): 
 
-### Community 44 - "Community 44"
+### Community 43 - "Community 43"
 Cohesion: 0.6
 Nodes (5): authorizeMeetingAccess(), isAllowedByChatCall(), isAllowedByInternalMeeting(), isAllowedByMeeting(), lc()
 
-### Community 45 - "Community 45"
+### Community 44 - "Community 44"
 Cohesion: 0.33
 Nodes (3): mockFindOne(), makeCtx(), baseCtx()
 
-### Community 46 - "Community 46"
+### Community 45 - "Community 45"
 Cohesion: 0.4
 Nodes (0): 
 
-### Community 47 - "Community 47"
+### Community 46 - "Community 46"
 Cohesion: 0.4
 Nodes (2): requireProjectsListAccess(), requirePermissions()
 
-### Community 48 - "Community 48"
+### Community 47 - "Community 47"
 Cohesion: 0.7
 Nodes (4): bucket(), cutoff(), purgeS3PrefixForMeeting(), runRetention()
 
-### Community 49 - "Community 49"
+### Community 48 - "Community 48"
 Cohesion: 0.6
 Nodes (3): liveIdSet(), runMemorySweep(), startMemorySweepScheduler()
 
-### Community 50 - "Community 50"
+### Community 49 - "Community 49"
 Cohesion: 0.6
 Nodes (3): fmtDate(), generateCandidateExportXlsxBuffer(), s()
+
+### Community 50 - "Community 50"
+Cohesion: 0.5
+Nodes (0): 
 
 ### Community 51 - "Community 51"
 Cohesion: 0.5
 Nodes (0): 
 
 ### Community 52 - "Community 52"
-Cohesion: 0.5
-Nodes (0): 
-
-### Community 53 - "Community 53"
 Cohesion: 0.67
 Nodes (2): computeBodyHash(), computeEventId()
 
-### Community 54 - "Community 54"
+### Community 53 - "Community 53"
 Cohesion: 0.83
 Nodes (3): renderAttendance(), renderRange(), renderSingleDay()
 
-### Community 55 - "Community 55"
+### Community 54 - "Community 54"
 Cohesion: 0.67
 Nodes (2): csvCell(), csvPhoneCell()
 
-### Community 56 - "Community 56"
+### Community 55 - "Community 55"
 Cohesion: 0.83
 Nodes (3): isDuplicateKeyError(), withAttributionTransaction(), withAttributionTransactionRetryOnce()
 
-### Community 57 - "Community 57"
+### Community 56 - "Community 56"
 Cohesion: 0.5
 Nodes (4): CEO Signature - Harvinder (Offer Letter Asset), Dharwin Offer Letter Logo (PNG Asset), Offer Letter Header Banner (PNG Asset), Dharwin Business Solutions Brand Logo
 
-### Community 58 - "Community 58"
+### Community 57 - "Community 57"
 Cohesion: 1.0
 Nodes (2): exitHandler(), unexpectedErrorHandler()
+
+### Community 58 - "Community 58"
+Cohesion: 0.67
+Nodes (0): 
 
 ### Community 59 - "Community 59"
 Cohesion: 0.67
@@ -779,44 +779,44 @@ Cohesion: 0.67
 Nodes (0): 
 
 ### Community 64 - "Community 64"
-Cohesion: 0.67
-Nodes (0): 
-
-### Community 65 - "Community 65"
 Cohesion: 1.0
 Nodes (2): getDateRange(), getTrainingAnalytics()
+
+### Community 65 - "Community 65"
+Cohesion: 0.67
+Nodes (0): 
 
 ### Community 66 - "Community 66"
 Cohesion: 0.67
 Nodes (0): 
 
 ### Community 67 - "Community 67"
-Cohesion: 0.67
-Nodes (0): 
-
-### Community 68 - "Community 68"
 Cohesion: 1.0
 Nodes (2): conclusionMeeting(), minutesAgo()
 
-### Community 69 - "Community 69"
+### Community 68 - "Community 68"
 Cohesion: 1.0
 Nodes (2): makeMeeting(), minutesFromNow()
 
-### Community 70 - "Community 70"
+### Community 69 - "Community 69"
 Cohesion: 0.67
 Nodes (1): ApiError
 
-### Community 71 - "Community 71"
+### Community 70 - "Community 70"
 Cohesion: 1.0
 Nodes (2): envKey(), getFeatureFlag()
 
-### Community 72 - "Community 72"
+### Community 71 - "Community 71"
 Cohesion: 0.67
 Nodes (0): 
 
-### Community 73 - "Community 73"
+### Community 72 - "Community 72"
 Cohesion: 0.67
 Nodes (3): Public Job Apply CORS Configuration, POST /v1/public/jobs/:jobId/apply - Public Job Apply, Nginx client_max_body_size for File Upload
+
+### Community 73 - "Community 73"
+Cohesion: 1.0
+Nodes (0): 
 
 ### Community 74 - "Community 74"
 Cohesion: 1.0
@@ -948,15 +948,15 @@ Nodes (0):
 
 ### Community 106 - "Community 106"
 Cohesion: 1.0
-Nodes (0): 
+Nodes (2): BackdatedAttendanceRequest Model, Attendance System Audit Document
 
 ### Community 107 - "Community 107"
 Cohesion: 1.0
-Nodes (2): BackdatedAttendanceRequest Model, Attendance System Audit Document
+Nodes (2): Zero-Downtime Role Migration Strategy, Legacy Role Removal Migration Guide
 
 ### Community 108 - "Community 108"
 Cohesion: 1.0
-Nodes (2): Zero-Downtime Role Migration Strategy, Legacy Role Removal Migration Guide
+Nodes (0): 
 
 ### Community 109 - "Community 109"
 Cohesion: 1.0
@@ -2353,75 +2353,77 @@ Nodes (1): Contributing Guide
 ## Knowledge Gaps
 - **84 isolated node(s):** `Backend README`, `GET /v1/activity-logs/network-preview`, `ActivityLog Collection Model`, `requireActivityLogsListAccess Middleware`, `Designated Superadmin Access Control` (+79 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 74`** (2 nodes): `main()`, `check-prakhar-rows.js`
+- **Thin community `Community 73`** (2 nodes): `getIpFormat()`, `morgan.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 75`** (2 nodes): `getIpFormat()`, `morgan.js`
+- **Thin community `Community 74`** (2 nodes): `validateSegmentBatch()`, `agentInternal.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 76`** (2 nodes): `validateSegmentBatch()`, `agentInternal.controller.js`
+- **Thin community `Community 75`** (2 nodes): `getUserId()`, `chat.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 77`** (2 nodes): `getUserId()`, `chat.controller.js`
+- **Thin community `Community 76`** (2 nodes): `currentUserId()`, `emailPreferences.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 78`** (2 nodes): `currentUserId()`, `emailPreferences.controller.js`
+- **Thin community `Community 77`** (2 nodes): `decodeKey()`, `fileStorage.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 79`** (2 nodes): `decodeKey()`, `fileStorage.controller.js`
+- **Thin community `Community 78`** (2 nodes): `requireHrmConfig()`, `hrmWebRtc.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 80`** (2 nodes): `requireHrmConfig()`, `hrmWebRtc.controller.js`
+- **Thin community `Community 79`** (2 nodes): `findApplicantCandidate()`, `jobApplication.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 81`** (2 nodes): `findApplicantCandidate()`, `jobApplication.controller.js`
+- **Thin community `Community 80`** (2 nodes): `parseChatRoomConversationId()`, `livekit.controller.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 82`** (2 nodes): `parseChatRoomConversationId()`, `livekit.controller.js`
+- **Thin community `Community 81`** (2 nodes): `documentAuth()`, `documentAuth.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 83`** (2 nodes): `documentAuth()`, `documentAuth.js`
+- **Thin community `Community 82`** (2 nodes): `requireAdministratorOrPermission()`, `requireAdministratorOrPermission.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 84`** (2 nodes): `requireAdministratorRole()`, `requireAdministratorRole.js`
+- **Thin community `Community 83`** (2 nodes): `requireAdministratorRole()`, `requireAdministratorRole.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 85`** (2 nodes): `requireExternalJobsAccess()`, `requireExternalJobsAccess.js`
+- **Thin community `Community 84`** (2 nodes): `requireExternalJobsAccess()`, `requireExternalJobsAccess.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 86`** (2 nodes): `requireFeatureFlag()`, `requireFeatureFlag.js`
+- **Thin community `Community 85`** (2 nodes): `requireFeatureFlag()`, `requireFeatureFlag.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 87`** (2 nodes): `requireRoleByName()`, `requireRoleByName.js`
+- **Thin community `Community 86`** (2 nodes): `requireRoleByName()`, `requireRoleByName.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 88`** (2 nodes): `validate.js`, `validate()`
+- **Thin community `Community 87`** (2 nodes): `validate.js`, `validate()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 89`** (2 nodes): `transform()`, `activityLog.model.js`
+- **Thin community `Community 88`** (2 nodes): `transform()`, `activityLog.model.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 90`** (2 nodes): `cascadeProjectChildren()`, `project.model.js`
+- **Thin community `Community 89`** (2 nodes): `cascadeProjectChildren()`, `project.model.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 91`** (2 nodes): `clearTasksSprintId()`, `sprint.model.js`
+- **Thin community `Community 90`** (2 nodes): `clearTasksSprintId()`, `sprint.model.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 92`** (2 nodes): `handleFileUploads()`, `trainingModule.route.js`
+- **Thin community `Community 91`** (2 nodes): `handleFileUploads()`, `trainingModule.route.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 93`** (2 nodes): `employeeRolePromotion.service.test.js`, `readSrc()`
+- **Thin community `Community 92`** (2 nodes): `employeeRolePromotion.service.test.js`, `readSrc()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 94`** (2 nodes): `getEvaluationData()`, `evaluation.service.js`
+- **Thin community `Community 93`** (2 nodes): `getEvaluationData()`, `evaluation.service.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 95`** (2 nodes): `emp()`, `pmGroup.test.js`
+- **Thin community `Community 94`** (2 nodes): `emp()`, `pmGroup.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 96`** (2 nodes): `resolveIdentity()`, `orphanResolver.js`
+- **Thin community `Community 95`** (2 nodes): `resolveIdentity()`, `orphanResolver.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 97`** (2 nodes): `sample()`, `listingRenderer.test.js`
+- **Thin community `Community 96`** (2 nodes): `sample()`, `listingRenderer.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 98`** (2 nodes): `mockModel()`, `peopleFetcher.test.js`
+- **Thin community `Community 97`** (2 nodes): `mockModel()`, `peopleFetcher.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 99`** (2 nodes): `mockOpenAI()`, `roleClassifier.test.js`
+- **Thin community `Community 98`** (2 nodes): `mockOpenAI()`, `roleClassifier.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 100`** (2 nodes): `mockRoleModel()`, `roleResolver.test.js`
+- **Thin community `Community 99`** (2 nodes): `mockRoleModel()`, `roleResolver.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 101`** (2 nodes): `minutesFromNow()`, `meeting.reminderEmail.test.js`
+- **Thin community `Community 100`** (2 nodes): `minutesFromNow()`, `meeting.reminderEmail.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 102`** (2 nodes): `teamExcel.buildLookups.test.js`, `mockEmployeeFind()`
+- **Thin community `Community 101`** (2 nodes): `teamExcel.buildLookups.test.js`, `mockEmployeeFind()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 103`** (2 nodes): `teamExcel.parse.test.js`, `xlsxBuffer()`
+- **Thin community `Community 102`** (2 nodes): `teamExcel.parse.test.js`, `xlsxBuffer()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 104`** (2 nodes): `catchAsync()`, `catchAsync.js`
+- **Thin community `Community 103`** (2 nodes): `catchAsync()`, `catchAsync.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 105`** (2 nodes): `countTokens()`, `textChunk.util.js`
+- **Thin community `Community 104`** (2 nodes): `countTokens()`, `textChunk.util.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 106`** (2 nodes): `makeTasks()`, `pmAssistant.validation.test.js`
+- **Thin community `Community 105`** (2 nodes): `makeTasks()`, `pmAssistant.validation.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 107`** (2 nodes): `BackdatedAttendanceRequest Model`, `Attendance System Audit Document`
+- **Thin community `Community 106`** (2 nodes): `BackdatedAttendanceRequest Model`, `Attendance System Audit Document`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 108`** (2 nodes): `Zero-Downtime Role Migration Strategy`, `Legacy Role Removal Migration Guide`
+- **Thin community `Community 107`** (2 nodes): `Zero-Downtime Role Migration Strategy`, `Legacy Role Removal Migration Guide`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 108`** (1 nodes): `audit-partial-grants.mjs`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 109`** (1 nodes): `2026-05-20-pm-task-numbering.test.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -3123,17 +3125,17 @@ Nodes (1): Contributing Guide
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `get()` connect `Community 3` to `Community 0`, `Community 2`, `Community 4`, `Community 6`, `Community 7`, `Community 9`, `Community 11`, `Community 12`, `Community 13`, `Community 14`, `Community 15`, `Community 16`, `Community 17`, `Community 18`, `Community 19`, `Community 21`, `Community 24`, `Community 26`?**
-  _High betweenness centrality (0.161) - this node is a cross-community bridge._
-- **Why does `test()` connect `Community 1` to `Community 32`, `Community 0`, `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 6`, `Community 37`, `Community 7`, `Community 8`, `Community 11`, `Community 13`, `Community 18`, `Community 19`, `Community 23`, `Community 26`?**
-  _High betweenness centrality (0.144) - this node is a cross-community bridge._
-- **Why does `set()` connect `Community 3` to `Community 0`, `Community 2`, `Community 4`, `Community 7`, `Community 9`, `Community 11`, `Community 13`, `Community 16`, `Community 17`, `Community 18`, `Community 19`, `Community 21`, `Community 26`?**
-  _High betweenness centrality (0.080) - this node is a cross-community bridge._
-- **Are the 72 inferred relationships involving `test()` (e.g. with `shouldSkipGlobalXss()` and `createActivityLog()`) actually correct?**
-  _`test()` has 72 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 64 inferred relationships involving `get()` (e.g. with `main()` and `main()`) actually correct?**
-  _`get()` has 64 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `test()` connect `Community 2` to `Community 0`, `Community 1`, `Community 3`, `Community 36`, `Community 5`, `Community 6`, `Community 7`, `Community 4`, `Community 9`, `Community 10`, `Community 11`, `Community 14`, `Community 16`, `Community 22`, `Community 24`, `Community 31`?**
+  _High betweenness centrality (0.162) - this node is a cross-community bridge._
+- **Why does `get()` connect `Community 5` to `Community 0`, `Community 1`, `Community 3`, `Community 6`, `Community 7`, `Community 8`, `Community 9`, `Community 10`, `Community 12`, `Community 15`, `Community 16`, `Community 17`, `Community 18`, `Community 19`, `Community 22`, `Community 23`, `Community 25`?**
+  _High betweenness centrality (0.139) - this node is a cross-community bridge._
+- **Why does `userIsAdmin()` connect `Community 4` to `Community 1`, `Community 3`, `Community 7`, `Community 9`, `Community 12`, `Community 15`, `Community 17`, `Community 19`, `Community 22`?**
+  _High betweenness centrality (0.057) - this node is a cross-community bridge._
+- **Are the 75 inferred relationships involving `test()` (e.g. with `main()` and `shouldSkipGlobalXss()`) actually correct?**
+  _`test()` has 75 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 65 inferred relationships involving `get()` (e.g. with `main()` and `main()`) actually correct?**
+  _`get()` has 65 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 47 inferred relationships involving `userIsAdmin()` (e.g. with `getAtsAnalytics()` and `fetchModule()`) actually correct?**
   _`userIsAdmin()` has 47 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 41 inferred relationships involving `set()` (e.g. with `main()` and `enrichActivityLogPlainsForEntityLabels()`) actually correct?**
-  _`set()` has 41 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 42 inferred relationships involving `set()` (e.g. with `main()` and `main()`) actually correct?**
+  _`set()` has 42 INFERRED edges - model-reasoned connections that need verification._

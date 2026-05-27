@@ -28,13 +28,36 @@ const resolveDeliveryEmail = async (to) => {
 };
 
 
+const isSmtpAuthError = (err) => {
+  const code = err?.code;
+  const responseCode = err?.responseCode;
+  const message = String(err?.message || '');
+  return code === 'EAUTH' || responseCode === 535 || /authentication|invalid login|auth/i.test(message);
+};
+
+const logSmtpFailure = (context, err) => {
+  const payload = {
+    code: err?.code,
+    responseCode: err?.responseCode,
+    response: err?.response,
+  };
+  if (isSmtpAuthError(err)) {
+    logger.error(`[SMTP] Authentication failed (${context}): ${err?.message || err}`, payload);
+    return;
+  }
+  logger.warn(`[SMTP] ${context} failed: ${err?.message || err}`, payload);
+};
+
 const transport = nodemailer.createTransport(config.email.smtp);
 /* istanbul ignore next */
 if (config.env !== 'test') {
   transport
     .verify()
-    .then(() => logger.info('Connected to email server'))
-    .catch(() => logger.warn('Unable to connect to email server. Make sure you have configured the SMTP options in .env'));
+    .then(() => logger.info('[SMTP] Connected to email server'))
+    .catch((err) => {
+      logSmtpFailure('verify', err);
+      logger.warn('[SMTP] Unable to connect. Check SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, and EMAIL_FROM in .env');
+    });
 }
 
 const BRAND_NAME = 'Dharwin Business Solutions';
@@ -340,6 +363,9 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
       return;
     } catch (err) {
       lastErr = err;
+      if (attempt === maxAttempts - 1) {
+        logSmtpFailure(`sendMail to ${deliveryTo}`, err);
+      }
       if (attempt < maxAttempts - 1) {
         await delay(backoffMs[attempt]);
       }

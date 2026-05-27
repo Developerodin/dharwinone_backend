@@ -28,6 +28,9 @@ const envVarsSchema = Joi.object()
       .description('minutes after which verify email token expires (default 24h; JWT + Token.expires)'),
     SMTP_HOST: Joi.string().description('server that will send the emails'),
     SMTP_PORT: Joi.number().description('port to connect to the email server'),
+    SMTP_TIMEOUT: Joi.number()
+      .optional()
+      .description('SMTP connection/greeting/socket timeout in seconds (e.g. 7 for Outlook)'),
     SMTP_USERNAME: Joi.string().description('username for email server'),
     SMTP_PASSWORD: Joi.string().description('password for email server'),
     EMAIL_FROM: Joi.string().description('the from field in the emails sent by the app'),
@@ -254,6 +257,35 @@ const trustProxyFlagRaw = String(envVars.TRUST_PROXY ?? '')
   .toLowerCase();
 const trustProxy = trustProxyFlagRaw === 'true' || trustProxyFlagRaw === '1';
 
+/** Nodemailer SMTP — Microsoft 365 / Outlook uses STARTTLS on 587 (secure: false). */
+const smtpPort = Number(envVars.SMTP_PORT) || 587;
+const smtpTimeoutSec = Number(envVars.SMTP_TIMEOUT);
+const smtpTimeoutMs =
+  Number.isFinite(smtpTimeoutSec) && smtpTimeoutSec > 0 ? smtpTimeoutSec * 1000 : undefined;
+const smtpTlsRejectUnauthorized = !['false', '0'].includes(
+  String(envVars.SMTP_TLS_REJECT_UNAUTHORIZED ?? 'true')
+    .trim()
+    .toLowerCase()
+);
+const smtpTransport = {
+  host: envVars.SMTP_HOST,
+  port: smtpPort,
+  secure: smtpPort === 465,
+  auth: {
+    user: envVars.SMTP_USERNAME,
+    pass: envVars.SMTP_PASSWORD,
+  },
+};
+if (smtpTimeoutMs) {
+  smtpTransport.connectionTimeout = smtpTimeoutMs;
+  smtpTransport.greetingTimeout = smtpTimeoutMs;
+  smtpTransport.socketTimeout = smtpTimeoutMs;
+}
+// Only disable TLS verification when explicitly requested (dev/self-signed). Outlook/M365 expects default verification.
+if (!smtpTlsRejectUnauthorized) {
+  smtpTransport.tls = { rejectUnauthorized: false };
+}
+
 const resolvedBackendPublicUrl = (
   envVars.BACKEND_PUBLIC_URL ||
   process.env.RENDER_EXTERNAL_URL ||
@@ -296,22 +328,7 @@ const config = {
     verifyEmailExpirationMinutes: envVars.JWT_VERIFY_EMAIL_EXPIRATION_MINUTES,
   },
   email: {
-    smtp: {
-      host: envVars.SMTP_HOST,
-      port: envVars.SMTP_PORT,
-      secure: envVars.SMTP_PORT === 465,
-      auth: {
-        user: envVars.SMTP_USERNAME,
-        pass: envVars.SMTP_PASSWORD,
-      },
-      tls: {
-        rejectUnauthorized: !['false', '0'].includes(
-          String(envVars.SMTP_TLS_REJECT_UNAUTHORIZED ?? 'true')
-            .trim()
-            .toLowerCase()
-        ),
-      },
-    },
+    smtp: smtpTransport,
     from: envVars.EMAIL_FROM,
     replyTo: envVars.EMAIL_REPLY_TO,
   },
@@ -538,7 +555,7 @@ const config = {
   },
 };
 
-// Production: warn if email/share links would use localhost
+// Production: warn if email/share links would use localhost or SMTP is incomplete
 if (config.env === 'production') {
   const f = config.frontendBaseUrl || '';
   const b = config.backendPublicUrl || '';
@@ -547,6 +564,13 @@ if (config.env === 'production') {
     console.warn(
       '[Config] Email and share links will use localhost. Set FRONTEND_BASE_URL and BACKEND_PUBLIC_URL in your deployment env.'
     );
+  }
+  const missingSmtp = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'EMAIL_FROM'].filter(
+    (key) => !String(envVars[key] ?? '').trim()
+  );
+  if (missingSmtp.length) {
+    // eslint-disable-next-line no-console
+    console.warn(`[Config] SMTP not fully configured for production mail: ${missingSmtp.join(', ')}`);
   }
 }
 
