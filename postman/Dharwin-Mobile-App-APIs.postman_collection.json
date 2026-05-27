@@ -1,0 +1,961 @@
+{
+  "info": {
+    "_postman_id": "dharwin-mobile-app-apis",
+    "name": "Dharwin Mobile App APIs",
+    "description": "Full backend coverage for the Dharwin mobile app (Mail, Meetings, Files, Calls, Chats, LiveKit). Set email/password in collection variables, run Auth -> Login, then any request.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://apis.dharwinone.com/v1", "type": "string" },
+    { "key": "email", "value": "your-email@example.com", "type": "string" },
+    { "key": "password", "value": "", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "accountId", "value": "", "type": "string" },
+    { "key": "outlookAccountId", "value": "", "type": "string" },
+    { "key": "threadId", "value": "", "type": "string" },
+    { "key": "messageId", "value": "", "type": "string" },
+    { "key": "attachmentId", "value": "", "type": "string" },
+    { "key": "labelId", "value": "", "type": "string" },
+    { "key": "templateId", "value": "", "type": "string" },
+    { "key": "meetingId", "value": "", "type": "string" },
+    { "key": "meetingRoomName", "value": "", "type": "string" },
+    { "key": "recordingId", "value": "", "type": "string" },
+    { "key": "conversationId", "value": "", "type": "string" },
+    { "key": "chatMessageId", "value": "", "type": "string" },
+    { "key": "fileKey", "value": "", "type": "string" },
+    { "key": "folderPrefix", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{accessToken}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "1. Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "if (json.tokens) {",
+                  "  if (json.tokens.access && json.tokens.access.token) pm.collectionVariables.set('accessToken', json.tokens.access.token);",
+                  "  if (json.tokens.refresh && json.tokens.refresh.token) pm.collectionVariables.set('refreshToken', json.tokens.refresh.token);",
+                  "  console.log('tokens saved');",
+                  "} else {",
+                  "  console.warn('No tokens in JSON. Set AUTH_RETURN_TOKENS_IN_JSON=true on the backend for non-prod testing.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Me (current user)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/auth/me" }
+        },
+        {
+          "name": "Refresh Tokens",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
+            "url": "{{baseUrl}}/auth/refresh-tokens"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
+            "url": "{{baseUrl}}/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Mail - Gmail",
+      "item": [
+        {
+          "name": "GET Accounts",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const r = pm.response.json();",
+                  "  const list = Array.isArray(r) ? r : (r.data || []);",
+                  "  const a = list[0];",
+                  "  const id = a && (a._id || a.id || a.accountId);",
+                  "  if (id) { pm.collectionVariables.set('accountId', id); console.log('accountId saved'); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/email/accounts" }
+        },
+        {
+          "name": "OAuth - Start Google",
+          "request": { "method": "GET", "url": "{{baseUrl}}/email/auth/google" }
+        },
+        {
+          "name": "OAuth - Google Callback",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/auth/google/callback?code=&state=",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "auth", "google", "callback"],
+              "query": [
+                { "key": "code", "value": "" },
+                { "key": "state", "value": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE Account",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/email/accounts/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "accounts", "{{accountId}}"]
+            }
+          }
+        },
+        {
+          "name": "List Threads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/threads?accountId={{accountId}}&labelId=INBOX&pageSize=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "threads"],
+              "query": [
+                { "key": "accountId", "value": "{{accountId}}" },
+                { "key": "labelId", "value": "INBOX" },
+                { "key": "pageToken", "value": "", "disabled": true },
+                { "key": "pageSize", "value": "25" },
+                { "key": "q", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Thread Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/threads/{{threadId}}?accountId={{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "threads", "{{threadId}}"],
+              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Single Message",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}?accountId={{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}"],
+              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}" },
+            "url": "{{baseUrl}}/email/messages/send"
+          }
+        },
+        {
+          "name": "Reply",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}/reply",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}", "reply"]
+            }
+          }
+        },
+        {
+          "name": "Reply All",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}/reply-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}", "reply-all"]
+            }
+          }
+        },
+        {
+          "name": "Forward",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}/forward",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}", "forward"]
+            }
+          }
+        },
+        {
+          "name": "Patch Message (labels/read)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "Batch Modify Messages",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"ids\": [\"{{messageId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}" },
+            "url": "{{baseUrl}}/email/messages/batch-modify"
+          }
+        },
+        {
+          "name": "Trash Thread",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"threadId\": \"{{threadId}}\"\n}" },
+            "url": "{{baseUrl}}/email/threads/trash"
+          }
+        },
+        {
+          "name": "Get Attachment",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/messages/{{messageId}}/attachments/{{attachmentId}}?accountId={{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "messages", "{{messageId}}", "attachments", "{{attachmentId}}"],
+              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Labels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/email/labels?accountId={{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "labels"],
+              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Templates - List",
+          "request": { "method": "GET", "url": "{{baseUrl}}/email/templates" }
+        },
+        {
+          "name": "Templates - Create",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Welcome\",\n  \"subject\": \"Hi\",\n  \"body\": \"<p>Hello</p>\"\n}" },
+            "url": "{{baseUrl}}/email/templates"
+          }
+        },
+        {
+          "name": "Templates - Patch",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"Updated\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/email/templates/{{templateId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["email", "templates", "{{templateId}}"]
+            }
+          }
+        },
+        {
+          "name": "Signature - Get",
+          "request": { "method": "GET", "url": "{{baseUrl}}/email/signature" }
+        },
+        {
+          "name": "Signature - Patch",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"signature\": \"<p>--<br/>Name</p>\"\n}" },
+            "url": "{{baseUrl}}/email/signature"
+          }
+        },
+        {
+          "name": "Drafts - AI Generate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"prompt\": \"Draft a polite follow-up\",\n  \"context\": {}\n}" },
+            "url": "{{baseUrl}}/email/drafts/generate"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Mail - Outlook",
+      "item": [
+        {
+          "name": "GET Accounts",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const r = pm.response.json();",
+                  "  const list = Array.isArray(r) ? r : (r.data || []);",
+                  "  const a = list[0];",
+                  "  const id = a && (a._id || a.id || a.accountId);",
+                  "  if (id) { pm.collectionVariables.set('outlookAccountId', id); console.log('outlookAccountId saved'); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/outlook/accounts" }
+        },
+        {
+          "name": "OAuth - Start Microsoft",
+          "request": { "method": "GET", "url": "{{baseUrl}}/outlook/auth/microsoft" }
+        },
+        {
+          "name": "OAuth - Microsoft Callback",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/auth/microsoft/callback?code=&state=",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "auth", "microsoft", "callback"],
+              "query": [
+                { "key": "code", "value": "" },
+                { "key": "state", "value": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE Account",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/accounts/{{outlookAccountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "accounts", "{{outlookAccountId}}"]
+            }
+          }
+        },
+        {
+          "name": "List Threads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/threads?accountId={{outlookAccountId}}&labelId=INBOX&pageSize=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "threads"],
+              "query": [
+                { "key": "accountId", "value": "{{outlookAccountId}}" },
+                { "key": "labelId", "value": "INBOX" },
+                { "key": "pageToken", "value": "", "disabled": true },
+                { "key": "pageSize", "value": "25" },
+                { "key": "q", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Thread Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/threads/{{threadId}}?accountId={{outlookAccountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "threads", "{{threadId}}"],
+              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Single Message",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/messages/{{messageId}}?accountId={{outlookAccountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "messages", "{{messageId}}"],
+              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}" },
+            "url": "{{baseUrl}}/outlook/messages/send"
+          }
+        },
+        {
+          "name": "Reply",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/reply",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "messages", "{{messageId}}", "reply"]
+            }
+          }
+        },
+        {
+          "name": "Reply All",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/reply-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "messages", "{{messageId}}", "reply-all"]
+            }
+          }
+        },
+        {
+          "name": "Forward",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/forward",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "messages", "{{messageId}}", "forward"]
+            }
+          }
+        },
+        {
+          "name": "Labels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/outlook/labels?accountId={{outlookAccountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["outlook", "labels"],
+              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Internal Meetings",
+      "item": [
+        {
+          "name": "List - Upcoming",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings?status=scheduled&page=1&limit=25&sortBy=startTime&order=asc",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings"],
+              "query": [
+                { "key": "status", "value": "scheduled", "description": "scheduled|ended|cancelled" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "25" },
+                { "key": "sortBy", "value": "startTime" },
+                { "key": "order", "value": "asc" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List - Completed",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings?status=ended&page=1&limit=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings"],
+              "query": [
+                { "key": "status", "value": "ended" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "25" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List - Cancelled",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings?status=cancelled&page=1&limit=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings"],
+              "query": [
+                { "key": "status", "value": "cancelled" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "25" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const j = pm.response.json();",
+                  "  const m = j.data || j;",
+                  "  if (m && m.meetingId) pm.collectionVariables.set('meetingRoomName', m.meetingId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}"]
+            }
+          }
+        },
+        {
+          "name": "Create",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const j = pm.response.json();",
+                  "  const m = j.data || j;",
+                  "  if (m && (m._id || m.id)) pm.collectionVariables.set('meetingId', m._id || m.id);",
+                  "  if (m && m.meetingId) pm.collectionVariables.set('meetingRoomName', m.meetingId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Team Sync\",\n  \"description\": \"Weekly sync\",\n  \"startTime\": \"2026-05-28T10:00:00.000Z\",\n  \"endTime\": \"2026-05-28T10:30:00.000Z\",\n  \"timezone\": \"Asia/Kolkata\",\n  \"participants\": [\n    { \"email\": \"someone@example.com\", \"name\": \"Someone\" }\n  ],\n  \"sendInvites\": true\n}" },
+            "url": "{{baseUrl}}/internal-meetings"
+          }
+        },
+        {
+          "name": "Patch / Reschedule",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Renamed\",\n  \"startTime\": \"2026-05-28T11:00:00.000Z\",\n  \"endTime\": \"2026-05-28T11:30:00.000Z\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}"]
+            }
+          }
+        },
+        {
+          "name": "Cancel (PATCH status)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"cancelled\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}"]
+            }
+          }
+        },
+        {
+          "name": "Resend Invites",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}/resend-invitations",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}", "resend-invitations"]
+            }
+          }
+        },
+        {
+          "name": "Recordings for Meeting",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}/recordings",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal-meetings", "{{meetingId}}", "recordings"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. LiveKit",
+      "item": [
+        {
+          "name": "Token - Meeting",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\"\n}" },
+            "url": "{{baseUrl}}/livekit/token"
+          }
+        },
+        {
+          "name": "Token - Chat Call",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{conversationId}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\",\n  \"forChatCall\": true\n}" },
+            "url": "{{baseUrl}}/livekit/token"
+          }
+        },
+        {
+          "name": "Recording - Start",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}" },
+            "url": "{{baseUrl}}/livekit/recording/start"
+          }
+        },
+        {
+          "name": "Recording - Stop",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}" },
+            "url": "{{baseUrl}}/livekit/recording/stop"
+          }
+        },
+        {
+          "name": "Recording - Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/livekit/recording/status/{{meetingRoomName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["livekit", "recording", "status", "{{meetingRoomName}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Recordings (Global)",
+      "item": [
+        {
+          "name": "List Recordings",
+          "request": { "method": "GET", "url": "{{baseUrl}}/recordings" }
+        },
+        {
+          "name": "Recording Transcript",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/recordings/{{recordingId}}/transcript",
+              "host": ["{{baseUrl}}"],
+              "path": ["recordings", "{{recordingId}}", "transcript"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. File Storage",
+      "item": [
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/file-storage/list?prefix=&maxKeys=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["file-storage", "list"],
+              "query": [
+                { "key": "prefix", "value": "" },
+                { "key": "next", "value": "", "disabled": true },
+                { "key": "maxKeys", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Download (signed URL)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/file-storage/download?key={{fileKey}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["file-storage", "download"],
+              "query": [{ "key": "key", "value": "{{fileKey}}" }]
+            }
+          }
+        },
+        {
+          "name": "Upload (multipart)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "folder", "value": "{{folderPrefix}}", "type": "text", "disabled": true }
+              ]
+            },
+            "url": "{{baseUrl}}/file-storage/upload",
+            "description": "Max 20 MB. Field name = file."
+          }
+        },
+        {
+          "name": "Delete Object",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/file-storage/object?key={{fileKey}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["file-storage", "object"],
+              "query": [{ "key": "key", "value": "{{fileKey}}" }]
+            }
+          }
+        },
+        {
+          "name": "Create Folder",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"NewFolder\",\n  \"prefix\": \"{{folderPrefix}}\"\n}" },
+            "url": "{{baseUrl}}/file-storage/folder"
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Chats",
+      "item": [
+        {
+          "name": "List Conversations",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const r = pm.response.json();",
+                  "  const list = Array.isArray(r) ? r : (r.data || r.conversations || []);",
+                  "  const c = list[0];",
+                  "  const id = c && (c._id || c.id);",
+                  "  if (id) pm.collectionVariables.set('conversationId', id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/chats/conversations" }
+        },
+        {
+          "name": "Conversation Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}"]
+            }
+          }
+        },
+        {
+          "name": "Messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}", "messages"]
+            }
+          }
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"text\": \"Hello from Postman\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}", "messages"]
+            }
+          }
+        },
+        {
+          "name": "Send Message with File",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "text", "value": "Attaching file", "type": "text" },
+                { "key": "file", "type": "file", "src": [] }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}", "messages", "upload"]
+            }
+          }
+        },
+        {
+          "name": "Mark Read",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}", "read"]
+            }
+          }
+        },
+        {
+          "name": "Start Call",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"type\": \"audio\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/call",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "conversations", "{{conversationId}}", "call"]
+            }
+          }
+        },
+        {
+          "name": "Socket Token",
+          "request": { "method": "GET", "url": "{{baseUrl}}/chats/socket-token" }
+        },
+        {
+          "name": "User Search",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/users/search?search=",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "users", "search"],
+              "query": [{ "key": "search", "value": "", "description": "Backend param is 'search' (not 'q')" }]
+            }
+          }
+        },
+        {
+          "name": "In-App Calls List",
+          "request": { "method": "GET", "url": "{{baseUrl}}/chats/calls" }
+        }
+      ]
+    },
+    {
+      "name": "9. Unified Calls",
+      "item": [
+        {
+          "name": "All Calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/communication/calls?page=1&limit=25&sortBy=createdAt&order=desc&source=all",
+              "host": ["{{baseUrl}}"],
+              "path": ["communication", "calls"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "25" },
+                { "key": "sortBy", "value": "createdAt" },
+                { "key": "order", "value": "desc" },
+                { "key": "source", "value": "all", "description": "all | telephony | in_app" },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "status", "value": "", "disabled": true },
+                { "key": "purpose", "value": "", "disabled": true },
+                { "key": "language", "value": "", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

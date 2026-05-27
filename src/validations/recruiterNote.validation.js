@@ -27,4 +27,14 @@ const deleteNote = {
   }),
 };
 
-export { listNotes, createNote, deleteNote };
+const shareByEmail = {
+  params: Joi.object().keys({
+    recruiterId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    email: Joi.string().email().required(),
+    message: Joi.string().trim().max(1000).optional().allow('', null),
+  }),
+};
+
+export { listNotes, createNote, deleteNote, shareByEmail };

@@ -362,13 +362,21 @@ const registerRecruiter = catchAsync(async (req, res) => {
   if (!recruiterRole) {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Recruiter role not found. Please contact administrator.');
   }
+  // Accept profilePicture as a URL string from the FE wizard; persist as the
+  // structured { url } object that the User model expects.
+  const profilePictureUrl =
+    typeof req.body.profilePicture === 'string' && req.body.profilePicture.trim()
+      ? req.body.profilePicture.trim()
+      : null;
+  const { profilePicture: _ignoredProfilePicture, ...rest } = req.body;
   const userData = {
-    ...req.body,
+    ...rest,
     isEmailVerified: true,
     status: 'active',
     roleIds: [recruiterRole._id],
     phoneNumber: req.body.phoneNumber || undefined,
     countryCode: req.body.countryCode || undefined,
+    ...(profilePictureUrl ? { profilePicture: { url: profilePictureUrl } } : {}),
   };
   const user = await createUser(userData);
   if (req.user) {
@@ -754,16 +762,18 @@ const extractSkillsFromResume = catchAsync(async (req, res) => {
  * Persists result to SkillRecommendation (fire-and-forget; never fails the response).
  */
 const recommendSkillsByRole = catchAsync(async (req, res) => {
-  const result = await recommendSkillsForJobRole(req.body?.role, req.body?.currentSkills);
+  const result = await recommendSkillsForJobRole(req.body?.role, req.body?.currentSkills, req.body?.seniority);
   res.send(result);
 
   // Persist recommendation history (non-blocking)
   try {
     const candidate = await getCandidateByOwnerForMe(req.user.id);
     if (candidate?._id && result.skills?.length) {
+      const seniority = String(req.body?.seniority || '').trim().slice(0, 50);
+      const baseRole = String(req.body?.role || '').trim().slice(0, 500);
       await SkillRecommendation.create({
         employeeId: candidate._id,
-        targetRole: String(req.body?.role || '').trim().slice(0, 500),
+        targetRole: seniority ? `${seniority} ${baseRole}`.slice(0, 500) : baseRole,
         skills: result.skills,
         buckets: result.buckets || {},
       });

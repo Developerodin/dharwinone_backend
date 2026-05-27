@@ -176,13 +176,15 @@ Normalize duplicates; Title Case proper nouns; empty arrays allowed.`;
  * @param {Array<{ name?: string; level?: string; category?: string } | string>} currentSkillsRaw - employee's existing skills only (names sent to the model)
  * @returns {Promise<{ skills: Array<{ name: string; level: string; category?: string }>; buckets: Record<string, string[]> }>}
  */
-export async function recommendSkillsForJobRole(roleTitle, currentSkillsRaw = []) {
+export async function recommendSkillsForJobRole(roleTitle, currentSkillsRaw = [], seniorityRaw = '') {
   const trimmed = String(roleTitle || '')
     .trim()
     .slice(0, 500);
   if (!trimmed || trimmed.length < 2) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Enter a job role (at least 2 characters).');
   }
+
+  const seniority = String(seniorityRaw || '').trim().slice(0, 50);
 
   const currentSkills = Array.isArray(currentSkillsRaw)
     ? currentSkillsRaw
@@ -219,7 +221,7 @@ export async function recommendSkillsForJobRole(roleTitle, currentSkillsRaw = []
   const system = `You help employees grow toward a target job role. Reply with ONE JSON object only (no markdown).
 Keys: technical, soft, tools, languages, domains, certifications.
 Each bucket is an array of objects: {name: string, level: string}.
-level is the target proficiency to reach: Beginner, Intermediate, Advanced, or Expert — pick based on what this role typically requires.
+level is the target proficiency to reach: Beginner, Intermediate, Advanced, or Expert — pick based on what this role AND seniority typically requires.
 technical = stacks still missing or weak for this role vs what they already have.
 soft = interpersonal skills worth developing for this role.
 tools = products/platforms to learn.
@@ -227,11 +229,20 @@ languages = spoken languages if relevant.
 domains = industries or contexts to deepen.
 certifications = credentials worth pursuing.
 
-IMPORTANT: The user lists skills the employee ALREADY has. Recommend ONLY additional skills they still need to develop for the target role. Do NOT repeat or trivially rename existing skills (match names loosely; ignore case). If they already cover the role well, use mostly empty arrays with a few high-impact gaps only.
+SENIORITY GUIDANCE: When a seniority level is given, calibrate skill depth and breadth accordingly:
+- Junior/Entry: foundational skills, common tools, basic best practices; lean toward Beginner/Intermediate levels.
+- Mid-level: solid breadth, independent execution, applied best practices; Intermediate/Advanced levels.
+- Senior: deep expertise, system design, mentoring, cross-functional skills; mostly Advanced.
+- Lead/Staff/Principal: architecture, technical strategy, large-scope influence, advanced soft skills (mentoring, stakeholder mgmt); Advanced/Expert.
+- Manager/Director: people management, hiring, roadmap ownership, exec communication, budget/strategy; Advanced/Expert in leadership-oriented skills.
+
+IMPORTANT: The user lists skills the employee ALREADY has. Recommend ONLY additional skills they still need to develop for the target role at the given seniority. Do NOT repeat or trivially rename existing skills (match names loosely; ignore case). If they already cover the role well, use mostly empty arrays with a few high-impact gaps only.
 
 Emit roughly 8–24 NEW distinct skill names total across buckets (fewer if redundant). Empty arrays allowed.`;
 
-  const user = `Target job role:\n${trimmed}\n\nSkills the employee already has:\n${skillsLines}\n\nWhat additional skills should they develop for this role? JSON only.`;
+  const roleLine = seniority ? `${seniority} ${trimmed}` : trimmed;
+  const seniorityLine = seniority ? `\nSeniority level: ${seniority}` : '';
+  const user = `Target job role:\n${roleLine}${seniorityLine}\n\nSkills the employee already has:\n${skillsLines}\n\nWhat additional skills should they develop for this role at this seniority? JSON only.`;
 
   let completion;
   try {
@@ -266,12 +277,13 @@ Emit roughly 8–24 NEW distinct skill names total across buckets (fewer if redu
   );
 
   logger.info(
-    '[resumeSkillsExtract] recommend-by-role count=%s afterDedupe=%s model=%s roleLen=%s existing=%s',
+    '[resumeSkillsExtract] recommend-by-role count=%s afterDedupe=%s model=%s roleLen=%s existing=%s seniority=%s',
     out.skills.length,
     filteredSkills.length,
     completion.model || model,
     trimmed.length,
-    currentSkills.length
+    currentSkills.length,
+    seniority || '-'
   );
   return { skills: filteredSkills, buckets: out.buckets };
 }

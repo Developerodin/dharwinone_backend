@@ -124,6 +124,6 @@ async function listUnifiedCalls(options = {}) {
   };
 }
 
-export default {
+export {
   listUnifiedCalls,
 };

@@ -20,4 +20,17 @@ const deleteNote = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { listNotes, createNote, deleteNote };
+const shareByEmail = catchAsync(async (req, res) => {
+  const result = await recruiterNoteService.shareRecruiterByEmail(
+    req.params.recruiterId,
+    { email: req.body.email, message: req.body.message },
+    req.user
+  );
+  res.status(httpStatus.OK).send({
+    success: true,
+    message: 'Recruiter profile shared successfully',
+    data: result,
+  });
+});
+
+export { listNotes, createNote, deleteNote, shareByEmail };

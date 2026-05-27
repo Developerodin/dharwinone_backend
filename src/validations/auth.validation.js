@@ -206,6 +206,7 @@ const registerRecruiter = {
     domain: Joi.alternatives().try(Joi.string(), Joi.array().items(Joi.string())).optional(),
     location: Joi.string().optional().allow('', null),
     profileSummary: Joi.string().optional().allow('', null),
+    profilePicture: Joi.string().uri().optional().allow('', null),
   }),
 };
 
@@ -410,6 +411,7 @@ const updateMeWithCandidate = {
 const recommendSkillsByRole = {
   body: Joi.object().keys({
     role: Joi.string().trim().min(2).max(500).required(),
+    seniority: Joi.string().trim().max(50).optional().allow('', null),
     currentSkills: Joi.array()
       .max(500)
       .items(

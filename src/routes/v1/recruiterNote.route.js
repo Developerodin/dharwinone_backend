@@ -31,4 +31,13 @@ router
     recruiterNoteController.deleteNote
   );
 
+router
+  .route('/:recruiterId/share-email')
+  .post(
+    auth(),
+    requirePermissions('recruiters.read'),
+    validate(recruiterNoteValidation.shareByEmail),
+    recruiterNoteController.shareByEmail
+  );
+
 export default router;

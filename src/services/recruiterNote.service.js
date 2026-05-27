@@ -3,6 +3,8 @@ import RecruiterNote from '../models/recruiterNote.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
+import { sendEmail, buildEmailHTML, buildPlainTextEmail } from './email.service.js';
+import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 
 const ensureRecruiterExists = async (recruiterId) => {
   const exists = await User.exists({ _id: recruiterId });
@@ -48,4 +50,89 @@ const deleteNote = async (noteId, requesterUser) => {
   return { id: noteId };
 };
 
-export { listForRecruiter, createNote, deleteNote };
+/**
+ * Share recruiter profile via email. Sends a branded email containing recruiter
+ * details (name, education, location, domain, profile summary) and a link to
+ * the recruiter edit page, using the same mailer/template wrapper as the rest
+ * of the backend.
+ *
+ * @param {string} recruiterId
+ * @param {{ email: string, message?: string }} payload
+ * @param {Object} requesterUser
+ */
+const shareRecruiterByEmail = async (recruiterId, payload, requesterUser) => {
+  const recruiter = await User.findById(recruiterId).select(
+    'name email education location domain profileSummary'
+  );
+  if (!recruiter) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Recruiter not found');
+  }
+
+  const { email, message } = payload;
+  const sharedBy = requesterUser?.name || requesterUser?.email || 'A Dharwin user';
+
+  const frontendBase = (process.env.WEB_URL || getFrontendBaseUrl()).replace(/\/$/, '');
+  const profileUrl = `${frontendBase}/ats/recruiters/edit/${recruiterId}`;
+
+  const domainText = Array.isArray(recruiter.domain)
+    ? recruiter.domain.filter(Boolean).join(', ')
+    : recruiter.domain || '';
+
+  const subject = 'Recruiter profile shared with you';
+  const introLines = [
+    `${sharedBy} shared a recruiter profile with you.`,
+    'Review the recruiter details below and use the button to open their profile.',
+  ];
+  const detailRows = [
+    { label: 'Recruiter', value: recruiter.name || '' },
+    { label: 'Email', value: recruiter.email || '' },
+    { label: 'Education', value: recruiter.education || '' },
+    { label: 'Location', value: recruiter.location || '' },
+    { label: 'Domain', value: domainText },
+  ];
+  const sections = [];
+  if (recruiter.profileSummary && String(recruiter.profileSummary).trim()) {
+    sections.push({
+      title: 'Profile summary',
+      tone: 'neutral',
+      bodyLines: [String(recruiter.profileSummary).trim()],
+    });
+  }
+  if (message && String(message).trim()) {
+    sections.push({
+      title: `Message from ${sharedBy}`,
+      tone: 'info',
+      bodyLines: [String(message).trim()],
+    });
+  }
+  const primaryAction = { label: 'View recruiter profile', href: profileUrl };
+
+  const text = buildPlainTextEmail({
+    title: subject,
+    greeting: 'there',
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText: 'Recruiter share',
+    title: subject,
+    greeting: 'there',
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+    preheader: `${sharedBy} shared ${recruiter.name || 'a recruiter'}'s profile with you.`,
+  });
+
+  await sendEmail(email, subject, text, html, 'recruiterProfileShare', {
+    recruiterId: String(recruiterId),
+    sharedBy,
+    hasMessage: !!(message && String(message).trim()),
+  });
+
+  return { success: true, profileUrl };
+};
+
+export { listForRecruiter, createNote, deleteNote, shareRecruiterByEmail };
