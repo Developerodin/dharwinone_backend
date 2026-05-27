@@ -27,6 +27,10 @@ router
   );
 
 router
+  .route('/diagnostics')
+  .get(auth(), requirePermissionOrAdministrator('calls.manage'), bolnaController.getBolnaDiagnostics);
+
+router
   .route('/call')
   .post(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.initiateCall), bolnaController.initiateCall);
 

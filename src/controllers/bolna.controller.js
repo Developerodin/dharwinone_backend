@@ -187,6 +187,65 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
   });
 });
 
+function maskSecret(value) {
+  if (!value || typeof value !== 'string') return null;
+  if (value.length <= 8) return '***';
+  return `${value.slice(0, 4)}...${value.slice(-4)} (len=${value.length})`;
+}
+
+const getBolnaDiagnostics = catchAsync(async (req, res) => {
+  const { apiKey, apiBase } = bolnaService.getConfig();
+  const agentId = config.bolna.agentId;
+  const candidateAgentId = config.bolna.candidateAgentId;
+
+  const checkAgent = async (aid) => {
+    if (!aid) return { configured: false };
+    if (!apiKey) return { configured: true, agentId: aid, error: 'BOLNA_API_KEY missing' };
+    try {
+      const r = await fetch(`${apiBase}/v2/agent/${aid}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      const text = await r.text();
+      let body = {};
+      try { body = text ? JSON.parse(text) : {}; } catch { /* ignore */ }
+      return {
+        configured: true,
+        agentId: aid,
+        status: r.status,
+        exists: r.ok,
+        bolnaMessage: body?.message || body?.error || body?.detail || (r.ok ? 'ok' : text?.slice(0, 200)),
+      };
+    } catch (err) {
+      return { configured: true, agentId: aid, error: err.message };
+    }
+  };
+
+  const [agentCheck, candidateAgentCheck] = await Promise.all([
+    checkAgent(agentId),
+    checkAgent(candidateAgentId),
+  ]);
+
+  res.status(httpStatus.OK).send({
+    success: true,
+    env: {
+      apiBase,
+      apiKeyMasked: maskSecret(apiKey),
+      apiKeyPresent: Boolean(apiKey),
+      fromPhoneNumber: config.bolna.fromPhoneNumber || null,
+      agentIdSource: process.env.BOLNA_AGENT_ID ? 'env' : 'hardcoded-default',
+      candidateAgentIdSource: process.env.BOLNA_CANDIDATE_AGENT_ID
+        ? 'env'
+        : process.env.BOLNA_AGENT_ID
+          ? 'fallback-to-BOLNA_AGENT_ID'
+          : 'hardcoded-default',
+      sameAgentIds: agentId === candidateAgentId,
+    },
+    agent: agentCheck,
+    candidateAgent: candidateAgentCheck,
+  });
+});
+
 const getCallStatus = catchAsync(async (req, res) => {
   const { executionId } = req.params;
   const result = await bolnaService.getExecutionDetails(executionId);
@@ -416,5 +475,6 @@ export {
   receiveCandidateWebhook,
   syncMissingCallRecords,
   deleteCallRecord,
+  getBolnaDiagnostics,
 };
 
