@@ -14,10 +14,20 @@ import { FEATURE_FLAG_NAME } from '../../constants/salesAgentAttribution.js';
 
 const router = express.Router();
 
-const canRead = [auth(), requirePermissions('candidates.read')];
-const canManage = [auth(), requirePermissions('candidates.manage')];
-const canUpdateJoiningDate = [auth(), requirePermissions('candidates.joiningDate')];
-const canUpdateResignDate = [auth(), requirePermissions('candidates.resignDate')];
+/** PR2: employee CRUD/list — employees.* primary, candidates.* legacy backstop. */
+const canReadEmployees = [auth(), requireAnyOfPermissions('candidates.read', 'employees.read')];
+const canManageEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.manage')];
+/** Referral / pre-hire pipeline — candidates.* only (employees-only roles must not leak here). */
+const canReadCandidatesOnly = [auth(), requirePermissions('candidates.read')];
+const canManageCandidatesOnly = [auth(), requirePermissions('candidates.manage')];
+const canUpdateJoiningDate = [
+  auth(),
+  requireAnyOfPermissions('candidates.manage', 'onboarding.manage', 'employees.manage'),
+];
+const canUpdateResignDate = [
+  auth(),
+  requireAnyOfPermissions('candidates.manage', 'employees.manage'),
+];
 const canManageSalesAgentAttribution = [
   auth(),
   requirePermissions('candidates.manageSalesAgentAttribution'),
@@ -32,43 +42,43 @@ const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.rea
 
 router
   .route('/')
-  .post(auth(), requirePermissions('candidates.manage'), validate(employeeValidation.createCandidate), employeeController.create)
-  .get(...canRead, validate(employeeValidation.getCandidates), employeeController.list);
+  .post(...canManageEmployees, validate(employeeValidation.createCandidate), employeeController.create)
+  .get(...canReadEmployees, validate(employeeValidation.getCandidates), employeeController.list);
 
 /** Referral leads (ATS) — list must be before /:candidateId */
 router.get(
   '/referral-leads',
-  ...canRead,
+  ...canReadCandidatesOnly,
   validate(employeeValidation.getReferralLeads),
   employeeController.listReferralLeadsHandler
 );
 router.get(
   '/referral-leads/stats',
-  ...canRead,
+  ...canReadCandidatesOnly,
   validate(employeeValidation.getReferralLeadsStats),
   employeeController.getReferralLeadsStatsHandler
 );
 router.get(
   '/referral-leads/export',
-  ...canRead,
+  ...canReadCandidatesOnly,
   validate(employeeValidation.getReferralLeadsStats),
   employeeController.exportReferralLeadsHandler
 );
 router.post(
   '/referral-link',
-  ...canRead,
+  ...canReadCandidatesOnly,
   validate(employeeValidation.postReferralLinkToken),
   employeeController.postReferralLinkToken
 );
 router.post(
   '/referral-leads/:candidateId/override',
-  ...canManage,
+  ...canManageCandidatesOnly,
   validate(employeeValidation.postReferralAttributionOverride),
   employeeController.postReferralAttributionOverride
 );
 router.get(
   '/referral-leads/:candidateId/attribution-override-history',
-  ...canRead,
+  ...canReadCandidatesOnly,
   validate(employeeValidation.getReferralAttributionOverrideHistory),
   employeeController.getReferralAttributionOverrideHistoryHandler
 );
@@ -121,7 +131,7 @@ router.get('/me/matching-jobs', auth(), employeeController.getMyMatchingJobsHand
 /** All Agent-role users for ATS candidate filter (checklist) — candidates.read */
 router.get(
   '/agents',
-  ...canRead,
+  ...canReadEmployees,
   validate(employeeValidation.listAgentsForFilter),
   employeeController.listAgentsForFilter
 );
@@ -129,7 +139,7 @@ router.get(
 /** Per-agent assigned counts + unassigned (org-wide for employment scope) — candidates.manage */
 router.get(
   '/agent-assignment-summary',
-  ...canManage,
+  ...canManageEmployees,
   validate(employeeValidation.getAgentAssignmentSummary),
   employeeController.getAgentAssignmentSummaryHandler
 );
@@ -137,7 +147,7 @@ router.get(
 /** Training students ↔ agents — must be before /:candidateId */
 router.get(
   '/student-agent-assignments',
-  ...canManage,
+  ...canManageEmployees,
   validate(employeeValidation.listStudentAgentAssignments),
   employeeController.listStudentAgentAssignmentsHandler
 );
@@ -169,76 +179,76 @@ router
 /** Active-SOP incomplete steps across current candidates — candidates.manage only */
 router.get(
   '/sop-open-overview',
-  ...canManage,
+  ...canManageEmployees,
   validate(employeeValidation.getSopOpenOverview),
   employeeController.getSopOpenOverview
 );
 
 /** Queue in-app SOP notifications for candidates with open steps (all users with candidates.manage receive them). */
-router.post('/sop-reminders/dispatch', ...canManage, employeeController.postSopRemindersDispatch);
+router.post('/sop-reminders/dispatch', ...canManageEmployees, employeeController.postSopRemindersDispatch);
 
 router
   .route('/export')
-  .post(...canManage, validate(employeeValidation.exportAllCandidates), employeeController.exportAll);
+  .post(...canManageEmployees, validate(employeeValidation.exportAllCandidates), employeeController.exportAll);
 
 router
   .route('/import/excel')
-  .post(...canManage, uploadSingle('file'), employeeController.importExcel);
+  .post(...canManageEmployees, uploadSingle('file'), employeeController.importExcel);
 
 router
   .route('/salary-slips/:candidateId')
-  .post(...canRead, validate(employeeValidation.addSalarySlip), employeeController.addSalarySlip);
+  .post(...canReadEmployees, validate(employeeValidation.addSalarySlip), employeeController.addSalarySlip);
 
 /** Salary slip download: auth only (like /documents/.../download). Owner access is enforced in getSalarySlipDownloadUrl — not candidates.read (so profile owners can view their own slips). */
 router
   .route('/salary-slips/:candidateId/:salarySlipIndex')
   .get(documentAuth, validate(employeeValidation.downloadSalarySlip), employeeController.downloadSalarySlip)
-  .patch(...canRead, validate(employeeValidation.updateSalarySlip), employeeController.updateSalarySlip)
-  .delete(...canRead, validate(employeeValidation.deleteSalarySlip), employeeController.deleteSalarySlip);
+  .patch(...canReadEmployees, validate(employeeValidation.updateSalarySlip), employeeController.updateSalarySlip)
+  .delete(...canReadEmployees, validate(employeeValidation.deleteSalarySlip), employeeController.deleteSalarySlip);
 
 router
   .route('/:candidateId/resend-verification-email')
-  .post(...canManage, validate(employeeValidation.resendVerificationEmail), employeeController.resendVerificationEmail);
+  .post(...canManageEmployees, validate(employeeValidation.resendVerificationEmail), employeeController.resendVerificationEmail);
 
 router
   .route('/:candidateId/export')
-  .post(...canRead, validate(employeeValidation.exportCandidate), employeeController.exportProfile);
+  .post(...canReadEmployees, validate(employeeValidation.exportCandidate), employeeController.exportProfile);
 
 router
   .route('/:candidateId/notes')
-  .post(...canRead, validate(employeeValidation.addRecruiterNote), employeeController.addNote);
+  .post(...canReadEmployees, validate(employeeValidation.addRecruiterNote), employeeController.addNote);
 
 router
   .route('/:candidateId/feedback')
-  .post(...canRead, validate(employeeValidation.addRecruiterFeedback), employeeController.addFeedback);
+  .post(...canReadEmployees, validate(employeeValidation.addRecruiterFeedback), employeeController.addFeedback);
 
 router
   .route('/:candidateId/assign-recruiter')
-  .post(...canManage, validate(employeeValidation.assignRecruiter), employeeController.assignRecruiter);
+  .post(...canManageEmployees, validate(employeeValidation.assignRecruiter), employeeController.assignRecruiter);
 
 router
   .route('/:candidateId/assign-agent')
-  .post(...canManage, validate(employeeValidation.assignAgent), employeeController.assignAgent);
+  .post(...canManageEmployees, validate(employeeValidation.assignAgent), employeeController.assignAgent);
 
 router
   .route('/:candidateId/company-assigned-email')
   .post(
-    ...canManage,
+    ...canManageEmployees,
     validate(employeeValidation.assignCompanyAssignedEmail),
     employeeController.assignCompanyAssignedEmail
   );
 
 router
   .route('/week-off')
-  .post(...canManage, validate(employeeValidation.updateWeekOff), employeeController.updateWeekOff);
+  .post(...canManageEmployees, validate(employeeValidation.updateWeekOff), employeeController.updateWeekOff);
 
 router
   .route('/:candidateId/week-off')
-  .get(...canRead, validate(employeeValidation.getWeekOff), employeeController.getWeekOff);
+  .get(...canReadEmployees, validate(employeeValidation.getWeekOff), employeeController.getWeekOff);
 
 router
   .route('/assign-shift')
-  .post(...canManage, validate(employeeValidation.assignShift), employeeController.assignShift);
+  .post(...canManageEmployees, validate(employeeValidation.assignShift), employeeController.assignShift);
 
 router
   .route('/:candidateId/joining-date')
@@ -266,13 +276,13 @@ router.get(
 
 router
   .route('/:candidateId')
-  .get(...canRead, validate(employeeValidation.getCandidate), employeeController.get)
-  .patch(...canRead, validate(employeeValidation.updateCandidate), employeeController.update)
-  .delete(...canManage, validate(employeeValidation.deleteCandidate), employeeController.remove);
+  .get(...canReadEmployees, validate(employeeValidation.getCandidate), employeeController.get)
+  .patch(...canReadEmployees, validate(employeeValidation.updateCandidate), employeeController.update)
+  .delete(...canManageEmployees, validate(employeeValidation.deleteCandidate), employeeController.remove);
 
 router
   .route('/documents/:candidateId')
-  .get(...canRead, validate(employeeValidation.getDocuments), employeeController.getCandidateDocuments);
+  .get(...canReadEmployees, validate(employeeValidation.getDocuments), employeeController.getCandidateDocuments);
 
 router
   .route('/documents/:candidateId/:documentIndex/download')
@@ -280,15 +290,15 @@ router
 
 router
   .route('/documents/verify/:candidateId/:documentIndex')
-  .patch(...canManage, validate(employeeValidation.verifyDocument), employeeController.verifyDocumentStatus);
+  .patch(...canManageEmployees, validate(employeeValidation.verifyDocument), employeeController.verifyDocumentStatus);
 
 router
   .route('/documents/status/:candidateId')
-  .get(...canRead, validate(employeeValidation.getDocumentStatus), employeeController.getCandidateDocumentStatus);
+  .get(...canReadEmployees, validate(employeeValidation.getDocumentStatus), employeeController.getCandidateDocumentStatus);
 
 router
   .route('/share/:candidateId')
-  .post(...canRead, validate(employeeValidation.shareCandidateProfile), employeeController.shareProfile);
+  .post(...canReadEmployees, validate(employeeValidation.shareCandidateProfile), employeeController.shareProfile);
 
 router
   .route('/public/candidate/:candidateId')
@@ -297,7 +307,7 @@ router
 /** Job fit score: compare candidate skills against a job's skillRequirements */
 router.get(
   '/:candidateId/job-fit',
-  ...canRead,
+  ...canReadEmployees,
   employeeController.getJobFitHandler
 );
 

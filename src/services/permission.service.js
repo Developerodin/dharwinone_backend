@@ -37,7 +37,7 @@ const NAMESPACED_RESOURCE_KEYS = new Set([
  * @param {Set<string>} rawPermissions
  * @returns {Set<string>}
  */
-const deriveApiPermissions = (rawPermissions) => {
+export const deriveApiPermissions = (rawPermissions) => {
   const apiPermissions = new Set();
 
   for (const raw of rawPermissions) {

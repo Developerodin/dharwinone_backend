@@ -39,9 +39,13 @@ export const ACTION_PERMISSIONS = Object.freeze({
   share_job: 'jobs.read',
   apply_to_job: 'jobs.read',
 
-  // ATS Candidates
+  // ATS Candidates (legacy pipeline / referral)
   view_candidates: 'candidates.read',
   manage_candidates: 'candidates.manage',
+
+  // ATS Employees (PR2)
+  view_employees: 'employees.read',
+  manage_employees: 'employees.manage',
 
   // Activity Logs
   view_activity_logs: 'activityLogs.read',

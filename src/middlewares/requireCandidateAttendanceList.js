@@ -35,7 +35,10 @@ const requireCandidateAttendanceList = async (req, res, next) => {
     return next();
   }
 
-  const grantingCandidates = getGrantingPermissions('candidates.read').concat(getGrantingPermissions('candidates.manage'));
+  const grantingCandidates = getGrantingPermissions('candidates.read')
+    .concat(getGrantingPermissions('candidates.manage'))
+    .concat(getGrantingPermissions('employees.read'))
+    .concat(getGrantingPermissions('employees.manage'));
   if (permissions && grantingCandidates.some((p) => permissions.has(p))) {
     return next();
   }

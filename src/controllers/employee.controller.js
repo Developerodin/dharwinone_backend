@@ -79,24 +79,28 @@ import {
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
-const canManageCandidates = (req) => req.authContext?.permissions?.has('candidates.manage') ?? false;
-
-/** Full manage OR granular joining-date permission (agents). */
-const canUpdateJoiningDate = (req) => {
+/** PR2: legacy candidates.manage OR employees.manage (employee record CRUD). */
+export const canManageCandidates = (req) => {
   const p = req.authContext?.permissions;
   if (!p) return false;
-  if (p.has('candidates.manage')) return true;
-  if (p.has('candidates.joiningDate.manage')) return true;
-  return false;
+  return p.has('candidates.manage') || p.has('employees.manage');
 };
 
-/** Full manage OR granular resign-date permission (agents). */
-const canUpdateResignDate = (req) => {
+/** PR1: candidates.manage (legacy) OR onboarding.manage OR employees.manage. */
+export const canUpdateJoiningDate = (req) => {
   const p = req.authContext?.permissions;
   if (!p) return false;
-  if (p.has('candidates.manage')) return true;
-  if (p.has('candidates.resignDate.manage')) return true;
-  return false;
+  return p.has('candidates.manage')
+      || p.has('onboarding.manage')
+      || p.has('employees.manage');
+};
+
+/** PR1: candidates.manage (legacy) OR employees.manage. Resign date NOT under onboarding. */
+export const canUpdateResignDate = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return p.has('candidates.manage')
+      || p.has('employees.manage');
 };
 
 const create = catchAsync(async (req, res) => {
@@ -656,7 +660,10 @@ const downloadDocument = catchAsync(async (req, res) => {
 
   // documentAuth sets req.user but not req.authContext; compute canManageCandidates for isOwnerOrAdmin check
   const authContext = await getUserPermissionContext(req.user);
-  req.user.canManageCandidates = authContext?.permissions?.has('candidates.manage') ?? false;
+  req.user.canManageCandidates =
+    authContext?.permissions?.has('candidates.manage')
+    || authContext?.permissions?.has('employees.manage')
+    || false;
 
   const documentData = await getDocumentDownloadUrl(candidateId, parseInt(documentIndex, 10), req.user);
   
@@ -683,7 +690,10 @@ const downloadDocument = catchAsync(async (req, res) => {
 const downloadSalarySlip = catchAsync(async (req, res) => {
   const { candidateId, salarySlipIndex } = req.params;
   const authContext = await getUserPermissionContext(req.user);
-  req.user.canManageCandidates = authContext?.permissions?.has('candidates.manage') ?? false;
+  req.user.canManageCandidates =
+    authContext?.permissions?.has('candidates.manage')
+    || authContext?.permissions?.has('employees.manage')
+    || false;
 
   const data = await getSalarySlipDownloadUrl(candidateId, parseInt(salarySlipIndex, 10), req.user);
   const acceptsJson = req.headers.accept && req.headers.accept.includes('application/json');

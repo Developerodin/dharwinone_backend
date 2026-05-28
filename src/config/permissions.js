@@ -65,6 +65,13 @@ export const permissionAliases = {
     'interviews.manage',
   ],
   'candidates.manage': ['candidates.manage', 'ats.candidates:view,create,edit,delete'],
+  // ATS employees: ats.employees:view -> employees.read; create/edit/delete -> employees.manage (PR2)
+  'employees.read': [
+    'employees.read',
+    'ats.employees:view',
+    'ats.employees:view,create,edit,delete',
+  ],
+  'employees.manage': ['employees.manage', 'ats.employees:view,create,edit,delete'],
   'candidates.manageSalesAgentAttribution': [
     'candidates.manageSalesAgentAttribution',
     'candidates.manage',
@@ -78,20 +85,6 @@ export const permissionAliases = {
     'ats.share-candidate-form:view',
     'ats.share-candidate-form:view,create,edit,delete',
     'candidates.manage',
-  ],
-  // Joining date PATCH: full manage OR granular ats.candidates.joiningDate:view,edit → candidates.joiningDate.manage
-  'candidates.joiningDate': [
-    'candidates.manage',
-    'candidates.joiningDate.read',
-    'candidates.joiningDate.manage',
-    'ats.candidates:view,create,edit,delete',
-  ],
-  // Resign date PATCH: full manage OR granular ats.candidates.resignDate:view,edit → candidates.resignDate.manage
-  'candidates.resignDate': [
-    'candidates.manage',
-    'candidates.resignDate.read',
-    'candidates.resignDate.manage',
-    'ats.candidates:view,create,edit,delete',
   ],
   // Positions: training.positions:* derives to positions.read/manage; these aliases cover legacy indirect grants
   'positions.read': ['positions.read', 'students.read', 'candidates.read', 'users.manage'],
@@ -175,11 +168,11 @@ export const permissionAliases = {
   ],
   'email-templates-admin.manage': ['email-templates-admin.manage', 'users.manage'],
   // Company work email (Settings). Legacy: hub routes used candidates.manage.
-  'company-email.read': ['company-email.read', 'company-email.manage', 'candidates.manage'],
-  'company-email.manage': ['company-email.manage', 'candidates.manage'],
+  'company-email.read': ['company-email.read', 'company-email.manage', 'candidates.manage', 'employees.manage'],
+  'company-email.manage': ['company-email.manage', 'candidates.manage', 'employees.manage'],
   // Employee SOP template editor (Settings). Legacy: route used candidates.manage for template CRUD.
-  'candidate-sop.read': ['candidate-sop.read', 'candidate-sop.manage', 'candidates.manage'],
-  'candidate-sop.manage': ['candidate-sop.manage', 'candidates.manage'],
+  'candidate-sop.read': ['candidate-sop.read', 'candidate-sop.manage', 'candidates.manage', 'employees.manage'],
+  'candidate-sop.manage': ['candidate-sop.manage', 'candidates.manage', 'employees.manage'],
   // Settings → Agents. Legacy: voice agent routes used users.manage.
   'agents.read': ['agents.read', 'agents.manage', 'users.manage'],
   'agents.manage': ['agents.manage', 'users.manage'],
@@ -196,6 +189,7 @@ export const permissionAliases = {
   // Generic S3 single upload used by candidates, profile, training flows
   'uploads.document': [
     'candidates.manage',
+    'employees.manage',
     'files-storage.manage',
     'my-profile.manage',
     'students.manage',
