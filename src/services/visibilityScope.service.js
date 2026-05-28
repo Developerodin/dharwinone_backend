@@ -4,6 +4,7 @@ import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
 import User from '../models/user.model.js';
 import { userHasRecruiterRole, userIsAdmin, userIsSalesAgent } from '../utils/roleHelpers.js';
+import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const EMPTY_SCOPE = { _id: { $in: [] } };
 
@@ -111,6 +112,17 @@ const applicationScope = async (actor = {}, action = 'read') => {
 
   if (admin) {
     return { filter: {}, scopeDebug: { scopeType: 'application', action, role: 'admin' } };
+  }
+
+  // Matrix-driven bypass: any role granted ATS Interviews → Create/Edit/Delete (resolves to
+  // `interviews.manage`) can read ALL job applications. Needed so interview schedulers see
+  // candidates' applied jobs even when they don't own the candidate / job. Toggle via the
+  // user role matrix (Interviews row → Create or Edit or Delete).
+  if (await hasApiPermission(actor, 'interviews.manage')) {
+    return {
+      filter: {},
+      scopeDebug: { scopeType: 'application', action, role: 'permission:interviews.manage' },
+    };
   }
 
   if (recruiter && actorId) {

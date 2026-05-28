@@ -2,34 +2,114 @@
   "info": {
     "_postman_id": "dharwin-mobile-app-apis",
     "name": "Dharwin Mobile App APIs",
-    "description": "Full backend coverage for the Dharwin mobile app (Mail, Meetings, Files, Calls, Chats, LiveKit). Set email/password in collection variables, run Auth -> Login, then any request.",
+    "description": "Full backend coverage for the **Dharwin mobile app** (Expo: `Dharwin App/my-app`).\n\n**Setup:** Set `email` / `password` in collection variables → run **1. Auth → Login** → run any request.\n\nEach **folder** includes: app screen tree (login + 5 tabs + inner routes), mobile workflow, Postman tips, and a table mapping every API to app screen, when to call, backend handler, and purpose.\nEach **request** documents: mobile screen, **How to connect in the app** (route, file, service, flow, wiring status), backend route/handler, and auth.\n\n### App navigation map\n\n```\napp/index.tsx (splash)\n  └─► app/login.tsx ──► Auth APIs ──► app/(tabs)/*\n        app/forgot-password.tsx\n\napp/(tabs)/_layout.tsx  — 5 tabs (left → right):\n  1. Mails      app/(tabs)/mails.tsx\n  2. Chats      app/(tabs)/chats.tsx\n  3. Calls      app/(tabs)/calls.tsx\n  4. Meetings   app/(tabs)/meetings.tsx\n  5. Files      app/(tabs)/files.tsx\n```\n\n**Wiring status:** Most screens still use mock data. `services/mail.ts` + `services/api.ts` exist; auth/meetings/chats/files/calls services are planned.\n\n| Area | Tab / entry | Inner screens |\n|------|-------------|---------------|\n| Auth | `/login` | `/forgot-password` |\n| Mails | `/(tabs)/mails` | `/mail/[folder]`, `/mail/thread/[id]`, `/mail/compose`, `/mail/accounts`, `/mail/add-account`, `/mail/settings`, `/mail/create-label` |\n| Chats | `/(tabs)/chats` | `/chat/[id]`, `/chat/new` |\n| Calls | `/(tabs)/calls` | `/call/new` |\n| Meetings | `/(tabs)/meetings` | `/meeting/[id]`, `/meeting/create` |\n| Files | `/(tabs)/files` | `/files/category/[id]`, `/files/[id]`, `/files/upload` |\n\nAll routes mount under `/v1` (included in `baseUrl`). Source: `uat.dharwin.backend/src/routes/v1/`.\n\n| Mobile tab | Postman folder | Backend prefix |\n|------------|----------------|----------------|\n| Sign in | 1. Auth | `/auth` |\n| Mails | 2–3. Mail | `/email`, `/outlook` |\n| Meetings | 4. Internal Meetings | `/internal-meetings` |\n| LiveKit | 5. LiveKit | `/livekit` |\n| Recordings | 6. Recordings | `/recordings` |\n| Files | 7. File Storage | `/file-storage` |\n| Chats | 8. Chats | `/chats` |\n| Calls | 9. Unified Calls | `/communication` |",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "https://apis.dharwinone.com/v1", "type": "string" },
-    { "key": "email", "value": "your-email@example.com", "type": "string" },
-    { "key": "password", "value": "", "type": "string" },
-    { "key": "accessToken", "value": "", "type": "string" },
-    { "key": "refreshToken", "value": "", "type": "string" },
-    { "key": "accountId", "value": "", "type": "string" },
-    { "key": "outlookAccountId", "value": "", "type": "string" },
-    { "key": "threadId", "value": "", "type": "string" },
-    { "key": "messageId", "value": "", "type": "string" },
-    { "key": "attachmentId", "value": "", "type": "string" },
-    { "key": "labelId", "value": "", "type": "string" },
-    { "key": "templateId", "value": "", "type": "string" },
-    { "key": "meetingId", "value": "", "type": "string" },
-    { "key": "meetingRoomName", "value": "", "type": "string" },
-    { "key": "recordingId", "value": "", "type": "string" },
-    { "key": "conversationId", "value": "", "type": "string" },
-    { "key": "chatMessageId", "value": "", "type": "string" },
-    { "key": "fileKey", "value": "", "type": "string" },
-    { "key": "folderPrefix", "value": "", "type": "string" }
+    {
+      "key": "baseUrl",
+      "value": "https://apis.dharwinone.com/v1",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "your-email@example.com",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "outlookAccountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "threadId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "messageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "attachmentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "labelId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "templateId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "meetingId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "meetingRoomName",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "recordingId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conversationId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "chatMessageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "fileKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "folderPrefix",
+      "value": "",
+      "type": "string"
+    }
   ],
   "auth": {
     "type": "bearer",
     "bearer": [
-      { "key": "token", "value": "{{accessToken}}", "type": "string" }
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
     ]
   },
   "item": [
@@ -58,37 +138,73 @@
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
-            "url": "{{baseUrl}}/auth/login"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "**API:** `POST /auth/login`\n\n### Mobile app\nlogin.tsx — Sign in (not wired yet; mock navigation today)\n\n### How to connect in the app\n- **Screen route:** `/login`\n- **File:** `app/login.tsx`\n- **Service:** services/auth.ts (planned)\n- **When to call:** User taps **Sign in** after entering email + password\n- **Navigation flow:** index (splash) → login → **Login** → store tokens → **Me** → router.replace(\"/(tabs)/…\")\n- **From → To:** app/index.tsx → app/(tabs)/*\n- **Wiring status:** Not wired — mock navigates to /chats without API\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.login`\n- **What it does:** Authenticates email/password, sets HttpOnly auth cookies, and may return access/refresh tokens in JSON when AUTH_RETURN_TOKENS_IN_JSON is enabled.\n- **How to call:** POST body `{ email, password }`. Rate-limited. No Bearer token. Postman test script saves tokens to collection variables.\n- **Auth / permissions:** Public\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
           }
         },
         {
           "name": "Me (current user)",
-          "request": { "method": "GET", "url": "{{baseUrl}}/auth/me" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/auth/me",
+            "description": "**API:** `GET /auth/me`\n\n### Mobile app\nSession bootstrap after login (planned; no caller yet)\n\n### How to connect in the app\n- **Screen route:** `/ (bootstrap) or tabs`\n- **File:** `app/_layout.tsx / services/api.ts (planned)`\n- **Service:** services/auth.ts → getMe()\n- **When to call:** Immediately after Login; also on cold start if refresh token valid\n- **Navigation flow:** Login success → **Me** → hydrate user, roles, feature flags → render tabs\n- **From → To:** login.tsx or app bootstrap → All tabs (permission-gated UI)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.getMe`\n- **What it does:** Returns the authenticated user profile, sessions, feature flags, and optional impersonation context.\n- **How to call:** GET with Bearer `accessToken`. Resigned candidate/employee accounts receive 403 (CANDIDATE_RESIGNED).\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
+          }
         },
         {
           "name": "Refresh Tokens",
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
-            "url": "{{baseUrl}}/auth/refresh-tokens"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/refresh-tokens",
+            "description": "**API:** `POST /auth/refresh-tokens`\n\n### Mobile app\nservices/api.ts — silent token refresh (planned)\n\n### How to connect in the app\n- **Screen route:** `(global)`\n- **File:** `services/api.ts`\n- **Service:** services/api.ts — axios/fetch interceptor\n- **When to call:** Any API returns 401; before retrying the failed request\n- **Navigation flow:** API 401 → **Refresh Tokens** → update accessToken → retry original call\n- **From → To:** Any authenticated screen → Same screen (transparent retry)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.refreshTokens`\n- **What it does:** Exchanges a valid refresh token for new access/refresh tokens and refreshes auth cookies.\n- **How to call:** POST body `{ refreshToken }` or rely on refreshToken HttpOnly cookie.\n- **Auth / permissions:** Valid refresh token (no access token required)\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
           }
         },
         {
           "name": "Logout",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
-            "url": "{{baseUrl}}/auth/logout"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/logout",
+            "description": "**API:** `POST /auth/logout`\n\n### Mobile app\nmail/accounts.tsx — Sign out of all accounts (planned)\n\n### How to connect in the app\n- **Screen route:** `/mail/accounts`\n- **File:** `app/mail/accounts.tsx`\n- **Service:** services/auth.ts → logout()\n- **When to call:** User taps **Sign out** on accounts screen\n- **Navigation flow:** accounts → **Logout** → clear secure storage → router.replace(\"/login\")\n- **From → To:** mail/accounts (also reachable from mails tab sidebar) → app/login.tsx\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.logout`\n- **What it does:** Revokes the refresh token, clears auth cookies, and logs sign-out activity.\n- **How to call:** POST body `{ refreshToken }`. Returns 204.\n- **Auth / permissions:** Refresh token in body or cookie\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
           }
         }
-      ]
+      ],
+      "description": "## 1. Auth\n\nJWT authentication for the mobile app. All other folders require a valid `accessToken` (Bearer) except Login and Refresh Tokens.\n\n**Mobile tab:** Sign in (pre-tabs)\n**App routes:** `app/login.tsx`, `services/api.ts`, `services/auth.ts` (planned)\n\n### App screens & inner routes\n\n**Login & session (pre-tabs)**\n- `app/index.tsx` → splash → navigates to `/login`\n- `app/login.tsx` (`/login`) → **Login**, then **Me** → enter tabs\n- `app/forgot-password.tsx` → UI only (no Postman API yet)\n- `services/api.ts` → **Refresh Tokens** on 401 (interceptor, planned)\n- `app/mail/accounts.tsx` → **Logout** on sign-out\n\n### How to use in the mobile app\n- User enters email/password on **login.tsx** → call **Login** → store `accessToken` + `refreshToken` in secure storage.\n- On app launch, call **Me** to hydrate user profile and permissions.\n- When API returns 401, call **Refresh Tokens** then retry the failed request.\n- On sign-out from **mail/accounts.tsx**, call **Logout** and clear local tokens.\n\n### Postman testing\n- Set collection variables `email` and `password`.\n- Run **Login** — test script saves tokens to `accessToken` / `refreshToken`.\n- All other requests inherit Bearer auth from collection level.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| Login | `POST /auth/login` | /login (app/login.tsx) | User taps **Sign in** after entering email + password | `authController.login` | Authenticates email/password, sets HttpOnly auth cookies, and may return access/refresh tokens in JSON when AUTH_RETURN_TOKENS_IN_JSON is enabled. |\n| Me (current user) | `GET /auth/me` | / (bootstrap) or tabs (app/_layout.tsx / services/api.ts (planned)) | Immediately after Login; also on cold start if refresh token valid | `authController.getMe` | Returns the authenticated user profile, sessions, feature flags, and optional impersonation context. |\n| Refresh Tokens | `POST /auth/refresh-tokens` | (global) (services/api.ts) | Any API returns 401; before retrying the failed request | `authController.refreshTokens` | Exchanges a valid refresh token for new access/refresh tokens and refreshes auth cookies. |\n| Logout | `POST /auth/logout` | /mail/accounts (app/mail/accounts.tsx) | User taps **Sign out** on accounts screen | `authController.logout` | Revokes the refresh token, clears auth cookies, and logs sign-out activity. |\n\n### Backend route files\n- `src/routes/v1/auth.route.js`"
     },
     {
       "name": "2. Mail - Gmail",
@@ -112,11 +228,19 @@
               }
             }
           ],
-          "request": { "method": "GET", "url": "{{baseUrl}}/email/accounts" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/email/accounts",
+            "description": "**API:** `GET /email/accounts`\n\n### Mobile app\nmail/accounts.tsx, mail/add-account.tsx, (tabs)/mails.tsx account switcher\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/mails | /mail/accounts`\n- **File:** `app/(tabs)/mails.tsx, app/mail/accounts.tsx`\n- **Service:** services/mail.ts → listAccounts(\"gmail\")\n- **When to call:** Mails tab mount; accounts screen open; after OAuth connect\n- **Navigation flow:** Tab load → **GET Accounts** → populate switcher → save accountId\n- **From → To:** Tab bar Mails → mail/[folder], thread, compose\n- **Wiring status:** Service ready; screens use mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.listGmailAccounts`\n- **What it does:** Lists Gmail accounts linked to the authenticated user.\n- **How to call:** GET, no params. Saves first account id to `accountId` via Postman test script.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "OAuth - Start Google",
-          "request": { "method": "GET", "url": "{{baseUrl}}/email/auth/google" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/email/auth/google",
+            "description": "**API:** `GET /email/auth/google`\n\n### Mobile app\nmail/add-account.tsx — Connect Gmail\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → getOAuthUrl(\"gmail\")\n- **When to call:** User taps **Connect Gmail**\n- **Navigation flow:** add-account → **OAuth Start** → open browser URL → user consents\n- **From → To:** mail/accounts or sidebar → OAuth callback deep link\n- **Wiring status:** Service ready; deep link handler not built\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.getGoogleAuthUrl`\n- **What it does:** Returns a Google OAuth authorization URL to connect a Gmail mailbox.\n- **How to call:** GET with Bearer. Open returned `{ url }` in browser; completes via callback route.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "OAuth - Google Callback",
@@ -124,13 +248,27 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/auth/google/callback?code=&state=",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "auth", "google", "callback"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "auth",
+                "google",
+                "callback"
+              ],
               "query": [
-                { "key": "code", "value": "" },
-                { "key": "state", "value": "" }
+                {
+                  "key": "code",
+                  "value": ""
+                },
+                {
+                  "key": "state",
+                  "value": ""
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /email/auth/google/callback`\n\n### Mobile app\nDeep link dharwin:// after Google OAuth (handler not implemented)\n\n### How to connect in the app\n- **Screen route:** `dharwin://oauth/google (planned)`\n- **File:** `app/_layout.tsx deep-link handler (planned)`\n- **Service:** Handled server-side; app receives redirect\n- **When to call:** After Google redirects back to app\n- **Navigation flow:** Browser callback → backend stores tokens → deep link → **GET Accounts**\n- **From → To:** External browser → mail/add-account or mails tab\n- **Wiring status:** Not implemented\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.googleCallback`\n- **What it does:** Handles Google OAuth redirect, stores tokens, redirects to frontend with success/error query params.\n- **How to call:** Browser redirect from Google with `code` and `state` (state encodes userId). Not called from mobile directly.\n- **Auth / permissions:** OAuth callback (no Bearer)\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -139,9 +277,16 @@
             "method": "DELETE",
             "url": {
               "raw": "{{baseUrl}}/email/accounts/{{accountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "accounts", "{{accountId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "**API:** `DELETE /email/accounts/{{accountId}}`\n\n### Mobile app\nmail/add-account.tsx — Revoke Gmail account\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → revokeAccount(\"gmail\", id)\n- **When to call:** User revokes/disconnects a Gmail account\n- **Navigation flow:** add-account → confirm → **DELETE Account** → refresh list\n- **From → To:** mail/accounts, add-account → Same screen (updated list)\n- **Wiring status:** Service ready; UI mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.disconnectGmailAccount`\n- **What it does:** Disconnects/revokes a linked Gmail account for the current user.\n- **How to call:** DELETE `/email/accounts/:accountId` — Mongo ObjectId path param.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -150,16 +295,39 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/threads?accountId={{accountId}}&labelId=INBOX&pageSize=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "threads"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "threads"
+              ],
               "query": [
-                { "key": "accountId", "value": "{{accountId}}" },
-                { "key": "labelId", "value": "INBOX" },
-                { "key": "pageToken", "value": "", "disabled": true },
-                { "key": "pageSize", "value": "25" },
-                { "key": "q", "value": "", "disabled": true }
+                {
+                  "key": "accountId",
+                  "value": "{{accountId}}"
+                },
+                {
+                  "key": "labelId",
+                  "value": "INBOX"
+                },
+                {
+                  "key": "pageToken",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /email/threads`\n\n### Mobile app\n(tabs)/mails.tsx, mail/[folder].tsx — Inbox & folder lists\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/mails | /mail/[folder]`\n- **File:** `app/(tabs)/mails.tsx, app/mail/[folder].tsx`\n- **Service:** services/mail.ts → listThreads(\"gmail\", { accountId, labelId, q })\n- **When to call:** Tab/folder mount, pull-to-refresh, search, infinite scroll\n- **Navigation flow:** Select account + folder → **List Threads** → render rows\n- **From → To:** Mails tab, sidebar folder tap → mail/thread/[id]\n- **Wiring status:** Service ready; screens use mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.listThreads`\n- **What it does:** Lists Gmail threads for an account, optionally filtered by label and search query.\n- **How to call:** Query: `accountId` (required), `labelId?`, `pageToken?`, `pageSize?` (default 20), `q?`.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -168,10 +336,22 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/threads/{{threadId}}?accountId={{accountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "threads", "{{threadId}}"],
-              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "threads",
+                "{{threadId}}"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{accountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /email/threads/{{threadId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Read thread\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → getThread(\"gmail\", accountId, threadId)\n- **When to call:** User opens a thread from list\n- **Navigation flow:** Tap thread row → **Thread Detail** → render messages\n- **From → To:** mails tab, mail/[folder] → mail/compose?mode=reply\n- **Wiring status:** Mock data (getMailThreadDetail)\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.getThread`\n- **What it does:** Fetches a single Gmail thread with its messages.\n- **How to call:** Path `threadId`. Query `accountId` (required).\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -180,89 +360,191 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}?accountId={{accountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}"],
-              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{accountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /email/messages/{{messageId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Single message body\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → getMessage(\"gmail\", accountId, messageId)\n- **When to call:** Expand single message or load body on demand\n- **Navigation flow:** Inside thread → **Single Message** for full HTML body\n- **From → To:** thread/[id] → Same screen\n- **Wiring status:** Mock / planned lazy load\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.getMessage`\n- **What it does:** Fetches one Gmail message by provider message ID.\n- **How to call:** Path `messageId`. Query `accountId` (required).\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Send Message",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}" },
-            "url": "{{baseUrl}}/email/messages/send"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}"
+            },
+            "url": "{{baseUrl}}/email/messages/send",
+            "description": "**API:** `POST /email/messages/send`\n\n### Mobile app\nmail/compose.tsx — New email\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → sendMessage(\"gmail\", payload)\n- **When to call:** User taps **Send** on new compose\n- **Navigation flow:** compose (new) → **Send Message** → pop to folder/inbox\n- **From → To:** mails FAB, folder, thread forward → mail/[folder] or mails tab\n- **Wiring status:** UI preview alert only\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.sendMessage`\n- **What it does:** Sends a new email via the linked Gmail account.\n- **How to call:** Body: `{ accountId, to, cc?, bcc?, subject?, html, attachments? }`. Backend expects `html`, not `body`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Reply",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}/reply",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}", "reply"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}",
+                "reply"
+              ]
+            },
+            "description": "**API:** `POST /email/messages/{{messageId}}/reply`\n\n### Mobile app\nmail/compose.tsx?mode=reply\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=reply`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → reply(\"gmail\", messageId, payload)\n- **When to call:** Send on reply compose\n- **Navigation flow:** thread → Reply → compose → **Reply** → back to thread\n- **From → To:** mail/thread/[id] → mail/thread/[id]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.replyMessage`\n- **What it does:** Replies to a Gmail message.\n- **How to call:** Path `messageId`. Body: `{ accountId, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Reply All",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}/reply-all",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}", "reply-all"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}",
+                "reply-all"
+              ]
+            },
+            "description": "**API:** `POST /email/messages/{{messageId}}/reply-all`\n\n### Mobile app\nmail/compose.tsx — Reply all\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=replyAll`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → replyAll(...)\n- **When to call:** Send on reply-all compose\n- **Navigation flow:** thread → Reply All → compose → **Reply All**\n- **From → To:** mail/thread/[id] → mail/thread/[id]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.replyAllMessage`\n- **What it does:** Reply-all to a Gmail message.\n- **How to call:** Path `messageId`. Body: `{ accountId, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Forward",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}/forward",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}", "forward"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}",
+                "forward"
+              ]
+            },
+            "description": "**API:** `POST /email/messages/{{messageId}}/forward`\n\n### Mobile app\nmail/compose.tsx?mode=forward\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=forward`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → forward(...)\n- **When to call:** Send on forward compose\n- **Navigation flow:** thread → Forward → compose → **Forward**\n- **From → To:** mail/thread/[id] → mail/[folder]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.forwardMessage`\n- **What it does:** Forwards a Gmail message to new recipients.\n- **How to call:** Path `messageId`. Body: `{ accountId, to, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Patch Message (labels/read)",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}"
+              ]
+            },
+            "description": "**API:** `PATCH /email/messages/{{messageId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Star, archive, mark read\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → modifyMessage(...)\n- **When to call:** Star, mark read/unread, archive from thread toolbar\n- **Navigation flow:** Thread action → **Patch Message** → update local state\n- **From → To:** mail/thread/[id] → Same thread\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.modifyMessage`\n- **What it does:** Adds/removes Gmail labels on a message (e.g. mark read by removing UNREAD).\n- **How to call:** Path `messageId`. Query `accountId` (required). Body: `{ addLabelIds?, removeLabelIds? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Batch Modify Messages",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"ids\": [\"{{messageId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}" },
-            "url": "{{baseUrl}}/email/messages/batch-modify"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"ids\": [\"{{messageId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}"
+            },
+            "url": "{{baseUrl}}/email/messages/batch-modify",
+            "description": "**API:** `POST /email/messages/batch-modify`\n\n### Mobile app\nBulk mail actions (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/mail.ts → batchModifyMessages(...)\n- **When to call:** Future bulk select in folder view\n- **Navigation flow:** Select multiple → **Batch Modify**\n- **From → To:** mail/[folder] (planned) → Folder list refresh\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.batchModifyMessages`\n- **What it does:** Batch label changes across multiple messages.\n- **How to call:** Body: `{ accountId, messageIds, addLabelIds?, removeLabelIds? }`. Backend expects `messageIds`, not `ids`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Trash Thread",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"threadId\": \"{{threadId}}\"\n}" },
-            "url": "{{baseUrl}}/email/threads/trash"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"threadId\": \"{{threadId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/email/threads/trash",
+            "description": "**API:** `POST /email/threads/trash`\n\n### Mobile app\nmail/thread/[id].tsx — Delete / trash thread\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → trashThreads(...)\n- **When to call:** User deletes/moves thread to trash\n- **Navigation flow:** Thread → Delete → **Trash Thread** → router.back()\n- **From → To:** mail/thread/[id] → Previous folder\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.trashThreads`\n- **What it does:** Moves one or more threads to Gmail trash.\n- **How to call:** Body: `{ accountId, threadIds: string[] }`. Backend expects array `threadIds`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -271,10 +553,24 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/messages/{{messageId}}/attachments/{{attachmentId}}?accountId={{accountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "messages", "{{messageId}}", "attachments", "{{attachmentId}}"],
-              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "messages",
+                "{{messageId}}",
+                "attachments",
+                "{{attachmentId}}"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{accountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /email/messages/{{messageId}}/attachments/{{attachmentId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Download attachment\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts (add getAttachment — planned)\n- **When to call:** User taps attachment chip\n- **Navigation flow:** Thread → attachment → **Get Attachment** → open/share file\n- **From → To:** mail/thread/[id] → OS share sheet / viewer\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.getAttachment`\n- **What it does:** Downloads a Gmail message attachment as raw binary.\n- **How to call:** Path `messageId`, `attachmentId`. Query `accountId` (required).\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -283,61 +579,123 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/email/labels?accountId={{accountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "labels"],
-              "query": [{ "key": "accountId", "value": "{{accountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "labels"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{accountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /email/labels`\n\n### Mobile app\nMailSidebar + mail/[folder].tsx — Folder/label list\n\n### How to connect in the app\n- **Screen route:** `/mail/[folder] + sidebar`\n- **File:** `components/mail-sidebar.tsx, app/mail/[folder].tsx`\n- **Service:** services/mail.ts → listLabels(\"gmail\")\n- **When to call:** Mails tab load; sidebar open; before folder-specific List Threads\n- **Navigation flow:** **Labels** → build sidebar → tap folder → List Threads with labelId\n- **From → To:** (tabs)/mails → mail/[folder]\n- **Wiring status:** Service ready; sidebar uses static folders\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.listLabels`\n- **What it does:** Lists Gmail labels/folders for an account.\n- **How to call:** Query `accountId` (required).\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Templates - List",
-          "request": { "method": "GET", "url": "{{baseUrl}}/email/templates" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/email/templates",
+            "description": "**API:** `GET /email/templates`\n\n### Mobile app\nCompose templates picker (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → listTemplates()\n- **When to call:** User opens template picker (UI not built)\n- **Navigation flow:** Compose → Templates → **List**\n- **From → To:** mail/compose → Compose body filled\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.listTemplates`\n- **What it does:** Lists the user's personal email compose templates.\n- **How to call:** GET, no params.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "Templates - Create",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Welcome\",\n  \"subject\": \"Hi\",\n  \"body\": \"<p>Hello</p>\"\n}" },
-            "url": "{{baseUrl}}/email/templates"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Welcome\",\n  \"subject\": \"Hi\",\n  \"body\": \"<p>Hello</p>\"\n}"
+            },
+            "url": "{{baseUrl}}/email/templates",
+            "description": "**API:** `POST /email/templates`\n\n### Mobile app\nCompose templates (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → createTemplate()\n- **When to call:** Save current compose as template (planned)\n- **Navigation flow:** Compose → Save as template → **Create**\n- **From → To:** mail/compose → Template list\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.createTemplate`\n- **What it does:** Creates a personal email template.\n- **How to call:** Body: `{ title, subject?, bodyHtml, isShared? }`. Backend uses `title`/`bodyHtml`, not `name`/`body`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Templates - Patch",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"Updated\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"Updated\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/email/templates/{{templateId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["email", "templates", "{{templateId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "email",
+                "templates",
+                "{{templateId}}"
+              ]
+            },
+            "description": "**API:** `PATCH /email/templates/{{templateId}}`\n\n### Mobile app\nCompose templates (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → updateTemplate()\n- **When to call:** Edit existing template (planned)\n- **Navigation flow:** Template editor → **Patch**\n- **From → To:** compose templates UI → Updated template\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.updateTemplate`\n- **What it does:** Updates a personal email template.\n- **How to call:** Path `templateId`. Body: partial `{ title?, subject?, bodyHtml?, isShared? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Signature - Get",
-          "request": { "method": "GET", "url": "{{baseUrl}}/email/signature" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/email/signature",
+            "description": "**API:** `GET /email/signature`\n\n### Mobile app\nmail/settings.tsx — Load signature\n\n### How to connect in the app\n- **Screen route:** `/mail/settings`\n- **File:** `app/mail/settings.tsx`\n- **Service:** services/mail.ts → getSignature()\n- **When to call:** Settings screen mount\n- **Navigation flow:** accounts → settings → **Signature Get** → show editor\n- **From → To:** mail/accounts → mail/settings\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.getSignature`\n- **What it does:** Returns the user's email signature (creates default if missing).\n- **How to call:** GET, no params.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "Signature - Patch",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"signature\": \"<p>--<br/>Name</p>\"\n}" },
-            "url": "{{baseUrl}}/email/signature"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"signature\": \"<p>--<br/>Name</p>\"\n}"
+            },
+            "url": "{{baseUrl}}/email/signature",
+            "description": "**API:** `PATCH /email/signature`\n\n### Mobile app\nmail/settings.tsx — Save signature\n\n### How to connect in the app\n- **Screen route:** `/mail/settings`\n- **File:** `app/mail/settings.tsx`\n- **Service:** services/mail.ts → updateSignature()\n- **When to call:** User saves signature\n- **Navigation flow:** settings → edit HTML → **Signature Patch**\n- **From → To:** mail/settings → Same screen (saved toast)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.patchSignature`\n- **What it does:** Updates the user's email signature HTML and/or enabled flag.\n- **How to call:** Body: `{ html?, enabled? }`. Backend expects `html`, not `signature`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Drafts - AI Generate",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"prompt\": \"Draft a polite follow-up\",\n  \"context\": {}\n}" },
-            "url": "{{baseUrl}}/email/drafts/generate"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"prompt\": \"Draft a polite follow-up\",\n  \"context\": {}\n}"
+            },
+            "url": "{{baseUrl}}/email/drafts/generate",
+            "description": "**API:** `POST /email/drafts/generate`\n\n### Mobile app\nmail/compose.tsx — AI draft assist (services/mail.ts)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → generateDraft()\n- **When to call:** User taps AI assist / generate draft\n- **Navigation flow:** compose → prompt → **AI Generate** → insert HTML into body\n- **From → To:** mail/compose → Compose editor\n- **Wiring status:** Service exists; button shows preview alert\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.generateDraft`\n- **What it does:** Generates AI email draft options via OpenAI.\n- **How to call:** Body: `{ tone, prompt, subject?, context?, recipientName?, length? }`. `tone` is required (professional|friendly|formal|persuasive|empathetic).\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         }
-      ]
+      ],
+      "description": "## 2. Mail - Gmail\n\nGmail integration via connected accounts. Provider prefix: `/email/*`. Mail API client lives in `services/mail.ts`.\n\n**Mobile tab:** Mails\n**App routes:** `app/(tabs)/mails.tsx`, `app/mail/*` (thread, compose, accounts, settings)\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/mails.tsx` → account switcher, recent threads\n\n**Inner screens**\n| Route | File | APIs to wire |\n|-------|------|--------------|\n| `/mail/[folder]` | `app/mail/[folder].tsx` | List Threads, Labels |\n| `/mail/thread/[id]` | `app/mail/thread/[id].tsx` | Thread Detail, Single Message, Patch, Trash, Attachment |\n| `/mail/compose` | `app/mail/compose.tsx` | Send, Reply, Reply All, Forward, AI Draft, Templates |\n| `/mail/accounts` | `app/mail/accounts.tsx` | GET Accounts |\n| `/mail/add-account` | `app/mail/add-account.tsx` | OAuth Start/Callback, DELETE Account |\n| `/mail/settings` | `app/mail/settings.tsx` | Signature Get/Patch |\n| `/mail/create-label` | `app/mail/create-label.tsx` | Labels (create) |\n\n**Service:** `services/mail.ts` (provider `gmail` → `/email/*`)\n\n### How to use in the mobile app\n- **GET Accounts** on Mails tab load → populate account switcher.\n- **OAuth - Start Google** opens browser; callback completes account link.\n- **List Threads** + **Labels** power inbox and sidebar folders.\n- Open thread → **Thread Detail** / **Single Message**; reply → **Reply** / **Send Message** via compose.\n- **Patch Message**, **Trash Thread**, **Get Attachment** from thread actions.\n\n### Postman testing\n- Run **GET Accounts** after login — saves `accountId` to collection variables.\n- Use `accountId` in thread/list/send requests.\n- OAuth requests are browser-based; use mobile deep link in production.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| GET Accounts | `GET /email/accounts` | /(tabs)/mails \\| /mail/accounts (app/(tabs)/mails.tsx, app/mail/accounts.tsx) | Mails tab mount; accounts screen open; after OAuth connect | `emailController.listGmailAccounts` | Lists Gmail accounts linked to the authenticated user. |\n| OAuth - Start Google | `GET /email/auth/google` | /mail/add-account (app/mail/add-account.tsx) | User taps **Connect Gmail** | `emailController.getGoogleAuthUrl` | Returns a Google OAuth authorization URL to connect a Gmail mailbox. |\n| OAuth - Google Callback | `GET /email/auth/google/callback` | dharwin://oauth/google (planned) (app/_layout.tsx deep-link handler (planned)) | After Google redirects back to app | `emailController.googleCallback` | Handles Google OAuth redirect, stores tokens, redirects to frontend with success/error query params. |\n| DELETE Account | `DELETE /email/accounts/{{accountId}}` | /mail/add-account (app/mail/add-account.tsx) | User revokes/disconnects a Gmail account | `emailController.disconnectGmailAccount` | Disconnects/revokes a linked Gmail account for the current user. |\n| List Threads | `GET /email/threads` | /(tabs)/mails \\| /mail/[folder] (app/(tabs)/mails.tsx, app/mail/[folder].tsx) | Tab/folder mount, pull-to-refresh, search, infinite scroll | `emailController.listThreads` | Lists Gmail threads for an account, optionally filtered by label and search query. |\n| Thread Detail | `GET /email/threads/{{threadId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | User opens a thread from list | `emailController.getThread` | Fetches a single Gmail thread with its messages. |\n| Single Message | `GET /email/messages/{{messageId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | Expand single message or load body on demand | `emailController.getMessage` | Fetches one Gmail message by provider message ID. |\n| Send Message | `POST /email/messages/send` | /mail/compose (app/mail/compose.tsx) | User taps **Send** on new compose | `emailController.sendMessage` | Sends a new email via the linked Gmail account. |\n| Reply | `POST /email/messages/{{messageId}}/reply` | /mail/compose?mode=reply (app/mail/compose.tsx) | Send on reply compose | `emailController.replyMessage` | Replies to a Gmail message. |\n| Reply All | `POST /email/messages/{{messageId}}/reply-all` | /mail/compose?mode=replyAll (app/mail/compose.tsx) | Send on reply-all compose | `emailController.replyAllMessage` | Reply-all to a Gmail message. |\n| Forward | `POST /email/messages/{{messageId}}/forward` | /mail/compose?mode=forward (app/mail/compose.tsx) | Send on forward compose | `emailController.forwardMessage` | Forwards a Gmail message to new recipients. |\n| Patch Message (labels/read) | `PATCH /email/messages/{{messageId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | Star, mark read/unread, archive from thread toolbar | `emailController.modifyMessage` | Adds/removes Gmail labels on a message (e.g. mark read by removing UNREAD). |\n| Batch Modify Messages | `POST /email/messages/batch-modify` | (none) (—) | Future bulk select in folder view | `emailController.batchModifyMessages` | Batch label changes across multiple messages. |\n| Trash Thread | `POST /email/threads/trash` | /mail/thread/[id] (app/mail/thread/[id].tsx) | User deletes/moves thread to trash | `emailController.trashThreads` | Moves one or more threads to Gmail trash. |\n| Get Attachment | `GET /email/messages/{{messageId}}/attachments/{{attachmentId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | User taps attachment chip | `emailController.getAttachment` | Downloads a Gmail message attachment as raw binary. |\n| Labels | `GET /email/labels` | /mail/[folder] + sidebar (components/mail-sidebar.tsx, app/mail/[folder].tsx) | Mails tab load; sidebar open; before folder-specific List Threads | `emailController.listLabels` | Lists Gmail labels/folders for an account. |\n| Templates - List | `GET /email/templates` | /mail/compose (app/mail/compose.tsx) | User opens template picker (UI not built) | `emailPreferencesController.listTemplates` | Lists the user's personal email compose templates. |\n| Templates - Create | `POST /email/templates` | /mail/compose (app/mail/compose.tsx) | Save current compose as template (planned) | `emailPreferencesController.createTemplate` | Creates a personal email template. |\n| Templates - Patch | `PATCH /email/templates/{{templateId}}` | /mail/compose (app/mail/compose.tsx) | Edit existing template (planned) | `emailPreferencesController.updateTemplate` | Updates a personal email template. |\n| Signature - Get | `GET /email/signature` | /mail/settings (app/mail/settings.tsx) | Settings screen mount | `emailPreferencesController.getSignature` | Returns the user's email signature (creates default if missing). |\n| Signature - Patch | `PATCH /email/signature` | /mail/settings (app/mail/settings.tsx) | User saves signature | `emailPreferencesController.patchSignature` | Updates the user's email signature HTML and/or enabled flag. |\n| Drafts - AI Generate | `POST /email/drafts/generate` | /mail/compose (app/mail/compose.tsx) | User taps AI assist / generate draft | `emailController.generateDraft` | Generates AI email draft options via OpenAI. |\n\n### Backend route files\n- `src/routes/v1/email.route.js`"
     },
     {
       "name": "3. Mail - Outlook",
@@ -361,11 +719,19 @@
               }
             }
           ],
-          "request": { "method": "GET", "url": "{{baseUrl}}/outlook/accounts" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/outlook/accounts",
+            "description": "**API:** `GET /outlook/accounts`\n\n### Mobile app\nmail/accounts.tsx, mail/add-account.tsx — Outlook provider\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/mails | /mail/accounts`\n- **File:** `app/(tabs)/mails.tsx, app/mail/accounts.tsx`\n- **Service:** services/mail.ts → listAccounts(\"outlook\")\n- **When to call:** Mails tab mount; accounts screen open; after OAuth connect\n- **Navigation flow:** Tab load → **GET Accounts** → populate switcher → save accountId\n- **From → To:** Tab bar Mails → mail/[folder], thread, compose\n- **Wiring status:** Service ready; screens use mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.listOutlookAccounts`\n- **What it does:** Lists Microsoft Outlook accounts linked to the user.\n- **How to call:** GET, no params. Postman saves `outlookAccountId` when present.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "OAuth - Start Microsoft",
-          "request": { "method": "GET", "url": "{{baseUrl}}/outlook/auth/microsoft" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/outlook/auth/microsoft",
+            "description": "**API:** `GET /outlook/auth/microsoft`\n\n### Mobile app\nmail/add-account.tsx — Connect Outlook\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → getOAuthUrl(\"outlook\")\n- **When to call:** User taps **Connect Outlook**\n- **Navigation flow:** add-account → **OAuth Start** → open browser URL → user consents\n- **From → To:** mail/accounts or sidebar → OAuth callback deep link\n- **Wiring status:** Service ready; deep link handler not built\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.getMicrosoftAuthUrl`\n- **What it does:** Returns Microsoft OAuth URL to connect Outlook.\n- **How to call:** GET with Bearer. Open returned `{ url }` in browser.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
+          }
         },
         {
           "name": "OAuth - Microsoft Callback",
@@ -373,13 +739,27 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/outlook/auth/microsoft/callback?code=&state=",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "auth", "microsoft", "callback"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "auth",
+                "microsoft",
+                "callback"
+              ],
               "query": [
-                { "key": "code", "value": "" },
-                { "key": "state", "value": "" }
+                {
+                  "key": "code",
+                  "value": ""
+                },
+                {
+                  "key": "state",
+                  "value": ""
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /outlook/auth/microsoft/callback`\n\n### Mobile app\nDeep link after Microsoft OAuth (handler not implemented)\n\n### How to connect in the app\n- **Screen route:** `dharwin://oauth/google (planned)`\n- **File:** `app/_layout.tsx deep-link handler (planned)`\n- **Service:** Handled server-side; app receives redirect\n- **When to call:** After Microsoft redirects back to app\n- **Navigation flow:** Browser callback → backend stores tokens → deep link → **GET Accounts**\n- **From → To:** External browser → mail/add-account or mails tab\n- **Wiring status:** Not implemented\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.microsoftCallback`\n- **What it does:** Handles Microsoft OAuth callback and redirects to frontend.\n- **How to call:** Browser redirect with `code` and `state`. Not called from mobile directly.\n- **Auth / permissions:** OAuth callback (no Bearer)\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -388,9 +768,16 @@
             "method": "DELETE",
             "url": {
               "raw": "{{baseUrl}}/outlook/accounts/{{outlookAccountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "accounts", "{{outlookAccountId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "accounts",
+                "{{outlookAccountId}}"
+              ]
+            },
+            "description": "**API:** `DELETE /outlook/accounts/{{outlookAccountId}}`\n\n### Mobile app\nmail/add-account.tsx — Revoke Outlook account\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → revokeAccount(\"outlook\", id)\n- **When to call:** User revokes/disconnects a Outlook account\n- **Navigation flow:** add-account → confirm → **DELETE Account** → refresh list\n- **From → To:** mail/accounts, add-account → Same screen (updated list)\n- **Wiring status:** Service ready; UI mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.disconnectOutlookAccount`\n- **What it does:** Disconnects a linked Outlook account.\n- **How to call:** DELETE `/outlook/accounts/:outlookAccountId`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -399,16 +786,39 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/outlook/threads?accountId={{outlookAccountId}}&labelId=INBOX&pageSize=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "threads"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "threads"
+              ],
               "query": [
-                { "key": "accountId", "value": "{{outlookAccountId}}" },
-                { "key": "labelId", "value": "INBOX" },
-                { "key": "pageToken", "value": "", "disabled": true },
-                { "key": "pageSize", "value": "25" },
-                { "key": "q", "value": "", "disabled": true }
+                {
+                  "key": "accountId",
+                  "value": "{{outlookAccountId}}"
+                },
+                {
+                  "key": "labelId",
+                  "value": "INBOX"
+                },
+                {
+                  "key": "pageToken",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /outlook/threads`\n\n### Mobile app\n(tabs)/mails.tsx, mail/[folder].tsx — Outlook threads\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/mails | /mail/[folder]`\n- **File:** `app/(tabs)/mails.tsx, app/mail/[folder].tsx`\n- **Service:** services/mail.ts → listThreads(\"outlook\", { accountId, labelId, q })\n- **When to call:** Tab/folder mount, pull-to-refresh, search, infinite scroll\n- **Navigation flow:** Select account + folder → **List Threads** → render rows\n- **From → To:** Mails tab, sidebar folder tap → mail/thread/[id]\n- **Wiring status:** Service ready; screens use mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.listThreads`\n- **What it does:** Lists Outlook mail threads/conversations.\n- **How to call:** Query: `accountId` (required), `labelId?`, `pageToken?`, `pageSize?`, `q?`.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -417,10 +827,22 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/outlook/threads/{{threadId}}?accountId={{outlookAccountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "threads", "{{threadId}}"],
-              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "threads",
+                "{{threadId}}"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{outlookAccountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /outlook/threads/{{threadId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Read thread\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → getThread(\"outlook\", accountId, threadId)\n- **When to call:** User opens a thread from list\n- **Navigation flow:** Tap thread row → **Thread Detail** → render messages\n- **From → To:** mails tab, mail/[folder] → mail/compose?mode=reply\n- **Wiring status:** Mock data (getMailThreadDetail)\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.getThread`\n- **What it does:** Fetches one Outlook thread.\n- **How to call:** Path `threadId`. Query `accountId`.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -429,58 +851,127 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/outlook/messages/{{messageId}}?accountId={{outlookAccountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "messages", "{{messageId}}"],
-              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "messages",
+                "{{messageId}}"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{outlookAccountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /outlook/messages/{{messageId}}`\n\n### Mobile app\nmail/thread/[id].tsx — Single message body\n\n### How to connect in the app\n- **Screen route:** `/mail/thread/[id]`\n- **File:** `app/mail/thread/[id].tsx`\n- **Service:** services/mail.ts → getMessage(\"outlook\", accountId, messageId)\n- **When to call:** Expand single message or load body on demand\n- **Navigation flow:** Inside thread → **Single Message** for full HTML body\n- **From → To:** thread/[id] → Same screen\n- **Wiring status:** Mock / planned lazy load\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.getMessage`\n- **What it does:** Fetches one Outlook message.\n- **How to call:** Path `messageId`. Query `accountId`.\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Send Message",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}" },
-            "url": "{{baseUrl}}/outlook/messages/send"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"someone@example.com\"],\n  \"cc\": [],\n  \"bcc\": [],\n  \"subject\": \"Hello from Postman\",\n  \"body\": \"<p>Body HTML</p>\"\n}"
+            },
+            "url": "{{baseUrl}}/outlook/messages/send",
+            "description": "**API:** `POST /outlook/messages/send`\n\n### Mobile app\nmail/compose.tsx — New email\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → sendMessage(\"outlook\", payload)\n- **When to call:** User taps **Send** on new compose\n- **Navigation flow:** compose (new) → **Send Message** → pop to folder/inbox\n- **From → To:** mails FAB, folder, thread forward → mail/[folder] or mails tab\n- **Wiring status:** UI preview alert only\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.sendMessage`\n- **What it does:** Sends a new Outlook email.\n- **How to call:** Body: `{ accountId, to, cc?, bcc?, subject?, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Reply",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply body</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/reply",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "messages", "{{messageId}}", "reply"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "messages",
+                "{{messageId}}",
+                "reply"
+              ]
+            },
+            "description": "**API:** `POST /outlook/messages/{{messageId}}/reply`\n\n### Mobile app\nmail/compose.tsx?mode=reply\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=reply`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → reply(\"outlook\", messageId, payload)\n- **When to call:** Send on reply compose\n- **Navigation flow:** thread → Reply → compose → **Reply** → back to thread\n- **From → To:** mail/thread/[id] → mail/thread/[id]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.replyMessage`\n- **What it does:** Replies to an Outlook message.\n- **How to call:** Path `messageId`. Body: `{ accountId, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Reply All",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"body\": \"<p>Reply-all body</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/reply-all",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "messages", "{{messageId}}", "reply-all"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "messages",
+                "{{messageId}}",
+                "reply-all"
+              ]
+            },
+            "description": "**API:** `POST /outlook/messages/{{messageId}}/reply-all`\n\n### Mobile app\nmail/compose.tsx — Reply all\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=replyAll`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → replyAll(...)\n- **When to call:** Send on reply-all compose\n- **Navigation flow:** thread → Reply All → compose → **Reply All**\n- **From → To:** mail/thread/[id] → mail/thread/[id]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.replyAllMessage`\n- **What it does:** Reply-all on an Outlook message.\n- **How to call:** Path `messageId`. Body: `{ accountId, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
           "name": "Forward",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"to\": [\"forward@example.com\"],\n  \"body\": \"<p>Forwarded</p>\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/outlook/messages/{{messageId}}/forward",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "messages", "{{messageId}}", "forward"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "messages",
+                "{{messageId}}",
+                "forward"
+              ]
+            },
+            "description": "**API:** `POST /outlook/messages/{{messageId}}/forward`\n\n### Mobile app\nmail/compose.tsx?mode=forward\n\n### How to connect in the app\n- **Screen route:** `/mail/compose?mode=forward`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → forward(...)\n- **When to call:** Send on forward compose\n- **Navigation flow:** thread → Forward → compose → **Forward**\n- **From → To:** mail/thread/[id] → mail/[folder]\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.forwardMessage`\n- **What it does:** Forwards an Outlook message.\n- **How to call:** Path `messageId`. Body: `{ accountId, to, html, attachments? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -489,13 +980,25 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/outlook/labels?accountId={{outlookAccountId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["outlook", "labels"],
-              "query": [{ "key": "accountId", "value": "{{outlookAccountId}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "outlook",
+                "labels"
+              ],
+              "query": [
+                {
+                  "key": "accountId",
+                  "value": "{{outlookAccountId}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /outlook/labels`\n\n### Mobile app\nMailSidebar + mail/[folder].tsx — Outlook folders\n\n### How to connect in the app\n- **Screen route:** `/mail/[folder] + sidebar`\n- **File:** `components/mail-sidebar.tsx, app/mail/[folder].tsx`\n- **Service:** services/mail.ts → listLabels(\"outlook\")\n- **When to call:** Mails tab load; sidebar open; before folder-specific List Threads\n- **Navigation flow:** **Labels** → build sidebar → tap folder → List Threads with labelId\n- **From → To:** (tabs)/mails → mail/[folder]\n- **Wiring status:** Service ready; sidebar uses static folders\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.listLabels`\n- **What it does:** Lists Outlook mail folders/labels.\n- **How to call:** Query `accountId` (required).\n- **Auth / permissions:** Bearer JWT + emails.read\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         }
-      ]
+      ],
+      "description": "## 3. Mail - Outlook\n\nMicrosoft Outlook / Office 365 mail. Provider prefix: `/outlook/*`. Same UI as Gmail; pass `provider=outlook` in `services/mail.ts`.\n\n**Mobile tab:** Mails\n**App routes:** Same as Gmail — `app/mail/*` with Outlook account selected\n\n### App screens & inner routes\n\nSame UI as Gmail — pass `provider: 'outlook'` in `services/mail.ts` (`/outlook/*`).\n\nScreens: identical to folder 2 (accounts, add-account, mails tab, folders, thread, compose).\n\n### How to use in the mobile app\n- **GET Accounts** lists Outlook-linked accounts.\n- **OAuth - Start Microsoft** → user signs in → **OAuth - Microsoft Callback**.\n- Thread read/send/reply flow mirrors Gmail folder (2) with `outlookAccountId`.\n\n### Postman testing\n- Run **GET Accounts** — saves `outlookAccountId` when an Outlook account exists.\n- If testing Gmail only, skip this folder.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| GET Accounts | `GET /outlook/accounts` | /(tabs)/mails \\| /mail/accounts (app/(tabs)/mails.tsx, app/mail/accounts.tsx) | Mails tab mount; accounts screen open; after OAuth connect | `outlookController.listOutlookAccounts` | Lists Microsoft Outlook accounts linked to the user. |\n| OAuth - Start Microsoft | `GET /outlook/auth/microsoft` | /mail/add-account (app/mail/add-account.tsx) | User taps **Connect Outlook** | `outlookController.getMicrosoftAuthUrl` | Returns Microsoft OAuth URL to connect Outlook. |\n| OAuth - Microsoft Callback | `GET /outlook/auth/microsoft/callback` | dharwin://oauth/google (planned) (app/_layout.tsx deep-link handler (planned)) | After Microsoft redirects back to app | `outlookController.microsoftCallback` | Handles Microsoft OAuth callback and redirects to frontend. |\n| DELETE Account | `DELETE /outlook/accounts/{{outlookAccountId}}` | /mail/add-account (app/mail/add-account.tsx) | User revokes/disconnects a Outlook account | `outlookController.disconnectOutlookAccount` | Disconnects a linked Outlook account. |\n| List Threads | `GET /outlook/threads` | /(tabs)/mails \\| /mail/[folder] (app/(tabs)/mails.tsx, app/mail/[folder].tsx) | Tab/folder mount, pull-to-refresh, search, infinite scroll | `outlookController.listThreads` | Lists Outlook mail threads/conversations. |\n| Thread Detail | `GET /outlook/threads/{{threadId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | User opens a thread from list | `outlookController.getThread` | Fetches one Outlook thread. |\n| Single Message | `GET /outlook/messages/{{messageId}}` | /mail/thread/[id] (app/mail/thread/[id].tsx) | Expand single message or load body on demand | `outlookController.getMessage` | Fetches one Outlook message. |\n| Send Message | `POST /outlook/messages/send` | /mail/compose (app/mail/compose.tsx) | User taps **Send** on new compose | `outlookController.sendMessage` | Sends a new Outlook email. |\n| Reply | `POST /outlook/messages/{{messageId}}/reply` | /mail/compose?mode=reply (app/mail/compose.tsx) | Send on reply compose | `outlookController.replyMessage` | Replies to an Outlook message. |\n| Reply All | `POST /outlook/messages/{{messageId}}/reply-all` | /mail/compose?mode=replyAll (app/mail/compose.tsx) | Send on reply-all compose | `outlookController.replyAllMessage` | Reply-all on an Outlook message. |\n| Forward | `POST /outlook/messages/{{messageId}}/forward` | /mail/compose?mode=forward (app/mail/compose.tsx) | Send on forward compose | `outlookController.forwardMessage` | Forwards an Outlook message. |\n| Labels | `GET /outlook/labels` | /mail/[folder] + sidebar (components/mail-sidebar.tsx, app/mail/[folder].tsx) | Mails tab load; sidebar open; before folder-specific List Threads | `outlookController.listLabels` | Lists Outlook mail folders/labels. |\n\n### Backend route files\n- `src/routes/v1/outlook.route.js`"
     },
     {
       "name": "4. Internal Meetings",
@@ -506,16 +1009,37 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings?status=scheduled&page=1&limit=25&sortBy=startTime&order=asc",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings"
+              ],
               "query": [
-                { "key": "status", "value": "scheduled", "description": "scheduled|ended|cancelled" },
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "25" },
-                { "key": "sortBy", "value": "startTime" },
-                { "key": "order", "value": "asc" }
+                {
+                  "key": "status",
+                  "value": "scheduled",
+                  "description": "scheduled|ended|cancelled"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "startTime"
+                },
+                {
+                  "key": "order",
+                  "value": "asc"
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /internal-meetings`\n\n### Mobile app\n(tabs)/meetings.tsx — Upcoming tab (status=scheduled)\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/meetings`\n- **File:** `app/(tabs)/meetings.tsx`\n- **Service:** services/meetings.ts → list({ status: \"scheduled\" }) (planned)\n- **When to call:** Meetings tab mount; Upcoming segment selected; pull-to-refresh\n- **Navigation flow:** Tab → Upcoming → **List - Upcoming** → render cards\n- **From → To:** Tab bar Meetings → meeting/[id]\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.list`\n- **What it does:** Paginated internal meetings filtered to scheduled/upcoming.\n- **How to call:** Query: `status=scheduled`, `page?`, `limit?`, `sortBy?`, `title?`.\n- **Auth / permissions:** Bearer JWT + meetings.read\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -524,14 +1048,28 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings?status=ended&page=1&limit=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings"
+              ],
               "query": [
-                { "key": "status", "value": "ended" },
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "25" }
+                {
+                  "key": "status",
+                  "value": "ended"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /internal-meetings`\n\n### Mobile app\n(tabs)/meetings.tsx — Completed tab (status=ended)\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/meetings`\n- **File:** `app/(tabs)/meetings.tsx`\n- **Service:** services/meetings.ts → list({ status: \"ended\" }) (planned)\n- **When to call:** User switches to Completed segment\n- **Navigation flow:** Meetings tab → Completed → **List - Completed**\n- **From → To:** (tabs)/meetings → meeting/[id]\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.list`\n- **What it does:** Same list endpoint filtered to ended meetings.\n- **How to call:** Query: `status=ended`, pagination params.\n- **Auth / permissions:** Bearer JWT + meetings.read\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -540,14 +1078,28 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings?status=cancelled&page=1&limit=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings"
+              ],
               "query": [
-                { "key": "status", "value": "cancelled" },
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "25" }
+                {
+                  "key": "status",
+                  "value": "cancelled"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /internal-meetings`\n\n### Mobile app\n(tabs)/meetings.tsx — Cancelled meetings list\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/meetings`\n- **File:** `app/(tabs)/meetings.tsx`\n- **Service:** services/meetings.ts → list({ status: \"cancelled\" }) (planned)\n- **When to call:** User switches to Cancelled segment\n- **Navigation flow:** Meetings tab → Cancelled → **List - Cancelled**\n- **From → To:** (tabs)/meetings → meeting/[id]\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.list`\n- **What it does:** Same list endpoint filtered to cancelled meetings.\n- **How to call:** Query: `status=cancelled`, pagination params.\n- **Auth / permissions:** Bearer JWT + meetings.read\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -571,9 +1123,15 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}"
+              ]
+            },
+            "description": "**API:** `GET /internal-meetings/{{meetingId}}`\n\n### Mobile app\nmeeting/[id].tsx — Meeting detail, join, recording\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/meetings.ts → get(meetingId) (planned)\n- **When to call:** User taps a meeting row from any list\n- **Navigation flow:** List row tap → **Detail** → show join, participants, recordings\n- **From → To:** (tabs)/meetings → LiveKit room (folder 5)\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.get`\n- **What it does:** Returns one internal meeting by Mongo _id (includes LiveKit room name).\n- **How to call:** GET `/internal-meetings/:meetingId` — document _id, not LiveKit room name.\n- **Auth / permissions:** Bearer JWT + meetings.read\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -596,35 +1154,72 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Team Sync\",\n  \"description\": \"Weekly sync\",\n  \"startTime\": \"2026-05-28T10:00:00.000Z\",\n  \"endTime\": \"2026-05-28T10:30:00.000Z\",\n  \"timezone\": \"Asia/Kolkata\",\n  \"participants\": [\n    { \"email\": \"someone@example.com\", \"name\": \"Someone\" }\n  ],\n  \"sendInvites\": true\n}" },
-            "url": "{{baseUrl}}/internal-meetings"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Team Sync\",\n  \"description\": \"Weekly sync\",\n  \"startTime\": \"2026-05-28T10:00:00.000Z\",\n  \"endTime\": \"2026-05-28T10:30:00.000Z\",\n  \"timezone\": \"Asia/Kolkata\",\n  \"participants\": [\n    { \"email\": \"someone@example.com\", \"name\": \"Someone\" }\n  ],\n  \"sendInvites\": true\n}"
+            },
+            "url": "{{baseUrl}}/internal-meetings",
+            "description": "**API:** `POST /internal-meetings`\n\n### Mobile app\nmeeting/create.tsx — Schedule new meeting\n\n### How to connect in the app\n- **Screen route:** `/meeting/create`\n- **File:** `app/meeting/create.tsx`\n- **Service:** services/meetings.ts → create(payload) (planned)\n- **When to call:** User submits Schedule form (FAB or header +)\n- **Navigation flow:** meetings → create → fill form → **Create** → back to Upcoming list\n- **From → To:** (tabs)/meetings → (tabs)/meetings\n- **Wiring status:** Mock submit\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.create`\n- **What it does:** Creates an internal meeting, assigns LiveKit room, sends invitation emails.\n- **How to call:** Body: `{ title, scheduledAt, hosts, description?, timezone?, durationMinutes?, emailInvites?, ... }`. Use `scheduledAt` + `durationMinutes`, not `startTime`/`endTime`.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Patch / Reschedule",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Renamed\",\n  \"startTime\": \"2026-05-28T11:00:00.000Z\",\n  \"endTime\": \"2026-05-28T11:30:00.000Z\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Renamed\",\n  \"startTime\": \"2026-05-28T11:00:00.000Z\",\n  \"endTime\": \"2026-05-28T11:30:00.000Z\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}"
+              ]
+            },
+            "description": "**API:** `PATCH /internal-meetings/{{meetingId}}`\n\n### Mobile app\nmeeting/create.tsx — Edit / reschedule existing meeting\n\n### How to connect in the app\n- **Screen route:** `/meeting/create`\n- **File:** `app/meeting/create.tsx`\n- **Service:** services/meetings.ts → update(meetingId, patch) (planned)\n- **When to call:** Edit existing meeting and save\n- **Navigation flow:** meeting/[id] → Edit → create (prefilled) → **Patch**\n- **From → To:** meeting/[id] → meeting/[id] or meetings tab\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.update`\n- **What it does:** Updates meeting fields (title, schedule, hosts, status, etc.).\n- **How to call:** PATCH `/internal-meetings/:meetingId` with partial create fields.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Cancel (PATCH status)",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"status\": \"cancelled\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}"
+              ]
+            },
+            "description": "**API:** `PATCH /internal-meetings/{{meetingId}}`\n\n### Mobile app\n(tabs)/meetings.tsx — Cancel meeting from list\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/meetings | /meeting/[id]`\n- **File:** `app/(tabs)/meetings.tsx, app/meeting/[id].tsx`\n- **Service:** services/meetings.ts → update(id, { status: \"cancelled\" }) (planned)\n- **When to call:** User confirms Cancel on meeting card or detail\n- **Navigation flow:** Cancel action → **Cancel PATCH** → move to Cancelled segment\n- **From → To:** meetings list or detail → Cancelled list\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.update`\n- **What it does:** Cancels a meeting by setting status to cancelled.\n- **How to call:** PATCH body: `{ status: \"cancelled\" }`.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -633,22 +1228,43 @@
             "method": "DELETE",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}"
+              ]
+            },
+            "description": "**API:** `DELETE /internal-meetings/{{meetingId}}`\n\n### Mobile app\nPermanent delete (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/meetings.ts → remove(meetingId) (planned)\n- **When to call:** Permanent delete (admin action — no mobile UI yet)\n- **Navigation flow:** —\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.remove`\n- **What it does:** Permanently deletes an internal meeting and tears down its LiveKit room.\n- **How to call:** DELETE `/internal-meetings/:meetingId`. Returns 204.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Resend Invites",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}/resend-invitations",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}", "resend-invitations"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}",
+                "resend-invitations"
+              ]
+            },
+            "description": "**API:** `POST /internal-meetings/{{meetingId}}/resend-invitations`\n\n### Mobile app\nResend participant invites (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/meetings.ts → resendInvites(meetingId) (planned)\n- **When to call:** Resend button on detail (planned)\n- **Navigation flow:** Detail → Resend → **Resend Invites**\n- **From → To:** meeting/[id] → Same screen (toast)\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.resendInvitations`\n- **What it does:** Re-sends invitation emails/notifications to meeting invitees.\n- **How to call:** POST `/internal-meetings/:meetingId/resend-invitations`. Empty body OK.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -657,12 +1273,20 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}/recordings",
-              "host": ["{{baseUrl}}"],
-              "path": ["internal-meetings", "{{meetingId}}", "recordings"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal-meetings",
+                "{{meetingId}}",
+                "recordings"
+              ]
+            },
+            "description": "**API:** `GET /internal-meetings/{{meetingId}}/recordings`\n\n### Mobile app\nmeeting/[id].tsx — Recording section / play\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/meetings.ts → getRecordings(meetingId) (planned)\n- **When to call:** Detail screen loads recording section\n- **Navigation flow:** Detail → **Recordings for Meeting** → playback list\n- **From → To:** meeting/[id] → Folder 6 transcript/download\n- **Wiring status:** Mock player\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.getRecordings`\n- **What it does:** Lists recordings associated with a specific internal meeting.\n- **How to call:** GET `/internal-meetings/:meetingId/recordings`.\n- **Auth / permissions:** Bearer JWT + meetings.read\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         }
-      ]
+      ],
+      "description": "## 4. Internal Meetings\n\nSchedule and manage Dharwin-native meetings (not external calendar sync). Base path: `/meetings`.\n\n**Mobile tab:** Meetings\n**App routes:** `app/(tabs)/meetings.tsx`, `app/meeting/[id].tsx`, `app/meeting/create.tsx`\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/meetings.tsx` → Upcoming / Completed / Cancelled segments\n\n**Inner screens**\n| Route | File | APIs to wire |\n|-------|------|--------------|\n| `/meeting/[id]` | `app/meeting/[id].tsx` | Detail, Recordings, Cancel, LiveKit token |\n| `/meeting/create` | `app/meeting/create.tsx` | Create, Patch / Reschedule |\n\n**Service:** `services/meetings.ts` (planned)\n\n### How to use in the mobile app\n- Meetings tab loads three lists: **List - Upcoming**, **List - Completed**, **List - Cancelled**.\n- Tap meeting → **Detail** on `meeting/[id].tsx`.\n- Schedule → **Create** from `meeting/create.tsx`; edit → **Patch / Reschedule**.\n- Cancel from list → **Cancel (PATCH status)**; recordings section → **Recordings for Meeting**.\n\n### Postman testing\n- Run **List - Upcoming** to copy a `meetingId` into variables.\n- Use **Detail** before **Patch** or **Cancel** to inspect current state.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| List - Upcoming | `GET /internal-meetings` | /(tabs)/meetings (app/(tabs)/meetings.tsx) | Meetings tab mount; Upcoming segment selected; pull-to-refresh | `internalMeetingController.list` | Paginated internal meetings filtered to scheduled/upcoming. |\n| List - Completed | `GET /internal-meetings` | /(tabs)/meetings (app/(tabs)/meetings.tsx) | User switches to Completed segment | `internalMeetingController.list` | Same list endpoint filtered to ended meetings. |\n| List - Cancelled | `GET /internal-meetings` | /(tabs)/meetings (app/(tabs)/meetings.tsx) | User switches to Cancelled segment | `internalMeetingController.list` | Same list endpoint filtered to cancelled meetings. |\n| Detail | `GET /internal-meetings/{{meetingId}}` | /meeting/[id] (app/meeting/[id].tsx) | User taps a meeting row from any list | `internalMeetingController.get` | Returns one internal meeting by Mongo _id (includes LiveKit room name). |\n| Create | `POST /internal-meetings` | /meeting/create (app/meeting/create.tsx) | User submits Schedule form (FAB or header +) | `internalMeetingController.create` | Creates an internal meeting, assigns LiveKit room, sends invitation emails. |\n| Patch / Reschedule | `PATCH /internal-meetings/{{meetingId}}` | /meeting/create (app/meeting/create.tsx) | Edit existing meeting and save | `internalMeetingController.update` | Updates meeting fields (title, schedule, hosts, status, etc.). |\n| Cancel (PATCH status) | `PATCH /internal-meetings/{{meetingId}}` | /(tabs)/meetings \\| /meeting/[id] (app/(tabs)/meetings.tsx, app/meeting/[id].tsx) | User confirms Cancel on meeting card or detail | `internalMeetingController.update` | Cancels a meeting by setting status to cancelled. |\n| Delete | `DELETE /internal-meetings/{{meetingId}}` | (none) (—) | Permanent delete (admin action — no mobile UI yet) | `internalMeetingController.remove` | Permanently deletes an internal meeting and tears down its LiveKit room. |\n| Resend Invites | `POST /internal-meetings/{{meetingId}}/resend-invitations` | /meeting/[id] (app/meeting/[id].tsx) | Resend button on detail (planned) | `internalMeetingController.resendInvitations` | Re-sends invitation emails/notifications to meeting invitees. |\n| Recordings for Meeting | `GET /internal-meetings/{{meetingId}}/recordings` | /meeting/[id] (app/meeting/[id].tsx) | Detail screen loads recording section | `internalMeetingController.getRecordings` | Lists recordings associated with a specific internal meeting. |\n\n### Backend route files\n- `src/routes/v1/internalMeeting.route.js`"
     },
     {
       "name": "5. LiveKit",
@@ -671,36 +1295,72 @@
           "name": "Token - Meeting",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\"\n}" },
-            "url": "{{baseUrl}}/livekit/token"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\"\n}"
+            },
+            "url": "{{baseUrl}}/livekit/token",
+            "description": "**API:** `POST /livekit/token`\n\n### Mobile app\nmeeting/[id].tsx — Join Meeting (LiveKit room)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/livekit.ts → getMeetingToken(roomName) (planned)\n- **When to call:** User taps **Join Meeting** on detail\n- **Navigation flow:** Detail → **Token - Meeting** → open LiveKit room component\n- **From → To:** meeting/[id] → In-call UI (planned)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/livekit.route.js`\n- **Handler:** `livekitController.getToken`\n- **What it does:** Mints a LiveKit JWT for joining a meeting room with host/guest permissions.\n- **How to call:** POST body: `{ roomName, participantName?, participantEmail?, forChatCall? }`. Use meeting's `meetingId` as roomName.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Token - Chat Call",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{conversationId}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\",\n  \"forChatCall\": true\n}" },
-            "url": "{{baseUrl}}/livekit/token"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomName\": \"{{conversationId}}\",\n  \"participantName\": \"Test User\",\n  \"participantEmail\": \"{{email}}\",\n  \"forChatCall\": true\n}"
+            },
+            "url": "{{baseUrl}}/livekit/token",
+            "description": "**API:** `POST /livekit/token`\n\n### Mobile app\nchat/[id].tsx call button, call/new.tsx — In-app audio/video call\n\n### How to connect in the app\n- **Screen route:** `/chat/[id] | /call/new`\n- **File:** `app/chat/[id].tsx, app/call/new.tsx`\n- **Service:** services/livekit.ts → getChatCallToken(conversationId) (planned)\n- **When to call:** Start audio/video from chat or new call screen\n- **Navigation flow:** chat → call button → **Start Call** (folder 8) → **Token - Chat Call** → room\n- **From → To:** chat/[id], call/new → In-call UI\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/livekit.route.js`\n- **Handler:** `livekitController.getToken`\n- **What it does:** Same token endpoint; for chat P2P rooms verifies conversation membership.\n- **How to call:** Body: `{ roomName: \"chat-{conversationId}\", forChatCall: true }`.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Recording - Start",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}" },
-            "url": "{{baseUrl}}/livekit/recording/start"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}"
+            },
+            "url": "{{baseUrl}}/livekit/recording/start",
+            "description": "**API:** `POST /livekit/recording/start`\n\n### Mobile app\nIn-meeting room controls (not built yet)\n\n### How to connect in the app\n- **Screen route:** `In-call room UI (planned)`\n- **File:** `components/livekit-room.tsx (planned)`\n- **Service:** services/livekit.ts → startRecording(roomName) (planned)\n- **When to call:** Host taps Record during meeting\n- **Navigation flow:** In room → **Recording Start** → show REC indicator\n- **From → To:** LiveKit room → Same room\n- **Wiring status:** No in-call UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/livekit.route.js`\n- **Handler:** `livekitController.startRecording`\n- **What it does:** Starts LiveKit egress recording for a room (host-only at controller level).\n- **How to call:** POST body: `{ roomName }`.\n- **Auth / permissions:** Bearer JWT + meetings.record (host email check)\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
           "name": "Recording - Stop",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}" },
-            "url": "{{baseUrl}}/livekit/recording/stop"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomName\": \"{{meetingRoomName}}\"\n}"
+            },
+            "url": "{{baseUrl}}/livekit/recording/stop",
+            "description": "**API:** `POST /livekit/recording/stop`\n\n### Mobile app\nIn-meeting room controls (not built yet)\n\n### How to connect in the app\n- **Screen route:** `In-call room UI (planned)`\n- **File:** `components/livekit-room.tsx (planned)`\n- **Service:** services/livekit.ts → stopRecording(egressId) (planned)\n- **When to call:** Host stops recording\n- **Navigation flow:** In room → Stop → **Recording Stop**\n- **From → To:** LiveKit room → meeting/[id] recordings refresh\n- **Wiring status:** No in-call UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/livekit.route.js`\n- **Handler:** `livekitController.stopRecording`\n- **What it does:** Stops an active LiveKit recording egress.\n- **How to call:** POST body: `{ egressId, roomName }` — `egressId` from start response.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         },
         {
@@ -709,19 +1369,32 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/livekit/recording/status/{{meetingRoomName}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["livekit", "recording", "status", "{{meetingRoomName}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "livekit",
+                "recording",
+                "status",
+                "{{meetingRoomName}}"
+              ]
+            },
+            "description": "**API:** `GET /livekit/recording/status/{{meetingRoomName}}`\n\n### Mobile app\nIn-meeting recording indicator (not built yet)\n\n### How to connect in the app\n- **Screen route:** `In-call room UI (planned)`\n- **File:** `components/livekit-room.tsx (planned)`\n- **Service:** services/livekit.ts → getRecordingStatus(roomName) (planned)\n- **When to call:** Poll while recording active\n- **Navigation flow:** Room mount / interval → **Recording Status**\n- **From → To:** LiveKit room → REC badge state\n- **Wiring status:** No in-call UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/livekit.route.js`\n- **Handler:** `livekitController.getRecordingStatus`\n- **What it does:** Returns current recording/egress status for a LiveKit room.\n- **How to call:** GET `/livekit/recording/status/:meetingRoomName`.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         }
-      ]
+      ],
+      "description": "## 5. LiveKit\n\nReal-time A/V rooms powered by LiveKit. Tokens are short-lived; fetch immediately before joining.\n\n**Mobile tab:** Meetings + Chats (calls)\n**App routes:** `app/meeting/[id].tsx` (join meeting), `app/chat/[id].tsx`, `app/call/new.tsx`\n\n### App screens & inner routes\n\nCalled from meeting and chat flows (not a separate tab).\n\n| Trigger screen | When |\n|----------------|------|\n| `app/meeting/[id].tsx` | User taps **Join Meeting** |\n| `app/chat/[id].tsx`, `app/call/new.tsx` | Start audio/video call |\n\n**Service:** `services/livekit.ts` (planned)\n\n### How to use in the mobile app\n- Join scheduled meeting → **Token - Meeting** with `meetingId` → open LiveKit room UI.\n- Start chat call → **Token - Chat Call** with conversation/participant context.\n- Optional: **Recording - Start/Stop/Status** during active room (UI not built yet).\n\n### Postman testing\n- Requires valid `meetingId` or chat context from folders 4 / 8.\n- Token response is used client-side only — do not log in production.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| Token - Meeting | `POST /livekit/token` | /meeting/[id] (app/meeting/[id].tsx) | User taps **Join Meeting** on detail | `livekitController.getToken` | Mints a LiveKit JWT for joining a meeting room with host/guest permissions. |\n| Token - Chat Call | `POST /livekit/token` | /chat/[id] \\| /call/new (app/chat/[id].tsx, app/call/new.tsx) | Start audio/video from chat or new call screen | `livekitController.getToken` | Same token endpoint; for chat P2P rooms verifies conversation membership. |\n| Recording - Start | `POST /livekit/recording/start` | In-call room UI (planned) (components/livekit-room.tsx (planned)) | Host taps Record during meeting | `livekitController.startRecording` | Starts LiveKit egress recording for a room (host-only at controller level). |\n| Recording - Stop | `POST /livekit/recording/stop` | In-call room UI (planned) (components/livekit-room.tsx (planned)) | Host stops recording | `livekitController.stopRecording` | Stops an active LiveKit recording egress. |\n| Recording - Status | `GET /livekit/recording/status/{{meetingRoomName}}` | In-call room UI (planned) (components/livekit-room.tsx (planned)) | Poll while recording active | `livekitController.getRecordingStatus` | Returns current recording/egress status for a LiveKit room. |\n\n### Backend route files\n- `src/routes/v1/livekit.route.js`"
     },
     {
       "name": "6. Recordings (Global)",
       "item": [
         {
           "name": "List Recordings",
-          "request": { "method": "GET", "url": "{{baseUrl}}/recordings" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/recordings",
+            "description": "**API:** `GET /recordings`\n\n### Mobile app\nmeeting/[id].tsx — Play recording; global list (no tab yet)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/recordings.ts → listAll() (planned)\n- **When to call:** Global library or meeting detail needs all recordings\n- **Navigation flow:** Detail recordings section → **List Recordings** (or per-meeting API in folder 4)\n- **From → To:** meeting/[id] → Playback / transcript\n- **Wiring status:** Mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/recording.route.js`\n- **Handler:** `recordingController.listAll`\n- **What it does:** Paginated global library of meeting/interview recordings.\n- **How to call:** Query: `page?`, `limit?`, `status?`, `q?`, `source?`, `dateFrom?`, `dateTo?`.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
+          }
         },
         {
           "name": "Recording Transcript",
@@ -729,12 +1402,20 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/recordings/{{recordingId}}/transcript",
-              "host": ["{{baseUrl}}"],
-              "path": ["recordings", "{{recordingId}}", "transcript"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "recordings",
+                "{{recordingId}}",
+                "transcript"
+              ]
+            },
+            "description": "**API:** `GET /recordings/{{recordingId}}/transcript`\n\n### Mobile app\nMeeting transcript view (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id] (planned transcript tab)`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/recordings.ts → getTranscript(recordingId) (planned)\n- **When to call:** User opens transcript for a recording\n- **Navigation flow:** Recording row → **Transcript** → scrollable text\n- **From → To:** meeting/[id] → Transcript view\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/recording.route.js`\n- **Handler:** `recordingController.getTranscript`\n- **What it does:** Returns transcript segments for a recording ordered by sequenceNumber.\n- **How to call:** GET `/recordings/:recordingId/transcript`.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
           }
         }
-      ]
+      ],
+      "description": "## 6. Recordings (Global)\n\nGlobal recording library and transcripts. Complements per-meeting recordings in folder 4.\n\n**Mobile tab:** Meetings (playback)\n**App routes:** `app/meeting/[id].tsx` recording player; no dedicated Recordings tab yet\n\n### App screens & inner routes\n\nUsed from `app/meeting/[id].tsx` recording section (playback + transcript).\n\n**Service:** `services/recordings.ts` (planned)\n\n### How to use in the mobile app\n- After meeting ends, **List Recordings** fetches available files.\n- Tap recording → stream URL from list response.\n- **Recording Transcript** for AI/search transcript view (planned).\n\n### Postman testing\n- Use `recordingId` from **List Recordings** for transcript request.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| List Recordings | `GET /recordings` | /meeting/[id] (app/meeting/[id].tsx) | Global library or meeting detail needs all recordings | `recordingController.listAll` | Paginated global library of meeting/interview recordings. |\n| Recording Transcript | `GET /recordings/{{recordingId}}/transcript` | /meeting/[id] (planned transcript tab) (app/meeting/[id].tsx) | User opens transcript for a recording | `recordingController.getTranscript` | Returns transcript segments for a recording ordered by sequenceNumber. |\n\n### Backend route files\n- `src/routes/v1/recording.route.js`"
     },
     {
       "name": "7. File Storage",
@@ -745,14 +1426,30 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/file-storage/list?prefix=&maxKeys=50",
-              "host": ["{{baseUrl}}"],
-              "path": ["file-storage", "list"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "file-storage",
+                "list"
+              ],
               "query": [
-                { "key": "prefix", "value": "" },
-                { "key": "next", "value": "", "disabled": true },
-                { "key": "maxKeys", "value": "50" }
+                {
+                  "key": "prefix",
+                  "value": ""
+                },
+                {
+                  "key": "next",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "maxKeys",
+                  "value": "50"
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /file-storage/list`\n\n### Mobile app\n(tabs)/files.tsx, files/category/[id].tsx — Browse files\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/files | /files/category/[id]`\n- **File:** `app/(tabs)/files.tsx, app/files/category/[id].tsx`\n- **Service:** services/files.ts → list({ prefix }) (planned)\n- **When to call:** Files tab mount; category drill-in; pull-to-refresh\n- **Navigation flow:** Tab → categories → category/[id] → **List** with prefix\n- **From → To:** Tab bar Files → files/[id]\n- **Wiring status:** Mock listings\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/fileStorage.route.js`\n- **Handler:** `fileStorageController.list`\n- **What it does:** Lists S3 objects and virtual folders under a prefix for the user's storage namespace.\n- **How to call:** Query: `prefix?`, `next?` (continuation token), `maxKeys?` (1–1000).\n- **Auth / permissions:** Bearer JWT + files-storage.read\n\n_App repo: `Dharwin App/my-app`. Files tab uses mock listings until storage API is wired._"
           }
         },
         {
@@ -761,10 +1458,21 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/file-storage/download?key={{fileKey}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["file-storage", "download"],
-              "query": [{ "key": "key", "value": "{{fileKey}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "file-storage",
+                "download"
+              ],
+              "query": [
+                {
+                  "key": "key",
+                  "value": "{{fileKey}}"
+                }
+              ]
+            },
+            "description": "**API:** `GET /file-storage/download`\n\n### Mobile app\nfiles/[id].tsx — Download file\n\n### How to connect in the app\n- **Screen route:** `/files/[id]`\n- **File:** `app/files/[id].tsx`\n- **Service:** services/files.ts → getDownloadUrl(key) (planned)\n- **When to call:** User taps Download or opens file preview\n- **Navigation flow:** File row → **Download** → open signed URL in browser/viewer\n- **From → To:** files/[id], category list → OS viewer\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/fileStorage.route.js`\n- **Handler:** `fileStorageController.download`\n- **What it does:** Returns a presigned S3 download URL for an object key owned by the user.\n- **How to call:** Query: `key` (URI-encoded S3 object key).\n- **Auth / permissions:** Bearer JWT + files-storage.read\n\n_App repo: `Dharwin App/my-app`. Files tab uses mock listings until storage API is wired._"
           }
         },
         {
@@ -774,12 +1482,21 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "file", "type": "file", "src": [] },
-                { "key": "folder", "value": "{{folderPrefix}}", "type": "text", "disabled": true }
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "folder",
+                  "value": "{{folderPrefix}}",
+                  "type": "text",
+                  "disabled": true
+                }
               ]
             },
             "url": "{{baseUrl}}/file-storage/upload",
-            "description": "Max 20 MB. Field name = file."
+            "description": "**API:** `POST /file-storage/upload`\n\n### Mobile app\nfiles/upload.tsx — Upload file\n\n### How to connect in the app\n- **Screen route:** `/files/upload`\n- **File:** `app/files/upload.tsx`\n- **Service:** services/files.ts → upload(file, folder?) (planned)\n- **When to call:** User picks file and taps Upload\n- **Navigation flow:** files tab → Upload FAB → upload screen → **Upload** → back to list\n- **From → To:** (tabs)/files → files/category or files tab\n- **Wiring status:** Mock UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/fileStorage.route.js`\n- **Handler:** `fileStorageController.upload`\n- **What it does:** Uploads a file to user-scoped S3 storage (max 20MB).\n- **How to call:** multipart/form-data: `file` (required), optional `folder` prefix.\n- **Auth / permissions:** Bearer JWT + files-storage.manage\n\n_App repo: `Dharwin App/my-app`. Files tab uses mock listings until storage API is wired._"
           }
         },
         {
@@ -788,22 +1505,43 @@
             "method": "DELETE",
             "url": {
               "raw": "{{baseUrl}}/file-storage/object?key={{fileKey}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["file-storage", "object"],
-              "query": [{ "key": "key", "value": "{{fileKey}}" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "file-storage",
+                "object"
+              ],
+              "query": [
+                {
+                  "key": "key",
+                  "value": "{{fileKey}}"
+                }
+              ]
+            },
+            "description": "**API:** `DELETE /file-storage/object`\n\n### Mobile app\nfiles/[id].tsx — Delete file\n\n### How to connect in the app\n- **Screen route:** `/files/[id]`\n- **File:** `app/files/[id].tsx`\n- **Service:** services/files.ts → deleteObject(key) (planned)\n- **When to call:** User confirms delete on file detail\n- **Navigation flow:** Detail → Delete → **Delete Object** → router.back()\n- **From → To:** files/[id] → Previous list\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/fileStorage.route.js`\n- **Handler:** `fileStorageController.deleteObject`\n- **What it does:** Deletes an S3 object by key from the user's storage.\n- **How to call:** DELETE with query `key`.\n- **Auth / permissions:** Bearer JWT + files-storage.manage\n\n_App repo: `Dharwin App/my-app`. Files tab uses mock listings until storage API is wired._"
           }
         },
         {
           "name": "Create Folder",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"name\": \"NewFolder\",\n  \"prefix\": \"{{folderPrefix}}\"\n}" },
-            "url": "{{baseUrl}}/file-storage/folder"
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"NewFolder\",\n  \"prefix\": \"{{folderPrefix}}\"\n}"
+            },
+            "url": "{{baseUrl}}/file-storage/folder",
+            "description": "**API:** `POST /file-storage/folder`\n\n### Mobile app\nCreate folder (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/files.ts → createFolder(name) (planned)\n- **When to call:** New folder action (no mobile UI yet)\n- **Navigation flow:** —\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/fileStorage.route.js`\n- **Handler:** `fileStorageController.createFolder`\n- **What it does:** Creates a folder placeholder in S3 under the user's prefix.\n- **How to call:** POST body: `{ name, prefix? }`.\n- **Auth / permissions:** Bearer JWT + files-storage.manage\n\n_App repo: `Dharwin App/my-app`. Files tab uses mock listings until storage API is wired._"
           }
         }
-      ]
+      ],
+      "description": "## 7. File Storage\n\nOrg file storage (S3-backed). Upload, browse, download, delete objects and folders.\n\n**Mobile tab:** Files\n**App routes:** `app/(tabs)/files.tsx`, `app/files/[id].tsx`, `app/files/upload.tsx`, `app/files/category/[id].tsx`\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/files.tsx` → categories + recent files\n\n**Inner screens**\n| Route | File | APIs to wire |\n|-------|------|--------------|\n| `/files/category/[id]` | `app/files/category/[id].tsx` | List (with prefix) |\n| `/files/[id]` | `app/files/[id].tsx` | Download, Delete |\n| `/files/upload` | `app/files/upload.tsx` | Upload |\n\n**Service:** `services/files.ts` (planned)\n\n### How to use in the mobile app\n- Files tab → **List** by category or root.\n- Upload FAB → **Upload (multipart)** from `files/upload.tsx`.\n- Tap file → **Download (signed URL)**; swipe/delete → **Delete Object**.\n\n### Postman testing\n- Upload uses form-data — pick a local file in Postman.\n- Download returns a signed URL; open in browser to verify.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| List | `GET /file-storage/list` | /(tabs)/files \\| /files/category/[id] (app/(tabs)/files.tsx, app/files/category/[id].tsx) | Files tab mount; category drill-in; pull-to-refresh | `fileStorageController.list` | Lists S3 objects and virtual folders under a prefix for the user's storage namespace. |\n| Download (signed URL) | `GET /file-storage/download` | /files/[id] (app/files/[id].tsx) | User taps Download or opens file preview | `fileStorageController.download` | Returns a presigned S3 download URL for an object key owned by the user. |\n| Upload (multipart) | `POST /file-storage/upload` | /files/upload (app/files/upload.tsx) | User picks file and taps Upload | `fileStorageController.upload` | Uploads a file to user-scoped S3 storage (max 20MB). |\n| Delete Object | `DELETE /file-storage/object` | /files/[id] (app/files/[id].tsx) | User confirms delete on file detail | `fileStorageController.deleteObject` | Deletes an S3 object by key from the user's storage. |\n| Create Folder | `POST /file-storage/folder` | (none) (—) | New folder action (no mobile UI yet) | `fileStorageController.createFolder` | Creates a folder placeholder in S3 under the user's prefix. |\n\n### Backend route files\n- `src/routes/v1/fileStorage.route.js`"
     },
     {
       "name": "8. Chats",
@@ -827,7 +1565,11 @@
               }
             }
           ],
-          "request": { "method": "GET", "url": "{{baseUrl}}/chats/conversations" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chats/conversations",
+            "description": "**API:** `GET /chats/conversations`\n\n### Mobile app\n(tabs)/chats.tsx — Chat inbox\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/chats`\n- **File:** `app/(tabs)/chats.tsx`\n- **Service:** services/chat.ts → listConversations() (planned)\n- **When to call:** Chats tab mount; pull-to-refresh; return from chat/[id]\n- **Navigation flow:** Tab → **List Conversations** → render inbox rows\n- **From → To:** Tab bar Chats → chat/[id]\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.listConversations`\n- **What it does:** Returns paginated chat conversations for the current user.\n- **How to call:** Query: `page?`, `limit?` (max 50). Sets `conversationId` in Postman tests.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
+          }
         },
         {
           "name": "Conversation Detail",
@@ -835,9 +1577,16 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}"
+              ]
+            },
+            "description": "**API:** `GET /chats/conversations/{{conversationId}}`\n\n### Mobile app\nchat/[id].tsx — Chat header / metadata\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → getConversation(id) (planned)\n- **When to call:** Chat header mount (parallel with Messages)\n- **Navigation flow:** Open chat → **Conversation Detail** → title, participants\n- **From → To:** (tabs)/chats → chat/[id]\n- **Wiring status:** Mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.getConversation`\n- **What it does:** Returns conversation metadata if the user is a participant.\n- **How to call:** GET `/chats/conversations/:conversationId`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
@@ -846,22 +1595,46 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}", "messages"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}",
+                "messages"
+              ]
+            },
+            "description": "**API:** `GET /chats/conversations/{{conversationId}}/messages`\n\n### Mobile app\nchat/[id].tsx — Message timeline\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → getMessages(conversationId) (planned)\n- **When to call:** Chat screen mount; scroll-up pagination\n- **Navigation flow:** chat/[id] → **Messages** → render timeline\n- **From → To:** (tabs)/chats → Same chat\n- **Wiring status:** Mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.getMessages`\n- **What it does:** Returns paginated message history for a conversation.\n- **How to call:** Query: `before?` (message id cursor), `limit?` (max 100, default 50).\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
           "name": "Send Message",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"text\": \"Hello from Postman\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Hello from Postman\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}", "messages"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}",
+                "messages"
+              ]
+            },
+            "description": "**API:** `POST /chats/conversations/{{conversationId}}/messages`\n\n### Mobile app\nchat/[id].tsx — Composer send text\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → sendMessage(conversationId, content) (planned)\n- **When to call:** User sends text from composer\n- **Navigation flow:** Composer Send → **Send Message** → append to list (+ socket)\n- **From → To:** chat/[id] → Same chat\n- **Wiring status:** Mock local only\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.sendMessage`\n- **What it does:** Sends a text/media message and emits realtime socket event.\n- **How to call:** Body: `{ content?, type?, attachments?, replyTo? }`. Backend expects `content`, not `text`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
@@ -871,46 +1644,99 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "text", "value": "Attaching file", "type": "text" },
-                { "key": "file", "type": "file", "src": [] }
+                {
+                  "key": "text",
+                  "value": "Attaching file",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
               ]
             },
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages/upload",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}", "messages", "upload"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}",
+                "messages",
+                "upload"
+              ]
+            },
+            "description": "**API:** `POST /chats/conversations/{{conversationId}}/messages/upload`\n\n### Mobile app\nchat/[id].tsx — Attach file in composer\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → uploadAndSend(conversationId, files) (planned)\n- **When to call:** User attaches image/file and sends\n- **Navigation flow:** Attach → Send → **Send with File**\n- **From → To:** chat/[id] → Same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.uploadAndSendMessage`\n- **What it does:** Uploads file(s) to S3 and sends as chat message.\n- **How to call:** multipart field `files` (array, up to 10), optional `content`, `replyTo`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
           "name": "Mark Read",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/read",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}", "read"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}",
+                "read"
+              ]
+            },
+            "description": "**API:** `PATCH /chats/conversations/{{conversationId}}/read`\n\n### Mobile app\nchat/[id].tsx / (tabs)/chats.tsx — Clear unread badge\n\n### How to connect in the app\n- **Screen route:** `/chat/[id] | /(tabs)/chats`\n- **File:** `app/chat/[id].tsx, app/(tabs)/chats.tsx`\n- **Service:** services/chat.ts → markRead(conversationId) (planned)\n- **When to call:** Chat opens or user views thread\n- **Navigation flow:** Open chat → **Mark Read** → clear badge on tab list\n- **From → To:** chat/[id] → (tabs)/chats (badge update)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.markAsRead`\n- **What it does:** Marks conversation as read for the current user.\n- **How to call:** PATCH `/chats/conversations/:conversationId/read`. Empty body OK.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
           "name": "Start Call",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"type\": \"audio\"\n}" },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"audio\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/call",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "conversations", "{{conversationId}}", "call"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "conversations",
+                "{{conversationId}}",
+                "call"
+              ]
+            },
+            "description": "**API:** `POST /chats/conversations/{{conversationId}}/call`\n\n### Mobile app\nchat/[id].tsx — Start call from chat\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → initiateCall(conversationId, callType) (planned)\n- **When to call:** User taps phone/video icon in chat header\n- **Navigation flow:** chat → **Start Call** → **Token - Chat Call** (folder 5) → room\n- **From → To:** chat/[id] → LiveKit in-call UI\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.initiateCall`\n- **What it does:** Creates in-app call record and emits incoming-call socket event with LiveKit roomName.\n- **How to call:** Body: `{ callType: \"audio\"|\"video\" }`. Backend expects `callType`, not `type`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
           "name": "Socket Token",
-          "request": { "method": "GET", "url": "{{baseUrl}}/chats/socket-token" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chats/socket-token",
+            "description": "**API:** `GET /chats/socket-token`\n\n### Mobile app\nRealtime chat (SignalR/socket layer — not implemented)\n\n### How to connect in the app\n- **Screen route:** `(app bootstrap)`\n- **File:** `app/_layout.tsx, services/chat-socket.ts (planned)`\n- **Service:** services/chat.ts → getSocketToken() (planned)\n- **When to call:** After login, before subscribing to realtime events\n- **Navigation flow:** Login → **Socket Token** → connect Socket.IO → listen for messages/calls\n- **From → To:** App bootstrap → All chat screens\n- **Wiring status:** Not implemented\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.getSocketToken`\n- **What it does:** Echoes the current access token for Socket.IO / realtime chat authentication.\n- **How to call:** GET, no params. Returns `{ token }` from Bearer or cookie.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
+          }
         },
         {
           "name": "User Search",
@@ -918,17 +1744,35 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/chats/users/search?search=",
-              "host": ["{{baseUrl}}"],
-              "path": ["chats", "users", "search"],
-              "query": [{ "key": "search", "value": "", "description": "Backend param is 'search' (not 'q')" }]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chats",
+                "users",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Backend param is 'search' (not 'q')"
+                }
+              ]
+            },
+            "description": "**API:** `GET /chats/users/search`\n\n### Mobile app\nchat/new.tsx, call/new.tsx — Find users to chat/call\n\n### How to connect in the app\n- **Screen route:** `/chat/new | /call/new`\n- **File:** `app/chat/new.tsx, app/call/new.tsx`\n- **Service:** services/chat.ts → searchUsers(q) (planned)\n- **When to call:** User types in search field on new chat/call screens\n- **Navigation flow:** new chat → type name → **User Search** → tap user → open/create conversation\n- **From → To:** chat/new, call/new → chat/[id]\n- **Wiring status:** Mock users\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.searchUsers`\n- **What it does:** Searches active users by name/email for starting new chats or calls.\n- **How to call:** Query: `search` (required), `limit?` (max 50).\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
           "name": "In-App Calls List",
-          "request": { "method": "GET", "url": "{{baseUrl}}/chats/calls" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chats/calls",
+            "description": "**API:** `GET /chats/calls`\n\n### Mobile app\n(tabs)/calls.tsx — In-app call history subset\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/calls`\n- **File:** `app/(tabs)/calls.tsx`\n- **Service:** services/chat.ts → listInAppCalls() (planned)\n- **When to call:** Calls tab — filter to in-app subset (optional alongside folder 9)\n- **Navigation flow:** Calls tab → in-app filter → **In-App Calls List**\n- **From → To:** (tabs)/calls → chat/[id] or call detail\n- **Wiring status:** Mock; prefer **All Calls** from folder 9\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.listCalls`\n- **What it does:** Paginated in-app call history for the current user (chat-scoped).\n- **How to call:** Query: `page?`, `limit?` (max 500).\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
+          }
         }
-      ]
+      ],
+      "description": "## 8. Chats\n\nIn-app messaging between Dharwin users. REST for history; realtime via socket token (planned).\n\n**Mobile tab:** Chats (+ Calls history subset)\n**App routes:** `app/(tabs)/chats.tsx`, `app/chat/[id].tsx`, `app/chat/new.tsx`\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/chats.tsx` → conversation list\n\n**Inner screens**\n| Route | File | APIs to wire |\n|-------|------|--------------|\n| `/chat/[id]` | `app/chat/[id].tsx` | Messages, Send, Upload, Mark Read, Start Call |\n| `/chat/new` | `app/chat/new.tsx` | User Search → open new chat |\n\n**Realtime:** **Socket Token** on app bootstrap (`services/chat.ts`, planned)\n\n### How to use in the mobile app\n- Chats tab → **List Conversations**.\n- Open chat → **Messages** paginated; send → **Send Message** or **Send Message with File**.\n- New chat → **User Search** on `chat/new.tsx`.\n- Unread badge → **Mark Read**; call button → **Start Call** (pairs with folder 5).\n\n### Postman testing\n- Run **List Conversations** → set `conversationId`.\n- **Send Message** posts to `/chats/conversations/{{conversationId}}/messages`.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| List Conversations | `GET /chats/conversations` | /(tabs)/chats (app/(tabs)/chats.tsx) | Chats tab mount; pull-to-refresh; return from chat/[id] | `chatController.listConversations` | Returns paginated chat conversations for the current user. |\n| Conversation Detail | `GET /chats/conversations/{{conversationId}}` | /chat/[id] (app/chat/[id].tsx) | Chat header mount (parallel with Messages) | `chatController.getConversation` | Returns conversation metadata if the user is a participant. |\n| Messages | `GET /chats/conversations/{{conversationId}}/messages` | /chat/[id] (app/chat/[id].tsx) | Chat screen mount; scroll-up pagination | `chatController.getMessages` | Returns paginated message history for a conversation. |\n| Send Message | `POST /chats/conversations/{{conversationId}}/messages` | /chat/[id] (app/chat/[id].tsx) | User sends text from composer | `chatController.sendMessage` | Sends a text/media message and emits realtime socket event. |\n| Send Message with File | `POST /chats/conversations/{{conversationId}}/messages/upload` | /chat/[id] (app/chat/[id].tsx) | User attaches image/file and sends | `chatController.uploadAndSendMessage` | Uploads file(s) to S3 and sends as chat message. |\n| Mark Read | `PATCH /chats/conversations/{{conversationId}}/read` | /chat/[id] \\| /(tabs)/chats (app/chat/[id].tsx, app/(tabs)/chats.tsx) | Chat opens or user views thread | `chatController.markAsRead` | Marks conversation as read for the current user. |\n| Start Call | `POST /chats/conversations/{{conversationId}}/call` | /chat/[id] (app/chat/[id].tsx) | User taps phone/video icon in chat header | `chatController.initiateCall` | Creates in-app call record and emits incoming-call socket event with LiveKit roomName. |\n| Socket Token | `GET /chats/socket-token` | (app bootstrap) (app/_layout.tsx, services/chat-socket.ts (planned)) | After login, before subscribing to realtime events | `chatController.getSocketToken` | Echoes the current access token for Socket.IO / realtime chat authentication. |\n| User Search | `GET /chats/users/search` | /chat/new \\| /call/new (app/chat/new.tsx, app/call/new.tsx) | User types in search field on new chat/call screens | `chatController.searchUsers` | Searches active users by name/email for starting new chats or calls. |\n| In-App Calls List | `GET /chats/calls` | /(tabs)/calls (app/(tabs)/calls.tsx) | Calls tab — filter to in-app subset (optional alongside folder 9) | `chatController.listCalls` | Paginated in-app call history for the current user (chat-scoped). |\n\n### Backend route files\n- `src/routes/v1/chat.route.js`"
     },
     {
       "name": "9. Unified Calls",
@@ -939,23 +1783,62 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/communication/calls?page=1&limit=25&sortBy=createdAt&order=desc&source=all",
-              "host": ["{{baseUrl}}"],
-              "path": ["communication", "calls"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "communication",
+                "calls"
+              ],
               "query": [
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "25" },
-                { "key": "sortBy", "value": "createdAt" },
-                { "key": "order", "value": "desc" },
-                { "key": "source", "value": "all", "description": "all | telephony | in_app" },
-                { "key": "search", "value": "", "disabled": true },
-                { "key": "status", "value": "", "disabled": true },
-                { "key": "purpose", "value": "", "disabled": true },
-                { "key": "language", "value": "", "disabled": true }
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "order",
+                  "value": "desc"
+                },
+                {
+                  "key": "source",
+                  "value": "all",
+                  "description": "all | telephony | in_app"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "purpose",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "language",
+                  "value": "",
+                  "disabled": true
+                }
               ]
-            }
+            },
+            "description": "**API:** `GET /communication/calls`\n\n### Mobile app\n(tabs)/calls.tsx — Unified call log (telephony + in-app)\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/calls`\n- **File:** `app/(tabs)/calls.tsx`\n- **Service:** services/communication.ts → listUnifiedCalls(filters) (planned)\n- **When to call:** Calls tab mount; filter change (missed/incoming/outgoing); refresh\n- **Navigation flow:** Tab → **All Calls** → unified telephony + in-app log\n- **From → To:** Tab bar Calls → chat/[id], meeting/[id], or external dialer metadata\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/communication.route.js`\n- **Handler:** `communicationController.listUnifiedCalls`\n- **What it does:** Unified call log merging telephony (Bolna) and in-app chat calls with filters.\n- **How to call:** Query: `page?`, `limit?`, `source?` (all|telephony|in_app), `search?`, `status?`, `sortBy?`, `order?`.\n- **Auth / permissions:** Bearer JWT + calls.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         }
-      ]
+      ],
+      "description": "## 9. Unified Calls\n\nSingle call log merging telephony and in-app LiveKit calls. Distinct from **In-App Calls List** in folder 8.\n\n**Mobile tab:** Calls\n**App routes:** `app/(tabs)/calls.tsx`\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/calls.tsx` → unified call history (telephony + in-app)\n\nAlso uses **In-App Calls List** from folder 8 for chat-scoped history.\n\n**Inner:** `app/call/new.tsx` → User Search + LiveKit token (folder 5)\n\n### How to use in the mobile app\n- Calls tab on load → **All Calls** with filters (missed, incoming, outgoing).\n- Tap row → navigate to related chat or meeting when metadata present.\n\n### Postman testing\n- Compare with **8. Chats → In-App Calls List** — unified vs chat-scoped history.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| All Calls | `GET /communication/calls` | /(tabs)/calls (app/(tabs)/calls.tsx) | Calls tab mount; filter change (missed/incoming/outgoing); refresh | `communicationController.listUnifiedCalls` | Unified call log merging telephony (Bolna) and in-app chat calls with filters. |\n\n### Backend route files\n- `src/routes/v1/communication.route.js`"
     }
   ]
 }
