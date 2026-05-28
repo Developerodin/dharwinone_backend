@@ -71,6 +71,27 @@ export const permissionAliases = {
     'ats.employees:view',
     'ats.employees:view,create,edit,delete',
   ],
+  'employees.create': [
+    'employees.create',
+    'ats.employees:create',
+    'ats.employees:view,create,edit,delete',
+    'candidates.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
+  'employees.edit': [
+    'employees.edit',
+    'ats.employees:edit',
+    'ats.employees:view,create,edit,delete',
+    'candidates.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
+  'employees.delete': [
+    'employees.delete',
+    'ats.employees:delete',
+    'ats.employees:view,create,edit,delete',
+    'candidates.manage',
+    'ats.candidates:view,create,edit,delete',
+  ],
   'employees.manage': ['employees.manage', 'ats.employees:view,create,edit,delete'],
   'candidates.manageSalesAgentAttribution': [
     'candidates.manageSalesAgentAttribution',

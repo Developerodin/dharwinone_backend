@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canUpdateJoiningDate, canUpdateResignDate, canManageCandidates } from '../controllers/employee.controller.js';
+import { canUpdateJoiningDate, canUpdateResignDate, canManageCandidates, canViewAllEmployees } from '../controllers/employee.controller.js';
 import { getGrantingPermissions } from '../config/permissions.js';
 
 const mkReq = (perms) => ({ authContext: { permissions: new Set(perms) } });
@@ -45,6 +45,16 @@ test('canManageCandidates: candidates.manage → true', () => {
 });
 test('canManageCandidates: employees.read only → false', () => {
   assert.equal(canManageCandidates(mkReq(['employees.read'])), false);
+});
+
+test('canViewAllEmployees: employees.read only → true', () => {
+  assert.equal(canViewAllEmployees(mkReq(['employees.read'])), true);
+});
+test('canViewAllEmployees: candidates.read only → true', () => {
+  assert.equal(canViewAllEmployees(mkReq(['candidates.read'])), true);
+});
+test('canViewAllEmployees: no read/manage → false', () => {
+  assert.equal(canViewAllEmployees(mkReq([])), false);
 });
 
 test('getGrantingPermissions: employees.read includes ats.employees:view', () => {

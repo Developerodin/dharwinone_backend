@@ -14,19 +14,24 @@ import { FEATURE_FLAG_NAME } from '../../constants/salesAgentAttribution.js';
 
 const router = express.Router();
 
-/** PR2: employee CRUD/list — employees.* primary, candidates.* legacy backstop. */
+/** PR2/PR3: employee list/read — employees.read primary, candidates.read legacy backstop. */
 const canReadEmployees = [auth(), requireAnyOfPermissions('candidates.read', 'employees.read')];
-const canManageEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.manage')];
+/** Granular write gates — candidates.manage retains full legacy bundle access. */
+const canCreateEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.create')];
+const canEditEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.edit')];
+const canDeleteEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.delete')];
+/** Non-CRUD admin flows that mutate employee data (assignments, imports, etc.). */
+const canMutateEmployees = canEditEmployees;
 /** Referral / pre-hire pipeline — candidates.* only (employees-only roles must not leak here). */
 const canReadCandidatesOnly = [auth(), requirePermissions('candidates.read')];
 const canManageCandidatesOnly = [auth(), requirePermissions('candidates.manage')];
 const canUpdateJoiningDate = [
   auth(),
-  requireAnyOfPermissions('candidates.manage', 'onboarding.manage', 'employees.manage'),
+  requireAnyOfPermissions('candidates.manage', 'onboarding.manage', 'employees.edit'),
 ];
 const canUpdateResignDate = [
   auth(),
-  requireAnyOfPermissions('candidates.manage', 'employees.manage'),
+  requireAnyOfPermissions('candidates.manage', 'employees.edit'),
 ];
 const canManageSalesAgentAttribution = [
   auth(),
@@ -42,7 +47,7 @@ const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.rea
 
 router
   .route('/')
-  .post(...canManageEmployees, validate(employeeValidation.createCandidate), employeeController.create)
+  .post(...canCreateEmployees, validate(employeeValidation.createCandidate), employeeController.create)
   .get(...canReadEmployees, validate(employeeValidation.getCandidates), employeeController.list);
 
 /** Referral leads (ATS) — list must be before /:candidateId */
@@ -139,7 +144,7 @@ router.get(
 /** Per-agent assigned counts + unassigned (org-wide for employment scope) — candidates.manage */
 router.get(
   '/agent-assignment-summary',
-  ...canManageEmployees,
+  ...canReadEmployees,
   validate(employeeValidation.getAgentAssignmentSummary),
   employeeController.getAgentAssignmentSummaryHandler
 );
@@ -147,7 +152,7 @@ router.get(
 /** Training students ↔ agents — must be before /:candidateId */
 router.get(
   '/student-agent-assignments',
-  ...canManageEmployees,
+  ...canReadEmployees,
   validate(employeeValidation.listStudentAgentAssignments),
   employeeController.listStudentAgentAssignmentsHandler
 );
@@ -179,21 +184,21 @@ router
 /** Active-SOP incomplete steps across current candidates — candidates.manage only */
 router.get(
   '/sop-open-overview',
-  ...canManageEmployees,
+  ...canReadEmployees,
   validate(employeeValidation.getSopOpenOverview),
   employeeController.getSopOpenOverview
 );
 
 /** Queue in-app SOP notifications for candidates with open steps (all users with candidates.manage receive them). */
-router.post('/sop-reminders/dispatch', ...canManageEmployees, employeeController.postSopRemindersDispatch);
+router.post('/sop-reminders/dispatch', ...canMutateEmployees, employeeController.postSopRemindersDispatch);
 
 router
   .route('/export')
-  .post(...canManageEmployees, validate(employeeValidation.exportAllCandidates), employeeController.exportAll);
+  .post(...canReadEmployees, validate(employeeValidation.exportAllCandidates), employeeController.exportAll);
 
 router
   .route('/import/excel')
-  .post(...canManageEmployees, uploadSingle('file'), employeeController.importExcel);
+  .post(...canCreateEmployees, uploadSingle('file'), employeeController.importExcel);
 
 router
   .route('/salary-slips/:candidateId')
@@ -208,7 +213,7 @@ router
 
 router
   .route('/:candidateId/resend-verification-email')
-  .post(...canManageEmployees, validate(employeeValidation.resendVerificationEmail), employeeController.resendVerificationEmail);
+  .post(...canMutateEmployees, validate(employeeValidation.resendVerificationEmail), employeeController.resendVerificationEmail);
 
 router
   .route('/:candidateId/export')
@@ -224,23 +229,23 @@ router
 
 router
   .route('/:candidateId/assign-recruiter')
-  .post(...canManageEmployees, validate(employeeValidation.assignRecruiter), employeeController.assignRecruiter);
+  .post(...canMutateEmployees, validate(employeeValidation.assignRecruiter), employeeController.assignRecruiter);
 
 router
   .route('/:candidateId/assign-agent')
-  .post(...canManageEmployees, validate(employeeValidation.assignAgent), employeeController.assignAgent);
+  .post(...canMutateEmployees, validate(employeeValidation.assignAgent), employeeController.assignAgent);
 
 router
   .route('/:candidateId/company-assigned-email')
   .post(
-    ...canManageEmployees,
+    ...canMutateEmployees,
     validate(employeeValidation.assignCompanyAssignedEmail),
     employeeController.assignCompanyAssignedEmail
   );
 
 router
   .route('/week-off')
-  .post(...canManageEmployees, validate(employeeValidation.updateWeekOff), employeeController.updateWeekOff);
+  .post(...canMutateEmployees, validate(employeeValidation.updateWeekOff), employeeController.updateWeekOff);
 
 router
   .route('/:candidateId/week-off')
@@ -248,7 +253,7 @@ router
 
 router
   .route('/assign-shift')
-  .post(...canManageEmployees, validate(employeeValidation.assignShift), employeeController.assignShift);
+  .post(...canMutateEmployees, validate(employeeValidation.assignShift), employeeController.assignShift);
 
 router
   .route('/:candidateId/joining-date')
@@ -277,8 +282,8 @@ router.get(
 router
   .route('/:candidateId')
   .get(...canReadEmployees, validate(employeeValidation.getCandidate), employeeController.get)
-  .patch(...canReadEmployees, validate(employeeValidation.updateCandidate), employeeController.update)
-  .delete(...canManageEmployees, validate(employeeValidation.deleteCandidate), employeeController.remove);
+  .patch(...canEditEmployees, validate(employeeValidation.updateCandidate), employeeController.update)
+  .delete(...canDeleteEmployees, validate(employeeValidation.deleteCandidate), employeeController.remove);
 
 router
   .route('/documents/:candidateId')
@@ -290,7 +295,7 @@ router
 
 router
   .route('/documents/verify/:candidateId/:documentIndex')
-  .patch(...canManageEmployees, validate(employeeValidation.verifyDocument), employeeController.verifyDocumentStatus);
+  .patch(...canMutateEmployees, validate(employeeValidation.verifyDocument), employeeController.verifyDocumentStatus);
 
 router
   .route('/documents/status/:candidateId')

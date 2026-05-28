@@ -86,6 +86,13 @@ export const canManageCandidates = (req) => {
   return p.has('candidates.manage') || p.has('employees.manage');
 };
 
+/** PR3: list/read-all — employees.read or legacy candidates.read (view matrix checkbox). */
+export const canViewAllEmployees = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return p.has('employees.read') || p.has('candidates.read') || canManageCandidates(req);
+};
+
 /** PR1: candidates.manage (legacy) OR onboarding.manage OR employees.manage. */
 export const canUpdateJoiningDate = (req) => {
   const p = req.authContext?.permissions;
@@ -200,8 +207,8 @@ const list = catchAsync(async (req, res) => {
     'withoutReferrer',
     'ownerUserRole',
   ]);
-  if (!req.user.canManageCandidates) {
-    // Non-managers: default to "my" candidate profile (owner = self). Agents use assignedAgent instead —
+  if (!canViewAllEmployees(req)) {
+    // No org-wide read: default to "my" profile (owner = self). Agents use assignedAgent instead —
     // otherwise owner=self + Candidate-role owner filter returns no rows (agents are not Candidate owners).
     const isAgent = await userIsAgent(req.user);
     if (isAgent) {
@@ -362,7 +369,7 @@ const get = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const candidate = await getCandidateById(req.params.candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
-  if (!req.user.canManageCandidates && String(candidate.owner) !== String(req.user._id)) {
+  if (!canViewAllEmployees(req) && String(candidate.owner) !== String(req.user._id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const obj = candidate.toJSON ? candidate.toJSON() : candidate;
@@ -480,7 +487,7 @@ const exportProfile = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const candidate = await getCandidateById(req.params.candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
-  if (!req.user.canManageCandidates && String(candidate.owner) !== String(req.user._id)) {
+  if (!canViewAllEmployees(req) && String(candidate.owner) !== String(req.user._id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const { email } = req.body;
@@ -523,8 +530,8 @@ const exportProfile = catchAsync(async (req, res) => {
 
 const exportAll = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
-  if (!req.user.canManageCandidates) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can export all candidates');
+  if (!canViewAllEmployees(req)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with employee view permission can export all candidates');
   }
 
   const { email } = req.body;

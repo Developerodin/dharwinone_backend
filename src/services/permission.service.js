@@ -51,9 +51,15 @@ export const deriveApiPermissions = (rawPermissions) => {
 
     const actions = actionsPart.split(',').map((a) => a.trim().toLowerCase());
     const hasView = actions.includes('view');
-    const hasManage = actions.some((a) => ['create', 'edit', 'delete'].includes(a));
+    const hasCreate = actions.includes('create');
+    const hasEdit = actions.includes('edit');
+    const hasDelete = actions.includes('delete');
+    const hasManage = hasCreate || hasEdit || hasDelete;
 
     if (hasView) apiPermissions.add(`${resource}.read`);
+    if (hasCreate) apiPermissions.add(`${resource}.create`);
+    if (hasEdit) apiPermissions.add(`${resource}.edit`);
+    if (hasDelete) apiPermissions.add(`${resource}.delete`);
     if (hasManage) apiPermissions.add(`${resource}.manage`);
 
     // Namespaced form for colliding resources (e.g. candidate.courses vs training.courses).
@@ -61,6 +67,9 @@ export const deriveApiPermissions = (rawPermissions) => {
       const moduleId = key.substring(0, dotIndex).trim();
       const namespaced = `${moduleId}-${resource}`;
       if (hasView) apiPermissions.add(`${namespaced}.read`);
+      if (hasCreate) apiPermissions.add(`${namespaced}.create`);
+      if (hasEdit) apiPermissions.add(`${namespaced}.edit`);
+      if (hasDelete) apiPermissions.add(`${namespaced}.delete`);
       if (hasManage) apiPermissions.add(`${namespaced}.manage`);
     }
   }
