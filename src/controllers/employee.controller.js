@@ -43,6 +43,13 @@ import {
   getAgentAssignmentSummary,
   getJobFit,
   matchJobsForCandidate,
+  requestDocumentFromCandidate,
+  cancelDocumentRequest,
+  getMyDocumentRequests,
+  fulfillDocumentRequest,
+  replaceMyRejectedDocument,
+  adminUploadDocumentForCandidate,
+  deleteCandidateDocument,
 } from '../services/employee.service.js';
 import {
   listReferralLeads,
@@ -85,6 +92,42 @@ export const canManageCandidates = (req) => {
   if (!p) return false;
   return p.has('candidates.manage') || p.has('employees.manage');
 };
+
+/** Document-modal actions (admin upload, approve/reject, request, cancel-request).
+ *  Allowed for full candidate managers AND pre-boarding scope users. */
+export const canMutatePreBoardingDocs = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return canManageCandidates(req) || p.has('pre-boarding.edit') || p.has('pre-boarding.manage');
+};
+
+export const canRequestPreBoardingDocs = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return canManageCandidates(req) || p.has('pre-boarding.create') || p.has('pre-boarding.manage');
+};
+
+export const canDeletePreBoardingDocs = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return canManageCandidates(req) || p.has('pre-boarding.delete') || p.has('pre-boarding.manage');
+};
+
+/** Pre-boarding Documents modal: list, status, preview, and documentRequests on GET /employees/:id. */
+export const userCanViewPreBoardingDocs = (permissions) => {
+  if (!permissions) return false;
+  return (
+    permissions.has('candidates.manage')
+    || permissions.has('employees.manage')
+    || permissions.has('pre-boarding.read')
+    || permissions.has('pre-boarding.create')
+    || permissions.has('pre-boarding.edit')
+    || permissions.has('pre-boarding.delete')
+    || permissions.has('pre-boarding.manage')
+  );
+};
+
+export const canViewPreBoardingDocs = (req) => userCanViewPreBoardingDocs(req.authContext?.permissions);
 
 /** PR3: list/read-all — employees.read or legacy candidates.read (view matrix checkbox). */
 export const canViewAllEmployees = (req) => {
@@ -369,7 +412,11 @@ const get = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const candidate = await getCandidateById(req.params.candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
-  if (!canViewAllEmployees(req) && String(candidate.owner) !== String(req.user._id)) {
+  if (
+    !canViewAllEmployees(req)
+    && !canViewPreBoardingDocs(req)
+    && String(candidate.owner) !== String(req.user._id)
+  ) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   const obj = candidate.toJSON ? candidate.toJSON() : candidate;
@@ -630,7 +677,7 @@ export { addSalarySlip, updateSalarySlip, deleteSalarySlip };
 
 // Document verification controllers
 const verifyDocumentStatus = catchAsync(async (req, res) => {
-  req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canManageCandidates = canMutatePreBoardingDocs(req);
   const candidate = await verifyDocument(
     req.params.candidateId,
     req.params.documentIndex,
@@ -645,7 +692,7 @@ const verifyDocumentStatus = catchAsync(async (req, res) => {
 });
 
 const getCandidateDocumentStatus = catchAsync(async (req, res) => {
-  req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canManageCandidates = canViewPreBoardingDocs(req);
   const candidate = await getDocumentStatus(req.params.candidateId, req.user);
   res.status(httpStatus.OK).send({
     success: true,
@@ -654,7 +701,7 @@ const getCandidateDocumentStatus = catchAsync(async (req, res) => {
 });
 
 const getCandidateDocuments = catchAsync(async (req, res) => {
-  req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canManageCandidates = canViewPreBoardingDocs(req);
   const documents = await getDocuments(req.params.candidateId, req.user);
   res.status(httpStatus.OK).send({
     success: true,
@@ -667,10 +714,7 @@ const downloadDocument = catchAsync(async (req, res) => {
 
   // documentAuth sets req.user but not req.authContext; compute canManageCandidates for isOwnerOrAdmin check
   const authContext = await getUserPermissionContext(req.user);
-  req.user.canManageCandidates =
-    authContext?.permissions?.has('candidates.manage')
-    || authContext?.permissions?.has('employees.manage')
-    || false;
+  req.user.canManageCandidates = userCanViewPreBoardingDocs(authContext?.permissions);
 
   const documentData = await getDocumentDownloadUrl(candidateId, parseInt(documentIndex, 10), req.user);
   
@@ -712,7 +756,68 @@ const downloadSalarySlip = catchAsync(async (req, res) => {
   }
 });
 
-export { verifyDocumentStatus, getCandidateDocumentStatus, getCandidateDocuments, downloadDocument, downloadSalarySlip };
+// Document request controllers (admin → candidate)
+const requestDocument = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canRequestPreBoardingDocs(req);
+  const created = await requestDocumentFromCandidate(req.params.candidateId, req.body, req.user);
+  res.status(httpStatus.CREATED).send({ success: true, data: created });
+});
+
+const cancelDocumentRequestController = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canRequestPreBoardingDocs(req);
+  const cancelled = await cancelDocumentRequest(req.params.candidateId, req.params.requestIndex, req.user);
+  res.status(httpStatus.OK).send({ success: true, data: cancelled });
+});
+
+const getMyDocRequests = catchAsync(async (req, res) => {
+  const userId = req.user._id || req.user.id;
+  const data = await getMyDocumentRequests(userId);
+  res.status(httpStatus.OK).send({ success: true, data });
+});
+
+const fulfillDocRequest = catchAsync(async (req, res) => {
+  const userId = req.user._id || req.user.id;
+  const result = await fulfillDocumentRequest(userId, req.params.requestIndex, req.file);
+  res.status(httpStatus.OK).send({ success: true, data: result });
+});
+
+const replaceMyRejectedDoc = catchAsync(async (req, res) => {
+  const userId = req.user._id || req.user.id;
+  const replaced = await replaceMyRejectedDocument(userId, req.params.documentIndex, req.file);
+  res.status(httpStatus.OK).send({ success: true, data: replaced });
+});
+
+const adminUploadDocument = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canMutatePreBoardingDocs(req);
+  const created = await adminUploadDocumentForCandidate(
+    req.params.candidateId,
+    req.file,
+    { type: req.body?.type, label: req.body?.label },
+    req.user
+  );
+  res.status(httpStatus.CREATED).send({ success: true, data: created });
+});
+
+const deleteDocumentController = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canDeletePreBoardingDocs(req);
+  const result = await deleteCandidateDocument(req.params.candidateId, req.params.documentIndex, req.user);
+  res.status(httpStatus.OK).send({ success: true, data: result });
+});
+
+export {
+  verifyDocumentStatus,
+  getCandidateDocumentStatus,
+  getCandidateDocuments,
+  downloadDocument,
+  downloadSalarySlip,
+  requestDocument,
+  cancelDocumentRequestController,
+  getMyDocRequests,
+  fulfillDocRequest,
+  replaceMyRejectedDoc,
+  adminUploadDocument,
+  deleteDocumentController,
+};
 
 // Share candidate profile controller (per SHARE_CANDIDATE_FORM.md)
 const shareProfile = catchAsync(async (req, res) => {

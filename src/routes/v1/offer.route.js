@@ -1,78 +1,55 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import validate from '../../middlewares/validate.js';
 import * as offerValidation from '../../validations/offer.validation.js';
 import * as offerController from '../../controllers/offer.controller.js';
 
 const router = express.Router();
 
-router.get(
-  '/letter-defaults',
+// Honor ats.offers:* matrix keys (derive offers.read / .create / .edit / .delete / .manage) in addition
+// to legacy candidates.* admin scope. View also unlocked for pipeline-adjacent pre-boarding read users.
+const canReadOffers = [
   auth(),
-  requirePermissions('candidates.read'),
-  validate(offerValidation.letterDefaults),
-  offerController.letterDefaults
-);
+  requireAnyOfPermissions(
+    'candidates.read', 'employees.read',
+    'offers.read', 'offers.create', 'offers.edit', 'offers.delete', 'offers.manage',
+    'pre-boarding.read', 'pre-boarding.edit', 'pre-boarding.manage',
+  ),
+];
 
-router.post(
-  '/enhance-roles',
+const canCreateOffers = [
   auth(),
-  requirePermissions('candidates.manage'),
-  validate(offerValidation.enhanceRoles),
-  offerController.enhanceRoles
-);
+  requireAnyOfPermissions('candidates.manage', 'employees.edit', 'offers.create', 'offers.manage'),
+];
 
-router.post(
-  '/:offerId/share',
+const canEditOffers = [
   auth(),
-  requirePermissions('candidates.manage'),
-  validate(offerValidation.shareOffer),
-  offerController.shareOffer
-);
+  requireAnyOfPermissions('candidates.manage', 'employees.edit', 'offers.edit', 'offers.manage'),
+];
 
-router.post(
-  '/:offerId/generate-letter',
+const canDeleteOffers = [
   auth(),
-  requirePermissions('candidates.manage'),
-  validate(offerValidation.generateLetter),
-  offerController.generateLetter
-);
+  requireAnyOfPermissions('candidates.manage', 'employees.delete', 'offers.delete', 'offers.manage'),
+];
+
+router.get('/letter-defaults', ...canReadOffers, validate(offerValidation.letterDefaults), offerController.letterDefaults);
+
+router.post('/enhance-roles', ...canEditOffers, validate(offerValidation.enhanceRoles), offerController.enhanceRoles);
+
+router.post('/:offerId/share', ...canEditOffers, validate(offerValidation.shareOffer), offerController.shareOffer);
+
+router.post('/:offerId/generate-letter', ...canEditOffers, validate(offerValidation.generateLetter), offerController.generateLetter);
 
 router
   .route('/')
-  .post(
-    auth(),
-    requirePermissions('candidates.manage'),
-    validate(offerValidation.createOffer),
-    offerController.create
-  )
-  .get(
-    auth(),
-    requirePermissions('candidates.read'),
-    validate(offerValidation.getOffers),
-    offerController.list
-  );
+  .post(...canCreateOffers, validate(offerValidation.createOffer), offerController.create)
+  .get(...canReadOffers, validate(offerValidation.getOffers), offerController.list);
 
 router
   .route('/:offerId')
-  .get(
-    auth(),
-    requirePermissions('candidates.read'),
-    validate(offerValidation.getOffer),
-    offerController.get
-  )
-  .patch(
-    auth(),
-    requirePermissions('candidates.manage'),
-    validate(offerValidation.updateOffer),
-    offerController.update
-  )
-  .delete(
-    auth(),
-    requirePermissions('candidates.manage'),
-    validate(offerValidation.deleteOffer),
-    offerController.remove
-  );
+  .get(...canReadOffers, validate(offerValidation.getOffer), offerController.get)
+  .patch(...canEditOffers, validate(offerValidation.updateOffer), offerController.update)
+  .delete(...canDeleteOffers, validate(offerValidation.deleteOffer), offerController.remove);
 
 export default router;

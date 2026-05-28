@@ -35,6 +35,9 @@ const verifyCallback = (req, resolve, reject, _requiredRights) => async (err, us
   // This is used by downstream permission middleware.
   try {
     req.authContext = await getUserPermissionContext(user);
+    // Mirror onto req.user so service-layer helpers can read permissions without
+    // every controller having to forward it manually. Same object reference.
+    req.user.authContext = req.authContext;
   } catch (e) {
     return reject(new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Failed to load permissions'));
   }

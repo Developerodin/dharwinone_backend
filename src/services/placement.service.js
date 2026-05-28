@@ -11,6 +11,19 @@ import logger from '../config/logger.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
 import { ALLOWED_TRANSITIONS, PLACEMENT_STATUSES } from '../constants/atsPipeline.js';
 
+// Any pipeline-scope perm (15 keys across pre-boarding/onboarding/offers) grants full read
+// across placements — same as admin. Used to bypass owner/job-ownership gates for non-admin
+// users with explicit pipeline matrix permissions.
+const PIPELINE_PERMS = [
+  'pre-boarding.read', 'pre-boarding.create', 'pre-boarding.edit', 'pre-boarding.delete', 'pre-boarding.manage',
+  'onboarding.read', 'onboarding.create', 'onboarding.edit', 'onboarding.delete', 'onboarding.manage',
+  'offers.read', 'offers.create', 'offers.edit', 'offers.delete', 'offers.manage',
+];
+const hasAnyPipelinePerm = (currentUser) => {
+  const p = currentUser?.authContext?.permissions;
+  return !!(p && PIPELINE_PERMS.some((perm) => p.has(perm)));
+};
+
 /** UTC calendar day string YYYY-MM-DD for stable comparison of stored dates. */
 const joinDateYmdUtc = (d) => {
   const x = d instanceof Date ? d : new Date(d);
@@ -401,7 +414,9 @@ const queryPlacements = async (filter, options, currentUser) => {
   const isAdmin = await userIsAdmin(currentUser);
   const rawUserId = currentUser?.id ?? currentUser?._id;
   const userId = rawUserId && String(rawUserId).match(/^[0-9a-fA-F]{24}$/) ? rawUserId : null;
-  if (!isAdmin && userId) {
+  // Any pipeline-scope perm grants full-list visibility — same as admin.
+  const hasPipelineReadScope = hasAnyPipelinePerm(currentUser);
+  if (!isAdmin && !hasPipelineReadScope && userId) {
     const Job = (await import('../models/job.model.js')).default;
     const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
     const myJobIds = myJobs.map((j) => j._id);
@@ -514,7 +529,7 @@ const getPlacementById = async (id, currentUser = null) => {
 
   if (currentUser) {
     const createdByMe = String(placement.createdBy) === String(currentUser.id ?? currentUser._id);
-    if (!createdByMe && placement.job) {
+    if (!hasAnyPipelinePerm(currentUser) && !createdByMe && placement.job) {
       const canAccess = await isOwnerOrAdmin(currentUser, placement.job);
       if (!canAccess) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
@@ -534,7 +549,10 @@ const listAuditForPlacementId = async (id, currentUser) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Placement not found');
   }
   const createdByMe = String(placement.createdBy) === String(currentUser?.id ?? currentUser?._id);
-  const canAccess = createdByMe || (placement.job && (await isOwnerOrAdmin(currentUser, placement.job)));
+  const canAccess =
+    hasAnyPipelinePerm(currentUser)
+    || createdByMe
+    || (placement.job && (await isOwnerOrAdmin(currentUser, placement.job)));
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
@@ -554,7 +572,10 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     throw new ApiError(httpStatus.NOT_FOUND, 'Placement not found');
   }
   const createdByMe = String(placement.createdBy) === String(currentUser?.id ?? currentUser?._id);
-  const canAccess = createdByMe || (placement.job && (await isOwnerOrAdmin(currentUser, placement.job)));
+  const canAccess =
+    hasAnyPipelinePerm(currentUser)
+    || createdByMe
+    || (placement.job && (await isOwnerOrAdmin(currentUser, placement.job)));
   if (!canAccess) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }

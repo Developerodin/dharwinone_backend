@@ -139,10 +139,19 @@ function stripForbiddenJobFields(body) {
   });
 }
 
+// Matrix-derived jobs.manage (any of ats.jobs:create/edit/delete) grants resource-wide access,
+// matching the admin behavior. Without this, recruiters with explicit edit/delete perms can only
+// touch jobs they created — defeating the matrix design.
+const hasJobsManageScope = (user) => {
+  const p = user?.authContext?.permissions;
+  return !!(p && (p.has('jobs.manage') || p.has('jobs.edit') || p.has('jobs.delete') || p.has('jobs.create')));
+};
+
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
   const admin = await userIsAdmin(user);
   if (admin) return true;
+  if (hasJobsManageScope(user)) return true;
   return String(resource.createdBy?._id || resource.createdBy) === String(user.id || user._id);
 };
 
@@ -904,24 +913,41 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     status: 'pending',
   });
 
-  // Handle file uploads to S3
-  let resumeUrl = null;
-  const documentUrls = [];
+  // Handle file uploads to S3 and build candidate.documents entries that match documentSchema.
+  // Earlier shape ({ name, url } and uploadResult.fileUrl) silently dropped the resume because
+  // uploadFileToS3 returns `url` (not fileUrl) and the candidate doc schema uses `label`, not `name`.
+  let resumeDoc = null;
+  const documentDocs = [];
 
   if (files?.resume && files.resume[0]) {
     const { uploadFileToS3 } = await import('./upload.service.js');
     const resumeFile = files.resume[0];
-    const uploadResult = await uploadFileToS3(resumeFile, user._id, 'candidate-resumes');
-    resumeUrl = uploadResult.fileUrl;
+    const r = await uploadFileToS3(resumeFile, user._id, 'candidate-resumes');
+    resumeDoc = {
+      type: 'CV/Resume',
+      label: 'Resume',
+      url: r.url,
+      key: r.key,
+      originalName: r.originalName,
+      size: r.size,
+      mimeType: r.mimeType,
+      status: 0,
+    };
   }
 
   if (files?.documents && files.documents.length > 0) {
     const { uploadFileToS3 } = await import('./upload.service.js');
     for (const doc of files.documents) {
-      const uploadResult = await uploadFileToS3(doc, user._id, 'candidate-documents');
-      documentUrls.push({
-        name: doc.originalname,
-        url: uploadResult.fileUrl,
+      const r = await uploadFileToS3(doc, user._id, 'candidate-documents');
+      documentDocs.push({
+        type: 'Other',
+        label: r.originalName,
+        url: r.url,
+        key: r.key,
+        originalName: r.originalName,
+        size: r.size,
+        mimeType: r.mimeType,
+        status: 0,
       });
     }
   }
@@ -948,12 +974,9 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       socialLinks: [],
     };
 
-    if (resumeUrl) {
-      candidateData.documents = [{ name: 'Resume', url: resumeUrl }];
-    }
-
-    if (documentUrls.length > 0) {
-      candidateData.documents = [...(candidateData.documents || []), ...documentUrls];
+    const newDocs = [...(resumeDoc ? [resumeDoc] : []), ...documentDocs];
+    if (newDocs.length > 0) {
+      candidateData.documents = newDocs;
     }
 
     try {
@@ -982,11 +1005,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     }
     
     // Add new documents if provided
-    if (resumeUrl || documentUrls.length > 0) {
-      const newDocs = [];
-      if (resumeUrl) newDocs.push({ name: 'Resume', url: resumeUrl });
-      if (documentUrls.length > 0) newDocs.push(...documentUrls);
-      
+    const newDocs = [...(resumeDoc ? [resumeDoc] : []), ...documentDocs];
+    if (newDocs.length > 0) {
       candidate.documents = [...(candidate.documents || []), ...newDocs];
       await candidate.save();
       logger.info('✅ Candidate documents updated');

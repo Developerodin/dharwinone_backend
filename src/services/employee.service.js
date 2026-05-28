@@ -3286,6 +3286,214 @@ const updateUserAndCandidateForMe = async (userId, body) => {
   }
 };
 
+// ===== Document Requests =====
+// Admin asks the candidate to upload a specific document. Candidate sees this in My Applications.
+
+const requestDocumentFromCandidate = async (candidateId, payload, user) => {
+  if (!user?.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can request documents');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  const { type, label, notes } = payload || {};
+  const trimmedLabel = String(label || '').trim();
+  if (!trimmedLabel) throw new ApiError(httpStatus.BAD_REQUEST, 'label is required');
+  candidate.documentRequests = candidate.documentRequests || [];
+  candidate.documentRequests.push({
+    type: type || 'Other',
+    label: trimmedLabel,
+    notes: notes ? String(notes).trim() : undefined,
+    status: 'pending',
+    requestedBy: user._id || user.id,
+    requestedAt: new Date(),
+  });
+  await candidate.save();
+  return candidate.documentRequests[candidate.documentRequests.length - 1];
+};
+
+const cancelDocumentRequest = async (candidateId, requestIndex, user) => {
+  if (!user?.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can cancel document requests');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  const idx = Number(requestIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= (candidate.documentRequests || []).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid request index');
+  }
+  const req = candidate.documentRequests[idx];
+  if (req.status !== 'pending') {
+    throw new ApiError(httpStatus.BAD_REQUEST, `Cannot cancel request with status "${req.status}"`);
+  }
+  req.status = 'cancelled';
+  req.cancelledAt = new Date();
+  req.cancelledBy = user._id || user.id;
+  candidate.markModified('documentRequests');
+  await candidate.save();
+  return req;
+};
+
+const getMyDocumentRequests = async (userId) => {
+  const candidate = await Employee.findOne({ owner: userId });
+  if (!candidate) return { requests: [], rejectedDocuments: [], approvedDocuments: [], pendingDocuments: [] };
+  const pendingRequests = (candidate.documentRequests || [])
+    .map((r, index) => ({ index, ...(typeof r.toObject === 'function' ? r.toObject() : r) }))
+    .filter((r) => r.status === 'pending');
+  const indexedDocs = (candidate.documents || []).map((d, index) => ({
+    index,
+    doc: typeof d.toObject === 'function' ? d.toObject() : d,
+  }));
+  const rejectedDocuments = indexedDocs
+    .filter((entry) => entry.doc.status === 2)
+    .map((entry) => ({ index: entry.index, ...entry.doc }));
+  const approvedDocuments = indexedDocs
+    .filter((entry) => entry.doc.status === 1)
+    .map((entry) => ({ index: entry.index, ...entry.doc }));
+  const pendingDocuments = indexedDocs
+    .filter((entry) => !entry.doc.status || entry.doc.status === 0)
+    .map((entry) => ({ index: entry.index, ...entry.doc }));
+  return { requests: pendingRequests, rejectedDocuments, approvedDocuments, pendingDocuments };
+};
+
+/** Internal helper — uploads a multer-memory file to S3 and returns the doc-shaped payload. */
+const uploadFileForCandidate = async (file, ownerUserId, folder) => {
+  if (!file) throw new ApiError(httpStatus.BAD_REQUEST, 'No file uploaded');
+  const { uploadFileToS3 } = await import('./upload.service.js');
+  const r = await uploadFileToS3(file, ownerUserId, folder);
+  return {
+    url: r.url,
+    key: r.key,
+    originalName: r.originalName,
+    size: r.size,
+    mimeType: r.mimeType,
+  };
+};
+
+const fulfillDocumentRequest = async (userId, requestIndex, file) => {
+  const candidate = await Employee.findOne({ owner: userId });
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate profile not found');
+  const idx = Number(requestIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= (candidate.documentRequests || []).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid request index');
+  }
+  const req = candidate.documentRequests[idx];
+  if (req.status !== 'pending') {
+    throw new ApiError(httpStatus.BAD_REQUEST, `Request already ${req.status}`);
+  }
+  const uploaded = await uploadFileForCandidate(file, userId, 'candidate-documents');
+  candidate.documents = candidate.documents || [];
+  candidate.documents.push({
+    type: req.type || 'Other',
+    label: req.label,
+    ...uploaded,
+    status: 0,
+  });
+  const newDocIndex = candidate.documents.length - 1;
+  req.status = 'fulfilled';
+  req.fulfilledAt = new Date();
+  req.fulfilledDocIndex = newDocIndex;
+  candidate.markModified('documents');
+  candidate.markModified('documentRequests');
+  await candidate.save();
+  return { request: req, documentIndex: newDocIndex };
+};
+
+const replaceMyRejectedDocument = async (userId, documentIndex, file) => {
+  const candidate = await Employee.findOne({ owner: userId });
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate profile not found');
+  const idx = Number(documentIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= (candidate.documents || []).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document index');
+  }
+  const existing = candidate.documents[idx];
+  if (existing.status !== 2) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Only rejected documents can be replaced via this endpoint');
+  }
+  const uploaded = await uploadFileForCandidate(file, userId, 'candidate-documents');
+  // Replace in place — preserves type/label. Reset verification fields.
+  candidate.documents[idx].url = uploaded.url;
+  candidate.documents[idx].key = uploaded.key;
+  candidate.documents[idx].originalName = uploaded.originalName;
+  candidate.documents[idx].size = uploaded.size;
+  candidate.documents[idx].mimeType = uploaded.mimeType;
+  candidate.documents[idx].status = 0;
+  candidate.documents[idx].adminNotes = undefined;
+  candidate.documents[idx].verifiedAt = undefined;
+  candidate.documents[idx].verifiedBy = undefined;
+  candidate.markModified('documents');
+  await candidate.save();
+  return candidate.documents[idx];
+};
+
+/** Admin uploads a document on behalf of a candidate (used by Pre-boarding Documents modal).
+ *  Pre-approves the doc since a staff member is the source. */
+const adminUploadDocumentForCandidate = async (candidateId, file, payload, user) => {
+  if (!user?.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can upload documents');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  const { type, label } = payload || {};
+  const trimmedLabel = String(label || '').trim();
+  if (!trimmedLabel) throw new ApiError(httpStatus.BAD_REQUEST, 'label is required');
+  const uploaded = await uploadFileForCandidate(file, candidate.owner || candidateId, 'candidate-documents');
+  candidate.documents = candidate.documents || [];
+  candidate.documents.push({
+    type: type || 'Other',
+    label: trimmedLabel,
+    ...uploaded,
+    status: 1,
+    verifiedAt: new Date(),
+    verifiedBy: user._id || user.id,
+  });
+  candidate.markModified('documents');
+  await candidate.save();
+  return candidate.documents[candidate.documents.length - 1];
+};
+
+/** Delete a document from a candidate's profile. Gated by pre-boarding.delete OR candidates.manage.
+ *  Also deletes the underlying S3 object and removes any documentRequest whose fulfilledDocIndex
+ *  points at the deleted doc — those requests would otherwise dangle in the modal as 'fulfilled' with
+ *  no actual file behind them. */
+const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
+  if (!user?.canManageCandidates) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can delete documents');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  const idx = Number(documentIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= (candidate.documents || []).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document index');
+  }
+  const removedDoc = candidate.documents[idx];
+  const removedKey = removedDoc?.key;
+  candidate.documents.splice(idx, 1);
+  // Cascade through documentRequests:
+  //   - request that was fulfilled by this exact doc → remove the request entry
+  //   - request fulfilled by a later doc → re-index downwards
+  if (Array.isArray(candidate.documentRequests)) {
+    candidate.documentRequests = candidate.documentRequests.filter((r) => {
+      if (typeof r.fulfilledDocIndex !== 'number') return true;
+      if (r.fulfilledDocIndex === idx) return false; // drop dangling fulfilled request
+      if (r.fulfilledDocIndex > idx) r.fulfilledDocIndex -= 1;
+      return true;
+    });
+    candidate.markModified('documentRequests');
+  }
+  candidate.markModified('documents');
+  await candidate.save();
+  // S3 cleanup — best-effort, after DB save so a transient S3 failure doesn't block the user.
+  if (removedKey) {
+    try {
+      const { deleteFileFromS3 } = await import('./upload.service.js');
+      await deleteFileFromS3(removedKey);
+    } catch (err) {
+      // already logged inside helper
+    }
+  }
+  return { deletedIndex: idx };
+};
+
 export {
   createCandidate,
   queryCandidates,
@@ -3306,6 +3514,14 @@ export {
   getDocumentStatus,
   getDocuments,
   getDocumentDownloadUrl,
+  // Document requests (admin → candidate)
+  requestDocumentFromCandidate,
+  cancelDocumentRequest,
+  getMyDocumentRequests,
+  fulfillDocumentRequest,
+  replaceMyRejectedDocument,
+  adminUploadDocumentForCandidate,
+  deleteCandidateDocument,
   getSalarySlipDownloadUrl,
   getDocumentApiUrl,
   // Profile sharing

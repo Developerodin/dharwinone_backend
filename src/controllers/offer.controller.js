@@ -16,7 +16,13 @@ import {
 import * as jobService from '../services/job.service.js';
 import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 
+// Forward authContext onto req.user so service-layer pipeline-perm bypass can read permissions.
+const withAuthContext = (req) => {
+  if (req.user && req.authContext) req.user.authContext = req.authContext;
+};
+
 const create = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const { jobApplicationId, ...payload } = req.body;
   const userId = req.user?.id ?? req.user?._id;
   const raw = jobApplicationId != null && String(jobApplicationId).trim() ? String(jobApplicationId).trim() : null;
@@ -25,6 +31,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const get = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const offer = await getOfferById(req.params.offerId, req.user);
   if (!offer) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
@@ -33,11 +40,13 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const offer = await updateOfferById(req.params.offerId, req.body, req.user);
   res.send(offer);
 });
 
 const list = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const filter = pick(req.query, ['jobId', 'candidateId', 'status']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryOffers(filter, options, req.user);
@@ -45,6 +54,7 @@ const list = catchAsync(async (req, res) => {
 });
 
 const remove = catchAsync(async (req, res) => {
+  withAuthContext(req);
   await deleteOfferById(req.params.offerId, req.user);
   res.status(httpStatus.NO_CONTENT).send();
 });
@@ -60,11 +70,13 @@ const letterDefaults = catchAsync(async (req, res) => {
 });
 
 const shareOffer = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const result = await shareOfferWithCandidate(req.params.offerId, req.user, req.body);
   res.send(result);
 });
 
 const generateLetter = catchAsync(async (req, res) => {
+  withAuthContext(req);
   const offer = await generateOfferLetter(req.params.offerId, req.user, req.body);
   res.send(offer);
 });

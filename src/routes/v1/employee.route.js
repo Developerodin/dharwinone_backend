@@ -3,7 +3,7 @@ import auth from '../../middlewares/auth.js';
 import documentAuth from '../../middlewares/documentAuth.js';
 import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import requireCandidateAttendanceList from '../../middlewares/requireCandidateAttendanceList.js';
-import { uploadSingle } from '../../middlewares/upload.js';
+import { uploadSingle, uploadDocumentFile } from '../../middlewares/upload.js';
 import validate from '../../middlewares/validate.js';
 import * as employeeValidation from '../../validations/employee.validation.js';
 import * as attendanceValidation from '../../validations/attendance.validation.js';
@@ -16,6 +16,19 @@ const router = express.Router();
 
 /** PR2/PR3: employee list/read — employees.read primary, candidates.read legacy backstop. */
 const canReadEmployees = [auth(), requireAnyOfPermissions('candidates.read', 'employees.read')];
+/** Pre-boarding Documents modal — list/status/preview for scoped pre-boarding roles. */
+const canReadCandidateDocuments = [
+  auth(),
+  requireAnyOfPermissions(
+    'candidates.read',
+    'employees.read',
+    'pre-boarding.read',
+    'pre-boarding.create',
+    'pre-boarding.edit',
+    'pre-boarding.delete',
+    'pre-boarding.manage',
+  ),
+];
 /** Granular write gates — candidates.manage retains full legacy bundle access. */
 const canCreateEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.create')];
 const canEditEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.edit')];
@@ -281,13 +294,18 @@ router.get(
 
 router
   .route('/:candidateId')
-  .get(...canReadEmployees, validate(employeeValidation.getCandidate), employeeController.get)
+  .get(
+    auth(),
+    requireAnyOfPermissions('candidates.read', 'employees.read', 'pre-boarding.read', 'onboarding.read'),
+    validate(employeeValidation.getCandidate),
+    employeeController.get
+  )
   .patch(...canEditEmployees, validate(employeeValidation.updateCandidate), employeeController.update)
   .delete(...canDeleteEmployees, validate(employeeValidation.deleteCandidate), employeeController.remove);
 
 router
   .route('/documents/:candidateId')
-  .get(...canReadEmployees, validate(employeeValidation.getDocuments), employeeController.getCandidateDocuments);
+  .get(...canReadCandidateDocuments, validate(employeeValidation.getDocuments), employeeController.getCandidateDocuments);
 
 router
   .route('/documents/:candidateId/:documentIndex/download')
@@ -295,11 +313,64 @@ router
 
 router
   .route('/documents/verify/:candidateId/:documentIndex')
-  .patch(...canMutateEmployees, validate(employeeValidation.verifyDocument), employeeController.verifyDocumentStatus);
+  .patch(
+    auth(),
+    requireAnyOfPermissions('candidates.manage', 'employees.edit', 'pre-boarding.edit'),
+    validate(employeeValidation.verifyDocument),
+    employeeController.verifyDocumentStatus
+  );
 
 router
   .route('/documents/status/:candidateId')
-  .get(...canReadEmployees, validate(employeeValidation.getDocumentStatus), employeeController.getCandidateDocumentStatus);
+  .get(...canReadCandidateDocuments, validate(employeeValidation.getDocumentStatus), employeeController.getCandidateDocumentStatus);
+
+// Document request — gated by pre-boarding:create (matrix) or candidates.manage (admin).
+const canRequestDocument = [
+  auth(),
+  requireAnyOfPermissions('candidates.manage', 'employees.edit', 'pre-boarding.create'),
+];
+
+// Approve/Reject + admin upload — gated by pre-boarding:edit (matrix) or candidates.manage (admin).
+const canMutateDocument = [
+  auth(),
+  requireAnyOfPermissions('candidates.manage', 'employees.edit', 'pre-boarding.edit'),
+];
+
+// Admin requests a specific document from a candidate (appears in candidate's My Applications).
+router
+  .route('/documents/request/:candidateId')
+  .post(...canRequestDocument, employeeController.requestDocument);
+
+router
+  .route('/documents/request/:candidateId/:requestIndex')
+  .delete(...canRequestDocument, employeeController.cancelDocumentRequestController);
+
+// Admin uploads a document on behalf of a candidate (Pre-boarding Documents modal).
+router
+  .route('/documents/:candidateId/upload')
+  .post(...canMutateDocument, uploadDocumentFile, employeeController.adminUploadDocument);
+
+// Delete a candidate document — gated by pre-boarding.delete or candidates.manage.
+router
+  .route('/documents/:candidateId/:documentIndex')
+  .delete(
+    auth(),
+    requireAnyOfPermissions('candidates.manage', 'employees.delete', 'pre-boarding.delete'),
+    employeeController.deleteDocumentController
+  );
+
+// Candidate self-service endpoints — auth-only.
+router
+  .route('/me/document-requests')
+  .get(auth(), employeeController.getMyDocRequests);
+
+router
+  .route('/me/document-requests/:requestIndex/fulfill')
+  .post(auth(), uploadDocumentFile, employeeController.fulfillDocRequest);
+
+router
+  .route('/me/documents/:documentIndex/replace')
+  .post(auth(), uploadDocumentFile, employeeController.replaceMyRejectedDoc);
 
 router
   .route('/share/:candidateId')

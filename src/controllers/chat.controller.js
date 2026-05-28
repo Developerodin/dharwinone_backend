@@ -59,9 +59,19 @@ const sendMessage = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(msg);
 });
 
+const collectUploadedChatFiles = (req) => {
+  if (Array.isArray(req.files)) {
+    return req.files;
+  }
+  if (req.files && typeof req.files === 'object') {
+    return [...(req.files.files || []), ...(req.files.file || [])];
+  }
+  return req.file ? [req.file] : [];
+};
+
 const uploadAndSendMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  const files = req.files || (req.file ? [req.file] : []);
+  const files = collectUploadedChatFiles(req);
   if (!files.length) {
     return res.status(httpStatus.BAD_REQUEST).json({ error: 'No files provided' });
   }
@@ -75,7 +85,7 @@ const uploadAndSendMessage = catchAsync(async (req, res) => {
   const isImage = files.every((f) => f.mimetype?.startsWith('image/'));
   const isAudio = files.every((f) => f.mimetype?.startsWith('audio/'));
   const msgType = isImage ? 'image' : isAudio ? 'audio' : 'file';
-  const content = req.body?.content || '';
+  const content = req.body?.content || req.body?.text || '';
   const replyTo = req.body?.replyTo || undefined;
 
   const msg = await chatService.createMessage(req.params.id, userId, {

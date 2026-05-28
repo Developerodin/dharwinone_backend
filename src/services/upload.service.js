@@ -1,4 +1,4 @@
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { s3Client, generateFileKey, generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
@@ -50,5 +50,20 @@ const uploadMultipleFilesToS3 = async (files, userId, folder = 'documents') => {
   }
 };
 
-export { uploadFileToS3, uploadMultipleFilesToS3 };
+// Delete a single object from S3. Best-effort — logs and swallows errors so DB cleanup proceeds.
+const deleteFileFromS3 = async (key) => {
+  if (!key) return;
+  try {
+    await s3Client.send(
+      new DeleteObjectCommand({ Bucket: config.aws.bucketName, Key: key })
+    );
+  } catch (error) {
+    // Intentionally swallow — caller has already validated, and DB integrity matters more than S3 cleanup.
+    // Stale objects can be reaped by an out-of-band lifecycle policy.
+    // eslint-disable-next-line no-console
+    console.warn(`[s3] failed to delete ${key}: ${error?.message}`);
+  }
+};
+
+export { uploadFileToS3, uploadMultipleFilesToS3, deleteFileFromS3 };
 

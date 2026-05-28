@@ -62,6 +62,25 @@ const documentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Admin-initiated request asking a candidate to upload a specific document.
+// Surfaces to the candidate via GET /employees/me/document-requests (My Applications).
+const documentRequestSchema = new mongoose.Schema(
+  {
+    type: { type: String, enum: DOCUMENT_TYPES, default: 'Other', trim: true },
+    label: { type: String, trim: true, required: true },
+    notes: { type: String, trim: true },
+    status: { type: String, enum: ['pending', 'fulfilled', 'cancelled'], default: 'pending', index: true },
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    requestedAt: { type: Date, default: Date.now },
+    fulfilledAt: { type: Date },
+    /** Index into candidate.documents[] of the upload that fulfilled this request. */
+    fulfilledDocIndex: { type: Number },
+    cancelledAt: { type: Date },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  },
+  { _id: false }
+);
+
 const skillSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -141,6 +160,7 @@ const employeeSchema = new mongoose.Schema(
     qualifications: { type: [qualificationSchema], default: [] },
     experiences: { type: [experienceSchema], default: [] },
     documents: { type: [documentSchema], default: [] },
+    documentRequests: { type: [documentRequestSchema], default: [] },
     skills: { type: [skillSchema], default: [] },
     socialLinks: { type: [socialLinkSchema], default: [] },
     salarySlips: { type: [salarySlipSchema], default: [] },

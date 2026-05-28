@@ -256,7 +256,18 @@ const jobHasPopulatedCreatedBy = (jobDoc) => {
   return mongoose.Types.ObjectId.isValid(String(cb));
 };
 
+// Any ats.offers:* or ats.pre-boarding:* matrix perm bypasses the job-owner gate — same model as placements.
+const OFFER_PIPELINE_PERMS = [
+  'offers.read', 'offers.create', 'offers.edit', 'offers.delete', 'offers.manage',
+  'pre-boarding.read', 'pre-boarding.create', 'pre-boarding.edit', 'pre-boarding.delete', 'pre-boarding.manage',
+];
+const hasOfferPipelinePerm = (currentUser) => {
+  const p = currentUser?.authContext?.permissions;
+  return !!(p && OFFER_PIPELINE_PERMS.some((perm) => p.has(perm)));
+};
+
 const ensureAccess = async (currentUser, offerOrJob) => {
+  if (hasOfferPipelinePerm(currentUser)) return;
   let job;
   if (offerOrJob.job) {
     const j = offerOrJob.job;

@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import config from '../config/config.js';
 import { tokenTypes } from '../config/tokens.js';
 import User from '../models/user.model.js';
+import Role from '../models/role.model.js';
 import ChatCall from '../models/chatCall.model.js';
 import * as chatService from './chat.service.js';
 import logger from '../config/logger.js';
@@ -47,6 +48,45 @@ const initSocket = (httpServer) => {
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
     io.emit('user_online', { userId });
+
+    // Admins receive every Bolna call:update on role:admin (see emitCallUpdate).
+    (async () => {
+      try {
+        const fullUser = await User.findById(userId).select('roleIds platformSuperUser').lean();
+        if (fullUser?.platformSuperUser) {
+          socket.join('role:admin');
+          return;
+        }
+        const roleIds = fullUser?.roleIds || [];
+        if (!roleIds.length) return;
+        const adminRole = await Role.findOne({
+          _id: { $in: roleIds },
+          name: 'Administrator',
+          status: 'active',
+        })
+          .select('_id')
+          .lean();
+        if (adminRole) socket.join('role:admin');
+      } catch (err) {
+        logger.warn(`socket admin room join failed: ${err.message}`);
+      }
+    })();
+
+    socket.on('subscribe:call', (data) => {
+      const { scope, id } = data || {};
+      const scopedId = id != null ? String(id).trim() : '';
+      if (!scopedId) return;
+      if (scope === 'candidate') socket.join(`call:candidate:${scopedId}`);
+      else if (scope === 'job') socket.join(`call:job:${scopedId}`);
+    });
+
+    socket.on('unsubscribe:call', (data) => {
+      const { scope, id } = data || {};
+      const scopedId = id != null ? String(id).trim() : '';
+      if (!scopedId) return;
+      if (scope === 'candidate') socket.leave(`call:candidate:${scopedId}`);
+      else if (scope === 'job') socket.leave(`call:job:${scopedId}`);
+    });
 
     socket.on('join_conversation', async (data, cb) => {
       try {

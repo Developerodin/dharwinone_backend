@@ -82,7 +82,10 @@ router.post(
 router.post(
   '/conversations/:id/messages/upload',
   validate(chatValidation.conversationIdParam),
-  chatAttachmentsUpload.array('files', 10),
+  chatAttachmentsUpload.fields([
+    { name: 'files', maxCount: 10 },
+    { name: 'file', maxCount: 10 },
+  ]),
   chatController.uploadAndSendMessage
 );
 router.patch(

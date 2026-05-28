@@ -13,11 +13,14 @@ import {
 const list = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['jobId', 'candidateId', 'status', 'preBoardingStatus']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  // Expose authContext so the service can detect pipeline-scope read perms and skip owner narrowing.
+  req.user.authContext = req.authContext;
   const result = await queryPlacements(filter, options, req.user);
   res.send(result);
 });
 
 const get = catchAsync(async (req, res) => {
+  req.user.authContext = req.authContext;
   const placement = await getPlacementById(req.params.placementId, req.user);
   if (!placement) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Placement not found');
@@ -26,6 +29,7 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
+  req.user.authContext = req.authContext;
   const canOverride = ['preboarding.override', 'candidates.manage'].some((reqPerm) =>
     getGrantingPermissions(reqPerm).some((g) => req.authContext.permissions.has(g))
   );
@@ -34,6 +38,7 @@ const update = catchAsync(async (req, res) => {
 });
 
 const audit = catchAsync(async (req, res) => {
+  req.user.authContext = req.authContext;
   const rows = await listAuditForPlacementId(req.params.placementId, req.user);
   res.send(rows);
 });

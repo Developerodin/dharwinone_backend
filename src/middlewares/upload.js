@@ -186,4 +186,19 @@ const chatAttachmentsUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-export { uploadSingle, uploadJobApplicationFiles, uploadImagesVideos, studentProfileImageUpload, chatAttachmentsUpload };
+// Single-file document upload — used by candidate-self and admin-on-behalf-of-candidate doc endpoints.
+const uploadDocumentFile = (req, res, next) => {
+  jobApplicationUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return next(new ApiError(httpStatus.BAD_REQUEST, 'File size too large. Maximum 10MB.'));
+        }
+      }
+      return next(err);
+    }
+    next();
+  });
+};
+
+export { uploadSingle, uploadJobApplicationFiles, uploadImagesVideos, studentProfileImageUpload, chatAttachmentsUpload, uploadDocumentFile };
