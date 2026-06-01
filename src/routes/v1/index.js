@@ -51,8 +51,6 @@ import teamRoute from './team.route.js';
 import teamGroupRoute from './teamGroup.route.js';
 import pmAssistantRoute from './pmAssistant.route.js';
 import bolnaRoute from './bolna.route.js';
-import voiceAgentRoute from './voiceAgent.route.js';
-import voiceKbRoute from './voiceKb.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
 import communicationRoute from './communication.route.js';
@@ -260,14 +258,6 @@ const defaultRoutes = [
   {
     path: '/bolna',
     route: bolnaRoute,
-  },
-  {
-    path: '/agents',
-    route: voiceAgentRoute,
-  },
-  {
-    path: '/kb',
-    route: voiceKbRoute,
   },
   {
     path: '/webhooks',

@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "dharwin-mobile-app-apis",
-    "name": "Dharwin Mobile App APIs",
-    "description": "**Full backend catalog** for Dharwin (Expo: `Dharwin App/my-app`) — includes admin/web-only routes.\n\n**App-only subset (recommended for mobile QA):** import `Dharwin-Mobile-App-APIs.app-only.postman_collection.json` (~90 requests). Regenerate with `node postman/build-app-only-collection.cjs`. See `postman/APP_API_SCOPE.md`.\n\n**Setup:** Set `email` / `password` in collection variables → run **1. Auth → Login** → run any request.\n\nEach **folder** includes: app screen tree (login + 5 tabs + inner routes), mobile workflow, Postman tips, and a table mapping every API to app screen, when to call, backend handler, and purpose.\nEach **request** documents: mobile screen, **How to connect in the app** (route, file, service, flow, wiring status), backend route/handler, and auth.\n\n### App navigation map\n\n```\napp/index.tsx (splash)\n  └─► app/login.tsx ──► Auth APIs ──► app/(tabs)/*\n        app/forgot-password.tsx\n\napp/(tabs)/_layout.tsx  — 5 tabs (left → right):\n  1. Mails      app/(tabs)/mails.tsx\n  2. Chats      app/(tabs)/chats.tsx\n  3. Calls      app/(tabs)/calls.tsx\n  4. Meetings   app/(tabs)/meetings.tsx\n  5. Files      app/(tabs)/files.tsx\n```\n\n**Wiring status:** Most screens still use mock data. `services/mail.ts` + `services/api.ts` exist; auth/meetings/chats/files/calls services are planned.\n\n| Area | Tab / entry | Inner screens |\n|------|-------------|---------------|\n| Auth | `/login` | `/forgot-password` |\n| Mails | `/(tabs)/mails` | `/mail/[folder]`, `/mail/thread/[id]`, `/mail/compose`, `/mail/accounts`, `/mail/add-account`, `/mail/settings`, `/mail/create-label` |\n| Chats | `/(tabs)/chats` | `/chat/[id]`, `/chat/new` |\n| Calls | `/(tabs)/calls` | `/call/new` |\n| Meetings | `/(tabs)/meetings` | `/meeting/[id]`, `/meeting/create` |\n| Files | `/(tabs)/files` | `/files/category/[id]`, `/files/[id]`, `/files/upload` |\n\nAll routes mount under `/v1` (included in `baseUrl`). Source: `uat.dharwin.backend/src/routes/v1/`.\n\n| Mobile tab | Postman folder | Backend prefix |\n|------------|----------------|----------------|\n| Sign in | 1. Auth | `/auth` |\n| Mails | 2–3. Mail | `/email`, `/outlook` |\n| Meetings | 4. Internal Meetings | `/internal-meetings` |\n| LiveKit | 5. LiveKit | `/livekit` |\n| Recordings | 6. Recordings | `/recordings` |\n| Files | 7. File Storage | `/file-storage` |\n| Chats | 8. Chats | `/chats` |\n| Calls | 9. Unified Calls | `/communication` |",
+    "_postman_id": "dharwin-mobile-app-apis-app-only",
+    "name": "Dharwin Mobile App APIs (App scope)",
+    "description": "**App-scoped** subset of backend APIs for the Dharwin Expo app (`Dharwin App/my-app`).\n\nIncludes only what mobile screens and `services/mail.ts` need. **Full backend coverage** remains in `Dharwin-Mobile-App-APIs.postman_collection.json`.\n\n**Setup:** Set `email` / `password` → run **1. Auth → Login** → other requests.\n\n**Wiring:** Most UI still uses mocks (`mail-mock`, `meetings-mock`, etc.). `services/mail.ts` defines the mail contract; auth/chats/meetings/files services are planned.\n\n**This collection:** 8 folders, 90 requests (vs full catalog).\n\nSee `postman/APP_API_SCOPE.md` for include/exclude rationale.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -352,24 +352,6 @@
           }
         },
         {
-          "name": "Update Me",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Updated Name\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/me",
-            "description": "**API:** `PATCH /auth/me`\n\n### Mobile app\nProfile settings (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → updateMe() (planned)\n- **When to call:** User saves profile changes\n- **Navigation flow:** Profile edit → **Update Me** → refresh **Me**\n- **From → To:** profile → profile\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.updateMe`\n- **What it does:** Updates authenticated user profile fields.\n- **How to call:** PATCH body partial user fields.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
           "name": "My Permissions",
           "request": {
             "method": "GET",
@@ -383,218 +365,6 @@
             "method": "GET",
             "url": "{{baseUrl}}/auth/page-capabilities",
             "description": "**API:** `GET /auth/page-capabilities`\n\n### Mobile app\nApp bootstrap — page-level CRUD capability map\n\n### How to connect in the app\n- **Screen route:** `(bootstrap)`\n- **File:** `app/_layout.tsx / services/auth.ts (planned)`\n- **Service:** services/auth.ts → getPageCapabilities() (planned)\n- **When to call:** After login; before rendering feature screens\n- **Navigation flow:** Login → **Page Capabilities** → drive UI affordances\n- **From → To:** bootstrap → all feature screens\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.getMyPageCapabilities`\n- **What it does:** Returns structured page/feature capabilities for RBAC UI.\n- **How to call:** GET with Bearer.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Register",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"New User\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"Password1\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/register",
-            "description": "**API:** `POST /auth/register`\n\n### Mobile app\nPublic registration (web-first; no mobile signup UI)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → register() (planned)\n- **When to call:** New user self-registration\n- **Navigation flow:** Signup form → **Register** → login\n- **From → To:** — → login\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.register`\n- **What it does:** Creates a new user account.\n- **How to call:** POST body `{ name, email, password }`. Rate-limited.\n- **Auth / permissions:** Public (optional auth for admin-assisted signup)\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Send My Verification Email",
-          "request": {
-            "method": "POST",
-            "url": "{{baseUrl}}/auth/me/send-verification-email",
-            "description": "**API:** `POST /auth/me/send-verification-email`\n\n### Mobile app\nProfile banner — resend verification (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → sendMyVerificationEmail() (planned)\n- **When to call:** User taps resend verification email\n- **Navigation flow:** Profile → **Send My Verification Email**\n- **From → To:** profile → profile\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.sendMyVerificationEmail`\n- **What it does:** Sends email verification link to current user.\n- **How to call:** POST empty body. Rate-limited.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Register Student",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Student Name\",\n  \"email\": \"student@example.com\",\n  \"password\": \"Password1\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/register-student",
-            "description": "**API:** `POST /auth/register-student`\n\n### Mobile app\nStudent onboarding signup (web-first)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → registerStudent() (planned)\n- **When to call:** New student self-registration flow\n- **Navigation flow:** Signup → **Register Student** → login\n- **From → To:** — → login\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.registerStudent`\n- **What it does:** Creates student user with student role defaults.\n- **How to call:** POST body student registration fields. Rate-limited.\n- **Auth / permissions:** Public (optional auth for admin-assisted signup)\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Register Mentor",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Mentor Name\",\n  \"email\": \"mentor@example.com\",\n  \"password\": \"Password1\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/register-mentor",
-            "description": "**API:** `POST /auth/register-mentor`\n\n### Mobile app\nMentor onboarding signup (web-first)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → registerMentor() (planned)\n- **When to call:** New mentor self-registration\n- **Navigation flow:** Signup → **Register Mentor** → login\n- **From → To:** — → login\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.registerMentor`\n- **What it does:** Creates mentor user with mentor role defaults.\n- **How to call:** POST body mentor registration fields. Rate-limited.\n- **Auth / permissions:** Public (optional auth for admin-assisted signup)\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Register Recruiter",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Recruiter Name\",\n  \"email\": \"recruiter@example.com\",\n  \"password\": \"Password1\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/register-recruiter",
-            "description": "**API:** `POST /auth/register-recruiter`\n\n### Mobile app\nAdmin creates recruiter account (web admin)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Administrator registers a recruiter\n- **Navigation flow:** Admin users panel → **Register Recruiter**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.registerRecruiter`\n- **What it does:** Creates recruiter user; admin-only.\n- **How to call:** POST body recruiter fields. Requires Administrator role.\n- **Auth / permissions:** Bearer JWT + Administrator\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Me with Candidate",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/auth/me/with-candidate",
-            "description": "**API:** `GET /auth/me/with-candidate`\n\n### Mobile app\nCandidate portal profile (web-first)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → getMeWithCandidate() (planned)\n- **When to call:** Candidate user loads profile with linked candidate record\n- **Navigation flow:** Profile → **Me with Candidate**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.getMeWithCandidate`\n- **What it does:** Returns user plus linked candidate profile data.\n- **How to call:** GET with Bearer.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Update Me with Candidate",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"phoneNumber\": \"1234567890\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/me/with-candidate",
-            "description": "**API:** `PATCH /auth/me/with-candidate`\n\n### Mobile app\nCandidate profile edit (web-first)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/auth.ts → updateMeWithCandidate() (planned)\n- **When to call:** Candidate saves profile fields\n- **Navigation flow:** Profile edit → **Update Me with Candidate**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.updateMeWithCandidate`\n- **What it does:** Updates user and linked candidate profile fields.\n- **How to call:** PATCH partial body.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Extract Skills from Resume",
-          "request": {
-            "method": "POST",
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": [],
-                  "description": "PDF/DOC resume file"
-                }
-              ]
-            },
-            "url": "{{baseUrl}}/auth/me/extract-skills-from-resume",
-            "description": "**API:** `POST /auth/me/extract-skills-from-resume`\n\n### Mobile app\nResume upload skill extraction (web ATS)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** User uploads resume to extract skills\n- **Navigation flow:** Resume upload → **Extract Skills from Resume**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.extractSkillsFromResume`\n- **What it does:** Parses resume file and returns extracted skill list.\n- **How to call:** Multipart form field `file`. Rate-limited.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Recommend Skills by Role",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"role\": \"Software Engineer\",\n  \"seniority\": \"mid\",\n  \"currentSkills\": []\n}"
-            },
-            "url": "{{baseUrl}}/auth/me/recommend-skills-by-role",
-            "description": "**API:** `POST /auth/me/recommend-skills-by-role`\n\n### Mobile app\nSkill suggestions by job role (web profile)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** User requests skill recommendations for a target role\n- **Navigation flow:** Skills form → **Recommend Skills by Role**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.recommendSkillsByRole`\n- **What it does:** Returns AI/recommendation skill suggestions for a role title.\n- **How to call:** POST body `{ roleTitle }`. Rate-limited.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Skill Recommendations",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/auth/me/skill-recommendations",
-            "description": "**API:** `GET /auth/me/skill-recommendations`\n\n### Mobile app\nList saved skill recommendations (web profile)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Load previously generated skill recommendations\n- **Navigation flow:** Profile skills → **Skill Recommendations**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.listSkillRecommendations`\n- **What it does:** Lists stored skill recommendation history for user.\n- **How to call:** GET with Bearer.\n- **Auth / permissions:** Bearer JWT\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Impersonate",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/impersonate",
-            "description": "**API:** `POST /auth/impersonate`\n\n### Mobile app\nAdmin support impersonation (web admin only)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin impersonates another user for support\n- **Navigation flow:** Admin panel → **Impersonate** → new session as target user\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.impersonate`\n- **What it does:** Starts impersonation session as target user.\n- **How to call:** POST body `{ userId }`. Requires users.impersonate or Administrator.\n- **Auth / permissions:** Bearer JWT + users.impersonate\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Stop Impersonation",
-          "request": {
-            "method": "POST",
-            "url": "{{baseUrl}}/auth/stop-impersonation",
-            "description": "**API:** `POST /auth/stop-impersonation`\n\n### Mobile app\nEnd admin impersonation session (web admin)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin ends impersonation and returns to own account\n- **Navigation flow:** Banner → **Stop Impersonation**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.stopImpersonation`\n- **What it does:** Restores original admin session after impersonation.\n- **How to call:** POST empty body with Bearer (impersonation session).\n- **Auth / permissions:** Bearer JWT (impersonating admin)\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Send Verification Email (admin)",
-          "request": {
-            "method": "POST",
-            "url": "{{baseUrl}}/auth/send-verification-email",
-            "description": "**API:** `POST /auth/send-verification-email`\n\n### Mobile app\nAdmin resends verification for a user (web admin)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin triggers verification email for another user\n- **Navigation flow:** Admin users → **Send Verification Email (admin)**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.sendVerificationEmail`\n- **What it does:** Sends email verification link to specified user email.\n- **How to call:** POST body `{ email }`. Requires users.manage.\n- **Auth / permissions:** Bearer JWT + users.manage\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
-          }
-        },
-        {
-          "name": "Send Candidate Invitation",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"candidate@example.com\",\n  \"onboardUrl\": \"{{onboardUrl}}\"\n}"
-            },
-            "url": "{{baseUrl}}/auth/send-candidate-invitation",
-            "description": "**API:** `POST /auth/send-candidate-invitation`\n\n### Mobile app\nATS invite candidate to portal (web ATS)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Recruiter sends candidate portal invitation\n- **Navigation flow:** Candidate record → **Send Candidate Invitation**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/auth.route.js`\n- **Handler:** `authController.sendCandidateInvitation`\n- **What it does:** Emails candidate invitation to complete profile/login.\n- **How to call:** POST body invitation fields. Requires share-candidate-form.read.\n- **Auth / permissions:** Bearer JWT + share-candidate-form.read\n\n_App repo: `Dharwin App/my-app`. Auth service scaffold in `services/api.ts`; login screen not yet calling backend._"
           }
         }
       ],
@@ -634,35 +404,6 @@
             "method": "GET",
             "url": "{{baseUrl}}/email/auth/google",
             "description": "**API:** `GET /email/auth/google`\n\n### Mobile app\nmail/add-account.tsx — Connect Gmail\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → getOAuthUrl(\"gmail\")\n- **When to call:** User taps **Connect Gmail**\n- **Navigation flow:** add-account → **OAuth Start** → open browser URL → user consents\n- **From → To:** mail/accounts or sidebar → OAuth callback deep link\n- **Wiring status:** Service ready; deep link handler not built\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.getGoogleAuthUrl`\n- **What it does:** Returns a Google OAuth authorization URL to connect a Gmail mailbox.\n- **How to call:** GET with Bearer. Open returned `{ url }` in browser; completes via callback route.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
-          }
-        },
-        {
-          "name": "OAuth - Google Callback",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/email/auth/google/callback?code=&state=",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "email",
-                "auth",
-                "google",
-                "callback"
-              ],
-              "query": [
-                {
-                  "key": "code",
-                  "value": ""
-                },
-                {
-                  "key": "state",
-                  "value": ""
-                }
-              ]
-            },
-            "description": "**API:** `GET /email/auth/google/callback`\n\n### Mobile app\nDeep link dharwin:// after Google OAuth (handler not implemented)\n\n### How to connect in the app\n- **Screen route:** `dharwin://oauth/google (planned)`\n- **File:** `app/_layout.tsx deep-link handler (planned)`\n- **Service:** Handled server-side; app receives redirect\n- **When to call:** After Google redirects back to app\n- **Navigation flow:** Browser callback → backend stores tokens → deep link → **GET Accounts**\n- **From → To:** External browser → mail/add-account or mails tab\n- **Wiring status:** Not implemented\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.googleCallback`\n- **What it does:** Handles Google OAuth redirect, stores tokens, redirects to frontend with success/error query params.\n- **How to call:** Browser redirect from Google with `code` and `state` (state encodes userId). Not called from mobile directly.\n- **Auth / permissions:** OAuth callback (no Bearer)\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -1023,34 +764,6 @@
           }
         },
         {
-          "name": "Templates - Patch",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"subject\": \"Updated\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/email/templates/{{templateId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "email",
-                "templates",
-                "{{templateId}}"
-              ]
-            },
-            "description": "**API:** `PATCH /email/templates/{{templateId}}`\n\n### Mobile app\nCompose templates (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → updateTemplate()\n- **When to call:** Edit existing template (planned)\n- **Navigation flow:** Template editor → **Patch**\n- **From → To:** compose templates UI → Updated template\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.updateTemplate`\n- **What it does:** Updates a personal email template.\n- **How to call:** Path `templateId`. Body: partial `{ title?, subject?, bodyHtml?, isShared? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
-          }
-        },
-        {
           "name": "Signature - Get",
           "request": {
             "method": "GET",
@@ -1145,24 +858,6 @@
           }
         },
         {
-          "name": "Batch Modify Threads",
-          "request": {
-            "method": "POST",
-            "description": "**API:** `POST /email/threads/batch-modify`\n\n### Mobile app\nBulk select in folder view (future)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/mail.ts → batchModifyThreads() (planned)\n- **When to call:** User bulk-archives or labels multiple threads\n- **Navigation flow:** Multi-select → **Batch Modify Threads**\n- **From → To:** mail/[folder] → same folder\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailController.batchModifyThreads`\n- **What it does:** Batch add/remove labels on multiple Gmail threads.\n- **How to call:** Body: `{ accountId, threadIds[], addLabelIds?, removeLabelIds? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"threadIds\": [\"{{threadId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": [\"UNREAD\"]\n}"
-            },
-            "url": "{{baseUrl}}/email/threads/batch-modify"
-          }
-        },
-        {
           "name": "Create Label",
           "request": {
             "method": "POST",
@@ -1218,124 +913,6 @@
               ]
             }
           }
-        },
-        {
-          "name": "Admin Templates - List",
-          "request": {
-            "method": "GET",
-            "description": "**API:** `GET /email/admin/templates`\n\n### Mobile app\nWeb admin only — org email templates\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin manages org-wide templates (web)\n- **Navigation flow:** Admin panel → list templates\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminListTemplates`\n- **What it does:** Lists organization admin email templates.\n- **How to call:** GET with Bearer + email-templates-admin.read/manage.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.read/manage\n\n_App repo: `Dharwin App/my-app`._",
-            "url": {
-              "raw": "{{baseUrl}}/email/admin/templates?userId={{userId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "email",
-                "admin",
-                "templates"
-              ],
-              "query": [
-                {
-                  "key": "userId",
-                  "value": "{{userId}}"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Admin Signature - Patch",
-          "request": {
-            "method": "PATCH",
-            "description": "**API:** `PATCH /email/admin/signature`\n\n### Mobile app\nWeb admin only — org default signature\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin updates org-wide email signature (web)\n- **Navigation flow:** Admin settings → save signature\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminPatchSignature`\n- **What it does:** Updates organization default email signature.\n- **How to call:** PATCH body signature HTML/enabled fields.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"html\": \"<p>Org signature</p>\",\n  \"enabled\": true\n}"
-            },
-            "url": "{{baseUrl}}/email/admin/signature"
-          }
-        },
-        {
-          "name": "Templates - Delete",
-          "request": {
-            "method": "DELETE",
-            "description": "**API:** `DELETE /email/templates/{{templateId}}`\n\n### Mobile app\nmail/compose — remove saved template (planned)\n\n### How to connect in the app\n- **Screen route:** `/mail/compose`\n- **File:** `app/mail/compose.tsx`\n- **Service:** services/mail.ts → deleteTemplate() (planned)\n- **When to call:** User deletes a personal template\n- **Navigation flow:** Template manager → **Templates - Delete**\n- **From → To:** compose → compose\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.deleteTemplate`\n- **What it does:** Deletes a personal email template.\n- **How to call:** DELETE path `templateId`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "url": "{{baseUrl}}/email/templates/{{templateId}}"
-          }
-        },
-        {
-          "name": "Admin Templates - Create",
-          "request": {
-            "method": "POST",
-            "description": "**API:** `POST /email/admin/templates`\n\n### Mobile app\nWeb admin only — create org template\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin creates org-wide template\n- **Navigation flow:** Admin templates → **Admin Templates - Create**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminCreateTemplate`\n- **What it does:** Creates organization admin email template.\n- **How to call:** POST body template fields.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"title\": \"Org Welcome\",\n  \"subject\": \"Welcome\",\n  \"bodyHtml\": \"<p>Hello</p>\"\n}"
-            },
-            "url": "{{baseUrl}}/email/admin/templates"
-          }
-        },
-        {
-          "name": "Admin Templates - Patch",
-          "request": {
-            "method": "PATCH",
-            "description": "**API:** `PATCH /email/admin/templates/{{templateId}}`\n\n### Mobile app\nWeb admin only — edit org template\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin updates org template\n- **Navigation flow:** Admin templates → **Admin Templates - Patch**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminUpdateTemplate`\n- **What it does:** Updates organization admin email template.\n- **How to call:** PATCH path `templateId` + partial body.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"title\": \"Updated Org Template\"\n}"
-            },
-            "url": "{{baseUrl}}/email/admin/templates/{{templateId}}"
-          }
-        },
-        {
-          "name": "Admin Templates - Delete",
-          "request": {
-            "method": "DELETE",
-            "description": "**API:** `DELETE /email/admin/templates/{{templateId}}`\n\n### Mobile app\nWeb admin only — delete org template\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin removes org template\n- **Navigation flow:** Admin templates → **Admin Templates - Delete**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminDeleteTemplate`\n- **What it does:** Deletes organization admin email template.\n- **How to call:** DELETE path `templateId`.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "url": "{{baseUrl}}/email/admin/templates/{{templateId}}"
-          }
-        },
-        {
-          "name": "Admin Signature - Get",
-          "request": {
-            "method": "GET",
-            "description": "**API:** `GET /email/admin/signature`\n\n### Mobile app\nWeb admin only — load org signature\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** Admin opens org signature settings\n- **Navigation flow:** Admin settings → **Admin Signature - Get**\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/email.route.js`\n- **Handler:** `emailPreferencesController.adminGetSignature`\n- **What it does:** Returns organization default email signature.\n- **How to call:** GET with Bearer.\n- **Auth / permissions:** Bearer JWT + email-templates-admin.read/manage\n\n_App repo: `Dharwin App/my-app`._",
-            "url": {
-              "raw": "{{baseUrl}}/email/admin/signature?userId={{userId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "email",
-                "admin",
-                "signature"
-              ],
-              "query": [
-                {
-                  "key": "userId",
-                  "value": "{{userId}}"
-                }
-              ]
-            }
-          }
         }
       ],
       "description": "## 2. Mail - Gmail\n\nGmail integration via connected accounts. Provider prefix: `/email/*`. Mail API client lives in `services/mail.ts`.\n\n**Mobile tab:** Mails\n**App routes:** `app/(tabs)/mails.tsx`, `app/mail/*` (thread, compose, accounts, settings, create-label)\n\n### App screens & inner routes\n\n**Tab:** `app/(tabs)/mails.tsx` → account switcher, recent threads\n\n**Inner screens**\n| Route | File | APIs to wire |\n|-------|------|--------------|\n| `/mail/[folder]` | `app/mail/[folder].tsx` | List Threads/Messages, Labels |\n| `/mail/thread/[id]` | `app/mail/thread/[id].tsx` | Thread Detail, Patch, Trash, Delete, Attachment |\n| `/mail/compose` | `app/mail/compose.tsx` | Send, Reply, Forward, AI Draft, Templates |\n| `/mail/accounts` | `app/mail/accounts.tsx` | GET Accounts |\n| `/mail/add-account` | `app/mail/add-account.tsx` | Connection Policy, OAuth, DELETE Account |\n| `/mail/settings` | `app/mail/settings.tsx` | Signature Get/Patch |\n| `/mail/create-label` | `app/mail/create-label.tsx` | Create Label |\n\n**Service:** `services/mail.ts` (provider `gmail` → `/email/*`)\n\n### How to use in the mobile app\n- **GET Accounts** + **Connection Policy** on mail setup.\n- **OAuth - Start Google** → callback → **GET Accounts** again.\n- Inbox: **List Threads** (or **List Messages**) + **Labels**.\n- Thread actions: **Patch Message**, **Trash Thread**, **Delete Message**, **Get Attachment**.\n- Compose: **Send**, **Reply**, **Forward**, **Drafts - AI Generate**, templates/signature.\n\n### Postman testing\n- Run **GET Accounts** after login — saves `accountId`.\n- Use `accountId` on all mail queries/bodies.\n- OAuth Start opens browser; Callback is server redirect (not mobile Bearer call).\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| GET Accounts | `GET /email/accounts` | /(tabs)/mails \\| /mail/accounts | Mails tab mount; after OAuth | `emailController.listGmailAccounts` | Lists Gmail accounts linked to the user. |\n| Connection Policy | `GET /email/connection-policy` | /mail/add-account | Before showing connect buttons | `emailController.getConnectionPolicy` | Returns mail account connection limits/policy. |\n| OAuth - Start Google | `GET /email/auth/google` | /mail/add-account | User taps **Connect Gmail** | `emailController.getGoogleAuthUrl` | Returns Google OAuth authorization URL. |\n| OAuth - Google Callback | `GET /email/auth/google/callback` | deep link (planned) | After Google redirect | `emailController.googleCallback` | Handles OAuth callback; stores tokens. |\n| DELETE Account | `DELETE /email/accounts/{{accountId}}` | /mail/add-account | User disconnects Gmail | `emailController.disconnectGmailAccount` | Disconnects linked Gmail account. |\n| List Threads | `GET /email/threads` | /(tabs)/mails \\| /mail/[folder] | Folder mount; refresh; search | `emailController.listThreads` | Lists Gmail threads with pagination. |\n| List Messages | `GET /email/messages` | /(tabs)/mails \\| /mail/[folder] | Flat message list mode | `emailController.listMessages` | Lists Gmail messages with pagination. |\n| Thread Detail | `GET /email/threads/{{threadId}}` | /mail/thread/[id] | User opens thread | `emailController.getThread` | Fetches thread with messages. |\n| Single Message | `GET /email/messages/{{messageId}}` | /mail/thread/[id] | Expand message body | `emailController.getMessage` | Fetches one Gmail message. |\n| Send Message | `POST /email/messages/send` | /mail/compose | User taps **Send** | `emailController.sendMessage` | Sends new email via Gmail. |\n| Reply | `POST /email/messages/{{messageId}}/reply` | /mail/compose?mode=reply | Send on reply | `emailController.replyMessage` | Replies to a message. |\n| Reply All | `POST /email/messages/{{messageId}}/reply-all` | /mail/compose?mode=replyAll | Send on reply-all | `emailController.replyAllMessage` | Reply-all to a message. |\n| Forward | `POST /email/messages/{{messageId}}/forward` | /mail/compose?mode=forward | Send on forward | `emailController.forwardMessage` | Forwards a message. |\n| Patch Message (labels/read) | `PATCH /email/messages/{{messageId}}` | /mail/thread/[id] | Star, read/unread, archive | `emailController.modifyMessage` | Adds/removes labels on a message. |\n| Batch Modify Messages | `POST /email/messages/batch-modify` | (none) | Bulk label on messages | `emailController.batchModifyMessages` | Batch label changes on messages. |\n| Batch Modify Threads | `POST /email/threads/batch-modify` | (none) | Bulk label on threads | `emailController.batchModifyThreads` | Batch label changes on threads. |\n| Trash Thread | `POST /email/threads/trash` | /mail/thread/[id] | User deletes thread | `emailController.trashThreads` | Moves threads to Gmail trash. |\n| Delete Message | `DELETE /email/messages/{{messageId}}` | /mail/thread/[id] | Permanent delete message | `emailController.deleteMessage` | Permanently deletes a Gmail message. |\n| Get Attachment | `GET /email/messages/{{messageId}}/attachments/{{attachmentId}}` | /mail/thread/[id] | User taps attachment | `emailController.getAttachment` | Downloads attachment binary. |\n| Labels | `GET /email/labels` | /mail/[folder] + sidebar | Mails tab load; sidebar | `emailController.listLabels` | Lists Gmail labels/folders. |\n| Create Label | `POST /email/labels` | /mail/create-label | User creates custom label | `emailController.createLabel` | Creates a new Gmail label. |\n| Templates - List | `GET /email/templates` | /mail/compose | Template picker (planned) | `emailPreferencesController.listTemplates` | Lists personal compose templates. |\n| Templates - Create | `POST /email/templates` | /mail/compose | Save as template (planned) | `emailPreferencesController.createTemplate` | Creates personal template. |\n| Templates - Patch | `PATCH /email/templates/{{templateId}}` | /mail/compose | Edit template (planned) | `emailPreferencesController.updateTemplate` | Updates personal template. |\n| Signature - Get | `GET /email/signature` | /mail/settings | Settings mount | `emailPreferencesController.getSignature` | Returns user email signature. |\n| Signature - Patch | `PATCH /email/signature` | /mail/settings | User saves signature | `emailPreferencesController.patchSignature` | Updates user signature. |\n| Drafts - AI Generate | `POST /email/drafts/generate` | /mail/compose | AI assist button | `emailController.generateDraft` | Generates AI draft options via OpenAI. |\n| Admin Templates - List | `GET /email/admin/templates` | (web admin) | Org template admin | `emailPreferencesController.adminListTemplates` | Lists org admin templates. |\n| Admin Templates - Create | `POST /email/admin/templates` | (web admin) | Create org template | `emailPreferencesController.adminCreateTemplate` | Creates org-wide email template. |\n| Admin Templates - Patch | `PATCH /email/admin/templates/{{templateId}}` | (web admin) | Edit org template | `emailPreferencesController.adminUpdateTemplate` | Updates org admin template. |\n| Admin Templates - Delete | `DELETE /email/admin/templates/{{templateId}}` | (web admin) | Delete org template | `emailPreferencesController.adminDeleteTemplate` | Deletes org admin template. |\n| Admin Signature - Get | `GET /email/admin/signature` | (web admin) | Load org signature | `emailPreferencesController.adminGetSignature` | Returns org default email signature. |\n| Admin Signature - Patch | `PATCH /email/admin/signature` | (web admin) | Org signature admin | `emailPreferencesController.adminPatchSignature` | Updates org default signature. |\n| Templates - Delete | `DELETE /email/templates/{{templateId}}` | /mail/compose | Delete personal template | `emailPreferencesController.deleteTemplate` | Deletes personal compose template. |\n\n### Backend route files\n- `src/routes/v1/email.route.js`"
@@ -1374,35 +951,6 @@
             "method": "GET",
             "url": "{{baseUrl}}/outlook/auth/microsoft",
             "description": "**API:** `GET /outlook/auth/microsoft`\n\n### Mobile app\nmail/add-account.tsx — Connect Outlook\n\n### How to connect in the app\n- **Screen route:** `/mail/add-account`\n- **File:** `app/mail/add-account.tsx`\n- **Service:** services/mail.ts → getOAuthUrl(\"outlook\")\n- **When to call:** User taps **Connect Outlook**\n- **Navigation flow:** add-account → **OAuth Start** → open browser URL → user consents\n- **From → To:** mail/accounts or sidebar → OAuth callback deep link\n- **Wiring status:** Service ready; deep link handler not built\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.getMicrosoftAuthUrl`\n- **What it does:** Returns Microsoft OAuth URL to connect Outlook.\n- **How to call:** GET with Bearer. Open returned `{ url }` in browser.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
-          }
-        },
-        {
-          "name": "OAuth - Microsoft Callback",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/outlook/auth/microsoft/callback?code=&state=",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "outlook",
-                "auth",
-                "microsoft",
-                "callback"
-              ],
-              "query": [
-                {
-                  "key": "code",
-                  "value": ""
-                },
-                {
-                  "key": "state",
-                  "value": ""
-                }
-              ]
-            },
-            "description": "**API:** `GET /outlook/auth/microsoft/callback`\n\n### Mobile app\nDeep link after Microsoft OAuth (handler not implemented)\n\n### How to connect in the app\n- **Screen route:** `dharwin://oauth/google (planned)`\n- **File:** `app/_layout.tsx deep-link handler (planned)`\n- **Service:** Handled server-side; app receives redirect\n- **When to call:** After Microsoft redirects back to app\n- **Navigation flow:** Browser callback → backend stores tokens → deep link → **GET Accounts**\n- **From → To:** External browser → mail/add-account or mails tab\n- **Wiring status:** Not implemented\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.microsoftCallback`\n- **What it does:** Handles Microsoft OAuth callback and redirects to frontend.\n- **How to call:** Browser redirect with `code` and `state`. Not called from mobile directly.\n- **Auth / permissions:** OAuth callback (no Bearer)\n\n_App repo: `Dharwin App/my-app`. Mail client in `services/mail.ts`; most mail screens still use mock data until wired._"
           }
         },
         {
@@ -1656,24 +1204,6 @@
               "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"messageIds\": [\"{{messageId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": []\n}"
             },
             "url": "{{baseUrl}}/outlook/messages/batch-modify"
-          }
-        },
-        {
-          "name": "Batch Modify Threads",
-          "request": {
-            "method": "POST",
-            "description": "**API:** `POST /outlook/threads/batch-modify`\n\n### Mobile app\nBulk select threads (future)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/mail.ts → batchModifyThreads(\"outlook\") (planned)\n- **When to call:** User bulk-archives or moves threads\n- **Navigation flow:** Multi-select → **Batch Modify Threads**\n- **From → To:** mail/[folder] → same folder\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/outlook.route.js`\n- **Handler:** `outlookController.batchModifyThreads`\n- **What it does:** Batch folder changes on Outlook conversations.\n- **How to call:** Body: `{ accountId, threadIds[], addLabelIds?, removeLabelIds? }`.\n- **Auth / permissions:** Bearer JWT + emails.manage\n\n_App repo: `Dharwin App/my-app`._",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"accountId\": \"{{outlookAccountId}}\",\n  \"threadIds\": [\"{{threadId}}\"],\n  \"addLabelIds\": [],\n  \"removeLabelIds\": []\n}"
-            },
-            "url": "{{baseUrl}}/outlook/threads/batch-modify"
           }
         },
         {
@@ -2071,23 +1601,6 @@
           }
         },
         {
-          "name": "Delete",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/internal-meetings/{{meetingId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "internal-meetings",
-                "{{meetingId}}"
-              ]
-            },
-            "description": "**API:** `DELETE /internal-meetings/{{meetingId}}`\n\n### Mobile app\nPermanent delete (no mobile UI yet)\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** services/meetings.ts → remove(meetingId) (planned)\n- **When to call:** Permanent delete (admin action — no mobile UI yet)\n- **Navigation flow:** —\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/internalMeeting.route.js`\n- **Handler:** `internalMeetingController.remove`\n- **What it does:** Permanently deletes an internal meeting and tears down its LiveKit room.\n- **How to call:** DELETE `/internal-meetings/:meetingId`. Returns 204.\n- **Auth / permissions:** Bearer JWT + meetings.manage\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
-          }
-        },
-        {
           "name": "Resend Invites",
           "request": {
             "method": "POST",
@@ -2301,63 +1814,6 @@
         }
       ],
       "description": "## 5. LiveKit\n\nReal-time audio/video via LiveKit. Tokens are short-lived — fetch immediately before joining. Used by **Meetings** (scheduled rooms) and **Chats** (P2P call rooms).\n\n**Mobile tab:** Meetings + Chats (in-call)\n**App routes:** `app/meeting/[id].tsx`, `app/chat/[id].tsx`, `app/call/new.tsx`\n\n### App screens & inner routes\n\nNot a separate tab — invoked when user joins a room.\n\n| Trigger screen | When | LiveKit APIs |\n|----------------|------|--------------|\n| `app/meeting/[id].tsx` | **Join Meeting** | Token - Meeting, Recording Start/Stop/Status, Waiting room |\n| `app/chat/[id].tsx`, `app/call/new.tsx` | Start call | Token - Chat Call (after folder 8 **Start Call**) |\n\n**Service:** `services/livekit.ts` (planned)\n\n### How to use in the mobile app\n- Meeting join → **Token - Meeting** with `meetingRoomName` from folder 4 **Detail**.\n- Chat call → folder 8 **Start Call** → **Token - Chat Call** with `forChatCall: true`.\n- Host recording → **Recording - Start/Stop/Status** during active room.\n- Waiting room enabled → **Waiting Participants** poll → **Admit Participant** / **Remove Participant**.\n\n### Postman testing\n- Set `meetingRoomName` from folder 4 **Detail** test script.\n- Token response is client-only — do not log in production.\n- Recording endpoints require `meetings.record` permission.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| Token - Meeting | `POST /livekit/token` | /meeting/[id] | User taps Join Meeting | `livekitController.getToken` | Mints LiveKit JWT for meeting room (host/guest permissions). |\n| Token - Chat Call | `POST /livekit/token` | /chat/[id] \\| /call/new | Join in-app audio/video call | `livekitController.getToken` | Same endpoint; verifies chat membership when `forChatCall: true`. |\n| Recording - Start | `POST /livekit/recording/start` | In-call UI (planned) | Host starts recording | `livekitController.startRecording` | Starts LiveKit egress recording for room. |\n| Recording - Stop | `POST /livekit/recording/stop` | In-call UI (planned) | Host stops recording | `livekitController.stopRecording` | Stops active egress; requires `egressId` from start response. |\n| Recording - Status | `GET /livekit/recording/status/{{meetingRoomName}}` | In-call UI (planned) | Poll REC indicator | `livekitController.getRecordingStatus` | Returns recording/egress status for room. |\n| Waiting Participants | `GET /livekit/waiting-participants/{{meetingRoomName}}` | In-call lobby (planned) | Host views waiting room queue | `livekitController.getWaitingParticipants` | Lists participants awaiting admission. |\n| Admit Participant | `POST /livekit/admit-participant` | In-call lobby (planned) | Host admits guest | `livekitController.admitParticipant` | Admits waiting participant into room. |\n| Remove Participant | `POST /livekit/remove-participant` | In-call lobby (planned) | Host denies/removes guest | `livekitController.removeParticipant` | Removes or denies participant from waiting/active room. |\n\n### Backend route files\n- `src/routes/v1/livekit.route.js`"
-    },
-    {
-      "name": "6. Recordings (Global)",
-      "item": [
-        {
-          "name": "List Recordings",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const r = pm.response.json();",
-                  "  const list = Array.isArray(r) ? r : (r.data || r.results || r.recordings || []);",
-                  "  const rec = list[0];",
-                  "  const id = rec && (rec._id || rec.id || rec.recordingId);",
-                  "  if (id) pm.collectionVariables.set('recordingId', id);",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/recordings",
-            "description": "**API:** `GET /recordings`\n\n### Mobile app\nmeeting/[id].tsx — Play recording; global list (no tab yet)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id]`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/recordings.ts → listAll() (planned)\n- **When to call:** Global library or meeting detail needs all recordings\n- **Navigation flow:** Detail recordings section → **List Recordings** (or per-meeting API in folder 4)\n- **From → To:** meeting/[id] → Playback / transcript\n- **Wiring status:** Mock\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/recording.route.js`\n- **Handler:** `recordingController.listAll`\n- **What it does:** Paginated global library of meeting/interview recordings.\n- **How to call:** Query: `page?`, `limit?`, `status?`, `q?`, `source?`, `dateFrom?`, `dateTo?`.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
-          }
-        },
-        {
-          "name": "Recording Transcript",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/recordings/{{recordingId}}/transcript",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "recordings",
-                "{{recordingId}}",
-                "transcript"
-              ]
-            },
-            "description": "**API:** `GET /recordings/{{recordingId}}/transcript`\n\n### Mobile app\nMeeting transcript view (no screen yet)\n\n### How to connect in the app\n- **Screen route:** `/meeting/[id] (planned transcript tab)`\n- **File:** `app/meeting/[id].tsx`\n- **Service:** services/recordings.ts → getTranscript(recordingId) (planned)\n- **When to call:** User opens transcript for a recording\n- **Navigation flow:** Recording row → **Transcript** → scrollable text\n- **From → To:** meeting/[id] → Transcript view\n- **Wiring status:** No UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/recording.route.js`\n- **Handler:** `recordingController.getTranscript`\n- **What it does:** Returns transcript segments for a recording ordered by sequenceNumber.\n- **How to call:** GET `/recordings/:recordingId/transcript`.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._"
-          }
-        },
-        {
-          "name": "Sync from LiveKit",
-          "request": {
-            "method": "POST",
-            "description": "**API:** `POST /recordings/sync`\n\n### Mobile app\nAdmin/dev repair — not a mobile screen\n\n### How to connect in the app\n- **Screen route:** `(none)`\n- **File:** `—`\n- **Service:** —\n- **When to call:** DB out of sync with LiveKit egress (missed webhooks, fresh deploy)\n- **Navigation flow:** Admin tool → **Sync from LiveKit** → refresh recording library\n- **From → To:** — → —\n- **Wiring status:** No mobile UI\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/recording.route.js`\n- **Handler:** `recordingController.syncFromLiveKit`\n- **What it does:** Pulls all egress from LiveKit and upserts Recording rows (idempotent).\n- **How to call:** POST empty body. Requires meetings.record.\n- **Auth / permissions:** Bearer JWT + meetings.record\n\n_App repo: `Dharwin App/my-app`. Meeting/LiveKit flows partially mocked on device._",
-            "url": "{{baseUrl}}/recordings/sync"
-          }
-        }
-      ],
-      "description": "## 6. Recordings (Global)\n\nGlobal recording library and AI transcripts. Complements per-meeting **Recordings for Meeting** in folder 4. Recordings are created via LiveKit egress (folder 5).\n\n**Mobile tab:** Meetings (playback)\n**App routes:** `app/meeting/[id].tsx` recording section; no dedicated Recordings tab yet\n\n### App screens & inner routes\n\nUsed from `app/meeting/[id].tsx` after a meeting ends — playback list + transcript view (planned).\n\n**Service:** `services/recordings.ts` (planned)\n\n### How to use in the mobile app\n- **List Recordings** — global paginated library with filters (`status`, `q`, date range).\n- Per-meeting shortcut: folder 4 **Recordings for Meeting**.\n- Tap recording → stream URL from list response; **Recording Transcript** for AI segments.\n- **Sync from LiveKit** — ops/admin only when webhook sync missed rows.\n\n### Postman testing\n- **List Recordings** → copy `recordingId` for transcript.\n- **Sync from LiveKit** is idempotent — safe to re-run after deploy.\n\n### APIs in this folder\n\n| Request | API | App screen | When to call | Backend handler | What it does |\n|---------|-----|------------|--------------|-----------------|--------------|\n| List Recordings | `GET /recordings` | /meeting/[id] | Global library or detail playback | `recordingController.listAll` | Paginated recording library with filters. |\n| Recording Transcript | `GET /recordings/{{recordingId}}/transcript` | /meeting/[id] transcript tab (planned) | User opens transcript | `recordingController.getTranscript` | Returns transcript segments ordered by sequenceNumber. |\n| Sync from LiveKit | `POST /recordings/sync` | (web admin / ops) | Repair DB vs LiveKit drift | `recordingController.syncFromLiveKit` | Pulls LiveKit egress and upserts Recording documents. |\n\n### Backend route files\n- `src/routes/v1/recording.route.js`"
     },
     {
       "name": "7. File Storage",
@@ -2598,161 +2054,6 @@
           }
         },
         {
-          "name": "Update Group Name",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Renamed Group\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}"
-              ]
-            },
-            "description": "**API:** `PATCH /chats/conversations/{{conversationId}}`\n\n### Mobile app\nchat/[id].tsx — Group info / rename\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (group settings)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → updateGroupName(conversationId, name) (planned)\n- **When to call:** Group admin saves new title\n- **Navigation flow:** Group settings → edit name → **Update Group Name**\n- **From → To:** chat/[id] → same chat (header refresh)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.updateGroupName`\n- **What it does:** Updates persisted group name; emits conversation_updated socket event.\n- **How to call:** Body: `{ name: \"New name\" }` (max 100 chars). Group conversations only.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Upload Group Avatar",
-          "request": {
-            "method": "POST",
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "avatar",
-                  "type": "file",
-                  "src": []
-                }
-              ]
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/avatar",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "avatar"
-              ]
-            },
-            "description": "**API:** `POST /chats/conversations/{{conversationId}}/avatar`\n\n### Mobile app\nchat/[id].tsx — Group photo\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (group settings)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → uploadGroupAvatar(conversationId, file) (planned)\n- **When to call:** Admin picks group image\n- **Navigation flow:** Group settings → choose image → **Upload Group Avatar**\n- **From → To:** chat/[id] → same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.uploadGroupAvatar`\n- **What it does:** Uploads image to S3 and persists group avatar URL.\n- **How to call:** multipart field `avatar` (JPEG/PNG/WebP/GIF, max 5MB).\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Add Participants",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"participantIds\": [\"{{chatParticipantUserId}}\"]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/participants",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "participants"
-              ]
-            },
-            "description": "**API:** `POST /chats/conversations/{{conversationId}}/participants`\n\n### Mobile app\nchat/[id].tsx — Add members to group\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (group settings)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → addParticipants(conversationId, participantIds) (planned)\n- **When to call:** Admin adds users from search\n- **Navigation flow:** Add member → **Add Participants** → refresh participant list\n- **From → To:** chat/[id] → same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.addParticipants`\n- **What it does:** Adds users to group; emits conversation_updated.\n- **How to call:** Body: `{ participantIds: [\"<userId>\", ...] }`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Remove Participant",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/participants/{{chatParticipantUserId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "participants",
-                "{{chatParticipantUserId}}"
-              ]
-            },
-            "description": "**API:** `DELETE /chats/conversations/{{conversationId}}/participants/{{chatParticipantUserId}}`\n\n### Mobile app\nchat/[id].tsx — Remove member or leave group\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (group settings)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → removeParticipant(conversationId, userId) (planned)\n- **When to call:** Admin removes member, or user leaves group\n- **Navigation flow:** Member row → Remove → **Remove Participant**\n- **From → To:** chat/[id] → chats list if self removed\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.removeParticipant`\n- **What it does:** Removes participant from group; emits conversation_updated.\n- **How to call:** DELETE with `:userId` path param.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Set Participant Role",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"role\": \"admin\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/participants/{{chatParticipantUserId}}/role",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "participants",
-                "{{chatParticipantUserId}}",
-                "role"
-              ]
-            },
-            "description": "**API:** `PATCH /chats/conversations/{{conversationId}}/participants/{{chatParticipantUserId}}/role`\n\n### Mobile app\nchat/[id].tsx — Promote/demote group admin\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (group settings)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → setParticipantRole(conversationId, userId, role) (planned)\n- **When to call:** Admin changes member role\n- **Navigation flow:** Member → Make admin → **Set Participant Role**\n- **From → To:** chat/[id] → same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.setParticipantRole`\n- **What it does:** Sets participant role to `admin` or `member`.\n- **How to call:** Body: `{ role: \"admin\" | \"member\" }`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Delete Conversation",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}"
-              ]
-            },
-            "description": "**API:** `DELETE /chats/conversations/{{conversationId}}`\n\n### Mobile app\nchat/[id].tsx — Delete chat / leave & delete\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → deleteConversation(conversationId) (planned)\n- **When to call:** User confirms delete on direct chat or group (admin)\n- **Navigation flow:** Chat menu → Delete → **Delete Conversation** → back to chats tab\n- **From → To:** chat/[id] → (tabs)/chats\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.deleteConversation`\n- **What it does:** Deletes conversation for participants; emits conversation_deleted socket event.\n- **How to call:** DELETE `/chats/conversations/:conversationId`. Returns 204.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
           "name": "Messages",
           "event": [
             {
@@ -2850,67 +2151,6 @@
               ]
             },
             "description": "**API:** `POST /chats/conversations/{{conversationId}}/messages/upload`\n\n### Mobile app\nchat/[id].tsx — Attach file in composer\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → uploadAndSend(conversationId, files) (planned)\n- **When to call:** User attaches image/file and sends\n- **Navigation flow:** Attach → Send → **Send with File**\n- **From → To:** chat/[id] → Same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.uploadAndSendMessage`\n- **What it does:** Uploads file(s) to S3 and sends as chat message.\n- **How to call:** multipart field `files` (array, up to 10), optional `content`, `replyTo`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Delete Message",
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"deleteFor\": \"me\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages/{{chatMessageId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "messages",
-                "{{chatMessageId}}"
-              ]
-            },
-            "description": "**API:** `DELETE /chats/conversations/{{conversationId}}/messages/{{chatMessageId}}`\n\n### Mobile app\nchat/[id].tsx — Delete message\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → deleteMessage(conversationId, messageId, deleteFor) (planned)\n- **When to call:** User deletes message for self or everyone\n- **Navigation flow:** Long-press message → Delete → **Delete Message**\n- **From → To:** chat/[id] → same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.deleteMessage`\n- **What it does:** Soft-deletes message for me or everyone; emits message_deleted socket event.\n- **How to call:** Body: `{ deleteFor: \"me\" | \"everyone\" }`. Run **Messages** first to set `chatMessageId`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "React to Message",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"emoji\": \"👍\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/conversations/{{conversationId}}/messages/{{chatMessageId}}/react",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "conversations",
-                "{{conversationId}}",
-                "messages",
-                "{{chatMessageId}}",
-                "react"
-              ]
-            },
-            "description": "**API:** `POST /chats/conversations/{{conversationId}}/messages/{{chatMessageId}}/react`\n\n### Mobile app\nchat/[id].tsx — Message reaction\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]`\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → reactToMessage(conversationId, messageId, emoji) (planned)\n- **When to call:** User taps reaction on a message\n- **Navigation flow:** Message → react → **React to Message**\n- **From → To:** chat/[id] → same chat\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.reactToMessage`\n- **What it does:** Adds or toggles emoji reaction; emits message_reacted socket event.\n- **How to call:** Body: `{ emoji: \"👍\" }` (max 10 chars). Default 👍 if omitted.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
           }
         },
         {
@@ -3034,54 +2274,6 @@
           }
         },
         {
-          "name": "Update Call",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"status\": \"completed\",\n  \"duration\": 120\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/chats/calls/{{chatCallId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "calls",
-                "{{chatCallId}}"
-              ]
-            },
-            "description": "**API:** `PATCH /chats/calls/{{chatCallId}}`\n\n### Mobile app\nIn-call UI — End call / update status\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (in-call overlay)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → updateCall(callId, payload) (planned)\n- **When to call:** Call ends, missed, declined, or duration recorded\n- **Navigation flow:** Hang up → **Update Call** with status/duration\n- **From → To:** in-call UI → chats/calls history\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.updateCall`\n- **What it does:** Updates call status, duration, or records room join.\n- **How to call:** Body: `{ status?, duration?, recordRoomJoin?: true }`. Run **Start Call** first for `chatCallId`.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
-          "name": "Start Call Recording",
-          "request": {
-            "method": "POST",
-            "url": {
-              "raw": "{{baseUrl}}/chats/calls/{{chatCallId}}/recording/start",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "chats",
-                "calls",
-                "{{chatCallId}}",
-                "recording",
-                "start"
-              ]
-            },
-            "description": "**API:** `POST /chats/calls/{{chatCallId}}/recording/start`\n\n### Mobile app\nIn-call UI — Start recording\n\n### How to connect in the app\n- **Screen route:** `/chat/[id]` (in-call)\n- **File:** `app/chat/[id].tsx`\n- **Service:** services/chat.ts → startCallRecording(callId) (planned)\n- **When to call:** User taps record during active call\n- **Navigation flow:** In call → Record → **Start Call Recording**\n- **From → To:** in-call UI → recordings (folder 6)\n- **Wiring status:** Not wired\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/chat.route.js`\n- **Handler:** `chatController.startChatCallRecording`\n- **What it does:** Starts LiveKit egress recording for chat call.\n- **How to call:** POST with `chatCallId` from **Start Call**.\n- **Auth / permissions:** Bearer JWT + chats.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
           "name": "End Call by Room",
           "request": {
             "method": "POST",
@@ -3168,66 +2360,6 @@
       "name": "9. Unified Calls",
       "item": [
         {
-          "name": "All Calls",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/communication/calls?page=1&limit=25&sortBy=createdAt&order=desc&source=all",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "communication",
-                "calls"
-              ],
-              "query": [
-                {
-                  "key": "page",
-                  "value": "1"
-                },
-                {
-                  "key": "limit",
-                  "value": "25"
-                },
-                {
-                  "key": "sortBy",
-                  "value": "createdAt"
-                },
-                {
-                  "key": "order",
-                  "value": "desc"
-                },
-                {
-                  "key": "source",
-                  "value": "all",
-                  "description": "all | telephony | in_app"
-                },
-                {
-                  "key": "search",
-                  "value": "",
-                  "disabled": true
-                },
-                {
-                  "key": "status",
-                  "value": "",
-                  "disabled": true
-                },
-                {
-                  "key": "purpose",
-                  "value": "",
-                  "disabled": true
-                },
-                {
-                  "key": "language",
-                  "value": "",
-                  "disabled": true
-                }
-              ]
-            },
-            "description": "**API:** `GET /communication/calls`\n\n### Mobile app\n(tabs)/calls.tsx — Unified call log (telephony + in-app)\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/calls`\n- **File:** `app/(tabs)/calls.tsx`\n- **Service:** services/communication.ts → listUnifiedCalls(filters) (planned)\n- **When to call:** Calls tab mount; filter change (missed/incoming/outgoing); refresh\n- **Navigation flow:** Tab → **All Calls** → unified telephony + in-app log\n- **From → To:** Tab bar Calls → chat/[id], meeting/[id], or external dialer metadata\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/communication.route.js`\n- **Handler:** `communicationController.listUnifiedCalls`\n- **What it does:** Unified call log merging telephony (Bolna) and in-app chat calls with filters.\n- **How to call:** Query: `page?`, `limit?`, `source?` (all|telephony|in_app), `search?`, `status?`, `sortBy?`, `order?`.\n- **Auth / permissions:** Bearer JWT + calls.read\n\n_App repo: `Dharwin App/my-app`. Chat/call screens use mock data until REST + LiveKit are wired._"
-          }
-        },
-        {
           "name": "In-App Calls Only",
           "request": {
             "method": "GET",
@@ -3261,45 +2393,6 @@
                 {
                   "key": "source",
                   "value": "in_app"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Telephony Calls Only",
-          "request": {
-            "method": "GET",
-            "description": "**API:** `GET /communication/calls?source=telephony`\n\n### Mobile app\n(tabs)/calls.tsx — filter to Bolna/telephony calls only\n\n### How to connect in the app\n- **Screen route:** `/(tabs)/calls`\n- **File:** `app/(tabs)/calls.tsx`\n- **Service:** services/communication.ts → listUnifiedCalls({ source: \"telephony\" }) (planned)\n- **When to call:** User selects Telephony filter on Calls tab\n- **Navigation flow:** Calls tab → filter Telephony → **Telephony Calls Only**\n- **From → To:** (tabs)/calls → call detail metadata\n- **Wiring status:** Mock data\n\n### Backend (uat.dharwin.backend)\n- **Route file:** `src/routes/v1/communication.route.js`\n- **Handler:** `communicationController.listUnifiedCalls`\n- **What it does:** Same unified log filtered to external telephony (Bolna) calls.\n- **How to call:** Query `source=telephony` plus pagination/sort/filter params.\n- **Auth / permissions:** Bearer JWT + calls.read\n\n_App repo: `Dharwin App/my-app`. Realtime: `shared/contexts/ChatSocketContext.tsx` → Socket.IO `/socket.io` with JWT from **Socket Token**._",
-            "url": {
-              "raw": "{{baseUrl}}/communication/calls?page=1&limit=25&sortBy=createdAt&order=desc&source=telephony",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "communication",
-                "calls"
-              ],
-              "query": [
-                {
-                  "key": "page",
-                  "value": "1"
-                },
-                {
-                  "key": "limit",
-                  "value": "25"
-                },
-                {
-                  "key": "sortBy",
-                  "value": "createdAt"
-                },
-                {
-                  "key": "order",
-                  "value": "desc"
-                },
-                {
-                  "key": "source",
-                  "value": "telephony"
                 }
               ]
             }
