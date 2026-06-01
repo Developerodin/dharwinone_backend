@@ -4,8 +4,10 @@ import config from '../config/config.js';
 import { getGrantingPermissions } from '../config/permissions.js';
 
 /**
- * GET /activity-logs list: designated platform email, platform super user, users with
- * activityLogs.read / activity.read, or self-actor query (actor === own user id).
+ * GET /activity-logs list gate: allow designated platform email, platform super user, or any
+ * user holding the view permission (activityLogs.read / activity.read). The controller
+ * (resolveActivityLogListFilter) scopes non-privileged viewers to their own logs, so this
+ * middleware no longer requires an `actor=<own id>` query param.
  */
 const requireActivityLogsListAccess = (req, res, next) => {
   if (!req.user || !req.authContext) {

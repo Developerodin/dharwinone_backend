@@ -20,7 +20,8 @@ const EXPORT_ROW_CAP = 50000;
 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const ACTOR_MATCH_CAP = 500;
-const Q_ACTOR_MIN_LEN = 2;
+const Q_ACTOR_MIN_LEN = 3;
+const Q_ACTOR_LOOKUP_TIMEOUT_MS = 1500;
 
 /**
  * Build the $or array for a free-text `q` search.
@@ -32,7 +33,9 @@ const Q_ACTOR_MIN_LEN = 2;
 const buildQOrClause = (qTrim, actorIds = []) => {
   const re = new RegExp(escapeRegExp(qTrim), 'i');
   const orClause = [{ action: re }, { entityType: re }, { entityId: re }];
-  if (/^[\d.:a-fA-F]{3,}$/i.test(qTrim) && qTrim.length <= 45) {
+  // Only treat as an ip-ish query when at least one digit/dot/colon is present, so plain
+  // hex-letter words ("ada", "beef", "cafe", "fee") don't spawn pointless ip/clientIp clauses.
+  if (/^(?=.*[\d.:])[\d.:a-fA-F]{3,}$/i.test(qTrim) && qTrim.length <= 45) {
     orClause.push({ ip: re });
     orClause.push({ clientIp: re });
   }
@@ -332,10 +335,15 @@ const buildActivityLogMongoFilter = async (filter, viewer = null) => {
     const qTrim = String(q).trim();
     let actorIds = [];
     if (qTrim.length >= Q_ACTOR_MIN_LEN) {
-      const userRe = new RegExp(escapeRegExp(qTrim), 'i');
+      // Prefix-anchored so this is a "starts-with" person lookup, narrowing the match set and
+      // letting a future case-insensitive collation index on { name } / { email } serve it.
+      // Until that index exists this is a bounded COLLSCAN: capped rows + a hard maxTimeMS so a
+      // large User collection can never hang the request. TODO: add the collation index.
+      const userRe = new RegExp(`^${escapeRegExp(qTrim)}`, 'i');
       const matchedUsers = await User.find({ $or: [{ name: userRe }, { email: userRe }] })
         .select('_id')
         .limit(ACTOR_MATCH_CAP)
+        .maxTimeMS(Q_ACTOR_LOOKUP_TIMEOUT_MS)
         .lean();
       actorIds = matchedUsers.map((u) => u._id);
     }
