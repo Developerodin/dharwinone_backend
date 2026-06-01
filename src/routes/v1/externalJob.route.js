@@ -18,9 +18,9 @@ router.delete(
 
 router.post('/enrich', auth(), requireExternalJobsAccess(), externalJobController.enrichJob);
 
-router.post('/hr-contacts', auth(), requireExternalJobsAccess(), externalJobController.saveHrContact);
+router.post('/hr-contacts', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobController.saveHrContact);
 router.get('/hr-contacts', auth(), requireExternalJobsAccess(), externalJobController.listSavedHrContacts);
-router.delete('/hr-contacts/:apolloId', auth(), requireExternalJobsAccess(), externalJobController.deleteHrContact);
+router.delete('/hr-contacts/:apolloId', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobController.deleteHrContact);
 
 // Apollo webhook — verified by secret token in URL path (set APOLLO_WEBHOOK_SECRET in .env)
 router.post('/webhook/apollo/:secret', (req, res, next) => {

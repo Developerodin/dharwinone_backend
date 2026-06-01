@@ -17,7 +17,7 @@ router
   )
   .post(
     auth(),
-    requirePermissions('recruiters.update'),
+    requirePermissions('recruiters.manage'),
     validate(recruiterNoteValidation.createNote),
     recruiterNoteController.createNote
   );
@@ -26,7 +26,7 @@ router
   .route('/notes/:noteId')
   .delete(
     auth(),
-    requirePermissions('recruiters.update'),
+    requirePermissions('recruiters.manage'),
     validate(recruiterNoteValidation.deleteNote),
     recruiterNoteController.deleteNote
   );

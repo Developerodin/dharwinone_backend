@@ -3,7 +3,7 @@ import auth from '../../middlewares/auth.js';
 import optionalAuth from '../../middlewares/optionalAuth.js';
 import { jobsBrowseLimiter } from '../../middlewares/rateLimiter.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import { uploadSingle } from '../../middlewares/upload.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
@@ -29,14 +29,15 @@ router
 
 router
   .route('/templates')
-  .post(auth(), requirePermissions('jobs.manage'), validate(jobValidation.createJobTemplate), jobController.createTemplate)
-  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobTemplates), jobController.listTemplates);
+  // "My jobs template" matrix row derives job-templates.read/manage; honor it alongside legacy jobs.* scope.
+  .post(auth(), requireAnyOfPermissions('jobs.manage', 'job-templates.manage'), validate(jobValidation.createJobTemplate), jobController.createTemplate)
+  .get(auth(), requireAnyOfPermissions('jobs.read', 'job-templates.read', 'job-templates.manage'), validate(jobValidation.getJobTemplates), jobController.listTemplates);
 
 router
   .route('/templates/:templateId')
-  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobTemplate), jobController.getTemplate)
-  .patch(auth(), requirePermissions('jobs.manage'), validate(jobValidation.updateJobTemplate), jobController.updateTemplate)
-  .delete(auth(), requirePermissions('jobs.manage'), validate(jobValidation.deleteJobTemplate), jobController.removeTemplate);
+  .get(auth(), requireAnyOfPermissions('jobs.read', 'job-templates.read', 'job-templates.manage'), validate(jobValidation.getJobTemplate), jobController.getTemplate)
+  .patch(auth(), requireAnyOfPermissions('jobs.manage', 'job-templates.manage'), validate(jobValidation.updateJobTemplate), jobController.updateTemplate)
+  .delete(auth(), requireAnyOfPermissions('jobs.manage', 'job-templates.manage'), validate(jobValidation.deleteJobTemplate), jobController.removeTemplate);
 
 router
   .route('/templates/:templateId/create-job')
