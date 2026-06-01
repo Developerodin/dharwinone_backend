@@ -19,6 +19,29 @@ const EXPORT_ROW_CAP = 50000;
  */
 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const ACTOR_MATCH_CAP = 500;
+const Q_ACTOR_MIN_LEN = 2;
+
+/**
+ * Build the $or array for a free-text `q` search.
+ * Pure: takes pre-resolved actor ids; never mutates the outer filter.
+ * @param {string} qTrim - trimmed, non-empty query string
+ * @param {import('mongoose').Types.ObjectId[]} [actorIds] - matching user ids (may be empty)
+ * @returns {object[]}
+ */
+const buildQOrClause = (qTrim, actorIds = []) => {
+  const re = new RegExp(escapeRegExp(qTrim), 'i');
+  const orClause = [{ action: re }, { entityType: re }, { entityId: re }];
+  if (/^[\d.:a-fA-F]{3,}$/i.test(qTrim) && qTrim.length <= 45) {
+    orClause.push({ ip: re });
+    orClause.push({ clientIp: re });
+  }
+  if (Array.isArray(actorIds) && actorIds.length) {
+    orClause.push({ actor: { $in: actorIds } });
+  }
+  return orClause;
+};
+
 const IP_FILTER_PATTERN = /^[0-9a-fA-F:.]+$/;
 
 /**
@@ -307,13 +330,16 @@ const buildActivityLogMongoFilter = async (filter, viewer = null) => {
 
   if (q != null && String(q).trim()) {
     const qTrim = String(q).trim();
-    const re = new RegExp(escapeRegExp(qTrim), 'i');
-    const orClause = [{ action: re }, { entityType: re }, { entityId: re }];
-    if (/^[\d.:a-fA-F]{3,}$/i.test(qTrim) && qTrim.length <= 45) {
-      orClause.push({ ip: re });
-      orClause.push({ clientIp: re });
+    let actorIds = [];
+    if (qTrim.length >= Q_ACTOR_MIN_LEN) {
+      const userRe = new RegExp(escapeRegExp(qTrim), 'i');
+      const matchedUsers = await User.find({ $or: [{ name: userRe }, { email: userRe }] })
+        .select('_id')
+        .limit(ACTOR_MATCH_CAP)
+        .lean();
+      actorIds = matchedUsers.map((u) => u._id);
     }
-    const qCond = { $or: orClause };
+    const qCond = { $or: buildQOrClause(qTrim, actorIds) };
     if (Array.isArray(mongoFilter.$and)) {
       mongoFilter.$and.push(qCond);
     } else {
@@ -608,6 +634,7 @@ export {
   queryActivityLogs,
   sanitizeMetadata,
   buildActivityLogMongoFilter,
+  buildQOrClause,
   streamActivityLogsCsv,
   EXPORT_ROW_CAP,
 };
