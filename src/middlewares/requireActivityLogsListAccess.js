@@ -22,11 +22,6 @@ const requireActivityLogsListAccess = (req, res, next) => {
   if (granting.some((p) => permissions.has(p))) {
     return next();
   }
-  const actor = (req.query.actor ?? '').toString().trim();
-  const uid = String(req.user._id || req.user.id);
-  if (actor === uid) {
-    return next();
-  }
   return next(new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to view activity logs'));
 };
 

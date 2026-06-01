@@ -16,16 +16,42 @@ const listFilterKeys = [
   'q',
 ];
 
-const getActivityLogs = catchAsync(async (req, res) => {
-  const uid = String(req.user._id || req.user.id);
-  const isDesignated = config.isDesignatedSuperadminEmail(req.user.email);
-  const granting = getGrantingPermissions('activityLogs.read');
-  const hasPrivilegedRead =
+/**
+ * Resolve the Mongo list filter from the viewer's capabilities.
+ * Pure: no req/res. viewAll → all filters/all actors; filter tier → own actor + safe
+ * filters; view tier → own actor only.
+ * @param {{ query: object, permissions: Set<string>, isDesignated: boolean, isPlatformSuperUser: boolean, uid: string }} ctx
+ * @returns {object}
+ */
+const resolveActivityLogListFilter = ({ query, permissions, isDesignated, isPlatformSuperUser, uid }) => {
+  const has = (p) => !!(permissions && permissions.has(p));
+  const viewAll =
     isDesignated ||
-    req.user.platformSuperUser ||
-    granting.some((p) => req.authContext?.permissions?.has(p));
+    isPlatformSuperUser ||
+    has('activity.delete') ||
+    getGrantingPermissions('activityLogs.manage').some((p) => has(p));
+  const canFilter = viewAll || (has('activity.create') && has('activity.edit'));
 
-  const filter = hasPrivilegedRead ? pick(req.query, listFilterKeys) : { actor: uid };
+  if (viewAll) {
+    return pick(query, listFilterKeys);
+  }
+  if (canFilter) {
+    return {
+      ...pick(query, ['action', 'entityType', 'q', 'startDate', 'endDate', 'includeAttendance']),
+      actor: uid,
+    };
+  }
+  return { actor: uid };
+};
+
+const getActivityLogs = catchAsync(async (req, res) => {
+  const filter = resolveActivityLogListFilter({
+    query: req.query,
+    permissions: req.authContext?.permissions,
+    isDesignated: config.isDesignatedSuperadminEmail(req.user.email),
+    isPlatformSuperUser: !!req.user.platformSuperUser,
+    uid: String(req.user._id || req.user.id),
+  });
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await activityLogService.queryActivityLogs(filter, options, req.user);
   res.send(result);
@@ -43,4 +69,4 @@ const getActivityLogNetworkPreview = catchAsync(async (req, res) => {
   res.send({ ip: req.ip || null });
 });
 
-export { getActivityLogs, exportActivityLogs, getActivityLogNetworkPreview };
+export { getActivityLogs, exportActivityLogs, getActivityLogNetworkPreview, resolveActivityLogListFilter };
