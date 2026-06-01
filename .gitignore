@@ -14,28 +14,17 @@ coverage
 # Local webhook payload backups (LiveKit Egress)
 recordings/
 
-# graphify knowledge graph (regeneratable)
-graphify-out/
-
 # agent / session context (local)
 .context/
 
-# documentation (local edits; do not commit)
+# local / generated — do not commit
 docs/
+scripts/
+tests/
+graphify-out/
+
 AGENTS.md
 postman/APP_API_SCOPE.md
-
-# ad-hoc UI patch scripts (tracked migrations/utilities stay in repo)
-scripts/apply-*.mjs
-scripts/fix-*.mjs
-scripts/install-*.mjs
-scripts/patch-*.mjs
-scripts/write-*.mjs
-scripts/mail-ui/
-scripts/meetings-files-ui/
-
-# standalone local test sandboxes (src/**/__tests__ remain tracked)
-tests/
 
 # local scratch / exports (do not commit)
 referral_hits.csv
