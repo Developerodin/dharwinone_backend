@@ -30,6 +30,7 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ conversation: 1, createdAt: -1 });
+messageSchema.index({ conversation: 1, sender: 1, createdAt: -1 });
 messageSchema.plugin(toJSON);
 
 export default mongoose.model('Message', messageSchema);

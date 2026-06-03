@@ -27,6 +27,7 @@ const chatCallSchema = new mongoose.Schema(
 chatCallSchema.index({ conversation: 1 });
 chatCallSchema.index({ caller: 1 });
 chatCallSchema.index({ createdAt: -1 });
+chatCallSchema.index({ participants: 1, status: 1, createdAt: -1 });
 chatCallSchema.plugin(toJSON);
 
 export default mongoose.model('ChatCall', chatCallSchema);
