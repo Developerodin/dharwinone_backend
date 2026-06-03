@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 
 // ----- mutable mock state -----
 let studentRow = null;
-let attendanceRow = null;
+let attendanceRow = null; // the open punch-in row returned for the "active session" lookup
+let holidayRowMock = null; // row returned for status:'Holiday' lookups
+let leaveRowMock = null; // row returned for status:'Leave' lookups
 
 /**
  * Build a chainable stub: .populate(...).lean() → value
@@ -32,10 +34,18 @@ mock.module('../../models/student.model.js', {
 });
 mock.module('../../models/attendance.model.js', {
   defaultExport: {
-    findOne: (_query) => {
+    // Query-aware: the service issues three distinct findOne shapes — a Holiday-row
+    // lookup, a Leave-row lookup, and the active open-session lookup. Route each to
+    // its own mock value so tests can exercise the branches independently.
+    findOne: (query = {}) => {
+      let value;
+      if (query.status === 'Holiday') value = holidayRowMock;
+      else if (query.status === 'Leave') value = leaveRowMock;
+      else value = attendanceRow; // active punch-in lookup
       const stub = {
+        select: () => stub,
         sort: () => stub,
-        lean: async () => attendanceRow,
+        lean: async () => value,
       };
       return stub;
     },
@@ -195,4 +205,44 @@ test('validatePunchOut — allowed:true when active punch-in exists', async () =
 
   const result = await validatePunchOut('stu4', new Date('2025-06-16T18:00:00Z'), 'UTC');
   assert.equal(result.allowed, true);
+});
+
+test('validatePunchOut — night shift: allowed when punch-out lands on a week-off morning (session started on a working day)', async () => {
+  // Regression: worker punches in Friday night, works overnight, punches out Saturday
+  // ~02:00. Saturday is a week-off day, but the shift belongs to Friday (active.date).
+  // The day-based block must key off the session day, not the wall-clock punch-out.
+  studentRow = { _id: 'stu5', weekOff: ['Saturday'], holidays: [], shift: null };
+  holidayRowMock = null;
+  leaveRowMock = null;
+  attendanceRow = {
+    _id: 'att2',
+    student: 'stu5',
+    date: new Date('2025-06-13T00:00:00.000Z'), // Friday — the day the shift belongs to
+    punchIn: new Date('2025-06-13T22:00:00Z'),
+    punchOut: null,
+  };
+
+  const result = await validatePunchOut('stu5', new Date('2025-06-14T02:00:00Z'), 'UTC');
+  assert.equal(result.allowed, true);
+  assert.equal(result.activeRecord._id, 'att2');
+});
+
+test('validatePunchOut — blocks when the session day itself is a week-off day', async () => {
+  // Defensive: a session whose own day is a week-off stays blocked. Confirms the check
+  // keys off the session day (active.date), not the wall clock.
+  studentRow = { _id: 'stu6', weekOff: ['Saturday'], holidays: [], shift: null };
+  holidayRowMock = null;
+  leaveRowMock = null;
+  attendanceRow = {
+    _id: 'att3',
+    student: 'stu6',
+    date: new Date('2025-06-14T00:00:00.000Z'), // Saturday — week-off
+    punchIn: new Date('2025-06-14T09:00:00Z'),
+    punchOut: null,
+  };
+
+  const result = await validatePunchOut('stu6', new Date('2025-06-14T18:00:00Z'), 'UTC');
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, 'WEEK_OFF_BLOCKED');
+  assert.match(result.detail, /Saturday is a week-off day/);
 });

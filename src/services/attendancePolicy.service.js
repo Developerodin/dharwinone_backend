@@ -312,38 +312,12 @@ const validatePunchOut = async (studentId, punchOutTime, timezone = 'UTC') => {
   const ownerUserId = resolveOwnerUserId(student);
   const employee = await loadEmployeeHolidayProfile(ownerUserId);
   const effectiveTz = student.shift?.timezone || employee?.shift?.timezone || timezone;
-  const { midnight, day } = resolveAttendanceDay(punchOutTime, effectiveTz);
 
-  const mergedHolidays = mergeHolidayDocs(student.holidays, employee?.holidays);
-  const holidayCheck = isHoliday({ holidays: mergedHolidays }, midnight);
-  if (holidayCheck.blocked) {
-    return buildHolidayBlockDecision(holidayCheck, 'Punch out');
-  }
-
-  const holidayRow = await hasHolidayAttendanceRow({ studentId, userId: ownerUserId, localMidnight: midnight });
-  if (holidayRow) {
-    return buildHolidayBlockDecision(holidayBlockFromAttendanceRow(holidayRow), 'Punch out');
-  }
-
-  const weekOffDays = [...new Set([...(student.weekOff || []), ...(employee?.weekOff || [])])];
-  const weekOffCheck = isWeekOff({ weekOff: weekOffDays }, day);
-  if (weekOffCheck.blocked) {
-    return {
-      allowed: false,
-      reason: weekOffCheck.reason,
-      detail: `Punch out blocked: ${day} is a week-off day.`,
-    };
-  }
-
-  const leaveCheck = await isLeave(studentId, midnight);
-  if (leaveCheck.blocked) {
-    return {
-      allowed: false,
-      reason: leaveCheck.reason,
-      detail: 'Punch out blocked: leave is recorded for this day.',
-    };
-  }
-
+  // Find the open session FIRST. A night shift that crosses midnight belongs to the
+  // day it STARTED (active.date), not the wall-clock day of the punch-out. All
+  // day-based blocks (holiday, week-off, leave) must be evaluated against the
+  // session's attendance day — otherwise an overnight worker is stranded with an
+  // open session they can never close on a week-off / holiday morning.
   const { midnight: today } = resolveAttendanceDay(new Date(), effectiveTz);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -366,6 +340,42 @@ const validatePunchOut = async (studentId, punchOutTime, timezone = 'UTC') => {
     return { allowed: false, reason: 'NO_ACTIVE_PUNCH', detail: 'No active punch-in found to punch out.' };
   }
 
+  // Attendance day the open session belongs to. Fall back to the punch-out instant
+  // only if the row has no stored date.
+  const fallback = resolveAttendanceDay(punchOutTime, effectiveTz);
+  const sessionMidnight = active.date ? new Date(active.date) : fallback.midnight;
+  const sessionDay = active.date ? DAY_NAMES[sessionMidnight.getUTCDay()] : fallback.day;
+
+  const mergedHolidays = mergeHolidayDocs(student.holidays, employee?.holidays);
+  const holidayCheck = isHoliday({ holidays: mergedHolidays }, sessionMidnight);
+  if (holidayCheck.blocked) {
+    return buildHolidayBlockDecision(holidayCheck, 'Punch out');
+  }
+
+  const holidayRow = await hasHolidayAttendanceRow({ studentId, userId: ownerUserId, localMidnight: sessionMidnight });
+  if (holidayRow) {
+    return buildHolidayBlockDecision(holidayBlockFromAttendanceRow(holidayRow), 'Punch out');
+  }
+
+  const weekOffDays = [...new Set([...(student.weekOff || []), ...(employee?.weekOff || [])])];
+  const weekOffCheck = isWeekOff({ weekOff: weekOffDays }, sessionDay);
+  if (weekOffCheck.blocked) {
+    return {
+      allowed: false,
+      reason: weekOffCheck.reason,
+      detail: `Punch out blocked: ${sessionDay} is a week-off day.`,
+    };
+  }
+
+  const leaveCheck = await isLeave(studentId, sessionMidnight);
+  if (leaveCheck.blocked) {
+    return {
+      allowed: false,
+      reason: leaveCheck.reason,
+      detail: 'Punch out blocked: leave is recorded for this day.',
+    };
+  }
+
   if (punchOutTime <= new Date(active.punchIn)) {
     return { allowed: false, reason: 'INVALID_TIME_ORDER', detail: 'Punch out time must be after punch in time.' };
   }
@@ -384,28 +394,10 @@ const validatePunchOutByUser = async (userId, punchOutTime, timezone = 'UTC') =>
 
   const employee = await loadEmployeeHolidayProfile(userId);
   const effectiveTz = employee?.shift?.timezone || timezone;
-  const { midnight, day } = resolveAttendanceDay(punchOutTime, effectiveTz);
 
-  if (employee) {
-    const holidayCheck = isHoliday({ holidays: employee.holidays || [] }, midnight);
-    if (holidayCheck.blocked) {
-      return buildHolidayBlockDecision(holidayCheck, 'Punch out');
-    }
-    const weekOffCheck = isWeekOff(employee, day);
-    if (weekOffCheck.blocked) {
-      return {
-        allowed: false,
-        reason: weekOffCheck.reason,
-        detail: `Punch out blocked: ${day} is a week-off day.`,
-      };
-    }
-  }
-
-  const holidayRow = await hasHolidayAttendanceRow({ userId, localMidnight: midnight });
-  if (holidayRow) {
-    return buildHolidayBlockDecision(holidayBlockFromAttendanceRow(holidayRow), 'Punch out');
-  }
-
+  // Open session first; the punch-out is attributed to the day the shift STARTED
+  // (active.date), not the wall-clock day, so overnight shifts crossing midnight
+  // into a week-off / holiday are not wrongly blocked. See validatePunchOut.
   const { midnight: today } = resolveAttendanceDay(new Date(), effectiveTz);
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -426,6 +418,30 @@ const validatePunchOutByUser = async (userId, punchOutTime, timezone = 'UTC') =>
 
   if (!active) {
     return { allowed: false, reason: 'NO_ACTIVE_PUNCH', detail: 'No active punch-in found to punch out.' };
+  }
+
+  const fallback = resolveAttendanceDay(punchOutTime, effectiveTz);
+  const sessionMidnight = active.date ? new Date(active.date) : fallback.midnight;
+  const sessionDay = active.date ? DAY_NAMES[sessionMidnight.getUTCDay()] : fallback.day;
+
+  if (employee) {
+    const holidayCheck = isHoliday({ holidays: employee.holidays || [] }, sessionMidnight);
+    if (holidayCheck.blocked) {
+      return buildHolidayBlockDecision(holidayCheck, 'Punch out');
+    }
+    const weekOffCheck = isWeekOff(employee, sessionDay);
+    if (weekOffCheck.blocked) {
+      return {
+        allowed: false,
+        reason: weekOffCheck.reason,
+        detail: `Punch out blocked: ${sessionDay} is a week-off day.`,
+      };
+    }
+  }
+
+  const holidayRow = await hasHolidayAttendanceRow({ userId, localMidnight: sessionMidnight });
+  if (holidayRow) {
+    return buildHolidayBlockDecision(holidayBlockFromAttendanceRow(holidayRow), 'Punch out');
   }
 
   if (punchOutTime <= new Date(active.punchIn)) {
