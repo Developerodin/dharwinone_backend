@@ -1,13 +1,13 @@
 <claude-mem-context>
 # Memory Context
 
-# [uat.dharwin.backend] recent context, 2026-05-28 2:06pm GMT+5:30
+# [uat.dharwin.backend] recent context, 2026-06-03 1:09pm GMT+5:30
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (26,887t read) | 2,008,810t work | 99% savings
+Stats: 50 obs (25,860t read) | 2,572,360t work | 99% savings
 
 ### May 20, 2026
 S579 Remove all scripts and tests from uat.dharwin.backend, merge all feature branches into main, delete merged branches, leave unmapped members as-is (May 20, 4:44 PM)
@@ -16,56 +16,58 @@ S580 Remove all scripts and tests, merge all branches into main — executed acr
 S581 Fix Vercel production build failure on dharwinfrontend caused by impure CSS Modules selectors in the kanban board feature (May 20, 4:49 PM)
 S582 Fix and deploy resolution for Vercel production build failure on dharwinfrontend — CSS Modules purity violation in kanban board styles (May 20, 4:59 PM)
 ### May 28, 2026
-3385 11:52a 🔵 Permission Derivation Architecture: Raw Strings vs Derived API Strings in Alias Arrays
-3386 " 🔵 Controller canUpdateJoiningDate/canUpdateResignDate Bypass Alias System Entirely
-3387 " 🔵 Unintended Access: Adding employees.manage to candidates.manage Alias Grants Override Endpoint Access
-3388 " 🔵 Migration Must Use bulkWrite; role.save() Loop Triggers Per-Save bustRoleRegistry
-3408 12:13p 🔵 PR1 Unified Workforce Migration: 15 Test/Rollout Plan Gaps Identified
-3409 12:16p 🔵 Migration A1 Is a TeamMember Structural Migration, Not a Permission Migration
-3410 " 🔵 Migration Uses Raw bulkWrite — Bypasses Mongoose Hooks Including bustRoleRegistry
-3411 " 🔵 Test Suite Covers Only 8 Pure-Function Unit Tests — All I/O Paths Untested
-3412 " 🔵 permission.service.js Uses Rule-Based deriveApiPermissions with No Hardcoded Map
-3418 12:41p ⚖️ ATS Employees Permission Row — PR1 Final Spec Design Decisions
-3419 12:43p 🔵 deriveApiPermissions Uses Generic Algorithm — No Code Change Needed for ats.employees:* Derivation
-3420 " 🔵 employmentStatus Field Mismatch: Spec Enum vs Actual DB Schema
-3421 " 🔵 Both /candidates and /employees Routes Share the Same employee.route.js Router Instance
-3422 " 🔵 Controller-Level canUpdateJoiningDate/canUpdateResignDate Are Used Post-Route-Gate for Business Logic
-3423 " 🔵 roleRegistry.js bustRoleRegistry is Cache-Only — Auth Path Queries DB Directly Per Request
-3439 1:33p ⚖️ ATS Employees Permission Row — Implementation Architecture
-3440 " 🔵 ESM Import-Append Anti-Pattern in Multi-Task Test File
-3441 " 🔵 Task 5 Controller Test Imports Names That Are Middleware Arrays, Not Exported Functions
-3442 " 🔵 Windows PowerShell Incompatibilities Across Multiple Plan Tasks
-3443 " 🔵 runReverse Uses Non-Standard `.stream()` API on MongoDB Cursor
-3444 " 🔵 Task 15 Supertest Smoke References Non-Existent Helper Module
-3445 " 🔵 Task 4 Assumes `requireAnyOfPermissions` Is Already Imported Without Verification
-3450 1:37p 🔵 Project Uses Node Built-in Test Runner, NOT Jest — Plan's Test APIs Are Wrong Framework
-3451 " 🔵 `mongodb-memory-server` and `supertest` Are Not Installed — Tasks 12 and 15 Will Fail at Import
-3452 " 🔵 `deriveApiPermissions` Is NOT Exported from permission.service.js — Task 2 Export Step Is Required
-3453 " 🔵 `requireAnyOfPermissions` IS Already Imported in employee.route.js — Task 4 Assumption Verified
-3454 " 🔵 Controller Helpers Are Internal-Only — `employee.service.js` Has a Second Permission Gate via `req.user` Flag
-3455 " 🔵 Task 5 Export Will Conflict With Existing Multiple Named Export Blocks in employee.controller.js
-3456 " 🔵 `src/__tests__/routes/helpers/test-fixtures.js` Does Not Exist — Task 15 Is Missing Infrastructure
-3457 " 🔵 Migration Script Pattern — Node --test + node:assert, No bustRoleRegistry Import Issue
-3458 " 🔵 `candidates.joiningDate` Alias in permissions.js Has 4 Granting Strings Including Raw ATS Bundle
-3461 1:48p ⚖️ ATS Employees Permission Row — Revised Implementation Plan (PR1)
-3462 " 🟣 Migration Script: `2026-05-28-ats-employees-permission-row.js` with Full Lifecycle
-3463 " ⚖️ Frontend `candidate-permissions.ts` Uses Manage-Only Actions (Not View) for Edit Affordances
-3464 " ⚖️ Commit Ordering Safety: Controller Helpers Before Route Gates Before Dead Alias Deletion
-3465 " ⚖️ PR1 Defers Supertest + mongodb-memory-server Integration Tests to PR2
-3466 1:50p 🔵 Current Codebase State Confirmed: All Pre-Conditions for PR1 Tasks Verified
-3467 " 🔵 New P1 Bug Found: `requireAnyOfPermissions` Resolves `candidates.manage` Through Alias Table — Grants May Be Wider Than Expected
 3476 1:55p ⚖️ ATS Employees Permission Row — Commit-Order Safety Strategy
 3477 " 🟣 Controller Helpers Rewired: employees.manage + onboarding.manage Accepted for Date Updates
 3478 " 🟣 Migration Script: migrateRole Pure Transform with Verbatim Preservation
 3479 " ⚖️ PR1 Test Strategy: Pure-Function node:test Only, supertest Deferred to PR2
 3480 " 🟣 preFlight: Unknown Permission String Check is Informational, Not Blocking
-3481 " 🟣 Frontend: canEditCandidateJoiningDate/ResignDate Rewritten for Raw String Matching
-3482 " 🟣 Route Gates Flipped: PATCH joining-date and resign-date Accept New Permission Keys
 3483 1:57p 🔵 permission.service.js: deriveApiPermissions NOT Exported, Rule Confirms ats.employees Auto-Derivation
 3484 " 🔵 permissions.js: Dead Alias Entries Confirmed at Lines 82-95, permissionAliases Already Named-Exported
 3486 1:58p 🔵 Full Baseline Audit: requireAnyOfPermissions Already Imported, bustRoleRegistry Correctly Exported, All Files Match Plan Assumptions
 3487 " 🔵 requireAnyOfPermissions Goes Through Alias Expansion — employees.manage Has No Alias Entry, Checks Derived Key Directly
 3488 " 🔵 bustRoleRegistry Is Synchronous — Migration await Call Is Harmless No-Op
+3493 2:06p 🟣 ATS Employees Permission Row — Full Implementation Plan (PR1)
+3494 " ⚖️ Permission Normalization: Only Mirror Strings Normalized, Source Strings Preserved Verbatim
+3495 " ⚖️ Backend-Frontend Permission Parity: Frontend Uses Raw Manage-Action Check, Not Derived Keys
+3496 " ⚖️ Commit Safety Order Enforced: Helpers Before Route Gates Before Alias Deletion
+3499 2:08p 🔵 Code Audit: Verified Current State of All Files Before PR1 Implementation
+3500 " 🔵 requireAnyOfPermissions Expands Arguments Through permissionAliases — Broader Grant Than Intended
+3501 " 🔵 Role Model Post-UpdateOne Hook Will Bust Registry Cache on Every Migration Write
+### Jun 1, 2026
+4002 2:59p ⚖️ Activity Log Filter Redesign — Technical Review Spec
+4003 3:01p 🔵 activityLog.service.js — buildActivityLogMongoFilter: exact code structure confirmed
+4004 " 🔵 user.model.js — name field has NO index; email has unique index
+4005 " 🔵 config/activityLog.js — spec catalog sync is incomplete: misses supportCamera.invite and settings.bolnaCandidateAgent.update
+4006 " 🔵 activityLog controller: export route gated by requireDesignatedSuperadmin, list route by requireActivityLogsListAccess
+4007 " 🔵 activityLog.model.js — schema and index structure confirmed
+4016 3:13p 🔵 Activity Log Service Architecture — Query Filter Pipeline
+4017 " ⚖️ Activity Log UI Redesign — Search-First Filter Bar with Name/Email Lookup
+4018 " 🔵 Timezone Bug Risk in Frontend Date Preset Calculation
+4019 3:15p 🔵 activityLog.js Config Already Contains All Proposed New Actions and Entity Types
+4020 " 🔵 User Model Has No Index on name or email for Regex Lookup — Full Collection Scan Risk
+4021 " 🔵 Existing q Block in activityLog.service.js Already Implements IP Regex and $and Composition
+4022 " 🔵 Node:test ESM Import Pattern Confirmed from Existing Test Files
+4023 " 🔵 Activity Log Access Control: Non-Privileged Self-Actor Path Exists in Middleware
+4024 " 🔵 lean-ctx Shell Commands Blocked by Policy on Windows — Fallback to ctx_read Tool Used
+4062 3:55p 🔵 RBAC Permission Matrix Audit — 16 Claimed Dead/UI-Only Rows in HR Backend
+4067 3:56p 🔵 RBAC Audit Verdict: 7 of 16 Claimed Dead Rows Refuted, 9 Confirmed — Key False Positives Found
+4086 4:18p 🔵 RBAC Permission Matrix Security Audit Initiated — HR Backend
+4092 4:21p 🟣 job-templates.* Permission Keys Wired to /jobs/templates Routes
+4093 " 🔵 Administrator Name-Bypass Inconsistency: requireExternalJobsAccess vs Others
+4094 " 🔵 Cross-Scope Privilege Escalation via interviews.* Alias Granting candidates.read, jobs.read, users.read
+4095 " 🔵 uploads.document Alias Bundles 18 Distinct manage Keys — Any Single Manage Permission Grants S3 Upload
+4096 " 🔵 recruiters.update Permission Key Used in Routes Has No Alias Entry — May Be Wrong-Key
+4097 " 🟣 CI Permission Matrix Enforcement Guard Added — scripts/assert-permission-matrix-enforced.mjs
+4098 " 🔵 deriveApiPermissions Multi-Dot Key Edge Case: settings.users.impersonate Produces users.impersonate.read
+4099 " 🔵 email-templates.read/manage Grant emails.read/emails.manage — Settings Email Template Users Can Read All Emails
+4100 " 🔵 Frontend Matrix State: communication.templates Row Absent — Orphan Successfully Removed
+4115 4:30p 🟣 Permission Matrix CI Assertion Script Added
+4116 " 🔴 Recruiter Notes Routes Fixed: `recruiters.update` → `recruiters.manage`
+4117 " 🟣 Job Templates Routes Now Honor `job-templates.*` Matrix Row
+4118 " 🔴 External Job HR-Contact Mutation Routes Now Require `requireManage: true`
+4119 " 🔵 RBAC Permission System Architecture in uat.dharwin.backend
+### Jun 3, 2026
+4263 1:09p 🚨 Security Audit: 5 Critical/High Vulnerabilities Identified in Node/Express/MongoDB Backend
 
-Access 2009k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 2572k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
