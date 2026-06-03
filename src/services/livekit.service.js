@@ -102,7 +102,7 @@ const isParticipantHost = async (roomName, participantEmail) => {
  * @param {boolean} options.forceFullPermissions - Force full permissions (for admitted participants)
  * @returns {Promise<{token: string, isHost: boolean, canPublish: boolean, meetingEndAt: string|null}>} JWT token and participant grants
  */
-const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false }) => {
+const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false, forcePublicGuest = false }) => {
   logger.info('[LiveKit] generateAccessToken', { roomName, participantName, participantIdentity: participantIdentity || '(none)' });
 
   if (!apiKey || !apiSecret) {
@@ -123,7 +123,9 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   }
 
   // True host identity is based on meeting host/recruiter/creator email only.
-  const hostByEmail = participantEmail ? await isParticipantHost(roomName, participantEmail) : false;
+  // forcePublicGuest: unauthenticated callers supply their own email, so it can't
+  // prove host identity — never grant host on that path (prevents privilege forgery).
+  const hostByEmail = !forcePublicGuest && participantEmail ? await isParticipantHost(roomName, participantEmail) : false;
 
   // If true, guest is before scheduled start and room not yet open — still issue a token with canPublish: false
   // so the public /join/room page can connect and show the lobby (instead of HTTP 403 on getPublicLiveKitToken).
@@ -134,7 +136,10 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     const nowMs = Date.now();
     const startMs = meeting.scheduledAt ? new Date(meeting.scheduledAt).getTime() : null;
     const durationMinutes = Number(meeting.durationMinutes) > 0 ? Number(meeting.durationMinutes) : 60;
-    const endMs = startMs ? startMs + durationMinutes * 60 * 1000 : null;
+    // Keep the join window open for at least 60 min from the scheduled start so a
+    // host stepping out / a late or reconnecting guest can still (re)join the link.
+    const joinWindowMinutes = Math.max(durationMinutes, 60);
+    const endMs = startMs ? startMs + joinWindowMinutes * 60 * 1000 : null;
     let participantsInRoom = null;
 
     if (roomService) {

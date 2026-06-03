@@ -162,6 +162,9 @@ const getTokenPublic = catchAsync(async (req, res) => {
     participantName: name,
     participantIdentity,
     participantEmail: participantEmail?.trim() || null,
+    // Unauthenticated callers can never be granted host status: email is self-asserted
+    // here, so host privilege only comes from the authenticated /livekit/token path.
+    forcePublicGuest: true,
   });
 
   res.status(httpStatus.OK).json({
@@ -184,6 +187,12 @@ const getWaitingParticipants = catchAsync(async (req, res) => {
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
+  }
+
+  // Waiting roster contains participant names (PII) — only the meeting host may see it.
+  const hostEmail = req.user?.email;
+  if (!hostEmail || !(await livekitService.isParticipantHost(roomName, hostEmail))) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can view waiting participants');
   }
 
   const participants = await livekitService.getWaitingParticipants(roomName);
@@ -271,15 +280,15 @@ const getWaitingParticipantsPublic = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
   }
 
-  // Note: We allow ALL participants to view waiting participants (read-only)
-  // This allows everyone to hide waiting participants from their view
-  // Only host verification is required for admit/remove actions, not for viewing
-
+  // Unauthenticated/guest view: return ONLY opaque identities so the client can hide
+  // waiting users from its grid. Names and other PII are stripped — the full roster is
+  // host-only via the authenticated /livekit/waiting-participants endpoint.
   const participants = await livekitService.getWaitingParticipants(roomName);
+  const identitiesOnly = (participants || []).map((p) => ({ identity: p.identity }));
 
   res.status(httpStatus.OK).json({
     success: true,
-    participants,
+    participants: identitiesOnly,
   });
 });
 
@@ -289,14 +298,17 @@ const getWaitingParticipantsPublic = catchAsync(async (req, res) => {
  * Body: { roomName, participantIdentity, participantName?, participantEmail?, hostEmail? }
  */
 const admitParticipantPublic = catchAsync(async (req, res) => {
-  const { roomName, participantIdentity, participantName, participantEmail, hostEmail } = req.body;
+  const { roomName, participantIdentity, participantName, participantEmail } = req.body;
 
   if (!roomName || !participantIdentity) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and participantIdentity are required');
   }
 
+  // Host identity comes from the authenticated session, never a request-body email
+  // (which is not a secret and was trivially spoofable). Route requires auth().
+  const hostEmail = req.user?.email;
   if (!hostEmail) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'hostEmail is required');
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Authentication required for host actions');
   }
   const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
   if (!isHost) {
@@ -323,14 +335,16 @@ const admitParticipantPublic = catchAsync(async (req, res) => {
  * Body: { roomName, participantIdentity, hostEmail? }
  */
 const removeParticipantPublic = catchAsync(async (req, res) => {
-  const { roomName, participantIdentity, hostEmail } = req.body;
+  const { roomName, participantIdentity } = req.body;
 
   if (!roomName || !participantIdentity) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and participantIdentity are required');
   }
 
+  // Host identity from the authenticated session, not a spoofable body email. Route requires auth().
+  const hostEmail = req.user?.email;
   if (!hostEmail) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'hostEmail is required');
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Authentication required for host actions');
   }
   const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
   if (!isHost) {
@@ -352,12 +366,17 @@ const removeParticipantPublic = catchAsync(async (req, res) => {
  * Body: { roomName, hostEmail }
  */
 const startRecordingPublic = catchAsync(async (req, res) => {
-  const { roomName, hostEmail } = req.body;
+  const { roomName } = req.body;
 
-  if (!roomName || !hostEmail) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'roomName and hostEmail are required');
+  if (!roomName) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
   }
 
+  // Host identity from the authenticated session, not a spoofable body email. Route requires auth().
+  const hostEmail = req.user?.email;
+  if (!hostEmail) {
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Authentication required for host actions');
+  }
   const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
   if (!isHost) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can start recording');
@@ -378,12 +397,17 @@ const startRecordingPublic = catchAsync(async (req, res) => {
  * Body: { egressId, roomName, hostEmail }
  */
 const stopRecordingPublic = catchAsync(async (req, res) => {
-  const { egressId, roomName, hostEmail } = req.body;
+  const { egressId, roomName } = req.body;
 
-  if (!egressId || !roomName || !hostEmail) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'egressId, roomName and hostEmail are required');
+  if (!egressId || !roomName) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'egressId and roomName are required');
   }
 
+  // Host identity from the authenticated session, not a spoofable body email. Route requires auth().
+  const hostEmail = req.user?.email;
+  if (!hostEmail) {
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Authentication required for host actions');
+  }
   const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
   if (!isHost) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can stop recording');
@@ -409,9 +433,11 @@ const getRecordingStatusPublic = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
   }
 
+  // Guests need only the recording on/off state for the consent indicator. Egress
+  // ids and timestamps are internal metadata — omit them from the unauthenticated view.
   const result = await livekitService.getRecordingStatus(roomName);
 
-  res.status(httpStatus.OK).json(result);
+  res.status(httpStatus.OK).json({ isRecording: Boolean(result?.isRecording) });
 });
 
 export { 

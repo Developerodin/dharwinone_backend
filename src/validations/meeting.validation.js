@@ -148,7 +148,9 @@ const endMeetingByRoomPublic = {
   body: Joi.object()
     .keys({
       roomName: Joi.string().required().trim(),
-      hostEmail: Joi.string().email().required(),
+      // Ignored by the controller (host identity from the authenticated session);
+      // optional only for backward-compatible clients that still send it.
+      hostEmail: Joi.string().email().optional(),
     })
     .required(),
 };

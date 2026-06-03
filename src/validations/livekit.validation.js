@@ -26,7 +26,7 @@ const stopRecording = {
 const startRecordingPublic = {
   body: Joi.object().keys({
     roomName: Joi.string().required().trim(),
-    hostEmail: Joi.string().required().email().trim(),
+    hostEmail: Joi.string().optional().email().trim(),
   }),
 };
 
@@ -34,7 +34,7 @@ const stopRecordingPublic = {
   body: Joi.object().keys({
     egressId: Joi.string().required().trim(),
     roomName: Joi.string().required().trim(),
-    hostEmail: Joi.string().required().email().trim(),
+    hostEmail: Joi.string().optional().email().trim(),
   }),
 };
 
@@ -84,7 +84,7 @@ const admitParticipantPublic = {
     participantIdentity: Joi.string().required().trim(),
     participantName: Joi.string().optional().trim(),
     participantEmail: Joi.string().optional().email().trim(),
-    hostEmail: Joi.string().required().email().trim(),
+    hostEmail: Joi.string().optional().email().trim(),
   }),
 };
 
@@ -92,7 +92,7 @@ const removeParticipantPublic = {
   body: Joi.object().keys({
     roomName: Joi.string().required().trim(),
     participantIdentity: Joi.string().required().trim(),
-    hostEmail: Joi.string().required().email().trim(),
+    hostEmail: Joi.string().optional().email().trim(),
   }),
 };
 

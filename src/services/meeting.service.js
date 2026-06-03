@@ -13,6 +13,7 @@ import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
+import { meetingScope } from './visibilityScope.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
@@ -363,8 +364,26 @@ const createMeeting = async (body, userId) => {
  * @param {Object} options
  * @returns {Promise<QueryResult>}
  */
-const queryMeetings = async (filter, options) => {
-  const result = await Meeting.paginate(filter, {
+/**
+ * Throw 404 if `currentUser` may not access `meeting`. No-op when currentUser is
+ * absent (trusted internal call). Prevents cross-tenant enumeration by ObjectId.
+ */
+const assertMeetingInScope = async (meeting, currentUser) => {
+  if (!currentUser || !meeting?._id) return;
+  const { filter } = await meetingScope(currentUser, 'read');
+  const inScope = await Meeting.exists({ $and: [{ _id: meeting._id }, filter] });
+  if (!inScope) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+};
+
+const queryMeetings = async (filter, options, currentUser = null) => {
+  let scopedFilter = filter;
+  if (currentUser) {
+    const { filter: scope } = await meetingScope(currentUser, 'read');
+    scopedFilter = { $and: [filter || {}, scope] };
+  }
+  const result = await Meeting.paginate(scopedFilter, {
     ...options,
     populate: 'createdBy',
     sort: options.sortBy || '-createdAt',
@@ -382,9 +401,10 @@ const queryMeetings = async (filter, options) => {
  * @param {string} id - MongoDB ObjectId (24 hex) or meetingId (e.g. meeting_xxx)
  * @returns {Promise<Meeting|null>}
  */
-const getMeetingById = async (id) => {
+const getMeetingById = async (id, currentUser = null) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) return null;
+  await assertMeetingInScope(meeting, currentUser);
   const populated = await Meeting.findById(meeting._id).populate('createdBy');
   if (!populated) return null;
   const doc = populated.toJSON();
@@ -568,11 +588,12 @@ const createPlacementFromInterview = async (meeting, userId) => {
  * @param {string} [userId] - User performing the update (needed for move-to-preboarding)
  * @returns {Promise<Meeting>}
  */
-const updateMeetingById = async (id, updateBody, userId) => {
+const updateMeetingById = async (id, updateBody, userId, currentUser = null) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  await assertMeetingInScope(meeting, currentUser);
   const previousInterviewResult = meeting.interviewResult;
   const previousStatus = meeting.status;
   const safeBody = { ...updateBody };
@@ -644,11 +665,12 @@ const updateMeetingById = async (id, updateBody, userId) => {
  * @param {ObjectId} id
  * @returns {Promise<Meeting|null>}
  */
-const deleteMeetingById = async (id) => {
+const deleteMeetingById = async (id, currentUser = null) => {
   const meeting = await Meeting.findById(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  await assertMeetingInScope(meeting, currentUser);
   // Stop egress + wait for finalize BEFORE removing the meeting doc, otherwise
   // a live recording is orphaned in EGRESS_ACTIVE with no DB row to reconcile.
   if (meeting.meetingId) {
@@ -670,11 +692,12 @@ const deleteMeetingById = async (id) => {
  * @param {ObjectId} id
  * @returns {Promise<{ sent: number }>}
  */
-const resendMeetingInvitations = async (id) => {
+const resendMeetingInvitations = async (id, currentUser = null) => {
   const meeting = await Meeting.findById(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  await assertMeetingInScope(meeting, currentUser);
   const emails = getInvitationEmails(meeting);
   const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
   let sent = 0;
@@ -730,11 +753,12 @@ const resendMeetingInvitations = async (id) => {
  * @param {string} [userId] - User performing the action
  * @returns {Promise<{ moved: boolean; message: string }>}
  */
-const moveMeetingToPreboarding = async (id, userId) => {
+const moveMeetingToPreboarding = async (id, userId, currentUser = null) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  await assertMeetingInScope(meeting, currentUser);
   if (meeting.interviewResult !== 'selected') {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Interview result must be "Selected" to move to pre-boarding');
   }

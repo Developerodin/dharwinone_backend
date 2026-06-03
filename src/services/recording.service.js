@@ -793,11 +793,17 @@ const syncFromLiveKit = async () => {
  * @param {string} recordingId - Mongo ObjectId of the Recording row.
  * @returns {Promise<{ recording, meetingTitle, segments, totalSegments, source }>}
  */
-const getTranscriptByRecordingId = async (recordingId) => {
+const getTranscriptByRecordingId = async (recordingId, currentUser = {}) => {
   if (!recordingId || !mongoose.isValidObjectId(recordingId)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid recording id');
   }
-  const recording = await Recording.findById(recordingId).lean();
+  // Tenant/ownership scope — mirror listAll() so a user can only read transcripts
+  // for recordings they're allowed to see (prevents cross-tenant IDOR by ObjectId).
+  const { filter: scopeFilter } = await recordingScope(currentUser, 'read');
+  if (scopeFilter?._id?.$in && scopeFilter._id.$in.length === 0) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Recording not found');
+  }
+  const recording = await Recording.findOne({ _id: recordingId, ...scopeFilter }).lean();
   if (!recording) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Recording not found');
   }

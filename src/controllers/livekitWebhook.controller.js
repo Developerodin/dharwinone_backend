@@ -60,7 +60,10 @@ const savePayloadLocally = async (payload) => {
   try {
     await fs.mkdir(RECORDINGS_DIR, { recursive: true });
     const info = payload?.egressInfo || {};
-    const egressId = info.egressId || info.id || 'unknown';
+    const rawEgressId = info.egressId || info.id || 'unknown';
+    // Sanitize: webhook payload is attacker-controllable; strip anything that
+    // could traverse out of RECORDINGS_DIR (path separators, '..', etc.).
+    const egressId = String(rawEgressId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128) || 'unknown';
     const ts = Date.now();
     const filename = `egress-${egressId}-${ts}.json`;
     const filepath = path.join(RECORDINGS_DIR, filename);

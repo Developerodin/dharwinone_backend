@@ -1,4 +1,5 @@
 import express from 'express';
+import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import * as authValidation from '../../validations/auth.validation.js';
 import * as authController from '../../controllers/auth.controller.js';
@@ -57,6 +58,7 @@ router.get(
  */
 router.post(
   '/admit-participant',
+  auth(),
   publicWriteLimiter,
   validate(livekitValidation.admitParticipantPublic),
   livekitController.admitParticipantPublic
@@ -69,6 +71,7 @@ router.post(
  */
 router.post(
   '/remove-participant',
+  auth(),
   publicWriteLimiter,
   validate(livekitValidation.removeParticipantPublic),
   livekitController.removeParticipantPublic
@@ -81,6 +84,7 @@ router.post(
  */
 router.post(
   '/recording/start',
+  auth(),
   publicWriteLimiter,
   validate(livekitValidation.startRecordingPublic),
   livekitController.startRecordingPublic
@@ -93,6 +97,7 @@ router.post(
  */
 router.post(
   '/recording/stop',
+  auth(),
   publicWriteLimiter,
   validate(livekitValidation.stopRecordingPublic),
   livekitController.stopRecordingPublic
@@ -114,6 +119,7 @@ router.get(
  */
 router.post(
   '/meetings/end',
+  auth(),
   publicWriteLimiter,
   validate(meetingValidation.endMeetingByRoomPublic),
   meetingController.endMeetingByRoomPublic

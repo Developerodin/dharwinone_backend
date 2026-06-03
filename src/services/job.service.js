@@ -18,6 +18,9 @@ import {
   queryApplicants,
 } from './applicantQuery.service.js';
 
+/** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /** Matches mirrored external listings in Job (explicit origin or legacy externalRef-only rows). */
 const MIRROR_EXTERNAL_OR = {
   $or: [
@@ -174,7 +177,7 @@ const queryJobs = async (filter, options) => {
 
   // Handle search query
   if (filter.search) {
-    const searchRegex = new RegExp(filter.search, 'i');
+    const searchRegex = new RegExp(escapeRegex(filter.search), 'i');
     filter.$or = [
       { title: searchRegex },
       { 'organisation.name': searchRegex },

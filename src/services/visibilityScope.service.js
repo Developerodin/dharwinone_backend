@@ -233,7 +233,36 @@ const recordingScope = async (actor = {}, action = 'read') => {
   };
 };
 
-export { tenantScope, candidateScope, jobScope, applicationScope, recordingScope };
+/**
+ * Build a Mongoose filter restricting Meeting docs to those an actor may see.
+ * Admins see every meeting created by a user in their tenant tree; non-admins
+ * see meetings they created, host, recruit, are the candidate of, or are invited
+ * to. Used to scope by-id reads/writes so meetings can't be enumerated cross-tenant.
+ *
+ * @param {Object} actor - req.user
+ * @param {'read'|'write'} action
+ * @returns {Promise<{ filter: object }>}
+ */
+const meetingScope = async (actor = {}, action = 'read') => {
+  const admin = await userIsAdmin(actor);
+  if (admin) {
+    const rootId = tenantRootId(actor);
+    if (!rootId) return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'admin' } };
+    const tenantUsers = await User.find({ $or: [{ _id: rootId }, { adminId: rootId }] }, { _id: 1 }).lean();
+    const userIds = uniq(tenantUsers.map((u) => u._id));
+    return {
+      filter: { createdBy: { $in: userIds } },
+      scopeDebug: { scopeType: 'meeting', action, role: 'admin', tenantRoot: String(rootId) },
+    };
+  }
+  const actorQuery = meetingActorQuery(actor);
+  return {
+    filter: actorQuery || EMPTY_SCOPE,
+    scopeDebug: { scopeType: 'meeting', action, role: actorQuery ? 'self' : 'none' },
+  };
+};
+
+export { tenantScope, candidateScope, jobScope, applicationScope, recordingScope, meetingScope };
 
 export default {
   tenantScope,
@@ -241,4 +270,5 @@ export default {
   jobScope,
   applicationScope,
   recordingScope,
+  meetingScope,
 };
