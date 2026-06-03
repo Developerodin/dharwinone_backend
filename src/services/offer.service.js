@@ -1011,17 +1011,57 @@ const MAX_ROLE_RESPONSIBILITIES = 12;
  * Derive offer-letter role responsibilities from the selected job.
  * Precedence: job description (one bullet per line) → skillRequirements summary → [].
  */
-export const deriveRoleResponsibilities = (job) => {
-  if (!job) return [];
-  const description = typeof job.jobDescription === 'string' ? job.jobDescription : '';
-  const text = description
+const htmlToLines = (html) =>
+  String(html || '')
     .replace(/<\/(p|div|li|ul|ol|h[1-6])>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '');
-  const lines = text
+    .replace(/<[^>]+>/g, '')
     .split('\n')
     .map((l) => l.replace(/^[\s•\-*]+/, '').trim())
     .filter(Boolean);
+
+/** Heading text that marks the start of the responsibilities section in a JD. */
+const RESP_HEADING_RE =
+  /(roles?\s*(?:&|and|&amp;)\s*responsibilit|key\s+responsibilit|responsibilit|duties|what\s+you(?:['’]| wi)ll\s+do|your\s+role)/i;
+/** Any other section heading that ends the responsibilities block. */
+const OTHER_HEADING_RE =
+  /(requirement|qualificat|skills?|experience|about|who\s+you\s+are|benefit|perks?|compensation|education|nice\s+to\s+have|what\s+we\s+offer|eligibilit)/i;
+
+/**
+ * Pull just the Roles & Responsibilities section from a JD when one is labelled;
+ * returns its bullet/line items. Empty array if no such section is found.
+ */
+const responsibilitiesSectionLines = (html) => {
+  const blocks = String(html || '')
+    // Each heading / paragraph / list-item becomes its own chunk.
+    .replace(/<br\s*\/?>/gi, '</p>')
+    .split(/(?=<(?:h[1-6]|p|li|ul|ol|div)\b)/i);
+  let inSection = false;
+  const out = [];
+  for (const block of blocks) {
+    const isHeading = /<(?:h[1-6]|strong|b)\b/i.test(block);
+    const plain = block
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/gi, '&')
+      .replace(/^[\s•\-*]+/, '')
+      .trim();
+    if (!plain) continue;
+    if (isHeading && RESP_HEADING_RE.test(plain)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && isHeading && OTHER_HEADING_RE.test(plain)) break;
+    if (inSection) out.push(plain);
+  }
+  return out;
+};
+
+export const deriveRoleResponsibilities = (job) => {
+  if (!job) return [];
+  const description = typeof job.jobDescription === 'string' ? job.jobDescription : '';
+  /* Prefer the labelled Roles & Responsibilities section; fall back to the whole description. */
+  const sectionLines = responsibilitiesSectionLines(description);
+  const lines = sectionLines.length ? sectionLines : htmlToLines(description);
   if (lines.length) return lines.slice(0, MAX_ROLE_RESPONSIBILITIES);
   if (Array.isArray(job.skillRequirements) && job.skillRequirements.length) {
     return job.skillRequirements
