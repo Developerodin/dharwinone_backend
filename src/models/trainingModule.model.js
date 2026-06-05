@@ -41,6 +41,12 @@ const trainingModuleSchema = mongoose.Schema(
         ref: 'Category',
       },
     ],
+    positions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Position',
+      },
+    ],
     moduleName: {
       type: String,
       required: true,
@@ -178,6 +184,7 @@ trainingModuleSchema.plugin(paginate);
 // --- Indexes for list + search performance (perf audit 2026-05) ---
 trainingModuleSchema.index({ status: 1, createdAt: -1 });
 trainingModuleSchema.index({ categories: 1, createdAt: -1 });
+trainingModuleSchema.index({ positions: 1 });
 trainingModuleSchema.index({ moduleName: 1 });
 trainingModuleSchema.index({ createdAt: -1 });
 trainingModuleSchema.index(

@@ -44,4 +44,33 @@ const deletePosition = {
   }),
 };
 
-export { createPosition, getPositions, getPosition, updatePosition, deletePosition };
+const getPositionEmployees = {
+  params: Joi.object().keys({
+    positionId: Joi.string().required().custom(objectId),
+  }),
+  query: Joi.object().keys({
+    search: Joi.string().allow('').optional(),
+    sortBy: Joi.string(),
+    limit: Joi.number().integer(),
+    page: Joi.number().integer(),
+  }),
+};
+
+const setPositionModules = {
+  params: Joi.object().keys({
+    positionId: Joi.string().required().custom(objectId),
+  }),
+  body: Joi.object().keys({
+    moduleIds: Joi.array().items(Joi.string().custom(objectId)).required(),
+  }),
+};
+
+export {
+  createPosition,
+  getPositions,
+  getPosition,
+  getPositionEmployees,
+  setPositionModules,
+  updatePosition,
+  deletePosition,
+};

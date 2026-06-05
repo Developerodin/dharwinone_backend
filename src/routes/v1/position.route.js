@@ -18,12 +18,37 @@ const canReadPositions = [
   ),
 ];
 
+/** HR employee names on roster. Training Positions tab (training.positions:view → positions.read) needs this too. */
+const canReadPositionRoster = [
+  auth(),
+  requireAnyOfPermissions('employees.read', 'candidates.read', 'positions.manage', 'positions.read'),
+];
+
 router.get('/all', ...canReadPositions, positionController.getAllPositions);
+
+router.get('/roster', ...canReadPositionRoster, positionController.getPositionRoster);
 
 router
   .route('/')
   .post(auth(), requirePermissions('positions.manage'), validate(positionValidation.createPosition), positionController.createPosition)
   .get(...canReadPositions, validate(positionValidation.getPositions), positionController.getPositions);
+
+router
+  .route('/:positionId/employees')
+  .get(
+    ...canReadPositionRoster,
+    validate(positionValidation.getPositionEmployees),
+    positionController.getPositionEmployees
+  );
+
+router
+  .route('/:positionId/modules')
+  .put(
+    auth(),
+    requireAnyOfPermissions('modules.manage', 'positions.manage'),
+    validate(positionValidation.setPositionModules),
+    positionController.setPositionModules
+  );
 
 router
   .route('/:positionId')

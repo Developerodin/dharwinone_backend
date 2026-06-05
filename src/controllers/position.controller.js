@@ -40,11 +40,31 @@ const deletePosition = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+const getPositionRoster = catchAsync(async (req, res) => {
+  const roster = await positionService.getPositionRoster();
+  res.send(roster);
+});
+
+const getPositionEmployees = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['search']);
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const result = await positionService.queryEmployeesForPosition(req.params.positionId, filter, options);
+  res.send(result);
+});
+
+const setPositionModules = catchAsync(async (req, res) => {
+  const result = await positionService.setPositionModules(req.params.positionId, req.body.moduleIds);
+  res.send(result);
+});
+
 export {
   createPosition,
   getPositions,
   getAllPositions,
   getPosition,
+  getPositionRoster,
+  getPositionEmployees,
+  setPositionModules,
   updatePosition,
   deletePosition,
 };
