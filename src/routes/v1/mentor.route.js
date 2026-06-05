@@ -1,7 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as mentorValidation from '../../validations/mentor.validation.js';
 import * as mentorController from '../../controllers/mentor.controller.js';
 import multer from 'multer';
@@ -11,7 +11,12 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 router
   .route('/')
-  .get(auth(), requirePermissions('mentors.read'), validate(mentorValidation.getMentors), mentorController.getMentors);
+  .get(
+    auth(),
+    requireAnyOfPermissions('mentors.read', 'categories.read', 'modules.read'),
+    validate(mentorValidation.getMentors),
+    mentorController.getMentors
+  );
 
 // Upload / fetch mentor profile image
 router

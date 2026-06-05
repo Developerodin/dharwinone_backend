@@ -16,6 +16,8 @@ export const permissionAliases = {
     'training.modules.read',
     'training.modules:view',
     'training.modules:view,create,edit,delete',
+    // Edit/manage without view still needs to read module detail (Categories assign flow).
+    'modules.manage',
     'evaluation.read',
     'evaluation.manage',
   ],
@@ -31,6 +33,27 @@ export const permissionAliases = {
     'training.modules.manage',
     'training.modules:create,edit,delete',
     'training.modules:view,create,edit,delete',
+  ],
+  'categories.read': [
+    'categories.read',
+    'training.categories.read',
+    'training.categories:view',
+    'training.categories:view,create,edit,delete',
+  ],
+  'categories.manage': [
+    'categories.manage',
+    'training.categories.manage',
+    'training.categories:create,edit,delete',
+    'training.categories:view,create,edit,delete',
+  ],
+  // Mentors picklist on Categories tab: categories/modules viewers need list access.
+  'mentors.read': [
+    'mentors.read',
+    'training.mentors.read',
+    'training.mentors:view',
+    'training.mentors:view,create,edit,delete',
+    'categories.read',
+    'modules.read',
   ],
   // Student courses: permission.service emits the namespaced `candidate-courses.read` /
   // `candidate-courses.manage` for `candidate.courses:*` (in addition to the legacy
