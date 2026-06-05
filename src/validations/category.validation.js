@@ -4,6 +4,19 @@ import { objectId } from './custom.validation.js';
 const createCategory = {
   body: Joi.object().keys({
     name: Joi.string().required().trim(),
+    positions: Joi.array().items(Joi.string().custom(objectId)).optional(),
+  }),
+};
+
+const getCategoryEmployees = {
+  params: Joi.object().keys({
+    categoryId: Joi.string().required().custom(objectId),
+  }),
+  query: Joi.object().keys({
+    search: Joi.string().allow('').optional(),
+    sortBy: Joi.string(),
+    limit: Joi.number().integer(),
+    page: Joi.number().integer(),
   }),
 };
 
@@ -30,6 +43,7 @@ const updateCategory = {
   body: Joi.object()
     .keys({
       name: Joi.string().trim(),
+      positions: Joi.array().items(Joi.string().custom(objectId)).optional(),
     })
     .min(1),
 };
@@ -40,4 +54,4 @@ const deleteCategory = {
   }),
 };
 
-export { createCategory, getCategories, getCategory, updateCategory, deleteCategory };
+export { createCategory, getCategories, getCategory, getCategoryEmployees, updateCategory, deleteCategory };

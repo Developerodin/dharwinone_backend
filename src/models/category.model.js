@@ -9,6 +9,12 @@ const categorySchema = mongoose.Schema(
       required: true,
       trim: true,
     },
+    /** Positions whose students appear in this category's employee dropdown (many-to-many). */
+    positions: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Position' }],
+      default: [],
+      index: true,
+    },
   },
   {
     timestamps: true,

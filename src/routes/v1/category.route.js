@@ -1,7 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as categoryValidation from '../../validations/category.validation.js';
 import * as categoryController from '../../controllers/category.controller.js';
 
@@ -11,6 +11,15 @@ router
   .route('/')
   .post(auth(), requirePermissions('categories.manage'), validate(categoryValidation.createCategory), categoryController.createCategory)
   .get(auth(), requirePermissions('categories.read'), validate(categoryValidation.getCategories), categoryController.getCategories);
+
+router
+  .route('/:categoryId/employees')
+  .get(
+    auth(),
+    requireAnyOfPermissions('categories.read', 'students.read'),
+    validate(categoryValidation.getCategoryEmployees),
+    categoryController.getCategoryEmployees
+  );
 
 router
   .route('/:categoryId')

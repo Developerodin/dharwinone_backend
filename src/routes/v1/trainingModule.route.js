@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as trainingModuleValidation from '../../validations/trainingModule.validation.js';
 import * as trainingModuleController from '../../controllers/trainingModule.controller.js';
 import * as aiGenerateController from '../../controllers/trainingModuleAI.controller.js';
@@ -119,7 +119,9 @@ router
   )
   .get(
     auth(),
-    requirePermissions('modules.read'),
+    // Course Assignment (categories) and the Positions roster both need the module list,
+    // so a training.categories:view / training.positions:view role can read modules too.
+    requireAnyOfPermissions('modules.read', 'categories.read', 'positions.read'),
     validate(trainingModuleValidation.getTrainingModules),
     trainingModuleController.getTrainingModules
   );
@@ -139,10 +141,20 @@ router.post(
 );
 
 router
+  .route('/:moduleId/employees')
+  .get(
+    auth(),
+    // Course Assignment (categories) loads a module's employees when a module is picked.
+    requireAnyOfPermissions('modules.read', 'students.read', 'categories.read'),
+    validate(trainingModuleValidation.getModuleEmployees),
+    trainingModuleController.getModuleEmployees
+  );
+
+router
   .route('/:moduleId')
   .get(
     auth(),
-    requirePermissions('modules.read'),
+    requireAnyOfPermissions('modules.read', 'categories.read', 'positions.read'),
     validate(trainingModuleValidation.getTrainingModule),
     trainingModuleController.getTrainingModule
   )

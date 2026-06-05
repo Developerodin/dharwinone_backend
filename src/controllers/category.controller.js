@@ -39,10 +39,18 @@ const deleteCategory = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+const getCategoryEmployees = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['search']);
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const result = await categoryService.queryEmployeesForCategory(req.params.categoryId, filter, options);
+  res.send(result);
+});
+
 export {
   createCategory,
   getCategories,
   getCategory,
+  getCategoryEmployees,
   updateCategory,
   deleteCategory,
 };

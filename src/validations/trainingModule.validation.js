@@ -122,6 +122,7 @@ const playlistItemSchema = Joi.object({
 const createTrainingModule = {
   body: Joi.object().keys({
     categories: Joi.array().items(Joi.custom(objectId)).default([]),
+    positions: Joi.array().items(Joi.custom(objectId)).default([]),
     moduleName: Joi.string().required().trim(),
     shortDescription: Joi.string().required().trim(),
     students: Joi.array().items(Joi.custom(objectId)).default([]),
@@ -198,6 +199,7 @@ const updateTrainingModule = {
   body: Joi.object()
     .keys({
       categories: updateCategoriesField,
+      positions: updateIdArrayField,
       moduleName: Joi.string().trim(),
       shortDescription: Joi.string().trim(),
       students: updateIdArrayField,
@@ -214,10 +216,23 @@ const deleteTrainingModule = {
   }),
 };
 
+const getModuleEmployees = {
+  params: Joi.object().keys({
+    moduleId: Joi.string().required().custom(objectId),
+  }),
+  query: Joi.object().keys({
+    search: Joi.string().allow('').optional(),
+    sortBy: Joi.string(),
+    limit: Joi.number().integer(),
+    page: Joi.number().integer(),
+  }),
+};
+
 export {
   createTrainingModule,
   getTrainingModules,
   getTrainingModule,
+  getModuleEmployees,
   updateTrainingModule,
   deleteTrainingModule,
 };

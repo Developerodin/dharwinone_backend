@@ -85,6 +85,13 @@ const getTrainingModule = catchAsync(async (req, res) => {
   res.send(module);
 });
 
+const getModuleEmployees = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['search']);
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const result = await trainingModuleService.queryEmployeesForModule(req.params.moduleId, filter, options);
+  res.send(result);
+});
+
 const updateTrainingModule = catchAsync(async (req, res) => {
   const moduleData = { ...req.body };
 
@@ -169,6 +176,7 @@ export {
   createTrainingModule,
   getTrainingModules,
   getTrainingModule,
+  getModuleEmployees,
   updateTrainingModule,
   deleteTrainingModule,
 };

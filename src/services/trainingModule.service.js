@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
 import Mentor from '../models/mentor.model.js';
+import * as studentService from './student.service.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
@@ -171,6 +172,7 @@ const createTrainingModule = async (moduleBody, currentUser) => {
   // Create training module
   const trainingModule = await TrainingModule.create({
     categories: moduleBody.categories || [],
+    positions: moduleBody.positions || [],
     moduleName: moduleBody.moduleName,
     coverImage: coverImageData,
     shortDescription: moduleBody.shortDescription,
@@ -183,6 +185,7 @@ const createTrainingModule = async (moduleBody, currentUser) => {
 
   return trainingModule.populate([
     { path: 'categories' },
+    { path: 'positions', select: 'name department' },
     { path: 'students', populate: { path: 'user' } },
     { path: 'mentorsAssigned', populate: { path: 'user' } },
   ]);
@@ -294,6 +297,7 @@ const queryTrainingModules = async (filter, options, currentUser) => {
     select: LIST_EXCLUDE_FIELDS,
     populate: [
       { path: 'categories', select: 'name' },
+      { path: 'positions', select: 'name department' },
       { path: 'students', select: 'user', populate: { path: 'user', select: 'name' } },
       { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } },
     ],
@@ -324,6 +328,7 @@ const queryTrainingModules = async (filter, options, currentUser) => {
 const getTrainingModuleById = async (id) => {
   const module = await TrainingModule.findById(id).populate([
     { path: 'categories' },
+    { path: 'positions', select: 'name department' },
     { path: 'students', populate: { path: 'user' } },
     { path: 'mentorsAssigned', populate: { path: 'user' } },
   ]);
@@ -614,10 +619,38 @@ const deleteTrainingModuleById = async (moduleId) => {
   return module;
 };
 
+/**
+ * Active students whose position is linked to this module (TrainingModule.positions).
+ * @param {import('mongoose').Types.ObjectId} moduleId
+ * @param {Object} filter
+ * @param {Object} options
+ */
+const queryEmployeesForModule = async (moduleId, filter, options) => {
+  const module = await TrainingModule.findById(moduleId).select('positions moduleName');
+  if (!module) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
+  }
+  const positionIds = (module.positions ?? []).map((p) => String(p._id ?? p)).filter(Boolean);
+  if (!positionIds.length) {
+    return {
+      results: [],
+      page: options.page ?? 1,
+      limit: options.limit ?? 10,
+      totalPages: 0,
+      totalResults: 0,
+    };
+  }
+  return studentService.queryStudents(
+    { ...filter, position: { $in: positionIds }, status: 'active' },
+    options
+  );
+};
+
 export {
   createTrainingModule,
   queryTrainingModules,
   getTrainingModuleById,
+  queryEmployeesForModule,
   updateTrainingModuleById,
   deleteTrainingModuleById,
 };
