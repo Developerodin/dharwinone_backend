@@ -21,13 +21,16 @@ async function listUnifiedCalls(options = {}) {
   const fetchTelephony = source === 'all' || source === 'telephony';
   const fetchChat = source === 'all' || source === 'in_app';
 
+  /** Fetch enough rows from each source to merge-sort-slice for the requested page. */
+  const mergeFetchLimit = Math.min(page * limit, 5000);
+
   const [telephonyData, chatData] = await Promise.all([
     fetchTelephony
       ? callRecordService.listCallRecords({
           userId,
           isAdmin,
           page: 1,
-          limit: 10000,
+          limit: mergeFetchLimit,
           search: options.search,
           status: options.status,
           language: options.language,
@@ -36,8 +39,8 @@ async function listUnifiedCalls(options = {}) {
         })
       : Promise.resolve({ results: [], total: 0 }),
     fetchChat
-      ? chatService.listCalls(userId, { page: 1, limit: 10000, isAdmin })
-      : Promise.resolve({ results: [], totalPages: 0 }),
+      ? chatService.listCalls(userId, { page: 1, limit: mergeFetchLimit, isAdmin })
+      : Promise.resolve({ results: [], totalPages: 0, total: 0 }),
   ]);
 
   const telephonyRecords = telephonyData.results || [];
@@ -104,7 +107,11 @@ async function listUnifiedCalls(options = {}) {
   }
 
   const total = filtered.length;
-  const totalPages = Math.ceil(total / limit) || 1;
+  const telephonyTotal = telephonyData.total ?? telephonyRecords.length;
+  const chatTotal = chatData.total ?? chatCalls.length;
+  const combinedTotal =
+    source === 'telephony' ? telephonyTotal : source === 'in_app' ? chatTotal : telephonyTotal + chatTotal;
+  const totalPages = Math.ceil((options.status && options.status !== 'all' ? total : combinedTotal) / limit) || 1;
   const skip = (page - 1) * limit;
   const paginated = filtered.slice(skip, skip + limit);
 
@@ -119,7 +126,7 @@ async function listUnifiedCalls(options = {}) {
     results,
     page,
     limit,
-    total,
+    total: options.status && options.status !== 'all' ? total : combinedTotal,
     totalPages,
   };
 }

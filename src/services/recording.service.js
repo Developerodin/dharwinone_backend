@@ -215,7 +215,7 @@ const listAll = async (options = {}, currentUser = {}) => {
       : [];
 
     const [matchedMeetings] = await Promise.all([
-      Meeting.find(combinedMeetingQuery, { meetingId: 1 }).lean(),
+      Meeting.find(combinedMeetingQuery, { meetingId: 1 }).limit(500).lean(),
     ]);
     const matchedIds = new Set([
       ...matchedMeetings.map((m) => m.meetingId),
@@ -791,9 +791,14 @@ const syncFromLiveKit = async () => {
  * segments were ingested before the recordingId link existed.
  *
  * @param {string} recordingId - Mongo ObjectId of the Recording row.
- * @returns {Promise<{ recording, meetingTitle, segments, totalSegments, source }>}
+ * @param {Object} [options] - { page, limit }
+ * @returns {Promise<{ recording, meetingTitle, segments, totalSegments, page, limit, totalPages, source }>}
  */
-const getTranscriptByRecordingId = async (recordingId, currentUser = {}) => {
+const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options = {}) => {
+  const page = Math.max(1, parseInt(options.page, 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(options.limit, 10) || 50));
+  const skip = (page - 1) * limit;
+
   if (!recordingId || !mongoose.isValidObjectId(recordingId)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid recording id');
   }
@@ -808,17 +813,25 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Recording not found');
   }
 
-  let segments = await TranscriptSegment.find({ recordingId: recording._id })
-    .sort({ sequenceNumber: 1 })
-    .lean();
+  const segmentQuery = { recordingId: recording._id };
   let source = 'recordingId';
+  let totalSegments = await TranscriptSegment.countDocuments(segmentQuery);
 
-  if (segments.length === 0 && recording.meetingId) {
-    segments = await TranscriptSegment.find({ meetingId: recording.meetingId })
-      .sort({ sequenceNumber: 1 })
-      .lean();
-    source = 'meetingId';
+  if (totalSegments === 0 && recording.meetingId) {
+    const legacyQuery = { meetingId: recording.meetingId };
+    totalSegments = await TranscriptSegment.countDocuments(legacyQuery);
+    if (totalSegments > 0) {
+      segmentQuery.meetingId = recording.meetingId;
+      delete segmentQuery.recordingId;
+      source = 'meetingId';
+    }
   }
+
+  const segments = await TranscriptSegment.find(segmentQuery)
+    .sort({ sequenceNumber: 1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
 
   const meeting =
     (await Meeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean()) ||
@@ -856,7 +869,10 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}) => {
       })),
       createdAt: s.createdAt,
     })),
-    totalSegments: segments.length,
+    totalSegments,
+    page,
+    limit,
+    totalPages: Math.ceil(totalSegments / limit) || 1,
     source,
   };
 };

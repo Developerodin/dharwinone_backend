@@ -22,7 +22,8 @@ const syncFromLiveKit = catchAsync(async (req, res) => {
  * a recording (ordered by sequenceNumber). Empty `segments[]` if none ingested.
  */
 const getTranscript = catchAsync(async (req, res) => {
-  const result = await recordingService.getTranscriptByRecordingId(req.params.recordingId, req.user);
+  const options = pick(req.query, ['page', 'limit']);
+  const result = await recordingService.getTranscriptByRecordingId(req.params.recordingId, req.user, options);
   res.send(result);
 });
 

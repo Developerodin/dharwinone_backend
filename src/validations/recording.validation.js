@@ -18,6 +18,10 @@ const getTranscript = {
   params: Joi.object().keys({
     recordingId: objectId.required(),
   }),
+  query: Joi.object().keys({
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(200),
+  }),
 };
 
 export { listRecordings, getTranscript };

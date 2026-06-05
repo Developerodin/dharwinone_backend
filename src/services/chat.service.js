@@ -169,7 +169,8 @@ const enrichCallForViewer = (call, viewerUserId) => {
 
 const listConversations = async (userId, { page = 1, limit = 20 }) => {
   const skip = (page - 1) * limit;
-  const convs = await Conversation.find({ 'participants.user': new mongoose.Types.ObjectId(userId) })
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const convs = await Conversation.find({ 'participants.user': userObjectId })
     .sort({ lastMessageAt: -1 })
     .skip(skip)
     .limit(limit)
@@ -178,7 +179,7 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     .lean();
 
   const seenGroupKeys = new Set();
-  const result = [];
+  const dedupedConvs = [];
   for (const c of convs) {
     if (c.type === 'group') {
       const participantIds = (c.participants || [])
@@ -190,33 +191,96 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
       if (seenGroupKeys.has(groupKey)) continue;
       seenGroupKeys.add(groupKey);
     }
+    dedupedConvs.push(c);
+  }
 
-    const lastMsg = await Message.findOne({ conversation: c._id }).sort({ createdAt: -1 }).populate('sender', 'name').lean();
-    const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === userId);
-    const unreadCount = myParticipant?.lastReadAt
-      ? await Message.countDocuments({ conversation: c._id, createdAt: { $gt: myParticipant.lastReadAt }, sender: { $ne: userId } })
-      : await Message.countDocuments({ conversation: c._id, sender: { $ne: userId } });
+  const convIds = dedupedConvs.map((c) => c._id);
+  const lastMsgPreview = (lastMsg) => {
+    if (!lastMsg) return null;
+    let content = lastMsg.content;
+    if (lastMsg.type !== 'text') {
+      if (lastMsg.type === 'image') content = '📷 Image';
+      else if (lastMsg.type === 'audio') content = '🎤 Voice note';
+      else content = '📎 File';
+    }
+    return {
+      content,
+      sender: lastMsg.sender?.name,
+      createdAt: lastMsg.createdAt,
+    };
+  };
 
+  const [lastMsgAgg, total] = await Promise.all([
+    convIds.length
+      ? Message.aggregate([
+          { $match: { conversation: { $in: convIds } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$conversation',
+              content: { $first: '$content' },
+              type: { $first: '$type' },
+              sender: { $first: '$sender' },
+              createdAt: { $first: '$createdAt' },
+            },
+          },
+        ])
+      : Promise.resolve([]),
+    Conversation.countDocuments({ 'participants.user': userObjectId }),
+  ]);
+
+  const senderIds = [...new Set(lastMsgAgg.map((m) => m.sender?.toString()).filter(Boolean))];
+  const senders =
+    senderIds.length > 0
+      ? await User.find({ _id: { $in: senderIds.map((id) => new mongoose.Types.ObjectId(id)) } })
+          .select('name')
+          .lean()
+      : [];
+  const senderNameById = new Map(senders.map((s) => [s._id.toString(), s.name]));
+
+  const lastMsgMap = new Map(
+    lastMsgAgg.map((m) => [
+      m._id.toString(),
+      lastMsgPreview({
+        content: m.content,
+        type: m.type,
+        createdAt: m.createdAt,
+        sender: { name: senderNameById.get(m.sender?.toString()) },
+      }),
+    ])
+  );
+
+  const unreadPairs = await Promise.all(
+    dedupedConvs.map(async (c) => {
+      const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === userId);
+      const query = {
+        conversation: c._id,
+        sender: { $ne: userObjectId },
+      };
+      if (myParticipant?.lastReadAt) {
+        query.createdAt = { $gt: myParticipant.lastReadAt };
+      }
+      const count = await Message.countDocuments(query);
+      return [c._id.toString(), count];
+    })
+  );
+  const unreadMap = new Map(unreadPairs);
+
+  const result = dedupedConvs.map((c) => {
+    const cid = c._id.toString();
     const otherParticipants = (c.participants || []).filter((p) => p?.user?._id?.toString() !== userId);
     const displayName = c.type === 'group' ? (c.name || 'Group') : otherParticipants[0]?.user?.name || 'Unknown';
-
-    result.push({
+    return {
       ...c,
-      id: c._id?.toString(),
+      id: cid,
       displayName,
-      lastMessage: lastMsg
-        ? {
-            content: lastMsg.type !== 'text' ? (lastMsg.type === 'image' ? '📷 Image' : '📎 File') : lastMsg.content,
-            sender: lastMsg.sender?.name,
-            createdAt: lastMsg.createdAt,
-          }
-        : null,
-      unreadCount,
-    });
-  }
-  const total = await Conversation.countDocuments({ 'participants.user': new mongoose.Types.ObjectId(userId) });
+      lastMessage: lastMsgMap.get(cid) || null,
+      unreadCount: unreadMap.get(cid) || 0,
+    };
+  });
+
   const enrichedResults = await Promise.all(result.map((r) => formatConversationForClient({ ...r })));
-  return { results: enrichedResults, page, limit, totalPages: Math.ceil(total / limit) };
+  return { results: enrichedResults, page, limit, total, totalPages: Math.ceil(total / limit) || 1 };
 };
 
 const createConversation = async (userId, { type, participantIds, name }) => {
@@ -521,6 +585,7 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
     results,
     page,
     limit,
+    total,
     totalPages: Math.ceil(total / limit),
   };
 };
