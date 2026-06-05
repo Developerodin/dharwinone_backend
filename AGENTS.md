@@ -1,13 +1,13 @@
 <claude-mem-context>
 # Memory Context
 
-# [uat.dharwin.backend] recent context, 2026-06-03 1:09pm GMT+5:30
+# [uat.dharwin.backend] recent context, 2026-06-05 4:11pm GMT+5:30
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (25,860t read) | 2,572,360t work | 99% savings
+Stats: 50 obs (26,437t read) | 2,568,310t work | 99% savings
 
 ### May 20, 2026
 S579 Remove all scripts and tests from uat.dharwin.backend, merge all feature branches into main, delete merged branches, leave unmapped members as-is (May 20, 4:44 PM)
@@ -19,8 +19,6 @@ S582 Fix and deploy resolution for Vercel production build failure on dharwinfro
 3476 1:55p ⚖️ ATS Employees Permission Row — Commit-Order Safety Strategy
 3477 " 🟣 Controller Helpers Rewired: employees.manage + onboarding.manage Accepted for Date Updates
 3478 " 🟣 Migration Script: migrateRole Pure Transform with Verbatim Preservation
-3479 " ⚖️ PR1 Test Strategy: Pure-Function node:test Only, supertest Deferred to PR2
-3480 " 🟣 preFlight: Unknown Permission String Check is Informational, Not Blocking
 3483 1:57p 🔵 permission.service.js: deriveApiPermissions NOT Exported, Rule Confirms ats.employees Auto-Derivation
 3484 " 🔵 permissions.js: Dead Alias Entries Confirmed at Lines 82-95, permissionAliases Already Named-Exported
 3486 1:58p 🔵 Full Baseline Audit: requireAnyOfPermissions Already Imported, bustRoleRegistry Correctly Exported, All Files Match Plan Assumptions
@@ -68,6 +66,9 @@ S582 Fix and deploy resolution for Vercel production build failure on dharwinfro
 4119 " 🔵 RBAC Permission System Architecture in uat.dharwin.backend
 ### Jun 3, 2026
 4263 1:09p 🚨 Security Audit: 5 Critical/High Vulnerabilities Identified in Node/Express/MongoDB Backend
+### Jun 5, 2026
+4446 2:47p ⚖️ Architecture Design Review: Category–Position Mapping for Training LMS
+4447 2:48p 🔵 Training LMS Backend: Full Code Audit of Category–Student–Position Data Layer
 
-Access 2572k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 2568k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
