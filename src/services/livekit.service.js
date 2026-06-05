@@ -38,6 +38,20 @@ if (!apiKey || !apiSecret) {
   logger.warn('[LiveKit] Credentials not configured - token/recording endpoints will fail');
 }
 
+// Fail loud on the classic staging misconfig: LIVEKIT_URL unset → defaults to localhost.
+// Tokens are only SIGNED (no network), so browsers still connect via NEXT_PUBLIC_LIVEKIT_URL
+// and a meeting looks fine — but the server-side roomService/egressClient point at localhost,
+// so every server LiveKit op (start recording → "Room not found", egress status → 500, admit)
+// silently fails. Surface it at boot instead of as confusing per-feature errors.
+if (config.env === 'production' && /localhost|127\.0\.0\.1/.test(livekitUrl)) {
+  logger.error(
+    '[LiveKit] LIVEKIT_URL is unset/localhost in production. Server-side room & egress ops ' +
+      '(recording, admit) WILL FAIL even though browsers connect via NEXT_PUBLIC_LIVEKIT_URL. ' +
+      'Set LIVEKIT_URL to the same LiveKit deployment the frontend uses.',
+    { livekitUrl }
+  );
+}
+
 let egressClient = null;
 let roomService = null;
 
@@ -130,6 +144,9 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   // If true, guest is before scheduled start and room not yet open — still issue a token with canPublish: false
   // so the public /join/room page can connect and show the lobby (instead of HTTP 403 on getPublicLiveKitToken).
   let preStartBlockPublish = false;
+  // Non-hosts: true if the meeting is open (allowGuestJoin) or their email is on the invite
+  // list. Uninvited guests are NOT rejected — they "knock" (blind lobby) and wait for admit.
+  let isInvitedGuest = true;
 
   // Enforce schedule window + capacity + guest policy for scheduled meetings.
   if (meeting) {
@@ -162,7 +179,7 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
       throw new ApiError(httpStatus.GONE, 'Meeting has ended');
     }
 
-    if (!meeting.allowGuestJoin && !hostByEmail) {
+    if (!hostByEmail) {
       const emailLower = String(participantEmail || '').toLowerCase().trim();
       const allowedEmails = new Set();
       (meeting.hosts || []).forEach((h) => {
@@ -173,9 +190,11 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
       });
       if (meeting.candidate?.email) allowedEmails.add(String(meeting.candidate.email).toLowerCase().trim());
       if (meeting.recruiter?.email) allowedEmails.add(String(meeting.recruiter.email).toLowerCase().trim());
-      if (!emailLower || !allowedEmails.has(emailLower)) {
-        throw new ApiError(httpStatus.FORBIDDEN, 'Guest join is disabled for this meeting');
-      }
+      // "Invited" = email is on the meeting's list. Everyone else (uninvited) KNOCKS and
+      // waits for the host — regardless of allowGuestJoin. allowGuestJoin only controls the
+      // guest's UX on the client (auto-knock when true, explicit "Ask for permission" button
+      // when false); it does NOT grant direct entry.
+      isInvitedGuest = !!emailLower && allowedEmails.has(emailLower);
     }
 
     if (!hostByEmail && roomService && Number(meeting.maxParticipants) > 0) {
@@ -201,12 +220,30 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     meeting.admittedIdentities.includes(participantIdentity);
   const isAdmitted = roomAdmitted?.has(participantIdentity) || dbAdmitted || false;
   const approvalRequired = Boolean(meeting?.requireApproval);
+
+  const guestAllowed = Boolean(meeting?.allowGuestJoin);
+
+  // Access model (two toggles):
+  //  - requireApproval = the admit/waiting gate for allowed joiners.
+  //  - allowGuestJoin   = whether uninvited guests are auto-allowed.
+  // Uninvited + guests NOT allowed → they "knock": connect to a BLIND lobby (no publish,
+  // no subscribe) so they surface in the host's waiting list, and must click "Ask for
+  // permission". Host admits (→ admittedIdentities); on re-fetch isAdmitted flips true.
+  // Uninvited + guests allowed → treated like an invitee (auto-join, or wait if approval).
+  const knocking = Boolean(meeting) && !hostByEmail && !isInvitedGuest && !guestAllowed && !isAdmitted;
+
   const canPublish =
-    (forceFullPermissions || hostByEmail || isAdmitted || (meeting ? !approvalRequired : false)) &&
-    !preStartBlockPublish;
+    (forceFullPermissions ||
+      hostByEmail ||
+      isAdmitted ||
+      (meeting ? !approvalRequired && (isInvitedGuest || guestAllowed) : false)) &&
+    !preStartBlockPublish &&
+    !knocking;
+  // Invited waiters keep subscribe (see/hear while waiting); knockers stay blind until admitted.
+  const canSubscribe = !knocking;
   const isHost = hostByEmail;
 
-  logger.info('[LiveKit] Token grants', { roomName, isHost, canPublish, isAdmitted, forceFullPermissions });
+  logger.info('[LiveKit] Token grants', { roomName, isHost, canPublish, canSubscribe, isAdmitted, knocking, forceFullPermissions });
 
   const token = new AccessToken(apiKey, apiSecret, {
     identity: participantIdentity || participantName,
@@ -219,7 +256,7 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     room: roomName,
     roomJoin: true,
     canPublish, // Hosts, admitted users, or meetings with requireApproval=false
-    canSubscribe: true, // All participants can subscribe (see/hear)
+    canSubscribe, // Knockers (uninvited, not yet admitted) are blind until the host admits
     canPublishData: canPublish,
     canUpdateOwnMetadata: true,
   });
@@ -254,7 +291,7 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     })();
   }
 
-  return { token: jwt, isHost, canPublish, meetingEndAt };
+  return { token: jwt, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin: Boolean(meeting?.allowGuestJoin) };
 };
 
 /**

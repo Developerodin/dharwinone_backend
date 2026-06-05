@@ -4,6 +4,7 @@ import * as livekitService from '../services/livekit.service.js';
 import * as chatService from '../services/chat.service.js';
 import * as chatCallService from '../services/chatCall.service.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 
 const parseChatRoomConversationId = (roomName) => {
   if (!roomName || !roomName.startsWith('chat-')) return null;
@@ -157,7 +158,7 @@ const getTokenPublic = catchAsync(async (req, res) => {
   const name = participantName?.trim() || 'Guest';
   const participantIdentity = bodyIdentity?.trim() || `guest-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-  const { token, isHost, canPublish, meetingEndAt } = await livekitService.generateAccessToken({
+  const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
@@ -175,6 +176,8 @@ const getTokenPublic = catchAsync(async (req, res) => {
     isHost,
     canPublish,
     meetingEndAt,
+    knocking, // uninvited guest → client knocks (auto if allowGuestJoin, else "Ask for permission")
+    allowGuestJoin, // true → auto-knock; false → explicit ask-for-permission button
   });
 });
 
@@ -435,9 +438,20 @@ const getRecordingStatusPublic = catchAsync(async (req, res) => {
 
   // Guests need only the recording on/off state for the consent indicator. Egress
   // ids and timestamps are internal metadata — omit them from the unauthenticated view.
-  const result = await livekitService.getRecordingStatus(roomName);
+  // This is a non-critical 5s poll from every participant; if the egress service is
+  // unavailable or errors, degrade to "not recording" instead of 500-spamming the room.
+  let isRecording = false;
+  try {
+    const result = await livekitService.getRecordingStatus(roomName);
+    isRecording = Boolean(result?.isRecording);
+  } catch (error) {
+    logger.warn('[LiveKit] public recording status unavailable; defaulting to not-recording', {
+      roomName,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
 
-  res.status(httpStatus.OK).json({ isRecording: Boolean(result?.isRecording) });
+  res.status(httpStatus.OK).json({ isRecording });
 });
 
 export { 
