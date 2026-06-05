@@ -129,7 +129,15 @@ const punchIn = async (studentId, body = {}) => {
 
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const effectiveTz = student.shift?.timezone || timezone;
+  // Mirror the policy's effective-timezone resolution (student shift → employee shift →
+  // request tz) so the row is filed under the exact weekday the policy validated. A
+  // mismatch here is what lets a night-shift punch-in succeed but its punch-out be
+  // blocked as a "week-off day". See punchInByUser for the same fix.
+  const ownerUserId = student.user?._id || student.user || null;
+  const employeeForTz = ownerUserId
+    ? await Employee.findOne({ owner: ownerUserId }).populate('shift', 'timezone').lean()
+    : null;
+  const effectiveTz = student.shift?.timezone || employeeForTz?.shift?.timezone || timezone;
   const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, effectiveTz);
 
   // Attendance starts from joining date (if set)
@@ -463,7 +471,14 @@ const punchInByUser = async (userId, body = {}) => {
 
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, timezone);
+  // Compute the attendance day with the SAME effective timezone the policy used to
+  // validate this punch-in (shift tz, falling back to the request tz). Otherwise the
+  // policy can validate one weekday (shift tz) while the row is filed under another
+  // (request tz). A night-shift worker would then punch in fine but get blocked at
+  // punch-out, because punch-out re-reads the week-off check from the misfiled row.
+  const employeeForTz = await Employee.findOne({ owner: userId }).populate('shift', 'timezone').lean();
+  const effectiveTz = employeeForTz?.shift?.timezone || timezone;
+  const { midnight: attendanceDate, day } = getLocalMidnightAndDay(punchInTime, effectiveTz);
 
   const existing = await Attendance.findOne({
     user: userId,
