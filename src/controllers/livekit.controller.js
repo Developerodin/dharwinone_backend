@@ -436,14 +436,19 @@ const getRecordingStatusPublic = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
   }
 
-  // Guests need only the recording on/off state for the consent indicator. Egress
-  // ids and timestamps are internal metadata — omit them from the unauthenticated view.
+  // Guests need the on/off state for the consent indicator; the host also needs the
+  // active egressId so they can stop a recording they didn't start in this browser
+  // session (after a refresh, rejoin, or control-bar remount the client otherwise has
+  // no egressId and "stop" fails with "No active recording found"). The egressId is an
+  // opaque handle and stopping is host-auth-gated, so exposing it here is safe.
   // This is a non-critical 5s poll from every participant; if the egress service is
   // unavailable or errors, degrade to "not recording" instead of 500-spamming the room.
   let isRecording = false;
+  let recordings = [];
   try {
     const result = await livekitService.getRecordingStatus(roomName);
     isRecording = Boolean(result?.isRecording);
+    recordings = Array.isArray(result?.recordings) ? result.recordings : [];
   } catch (error) {
     logger.warn('[LiveKit] public recording status unavailable; defaulting to not-recording', {
       roomName,
@@ -451,7 +456,7 @@ const getRecordingStatusPublic = catchAsync(async (req, res) => {
     });
   }
 
-  res.status(httpStatus.OK).json({ isRecording });
+  res.status(httpStatus.OK).json({ isRecording, recordings });
 });
 
 export { 
