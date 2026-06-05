@@ -32,7 +32,9 @@ const OFFER_LETTER_FIELD_KEYS = [
   'weeklyHours',
   'workLocation',
   'roleResponsibilities',
+  'positionOverviewHtml',
   'trainingOutcomes',
+  'trainingOutcomesHtml',
   'compensationNarrative',
   'academicAlignmentNote',
   'employmentEligibilityLines',
@@ -146,10 +148,12 @@ const applyLetterFieldsFromUpdate = (offer, updateBody) => {
     offer.roleResponsibilities = Array.isArray(updateBody.roleResponsibilities) ? updateBody.roleResponsibilities : [];
     delete updateBody.roleResponsibilities;
   }
+  take('positionOverviewHtml');
   if (updateBody.trainingOutcomes !== undefined) {
     offer.trainingOutcomes = Array.isArray(updateBody.trainingOutcomes) ? updateBody.trainingOutcomes : [];
     delete updateBody.trainingOutcomes;
   }
+  take('trainingOutcomesHtml');
   take('compensationNarrative');
   take('academicAlignmentNote');
   if (updateBody.employmentEligibilityLines !== undefined) {
@@ -427,7 +431,9 @@ const createOffer = async (jobApplicationId, payload, userId) => {
     ...([25, 40].includes(payload.weeklyHours) && { weeklyHours: payload.weeklyHours }),
     ...(payload.workLocation != null && { workLocation: payload.workLocation }),
     ...(Array.isArray(payload.roleResponsibilities) && { roleResponsibilities: payload.roleResponsibilities }),
+    ...(payload.positionOverviewHtml != null && { positionOverviewHtml: payload.positionOverviewHtml }),
     ...(Array.isArray(payload.trainingOutcomes) && { trainingOutcomes: payload.trainingOutcomes }),
+    ...(payload.trainingOutcomesHtml != null && { trainingOutcomesHtml: payload.trainingOutcomesHtml }),
     ...(payload.compensationNarrative != null && { compensationNarrative: payload.compensationNarrative }),
     ...(payload.academicAlignmentNote != null && { academicAlignmentNote: payload.academicAlignmentNote }),
     ...(Array.isArray(payload.employmentEligibilityLines) && { employmentEligibilityLines: payload.employmentEligibilityLines }),

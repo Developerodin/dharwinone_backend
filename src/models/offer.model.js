@@ -96,7 +96,11 @@ const offerSchema = new mongoose.Schema(
     weeklyHours: { type: Number, enum: [25, 40], default: 40 },
     workLocation: { type: String, trim: true, default: 'Remote (USA)' },
     roleResponsibilities: [{ type: String, trim: true }],
+    /** Rich HTML for Position Overview (Tiptap); rendered in letter preview/print. */
+    positionOverviewHtml: { type: String, trim: true },
     trainingOutcomes: [{ type: String, trim: true }],
+    /** Rich HTML for Training & Learning Outcomes (Tiptap); rendered in intern letter preview/print. */
+    trainingOutcomesHtml: { type: String, trim: true },
     /** Paid roles: full compensation sentence; optional if gross CTC is set */
     compensationNarrative: { type: String, trim: true },
     /** e.g. degree alignment (paid template) */
