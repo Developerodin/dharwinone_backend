@@ -49,8 +49,11 @@ const internalMeetingSchema = mongoose.Schema(
       default: 10,
     },
     allowGuestJoin: {
+      // Invite-only by default — see meeting.model.js. When false the public token
+      // path enforces the invite list (hosts + emailInvites), so a bare meeting URL
+      // alone cannot join. Set true only to deliberately open the link to anyone.
       type: Boolean,
-      default: true,
+      default: false,
     },
     requireApproval: {
       type: Boolean,

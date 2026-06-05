@@ -63,7 +63,7 @@ const createMeeting = {
       agents: Joi.array().items(agentRefSchema).default([]),
       durationMinutes: Joi.number().integer().min(1).max(480).default(60),
       maxParticipants: Joi.number().integer().min(1).max(100).default(10),
-      allowGuestJoin: Joi.boolean().default(true),
+      allowGuestJoin: Joi.boolean().default(false), // invite-only by default; opt in to open the link to anyone
       requireApproval: Joi.boolean().default(false),
       hosts: Joi.array().items(hostSchema).min(1).required().messages({
         'array.min': 'At least one host with email is required',
