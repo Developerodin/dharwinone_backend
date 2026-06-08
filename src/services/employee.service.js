@@ -20,6 +20,7 @@ import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { resolveCompanyEmailSettingsUserId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -1363,6 +1364,12 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   } else if (positionProvided && sanitized.position && !designationProvided) {
     const posDoc = await Position.findById(sanitized.position).select('name').lean();
     if (posDoc?.name) sanitized.designation = posDoc.name;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(sanitized, 'departmentId')) {
+    await setEmployeeDepartment(candidate, sanitized.departmentId ?? null);
+    delete sanitized.departmentId;
+    delete sanitized.department;
   }
 
   const prevJoinMs =

@@ -257,6 +257,7 @@ const updateCandidateBodyBase = {
   supervisorContact: Joi.string().allow('', null),
   supervisorCountryCode: Joi.string().allow('', null),
   department: Joi.string().trim().optional().allow('', null),
+  departmentId: Joi.string().custom(objectId).optional().allow(null),
   designation: Joi.string().trim().optional().allow('', null),
   position: Joi.string().custom(objectId).optional().allow(null),
   reportingManager: Joi.string().custom(objectId).optional().allow(null),

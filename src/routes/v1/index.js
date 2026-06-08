@@ -64,6 +64,8 @@ import hrmWebRtcRoute from './hrmWebRtc.route.js';
 import chatAssistantRoute from './chatAssistant.route.js';
 import sprintRoute from './sprint.route.js';
 import featureFlagRoute from './featureFlag.route.js';
+import departmentRoute from './department.route.js';
+import orgStructureRoute from './orgStructure.route.js';
 
 /**
  * RBAC inventory: Most mounted routers use requirePermissions (see each *.route.js).
@@ -334,6 +336,14 @@ const defaultRoutes = [
   {
     path: '/feature-flags',
     route: featureFlagRoute,
+  },
+  {
+    path: '/departments',
+    route: departmentRoute,
+  },
+  {
+    path: '/org-structure',
+    route: orgStructureRoute,
   },
 ];
 

@@ -202,6 +202,8 @@ const employeeSchema = new mongoose.Schema(
     ],
     shift: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift', default: null, index: true },
     department: { type: String, trim: true, index: true },
+    /** Managed Department ref (Organization module). Kept in sync with `department` via setEmployeeDepartment(). */
+    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null, index: true },
     designation: { type: String, trim: true, index: true },
     /**
      * Compensation snapshot — FROZEN at offer-acceptance time. Mirrored once from
