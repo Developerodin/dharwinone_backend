@@ -21,6 +21,101 @@ import {
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Matches jobs with no meaningful salary (same semantics as ATS "Not specified"). */
+const SALARY_NOT_SPECIFIED_CLAUSE = {
+  $or: [
+    { salaryRange: { $exists: false } },
+    { salaryRange: null },
+    {
+      $and: [
+        { $or: [{ 'salaryRange.min': { $exists: false } }, { 'salaryRange.min': null }] },
+        { $or: [{ 'salaryRange.max': { $exists: false } }, { 'salaryRange.max': null }] },
+      ],
+    },
+    { $and: [{ 'salaryRange.min': 0 }, { 'salaryRange.max': 0 }] },
+  ],
+};
+
+const DEFAULT_SALARY_FILTER_MAX = 200000;
+
+/** Keys that are request context, not Job document fields — never snapshot into $and. */
+const JOB_QUERY_META_KEYS = new Set([
+  'userRoleIds',
+  'userId',
+  'platformSuperUser',
+  'forCandidates',
+  'salaryNotSpecified',
+  'salaryMin',
+  'salaryMax',
+]);
+
+const stripJobQueryMeta = (obj) => {
+  const cleaned = { ...obj };
+  JOB_QUERY_META_KEYS.forEach((key) => {
+    delete cleaned[key];
+  });
+  return cleaned;
+};
+
+/** Merge an extra constraint into a Mongo filter (preserves existing $and / field clauses). */
+const appendFilterClause = (filter, clause) => {
+  if (filter.$and) {
+    filter.$and.push(clause);
+    return;
+  }
+  const snapshot = stripJobQueryMeta(filter);
+  Object.keys(filter).forEach((k) => delete filter[k]);
+  if (Object.keys(snapshot).length === 0) {
+    Object.assign(filter, clause);
+    return;
+  }
+  filter.$and = [snapshot, clause];
+};
+
+/** Overlap filter: job salary range intersects [filterMin, filterMax]; unspecified jobs excluded. */
+const buildSalaryRangeOverlapClause = (filterMin, filterMax) => ({
+  $and: [
+    { $nor: [SALARY_NOT_SPECIFIED_CLAUSE] },
+    {
+      $expr: {
+        $let: {
+          vars: {
+            jobMin: { $ifNull: ['$salaryRange.min', 0] },
+            jobMax: {
+              $ifNull: ['$salaryRange.max', { $ifNull: ['$salaryRange.min', 0] }],
+            },
+          },
+          in: {
+            $and: [{ $lte: ['$$jobMin', filterMax] }, { $gte: ['$$jobMax', filterMin] }],
+          },
+        },
+      },
+    },
+  ],
+});
+
+const applyJobSalaryQueryFilters = (filter, salaryOpts = {}) => {
+  const notSpecified =
+    salaryOpts.salaryNotSpecified === true || salaryOpts.salaryNotSpecified === 'true';
+  const minRaw = salaryOpts.salaryMin;
+  const maxRaw = salaryOpts.salaryMax;
+
+  if (notSpecified) {
+    appendFilterClause(filter, SALARY_NOT_SPECIFIED_CLAUSE);
+    return;
+  }
+
+  const min = minRaw !== undefined && minRaw !== '' ? Number(minRaw) : null;
+  const max = maxRaw !== undefined && maxRaw !== '' ? Number(maxRaw) : null;
+  const minActive = min != null && Number.isFinite(min) && min > 0;
+  const maxActive = max != null && Number.isFinite(max) && max < DEFAULT_SALARY_FILTER_MAX;
+  if (!minActive && !maxActive) return;
+
+  const filterMin = minActive ? min : 0;
+  const filterMax = maxActive ? max : DEFAULT_SALARY_FILTER_MAX;
+  appendFilterClause(filter, buildSalaryRangeOverlapClause(filterMin, filterMax));
+};
+
 /** Matches mirrored external listings in Job (explicit origin or legacy externalRef-only rows). */
 const MIRROR_EXTERNAL_OR = {
   $or: [
@@ -175,6 +270,15 @@ const queryJobs = async (filter, options) => {
 
   await maybeRepairMirrorsForList(jobOriginMode);
 
+  const salaryQueryOpts = {
+    salaryNotSpecified: filter.salaryNotSpecified,
+    salaryMin: filter.salaryMin,
+    salaryMax: filter.salaryMax,
+  };
+  delete filter.salaryNotSpecified;
+  delete filter.salaryMin;
+  delete filter.salaryMax;
+
   // Handle search query
   if (filter.search) {
     const searchRegex = new RegExp(escapeRegex(filter.search), 'i');
@@ -204,6 +308,7 @@ const queryJobs = async (filter, options) => {
       filter.$and = [{ status }, MIRROR_EXTERNAL_OR];
     }
 
+    applyJobSalaryQueryFilters(filter, salaryQueryOpts);
     const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
     return result;
   }
@@ -245,6 +350,7 @@ const queryJobs = async (filter, options) => {
         : { ...rest, ...visibilityClause };
     }
 
+    applyJobSalaryQueryFilters(finalFilter, salaryQueryOpts);
     const result = await Job.paginate(finalFilter, { ...options, populate: LIST_JOBS_POPULATE });
     return result;
   }
@@ -262,6 +368,7 @@ const queryJobs = async (filter, options) => {
     filter.$and = clauses;
   }
 
+  applyJobSalaryQueryFilters(filter, salaryQueryOpts);
   const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
   return result;
 };

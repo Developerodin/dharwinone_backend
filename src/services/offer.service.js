@@ -3,6 +3,7 @@ import httpStatus from 'http-status';
 import Offer from '../models/offer.model.js';
 import Job from '../models/job.model.js';
 import Placement from '../models/placement.model.js';
+import Position from '../models/position.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
@@ -87,6 +88,66 @@ const formatStartDate = (d) => {
   if (Number.isNaN(x.getTime())) return 'TBD';
   const mon = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(x);
   return `${ordinalDay(x.getDate())} ${mon}, ${x.getFullYear()}`;
+};
+
+/** Strip HTML to plain lines (offer letter fallback when flat arrays are empty). */
+const htmlToLines = (html) =>
+  String(html || '')
+    .replace(/<\/(p|div|li|ul|ol|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .split('\n')
+    .map((l) => l.replace(/^[\s•\-*]+/, '').trim())
+    .filter(Boolean);
+
+/**
+ * Placement-linked accepted offer for a candidate (canonical pipeline record).
+ */
+const resolvePlacementLinkedAcceptedOffer = async (candidateId) => {
+  if (!candidateId) return null;
+  const placement = await Placement.findOne({
+    candidate: candidateId,
+    status: { $ne: 'Cancelled' },
+  })
+    .sort({ updatedAt: -1 })
+    .select('offer')
+    .lean();
+  if (!placement?.offer) return null;
+  const offer = await Offer.findById(placement.offer);
+  if (!offer || offer.status !== 'Accepted') return null;
+  return offer;
+};
+
+const resolvePositionIdFromDesignationTitle = async (title) => {
+  const trimmed = String(title || '').trim();
+  if (!trimmed) return null;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nameRegex = new RegExp(`^${escaped}$`, 'i');
+  let existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
+  if (existing?._id) return existing._id;
+  try {
+    const created = await Position.create({ name: trimmed });
+    return created._id;
+  } catch {
+    existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
+    return existing?._id ?? null;
+  }
+};
+
+/** When Accepted offer positionTitle changes, mirror to Employee designation + position. */
+const syncDesignationFromAcceptedOfferToEmployee = async (offer) => {
+  if (!offer || offer.status !== 'Accepted') return;
+  const title = (offer.positionTitle || '').trim();
+  if (!title) return;
+  const cand = offer.candidate && typeof offer.candidate === 'object' && offer.candidate !== null
+    ? offer.candidate._id ?? offer.candidate.id
+    : offer.candidate;
+  if (!cand) return;
+  const positionId = await resolvePositionIdFromDesignationTitle(title);
+  await Employee.findByIdAndUpdate(cand, {
+    designation: title,
+    ...(positionId ? { position: positionId } : {}),
+  });
 };
 
 /**
@@ -195,8 +256,23 @@ const toLetterContext = (offer) => {
   const hasSup = s && (s.firstName || s.lastName || s.email || s.phone);
   /** Same supervisor defaults as paid letters — Word template includes supervisor for all offer types. */
   const supFinal = { ...DEFAULT_SUPERVISOR, ...(hasSup ? s : {}) };
-  const roleBullets = Array.isArray(offer.roleResponsibilities) ? offer.roleResponsibilities.map((x) => String(x)) : [];
-  const trainingBullets = Array.isArray(offer.trainingOutcomes) ? offer.trainingOutcomes.map((x) => String(x)) : [];
+  const positionOverviewHtml = (offer.positionOverviewHtml && String(offer.positionOverviewHtml).trim()) || '';
+  const trainingOutcomesHtml = (offer.trainingOutcomesHtml && String(offer.trainingOutcomesHtml).trim()) || '';
+  // The offer letter is rendered FE-side from the rich *Html fields (nested
+  // ul/ol/li + bold preserved). This BE context is validation-only and is also
+  // passed through raw via positionOverviewHtml/trainingOutcomesHtml below.
+  // Prefer the canonical HTML source for the bullet check, falling back to the
+  // flat arrays only when no HTML is present (C2).
+  const roleBullets = positionOverviewHtml
+    ? htmlToLines(positionOverviewHtml)
+    : Array.isArray(offer.roleResponsibilities)
+      ? offer.roleResponsibilities.map((x) => String(x))
+      : [];
+  const trainingBullets = trainingOutcomesHtml
+    ? htmlToLines(trainingOutcomesHtml)
+    : Array.isArray(offer.trainingOutcomes)
+      ? offer.trainingOutcomes.map((x) => String(x))
+      : [];
   return {
     isIntern,
     jobType: jt,
@@ -208,6 +284,8 @@ const toLetterContext = (offer) => {
     workLocation: offer.workLocation || 'Remote (USA)',
     roleBullets,
     trainingBullets: isIntern ? trainingBullets : undefined,
+    positionOverviewHtml: positionOverviewHtml || undefined,
+    trainingOutcomesHtml: isIntern && trainingOutcomesHtml ? trainingOutcomesHtml : undefined,
     compensation: isIntern ? undefined : comp,
     supervisor: supFinal,
     academicNote: offer.academicAlignmentNote,
@@ -734,6 +812,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   await offer.save();
 
   await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
+  await syncDesignationFromAcceptedOfferToEmployee(offer);
 
   return getOfferById(offer._id);
 };
@@ -779,6 +858,7 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
   await offer.save();
 
   await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
+  await syncDesignationFromAcceptedOfferToEmployee(offer);
 };
 
 /**
@@ -798,7 +878,7 @@ const queryOffers = async (filter, options, currentUser) => {
     ? new mongoose.Types.ObjectId(String(rawUserId))
     : rawUserId;
 
-  if (!isAdmin && userId) {
+  if (!isAdmin && userId && !hasOfferPipelinePerm(currentUser)) {
     const Job = (await import('../models/job.model.js')).default;
     const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
     const myJobIds = myJobs.map((j) => j._id);
@@ -1017,14 +1097,6 @@ const MAX_ROLE_RESPONSIBILITIES = 12;
  * Derive offer-letter role responsibilities from the selected job.
  * Precedence: job description (one bullet per line) → skillRequirements summary → [].
  */
-const htmlToLines = (html) =>
-  String(html || '')
-    .replace(/<\/(p|div|li|ul|ol|h[1-6])>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .split('\n')
-    .map((l) => l.replace(/^[\s•\-*]+/, '').trim())
-    .filter(Boolean);
 
 /** Heading text that marks the start of the responsibilities section in a JD. */
 const RESP_HEADING_RE =
@@ -1180,5 +1252,6 @@ export {
   generateOfferLetter,
   getLetterDefaultsForTitle,
   shareOfferWithCandidate,
+  syncJoiningDateFromAcceptedOfferToPlacementAndEmployee,
   STATUS_VALUES,
 };

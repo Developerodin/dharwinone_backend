@@ -79,6 +79,9 @@ const list = catchAsync(async (req, res) => {
     'search',
     'forCandidates',
     'jobOrigin',
+    'salaryMin',
+    'salaryMax',
+    'salaryNotSpecified',
   ]);
 
   filter.userRoleIds = req.user.roleIds || [];

@@ -209,23 +209,9 @@ const punchOut = async (studentId, body = {}) => {
   }
   const notes = body.notes != null ? String(body.notes) : '';
 
-  const now = new Date();
-  const effectiveTz = student.shift?.timezone || 'UTC';
-  const { midnight: today } = getLocalMidnightAndDay(now, effectiveTz);
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const yesterday = new Date(today);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const dayBefore = new Date(today);
-  dayBefore.setUTCDate(dayBefore.getUTCDate() - 2);
-
-  const active = await Attendance.findOne({
-    student: studentId,
-    date: { $in: [tomorrow, today, yesterday, dayBefore] },
-    punchOut: null,
-    isActive: true,
-    status: { $nin: ['Holiday', 'Leave'] },
-  }).sort({ punchIn: -1 });
+  const active = policyDecision.activeRecord
+    ? await Attendance.findById(policyDecision.activeRecord._id)
+    : null;
 
   if (!active) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'No active punch-in found to punch out', true, '', 'NO_ACTIVE_PUNCH');

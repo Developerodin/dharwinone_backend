@@ -1,13 +1,13 @@
 <claude-mem-context>
 # Memory Context
 
-# [uat.dharwin.backend] recent context, 2026-06-05 4:11pm GMT+5:30
+# [uat.dharwin.backend] recent context, 2026-06-08 11:15am GMT+5:30
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (26,437t read) | 2,568,310t work | 99% savings
+Stats: 50 obs (27,210t read) | 2,511,253t work | 99% savings
 
 ### May 20, 2026
 S579 Remove all scripts and tests from uat.dharwin.backend, merge all feature branches into main, delete merged branches, leave unmapped members as-is (May 20, 4:44 PM)
@@ -16,11 +16,7 @@ S580 Remove all scripts and tests, merge all branches into main — executed acr
 S581 Fix Vercel production build failure on dharwinfrontend caused by impure CSS Modules selectors in the kanban board feature (May 20, 4:49 PM)
 S582 Fix and deploy resolution for Vercel production build failure on dharwinfrontend — CSS Modules purity violation in kanban board styles (May 20, 4:59 PM)
 ### May 28, 2026
-3476 1:55p ⚖️ ATS Employees Permission Row — Commit-Order Safety Strategy
-3477 " 🟣 Controller Helpers Rewired: employees.manage + onboarding.manage Accepted for Date Updates
-3478 " 🟣 Migration Script: migrateRole Pure Transform with Verbatim Preservation
-3483 1:57p 🔵 permission.service.js: deriveApiPermissions NOT Exported, Rule Confirms ats.employees Auto-Derivation
-3484 " 🔵 permissions.js: Dead Alias Entries Confirmed at Lines 82-95, permissionAliases Already Named-Exported
+3484 1:57p 🔵 permissions.js: Dead Alias Entries Confirmed at Lines 82-95, permissionAliases Already Named-Exported
 3486 1:58p 🔵 Full Baseline Audit: requireAnyOfPermissions Already Imported, bustRoleRegistry Correctly Exported, All Files Match Plan Assumptions
 3487 " 🔵 requireAnyOfPermissions Goes Through Alias Expansion — employees.manage Has No Alias Entry, Checks Derived Key Directly
 3488 " 🔵 bustRoleRegistry Is Synchronous — Migration await Call Is Harmless No-Op
@@ -69,6 +65,11 @@ S582 Fix and deploy resolution for Vercel production build failure on dharwinfro
 ### Jun 5, 2026
 4446 2:47p ⚖️ Architecture Design Review: Category–Position Mapping for Training LMS
 4447 2:48p 🔵 Training LMS Backend: Full Code Audit of Category–Student–Position Data Layer
+### Jun 8, 2026
+4590 10:39a 🔵 RBAC Granular-CRUD Migration Half-Finished — 6 Active Backend Bugs Identified
+4610 11:06a 🔴 Night-Shift Punch-Out: Policy Checks Now Keyed Off Session Day, Not Wall-Clock Day
+4611 " 🔐 Security Review: 4-Day Stale Session Window and Unvalidated studentId in MongoDB Query
+4612 " 🔄 Test Mock for Attendance.findOne Now Routes by Query Shape
 
-Access 2568k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 2511k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

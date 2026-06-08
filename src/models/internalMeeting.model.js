@@ -37,7 +37,7 @@ const internalMeetingSchema = mongoose.Schema(
     timezone: {
       type: String,
       trim: true,
-      default: 'Asia/Calcutta',
+      default: 'UTC',
     },
     durationMinutes: {
       type: Number,

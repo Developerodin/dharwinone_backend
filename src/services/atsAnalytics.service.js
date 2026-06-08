@@ -12,6 +12,80 @@ const TIME_BUCKETS = 12;
 
 const RANGE_DAYS = { '7d': 7, '30d': 30, '3m': 90, '12m': 365 };
 
+/** Leaderboard rows returned for the analytics card. */
+const RECRUITER_LEADERBOARD_SIZE = 5;
+
+const emptyLeaderboardEntry = (user) => ({
+  recruiter: { id: user._id, name: user.name, email: user.email },
+  activities: [],
+  totalActivities: 0,
+});
+
+/**
+ * Top activity rows first, then pad with recruiter-role users, job creators, and assignees
+ * so the leaderboard can show up to RECRUITER_LEADERBOARD_SIZE names.
+ */
+async function buildRecruiterLeaderboard(summary, { limit = RECRUITER_LEADERBOARD_SIZE, jobMatch = {}, isRecruiter = false } = {}) {
+  const sorted = [...(summary || [])].sort((a, b) => b.totalActivities - a.totalActivities);
+  if (isRecruiter) return sorted.slice(0, limit);
+
+  const seen = new Set(sorted.map((s) => String(s.recruiter?.id)).filter(Boolean));
+  const result = sorted.slice(0, limit);
+
+  const appendUser = (user) => {
+    if (!user?._id || result.length >= limit) return;
+    const id = String(user._id);
+    if (seen.has(id)) return;
+    seen.add(id);
+    result.push(emptyLeaderboardEntry(user));
+  };
+
+  if (result.length < limit) {
+    const Role = (await import('../models/role.model.js')).default;
+    const atsStaffRoles = await Role.find({
+      name: { $in: ['Administrator', 'Agent', 'agent', 'Recruiter', 'Manager'] },
+      status: 'active',
+    })
+      .select('_id')
+      .lean();
+    if (atsStaffRoles.length) {
+      const roleIds = atsStaffRoles.map((r) => r._id);
+      const staff = await User.find({ roleIds: { $in: roleIds }, status: 'active' })
+        .select('name email _id')
+        .sort({ name: 1 })
+        .lean();
+      for (const u of staff) appendUser(u);
+    }
+  }
+
+  if (result.length < limit) {
+    const creatorIds = await Job.distinct('createdBy', { ...jobMatch, createdBy: { $ne: null } });
+    if (creatorIds.length) {
+      const creators = await User.find({ _id: { $in: creatorIds }, status: 'active' })
+        .select('name email _id')
+        .sort({ name: 1 })
+        .lean();
+      for (const u of creators) appendUser(u);
+    }
+  }
+
+  if (result.length < limit) {
+    const assigneeIds = await Employee.distinct('assignedRecruiter', {
+      assignedRecruiter: { $ne: null },
+      isActive: { $ne: false },
+    });
+    if (assigneeIds.length) {
+      const assignees = await User.find({ _id: { $in: assigneeIds }, status: 'active' })
+        .select('name email _id')
+        .sort({ name: 1 })
+        .lean();
+      for (const u of assignees) appendUser(u);
+    }
+  }
+
+  return result.slice(0, limit);
+}
+
 function getDateRange(range) {
   if (!range || !RANGE_DAYS[range]) return null;
   const days = RANGE_DAYS[range];
@@ -221,6 +295,11 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     };
   }
 
+  const leaderboard = await buildRecruiterLeaderboard(recruiterActivitySummary, {
+    jobMatch,
+    isRecruiter,
+  });
+
   return {
     totals: {
       totalCandidates: Number(totalCandidates),
@@ -241,7 +320,7 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     applicationStatusBreakdown: applicationStatusAgg || [],
     topJobsByApplications: topJobsAgg || [],
     recruiterActivityStats,
-    recruiterActivitySummary: recruiterActivitySummary || [],
+    recruiterActivitySummary: leaderboard,
     range: options.range || null,
   };
 };

@@ -65,6 +65,8 @@ const letterDefaults = catchAsync(async (req, res) => {
     const job = await jobService.getJobById(req.query.jobId);
     const derived = deriveRoleResponsibilities(job);
     if (derived.length) base.roleResponsibilities = derived;
+    const jobDesc = typeof job?.jobDescription === 'string' ? job.jobDescription.trim() : '';
+    if (jobDesc) base.positionOverviewHtml = jobDesc;
   }
   res.send(base);
 });

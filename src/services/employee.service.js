@@ -8,6 +8,8 @@ import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import Token from '../models/token.model.js';
 import Offer from '../models/offer.model.js';
+import Placement from '../models/placement.model.js';
+import { syncJoiningDateFromAcceptedOfferToPlacementAndEmployee } from './offer.service.js';
 import { createUser, getUserByEmail, updateUserById, getUserById } from './user.service.js';
 import { generateVerifyEmailToken } from './token.service.js';
 import { sendVerificationEmail } from './email.service.js';
@@ -1389,9 +1391,45 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     await tryPromoteCandidateOwnerAfterJoiningDateSaved(candidate.owner, candidate.joiningDate, candidate._id);
   }
 
+  // A joiningDate edit through the general candidate PATCH must also write the
+  // canonical Accepted offer + run the pipeline sync — otherwise the placement
+  // reconciler reverts Employee.joiningDate to the offer date on next read (B5).
+  // Mirrors updateJoiningDate's placement-linked resolution; no-op without one.
+  if (joiningUpdated) {
+    const jdPlacement = await Placement.findOne({ candidate: id, status: { $ne: 'Cancelled' } })
+      .sort({ updatedAt: -1 })
+      .select('offer')
+      .lean();
+    if (jdPlacement?.offer) {
+      const jdOffer = await Offer.findById(jdPlacement.offer);
+      if (jdOffer?.status === 'Accepted') {
+        jdOffer.joiningDate = candidate.joiningDate ? new Date(candidate.joiningDate) : null;
+        await jdOffer.save();
+        await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(jdOffer);
+      }
+    }
+  }
+
   await syncReferralPipelineStatusForCandidate(candidate._id).catch((err) =>
     logger.warn('syncReferralPipelineStatusForCandidate:', err?.message)
   );
+
+  if (designationProvided || positionProvided) {
+    const placement = await Placement.findOne({ candidate: id, status: { $ne: 'Cancelled' } })
+      .sort({ updatedAt: -1 })
+      .select('offer')
+      .lean();
+    if (placement?.offer) {
+      const linkedOffer = await Offer.findById(placement.offer);
+      if (linkedOffer?.status === 'Accepted') {
+        const newTitle = (candidate.designation || '').trim();
+        if (newTitle && newTitle !== (linkedOffer.positionTitle || '').trim()) {
+          linkedOffer.positionTitle = newTitle;
+          await linkedOffer.save();
+        }
+      }
+    }
+  }
 
   if (Object.prototype.hasOwnProperty.call(sanitized, 'companyAssignedEmail')) {
     await syncCompanyEmailHubForCandidate(candidate);
@@ -2789,8 +2827,41 @@ const updateJoiningDate = async (candidateId, joiningDate, user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Joining date cannot be after resign date');
   }
 
-  // Allow clearing joining date (setting to null)
-  candidate.joiningDate = joiningDate ? new Date(joiningDate) : null;
+  const jd = joiningDate ? new Date(joiningDate) : null;
+  const placement = await Placement.findOne({ candidate: candidateId, status: { $ne: 'Cancelled' } })
+    .sort({ updatedAt: -1 })
+    .select('offer')
+    .lean();
+
+  if (placement?.offer) {
+    const linkedOffer = await Offer.findById(placement.offer);
+    if (linkedOffer?.status === 'Accepted') {
+      linkedOffer.joiningDate = jd;
+      await linkedOffer.save();
+      await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(linkedOffer);
+      await candidate.populate([
+        { path: 'owner', select: 'name email' },
+        { path: 'adminId', select: 'name email' },
+      ]);
+      const refreshed = await Employee.findById(candidateId);
+      const student = await Student.findOne({ user: refreshed.owner });
+      if (student) {
+        student.joiningDate = refreshed.joiningDate;
+        await student.save();
+      }
+      if (refreshed.joiningDate) {
+        await tryPromoteCandidateOwnerAfterJoiningDateSaved(refreshed.owner, refreshed.joiningDate, refreshed._id);
+      }
+      await refreshed.populate([
+        { path: 'owner', select: 'name email' },
+        { path: 'adminId', select: 'name email' },
+      ]);
+      return refreshed;
+    }
+  }
+
+  // No placement-linked accepted offer — update employee directly
+  candidate.joiningDate = jd;
   await candidate.save();
 
   // Sync joiningDate to Student if user has a Student profile (for attendance)

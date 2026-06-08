@@ -23,6 +23,16 @@ const resolveInviteeDisplayName = (meeting, emailAddress) => {
   return local || 'Guest';
 };
 
+const formatMeetingScheduledLocal = (scheduledAt, timezone) => {
+  if (!scheduledAt) return 'TBD';
+  const tz = timezone && String(timezone).trim() ? String(timezone).trim() : 'UTC';
+  try {
+    return new Date(scheduledAt).toLocaleString('en-US', { timeZone: tz });
+  } catch {
+    return new Date(scheduledAt).toLocaleString('en-US');
+  }
+};
+
 const getInvitationEmails = (meeting) => {
   const set = new Set();
   (meeting.hosts || []).forEach((h) => {
@@ -62,7 +72,7 @@ const createInternalMeeting = async (body, userId) => {
   meetingObj.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
 
   const emails = getInvitationEmails(meeting);
-  const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
+  const scheduled = formatMeetingScheduledLocal(meeting.scheduledAt, meeting.timezone);
   const hostName = meeting.hosts?.[0]?.nameOrRole || '';
 
   emails.forEach((to) => {
@@ -154,7 +164,7 @@ const resendInternalMeetingInvitations = async (id) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
   const emails = getInvitationEmails(meeting);
-  const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
+  const scheduled = formatMeetingScheduledLocal(meeting.scheduledAt, meeting.timezone);
   let sent = 0;
   const { notifyByEmail } = await import('./notification.service.js');
   const hostName = meeting.hosts?.[0]?.nameOrRole || '';

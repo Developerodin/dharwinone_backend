@@ -32,6 +32,11 @@ const canReadCandidateDocuments = [
 /** Granular write gates — candidates.manage retains full legacy bundle access. */
 const canCreateEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.create')];
 const canEditEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.edit')];
+/** Onboarding "Employee & role" PATCH — scoped to record update only (not canMutateEmployees). */
+const canEditEmployeeRecord = [
+  auth(),
+  requireAnyOfPermissions('candidates.manage', 'employees.edit', 'onboarding.edit', 'onboarding.manage'),
+];
 const canDeleteEmployees = [auth(), requireAnyOfPermissions('candidates.manage', 'employees.delete')];
 /** Non-CRUD admin flows that mutate employee data (assignments, imports, etc.). */
 const canMutateEmployees = canEditEmployees;
@@ -300,7 +305,7 @@ router
     validate(employeeValidation.getCandidate),
     employeeController.get
   )
-  .patch(...canEditEmployees, validate(employeeValidation.updateCandidate), employeeController.update)
+  .patch(...canEditEmployeeRecord, validate(employeeValidation.updateCandidate), employeeController.update)
   .delete(...canDeleteEmployees, validate(employeeValidation.deleteCandidate), employeeController.remove);
 
 router
