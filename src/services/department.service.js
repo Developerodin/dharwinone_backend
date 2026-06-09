@@ -25,7 +25,13 @@ export const queryDepartments = async (filter, options) => {
   return Department.paginate(mongoFilter, options);
 };
 
-export const listDepartments = async () => Department.find({ isActive: { $ne: false } }).sort({ name: 1 }).lean();
+export const listDepartments = async () =>
+  (await Department.find({ isActive: { $ne: false } }).sort({ name: 1 }).lean()).map((d) => ({
+    id: String(d._id),
+    name: d.name,
+    code: d.code ?? '',
+    isActive: d.isActive !== false,
+  }));
 
 export const getDepartmentById = async (id) => Department.findById(id);
 
@@ -34,6 +40,27 @@ export const updateDepartmentById = async (id, body) => {
   if (!dept) throw new ApiError(httpStatus.NOT_FOUND, 'Department not found');
   if (body.name && (await Department.isNameTaken(body.name, id))) throw new ApiError(httpStatus.BAD_REQUEST, 'Department name already taken');
   Object.assign(dept, body);
+  await dept.save();
+  return dept;
+};
+
+/** Permanent delete. Blocked while any unit/employee (active or inactive) still references it. */
+export const deleteDepartmentById = async (id) => {
+  const dept = await getDepartmentById(id);
+  if (!dept) throw new ApiError(httpStatus.NOT_FOUND, 'Department not found');
+  const referencingUnits = await OrgUnit.countDocuments({ departmentId: id });
+  const assignedEmployees = await Employee.countDocuments({ departmentId: id });
+  if (referencingUnits > 0 || assignedEmployees > 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Reassign units/employees before deleting this department');
+  }
+  await Department.findByIdAndDelete(id);
+  return { id: String(id), deleted: true };
+};
+
+export const reactivateDepartmentById = async (id) => {
+  const dept = await getDepartmentById(id);
+  if (!dept) throw new ApiError(httpStatus.NOT_FOUND, 'Department not found');
+  dept.isActive = true;
   await dept.save();
   return dept;
 };

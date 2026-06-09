@@ -14,14 +14,27 @@ export const createOrgUnit = {
     order: Joi.number().integer().optional(),
   }),
 };
+export const getOrgUnits = {
+  query: Joi.object().keys({
+    q: Joi.string().allow('').optional(),
+    includeInactive: Joi.boolean().optional(),
+    sortBy: Joi.string().optional(),
+    limit: Joi.number().integer().optional(),
+    page: Joi.number().integer().optional(),
+  }),
+};
 export const updateOrgUnit = {
   params: Joi.object().keys({ orgUnitId: Joi.string().required().custom(objectId) }),
   body: Joi.object().keys({
     name: Joi.string().trim(),
+    type: Joi.string().valid(...TYPES),
     departmentId: Joi.string().custom(objectId).allow(null),
     directToCeo: Joi.boolean(),
     order: Joi.number().integer(),
   }).min(1),
+};
+export const reactivateOrgUnit = {
+  params: Joi.object().keys({ orgUnitId: Joi.string().required().custom(objectId) }),
 };
 export const reparentOrgUnit = {
   params: Joi.object().keys({ orgUnitId: Joi.string().required().custom(objectId) }),

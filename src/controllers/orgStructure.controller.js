@@ -3,8 +3,26 @@ import catchAsync from '../utils/catchAsync.js';
 import * as orgStructureService from '../services/orgStructure.service.js';
 
 export const getTree = catchAsync(async (req, res) => res.send(await orgStructureService.buildTree(req.user)));
-export const getOrgUnits = catchAsync(async (req, res) => res.send(await orgStructureService.listOrgUnits()));
+export const getOrgUnits = catchAsync(async (req, res) => {
+  const { q, page, limit, sortBy, includeInactive } = req.query;
+  const paginated = page !== undefined || limit !== undefined || q !== undefined || includeInactive !== undefined;
+  if (paginated) {
+    return res.send(
+      await orgStructureService.queryOrgUnits({
+        q,
+        page,
+        limit,
+        sortBy,
+        includeInactive: includeInactive === true || includeInactive === 'true',
+      })
+    );
+  }
+  res.send(await orgStructureService.listOrgUnits());
+});
 export const getCoverage = catchAsync(async (req, res) => res.send(await orgStructureService.getOrgCoverageSummary(req.user)));
+export const getAssignableHeads = catchAsync(async (req, res) =>
+  res.send(await orgStructureService.listAssignableHeads(req.user, req.query.departmentId || null))
+);
 export const exportReport = catchAsync(async (req, res) => res.send(await orgStructureService.exportComplianceReport(req.user)));
 export const createOrgUnit = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(await orgStructureService.createOrgUnit(req.body, req.user?._id));
@@ -13,3 +31,5 @@ export const updateOrgUnit = catchAsync(async (req, res) => res.send(await orgSt
 export const reparentOrgUnit = catchAsync(async (req, res) => res.send(await orgStructureService.reparentOrgUnit(req.params.orgUnitId, req.body.parentId)));
 export const assignHead = catchAsync(async (req, res) => res.send(await orgStructureService.assignHead(req.params.orgUnitId, req.body.headEmployeeId)));
 export const deactivateOrgUnit = catchAsync(async (req, res) => res.send(await orgStructureService.deactivateOrgUnit(req.params.orgUnitId)));
+export const reactivateOrgUnit = catchAsync(async (req, res) => res.send(await orgStructureService.reactivateOrgUnit(req.params.orgUnitId)));
+export const deleteOrgUnit = catchAsync(async (req, res) => res.send(await orgStructureService.deleteOrgUnit(req.params.orgUnitId)));

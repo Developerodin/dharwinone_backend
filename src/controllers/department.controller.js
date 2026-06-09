@@ -19,3 +19,9 @@ export const updateDepartment = catchAsync(async (req, res) => {
 export const deactivateDepartment = catchAsync(async (req, res) => {
   res.send(await departmentService.deactivateDepartmentById(req.params.departmentId));
 });
+export const reactivateDepartment = catchAsync(async (req, res) => {
+  res.send(await departmentService.reactivateDepartmentById(req.params.departmentId));
+});
+export const deleteDepartment = catchAsync(async (req, res) => {
+  res.send(await departmentService.deleteDepartmentById(req.params.departmentId));
+});

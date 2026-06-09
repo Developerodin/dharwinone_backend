@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTreeFromData, wouldCreateCycle, hasActiveChildren, departmentHasAssignedEmployees,
-  isAllowedParentChild, validateOrgUnitPlacement,
+  isAllowedParentChild, validateOrgUnitPlacement, childrenValidAfterTypeChange,
 } from '../orgTree.pure.js';
 
 const u = (id, type, parentId = null, extra = {}) => ({ id, type, parentId, isActive: true, order: 0, name: id, ...extra });
@@ -94,4 +94,31 @@ test('validateOrgUnitPlacement rejects invalid parent-child', () => {
   const units = [u('c', 'ceo'), u('m', 'manager', 'c')];
   const verdict = validateOrgUnitPlacement(units, { type: 'supervisor' }, 'c');
   assert.equal(verdict.ok, false);
+});
+
+test('childrenValidAfterTypeChange rejects a demotion that orphans a child', () => {
+  // manager 'm' has supervisor child 's'. Demoting 'm' to 'supervisor' makes
+  // supervisor→supervisor illegal.
+  const units = [u('m', 'manager'), u('s', 'supervisor', 'm')];
+  const verdict = childrenValidAfterTypeChange(units, 'm', 'supervisor');
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.child.id, 's');
+});
+
+test('childrenValidAfterTypeChange rejects turning a parent into a department (leaf)', () => {
+  const units = [u('s', 'supervisor'), u('d', 'department', 's', { departmentId: 'dept1' })];
+  // supervisor 's' has a department child; making 's' a department is illegal (departments are leaves)
+  const verdict = childrenValidAfterTypeChange(units, 's', 'department');
+  assert.equal(verdict.ok, false);
+});
+
+test('childrenValidAfterTypeChange allows a change that keeps children legal', () => {
+  // 's' has no children — any type change is fine.
+  const units = [u('m', 'manager'), u('s', 'supervisor', 'm')];
+  assert.deepEqual(childrenValidAfterTypeChange(units, 's', 'department'), { ok: true });
+});
+
+test('childrenValidAfterTypeChange ignores inactive children', () => {
+  const units = [u('m', 'manager'), u('s', 'supervisor', 'm', { isActive: false })];
+  assert.deepEqual(childrenValidAfterTypeChange(units, 'm', 'supervisor'), { ok: true });
 });

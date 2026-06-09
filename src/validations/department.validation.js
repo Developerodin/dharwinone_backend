@@ -25,3 +25,6 @@ export const updateDepartment = {
 export const deactivateDepartment = {
   params: Joi.object().keys({ departmentId: Joi.string().required().custom(objectId) }),
 };
+export const reactivateDepartment = {
+  params: Joi.object().keys({ departmentId: Joi.string().required().custom(objectId) }),
+};

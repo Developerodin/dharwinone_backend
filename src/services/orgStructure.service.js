@@ -9,8 +9,34 @@ import {
   hasActiveChildren,
   departmentHasAssignedEmployees,
   validateOrgUnitPlacement,
+  childrenValidAfterTypeChange,
 } from './orgTree.pure.js';
-import { orgEmployeeScope } from './visibilityScope.service.js';
+import User from '../models/user.model.js';
+
+const escapeRegex = (v) => String(v ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Owner user ids for active/pending Employee-role users. Read-only — mirrors the
+ * scope used by the ATS Employees list (queryCandidates), so the org chart counts
+ * the same people. Returns null when the Employee role doesn't exist (= no scoping).
+ */
+const getEmployeeRoleOwnerIds = async () => {
+  const { getRoleByName } = await import('./role.service.js');
+  const employeeRole = await getRoleByName('Employee');
+  if (!employeeRole?._id) return null;
+  const users = await User.find(
+    { roleIds: { $in: [employeeRole._id] }, status: { $in: ['active', 'pending'] } },
+    { _id: 1 }
+  ).lean();
+  return users.map((u) => u._id);
+};
+
+/** Employee read filter for org surfaces — owner ∈ Employee-role users (matches /ats/employees). */
+const employeeScopeFilter = async () => {
+  const ownerIds = await getEmployeeRoleOwnerIds();
+  if (ownerIds === null) return {};
+  return { owner: { $in: ownerIds } };
+};
 
 export const assertReparentAllowed = (units, nodeId, newParentId) => {
   if (wouldCreateCycle(units, nodeId, newParentId)) {
@@ -77,7 +103,7 @@ const assertHeadAssignment = async (unit, headEmployeeId) => {
 };
 
 export const buildTree = async (actor = null) => {
-  const { filter: empScope } = actor ? await orgEmployeeScope(actor) : { filter: {} };
+  const empScope = await employeeScopeFilter();
   const [units, employees] = await Promise.all([loadUnitsPlain(), loadActiveEmployeesPlain(empScope)]);
   const tree = buildTreeFromData(units, employees);
   return attachHeadEmployees(tree);
@@ -92,6 +118,24 @@ export const listOrgUnits = async () => {
   });
 };
 
+/**
+ * Paginated + searchable unit list for the Structure table. The full-array
+ * listOrgUnits() is kept for the chart and modal/reparent dropdowns, which need
+ * the whole tree.
+ */
+export const queryOrgUnits = async ({ q, page, limit, sortBy, includeInactive = false } = {}) => {
+  const filter = {};
+  if (!includeInactive) filter.isActive = { $ne: false };
+  if (q && String(q).trim()) filter.name = { $regex: new RegExp(escapeRegex(String(q).trim()), 'i') };
+  const result = await OrgUnit.paginate(filter, { page, limit, sortBy: sortBy || 'name:asc', lean: true });
+  const headMap = await loadHeadMap(result.results.map((u) => u.headEmployeeId).filter(Boolean));
+  result.results = result.results.map((u) => {
+    const hid = u.headEmployeeId ? String(u.headEmployeeId) : null;
+    return { ...u, id: String(u._id), headEmployee: hid ? headMap.get(hid) ?? null : null };
+  });
+  return result;
+};
+
 export const createOrgUnit = async (body, userId) => {
   const units = await loadUnitsPlain();
   assertPlacement(units, body, body.parentId ?? null);
@@ -101,16 +145,56 @@ export const createOrgUnit = async (body, userId) => {
 export const updateOrgUnit = async (id, body) => {
   const unit = await OrgUnit.findById(id);
   if (!unit) throw new ApiError(httpStatus.NOT_FOUND, 'Org unit not found');
+  const nextType = body.type !== undefined ? body.type : unit.type;
+  const typeChanged = nextType !== unit.type;
+  // Leaving department type drops the department link unless one is supplied.
+  let nextDepartmentId;
+  if (body.departmentId !== undefined) nextDepartmentId = body.departmentId;
+  else if (nextType !== 'department') nextDepartmentId = null;
+  else nextDepartmentId = unit.departmentId;
   const next = {
-    type: unit.type,
-    departmentId: body.departmentId !== undefined ? body.departmentId : unit.departmentId,
+    type: nextType,
+    departmentId: nextDepartmentId,
     directToCeo: body.directToCeo !== undefined ? body.directToCeo : unit.directToCeo,
   };
   const units = await loadUnitsPlain();
   assertPlacement(units, next, unit.parentId);
+  if (typeChanged) {
+    const verdict = childrenValidAfterTypeChange(units, id, nextType);
+    if (!verdict.ok) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        `Changing type to "${nextType}" would orphan child unit "${verdict.child.name}". Reassign or move it first.`
+      );
+    }
+  }
   Object.assign(unit, body);
+  unit.type = nextType;
+  unit.departmentId = nextDepartmentId;
   await unit.save();
   return unit;
+};
+
+export const reactivateOrgUnit = async (id) => {
+  const unit = await OrgUnit.findById(id);
+  if (!unit) throw new ApiError(httpStatus.NOT_FOUND, 'Org unit not found');
+  const units = await loadUnitsPlain();
+  assertPlacement(units, unit, unit.parentId);
+  unit.isActive = true;
+  await unit.save();
+  return unit;
+};
+
+/** Permanent delete. Blocked while any unit (active or inactive) still points here. */
+export const deleteOrgUnit = async (id) => {
+  const unit = await OrgUnit.findById(id);
+  if (!unit) throw new ApiError(httpStatus.NOT_FOUND, 'Org unit not found');
+  const childCount = await OrgUnit.countDocuments({ parentId: id });
+  if (childCount > 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Remove or reparent child units before deleting this unit');
+  }
+  await OrgUnit.findByIdAndDelete(id);
+  return { id: String(id), deleted: true };
 };
 
 export const reparentOrgUnit = async (id, newParentId) => {
@@ -152,8 +236,22 @@ export const deactivateOrgUnit = async (id) => {
   return unit;
 };
 
+/**
+ * Active employees eligible to be assigned as org-unit heads (scoped to the actor).
+ * When departmentId is given (department nodes), only that department's members are
+ * returned — a department head must belong to that department.
+ */
+export const listAssignableHeads = async (actor = null, departmentId = null) => {
+  const empScope = await employeeScopeFilter();
+  const scope = departmentId ? { ...empScope, departmentId } : empScope;
+  const employees = await loadActiveEmployeesPlain(scope);
+  return employees
+    .map((e) => ({ id: e.id, name: e.fullName }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+};
+
 export const getOrgCoverageSummary = async (actor = null) => {
-  const { filter: empScope } = actor ? await orgEmployeeScope(actor) : { filter: {} };
+  const empScope = await employeeScopeFilter();
   const [units, employees, departments] = await Promise.all([
     loadUnitsPlain(),
     loadActiveEmployeesPlain(empScope),

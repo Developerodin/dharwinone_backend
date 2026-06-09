@@ -86,6 +86,24 @@ export const isAllowedParentChild = (parentType, childType, directToCeo = false)
 };
 
 /**
+ * After changing unitId's type to newType, check every active child still has a
+ * legal parent→child placement under it. Departments are leaves, so any child of
+ * a unit becoming a department is invalid.
+ * @returns {{ ok: true } | { ok: false, child: object }}
+ */
+export const childrenValidAfterTypeChange = (units, unitId, newType) => {
+  const children = (units || []).filter(
+    (u) => u.isActive !== false && idStr(u.parentId) === idStr(unitId)
+  );
+  for (const child of children) {
+    if (!isAllowedParentChild(newType, child.type, child.directToCeo === true)) {
+      return { ok: false, child };
+    }
+  }
+  return { ok: true };
+};
+
+/**
  * Validate a unit's parent placement and required fields.
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */

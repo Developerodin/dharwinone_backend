@@ -13,14 +13,17 @@ const canReadUnits = [auth(), requireAnyOfPermissions('structure.read', 'structu
 router.get('/tree', ...canReadTree, c.getTree);
 router.get('/coverage', ...canReadTree, c.getCoverage);
 router.get('/export', ...canReadTree, c.exportReport);
+router.get('/employees', ...canReadUnits, c.getAssignableHeads);
 
 router
   .route('/')
-  .get(...canReadUnits, c.getOrgUnits)
+  .get(...canReadUnits, validate(v.getOrgUnits), c.getOrgUnits)
   .post(auth(), requirePermissions('structure.manage'), validate(v.createOrgUnit), c.createOrgUnit);
 
 router.patch('/:orgUnitId/reparent', auth(), requirePermissions('structure.manage'), validate(v.reparentOrgUnit), c.reparentOrgUnit);
 router.patch('/:orgUnitId/head', auth(), requirePermissions('structure.manage'), validate(v.assignHead), c.assignHead);
+router.patch('/:orgUnitId/reactivate', auth(), requirePermissions('structure.manage'), validate(v.reactivateOrgUnit), c.reactivateOrgUnit);
+router.delete('/:orgUnitId/permanent', auth(), requirePermissions('structure.manage'), validate(v.deactivateOrgUnit), c.deleteOrgUnit);
 
 router
   .route('/:orgUnitId')

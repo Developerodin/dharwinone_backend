@@ -26,4 +26,7 @@ router
   .patch(auth(), requirePermissions('departments.manage'), validate(v.updateDepartment), c.updateDepartment)
   .delete(auth(), requirePermissions('departments.manage'), validate(v.deactivateDepartment), c.deactivateDepartment);
 
+router.patch('/:departmentId/reactivate', auth(), requirePermissions('departments.manage'), validate(v.reactivateDepartment), c.reactivateDepartment);
+router.delete('/:departmentId/permanent', auth(), requirePermissions('departments.manage'), validate(v.deactivateDepartment), c.deleteDepartment);
+
 export default router;
