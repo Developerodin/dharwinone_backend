@@ -12,6 +12,7 @@ import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefa
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import logger from '../config/logger.js';
+import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
 import * as emailService from './email.service.js';
 
@@ -117,23 +118,6 @@ const resolvePlacementLinkedAcceptedOffer = async (candidateId) => {
   if (!offer || offer.status !== 'Accepted') return null;
   return offer;
 };
-
-const resolvePositionIdFromDesignationTitle = async (title) => {
-  const trimmed = String(title || '').trim();
-  if (!trimmed) return null;
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const nameRegex = new RegExp(`^${escaped}$`, 'i');
-  let existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
-  if (existing?._id) return existing._id;
-  try {
-    const created = await Position.create({ name: trimmed });
-    return created._id;
-  } catch {
-    existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
-    return existing?._id ?? null;
-  }
-};
-
 /** When Accepted offer positionTitle changes, mirror to Employee designation + position. */
 const syncDesignationFromAcceptedOfferToEmployee = async (offer) => {
   if (!offer || offer.status !== 'Accepted') return;

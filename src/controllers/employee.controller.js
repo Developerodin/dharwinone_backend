@@ -445,7 +445,10 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
+  const p = req.authContext?.permissions;
   req.user.canManageCandidates = canManageCandidates(req);
+  req.user.canEditEmployees = Boolean(p?.has('employees.edit') || p?.has('employees.manage'));
+  req.user.canOnboardingEdit = Boolean(p?.has('onboarding.edit') || p?.has('onboarding.manage'));
   const candidate = await updateCandidateById(req.params.candidateId, req.body, req.user);
   const cid = candidate?._id ?? candidate?.id ?? req.params.candidateId;
   await activityLogService.createActivityLog(

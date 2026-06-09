@@ -2,8 +2,10 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import * as orgStructureService from '../services/orgStructure.service.js';
 
-export const getTree = catchAsync(async (req, res) => res.send(await orgStructureService.buildTree()));
+export const getTree = catchAsync(async (req, res) => res.send(await orgStructureService.buildTree(req.user)));
 export const getOrgUnits = catchAsync(async (req, res) => res.send(await orgStructureService.listOrgUnits()));
+export const getCoverage = catchAsync(async (req, res) => res.send(await orgStructureService.getOrgCoverageSummary(req.user)));
+export const exportReport = catchAsync(async (req, res) => res.send(await orgStructureService.exportComplianceReport(req.user)));
 export const createOrgUnit = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(await orgStructureService.createOrgUnit(req.body, req.user?._id));
 });

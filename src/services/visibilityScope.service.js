@@ -262,7 +262,37 @@ const meetingScope = async (actor = {}, action = 'read') => {
   };
 };
 
-export { tenantScope, candidateScope, jobScope, applicationScope, recordingScope, meetingScope };
+/**
+ * Restrict Employee reads for organization surfaces to the actor's tenant boundary.
+ * OrgUnit/Department catalogs remain deployment-global; employee rows are tenant-scoped.
+ *
+ * @param {object} actor
+ * @returns {Promise<{ filter: object, scopeDebug: object }>}
+ */
+const orgEmployeeScope = async (actor = {}) => {
+  const admin = await userIsAdmin(actor);
+  const base = actorTenantBase(actor);
+  if (admin) {
+    return {
+      filter: Object.keys(base).length ? base : {},
+      scopeDebug: { scopeType: 'orgEmployee', role: 'admin' },
+    };
+  }
+  if (Object.keys(base).length) {
+    return { filter: base, scopeDebug: { scopeType: 'orgEmployee', role: 'tenant' } };
+  }
+  return { filter: {}, scopeDebug: { scopeType: 'orgEmployee', role: 'global' } };
+};
+
+export {
+  tenantScope,
+  candidateScope,
+  jobScope,
+  applicationScope,
+  recordingScope,
+  meetingScope,
+  orgEmployeeScope,
+};
 
 export default {
   tenantScope,
@@ -271,4 +301,5 @@ export default {
   applicationScope,
   recordingScope,
   meetingScope,
+  orgEmployeeScope,
 };

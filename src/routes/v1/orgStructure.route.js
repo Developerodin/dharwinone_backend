@@ -11,6 +11,8 @@ const canReadTree = [auth(), requireAnyOfPermissions('chart.read', 'structure.re
 const canReadUnits = [auth(), requireAnyOfPermissions('structure.read', 'structure.manage')];
 
 router.get('/tree', ...canReadTree, c.getTree);
+router.get('/coverage', ...canReadTree, c.getCoverage);
+router.get('/export', ...canReadTree, c.exportReport);
 
 router
   .route('/')

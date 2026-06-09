@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTreeFromData, wouldCreateCycle, hasActiveChildren, departmentHasAssignedEmployees,
+  isAllowedParentChild, validateOrgUnitPlacement,
 } from '../orgTree.pure.js';
 
 const u = (id, type, parentId = null, extra = {}) => ({ id, type, parentId, isActive: true, order: 0, name: id, ...extra });
@@ -77,4 +78,20 @@ test('departmentHasAssignedEmployees detects active assignment', () => {
   const employees = [emp('e1', 'dept1'), { ...emp('e2', 'dept1'), isActive: false }];
   assert.equal(departmentHasAssignedEmployees(employees, 'dept1'), true);
   assert.equal(departmentHasAssignedEmployees(employees, 'dept2'), false);
+});
+
+test('isAllowedParentChild enforces ceo→manager→supervisor→department chain', () => {
+  assert.equal(isAllowedParentChild(null, 'ceo'), true);
+  assert.equal(isAllowedParentChild('ceo', 'manager'), true);
+  assert.equal(isAllowedParentChild('ceo', 'department', true), true);
+  assert.equal(isAllowedParentChild('ceo', 'department', false), false);
+  assert.equal(isAllowedParentChild('manager', 'supervisor'), true);
+  assert.equal(isAllowedParentChild('supervisor', 'department'), true);
+  assert.equal(isAllowedParentChild('ceo', 'supervisor'), false);
+});
+
+test('validateOrgUnitPlacement rejects invalid parent-child', () => {
+  const units = [u('c', 'ceo'), u('m', 'manager', 'c')];
+  const verdict = validateOrgUnitPlacement(units, { type: 'supervisor' }, 'c');
+  assert.equal(verdict.ok, false);
 });

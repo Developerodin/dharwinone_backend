@@ -21,6 +21,13 @@ import logger from '../config/logger.js';
 import { resolveCompanyEmailSettingsUserId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
+import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
+import {
+  canFullEmployeeRecordEdit,
+  canMutateEmployeeRecord,
+  canSyncAcceptedOfferCanon,
+  restrictToOnboardingPatchFields,
+} from './employeeUpdateAuth.helper.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -1289,32 +1296,26 @@ const getCandidateById = async (id) => {
 };
 
 /** Find or create HRMS Position row from a free-text job title (designation). */
-const resolvePositionIdFromDesignation = async (title) => {
-  const trimmed = String(title || '').trim();
-  if (!trimmed) return null;
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const nameRegex = new RegExp(`^${escaped}$`, 'i');
-  let existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
-  if (existing?._id) return existing._id;
-  try {
-    const created = await Position.create({ name: trimmed });
-    return created._id;
-  } catch (err) {
-    existing = await Position.findOne({ name: { $regex: nameRegex } }).select('_id').lean();
-    return existing?._id ?? null;
-  }
-};
+const resolvePositionIdFromDesignation = resolvePositionIdFromDesignationTitle;
 
 const updateCandidateById = async (id, updateBody, currentUser) => {
   const candidate = await getCandidateById(id);
   if (!candidate) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
-  if (!isOwnerOrAdmin(currentUser, candidate)) {
+  if (!canMutateEmployeeRecord(currentUser, candidate)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
-  const sanitized = { ...updateBody };
+  let sanitized = { ...updateBody };
+  if (!canFullEmployeeRecordEdit(currentUser)) {
+    sanitized = restrictToOnboardingPatchFields(sanitized);
+    if (!Object.keys(sanitized).length) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'No permitted fields to update');
+    }
+  }
+
+  const allowOfferSync = canSyncAcceptedOfferCanon(currentUser);
   if (!currentUser?.canManageCandidates) {
     delete sanitized.companyAssignedEmail;
     delete sanitized.companyEmailProvider;
@@ -1402,7 +1403,7 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   // canonical Accepted offer + run the pipeline sync — otherwise the placement
   // reconciler reverts Employee.joiningDate to the offer date on next read (B5).
   // Mirrors updateJoiningDate's placement-linked resolution; no-op without one.
-  if (joiningUpdated) {
+  if (joiningUpdated && allowOfferSync) {
     const jdPlacement = await Placement.findOne({ candidate: id, status: { $ne: 'Cancelled' } })
       .sort({ updatedAt: -1 })
       .select('offer')
@@ -1421,7 +1422,7 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     logger.warn('syncReferralPipelineStatusForCandidate:', err?.message)
   );
 
-  if (designationProvided || positionProvided) {
+  if (allowOfferSync && (designationProvided || positionProvided)) {
     const placement = await Placement.findOne({ candidate: id, status: { $ne: 'Cancelled' } })
       .sort({ updatedAt: -1 })
       .select('offer')
