@@ -3,7 +3,12 @@ import Job from '../models/job.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
 import User from '../models/user.model.js';
-import { userHasRecruiterRole, userIsAdmin, userIsSalesAgent } from '../utils/roleHelpers.js';
+import {
+  userCanViewAllInterviewsForListing,
+  userHasRecruiterRole,
+  userIsAdmin,
+  userIsSalesAgent,
+} from '../utils/roleHelpers.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const EMPTY_SCOPE = { _id: { $in: [] } };
@@ -164,6 +169,43 @@ const applicationScope = async (actor = {}, action = 'read') => {
   };
 };
 
+/**
+ * Collect all user ids in a tenant tree (root + nested adminId descendants).
+ * @param {import('mongoose').Types.ObjectId|string} rootId
+ * @returns {Promise<string[]>}
+ */
+const resolveTenantUserIds = async (rootId) => {
+  if (!rootId) return [];
+  const ids = new Set([String(rootId)]);
+  let frontier = [rootId];
+  for (let depth = 0; depth < 10 && frontier.length; depth += 1) {
+    const children = await User.find({ adminId: { $in: frontier } }, { _id: 1 }).lean();
+    const next = [];
+    for (const child of children) {
+      const id = String(child._id);
+      if (!ids.has(id)) {
+        ids.add(id);
+        next.push(child._id);
+      }
+    }
+    frontier = next;
+  }
+  return [...ids];
+};
+
+/**
+ * Tenant-wide meeting filter: stamped tenantId OR any creator in the tenant user tree.
+ * @param {import('mongoose').Types.ObjectId|string} rootId
+ * @returns {Promise<object>}
+ */
+const tenantMeetingFilter = async (rootId) => {
+  if (!rootId) return {};
+  const userIds = await resolveTenantUserIds(rootId);
+  const orClauses = [{ tenantId: rootId }];
+  if (userIds.length) orClauses.push({ createdBy: { $in: userIds } });
+  return { $or: orClauses };
+};
+
 const meetingActorQuery = (actor = {}) => {
   const actorId = toId(actor._id || actor.id);
   const actorEmail = normalizeEmail(actor.email);
@@ -244,17 +286,17 @@ const recordingScope = async (actor = {}, action = 'read') => {
  * @returns {Promise<{ filter: object }>}
  */
 const meetingScope = async (actor = {}, action = 'read') => {
-  const admin = await userIsAdmin(actor);
-  if (admin) {
+  if (await userCanViewAllInterviewsForListing(actor)) {
     const rootId = tenantRootId(actor);
-    if (!rootId) return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'admin' } };
-    const tenantUsers = await User.find({ $or: [{ _id: rootId }, { adminId: rootId }] }, { _id: 1 }).lean();
-    const userIds = uniq(tenantUsers.map((u) => u._id));
+    if (!rootId) {
+      return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interview_listing_global' } };
+    }
     return {
-      filter: { createdBy: { $in: userIds } },
-      scopeDebug: { scopeType: 'meeting', action, role: 'admin', tenantRoot: String(rootId) },
+      filter: await tenantMeetingFilter(rootId),
+      scopeDebug: { scopeType: 'meeting', action, role: 'interview_listing', tenantRoot: String(rootId) },
     };
   }
+
   const actorQuery = meetingActorQuery(actor);
   return {
     filter: actorQuery || EMPTY_SCOPE,

@@ -5,6 +5,7 @@ import JobApplication from '../models/jobApplication.model.js';
 import Job from '../models/job.model.js';
 import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
+import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import { sendMeetingInvitationEmail } from './email.service.js';
@@ -257,12 +258,15 @@ const getInvitationEmails = (meeting) => {
 const createMeeting = async (body, userId) => {
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
+  const creator = await User.findById(userId).select('adminId').lean();
+  const tenantId = creator?.adminId || userId;
   const meeting = await Meeting.create({
     ...body,
     durationMinutes,
     meetingId,
     roomName: meetingId, // same as meetingId for LiveKit; satisfies legacy index roomName_1
     createdBy: userId,
+    tenantId,
   });
 
   const meetingObj = meeting.toJSON();

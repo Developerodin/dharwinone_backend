@@ -85,6 +85,7 @@ import {
 } from '../services/sopChecklist.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { buildEmployeeUpdateAuditEnvelope } from '../utils/auditMetadata.helper.js';
 
 /** PR2: legacy candidates.manage OR employees.manage (employee record CRUD). */
 export const canManageCandidates = (req) => {
@@ -449,16 +450,18 @@ const update = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   req.user.canEditEmployees = Boolean(p?.has('employees.edit') || p?.has('employees.manage'));
   req.user.canOnboardingEdit = Boolean(p?.has('onboarding.edit') || p?.has('onboarding.manage'));
+  const beforeCandidate = await getCandidateById(req.params.candidateId);
+  if (!beforeCandidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   const candidate = await updateCandidateById(req.params.candidateId, req.body, req.user);
   const cid = candidate?._id ?? candidate?.id ?? req.params.candidateId;
-  await activityLogService.createActivityLog(
-    String(req.user.id || req.user._id),
-    ActivityActions.CANDIDATE_UPDATE,
-    EntityTypes.CANDIDATE,
-    String(cid),
-    {},
-    req
-  );
+  const actor = String(req.user.id || req.user._id);
+  const auditEnvelope = buildEmployeeUpdateAuditEnvelope(beforeCandidate, candidate, req.body, cid, {
+    EMPLOYEE_DEPARTMENT_ASSIGN: ActivityActions.EMPLOYEE_DEPARTMENT_ASSIGN,
+    CANDIDATE_UPDATE: ActivityActions.CANDIDATE_UPDATE,
+    EMPLOYEE: EntityTypes.EMPLOYEE,
+    CANDIDATE: EntityTypes.CANDIDATE,
+  });
+  await activityLogService.persistActivityLogFailSoft(actor, auditEnvelope, req);
   res.send(candidate);
 });
 

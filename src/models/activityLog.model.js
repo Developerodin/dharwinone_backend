@@ -72,6 +72,10 @@ const activityLogSchema = mongoose.Schema(
       capturedAt: { type: Date, default: null },
       source: { type: String, default: null },
     },
+    /** Business event time (may differ from recordedAt when reconciled). */
+    occurredAt: { type: Date, default: null },
+    /** When this audit row was persisted. */
+    recordedAt: { type: Date, default: null },
   },
   {
     timestamps: true,
@@ -80,7 +84,7 @@ const activityLogSchema = mongoose.Schema(
 
 activityLogSchema.index({ createdAt: -1 });
 activityLogSchema.index({ actor: 1, createdAt: -1 });
-activityLogSchema.index({ entityType: 1, entityId: 1 });
+activityLogSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 activityLogSchema.index({ action: 1, createdAt: -1 });
 if (config.activityLog?.ttlSeconds > 0) {
   activityLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: config.activityLog.ttlSeconds });

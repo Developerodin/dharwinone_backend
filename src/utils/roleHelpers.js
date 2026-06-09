@@ -196,3 +196,38 @@ export const userCanViewAllJobsForListing = async (user) => {
   });
   return !!hasRole;
 };
+
+/** Role names that may list/view all ATS interviews (tenant-wide), not only meetings they created or were invited to. */
+const ATS_INTERVIEW_FULL_LISTING_ROLE_NAMES = ['Administrator', 'Agent', 'agent', 'Recruiter'];
+
+/**
+ * True if user may view the org-wide interview list for their tenant.
+ * Mirrors {@link userCanViewAllJobsForListing} and applicationScope's interviews.manage bypass:
+ *  - interviews.manage → full tenant list (schedulers)
+ *  - interviews.read + Administrator → full tenant list (secondary admins with view permission)
+ *  - interviews.read/manage + legacy ATS staff roles → full tenant list
+ *
+ * @param {Object|null|undefined} user
+ * @returns {Promise<boolean>}
+ */
+export const userCanViewAllInterviewsForListing = async (user) => {
+  if (!user) return false;
+  if (user.platformSuperUser) return true;
+
+  const { permissions } = await getUserPermissionContext(user);
+  if (permissions.has('interviews.manage')) return true;
+
+  const hasInterviewView = permissions.has('interviews.read') || permissions.has('interviews.manage');
+  if (!hasInterviewView) return false;
+
+  if (await userIsAdmin(user)) return true;
+
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return false;
+  const hasRole = await Role.exists({
+    _id: { $in: roleIds },
+    name: { $in: ATS_INTERVIEW_FULL_LISTING_ROLE_NAMES },
+    status: 'active',
+  });
+  return !!hasRole;
+};

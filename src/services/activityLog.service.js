@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import ActivityLog from '../models/activityLog.model.js';
+import ActivityLogOutbox from '../models/activityLogOutbox.model.js';
 import User from '../models/user.model.js';
 import Role from '../models/role.model.js';
 import Impersonation from '../models/impersonation.model.js';
@@ -11,8 +12,22 @@ import { resolveGeoForDisplay } from '../utils/ipGeo.util.js';
 import { getClientIpFromRequest, parseClientSuppliedIpHeader } from '../utils/requestIp.util.js';
 import { parseUserAgentDetails } from '../utils/parseUserAgent.util.js';
 import { nominatimReversePlace } from '../utils/nominatimReverse.util.js';
+import { ActivityActions } from '../config/activityLog.js';
 
 const EXPORT_ROW_CAP = 50000;
+const ACTIVITY_LOG_WRITE_FAILED_METRIC = 'activity_log_write_failed_total';
+
+/** Allowlisted keys for org.mutate.denied metadata. */
+const DENIED_AUDIT_METADATA_KEYS = new Set([
+  'permission',
+  'reason',
+  'targetEntityType',
+  'targetEntityId',
+  'route',
+  'requestId',
+  'aggregatedCount',
+  'windowSeconds',
+]);
 
 /**
  * @param {string} s
@@ -256,6 +271,115 @@ const createActivityLog = async (actorId, action, entityType, entityId, metadata
     );
     return null;
   }
+};
+
+/**
+ * Strip denied-audit metadata to allowlisted keys only.
+ * @param {Record<string, unknown>} meta
+ */
+export const sanitizeDeniedAuditMetadata = (meta) => {
+  if (!meta || typeof meta !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (DENIED_AUDIT_METADATA_KEYS.has(k)) out[k] = v;
+  }
+  return out;
+};
+
+const actorIdFromReq = (req) => (req?.user ? String(req.user.id || req.user._id) : null);
+
+/**
+ * Persist audit from a service AuditEnvelope; fail-soft with outbox on write failure.
+ * @param {string} actorId
+ * @param {{ audit: { action: string, entityType: string, entityId: string, metadata?: object, occurredAt?: Date|string|null }|null }} envelope
+ * @param {import('express').Request|null} req
+ */
+export const persistActivityLogFailSoft = async (actorId, envelope, req = null) => {
+  const audit = envelope?.audit;
+  if (!audit?.action || !audit.entityType || !audit.entityId) return null;
+
+  const occurredAt = audit.occurredAt ? new Date(audit.occurredAt) : new Date();
+  const metadata = {
+    ...(audit.metadata && typeof audit.metadata === 'object' ? audit.metadata : {}),
+    occurredAt: occurredAt.toISOString(),
+    recordedAt: new Date().toISOString(),
+  };
+
+  const entry = await createActivityLog(actorId, audit.action, audit.entityType, audit.entityId, metadata, req);
+  if (entry) return entry;
+
+  const route = requestPathTemplate(req);
+  const requestId = req?.headers?.['x-request-id'] ? String(req.headers['x-request-id']) : null;
+  logger.error(
+    {
+      metric: ACTIVITY_LOG_WRITE_FAILED_METRIC,
+      action: audit.action,
+      entityType: audit.entityType,
+      entityId: audit.entityId,
+      actorId,
+      route,
+      requestId,
+    },
+    ACTIVITY_LOG_WRITE_FAILED_METRIC
+  );
+
+  try {
+    await ActivityLogOutbox.create({
+      actor: actorId,
+      action: audit.action,
+      entityType: audit.entityType,
+      entityId: audit.entityId,
+      metadata: sanitizeMetadata(metadata),
+      route,
+      requestId,
+      occurredAt,
+      attempts: 1,
+      lastError: 'activity_log_create_failed',
+    });
+  } catch (outboxErr) {
+    logger.error(
+      { err: outboxErr, action: audit.action, entityType: audit.entityType, entityId: audit.entityId, actorId },
+      'activity_log_outbox_write_failed'
+    );
+  }
+  return null;
+};
+
+/**
+ * Emit allowlisted org.mutate.denied audit row (fail-soft).
+ * @param {import('express').Request} req
+ * @param {string} permission
+ * @param {{ targetEntityType?: string, targetEntityId?: string, reason?: string }} [opts]
+ */
+export const persistDeniedOrgMutateAudit = async (req, permission, opts = {}) => {
+  const actorId = actorIdFromReq(req);
+  if (!actorId) return null;
+
+  const metadata = sanitizeDeniedAuditMetadata({
+    permission,
+    reason: opts.reason || 'forbidden',
+    targetEntityType: opts.targetEntityType || null,
+    targetEntityId: opts.targetEntityId || null,
+    route: requestPathTemplate(req),
+    requestId: req?.headers?.['x-request-id'] ? String(req.headers['x-request-id']) : null,
+  });
+
+  const entityType = opts.targetEntityType || 'OrgStructure';
+  const entityId = opts.targetEntityId || 'unknown';
+
+  return persistActivityLogFailSoft(
+    actorId,
+    {
+      audit: {
+        action: ActivityActions.ORG_MUTATE_DENIED,
+        entityType,
+        entityId,
+        metadata,
+        occurredAt: new Date(),
+      },
+    },
+    req
+  );
 };
 
 /**
@@ -645,4 +769,5 @@ export {
   buildQOrClause,
   streamActivityLogsCsv,
   EXPORT_ROW_CAP,
+  ACTIVITY_LOG_WRITE_FAILED_METRIC,
 };

@@ -74,6 +74,35 @@ export const ActivityActions = {
   TICKET_DELETE: 'ticket.delete',
   // Integration / admin settings (sensitive config surfaces)
   SETTINGS_BOLNA_CANDIDATE_AGENT_UPDATE: 'settings.bolnaCandidateAgent.update',
+  // Organization — org units
+  ORG_UNIT_CREATE: 'orgUnit.create',
+  ORG_UNIT_UPDATE: 'orgUnit.update',
+  ORG_UNIT_REPARENT: 'orgUnit.reparent',
+  ORG_UNIT_HEAD_ASSIGN: 'orgUnit.headAssign',
+  ORG_UNIT_HEAD_CLEAR: 'orgUnit.headClear',
+  ORG_UNIT_REORDER: 'orgUnit.reorder',
+  ORG_UNIT_DEACTIVATE: 'orgUnit.deactivate',
+  ORG_UNIT_REACTIVATE: 'orgUnit.reactivate',
+  ORG_UNIT_DELETE: 'orgUnit.delete',
+  // Organization — departments
+  DEPARTMENT_CREATE: 'department.create',
+  DEPARTMENT_UPDATE: 'department.update',
+  DEPARTMENT_DEACTIVATE: 'department.deactivate',
+  DEPARTMENT_REACTIVATE: 'department.reactivate',
+  DEPARTMENT_DELETE: 'department.delete',
+  // Organization — structure export
+  ORG_STRUCTURE_EXPORT: 'orgStructure.export',
+  // Organization — employee department assignment
+  EMPLOYEE_DEPARTMENT_ASSIGN: 'employee.departmentAssign',
+  /** Denied org write/export attempt (allowlisted metadata only). */
+  ORG_MUTATE_DENIED: 'org.mutate.denied',
+  // Organization — scenario sandbox
+  ORG_SCENARIO_CREATE: 'orgScenario.create',
+  ORG_SCENARIO_APPLY: 'orgScenario.apply',
+  ORG_SCENARIO_APPROVE: 'orgScenario.approve',
+  // Organization — headcount slots
+  ORG_SLOT_CREATE: 'orgSlot.create',
+  ORG_SLOT_UPDATE: 'orgSlot.update',
 };
 
 export const EntityTypes = {
@@ -94,4 +123,10 @@ export const EntityTypes = {
   JOB_APPLICATION: 'JobApplication',
   BOLNA_CANDIDATE_AGENT_SETTINGS: 'BolnaCandidateAgentSettings',
   SUPPORT_TICKET: 'SupportTicket',
+  ORG_UNIT: 'OrgUnit',
+  DEPARTMENT: 'Department',
+  ORG_STRUCTURE: 'OrgStructure',
+  EMPLOYEE: 'Employee',
+  ORG_SCENARIO: 'OrgScenario',
+  ORG_SLOT: 'OrgSlot',
 };

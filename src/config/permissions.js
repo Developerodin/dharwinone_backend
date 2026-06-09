@@ -272,6 +272,11 @@ export const permissionAliases = {
   // Administrator role and platformSuperUser bypass at the middleware layer; all other roles
   // (including Agent) must be granted the permission via the role-matrix UI.
   'users.impersonate': ['users.impersonate', 'users.impersonate.read', 'users.impersonate.manage'],
+  // Organization structure export (Phase 1E): HR admins with structure.manage may export too.
+  'structure.export': ['structure.export', 'structure.manage', 'organization.structure:export'],
+  'structure.read': ['structure.read', 'organization.structure:view', 'organization.structure:view,create,edit,delete'],
+  'structure.manage': ['structure.manage', 'organization.structure:create,edit,delete', 'organization.structure:view,create,edit,delete'],
+  'chart.read': ['chart.read', 'organization.chart:view', 'organization.chart:view,create,edit,delete'],
 };
 
 /**
