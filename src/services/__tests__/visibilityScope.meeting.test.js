@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 // Permission-based visibility (tenant-independent):
-//   interviews.manage -> ALL interviews | interviews.read -> OWN | neither -> none
+//   full interview set (read+create+edit+delete) -> ALL interviews | interviews.read -> OWN | neither -> none
 //   meetings.manage   -> ALL meetings   | meetings.read   -> OWN | neither -> none
 // Interview and meeting permission families must stay isolated (no cross-leak).
 
@@ -12,6 +12,7 @@ const mockPerms = (t, granted) => {
   t.mock.module('../../utils/permissionCheck.js', {
     namedExports: {
       hasApiPermission: async (_user, required) => granted.has(required),
+      hasAllApiPermissions: async (_user, requiredList = []) => requiredList.every((p) => granted.has(p)),
       hasApiPermissionFromContext: () => false,
       hasPermission: async () => false,
       hasPermissionFromContext: () => false,
@@ -21,12 +22,20 @@ const mockPerms = (t, granted) => {
 
 const EMPTY = { _id: { $in: [] } };
 
-test('meetingScope: interviews.manage (full CRUD) sees ALL interviews', async (t) => {
-  mockPerms(t, new Set(['interviews.manage', 'interviews.read']));
+test('meetingScope: full interview permission set (view+create+edit+delete) sees ALL interviews', async (t) => {
+  mockPerms(t, new Set(['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete', 'interviews.manage']));
   const { meetingScope } = await import('../visibilityScope.service.js?t=int-manage');
   const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
   assert.deepEqual(filter, {});
-  assert.equal(scopeDebug.role, 'interviews.manage:all');
+  assert.equal(scopeDebug.role, 'interviews.full:all');
+});
+
+test('meetingScope: partial set (delete removed) falls back to OWN interviews', async (t) => {
+  mockPerms(t, new Set(['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.manage']));
+  const { meetingScope } = await import('../visibilityScope.service.js?t=int-partial');
+  const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'interviews.read:own');
+  assert.ok(filter.$or.some((c) => c.createdBy));
 });
 
 test('meetingScope: interviews.read only (view) sees OWN interviews', async (t) => {

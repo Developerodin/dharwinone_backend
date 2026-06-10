@@ -8,7 +8,7 @@ import {
   userIsAdmin,
   userIsSalesAgent,
 } from '../utils/roleHelpers.js';
-import { hasApiPermission } from '../utils/permissionCheck.js';
+import { hasApiPermission, hasAllApiPermissions } from '../utils/permissionCheck.js';
 
 const EMPTY_SCOPE = { _id: { $in: [] } };
 
@@ -238,12 +238,20 @@ const recordingScope = async (actor = {}, action = 'read') => {
 };
 
 /**
+ * Full ATS-interview action set. Tenant-wide visibility requires ALL four —
+ * `interviews.manage` alone is NOT enough because it derives from ANY single
+ * manage action (create OR edit OR delete), so a role stripped of e.g. delete
+ * would otherwise still see every interview in the tenant.
+ */
+const INTERVIEW_FULL_ACCESS = ['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete'];
+
+/**
  * Build a Mongoose filter restricting Meeting (ATS interview) docs to those an
  * actor may see. Visibility is PERMISSION-based, not tenant-based:
- *   - interviews.manage (full create/view/edit/delete) -> ALL interviews
- *   - interviews.read only (view)                       -> OWN interviews
+ *   - full interview permission set (view+create+edit+delete) -> ALL interviews
+ *   - partial set incl. view (e.g. delete removed)            -> OWN interviews
  *     (created by, host, recruiter, candidate, agent, or invited)
- *   - neither                                           -> nothing
+ *   - no view permission                                      -> nothing
  * Kept strictly separate from {@link internalMeetingScope} so interview and
  * meeting permissions never leak across the two surfaces.
  *
@@ -252,8 +260,8 @@ const recordingScope = async (actor = {}, action = 'read') => {
  * @returns {Promise<{ filter: object, scopeDebug: object }>}
  */
 const meetingScope = async (actor = {}, action = 'read') => {
-  if (await hasApiPermission(actor, 'interviews.manage')) {
-    return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interviews.manage:all' } };
+  if (await hasAllApiPermissions(actor, INTERVIEW_FULL_ACCESS)) {
+    return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interviews.full:all' } };
   }
   if (await hasApiPermission(actor, 'interviews.read')) {
     const actorQuery = meetingActorQuery(actor);

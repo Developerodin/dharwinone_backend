@@ -200,12 +200,19 @@ export const userCanViewAllJobsForListing = async (user) => {
 /** Role names that may list/view all ATS interviews (tenant-wide), not only meetings they created or were invited to. */
 const ATS_INTERVIEW_FULL_LISTING_ROLE_NAMES = ['Administrator', 'Agent', 'agent', 'Recruiter'];
 
+/** Full interview action set: tenant-wide listing via permissions requires ALL of these. */
+const INTERVIEW_FULL_ACCESS_PERMISSIONS = ['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete'];
+
 /**
  * True if user may view the org-wide interview list for their tenant.
- * Mirrors {@link userCanViewAllJobsForListing} and applicationScope's interviews.manage bypass:
- *  - interviews.manage → full tenant list (schedulers)
+ * Mirrors {@link userCanViewAllJobsForListing}:
+ *  - full interview permission set (view+create+edit+delete) → full tenant list (schedulers)
  *  - interviews.read + Administrator → full tenant list (secondary admins with view permission)
  *  - interviews.read/manage + legacy ATS staff roles → full tenant list
+ *
+ * Note: deliberately NOT keyed off `interviews.manage` — that derives from ANY single
+ * manage action (create OR edit OR delete), so a role stripped of delete would still
+ * see the whole tenant. Partial permissions fall back to own/invited scope.
  *
  * @param {Object|null|undefined} user
  * @returns {Promise<boolean>}
@@ -215,7 +222,7 @@ export const userCanViewAllInterviewsForListing = async (user) => {
   if (user.platformSuperUser) return true;
 
   const { permissions } = await getUserPermissionContext(user);
-  if (permissions.has('interviews.manage')) return true;
+  if (INTERVIEW_FULL_ACCESS_PERMISSIONS.every((p) => permissions.has(p))) return true;
 
   const hasInterviewView = permissions.has('interviews.read') || permissions.has('interviews.manage');
   if (!hasInterviewView) return false;

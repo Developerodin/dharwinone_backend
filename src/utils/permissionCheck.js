@@ -23,6 +23,23 @@ export const hasApiPermission = async (user, required) => {
 };
 
 /**
+ * True only if the user holds EVERY permission in `requiredList` (single role lookup).
+ * Use for "full access" gates where a partial action set must NOT qualify —
+ * e.g. tenant-wide interview visibility requires read+create+edit+delete, while
+ * `interviews.manage` alone is derived from ANY single manage action.
+ *
+ * @param {Object|null|undefined} user
+ * @param {string[]} requiredList - e.g. ['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete']
+ * @returns {Promise<boolean>}
+ */
+export const hasAllApiPermissions = async (user, requiredList = []) => {
+  if (!user) return false;
+  if (user.platformSuperUser) return true;
+  const { permissions } = await getUserPermissionContext(user);
+  return requiredList.every((required) => getGrantingPermissions(required).some((p) => permissions.has(p)));
+};
+
+/**
  * Synchronous variant for routes that have already loaded req.authContext.
  *
  * @param {Set<string>|undefined} apiPermissions - req.authContext?.permissions
