@@ -255,6 +255,7 @@ const queryTasks = async (filter, options) => {
       .limit(limit)
       .populate([
         { path: 'createdBy', select: 'name email' },
+        { path: 'assignedTo', select: 'name email phoneNumber location profilePicture' },
         { path: 'projectId', select: 'name' },
         { path: 'sprintId', select: 'name status' },
       ])
@@ -271,6 +272,7 @@ const getTaskById = async (id) => {
   if (!task) return null;
   await task.populate([
     { path: 'createdBy', select: 'name email' },
+    { path: 'assignedTo', select: 'name email phoneNumber location profilePicture' },
     { path: 'projectId', select: 'name' },
     { path: 'sprintId', select: 'name status' },
     { path: 'comments.commentedBy', select: 'name email' },

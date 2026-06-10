@@ -32,6 +32,30 @@ const BASE_OPTS = {
   retryStrategy: (times) => Math.min(times * 200, 5000),
 };
 
+export function isRedisEnabled() {
+  return config.redis?.enabled === true;
+}
+
+export async function canUseRedis() {
+  if (!isRedisEnabled()) return false;
+  try {
+    const probe = new IORedis({
+      ...redisConnection(),
+      lazyConnect: true,
+      connectTimeout: 1200,
+    });
+    await probe.connect();
+    await probe.ping();
+    await probe.quit();
+    return true;
+  } catch (err) {
+    logger.warn('[Redis] probe failed; disabling Redis-dependent services for this run', {
+      error: err?.message || String(err),
+    });
+    return false;
+  }
+}
+
 export function redisConnection() {
   return {
     ...parsed,
@@ -50,6 +74,17 @@ export function redisPartialConnection() {
 
 let partialClient = null;
 export function partialRedis() {
+  if (!isRedisEnabled()) {
+    return {
+      pipeline: () => ({
+        xadd: () => {},
+        expire: () => {},
+        hset: () => {},
+        exec: async () => [],
+      }),
+      del: async () => 0,
+    };
+  }
   if (partialClient) return partialClient;
   partialClient = new IORedis({
     ...redisPartialConnection(),

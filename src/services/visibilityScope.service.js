@@ -4,7 +4,6 @@ import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
 import User from '../models/user.model.js';
 import {
-  userCanViewAllInterviewsForListing,
   userHasRecruiterRole,
   userIsAdmin,
   userIsSalesAgent,
@@ -169,43 +168,6 @@ const applicationScope = async (actor = {}, action = 'read') => {
   };
 };
 
-/**
- * Collect all user ids in a tenant tree (root + nested adminId descendants).
- * @param {import('mongoose').Types.ObjectId|string} rootId
- * @returns {Promise<string[]>}
- */
-const resolveTenantUserIds = async (rootId) => {
-  if (!rootId) return [];
-  const ids = new Set([String(rootId)]);
-  let frontier = [rootId];
-  for (let depth = 0; depth < 10 && frontier.length; depth += 1) {
-    const children = await User.find({ adminId: { $in: frontier } }, { _id: 1 }).lean();
-    const next = [];
-    for (const child of children) {
-      const id = String(child._id);
-      if (!ids.has(id)) {
-        ids.add(id);
-        next.push(child._id);
-      }
-    }
-    frontier = next;
-  }
-  return [...ids];
-};
-
-/**
- * Tenant-wide meeting filter: stamped tenantId OR any creator in the tenant user tree.
- * @param {import('mongoose').Types.ObjectId|string} rootId
- * @returns {Promise<object>}
- */
-const tenantMeetingFilter = async (rootId) => {
-  if (!rootId) return {};
-  const userIds = await resolveTenantUserIds(rootId);
-  const orClauses = [{ tenantId: rootId }];
-  if (userIds.length) orClauses.push({ createdBy: { $in: userIds } });
-  return { $or: orClauses };
-};
-
 const meetingActorQuery = (actor = {}) => {
   const actorId = toId(actor._id || actor.id);
   const actorEmail = normalizeEmail(actor.email);
@@ -276,32 +238,67 @@ const recordingScope = async (actor = {}, action = 'read') => {
 };
 
 /**
- * Build a Mongoose filter restricting Meeting docs to those an actor may see.
- * Admins see every meeting created by a user in their tenant tree; non-admins
- * see meetings they created, host, recruit, are the candidate of, or are invited
- * to. Used to scope by-id reads/writes so meetings can't be enumerated cross-tenant.
+ * Build a Mongoose filter restricting Meeting (ATS interview) docs to those an
+ * actor may see. Visibility is PERMISSION-based, not tenant-based:
+ *   - interviews.manage (full create/view/edit/delete) -> ALL interviews
+ *   - interviews.read only (view)                       -> OWN interviews
+ *     (created by, host, recruiter, candidate, agent, or invited)
+ *   - neither                                           -> nothing
+ * Kept strictly separate from {@link internalMeetingScope} so interview and
+ * meeting permissions never leak across the two surfaces.
  *
  * @param {Object} actor - req.user
  * @param {'read'|'write'} action
- * @returns {Promise<{ filter: object }>}
+ * @returns {Promise<{ filter: object, scopeDebug: object }>}
  */
 const meetingScope = async (actor = {}, action = 'read') => {
-  if (await userCanViewAllInterviewsForListing(actor)) {
-    const rootId = tenantRootId(actor);
-    if (!rootId) {
-      return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interview_listing_global' } };
-    }
+  if (await hasApiPermission(actor, 'interviews.manage')) {
+    return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interviews.manage:all' } };
+  }
+  if (await hasApiPermission(actor, 'interviews.read')) {
+    const actorQuery = meetingActorQuery(actor);
     return {
-      filter: await tenantMeetingFilter(rootId),
-      scopeDebug: { scopeType: 'meeting', action, role: 'interview_listing', tenantRoot: String(rootId) },
+      filter: actorQuery || EMPTY_SCOPE,
+      scopeDebug: { scopeType: 'meeting', action, role: actorQuery ? 'interviews.read:own' : 'interviews.read:none' },
     };
   }
+  return { filter: EMPTY_SCOPE, scopeDebug: { scopeType: 'meeting', action, role: 'none' } };
+};
 
-  const actorQuery = meetingActorQuery(actor);
-  return {
-    filter: actorQuery || EMPTY_SCOPE,
-    scopeDebug: { scopeType: 'meeting', action, role: actorQuery ? 'self' : 'none' },
-  };
+/** Internal-meeting "own" query — createdBy, a host, or an invitee. */
+const internalMeetingActorQuery = (actor = {}) => {
+  const actorId = toId(actor._id || actor.id);
+  const actorEmail = normalizeEmail(actor.email);
+  const or = [];
+  if (actorId) or.push({ createdBy: actorId });
+  if (actorEmail) or.push({ 'hosts.email': actorEmail }, { emailInvites: actorEmail });
+  return or.length ? { $or: or } : null;
+};
+
+/**
+ * Build a Mongoose filter restricting InternalMeeting (Communication) docs.
+ * Mirrors {@link meetingScope} but driven by the SEPARATE meetings.* permission
+ * family, so the two surfaces stay isolated:
+ *   - meetings.manage -> ALL internal meetings
+ *   - meetings.read   -> OWN internal meetings (created / hosting / invited)
+ *   - neither         -> nothing
+ *
+ * @param {Object} actor - req.user
+ * @param {'read'|'write'} action
+ * @returns {Promise<{ filter: object, scopeDebug: object }>}
+ */
+const internalMeetingScope = async (actor = {}, action = 'read') => {
+  if (await hasApiPermission(actor, 'meetings.manage')) {
+    return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.manage:all' } };
+  }
+  if (await hasApiPermission(actor, 'meetings.read')) {
+    const actorQuery = internalMeetingActorQuery(actor);
+    return {
+      filter: actorQuery || EMPTY_SCOPE,
+      scopeDebug: { scopeType: 'internalMeeting', action, role: actorQuery ? 'meetings.read:own' : 'meetings.read:none' },
+    };
+  }
+  return { filter: EMPTY_SCOPE, scopeDebug: { scopeType: 'internalMeeting', action, role: 'none' } };
 };
 
 /**
@@ -333,6 +330,7 @@ export {
   applicationScope,
   recordingScope,
   meetingScope,
+  internalMeetingScope,
   orgEmployeeScope,
 };
 
@@ -343,5 +341,6 @@ export default {
   applicationScope,
   recordingScope,
   meetingScope,
+  internalMeetingScope,
   orgEmployeeScope,
 };

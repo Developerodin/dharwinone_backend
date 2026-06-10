@@ -27,7 +27,7 @@ const letterBodyKeys = {
   letterAddress: Joi.string().trim().allow(''),
   positionTitle: Joi.string().trim().allow(''),
   jobType: jobTypeLetter,
-  weeklyHours: Joi.number().valid(25, 40),
+  weeklyHours: Joi.number().integer().min(1).max(168),
   workLocation: Joi.string().trim().allow(''),
   roleResponsibilities: Joi.array().items(Joi.string().trim()),
   positionOverviewHtml: Joi.string().trim().allow('', null),

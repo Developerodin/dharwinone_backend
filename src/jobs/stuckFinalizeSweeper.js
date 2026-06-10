@@ -1,11 +1,13 @@
 import { getSummaryQueue } from '../queues/summaryQueue.js';
 import { writeDeadLetter } from '../queues/deadLetter.service.js';
 import logger from '../config/logger.js';
+import { isRedisEnabled } from '../config/redis.js';
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
 
 export async function sweepStuckFinalize() {
+  if (!isRedisEnabled()) return;
   const q = getSummaryQueue();
   const active = await q.getActive(0, 100);
   for (const job of active) {
@@ -29,6 +31,10 @@ export async function sweepStuckFinalize() {
 
 let intervalHandle = null;
 export function startStuckFinalizeSweeper() {
+  if (!isRedisEnabled()) {
+    logger.warn('[StuckFinalizeSweeper] Redis disabled; sweeper not started');
+    return;
+  }
   if (intervalHandle) return;
   intervalHandle = setInterval(() => {
     sweepStuckFinalize().catch((err) =>

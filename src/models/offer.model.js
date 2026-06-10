@@ -92,8 +92,8 @@ const offerSchema = new mongoose.Schema(
       enum: [...COMPENSATION_SOURCES],
       default: 'jobTypeDerived',
     },
-    /** Display hours for intern (25 or 40) */
-    weeklyHours: { type: Number, enum: [25, 40], default: 40 },
+    /** Display hours for intern (preset 40/20 or any custom 1-168) */
+    weeklyHours: { type: Number, min: 1, max: 168, default: 40 },
     workLocation: { type: String, trim: true, default: 'Remote (USA)' },
     roleResponsibilities: [{ type: String, trim: true }],
     /** Rich HTML for Position Overview (Tiptap); rendered in letter preview/print. */

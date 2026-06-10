@@ -58,6 +58,59 @@ let roomService = null;
 // Track admitted participants: roomName -> Set of participant identities
 const admittedParticipants = new Map();
 
+// Track knocking/approval-required participants who are NOT connected to LiveKit
+// yet. The client uses a poll-for-token model (it does not join a blind lobby),
+// so such waiters never appear in roomService.listParticipants(). We register
+// them here on each token poll and expire them when they stop polling
+// (cancel/leave), so the host's waiting roster (getWaitingParticipants) can show
+// and admit them. roomName -> Map<identity, { identity, name, joinedAt, lastSeen }>.
+const WAITING_TTL_MS = 8000;
+const waitingRegistry = new Map();
+
+const recordWaitingParticipant = (roomName, identity, name) => {
+  if (!roomName || !identity) return;
+  const key = String(roomName).trim();
+  let room = waitingRegistry.get(key);
+  if (!room) {
+    room = new Map();
+    waitingRegistry.set(key, room);
+  }
+  const now = Date.now();
+  const existing = room.get(identity);
+  room.set(identity, {
+    identity,
+    name: name || existing?.name || identity,
+    joinedAt: existing?.joinedAt || new Date(now).toISOString(),
+    lastSeen: now,
+  });
+};
+
+const removeWaitingParticipant = (roomName, identity) => {
+  const key = String(roomName || '').trim();
+  const room = waitingRegistry.get(key);
+  if (!room) return;
+  room.delete(identity);
+  if (room.size === 0) waitingRegistry.delete(key);
+};
+
+/** Return non-expired registry waiters for a room, pruning stale entries. */
+const listWaitingRegistry = (roomName) => {
+  const key = String(roomName || '').trim();
+  const room = waitingRegistry.get(key);
+  if (!room) return [];
+  const now = Date.now();
+  const out = [];
+  for (const [identity, entry] of room) {
+    if (now - entry.lastSeen > WAITING_TTL_MS) {
+      room.delete(identity);
+      continue;
+    }
+    out.push({ identity: entry.identity, name: entry.name, joinedAt: entry.joinedAt });
+  }
+  if (room.size === 0) waitingRegistry.delete(key);
+  return out;
+};
+
 if (apiKey && apiSecret) {
   try {
     egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
@@ -223,27 +276,50 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
 
   const guestAllowed = Boolean(meeting?.allowGuestJoin);
 
-  // Access model (two toggles):
-  //  - requireApproval = the admit/waiting gate for allowed joiners.
-  //  - allowGuestJoin   = whether uninvited guests are auto-allowed.
-  // Uninvited + guests NOT allowed → they "knock": connect to a BLIND lobby (no publish,
-  // no subscribe) so they surface in the host's waiting list, and must click "Ask for
-  // permission". Host admits (→ admittedIdentities); on re-fetch isAdmitted flips true.
-  // Uninvited + guests allowed → treated like an invitee (auto-join, or wait if approval).
-  const knocking = Boolean(meeting) && !hostByEmail && !isInvitedGuest && !guestAllowed && !isAdmitted;
+  // Access model:
+  //  - requireApproval OFF = the meeting link is OPEN. Anyone with the link joins
+  //    directly: no knock, no waiting, regardless of invite list or allowGuestJoin.
+  //    (Only the pre-start time gate still applies until the host opens the room.)
+  //  - requireApproval ON  = the admit/waiting gate is active. Invited + guests-allowed
+  //    AND uninvited guests all wait; uninvited guests "knock" into a BLIND lobby (no
+  //    publish, no subscribe) so they surface in the host's waiting list and must click
+  //    "Ask for permission". Host admits (→ admittedIdentities); on re-fetch isAdmitted flips.
+  const openRoom = Boolean(meeting) && !approvalRequired;
+  const knocking =
+    Boolean(meeting) && !hostByEmail && !openRoom && !isInvitedGuest && !guestAllowed && !isAdmitted;
 
-  const canPublish =
-    (forceFullPermissions ||
-      hostByEmail ||
-      isAdmitted ||
-      (meeting ? !approvalRequired && (isInvitedGuest || guestAllowed) : false)) &&
-    !preStartBlockPublish &&
-    !knocking;
+  // Force-full token (used by admitParticipant) must bypass waiting/pre-start gates.
+  // Also, once a host has admitted a participant, admission should override schedule/knock gates.
+  // Open meetings (approval off) grant publish to everyone with the link, subject only to
+  // the pre-start time gate.
+  const canPublish = forceFullPermissions ||
+    hostByEmail ||
+    isAdmitted ||
+    (openRoom && !preStartBlockPublish);
   // Invited waiters keep subscribe (see/hear while waiting); knockers stay blind until admitted.
-  const canSubscribe = !knocking;
+  // Forced-full or admitted participants should always subscribe.
+  const canSubscribe = forceFullPermissions || isAdmitted || !knocking;
   const isHost = hostByEmail;
 
-  logger.info('[LiveKit] Token grants', { roomName, isHost, canPublish, canSubscribe, isAdmitted, knocking, forceFullPermissions });
+  // The client polls for a token while waiting instead of joining a blind lobby,
+  // so a waiter is invisible to roomService.listParticipants(). Track waiters
+  // (non-host, cannot publish, real meeting) so the host's roster can show them;
+  // clear the moment they become joinable (host/admitted/approval-off).
+  const effectiveIdentity = participantIdentity || participantName;
+  if (effectiveIdentity) {
+    if (meeting && !isHost && !canPublish) {
+      recordWaitingParticipant(roomName, effectiveIdentity, participantName);
+    } else {
+      removeWaitingParticipant(roomName, effectiveIdentity);
+    }
+  }
+
+  logger.info(
+    `[LiveKit] Token grants room=${roomName} identity=${participantIdentity || participantName} ` +
+      `host=${isHost} invited=${isInvitedGuest} admitted=${isAdmitted} ` +
+      `preStartBlockPublish=${preStartBlockPublish} knocking=${knocking} ` +
+      `forceFullPermissions=${forceFullPermissions} canPublish=${canPublish} canSubscribe=${canSubscribe}`
+  );
 
   const token = new AccessToken(apiKey, apiSecret, {
     identity: participantIdentity || participantName,
@@ -722,10 +798,7 @@ const getWaitingParticipants = async (roomName) => {
   }
 
   try {
-    const participants = await roomService.listParticipants(roomName);
-    if (!participants || participants.length === 0) {
-      return [];
-    }
+    const participants = (await roomService.listParticipants(roomName)) || [];
 
     const meeting = await getMeetingByMeetingId(roomName);
     const dbAdmitted = new Set(
@@ -777,8 +850,22 @@ const getWaitingParticipants = async (roomName) => {
         };
       });
 
-    logger.info('[LiveKit] getWaitingParticipants result', { roomName, total: participants.length, waiting: waitingParticipants.length });
-    return waitingParticipants;
+    // Merge in registry waiters (clients that poll for admission without ever
+    // connecting to LiveKit), excluding anyone already admitted or already live.
+    const liveIdentities = new Set(waitingParticipants.map((p) => p.identity));
+    const registryWaiters = listWaitingRegistry(roomName).filter(
+      (p) => !liveIdentities.has(p.identity) && !dbAdmitted.has(p.identity) && !memAdmitted.has(p.identity)
+    );
+    const merged = [...waitingParticipants, ...registryWaiters];
+
+    logger.info('[LiveKit] getWaitingParticipants result', {
+      roomName,
+      total: participants.length,
+      live: waitingParticipants.length,
+      registry: registryWaiters.length,
+      waiting: merged.length,
+    });
+    return merged;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const roomMissing =
@@ -786,8 +873,10 @@ const getWaitingParticipants = async (roomName) => {
       errorMessage.includes('not found') ||
       errorMessage.toLowerCase().includes('does not exist');
     if (roomMissing) {
-      logger.debug('[LiveKit] getWaitingParticipants room not found', { roomName });
-      return [];
+      // Room not created in LiveKit yet (host hasn't joined) — still surface the
+      // poll-based waiters so the host sees them the moment they open the panel.
+      logger.debug('[LiveKit] getWaitingParticipants room not found; returning registry waiters', { roomName });
+      return listWaitingRegistry(roomName);
     }
     logger.warn('[LiveKit] getWaitingParticipants', { roomName, error: errorMessage });
     throw new ApiError(
@@ -815,16 +904,21 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
   }
 
   try {
-    // Get participant details from LiveKit
-    let participant;
+    // The waiter may be a poll-based participant who never connected to LiveKit,
+    // so a missing live participant is NOT an error: admission works purely via
+    // admittedIdentities + the client re-fetching a full token on its next poll.
+    let participant = null;
     try {
       participant = await roomService.getParticipant(roomName, participantIdentity);
     } catch (err) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'Participant not found in room');
+      logger.info('[LiveKit] admitParticipant: participant not connected (poll-based waiter)', { roomName, participantIdentity });
     }
 
-    const name = participantName || participant.name || participantIdentity;
-    const email = participantEmail || (participant.metadata && typeof participant.metadata === 'string' ? null : participant.metadata?.email) || null;
+    const name = participantName || participant?.name || participantIdentity;
+    const email =
+      participantEmail ||
+      (participant?.metadata && typeof participant.metadata === 'string' ? null : participant?.metadata?.email) ||
+      null;
 
     // Mark participant as admitted
     if (!admittedParticipants.has(roomName)) {
@@ -839,6 +933,9 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
     ]).catch((err) =>
       logger.warn('[LiveKit] Persist admitted identity failed', { roomName: meetingIdKey, participantIdentity, err: err?.message })
     );
+
+    // No longer waiting — drop from the poll-based registry.
+    removeWaitingParticipant(roomName, participantIdentity);
 
     // Generate new token with full permissions (force full permissions for admitted participants)
     const { token } = await generateAccessToken({
@@ -887,8 +984,17 @@ const removeParticipant = async (roomName, participantIdentity) => {
   }
 
   try {
-    await roomService.removeParticipant(roomName, participantIdentity);
-    logger.info('[LiveKit] Participant removed', { roomName, participantIdentity });
+    // Drop the poll-based waiter (denied before ever connecting).
+    removeWaitingParticipant(roomName, participantIdentity);
+
+    // Best-effort disconnect from LiveKit. A poll-based waiter is not connected,
+    // so a missing participant here is not an error.
+    try {
+      await roomService.removeParticipant(roomName, participantIdentity);
+      logger.info('[LiveKit] Participant removed', { roomName, participantIdentity });
+    } catch (err) {
+      logger.info('[LiveKit] removeParticipant: not connected (poll-based waiter)', { roomName, participantIdentity });
+    }
 
     // Remove from admitted list if present
     const roomAdmitted = admittedParticipants.get(roomName);

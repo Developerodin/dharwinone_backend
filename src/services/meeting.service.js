@@ -250,6 +250,44 @@ const getInvitationEmails = (meeting) => {
 };
 
 /**
+ * Send the interview invitation email + in-app notification to each recipient.
+ * Shared by create (all recipients) and update (only newly-added recipients) so
+ * the two paths stay in sync.
+ * @param {Object} meeting - Meeting document
+ * @param {string[]} emails - lowercased recipient emails
+ */
+const sendInvitationEmails = (meeting, emails) => {
+  const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
+  emails.forEach((to) => {
+    const inviteName = resolveInviteeDisplayName(meeting, to);
+    const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
+    const payload = {
+      title: meeting.title,
+      scheduledAt: meeting.scheduledAt,
+      timezone: meeting.timezone,
+      durationMinutes: meeting.durationMinutes,
+      inviteeName: inviteName,
+      hostName: meeting.recruiter?.name || meeting.hosts?.[0]?.nameOrRole || '',
+      interviewType: meeting.interviewType,
+      jobPosition: meeting.jobPosition,
+      description: meeting.description,
+      publicMeetingUrl: personalUrl,
+    };
+    sendMeetingInvitationEmail(to, payload).catch((err) => {
+      logger.warn(`Failed to send meeting invitation to ${to}:`, err?.message || err);
+    });
+    import('./notification.service.js').then(({ notifyByEmail }) => {
+      notifyByEmail(to, {
+        type: 'meeting',
+        title: meeting.title || 'Meeting invitation',
+        message: `Scheduled: ${scheduled}`,
+        ...interviewMeetingNotificationFields(meeting, { name: inviteName, email: to }),
+      }).catch(() => {});
+    }).catch(() => {});
+  });
+};
+
+/**
  * Create a meeting and send invitation emails
  * @param {Object} body - Meeting payload
  * @param {string} userId - Created by user id
@@ -328,36 +366,8 @@ const createMeeting = async (body, userId) => {
     }
   }
 
-  // Send invitation emails (fire-and-forget; log errors)
-  const emails = getInvitationEmails(meeting);
-  const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
-  emails.forEach((to) => {
-    const inviteName = resolveInviteeDisplayName(meeting, to);
-    const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
-    const payload = {
-      title: meeting.title,
-      scheduledAt: meeting.scheduledAt,
-      timezone: meeting.timezone,
-      durationMinutes: meeting.durationMinutes,
-      inviteeName: inviteName,
-      hostName: meeting.recruiter?.name || meeting.hosts?.[0]?.nameOrRole || '',
-      interviewType: meeting.interviewType,
-      jobPosition: meeting.jobPosition,
-      description: meeting.description,
-      publicMeetingUrl: personalUrl,
-    };
-    sendMeetingInvitationEmail(to, payload).catch((err) => {
-      logger.warn(`Failed to send meeting invitation to ${to}:`, err?.message || err);
-    });
-    import('./notification.service.js').then(({ notifyByEmail }) => {
-      notifyByEmail(to, {
-        type: 'meeting',
-        title: meeting.title || 'Meeting invitation',
-        message: `Scheduled: ${scheduled}`,
-        ...interviewMeetingNotificationFields(meeting, { name: inviteName, email: to }),
-      }).catch(() => {});
-    }).catch(() => {});
-  });
+  // Send invitation emails to everyone (fire-and-forget; log errors)
+  sendInvitationEmails(meeting, getInvitationEmails(meeting));
 
   return meetingObj;
 };
@@ -600,6 +610,10 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   await assertMeetingInScope(meeting, currentUser);
   const previousInterviewResult = meeting.interviewResult;
   const previousStatus = meeting.status;
+  // Snapshot recipients BEFORE applying the edit so we can email only the
+  // people newly added in this edit (participants from the user list or guest
+  // invites), never re-spam existing invitees.
+  const beforeInviteEmails = new Set(getInvitationEmails(meeting));
   const safeBody = { ...updateBody };
   const dur = Number(safeBody.durationMinutes);
   if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
@@ -609,6 +623,10 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   }
   Object.assign(meeting, safeBody);
   await meeting.save();
+
+  // Email ONLY the newly-added invitees/participants (decision: no re-spam on edit).
+  const newlyAddedEmails = getInvitationEmails(meeting).filter((e) => !beforeInviteEmails.has(e));
+  if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
 
   // If admin flips status -> 'ended' via PATCH, mirror endMeetingByRoomPublic:
   // stop active egress + wait for finalize before deleting LiveKit room. Without

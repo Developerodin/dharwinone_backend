@@ -106,7 +106,7 @@ export const isAllowedTransition = (workflow, from, to) => {
  */
 export const JOB_TYPES = freezeList([
   Object.freeze({ value: 'FT_40', label: 'Full time — 40 hours/week', compensationType: 'paid' }),
-  Object.freeze({ value: 'PT_25', label: 'Part time — 25 hours/week', compensationType: 'paid' }),
+  Object.freeze({ value: 'PT_25', label: 'Part time — 20 hours/week', compensationType: 'paid' }),
   Object.freeze({
     value: 'INTERN_UNPAID',
     label: 'Training / Unpaid Internship (Full Time)',

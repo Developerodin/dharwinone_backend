@@ -1,5 +1,7 @@
 import { Queue, QueueEvents } from 'bullmq';
-import { redisConnection } from '../config/redis.js';
+import { isRedisEnabled, redisConnection } from '../config/redis.js';
+import ApiError from '../utils/ApiError.js';
+import httpStatus from 'http-status';
 
 export const SUMMARY_QUEUE = 'summary.finalize';
 
@@ -19,11 +21,17 @@ let queueSingleton = null;
 let eventsSingleton = null;
 
 export function getSummaryQueue() {
+  if (!isRedisEnabled()) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Summary queue unavailable (Redis disabled)');
+  }
   if (!queueSingleton) queueSingleton = new Queue(SUMMARY_QUEUE, summaryQueueOptions());
   return queueSingleton;
 }
 
 export function getSummaryQueueEvents() {
+  if (!isRedisEnabled()) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Summary queue events unavailable (Redis disabled)');
+  }
   if (!eventsSingleton) eventsSingleton = new QueueEvents(SUMMARY_QUEUE, { connection: redisConnection() });
   return eventsSingleton;
 }

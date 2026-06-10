@@ -218,6 +218,7 @@ const envVarsSchema = Joi.object()
     REDIS_URL: Joi.string().default('redis://localhost:6379'),
     REDIS_QUEUE_DB: Joi.number().default(1),
     REDIS_PARTIAL_TRANSCRIPT_DB: Joi.number().default(2),
+    REDIS_ENABLED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     TRANSCRIPT_RETENTION_DAYS: Joi.number().default(365),
     SUMMARY_RETENTION_DAYS: Joi.number().default(365),
     AGENT_DISPATCH_RETENTION_DAYS: Joi.number().default(30),
@@ -531,6 +532,7 @@ const config = {
     presignExpirySeconds: envVars.PRESIGN_EXPIRY_SECONDS,
   },
   redis: {
+    enabled: String(envVars.REDIS_ENABLED ?? '').trim().toLowerCase() === 'true' || String(envVars.REDIS_ENABLED ?? '').trim() === '1',
     url: envVars.REDIS_URL,
     queueDb: envVars.REDIS_QUEUE_DB,
     partialDb: envVars.REDIS_PARTIAL_TRANSCRIPT_DB,

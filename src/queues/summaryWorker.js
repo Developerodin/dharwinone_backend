@@ -2,13 +2,17 @@ import { Worker } from 'bullmq';
 import { SUMMARY_QUEUE } from './summaryQueue.js';
 import { finalizeSummary } from '../services/summaryFinalize.service.js';
 import { writeDeadLetter } from './deadLetter.service.js';
-import { redisConnection } from '../config/redis.js';
+import { isRedisEnabled, redisConnection } from '../config/redis.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 
 let workerSingleton = null;
 
 export function startSummaryWorker() {
+  if (!isRedisEnabled()) {
+    logger.warn('[SummaryWorker] Redis disabled; worker not started');
+    return null;
+  }
   if (workerSingleton) return workerSingleton;
   workerSingleton = new Worker(
     SUMMARY_QUEUE,

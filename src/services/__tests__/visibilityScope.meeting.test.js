@@ -1,61 +1,78 @@
-import test, { mock } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const ROOT = '507f1f77bcf86cd799439011';
-const SUB_ADMIN = '507f1f77bcf86cd799439012';
-const AGENT = '507f1f77bcf86cd799439013';
+// Permission-based visibility (tenant-independent):
+//   interviews.manage -> ALL interviews | interviews.read -> OWN | neither -> none
+//   meetings.manage   -> ALL meetings   | meetings.read   -> OWN | neither -> none
+// Interview and meeting permission families must stay isolated (no cross-leak).
 
-test('meetingScope: administrator with interviews.read gets tenant-wide filter', async (t) => {
-  t.mock.module('../../utils/roleHelpers.js', {
+const ACTOR = { _id: '507f1f77bcf86cd799439013', email: 'user@example.com' };
+
+const mockPerms = (t, granted) => {
+  t.mock.module('../../utils/permissionCheck.js', {
     namedExports: {
-      userCanViewAllInterviewsForListing: async () => true,
-      userHasRecruiterRole: async () => false,
-      userIsAdmin: async () => true,
-      userIsSalesAgent: async () => false,
+      hasApiPermission: async (_user, required) => granted.has(required),
+      hasApiPermissionFromContext: () => false,
+      hasPermission: async () => false,
+      hasPermissionFromContext: () => false,
     },
   });
+};
 
-  const userFindMock = mock.fn(() => ({
-    lean: async () => [{ _id: AGENT }],
-  }));
-  t.mock.module('../../models/user.model.js', {
-    defaultExport: { find: userFindMock },
-  });
+const EMPTY = { _id: { $in: [] } };
 
-  const { meetingScope } = await import('../visibilityScope.service.js?t=admin-read');
-
-  const { filter, scopeDebug } = await meetingScope(
-    { _id: SUB_ADMIN, adminId: ROOT, email: 'admin@example.com' },
-    'read'
-  );
-
-  assert.equal(scopeDebug.role, 'interview_listing');
-  assert.ok(filter.$or);
-  assert.equal(filter.$or.length, 2);
-  assert.equal(String(filter.$or.find((c) => c.tenantId)?.tenantId), ROOT);
-  const createdByIds = filter.$or.find((c) => c.createdBy)?.createdBy.$in.map(String) || [];
-  assert.ok(createdByIds.includes(ROOT));
-  assert.ok(createdByIds.includes(AGENT));
+test('meetingScope: interviews.manage (full CRUD) sees ALL interviews', async (t) => {
+  mockPerms(t, new Set(['interviews.manage', 'interviews.read']));
+  const { meetingScope } = await import('../visibilityScope.service.js?t=int-manage');
+  const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
+  assert.deepEqual(filter, {});
+  assert.equal(scopeDebug.role, 'interviews.manage:all');
 });
 
-test('meetingScope: user without listing permission sees only own meetings', async (t) => {
-  t.mock.module('../../utils/roleHelpers.js', {
-    namedExports: {
-      userCanViewAllInterviewsForListing: async () => false,
-      userHasRecruiterRole: async () => false,
-      userIsAdmin: async () => false,
-      userIsSalesAgent: async () => false,
-    },
-  });
+test('meetingScope: interviews.read only (view) sees OWN interviews', async (t) => {
+  mockPerms(t, new Set(['interviews.read']));
+  const { meetingScope } = await import('../visibilityScope.service.js?t=int-read');
+  const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'interviews.read:own');
+  assert.ok(filter.$or.some((c) => c.createdBy));
+});
 
-  const { meetingScope } = await import('../visibilityScope.service.js?t=self-only');
+test('meetingScope: no interview permission sees nothing', async (t) => {
+  mockPerms(t, new Set());
+  const { meetingScope } = await import('../visibilityScope.service.js?t=int-none');
+  const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'none');
+  assert.deepEqual(filter, EMPTY);
+});
 
-  const { filter, scopeDebug } = await meetingScope(
-    { _id: AGENT, email: 'agent@example.com' },
-    'read'
-  );
+test('internalMeetingScope: meetings.manage sees ALL meetings', async (t) => {
+  mockPerms(t, new Set(['meetings.manage', 'meetings.read']));
+  const { internalMeetingScope } = await import('../visibilityScope.service.js?t=mtg-manage');
+  const { filter, scopeDebug } = await internalMeetingScope(ACTOR, 'read');
+  assert.deepEqual(filter, {});
+  assert.equal(scopeDebug.role, 'meetings.manage:all');
+});
 
-  assert.equal(scopeDebug.role, 'self');
-  assert.ok(filter.$or);
-  assert.equal(filter.$or.some((clause) => clause.createdBy), true);
+test('internalMeetingScope: meetings.read only sees OWN meetings', async (t) => {
+  mockPerms(t, new Set(['meetings.read']));
+  const { internalMeetingScope } = await import('../visibilityScope.service.js?t=mtg-read');
+  const { filter, scopeDebug } = await internalMeetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'meetings.read:own');
+  assert.ok(filter.$or.some((c) => c.createdBy));
+});
+
+test('no cross-leak: interviews.manage grants NO internal-meeting visibility', async (t) => {
+  mockPerms(t, new Set(['interviews.manage']));
+  const { internalMeetingScope } = await import('../visibilityScope.service.js?t=mtg-noleak');
+  const { filter, scopeDebug } = await internalMeetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'none');
+  assert.deepEqual(filter, EMPTY);
+});
+
+test('no cross-leak: meetings.manage grants NO interview visibility', async (t) => {
+  mockPerms(t, new Set(['meetings.manage']));
+  const { meetingScope } = await import('../visibilityScope.service.js?t=int-noleak');
+  const { filter, scopeDebug } = await meetingScope(ACTOR, 'read');
+  assert.equal(scopeDebug.role, 'none');
+  assert.deepEqual(filter, EMPTY);
 });

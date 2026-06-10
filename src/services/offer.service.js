@@ -185,7 +185,8 @@ const applyLetterFieldsFromUpdate = (offer, updateBody) => {
     offer.compensationSource = 'jobTypeDerived';
   }
   if (updateBody.weeklyHours !== undefined) {
-    offer.weeklyHours = [25, 40].includes(Number(updateBody.weeklyHours)) ? Number(updateBody.weeklyHours) : 40;
+    const h = Number(updateBody.weeklyHours);
+    offer.weeklyHours = Number.isFinite(h) && h >= 1 && h <= 168 ? h : 40;
     delete updateBody.weeklyHours;
   }
   take('workLocation');
@@ -228,8 +229,9 @@ const toLetterContext = (offer) => {
   const address = (offer.letterAddress && offer.letterAddress.trim()) || addrFromEmp || '';
   const jt = offer.jobType || 'FT_40';
   const isIntern = jt === 'INTERN_UNPAID';
-  let weeklyHours = [25, 40].includes(offer.weeklyHours) ? offer.weeklyHours : 40;
-  if (jt === 'PT_25') weeklyHours = 25;
+  let weeklyHours =
+    Number.isFinite(offer.weeklyHours) && offer.weeklyHours >= 1 && offer.weeklyHours <= 168 ? offer.weeklyHours : 40;
+  if (jt === 'PT_25') weeklyHours = 20;
   if (jt === 'FT_40') weeklyHours = 40;
   const fromCtc = buildCompensationNarrative(offer);
   const comp =
@@ -490,7 +492,9 @@ const createOffer = async (jobApplicationId, payload, userId) => {
     ...(payload.letterAddress != null && { letterAddress: payload.letterAddress }),
     ...(payload.positionTitle != null && { positionTitle: payload.positionTitle }),
     ...(payload.jobType != null && { jobType: payload.jobType }),
-    ...([25, 40].includes(payload.weeklyHours) && { weeklyHours: payload.weeklyHours }),
+    ...(Number.isFinite(payload.weeklyHours) &&
+      payload.weeklyHours >= 1 &&
+      payload.weeklyHours <= 168 && { weeklyHours: payload.weeklyHours }),
     ...(payload.workLocation != null && { workLocation: payload.workLocation }),
     ...(Array.isArray(payload.roleResponsibilities) && { roleResponsibilities: payload.roleResponsibilities }),
     ...(payload.positionOverviewHtml != null && { positionOverviewHtml: payload.positionOverviewHtml }),

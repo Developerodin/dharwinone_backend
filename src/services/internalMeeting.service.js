@@ -6,6 +6,7 @@ import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
+import { internalMeetingScope } from './visibilityScope.service.js';
 
 const internalMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
   link: getInAppMeetingLink(meeting.meetingId, invite),
@@ -54,27 +55,14 @@ const resolveInternalByIdOrMeetingId = async (id) => {
 };
 
 /**
- * @param {Object} body
- * @param {string} userId
+ * Send the meeting invitation email + in-app notification to each recipient.
+ * Shared by create (all recipients) and update (only newly-added recipients).
+ * @param {Object} meeting - InternalMeeting document
+ * @param {string[]} emails - lowercased recipient emails
  */
-const createInternalMeeting = async (body, userId) => {
-  const meetingId = await generateUniqueLivekitRoomId();
-  const durationMinutes = Number(body.durationMinutes) || 60;
-  const meeting = await InternalMeeting.create({
-    ...body,
-    durationMinutes,
-    meetingId,
-    roomName: meetingId,
-    createdBy: userId,
-  });
-
-  const meetingObj = meeting.toJSON();
-  meetingObj.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
-
-  const emails = getInvitationEmails(meeting);
+const sendInvitationEmails = (meeting, emails) => {
   const scheduled = formatMeetingScheduledLocal(meeting.scheduledAt, meeting.timezone);
   const hostName = meeting.hosts?.[0]?.nameOrRole || '';
-
   emails.forEach((to) => {
     const inviteName = resolveInviteeDisplayName(meeting, to);
     const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
@@ -104,12 +92,39 @@ const createInternalMeeting = async (body, userId) => {
       })
       .catch(() => {});
   });
+};
+
+/**
+ * @param {Object} body
+ * @param {string} userId
+ */
+const createInternalMeeting = async (body, userId) => {
+  const meetingId = await generateUniqueLivekitRoomId();
+  const durationMinutes = Number(body.durationMinutes) || 60;
+  const meeting = await InternalMeeting.create({
+    ...body,
+    durationMinutes,
+    meetingId,
+    roomName: meetingId,
+    createdBy: userId,
+  });
+
+  const meetingObj = meeting.toJSON();
+  meetingObj.publicMeetingUrl = getPublicMeetingUrl(meeting.meetingId);
+
+  // Send invitation emails to everyone (fire-and-forget; log errors)
+  sendInvitationEmails(meeting, getInvitationEmails(meeting));
 
   return meetingObj;
 };
 
-const queryInternalMeetings = async (filter, options) => {
-  const result = await InternalMeeting.paginate(filter, {
+const queryInternalMeetings = async (filter, options, currentUser = null) => {
+  let scopedFilter = filter;
+  if (currentUser) {
+    const { filter: scope } = await internalMeetingScope(currentUser, 'read');
+    scopedFilter = { $and: [filter || {}, scope] };
+  }
+  const result = await InternalMeeting.paginate(scopedFilter, {
     ...options,
     populate: 'createdBy',
     sort: options.sortBy || '-createdAt',
@@ -122,9 +137,16 @@ const queryInternalMeetings = async (filter, options) => {
   return result;
 };
 
-const getInternalMeetingById = async (id) => {
+const getInternalMeetingById = async (id, currentUser = null) => {
   const meeting = await resolveInternalByIdOrMeetingId(id);
   if (!meeting) return null;
+  // Prevent by-id enumeration across the meetings.* boundary. No-op for trusted
+  // internal calls (currentUser absent), e.g. the update flow re-fetch.
+  if (currentUser) {
+    const { filter: scope } = await internalMeetingScope(currentUser, 'read');
+    const inScope = await InternalMeeting.exists({ $and: [{ _id: meeting._id }, scope] });
+    if (!inScope) throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
   const populated = await InternalMeeting.findById(meeting._id).populate('createdBy');
   if (!populated) return null;
   const doc = populated.toJSON();
@@ -137,6 +159,8 @@ const updateInternalMeetingById = async (id, updateBody) => {
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  // Snapshot recipients before the edit so we email only newly-added invitees.
+  const beforeInviteEmails = new Set(getInvitationEmails(meeting));
   const safeBody = { ...updateBody };
   const dur = Number(safeBody.durationMinutes);
   if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
@@ -146,6 +170,11 @@ const updateInternalMeetingById = async (id, updateBody) => {
   }
   Object.assign(meeting, safeBody);
   await meeting.save();
+
+  // Email ONLY the newly-added invitees/participants (no re-spam on edit).
+  const newlyAddedEmails = getInvitationEmails(meeting).filter((e) => !beforeInviteEmails.has(e));
+  if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
+
   return getInternalMeetingById(meeting._id.toString());
 };
 

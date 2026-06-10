@@ -5,12 +5,23 @@ import * as chatService from '../services/chat.service.js';
 import * as chatCallService from '../services/chatCall.service.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
+import crypto from 'crypto';
 
 const parseChatRoomConversationId = (roomName) => {
   if (!roomName || !roomName.startsWith('chat-')) return null;
   const parts = roomName.split('-');
   if (parts.length >= 2) return parts[1];
   return null;
+};
+
+const stablePublicParticipantIdentity = ({ roomName, participantName, participantEmail }) => {
+  const base = String(participantEmail || participantName || 'guest').toLowerCase().trim();
+  const digest = crypto
+    .createHash('sha1')
+    .update(`${String(roomName).trim()}|${base}`)
+    .digest('hex')
+    .slice(0, 10);
+  return `guest-${digest}`;
 };
 
 /**
@@ -156,7 +167,13 @@ const getTokenPublic = catchAsync(async (req, res) => {
   }
 
   const name = participantName?.trim() || 'Guest';
-  const participantIdentity = bodyIdentity?.trim() || `guest-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const participantIdentity =
+    bodyIdentity?.trim() ||
+    stablePublicParticipantIdentity({
+      roomName,
+      participantName: name,
+      participantEmail: participantEmail?.trim(),
+    });
 
   const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin } = await livekitService.generateAccessToken({
     roomName,

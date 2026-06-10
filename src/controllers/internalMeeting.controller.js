@@ -13,12 +13,12 @@ const create = catchAsync(async (req, res) => {
 const list = catchAsync(async (req, res) => {
   const filter = pick(req.query, ['title', 'status']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const result = await internalMeetingService.queryInternalMeetings(filter, options);
+  const result = await internalMeetingService.queryInternalMeetings(filter, options, req.user);
   res.send(result);
 });
 
 const get = catchAsync(async (req, res) => {
-  const meeting = await internalMeetingService.getInternalMeetingById(req.params.id);
+  const meeting = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
   if (!meeting) {
     return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
   }

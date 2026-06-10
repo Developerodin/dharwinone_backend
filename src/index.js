@@ -33,6 +33,7 @@ import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
 import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
 import { startRetentionEnforcer, stopRetentionEnforcer } from './jobs/retentionEnforcer.js';
+import { canUseRedis } from './config/redis.js';
 import {
   startWorkforceReconciliationScheduler,
   stopWorkforceReconciliationScheduler,
@@ -48,6 +49,7 @@ let jobVerificationSchedulerId;
 let callRecordSyncSchedulerId;
 let applicationVerificationSchedulerId;
 let recordingDiscoverySchedulerId;
+let redisFeaturesEnabled = false;
 const port = config.port || process.env.PORT || 3000;
 
 mongoose
@@ -58,9 +60,13 @@ mongoose
     seedVoiceAgentsFromEnv().catch((e) => logger.warn(`[VoiceAgent] seed skipped: ${e.message}`));
     const httpServer = http.createServer(app);
     if (config.env !== 'test') initSocket(httpServer);
-    server = httpServer.listen(port, '0.0.0.0', () => {
+    server = httpServer.listen(port, '0.0.0.0', async () => {
       logger.info(`Listening on port ${port}`);
       if (config.env !== 'test') {
+        redisFeaturesEnabled = await canUseRedis();
+        if (!redisFeaturesEnabled) {
+          logger.warn('[Startup] Redis unavailable or disabled. Continuing without Redis-dependent workers/queues.');
+        }
         startAttendanceScheduler();
         const candidateSchedulerMinutes = Math.min(
           1440,
@@ -76,9 +82,13 @@ mongoose
         registerEmbeddingHooks();
         runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
         startMemorySweepScheduler({ intervalHours: 24 });
-        startSummaryWorker();
+        if (redisFeaturesEnabled) {
+          startSummaryWorker();
+        }
         startStuckDispatchSweeper();
-        startStuckFinalizeSweeper();
+        if (redisFeaturesEnabled) {
+          startStuckFinalizeSweeper();
+        }
         startRetentionEnforcer();
         startWorkforceReconciliationScheduler({ intervalHours: 24 });
         startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
@@ -107,9 +117,13 @@ const exitHandler = () => {
       stopRecordingScheduler();
       stopRecordingDiscoveryScheduler(recordingDiscoverySchedulerId);
       stopMemorySweepScheduler();
-      stopSummaryWorker().catch(() => {});
+      if (redisFeaturesEnabled) {
+        stopSummaryWorker().catch(() => {});
+      }
       stopStuckDispatchSweeper();
-      stopStuckFinalizeSweeper();
+      if (redisFeaturesEnabled) {
+        stopStuckFinalizeSweeper();
+      }
       stopRetentionEnforcer();
       stopWorkforceReconciliationScheduler();
       stopSalesAgentCacheReconcilerScheduler();
