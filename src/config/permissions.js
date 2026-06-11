@@ -189,6 +189,15 @@ export const permissionAliases = {
   // Tasks: project.tasks -> tasks.read; project.kanban -> kanban.read (Kanban board, also needs task API)
   'tasks.read': ['tasks.read', 'kanban.read'],
   'tasks.manage': ['tasks.manage', 'kanban.manage'],
+  // Kanban board project filter (GET /projects) — kanban-only matrix rows do not grant project.projects:view
+  'projects.read': [
+    'projects.read',
+    'my-projects.read',
+    'kanban.read',
+    'kanban.manage',
+    'tasks.read',
+    'tasks.manage',
+  ],
   // My Profile (ats.my-profile:view → my-profile.read)
   'my-profile.read': ['my-profile.read', 'ats.my-profile:view', 'ats.my-profile:view,create,edit,delete'],
   'my-profile.manage': ['my-profile.manage', 'ats.my-profile:create,edit,delete', 'ats.my-profile:view,create,edit,delete'],
@@ -200,8 +209,17 @@ export const permissionAliases = {
     'interviews.read',
     'interviews.manage',
   ],
-  // User directory list (GET /users) — interview roles need recruiter dropdown without full admin
-  'users.read': ['users.read', 'users.manage', 'interviews.read', 'interviews.manage'],
+  // User directory list (GET /users) — interview + kanban assignee dropdown without full users admin
+  'users.read': [
+    'users.read',
+    'users.manage',
+    'interviews.read',
+    'interviews.manage',
+    'kanban.read',
+    'kanban.manage',
+    'tasks.read',
+    'tasks.manage',
+  ],
   // Recruiters
   'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
   'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],
