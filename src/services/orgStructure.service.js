@@ -306,13 +306,17 @@ export const updateOrgUnit = async (id, body) => {
   if (body.departmentId !== undefined) nextDepartmentId = body.departmentId;
   else if (nextType !== 'department') nextDepartmentId = null;
   else nextDepartmentId = unit.departmentId;
+  const nextParentId = body.parentId !== undefined ? body.parentId ?? null : unit.parentId;
   const next = {
     type: nextType,
     departmentId: nextDepartmentId,
     directToCeo: body.directToCeo !== undefined ? body.directToCeo : unit.directToCeo,
   };
   const units = await loadUnitsPlain();
-  assertPlacement(units, next, unit.parentId);
+  if (body.parentId !== undefined && idStr(nextParentId) !== idStr(unit.parentId)) {
+    assertReparentAllowed(units, id, nextParentId);
+  }
+  assertPlacement(units, { ...unit.toObject(), ...next, type: nextType, departmentId: nextDepartmentId }, nextParentId);
   if (typeChanged) {
     const verdict = childrenValidAfterTypeChange(units, id, nextType);
     if (!verdict.ok) {
@@ -386,8 +390,19 @@ export const reparentOrgUnit = async (id, newParentId) => {
   const unit = await OrgUnit.findById(id);
   if (!unit) throw new ApiError(httpStatus.NOT_FOUND, 'Org unit not found');
   const parentIdBefore = unit.parentId;
-  assertPlacement(units, unit, newParentId ?? null);
+  const parentKey = idStr(newParentId);
+  const parent = parentKey ? units.find((u) => idStr(u.id) === parentKey) : null;
+  const nextDirectToCeo =
+    unit.type === 'department'
+      ? parent?.type === 'ceo'
+        ? true
+        : parent
+          ? false
+          : unit.directToCeo
+      : unit.directToCeo;
+  assertPlacement(units, { ...unit.toObject(), directToCeo: nextDirectToCeo }, newParentId ?? null);
   unit.parentId = newParentId ?? null;
+  if (unit.type === 'department') unit.directToCeo = nextDirectToCeo;
   await unit.save();
   const affectedUnitCount = countDescendantUnits(units, id);
   return buildAuditEnvelope(unit, {

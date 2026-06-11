@@ -28,6 +28,22 @@ export const permissionAliases = {
     'training.modules:view,create,edit,delete',
     'evaluation.manage',
   ],
+  'evaluation.read': [
+    'evaluation.read',
+    'training.evaluation:view',
+    'training.evaluation:view,create,edit,delete',
+    'modules.read',
+    'training.modules.read',
+    'training.modules:view',
+    'training.modules:view,create,edit,delete',
+  ],
+  'evaluation.manage': [
+    'evaluation.manage',
+    'training.evaluation:create,edit,delete',
+    'training.evaluation:view,create,edit,delete',
+    'modules.manage',
+    'training.modules.manage',
+  ],
   'training.modules.read': ['training.modules.read', 'training.modules:view', 'training.modules:view,create,edit,delete'],
   'training.modules.manage': [
     'training.modules.manage',
@@ -277,6 +293,32 @@ export const permissionAliases = {
   'structure.read': ['structure.read', 'organization.structure:view', 'organization.structure:view,create,edit,delete'],
   'structure.manage': ['structure.manage', 'organization.structure:create,edit,delete', 'organization.structure:view,create,edit,delete'],
   'chart.read': ['chart.read', 'organization.chart:view', 'organization.chart:view,create,edit,delete'],
+  'departments.read': [
+    'departments.read',
+    'organization.departments:view',
+    'organization.departments:view,create,edit,delete',
+  ],
+  'departments.manage': [
+    'departments.manage',
+    'structure.manage',
+    'organization.departments:create,edit,delete',
+    'organization.departments:view,create,edit,delete',
+  ],
+  'directory.read': [
+    'directory.read',
+    'organization.directory:view',
+    'organization.directory:view,create,edit,delete',
+  ],
+  'scenarios.read': [
+    'scenarios.read',
+    'organization.scenarios:view',
+    'organization.scenarios:view,create,edit,delete',
+  ],
+  'scenarios.manage': [
+    'scenarios.manage',
+    'organization.scenarios:create,edit,delete',
+    'organization.scenarios:view,create,edit,delete',
+  ],
 };
 
 /**

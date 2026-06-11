@@ -138,7 +138,10 @@ export const diffScenario = async (scenarioId) => {
       changes.push({ kind: 'removed', liveOrgUnitId: String(live._id), name: live.name });
     }
   }
-  return { scenarioId: String(scenarioId), changeCount: changes.length, changes };
+  // Only reparent changes are ever written by applyScenario. Surface that count so the
+  // UI can stop overstating what "Apply" will do (added/update/removed are live-drift noise).
+  const applicableCount = changes.filter((c) => c.kind === 'reparent' && c.liveOrgUnitId).length;
+  return { scenarioId: String(scenarioId), changeCount: changes.length, applicableCount, changes };
 };
 
 export const reparentScenarioUnit = async (scenarioId, scenarioUnitId, parentScenarioUnitId) => {
@@ -152,11 +155,23 @@ export const reparentScenarioUnit = async (scenarioId, scenarioUnitId, parentSce
   if (parentId && wouldCreateCycle(units.map((u) => ({ id: u.id, parentId: u.parentId })), unit.id, parentId)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Reparent would create a cycle');
   }
-  const verdict = validateOrgUnitPlacement(units, unit, parentId);
+  // Mirror live reparentOrgUnit: a department reporting straight to the CEO must be
+  // directToCeo; moving it under a supervisor clears the flag. Otherwise validation
+  // rejects department -> CEO moves that the live chart allows.
+  const parent = parentId ? units.find((u) => u.id === parentId) : null;
+  const nextDirectToCeo =
+    unit.type === 'department'
+      ? parent?.type === 'ceo'
+        ? true
+        : parent
+          ? false
+          : unit.directToCeo
+      : unit.directToCeo;
+  const verdict = validateOrgUnitPlacement(units, { ...unit, directToCeo: nextDirectToCeo }, parentId);
   if (!verdict.ok) throw new ApiError(httpStatus.BAD_REQUEST, verdict.reason);
-  await OrgScenarioUnit.findByIdAndUpdate(unit.id, {
-    parentScenarioUnitId: parentId,
-  });
+  const update = { parentScenarioUnitId: parentId };
+  if (unit.type === 'department') update.directToCeo = nextDirectToCeo;
+  await OrgScenarioUnit.findByIdAndUpdate(unit.id, update);
   return getScenarioTree(scenarioId);
 };
 
@@ -166,14 +181,17 @@ export const applyScenario = async (scenarioId, userId) => {
   if (!scenario) throw new ApiError(httpStatus.NOT_FOUND, 'Scenario not found');
   if (scenario.status === 'applied') throw new ApiError(httpStatus.BAD_REQUEST, 'Scenario already applied');
   const diff = await diffScenario(scenarioId);
-  if (!diff.changes.length) throw new ApiError(httpStatus.BAD_REQUEST, 'No changes to apply');
+  // Apply writes reparents only; refuse to flip a scenario to "applied" when there is
+  // nothing it can actually commit (avoids a no-op apply that silently freezes the draft).
+  const reparentChanges = diff.changes.filter((c) => c.kind === 'reparent' && c.liveOrgUnitId);
+  if (!reparentChanges.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'No applicable reparent changes to apply');
+  }
   const scenarioApplyId = crypto.randomUUID();
   const applied = [];
-  for (const change of diff.changes) {
-    if (change.kind === 'reparent' && change.liveOrgUnitId) {
-      const envelope = await orgStructureService.reparentOrgUnit(change.liveOrgUnitId, change.parentAfter);
-      applied.push({ change, audit: envelope.audit });
-    }
+  for (const change of reparentChanges) {
+    const envelope = await orgStructureService.reparentOrgUnit(change.liveOrgUnitId, change.parentAfter);
+    applied.push({ change, audit: envelope.audit });
   }
   scenario.status = 'applied';
   scenario.appliedAt = new Date();
@@ -191,6 +209,18 @@ export const applyScenario = async (scenarioId, userId) => {
     },
     occurredAt: new Date(),
   });
+};
+
+/** Delete a scenario and its sandbox units. Applied scenarios are kept as audit history. */
+export const deleteScenario = async (scenarioId) => {
+  const scenario = await OrgScenario.findById(scenarioId);
+  if (!scenario) throw new ApiError(httpStatus.NOT_FOUND, 'Scenario not found');
+  if (scenario.status === 'applied') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Applied scenarios are kept as audit history and cannot be deleted');
+  }
+  await OrgScenarioUnit.deleteMany({ scenarioId: scenario._id });
+  await scenario.deleteOne();
+  return { id: String(scenario._id), deleted: true };
 };
 
 export const approveScenario = async (scenarioId, userId) => {

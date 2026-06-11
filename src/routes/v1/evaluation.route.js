@@ -8,7 +8,7 @@ const router = express.Router();
 router.get(
   '/',
   auth(),
-  requirePermissions('modules.read'),
+  requirePermissions('evaluation.read'),
   evaluationController.default.getEvaluation
 );
 

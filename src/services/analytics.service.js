@@ -3,6 +3,7 @@ import Mentor from '../models/mentor.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
+import { computeEnrollmentStatusBreakdown } from './evaluation.service.js';
 
 const TIME_BUCKETS = 12;
 
@@ -45,9 +46,7 @@ const getTrainingAnalytics = async (options = {}) => {
     modulesWithStudents,
     totalEnrollments,
     completionCount,
-    statusEnrolled,
-    statusInProgress,
-    statusCompleted,
+    progressListForStatus,
     recentProgressList,
     quizAggResult,
     enrollmentsOverTime,
@@ -74,18 +73,9 @@ const getTrainingAnalytics = async (options = {}) => {
         ? { $exists: true, $ne: null, $gte: dateRange.start, $lte: dateRange.end }
         : { $exists: true, $ne: null },
     }),
-    StudentCourseProgress.countDocuments({
-      ...baseProgressMatch,
-      $or: [{ 'progress.percentage': 0 }, { 'progress.percentage': { $exists: false } }],
-    }),
-    StudentCourseProgress.countDocuments({
-      ...baseProgressMatch,
-      'progress.percentage': { $gt: 0, $lt: 100 },
-    }),
-    StudentCourseProgress.countDocuments({
-      ...baseProgressMatch,
-      $or: [{ status: 'completed' }, { 'progress.percentage': { $gte: 100 } }],
-    }),
+    StudentCourseProgress.find({ student: { $in: activeStudentIds } })
+      .select('student module progress completedAt enrolledAt startedAt status certificate')
+      .lean(),
     StudentCourseProgress.find({ completedAt: { $exists: true, $ne: null }, student: { $in: activeStudentIds } })
       .sort({ completedAt: -1 })
       .limit(10)
@@ -219,13 +209,19 @@ const getTrainingAnalytics = async (options = {}) => {
   ]);
 
   const totalCourses = modulesWithStudents.filter((m) => m.students?.length > 0).length;
+  const progressCountByModuleId = new Map(
+    (completionByModuleAgg || []).map((r) => [r.moduleId?.toString(), r.enrolled || 0])
+  );
   const enrollmentsByModule = modulesWithStudents
-    .filter((m) => m.students?.length > 0)
-    .map((m) => ({
-      moduleId: m._id?.toString(),
-      moduleName: m.moduleName || '—',
-      enrolledCount: m.students?.length ?? 0,
-    }))
+    .map((m) => {
+      const moduleId = m._id?.toString();
+      return {
+        moduleId,
+        moduleName: m.moduleName || '—',
+        enrolledCount: progressCountByModuleId.get(moduleId) ?? 0,
+      };
+    })
+    .filter((r) => r.enrolledCount > 0)
     .sort((a, b) => (b.enrolledCount || 0) - (a.enrolledCount || 0));
 
   const recentCompletions = recentProgressList.map((p) => ({
@@ -268,8 +264,8 @@ const getTrainingAnalytics = async (options = {}) => {
     const mentors = mod.mentorsAssigned || [];
     const studentCount = mod.students?.length ?? 0;
     for (const ment of mentors) {
-      const id = ment._id?.toString();
-      const name = ment?.user?.name || '—';
+      const id = (typeof ment === 'object' ? ment._id : ment)?.toString?.() || 'unassigned';
+      const name = ment?.user?.name || ment?.user?.email || 'Unassigned';
       if (!mentorMap[id]) mentorMap[id] = { mentorId: id, mentorName: name, moduleCount: 0, studentCount: 0 };
       mentorMap[id].moduleCount += 1;
       mentorMap[id].studentCount += studentCount;
@@ -306,11 +302,11 @@ const getTrainingAnalytics = async (options = {}) => {
     enrollmentsOverTime: enrollmentsOverTime || [],
     completionsOverTime: completionsOverTime || [],
     quizScoreOverTime: quizScoreOverTime || [],
-    statusBreakdown: {
-      enrolled: Number(statusEnrolled),
-      inProgress: Number(statusInProgress),
-      completed: Number(statusCompleted),
-    },
+    statusBreakdown: computeEnrollmentStatusBreakdown({
+      modules: modulesWithStudents,
+      progressList: progressListForStatus,
+      activeStudentIds: new Set(activeStudentIds.map((id) => id.toString())),
+    }),
     completionByModule,
     quizScoreByModule: quizScoreByModule,
     enrollmentsByCategory,

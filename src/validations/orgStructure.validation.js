@@ -28,6 +28,8 @@ export const updateOrgUnit = {
   body: Joi.object().keys({
     name: Joi.string().trim(),
     type: Joi.string().valid(...TYPES),
+    parentId: Joi.string().custom(objectId).allow(null),
+    headEmployeeId: Joi.string().custom(objectId).allow(null),
     departmentId: Joi.string().custom(objectId).allow(null),
     directToCeo: Joi.boolean(),
     order: Joi.number().integer(),

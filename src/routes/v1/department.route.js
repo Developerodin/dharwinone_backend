@@ -16,17 +16,22 @@ const canReadDepartments = [
   ),
 ];
 
+const canManageDepartments = [
+  auth(),
+  requireAnyOfPermissions('departments.manage', 'structure.manage'),
+];
+
 router
   .route('/')
   .get(...canReadDepartments, validate(v.getDepartments), c.getDepartments)
-  .post(auth(), requirePermissions('departments.manage', { auditOnDeny: 'org.mutate.denied' }), validate(v.createDepartment), c.createDepartment);
+  .post(...canManageDepartments, validate(v.createDepartment), c.createDepartment);
 
 router
   .route('/:departmentId')
-  .patch(auth(), requirePermissions('departments.manage', { auditOnDeny: 'org.mutate.denied' }), validate(v.updateDepartment), c.updateDepartment)
-  .delete(auth(), requirePermissions('departments.manage', { auditOnDeny: 'org.mutate.denied' }), validate(v.deactivateDepartment), c.deactivateDepartment);
+  .patch(...canManageDepartments, validate(v.updateDepartment), c.updateDepartment)
+  .delete(...canManageDepartments, validate(v.deactivateDepartment), c.deactivateDepartment);
 
-router.patch('/:departmentId/reactivate', auth(), requirePermissions('departments.manage', { auditOnDeny: 'org.mutate.denied' }), validate(v.reactivateDepartment), c.reactivateDepartment);
-router.delete('/:departmentId/permanent', auth(), requirePermissions('departments.manage', { auditOnDeny: 'org.mutate.denied' }), validate(v.deactivateDepartment), c.deleteDepartment);
+router.patch('/:departmentId/reactivate', ...canManageDepartments, validate(v.reactivateDepartment), c.reactivateDepartment);
+router.delete('/:departmentId/permanent', ...canManageDepartments, validate(v.deactivateDepartment), c.deleteDepartment);
 
 export default router;

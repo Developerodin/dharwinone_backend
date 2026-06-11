@@ -36,6 +36,10 @@ export const reparentScenarioUnit = catchAsync(async (req, res) => {
   );
 });
 
+export const deleteScenario = catchAsync(async (req, res) => {
+  res.send(await orgScenarioService.deleteScenario(req.params.scenarioId));
+});
+
 export const approveScenario = catchAsync(async (req, res) => {
   res.send(await orgScenarioService.approveScenario(req.params.scenarioId, req.user?._id));
 });
