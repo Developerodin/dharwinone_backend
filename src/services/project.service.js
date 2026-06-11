@@ -9,6 +9,7 @@ import TeamGroup from '../models/teamGroup.model.js';
 import ApiError from '../utils/ApiError.js';
 import { buildSpecialistTaskSlugOrConditions } from '../constants/candidateProjectTaskTypes.js';
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
+import { isKanbanViewOnlyScope } from '../utils/kanbanScope.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
 import { assignUniqueProjectKey, isProjectKeyDuplicateError } from './pmTaskCode.js';
 
@@ -119,6 +120,8 @@ const queryProjects = async (filter, options) => {
    */
   const canSeeAll =
     isAdmin || apiPermissions.has('projects.read') || apiPermissions.has('projects.manage');
+  const kanbanViewOnly = isKanbanViewOnlyScope(apiPermissions, isAdmin);
+  const effectiveMineOnly = mineOnly || kanbanViewOnly;
 
   const searchDisjunction = filter.$or;
   const hasSearchDisjunction = Array.isArray(searchDisjunction) && searchDisjunction.length > 0;
@@ -128,10 +131,10 @@ const queryProjects = async (filter, options) => {
 
   if (!canSeeAll && userId) {
     const hasPersonProfile = await userHasPersonProfileRole({ roleIds: userRoleIds });
-    if (hasPersonProfile && mongoose.Types.ObjectId.isValid(String(userId))) {
+    if ((hasPersonProfile || kanbanViewOnly) && mongoose.Types.ObjectId.isValid(String(userId))) {
       const userOid = new mongoose.Types.ObjectId(String(userId));
       /** My Projects (?mine=1): any assigned task. Main Projects list: specialist-slug tasks only. */
-      const taskProjectFilter = mineOnly
+      const taskProjectFilter = effectiveMineOnly
         ? { assignedTo: userOid, projectId: { $ne: null } }
         : {
             assignedTo: userOid,
@@ -140,7 +143,9 @@ const queryProjects = async (filter, options) => {
           };
       const projectIdsFromTasks = await Task.distinct('projectId', taskProjectFilter).exec();
       const idList = (projectIdsFromTasks || []).filter(Boolean);
-      const accessOr = [{ createdBy: userId }, { _id: { $in: idList } }];
+      const accessOr = kanbanViewOnly
+        ? [{ assignedTo: userId }, { _id: { $in: idList } }]
+        : [{ createdBy: userId }, { assignedTo: userId }, { _id: { $in: idList } }];
       if (hasSearchDisjunction) {
         filter.$and = [{ $or: searchDisjunction }, { $or: accessOr }];
       } else {
@@ -151,7 +156,7 @@ const queryProjects = async (filter, options) => {
     } else {
       filter.createdBy = userId;
     }
-  } else if (canSeeAll && mineOnly && userId) {
+  } else if (canSeeAll && effectiveMineOnly && userId) {
     if (hasSearchDisjunction) {
       filter.$and = [{ $or: searchDisjunction }, { createdBy: userId }];
     } else {

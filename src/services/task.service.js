@@ -5,6 +5,7 @@ import Project from '../models/project.model.js';
 import Sprint from '../models/sprint.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
+import { isKanbanViewOnlyScope } from '../utils/kanbanScope.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
 import { reserveTaskSeqRange, formatTaskCode } from './pmTaskCode.js';
 
@@ -193,10 +194,11 @@ const queryTasks = async (filter, options) => {
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   /** Org-wide list when admin OR role grants tasks.read / tasks.manage. */
   const canSeeAll = isAdmin || apiPermissions.has('tasks.read') || apiPermissions.has('tasks.manage');
+  const kanbanViewOnly = isKanbanViewOnlyScope(apiPermissions, isAdmin);
   let finalFilter = { ...filter };
 
-  if (assignedToMe && userId) {
-    // Show only tasks assigned to the current user
+  if ((kanbanViewOnly || assignedToMe) && userId) {
+    // Kanban view-only and explicit "assigned to me" — assigned tasks only
     finalFilter.assignedTo = userId;
   } else if (!canSeeAll && userId) {
     // Show tasks created by or assigned to the current user
@@ -214,7 +216,7 @@ const queryTasks = async (filter, options) => {
     orphanMatch = { projectId: { $ne: null } };
   } else if (userId && mongoose.Types.ObjectId.isValid(String(userId))) {
     const userOid = new mongoose.Types.ObjectId(String(userId));
-    orphanMatch = assignedToMe
+    orphanMatch = assignedToMe || kanbanViewOnly
       ? { assignedTo: userOid, projectId: { $ne: null } }
       : {
           projectId: { $ne: null },
