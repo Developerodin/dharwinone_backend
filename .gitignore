@@ -24,7 +24,7 @@ tests/
 graphify-out/
 
 AGENTS.md
-postman/APP_API_SCOPE.md
+postman/
 
 # local scratch / exports (do not commit)
 referral_hits.csv
