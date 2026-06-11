@@ -4,6 +4,9 @@ export const ATTRIBUTION_SOURCE = Object.freeze({
   MANUAL_ASSIGN: 'manual_assign',
   MANUAL_CHANGE: 'manual_change',
   MANUAL_REVOKE: 'manual_revoke',
+  // Auto-created when a referral is applied and the referrer holds the sales_agent
+  // role: the referrer is recorded as the candidate's sales agent too.
+  AUTO_REFERRAL_SALES_AGENT: 'auto_referral_sales_agent',
 });
 
 export const ACTIVITY_LOG_ACTION = Object.freeze({

@@ -6,6 +6,7 @@ import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import * as activityLogService from './activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { autoAttributeReferrerAsSalesAgent } from './salesAgentAttribution.service.js';
 
 const CTX_ONBOARD = 'SHARE_CANDIDATE_ONBOARD';
 const CTX_JOB = 'JOB_APPLY';
@@ -157,6 +158,9 @@ export const applyReferralToCandidate = async (candidateId, registeringEmail, ve
   c.referralPipelineStatus = 'pending';
   c.attributionLockedAt = new Date();
   await c.save();
+  // If the referrer is a sales agent, record them as this candidate's sales agent
+  // too — same scope as the referral (job-share → job, onboarding → candidate-level).
+  await autoAttributeReferrerAsSalesAgent(c, c.referredByUserId, c.referralJobId || null);
   return { applied: true };
 };
 
@@ -202,6 +206,9 @@ export const applyOnboardInviteReferral = async (candidateId, inviteeEmail, invi
   c.referralPipelineStatus = 'pending';
   c.attributionLockedAt = new Date();
   await c.save();
+  // Onboarding-invite referral is always candidate-level (no job). If the inviter is
+  // a sales agent, record them as this candidate's sales agent too.
+  await autoAttributeReferrerAsSalesAgent(c, c.referredByUserId, null);
   return { applied: true, jti };
 };
 

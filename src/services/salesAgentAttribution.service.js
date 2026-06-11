@@ -187,6 +187,77 @@ async function buildJobSnapshot(jobId, ctx = {}) {
   return { title: job.title || '', requisitionCode: job.requisitionCode || null };
 }
 
+/**
+ * When a referral is applied and the referrer holds the sales_agent role, also
+ * record that referrer as the candidate's sales agent (referrer == sales agent),
+ * regardless of whether the referral came via a job-share or onboarding link.
+ * Scope follows the referral: job-scoped when the link carried a job, else
+ * candidate-level. Idempotent (skips if a current attribution already exists) and
+ * best-effort — it never throws into the registration / referral flow.
+ *
+ * @param {object} candidate - Employee mongoose doc (the referred candidate)
+ * @param {import('mongoose').Types.ObjectId|string} referrerUserId
+ * @param {import('mongoose').Types.ObjectId|string|null} [jobId] - referral job, if any
+ * @param {object} [ctx] - dependency injection for tests
+ * @returns {Promise<{auto:boolean, reason?:string, attributionId?:string}>}
+ */
+export async function autoAttributeReferrerAsSalesAgent(candidate, referrerUserId, jobId = null, ctx = {}) {
+  const ReferralAttribution = ctx.ReferralAttribution || ReferralAttributionDefault;
+  const Employee = ctx.Employee || EmployeeDefault;
+  const User = ctx.User || UserDefault;
+  const isSalesAgent = ctx.isSalesAgent || userIsSalesAgent;
+  try {
+    if (!candidate?._id || !referrerUserId) return { auto: false, reason: 'missing_input' };
+
+    const referrer = await User.findById(referrerUserId);
+    if (!referrer) return { auto: false, reason: 'referrer_not_found' };
+    if (!(await isSalesAgent(referrer))) return { auto: false, reason: 'not_sales_agent' };
+
+    const scopeJobId =
+      jobId && mongoose.Types.ObjectId.isValid(String(jobId))
+        ? new mongoose.Types.ObjectId(String(jobId))
+        : null;
+
+    // Idempotent: never stack a second current attribution for the same scope.
+    const existing = await ReferralAttribution.findOne({
+      subjectProfileId: candidate._id,
+      jobId: scopeJobId,
+      ...ACTIVE,
+    });
+    if (existing) return { auto: false, reason: 'attribution_exists' };
+
+    const now = new Date();
+    const [row] = await ReferralAttribution.create([
+      {
+        tenantId: resolveEffectiveTenantId(candidate) || candidate.tenantId,
+        subjectProfileId: candidate._id,
+        jobId: scopeJobId,
+        salesAgentUserId: referrer._id,
+        salesAgentSnapshot: buildSnapshot(referrer),
+        jobSnapshot: scopeJobId ? await buildJobSnapshot(scopeJobId, ctx) : null,
+        lifecycleStageAtAssignment: deriveLifecycleStage(candidate, { now }),
+        attributionEventId: randomUUID(),
+        assignedByUserId: referrer._id,
+        assignedAt: now,
+        notes: null,
+        source: ATTRIBUTION_SOURCE.AUTO_REFERRAL_SALES_AGENT,
+        isCurrent: true,
+        isRevoked: false,
+      },
+    ]);
+
+    if (scopeJobId) {
+      await Employee.updateOne({ _id: candidate._id }, { $set: { attributionJobId: scopeJobId } });
+      candidate.attributionJobId = scopeJobId;
+    }
+    // Non-transactional: the row above is committed, so this read (no session) sees it.
+    await recomputeEmployeeCache(candidate, null, { Employee, ReferralAttribution });
+    return { auto: true, attributionId: String(row._id) };
+  } catch (e) {
+    return { auto: false, reason: 'error', error: e?.message };
+  }
+}
+
 async function assertCandidateLevelNotFrozen(Model, subjectProfileId, jobId) {
   if (jobId !== null && jobId !== undefined) return;
   const existing = await Model.countDocuments({
