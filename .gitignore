@@ -29,3 +29,7 @@ postman/APP_API_SCOPE.md
 # local scratch / exports (do not commit)
 referral_hits.csv
 
+
+# Local AI tool config (do not commit)
+.claude/
+.codex/
