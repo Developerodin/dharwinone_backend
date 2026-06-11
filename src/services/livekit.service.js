@@ -93,6 +93,47 @@ const removeWaitingParticipant = (roomName, identity) => {
   if (room.size === 0) waitingRegistry.delete(key);
 };
 
+// Track waiters a host has explicitly DENIED from the waiting room. A denied
+// waiter is still polling for a token, so without this they silently re-appear
+// in the host roster and keep waiting forever with no feedback. We flag them
+// here; the next token poll returns rejected:true so the client can show a
+// terminal "host declined" screen and stop polling. Cleared on admit or TTL.
+const REJECTED_TTL_MS = 15 * 60 * 1000;
+const rejectedRegistry = new Map(); // roomName -> Map<identity, deniedAtMs>
+
+const recordRejectedParticipant = (roomName, identity) => {
+  if (!roomName || !identity) return;
+  const key = String(roomName).trim();
+  let room = rejectedRegistry.get(key);
+  if (!room) {
+    room = new Map();
+    rejectedRegistry.set(key, room);
+  }
+  room.set(identity, Date.now());
+};
+
+const clearRejectedParticipant = (roomName, identity) => {
+  const key = String(roomName || '').trim();
+  const room = rejectedRegistry.get(key);
+  if (!room) return;
+  room.delete(identity);
+  if (room.size === 0) rejectedRegistry.delete(key);
+};
+
+const isRejectedParticipant = (roomName, identity) => {
+  const key = String(roomName || '').trim();
+  const room = rejectedRegistry.get(key);
+  if (!room) return false;
+  const deniedAt = room.get(identity);
+  if (!deniedAt) return false;
+  if (Date.now() - deniedAt > REJECTED_TTL_MS) {
+    room.delete(identity);
+    if (room.size === 0) rejectedRegistry.delete(key);
+    return false;
+  }
+  return true;
+};
+
 /** Return non-expired registry waiters for a room, pruning stale entries. */
 const listWaitingRegistry = (roomName) => {
   const key = String(roomName || '').trim();
@@ -306,8 +347,19 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   // (non-host, cannot publish, real meeting) so the host's roster can show them;
   // clear the moment they become joinable (host/admitted/approval-off).
   const effectiveIdentity = participantIdentity || participantName;
+  // A host-denied waiter must NOT be re-recorded as waiting (would re-surface in the
+  // host roster). Flag the rejection back to the client so it shows a terminal screen
+  // and stops polling. Host/admitted/forced tokens are never "rejected".
+  const rejected = Boolean(
+    meeting &&
+      !isHost &&
+      !isAdmitted &&
+      !forceFullPermissions &&
+      effectiveIdentity &&
+      isRejectedParticipant(roomName, effectiveIdentity)
+  );
   if (effectiveIdentity) {
-    if (meeting && !isHost && !canPublish) {
+    if (!rejected && meeting && !isHost && !canPublish) {
       recordWaitingParticipant(roomName, effectiveIdentity, participantName);
     } else {
       removeWaitingParticipant(roomName, effectiveIdentity);
@@ -367,7 +419,7 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     })();
   }
 
-  return { token: jwt, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin: Boolean(meeting?.allowGuestJoin) };
+  return { token: jwt, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin: Boolean(meeting?.allowGuestJoin), rejected };
 };
 
 /**
@@ -934,8 +986,10 @@ const admitParticipant = async (roomName, participantIdentity, participantName =
       logger.warn('[LiveKit] Persist admitted identity failed', { roomName: meetingIdKey, participantIdentity, err: err?.message })
     );
 
-    // No longer waiting — drop from the poll-based registry.
+    // No longer waiting — drop from the poll-based registry and clear any prior
+    // denial so a re-admit lets them back in (rejected flag must not stick).
     removeWaitingParticipant(roomName, participantIdentity);
+    clearRejectedParticipant(roomName, participantIdentity);
 
     // Generate new token with full permissions (force full permissions for admitted participants)
     const { token } = await generateAccessToken({
@@ -984,8 +1038,10 @@ const removeParticipant = async (roomName, participantIdentity) => {
   }
 
   try {
-    // Drop the poll-based waiter (denied before ever connecting).
+    // Drop the poll-based waiter (denied before ever connecting) and flag the
+    // denial so their next token poll returns rejected:true (terminal screen).
     removeWaitingParticipant(roomName, participantIdentity);
+    recordRejectedParticipant(roomName, participantIdentity);
 
     // Best-effort disconnect from LiveKit. A poll-based waiter is not connected,
     // so a missing participant here is not an error.

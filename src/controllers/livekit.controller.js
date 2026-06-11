@@ -59,7 +59,7 @@ const getToken = catchAsync(async (req, res) => {
     });
   }
 
-  const { token, isHost, canPublish, meetingEndAt } = await livekitService.generateAccessToken({
+  const { token, isHost, canPublish, meetingEndAt, rejected } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
@@ -75,6 +75,7 @@ const getToken = catchAsync(async (req, res) => {
     isHost,
     canPublish,
     meetingEndAt,
+    rejected, // true → host denied this waiter; client shows terminal screen, stops polling
   });
 });
 
@@ -175,7 +176,7 @@ const getTokenPublic = catchAsync(async (req, res) => {
       participantEmail: participantEmail?.trim(),
     });
 
-  const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin } = await livekitService.generateAccessToken({
+  const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin, rejected } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
@@ -195,6 +196,7 @@ const getTokenPublic = catchAsync(async (req, res) => {
     meetingEndAt,
     knocking, // uninvited guest → client knocks (auto if allowGuestJoin, else "Ask for permission")
     allowGuestJoin, // true → auto-knock; false → explicit ask-for-permission button
+    rejected, // true → host denied this waiter; client shows terminal screen, stops polling
   });
 });
 
