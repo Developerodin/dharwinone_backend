@@ -297,7 +297,15 @@ export const buildReferralLeadsMatch = async (opts) => {
   };
 
   if (!canSeeAll) {
-    mongo.referredByUserId = user._id;
+    // Scoped view: surface referral leads you referred OR ones you're the assigned sales
+    // agent for. Mirrors how a referrer sees their own candidates — the assigned sales
+    // agent (Employee.currentSalesAgentUserId, kept in sync by salesAgentAttribution) now
+    // sees the same candidate too.
+    mongo.$and = (mongo.$and || []).concat([
+      {
+        $or: [{ referredByUserId: user._id }, { currentSalesAgentUserId: user._id }],
+      },
+    ]);
   } else if (query.referredByUserId && mongoose.Types.ObjectId.isValid(String(query.referredByUserId))) {
     mongo.referredByUserId = new mongoose.Types.ObjectId(String(query.referredByUserId));
   }
@@ -788,7 +796,7 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
-  const [totalArr, byStatus, topRef, unassignedArr, salesBoard] = await Promise.all([
+  const [totalArr, byStatus, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
     Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
     Employee.aggregate([
       { $match: match },
@@ -810,6 +818,28 @@ export const getReferralLeadsStats = async (req) => {
       { $count: 'c' },
     ]),
     computeSalesAgentStats(req.user?.tenantId, q),
+    // Hired referral leads split by the job type they were hired into (Full-time = paid,
+    // Internship = unpaid). Item lists are capped at 100 for the dashboard drill-down.
+    Employee.aggregate([
+      { $match: { ...match, referralPipelineStatus: 'hired' } },
+      ...ownerStages,
+      { $lookup: { from: 'jobs', localField: 'attributionJobId', foreignField: '_id', as: '_aJob' } },
+      { $lookup: { from: 'jobs', localField: 'referralJobId', foreignField: '_id', as: '_rJob' } },
+      {
+        $addFields: {
+          _jobType: { $ifNull: [{ $arrayElemAt: ['$_aJob.jobType', 0] }, { $arrayElemAt: ['$_rJob.jobType', 0] }] },
+          _jobTitle: { $ifNull: [{ $arrayElemAt: ['$_aJob.title', 0] }, { $arrayElemAt: ['$_rJob.title', 0] }] },
+        },
+      },
+      {
+        $group: {
+          _id: '$_jobType',
+          count: { $sum: 1 },
+          items: { $push: { id: '$_id', name: '$fullName', email: '$email', jobTitle: '$_jobTitle' } },
+        },
+      },
+      { $project: { count: 1, items: { $slice: ['$items', 100] } } },
+    ]),
   ]);
 
   const totalAgg = totalArr[0]?.c ?? 0;
@@ -846,12 +876,38 @@ export const getReferralLeadsStats = async (req) => {
     rank: idx + 1,
   }));
 
+  // Paid = hired into a Full-time job; Unpaid = hired into an Internship. Everything else
+  // (other job types or no linked job) is surfaced separately so the totals stay honest.
+  const PAID_JOB_TYPE = 'Full-time';
+  const UNPAID_JOB_TYPE = 'Internship';
+  const shapeHire = (it) => ({
+    id: String(it.id),
+    name: it.name || 'Unknown',
+    email: it.email || '',
+    jobTitle: it.jobTitle || null,
+  });
+  const paidBucket = hireByType.find((b) => b._id === PAID_JOB_TYPE);
+  const unpaidBucket = hireByType.find((b) => b._id === UNPAID_JOB_TYPE);
+  const otherBuckets = hireByType.filter((b) => b._id !== PAID_JOB_TYPE && b._id !== UNPAID_JOB_TYPE);
+  const paidHires = paidBucket?.count ?? 0;
+  const unpaidHires = unpaidBucket?.count ?? 0;
+  const otherHires = otherBuckets.reduce((n, b) => n + b.count, 0);
+  const paidHiresList = (paidBucket?.items ?? []).map(shapeHire);
+  const unpaidHiresList = (unpaidBucket?.items ?? []).map(shapeHire);
+  const otherHiresList = otherBuckets.flatMap((b) => b.items || []).slice(0, 100).map(shapeHire);
+
   return {
     totalReferrals: totalAgg,
     converted,
     conversionRate,
     pending,
     hired,
+    paidHires,
+    unpaidHires,
+    otherHires,
+    paidHiresList,
+    unpaidHiresList,
+    otherHiresList,
     topReferrer,
     leaderboard: [],
     unassignedCount,
