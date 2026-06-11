@@ -50,13 +50,17 @@ export function assertSharesTenantIdentity(leftIds, rightIds, subjectLabel = 'Us
   }
 }
 
-export async function currentSalesAgent(subjectProfileId, jobId, { Model = ReferralAttributionDefault } = {}) {
+export async function currentSalesAgent(
+  subjectProfileId,
+  jobId,
+  { Model = ReferralAttributionDefault, session = null } = {}
+) {
   const sort = { assignedAt: -1, createdAt: -1 };
   if (jobId) {
-    const exact = await Model.findOne({ subjectProfileId, jobId, ...ACTIVE }).sort(sort);
+    const exact = await Model.findOne({ subjectProfileId, jobId, ...ACTIVE }).sort(sort).session(session);
     if (exact) return exact;
   }
-  const fallback = await Model.findOne({ subjectProfileId, jobId: null, ...ACTIVE }).sort(sort);
+  const fallback = await Model.findOne({ subjectProfileId, jobId: null, ...ACTIVE }).sort(sort).session(session);
   return fallback;
 }
 
@@ -143,12 +147,17 @@ async function syncAttributionJobAnchor(Employee, employee, jobId, session) {
 export async function recomputeEmployeeCache(employee, session, ctx = {}) {
   const Employee = ctx.Employee || EmployeeDefault;
   const ReferralAttribution = ctx.ReferralAttribution || ReferralAttributionDefault;
-  let row = await currentSalesAgent(employee._id, employee.attributionJobId, { Model: ReferralAttribution });
+  let row = await currentSalesAgent(employee._id, employee.attributionJobId, {
+    Model: ReferralAttribution,
+    session,
+  });
   if (!row) {
-    row = await ReferralAttribution.findOne({ subjectProfileId: employee._id, ...ACTIVE }).sort({
-      assignedAt: -1,
-      createdAt: -1,
-    });
+    row = await ReferralAttribution.findOne({ subjectProfileId: employee._id, ...ACTIVE })
+      .sort({
+        assignedAt: -1,
+        createdAt: -1,
+      })
+      .session(session);
   }
   await Employee.updateOne(
     { _id: employee._id },

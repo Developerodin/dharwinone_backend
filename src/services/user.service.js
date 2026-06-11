@@ -54,13 +54,30 @@ const queryUsers = async (filter, options, requester = null) => {
   const mongoFilter = { ...restFilter };
   if (role === 'recruiter' || role === 'referral_eligible' || role === 'sales_agent') {
     const Role = (await import('../models/role.model.js')).default;
-    const targetRoles =
-      role === 'recruiter'
-        ? ['Recruiter']
-        : role === 'sales_agent'
-          ? SALES_AGENT_ROLE_NAMES
+    let roleQuery;
+    if (role === 'sales_agent') {
+      // The sales-agent role's display name is admin-defined and varies by org
+      // ("Sales Agent", "sales agent", "sales_agent", "Sales_Agent", ...). Match it
+      // canonically — by slug and a case/space-insensitive name — so we resolve the
+      // role id regardless of spelling, then filter users by that id. Exact-name-only
+      // matching silently returned zero agents whenever the name differed by a space
+      // or letter case.
+      roleQuery = {
+        status: 'active',
+        $or: [
+          { name: { $in: SALES_AGENT_ROLE_NAMES } },
+          { slug: 'salesagent' },
+          { name: { $regex: /^sales[\s_-]*agent$/i } },
+        ],
+      };
+    } else {
+      const targetRoles =
+        role === 'recruiter'
+          ? ['Recruiter']
           : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
-    const roles = await Role.find({ name: { $in: targetRoles }, status: 'active' }).select('_id').lean();
+      roleQuery = { name: { $in: targetRoles }, status: 'active' };
+    }
+    const roles = await Role.find(roleQuery).select('_id').lean();
     if (roles.length > 0) {
       mongoFilter.roleIds = { $in: roles.map((r) => r._id) };
     } else {
