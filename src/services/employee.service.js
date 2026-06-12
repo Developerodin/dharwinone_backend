@@ -28,6 +28,11 @@ import {
   canSyncAcceptedOfferCanon,
   restrictToOnboardingPatchFields,
 } from './employeeUpdateAuth.helper.js';
+import { normalizeIdList } from '../utils/normalizeIdList.js';
+import {
+  mergeDocumentsPreserveKeys,
+  resetDocumentVerification,
+} from '../utils/documentVerificationMerge.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -44,45 +49,6 @@ const tryPromoteCandidateOwnerAfterJoiningDateSaved = async (ownerUserId, joinin
   } catch (e) {
     logger.warn(`tryPromoteCandidateOwnerAfterJoiningDateSaved: ${e?.message || e}`);
   }
-};
-
-/**
- * When PATCH sends documents without S3 keys (e.g. frontend only sent label+url), keep stored keys/metadata.
- * Matches rows by label (first unused match per label).
- */
-const mergeDocumentsPreserveKeys = (existingDocs = [], incomingDocs = []) => {
-  if (!Array.isArray(incomingDocs)) return existingDocs;
-  const pool = (existingDocs || []).map((d) => {
-    const plain = d?.toObject ? d.toObject() : { ...d };
-    return { ...plain, _merged: false };
-  });
-  return incomingDocs.map((inc) => {
-    const incLabel = (inc.label || '').trim();
-    let pi = pool.findIndex(
-      (p) =>
-        !p._merged &&
-        (p.label || '').trim() === incLabel &&
-        (String(inc.key || '') === String(p.key || '') || !inc.key)
-    );
-    if (pi === -1) {
-      pi = pool.findIndex((p) => !p._merged && (p.label || '').trim() === incLabel);
-    }
-    if (pi === -1) return inc;
-    const prev = pool[pi];
-    pool[pi] = { ...prev, _merged: true };
-    const out = { ...inc };
-    if (prev.key && (!inc.key || String(inc.key).trim() === '')) {
-      out.key = prev.key;
-    }
-    if (prev.originalName && !inc.originalName) out.originalName = prev.originalName;
-    if (!(out.size > 0) && prev.size) out.size = prev.size;
-    if (!out.mimeType && prev.mimeType) out.mimeType = prev.mimeType;
-    if (!out.type && prev.type) out.type = prev.type;
-    if (prev.url && (!inc.url || /localhost|127\.0\.0\.1/i.test(String(inc.url)))) {
-      out.url = prev.url;
-    }
-    return out;
-  });
 };
 
 /**
@@ -741,6 +707,11 @@ const queryCandidates = async (filter, options) => {
 
   // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
+
+  if (filter.ids) {
+    const idList = normalizeIdList(filter.ids);
+    mongoFilter._id = { $in: idList };
+  }
 
   if (
     filter.withoutReferrer === true ||
@@ -1706,10 +1677,13 @@ const mapCandidateDocToExportRow = (candidate) => {
     })),
     documents: (candidate.documents || []).map((d) => ({
       label: d.label || '',
+      type: d.type || '',
       url: d.url || '',
       originalName: d.originalName || '',
       size: d.size || '',
       mimeType: d.mimeType || '',
+      status: typeof d.status === 'number' ? d.status : 0,
+      verifiedAt: d.verifiedAt || '',
     })),
     salarySlips: (candidate.salarySlips || []).map((ss) => ({
       month: ss.month || '',
@@ -3524,8 +3498,8 @@ const replaceMyRejectedDocument = async (userId, documentIndex, file) => {
   return candidate.documents[idx];
 };
 
-/** Admin uploads a document on behalf of a candidate (used by Pre-boarding Documents modal).
- *  Pre-approves the doc since a staff member is the source. */
+/** Admin uploads a document on behalf of a candidate (Pre-boarding modal, etc.).
+ *  Staff uploads still enter the verification queue as pending. */
 const adminUploadDocumentForCandidate = async (candidateId, file, payload, user) => {
   if (!user?.canManageCandidates) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only users with candidate manage permission can upload documents');
@@ -3537,14 +3511,13 @@ const adminUploadDocumentForCandidate = async (candidateId, file, payload, user)
   if (!trimmedLabel) throw new ApiError(httpStatus.BAD_REQUEST, 'label is required');
   const uploaded = await uploadFileForCandidate(file, candidate.owner || candidateId, 'candidate-documents');
   candidate.documents = candidate.documents || [];
-  candidate.documents.push({
-    type: type || 'Other',
-    label: trimmedLabel,
-    ...uploaded,
-    status: 1,
-    verifiedAt: new Date(),
-    verifiedBy: user._id || user.id,
-  });
+  candidate.documents.push(
+    resetDocumentVerification({
+      type: type || 'Other',
+      label: trimmedLabel,
+      ...uploaded,
+    })
+  );
   candidate.markModified('documents');
   await candidate.save();
   return candidate.documents[candidate.documents.length - 1];

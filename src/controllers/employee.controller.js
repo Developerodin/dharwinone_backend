@@ -640,21 +640,47 @@ const exportAll = catchAsync(async (req, res) => {
   ]);
   const queryOptions = pick(req.query, ['sortBy']);
 
+  if (Array.isArray(req.body.ids) && req.body.ids.length > 0) {
+    listFilter.ids = req.body.ids;
+  }
+
   const exportData = await exportAllCandidates(listFilter, queryOptions);
 
   const wantsCsv = String(req.query.format || '').toLowerCase() === 'csv';
   const dateStamp = new Date().toISOString().split('T')[0];
 
   if (email) {
-    // Email body remains CSV for plain-text compatibility with current mailer
     const subject = `All Candidates Export - ${exportData.totalCandidates} candidates`;
-    const csvContent = generateCandidateExportCsv(exportData);
-    await sendEmail(email, subject, csvContent);
-    res.status(httpStatus.OK).send({
-      message: `Export sent successfully to ${email} (CSV in email body)`,
-      totalCandidates: exportData.totalCandidates,
-      exportedAt: exportData.exportedAt,
-    });
+    const bodyText = `Your employee export (${exportData.totalCandidates} record${exportData.totalCandidates === 1 ? '' : 's'}) is attached.`;
+    if (wantsCsv) {
+      const filename = `candidates-export-${dateStamp}.csv`;
+      await sendEmail(email, subject, bodyText, null, 'candidateExport', {}, {
+        attachments: [{
+          filename,
+          content: generateCandidateExportCsv(exportData),
+          contentType: 'text/csv; charset=utf-8',
+        }],
+      });
+      res.status(httpStatus.OK).send({
+        message: `Export sent successfully to ${email} (CSV attachment)`,
+        totalCandidates: exportData.totalCandidates,
+        exportedAt: exportData.exportedAt,
+      });
+    } else {
+      const filename = `employees-export-${dateStamp}.xlsx`;
+      await sendEmail(email, subject, bodyText, null, 'candidateExport', {}, {
+        attachments: [{
+          filename,
+          content: generateCandidateExportXlsxBuffer(exportData),
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }],
+      });
+      res.status(httpStatus.OK).send({
+        message: `Export sent successfully to ${email} (Excel attachment)`,
+        totalCandidates: exportData.totalCandidates,
+        exportedAt: exportData.exportedAt,
+      });
+    }
   } else if (wantsCsv) {
     const csvContent = generateCandidateExportCsv(exportData);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

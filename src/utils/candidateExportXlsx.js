@@ -21,6 +21,10 @@ function fmtDate(d) {
   }
 }
 
+function docUploadStatus(d) {
+  return d.url || d.key ? 'Uploaded' : 'Missing';
+}
+
 /**
  * Multi-sheet workbook: summary + visa/supervisor + address + one row per nested item.
  * @param {{ totalCandidates: number, exportedAt: string, data: object[] }} exportData
@@ -32,124 +36,32 @@ export function generateCandidateExportXlsxBuffer(exportData) {
 
   const idRow = (c) => [s(c.employeeId), s(c.fullName), s(c.email)];
 
-  const overviewHeader = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Phone Number',
-    'Country Code',
-    'Owner',
-    'Owner Email',
-    'Admin',
-    'Admin Email',
-    'Assigned Agent Name',
-    'Assigned Agent Email',
-    'Designation',
-    'Position (catalog)',
-    'Profile Completion %',
-    'Status',
-    'Created At',
-    'Updated At',
+  const detailsHeader = [
+    'Employee ID', 'Full Name', 'Email', 'Phone Number', 'Country Code',
+    'Owner', 'Owner Email', 'Admin', 'Admin Email',
+    'Assigned Agent Name', 'Assigned Agent Email',
+    'Designation', 'Position (catalog)', 'Profile Completion %', 'Status',
+    'Short Bio', 'SEVIS ID', 'EAD', 'Degree', 'Visa Type', 'Custom Visa Type',
+    'Supervisor Name', 'Supervisor Contact', 'Supervisor Country Code', 'Salary Range',
+    'Street Address', 'Street Address 2', 'City', 'State', 'Zip Code', 'Country',
+    'Created At', 'Updated At',
   ];
-  const overviewRows = list.map((c) => [
-    s(c.employeeId),
-    s(c.fullName),
-    s(c.email),
-    textPhone(c.phoneNumber),
-    s(c.countryCode),
-    s(c.owner),
-    s(c.ownerEmail),
-    s(c.adminId),
-    s(c.adminEmail),
-    s(c.assignedAgentName),
-    s(c.assignedAgentEmail),
-    s(c.designation),
-    s(c.positionTitle),
-    c.isProfileCompleted ?? '',
-    c.isCompleted ? 'Completed' : 'Incomplete',
-    fmtDate(c.createdAt),
-    fmtDate(c.updatedAt),
-  ]);
-  const wsOverview = XLSX.utils.aoa_to_sheet([overviewHeader, ...overviewRows]);
-  wsOverview['!cols'] = [
-    { wch: 10 },
-    { wch: 22 },
-    { wch: 28 },
-    { wch: 14 },
-    { wch: 8 },
-    { wch: 18 },
-    { wch: 26 },
-    { wch: 18 },
-    { wch: 26 },
-    { wch: 20 },
-    { wch: 28 },
-    { wch: 22 },
-    { wch: 18 },
-    { wch: 8 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsOverview, 'Overview');
-
-  const visaHeader = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Short Bio',
-    'SEVIS ID',
-    'EAD',
-    'Degree',
-    'Visa Type',
-    'Custom Visa Type',
-    'Supervisor Name',
-    'Supervisor Contact',
-    'Supervisor Country Code',
-    'Salary Range',
-  ];
-  const visaRows = list.map((c) => [
-    s(c.employeeId),
-    s(c.fullName),
-    s(c.email),
-    s(c.shortBio),
-    s(c.sevisId),
-    s(c.ead),
-    s(c.degree),
-    s(c.visaType),
-    s(c.customVisaType),
-    s(c.supervisorName),
-    textPhone(c.supervisorContact),
-    s(c.supervisorCountryCode),
-    s(c.salaryRange),
-  ]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([visaHeader, ...visaRows]), 'Visa and supervisor');
-
-  const addrHeader = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Street Address',
-    'Street Address 2',
-    'City',
-    'State',
-    'Zip Code',
-    'Country',
-  ];
-  const addrRows = list.map((c) => {
+  const detailsRows = list.map((c) => {
     const a = c.address || {};
     return [
-      s(c.employeeId),
-      s(c.fullName),
-      s(c.email),
-      s(a.streetAddress),
-      s(a.streetAddress2),
-      s(a.city),
-      s(a.state),
-      s(a.zipCode),
-      s(a.country),
+      s(c.employeeId), s(c.fullName), s(c.email), textPhone(c.phoneNumber), s(c.countryCode),
+      s(c.owner), s(c.ownerEmail), s(c.adminId), s(c.adminEmail),
+      s(c.assignedAgentName), s(c.assignedAgentEmail),
+      s(c.designation), s(c.positionTitle), c.isProfileCompleted ?? '', c.isCompleted ? 'Completed' : 'Incomplete',
+      s(c.shortBio), s(c.sevisId), s(c.ead), s(c.degree), s(c.visaType), s(c.customVisaType),
+      s(c.supervisorName), textPhone(c.supervisorContact), s(c.supervisorCountryCode), s(c.salaryRange),
+      s(a.streetAddress), s(a.streetAddress2), s(a.city), s(a.state), s(a.zipCode), s(a.country),
+      fmtDate(c.createdAt), fmtDate(c.updatedAt),
     ];
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([addrHeader, ...addrRows]), 'Address');
+  const wsDetails = XLSX.utils.aoa_to_sheet([detailsHeader, ...detailsRows]);
+  wsDetails['!cols'] = detailsHeader.map((h) => ({ wch: Math.min(Math.max(h.length + 2, 12), 28) }));
+  XLSX.utils.book_append_sheet(wb, wsDetails, 'Employee Details');
 
   const qualHeader = [
     'Employee ID',
@@ -239,15 +151,18 @@ export function generateCandidateExportXlsxBuffer(exportData) {
     'Social Links'
   );
 
-  const docHeader = ['Employee ID', 'Full Name', 'Email', 'Label', 'Original Name', 'Size', 'Mime Type'];
+  const docHeader = [
+    'Employee ID', 'Full Name', 'Email',
+    'Document Name', 'Document Type', 'Upload Status', 'Mime Type',
+  ];
   const docRows = [];
   for (const c of list) {
     for (const d of c.documents || []) {
       docRows.push([
         ...idRow(c),
-        s(d.label),
-        s(d.originalName),
-        d.size != null ? s(d.size) : '',
+        s(d.label || d.originalName),
+        s(d.type),
+        docUploadStatus(d),
         s(d.mimeType),
       ]);
     }
@@ -258,11 +173,11 @@ export function generateCandidateExportXlsxBuffer(exportData) {
     'Documents'
   );
 
-  const slipHeader = ['Employee ID', 'Full Name', 'Email', 'Month', 'Year', 'Original Name'];
+  const slipHeader = ['Employee ID', 'Full Name', 'Email', 'Month', 'Year'];
   const slipRows = [];
   for (const c of list) {
     for (const ss of c.salarySlips || []) {
-      slipRows.push([...idRow(c), s(ss.month), s(ss.year), s(ss.originalName)]);
+      slipRows.push([...idRow(c), s(ss.month), s(ss.year)]);
     }
   }
   XLSX.utils.book_append_sheet(

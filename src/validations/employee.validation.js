@@ -346,6 +346,7 @@ const exportAllCandidates = {
   }),
   body: Joi.object().keys({
     email: Joi.string().email().optional(),
+    ids: Joi.array().items(Joi.string().custom(objectId)).optional(),
   }),
 };
 

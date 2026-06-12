@@ -75,7 +75,9 @@ export function generateCandidateExportCsv(exportData) {
       .join('; ');
     const skillsStr = (candidate.skills || []).map((s) => `${s.name} (${s.level})`).join('; ');
     const socialStr = (candidate.socialLinks || []).map((sl) => `${sl.platform}: ${sl.url}`).join('; ');
-    const docsStr = (candidate.documents || []).map((d) => d.label || d.originalName).join('; ');
+    const docsStr = (candidate.documents || [])
+      .map((d) => `${d.label || d.originalName || ''} [${d.type || ''}]`)
+      .join('; ');
     const slipsStr = (candidate.salarySlips || []).map((ss) => `${ss.month} ${ss.year}`).join('; ');
 
     return [
