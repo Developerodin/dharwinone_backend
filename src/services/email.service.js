@@ -314,10 +314,16 @@ const buildPlainTextEmail = ({
  * @param {string} [html]
  * @param {string} [templateName] - Optional template name for audit (e.g. 'resetPassword')
  * @param {Object} [metadata] - Optional metadata for audit
+ * @param {Object} [extra] - Optional extra nodemailer message fields (e.g. { icalEvent }, { attachments })
  * @returns {Promise}
  */
-const sendEmail = async (to, subject, text, html, templateName = null, metadata = {}) => {
+const sendEmail = async (to, subject, text, html, templateName = null, metadata = {}, extra = {}) => {
   const deliveryTo = await resolveDeliveryEmail(to);
+  if (!deliveryTo || !String(deliveryTo).trim()) {
+    const err = new Error('No valid recipient address');
+    logger.warn(`[SMTP] sendEmail skipped: empty recipient (original to=${String(to || '')})`);
+    throw err;
+  }
   let logEntry = null;
   try {
     logEntry = await EmailLog.create({
@@ -345,6 +351,7 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
     subject,
     text,
     ...(html && { html }),
+    ...extra,
   };
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -681,9 +688,69 @@ const sendCandidateAccountActivationEmail = async (to, options = {}) => {
 };
 
 /**
+ * Build an iCalendar (.ics) string. When `rrule` is provided the VEVENT carries an
+ * RRULE so a single calendar entry covers the whole recurring series.
+ * @param {Object} ev - { uid, title, description, location, startAt, durationMinutes, rrule?, organizerEmail? }
+ * @returns {string} VCALENDAR content
+ */
+const buildIcsEvent = (ev) => {
+  const { uid, title, description, location, startAt, durationMinutes = 60, rrule, organizerEmail } = ev;
+  const toIcsUtc = (d) =>
+    new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); // YYYYMMDDTHHMMSSZ
+  const esc = (s) =>
+    String(s || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+      .replace(/\r?\n/g, '\\n');
+  const dtStart = toIcsUtc(startAt);
+  const dtEnd = toIcsUtc(new Date(new Date(startAt).getTime() + durationMinutes * 60000));
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Dharwin Business Solutions//Meetings//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${toIcsUtc(new Date())}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${esc(title)}`,
+    description ? `DESCRIPTION:${esc(description)}` : null,
+    location ? `LOCATION:${esc(location)}` : null,
+    rrule ? `RRULE:${rrule}` : null,
+    organizerEmail ? `ORGANIZER:mailto:${organizerEmail}` : null,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].filter(Boolean);
+  return lines.join('\r\n');
+};
+
+/**
+ * Build a recurring-series ICS (single VEVENT + RRULE) for a MeetingSeries doc.
+ * @param {Object} series - MeetingSeries
+ * @param {string} location - join URL
+ * @returns {Promise<string>}
+ */
+const buildSeriesIcs = async (series, location) => {
+  const { buildRRuleString } = await import('../utils/recurrence.util.js');
+  return buildIcsEvent({
+    uid: `series-${series._id || series.id || 'meeting'}@dharwin`,
+    title: series.title,
+    description: series.description,
+    location,
+    startAt: series.startAt,
+    durationMinutes: series.durationMinutes,
+    rrule: buildRRuleString(series),
+    organizerEmail: series.hosts?.[0]?.email,
+  });
+};
+
+/**
  * Send meeting invitation email
  * @param {string} to - Recipient email
- * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl }
+ * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl, icsContent? }
  * @returns {Promise}
  */
 const sendMeetingInvitationEmail = async (to, payload) => {
@@ -703,6 +770,7 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     interviewType,
     jobPosition,
     description,
+    icsContent,
   } = payload;
   const subject = `Meeting invitation: ${title || 'Dharwin meeting'}`;
   const scheduled = formatDateTime(scheduledAt, timezone);
@@ -752,13 +820,17 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     primaryAction,
     preheader: `Meeting scheduled for ${scheduled}.`,
   });
+  const extra = icsContent
+    ? { icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: icsContent } }
+    : {};
   await sendEmail(
     to,
     subject,
     text,
     html,
     'meetingInvitation',
-    compactMetadata({ title, scheduled, timezone, hostName, interviewType, jobPosition })
+    compactMetadata({ title, scheduled, timezone, hostName, interviewType, jobPosition }),
+    extra
   );
 };
 
@@ -1128,6 +1200,8 @@ export {
   sendCandidateProfileShareEmail,
   sendCandidateAccountActivationEmail,
   sendMeetingInvitationEmail,
+  buildIcsEvent,
+  buildSeriesIcs,
   buildMeetingReminderEmail,
   sendMeetingReminderEmail,
   buildInterviewConclusionEmail,

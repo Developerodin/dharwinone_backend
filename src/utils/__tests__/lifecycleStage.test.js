@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveLifecycleStage, isActiveEmployee } from '../lifecycleStage.js';
+import { deriveLifecycleStage, deriveEmployeeStatus, isActiveEmployee } from '../lifecycleStage.js';
 
 const now = new Date('2026-06-01T00:00:00Z');
 
@@ -50,4 +50,16 @@ test('isActiveEmployee false when join date in future', () => {
 
 test('default -> pending', () => {
   assert.equal(deriveLifecycleStage({ referralPipelineStatus: 'pending' }, { now }), 'pending');
+});
+
+test('joined inactive employee -> resigned (not preboarding/offered fallthrough)', () => {
+  const emp = { joiningDate: new Date('2026-01-01'), isActive: false, referralPipelineStatus: 'hired' };
+  assert.equal(deriveLifecycleStage(emp, { now, acceptedOffer: true, anyOffer: true }), 'resigned');
+});
+
+test('deriveEmployeeStatus: active / resigned / null', () => {
+  assert.equal(deriveEmployeeStatus({ joiningDate: new Date('2026-01-01'), isActive: true }, { now }), 'active');
+  assert.equal(deriveEmployeeStatus({ joiningDate: new Date('2026-01-01'), isActive: false }, { now }), 'resigned');
+  assert.equal(deriveEmployeeStatus({ joiningDate: new Date('2026-07-01'), isActive: true }, { now }), null);
+  assert.equal(deriveEmployeeStatus({ joiningDate: null, isActive: true }, { now }), null);
 });

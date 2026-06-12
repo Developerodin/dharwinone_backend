@@ -19,8 +19,15 @@ export function buildLeadMatchStage(filters = {}, scope = {}) {
     match.referralPipelineStatus = { $in: ['pending', 'profile_complete', 'applied', 'in_review'] };
   }
   if (filters.convertedEmployees === true || filters.convertedEmployees === 'true') {
+    // Conversion is historical: include resigned employees (isActive=false) too.
+    match.joiningDate = { $lte: new Date() };
+  }
+  if (filters.employeeStatus === 'active') {
     match.joiningDate = { $lte: new Date() };
     match.isActive = true;
+  } else if (filters.employeeStatus === 'resigned') {
+    match.joiningDate = { $lte: new Date() };
+    match.isActive = { $ne: true };
   }
   return match;
 }
@@ -88,6 +95,12 @@ export function buildLifecycleStageProjection() {
               then: 'employee',
             },
             {
+              case: {
+                $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }, { $ne: ['$isActive', true] }],
+              },
+              then: 'resigned',
+            },
+            {
               case: { $and: [{ $ne: ['$joiningDate', null] }, { $gt: ['$joiningDate', '$$NOW'] }] },
               then: 'joined_pending_start',
             },
@@ -105,11 +118,29 @@ export function buildLifecycleStageProjection() {
       employeeConverted: {
         $cond: [
           {
-            $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }, { $eq: ['$isActive', true] }],
+            // Conversion is a historical fact — stays true after resignation.
+            $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }],
           },
           true,
           false,
         ],
+      },
+      employeeStatus: {
+        $switch: {
+          branches: [
+            {
+              case: {
+                $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }, { $eq: ['$isActive', true] }],
+              },
+              then: 'active',
+            },
+            {
+              case: { $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }] },
+              then: 'resigned',
+            },
+          ],
+          default: null,
+        },
       },
     },
   };

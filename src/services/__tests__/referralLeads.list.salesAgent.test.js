@@ -14,6 +14,7 @@ test('applyNewFilters supports pendingReferrals filter', () => {
 
 test('applyNewFilters supports convertedEmployees filter', () => {
   const match = applyNewFilters({ convertedEmployees: true });
-  assert.equal(match.isActive, true);
+  // Conversion is historical — resigned employees stay in the converted set.
+  assert.equal(match.isActive, undefined);
   assert.ok(match.joiningDate.$lte instanceof Date);
 });

@@ -83,3 +83,87 @@ export const hasExceededDurationInTimezone = (punchIn, tz, durationHours) => {
   if (isNaN(start.getTime())) return false;
   return Date.now() - start.getTime() >= durationHours * 60 * 60 * 1000;
 };
+
+const offsetFormatterCache = new Map();
+
+const getOffsetFormatter = (timeZone) => {
+  let formatter = offsetFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    offsetFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+};
+
+/**
+ * Offset (ms) of `timeZone` at a given UTC instant: localWallClock - utc.
+ * Positive east of UTC (e.g. Asia/Kolkata → +19800000).
+ */
+const tzOffsetMs = (utcMs, timeZone) => {
+  const parts = getOffsetFormatter(timeZone).formatToParts(new Date(utcMs));
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  // Intl can emit hour '24' at midnight — normalize to 0.
+  const hour = map.hour === '24' ? 0 : Number(map.hour);
+  const asUTC = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    hour,
+    Number(map.minute),
+    Number(map.second)
+  );
+  return asUTC - utcMs;
+};
+
+/**
+ * Convert wall-clock parts in a zone to the matching UTC instant. DST-correct
+ * (resolves the offset at the target instant, with a second pass across a DST
+ * boundary). Mirrors the frontend `wallClockToUtc` so recurrence occurrences are
+ * anchored to the user's intended local time.
+ * @param {{year:number,month:number,day:number,hour?:number,minute?:number,second?:number}} parts - month is 1-based
+ * @param {string} tz - IANA zone (legacy aliases normalized)
+ * @returns {Date}
+ */
+export const wallClockToUtc = (parts, tz) => {
+  const zone = normalizeTimezone(tz);
+  const { year, month, day, hour = 0, minute = 0, second = 0 } = parts;
+  const naiveUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  let ts = naiveUtc - tzOffsetMs(naiveUtc, zone);
+  // Re-resolve once: across a DST transition the first offset guess can be wrong.
+  const refined = tzOffsetMs(ts, zone);
+  ts = naiveUtc - refined;
+  return new Date(ts);
+};
+
+/**
+ * Wall-clock parts of a UTC instant as seen in a zone (inverse of wallClockToUtc).
+ * @param {Date|string|number} instant
+ * @param {string} tz
+ * @returns {{year:number,month:number,day:number,hour:number,minute:number,second:number}} month is 1-based
+ */
+export const wallClockPartsInZone = (instant, tz) => {
+  const zone = normalizeTimezone(tz);
+  const date = instant instanceof Date ? instant : new Date(instant);
+  const parts = getOffsetFormatter(zone).formatToParts(date);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hour = map.hour === '24' ? 0 : Number(map.hour);
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour,
+    minute: Number(map.minute),
+    second: Number(map.second),
+  };
+};

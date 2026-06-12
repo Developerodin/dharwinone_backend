@@ -94,6 +94,31 @@ const internalMeetingSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Set when the per-occurrence invitation email is sent (recurring series).
+    invitationSentAt: {
+      type: Date,
+      default: null,
+    },
+    // Per-window reminder dedup, keyed by lead-minutes (e.g. { '60': Date, '15': Date }).
+    // Drives the config-driven reminder windows in internalMeeting.service.js so adding
+    // a window needs no schema change. `reminderSentAt` above is kept for back-compat.
+    reminderState: {
+      type: Map,
+      of: Date,
+      default: () => new Map(),
+    },
+    // ---- recurring-series linkage (null for one-off meetings) ----
+    seriesId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'MeetingSeries',
+      default: null,
+      index: true,
+    },
+    occurrenceIndex: { type: Number, default: null }, // 0-based position within the series
+    seriesVersion: { type: Number, default: null }, // copied from the series at materialization
+    // Set when a single occurrence is edited so series regen / "future" edits skip it.
+    detached: { type: Boolean, default: false },
+    recurrenceSummary: { type: String, default: '' }, // denormalized label e.g. "Weekly" for list badge
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

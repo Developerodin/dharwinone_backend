@@ -290,29 +290,61 @@ const autoEndExpiredInternalMeetings = async () => {
   return count;
 };
 
-export const sendUpcomingInternalMeetingReminders = async () => {
+/**
+ * Config-driven reminder windows (lead minutes before each meeting). Override via
+ * env INTERNAL_MEETING_REMINDER_WINDOWS="60,15". Adding a window (e.g. "1440,240,60,15"
+ * for 24h/4h/1h/15m) needs no code change. Each window dedups independently via the
+ * reminderState map keyed by lead-minutes.
+ */
+export const REMINDER_WINDOWS = (() => {
+  const raw = process.env.INTERNAL_MEETING_REMINDER_WINDOWS;
+  const mins = raw
+    ? raw
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    : [60, 15];
+  const label = (m) => (m % 60 === 0 ? `${m / 60} hour${m / 60 > 1 ? 's' : ''}` : `${m} minutes`);
+  return mins.map((m) => ({ minutes: m, label: label(m) }));
+})();
+
+// Half-width of the match window (minutes). With a 5-min scheduler tick a ~±5
+// window guarantees each meeting is caught once; reminderState prevents double-fire.
+const WINDOW_PAD_MIN = Math.max(2, Number(process.env.INTERNAL_MEETING_REMINDER_PAD_MIN) || 5);
+
+const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
   const now = new Date();
-  const windowStart = new Date(now.getTime() + 10 * 60 * 1000);
-  const windowEnd = new Date(now.getTime() + 20 * 60 * 1000);
-  const meetings = await InternalMeeting.find({
+  const center = now.getTime() + minutes * 60 * 1000;
+  const windowStart = new Date(center - WINDOW_PAD_MIN * 60 * 1000);
+  const windowEnd = new Date(center + WINDOW_PAD_MIN * 60 * 1000);
+  const stateField = `reminderState.${minutes}`;
+
+  const filter = {
     status: 'scheduled',
     scheduledAt: { $gte: windowStart, $lte: windowEnd },
-    reminderSentAt: null,
-  }).lean();
+    [stateField]: { $exists: false },
+  };
+  // Back-compat: pre-existing one-off meetings used `reminderSentAt` for the 15-min mark.
+  if (minutes === 15) filter.reminderSentAt = null;
+  const meetings = await InternalMeeting.find(filter).lean();
+  if (!meetings.length) return;
 
   const User = (await import('../models/user.model.js')).default;
   const { notify } = await import('./notification.service.js');
 
   for (const m of meetings) {
-    const result = await InternalMeeting.updateOne(
-      { _id: m._id, reminderSentAt: null },
-      { $set: { reminderSentAt: now } }
-    );
-    if (result.modifiedCount === 0) continue;
+    const claimFilter = { _id: m._id, [stateField]: { $exists: false } };
+    const claimSet = { [stateField]: now };
+    if (minutes === 15) {
+      claimFilter.reminderSentAt = null;
+      claimSet.reminderSentAt = now;
+    }
+    const result = await InternalMeeting.updateOne(claimFilter, { $set: claimSet });
+    if (result.modifiedCount === 0) continue; // another tick/process claimed it
 
     const emails = getInvitationEmails(m);
     const title = m.title || 'Meeting';
-    const message = `Your meeting "${title}" starts in 15 minutes.`;
+    const message = `Your meeting "${title}" starts in ${label}.`;
     const remindedUserIds = new Set();
     for (const email of emails) {
       const inviteName = resolveInviteeDisplayName(m, email);
@@ -336,6 +368,17 @@ export const sendUpcomingInternalMeetingReminders = async () => {
           },
         }).catch(() => {});
       }
+    }
+  }
+};
+
+export const sendUpcomingInternalMeetingReminders = async () => {
+  for (const w of REMINDER_WINDOWS) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await sendInternalMeetingRemindersForWindow(w);
+    } catch (err) {
+      logger.warn(`[internalMeetingReminders] window ${w.minutes}m failed: ${err?.message || err}`);
     }
   }
 };

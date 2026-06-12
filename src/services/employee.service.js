@@ -447,6 +447,22 @@ const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g
 const whitespaceTolerantRegexSource = (value) =>
   escapeRegex(String(value ?? '').trim().replace(/\s+/g, ' ')).replace(/ /g, '\\s+');
 
+/** Mongo `$regex` clause for employeeId (supports DBS-prefixed IDs and partial matches). */
+const buildEmployeeIdRegexFilter = (employeeId) => {
+  const trimmed = String(employeeId ?? '').trim();
+  if (!trimmed) return null;
+  const dbsMatch = trimmed.match(/^DBS(\d+)$/i);
+  if (dbsMatch) {
+    const numStr = dbsMatch[1];
+    const num = parseInt(numStr, 10);
+    if (num >= 1 && num <= 9 && numStr.length === 1) {
+      return { employeeId: { $regex: `^DBS0?${num}$`, $options: 'i' } };
+    }
+    return { employeeId: { $regex: escapeRegex(trimmed), $options: 'i' } };
+  }
+  return { employeeId: { $regex: escapeRegex(trimmed), $options: 'i' } };
+};
+
 /**
  * Build MongoDB query for advanced filtering
  */
@@ -463,21 +479,23 @@ const buildAdvancedFilter = (filter) => {
     mongoFilter.email = { $regex: escapeRegex(filter.email), $options: 'i' };
   }
   if (filter.employeeId) {
-    const trimmed = String(filter.employeeId).trim();
-    const dbsMatch = trimmed.match(/^DBS(\d+)$/i);
-    if (dbsMatch) {
-      const numStr = dbsMatch[1];
-      const num = parseInt(numStr, 10);
-      if (num >= 1 && num <= 9 && numStr.length === 1) {
-        mongoFilter.employeeId = { $regex: `^DBS0?${num}$`, $options: 'i' };
-      } else {
-        const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        mongoFilter.employeeId = { $regex: escaped, $options: 'i' };
-      }
-    } else {
-      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      mongoFilter.employeeId = { $regex: escaped, $options: 'i' };
+    const employeeIdClause = buildEmployeeIdRegexFilter(filter.employeeId);
+    if (employeeIdClause) Object.assign(mongoFilter, employeeIdClause);
+  }
+
+  // Quick search — employee name or employee ID only (toolbar search on ATS employees list).
+  if (filter.search) {
+    const trimmed = String(filter.search).trim();
+    if (trimmed) {
+      const searchClauses = [
+        { fullName: { $regex: whitespaceTolerantRegexSource(trimmed), $options: 'i' } },
+      ];
+      const employeeIdClause = buildEmployeeIdRegexFilter(trimmed);
+      if (employeeIdClause) searchClauses.push(employeeIdClause);
+      mongoFilter.$and = mongoFilter.$and || [];
+      mongoFilter.$and.push({ $or: searchClauses });
     }
+    delete filter.search;
   }
   
   // Skills matching — 'all' mode uses per-skill regex $and; default uses text index OR search
@@ -1345,10 +1363,12 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     sanitized.salarySlips = mergeSalarySlipsPreserveKeys(candidate.salarySlips || [], sanitized.salarySlips);
   }
 
-  // Compensation override: editable only for directly-created employees.
-  // Offer-sourced employees keep the frozen snapshot (ATS plan interpretation #7).
+  // Compensation override: editable for directly-created employees, OR by an
+  // admin (Administrator role / platform super user) even when the record is a
+  // frozen offer-sourced snapshot. Everyone else keeps the locked snapshot
+  // (ATS plan interpretation #7).
   if (sanitized.compensationType !== undefined) {
-    if (candidate.get('compensationLocked')) {
+    if (candidate.get('compensationLocked') && !currentUser?.canOverrideCompensation) {
       delete sanitized.compensationType;
       delete sanitized.compensationSource;
     } else {

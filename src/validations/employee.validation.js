@@ -143,6 +143,8 @@ const createCandidate = {
 /** Shared with GET /candidates and POST /candidates/export query (export ignores page/limit). */
 const listCandidatesQueryKeys = {
   owner: Joi.string().custom(objectId),
+  /** Toolbar quick search — matches employee fullName or employeeId only. */
+  search: Joi.string().trim(),
   fullName: Joi.string().trim(),
   email: Joi.string().trim(),
   employeeId: Joi.string().trim(),
@@ -619,6 +621,7 @@ const referralLeadsQueryKeys = {
   hiredOnly: Joi.boolean(),
   convertedEmployees: Joi.boolean(),
   pendingReferrals: Joi.boolean(),
+  employeeStatus: Joi.string().valid('active', 'resigned').allow(''),
 };
 
 const getReferralLeads = {

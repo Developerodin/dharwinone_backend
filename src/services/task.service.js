@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
 import Sprint from '../models/sprint.model.js';
+import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import { isKanbanViewOnlyScope } from '../utils/kanbanScope.js';
@@ -173,12 +174,23 @@ const queryTasks = async (filter, options) => {
 
   if (filter.search) {
     const searchRegex = new RegExp(escapeRegex(filter.search), 'i');
-    filter.$or = [
+    const or = [
       { title: searchRegex },
       { description: searchRegex },
       { taskCode: searchRegex },
       { tags: searchRegex },
     ];
+    // Also match tasks assigned to an employee whose name/email matches.
+    const matchedUsers = await User.find({
+      $or: [{ name: searchRegex }, { email: searchRegex }],
+    })
+      .select('_id')
+      .lean()
+      .exec();
+    if (matchedUsers.length) {
+      or.push({ assignedTo: { $in: matchedUsers.map((u) => u._id) } });
+    }
+    filter.$or = or;
     delete filter.search;
   }
 

@@ -34,4 +34,30 @@ test('buildLifecycleStageProjection adds derived lifecycleStage field', () => {
   const stage = buildLifecycleStageProjection();
   assert.ok(stage.$set.lifecycleStage);
   assert.ok(stage.$set.employeeConverted);
+  assert.ok(stage.$set.employeeStatus);
+});
+
+test('lifecycleStage projection maps joined+inactive to resigned', () => {
+  const branches = buildLifecycleStageProjection().$set.lifecycleStage.$switch.branches;
+  const thens = branches.map((b) => b.then);
+  assert.ok(thens.includes('resigned'));
+  // resigned must rank above joined_pending_start fallthrough but below active employee
+  assert.equal(thens.indexOf('employee') < thens.indexOf('resigned'), true);
+});
+
+test('employeeConverted stays true regardless of isActive (historical fact)', () => {
+  const cond = buildLifecycleStageProjection().$set.employeeConverted.$cond[0];
+  assert.equal(JSON.stringify(cond).includes('isActive'), false);
+});
+
+test('applyNewFilters employeeStatus=active matches active joined employees', () => {
+  const match = applyNewFilters({ employeeStatus: 'active' });
+  assert.equal(match.isActive, true);
+  assert.ok(match.joiningDate.$lte instanceof Date);
+});
+
+test('applyNewFilters employeeStatus=resigned matches inactive joined employees', () => {
+  const match = applyNewFilters({ employeeStatus: 'resigned' });
+  assert.deepEqual(match.isActive, { $ne: true });
+  assert.ok(match.joiningDate.$lte instanceof Date);
 });

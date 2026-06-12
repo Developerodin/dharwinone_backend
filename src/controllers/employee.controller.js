@@ -74,7 +74,7 @@ import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
-import { userHasRecruiterRole, userIsAgent } from '../utils/roleHelpers.js';
+import { userHasRecruiterRole, userIsAgent, userIsAdmin } from '../utils/roleHelpers.js';
 import { getUserPermissionContext } from '../services/permission.service.js';
 import logger from '../config/logger.js';
 import { dispatchSopRemindersForOpenCandidates } from '../services/sopReminder.service.js';
@@ -226,6 +226,7 @@ const list = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const filter = pick(req.query, [
     'owner',
+    'search',
     'fullName',
     'email',
     'employeeId',
@@ -450,8 +451,13 @@ const update = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   req.user.canEditEmployees = Boolean(p?.has('employees.edit') || p?.has('employees.manage'));
   req.user.canOnboardingEdit = Boolean(p?.has('onboarding.edit') || p?.has('onboarding.manage'));
+  // Admin (Administrator role / platform super user) may override a locked,
+  // offer-sourced compensation snapshot; everyone else keeps it read-only.
+  req.user.canOverrideCompensation = await userIsAdmin(req.user);
   const beforeCandidate = await getCandidateById(req.params.candidateId);
   if (!beforeCandidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  const compWasLocked = Boolean(beforeCandidate.get?.('compensationLocked'));
+  const compBefore = beforeCandidate.compensationType ?? null;
   const candidate = await updateCandidateById(req.params.candidateId, req.body, req.user);
   const cid = candidate?._id ?? candidate?.id ?? req.params.candidateId;
   const actor = String(req.user.id || req.user._id);
@@ -462,6 +468,24 @@ const update = catchAsync(async (req, res) => {
     CANDIDATE: EntityTypes.CANDIDATE,
   });
   await activityLogService.persistActivityLogFailSoft(actor, auditEnvelope, req);
+
+  // Dedicated audit trail when an admin overrode a locked compensation snapshot.
+  const compAfter = candidate?.compensationType ?? null;
+  if (
+    req.user.canOverrideCompensation &&
+    compWasLocked &&
+    Object.prototype.hasOwnProperty.call(req.body, 'compensationType') &&
+    compBefore !== compAfter
+  ) {
+    await activityLogService.createActivityLog(
+      actor,
+      ActivityActions.CANDIDATE_COMPENSATION_OVERRIDE,
+      EntityTypes.EMPLOYEE,
+      String(cid),
+      { before: compBefore, after: compAfter },
+      req
+    );
+  }
   res.send(candidate);
 });
 
@@ -591,6 +615,7 @@ const exportAll = catchAsync(async (req, res) => {
 
   const listFilter = pick(req.query, [
     'owner',
+    'search',
     'fullName',
     'email',
     'employeeId',

@@ -2,10 +2,16 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as internalMeetingService from '../services/internalMeeting.service.js';
+import * as meetingSeriesService from '../services/meetingSeries.service.js';
 import recordingService from '../services/recording.service.js';
 
 const create = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
+  // A recurrence rule routes to the series path; otherwise a plain one-off meeting.
+  if (req.body.recurrence && req.body.recurrence.frequency) {
+    const series = await meetingSeriesService.createMeetingSeries(req.body, userId);
+    return res.status(httpStatus.CREATED).send(series);
+  }
   const result = await internalMeetingService.createInternalMeeting(req.body, userId);
   res.status(httpStatus.CREATED).send(result);
 });
@@ -26,11 +32,40 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
+  const mode = req.query.mode || 'single';
+  // Scope check + detect whether this is a series occurrence.
+  const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
+  if (!existing) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
+  if (existing.seriesId) {
+    const result = await meetingSeriesService.updateSeries(req.params.id, req.body, mode);
+    return res.send(result);
+  }
   const result = await internalMeetingService.updateInternalMeetingById(req.params.id, req.body);
   res.send(result);
 });
 
 const remove = catchAsync(async (req, res) => {
+  const mode = req.query.mode || 'single';
+  const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
+  if (!existing) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
+  if (existing.seriesId) {
+    const purge = req.query.purge === true || req.query.purge === 'true';
+    if (purge) {
+      if (mode !== 'series') {
+        return res.status(httpStatus.BAD_REQUEST).send({
+          message: 'Permanent series removal requires mode=series',
+        });
+      }
+      const result = await meetingSeriesService.purgeSeries(req.params.id);
+      return res.send(result);
+    }
+    const result = await meetingSeriesService.cancelSeries(req.params.id, mode);
+    return res.send(result);
+  }
   await internalMeetingService.deleteInternalMeetingById(req.params.id);
   res.status(httpStatus.NO_CONTENT).send();
 });

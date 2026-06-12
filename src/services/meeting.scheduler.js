@@ -3,6 +3,7 @@ import {
   autoEndExpiredInternalMeetings,
   sendUpcomingInternalMeetingReminders,
 } from './internalMeeting.service.js';
+import { materializeDueSeries, sendDueOccurrenceInvites } from './meetingSeries.service.js';
 import logger from '../config/logger.js';
 
 const DEFAULT_INTERVAL_MINUTES = 5;
@@ -43,6 +44,20 @@ const runUpcomingMeetingReminders = async () => {
   }
 };
 
+const runSeriesMaterialization = async () => {
+  try {
+    const { series, created } = await materializeDueSeries();
+    const { sent } = await sendDueOccurrenceInvites();
+    if (created > 0 || sent > 0) {
+      logger.info(
+        `[Meeting scheduler] Series — materialized ${created} occurrence(s) across ${series} series, sent ${sent} invite(s)`
+      );
+    }
+  } catch (err) {
+    logger.error('[Meeting scheduler] Series materialization failed:', err?.message || err);
+  }
+};
+
 const runInterviewConclusionNotifications = async () => {
   try {
     const stats = await meetingService.sendInterviewConclusionNotifications();
@@ -61,10 +76,12 @@ export const startMeetingScheduler = () => {
   if (intervalId) return;
   const intervalMinutes = Math.max(1, Number(process.env.MEETING_SCHEDULER_INTERVAL_MINUTES) || DEFAULT_INTERVAL_MINUTES);
   const intervalMs = intervalMinutes * 60 * 1000;
+  runSeriesMaterialization();
   runAutoEndMeetings();
   runUpcomingMeetingReminders();
   runInterviewConclusionNotifications();
   intervalId = setInterval(() => {
+    runSeriesMaterialization();
     runAutoEndMeetings();
     runUpcomingMeetingReminders();
     runInterviewConclusionNotifications();

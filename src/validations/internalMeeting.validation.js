@@ -1,9 +1,35 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
 
 const hostSchema = Joi.object({
   nameOrRole: Joi.string().allow('', null).trim(),
   email: Joi.string().trim().email().required(),
+});
+
+// Recurrence rule for a recurring series. Present (with frequency) => series path.
+const recurrenceSchema = Joi.object({
+  frequency: Joi.string().valid('daily', 'weekly', 'monthly', 'custom').required(),
+  interval: Joi.number().integer().min(1).max(365).default(1),
+  daysOfWeek: Joi.array().items(Joi.number().integer().min(0).max(6)).default([]), // 0=Sun..6=Sat
+  dayOfMonth: Joi.number().integer().min(1).max(31).allow(null),
+});
+
+// Partial recurrence for edits (frequency optional).
+const recurrenceUpdateSchema = Joi.object({
+  frequency: Joi.string().valid('daily', 'weekly', 'monthly', 'custom'),
+  interval: Joi.number().integer().min(1).max(365),
+  daysOfWeek: Joi.array().items(Joi.number().integer().min(0).max(6)),
+  dayOfMonth: Joi.number().integer().min(1).max(31).allow(null),
+});
+
+const endSchema = Joi.object({
+  mode: Joi.string().valid('never', 'onDate', 'afterCount').default('never'),
+  untilDate: Joi.date().allow(null),
+  count: Joi.number().integer().min(1).max(1000).allow(null),
+});
+
+// ?mode= for series edit/cancel scope.
+const seriesModeQuery = Joi.object().keys({
+  mode: Joi.string().valid('single', 'future', 'series').default('single'),
 });
 
 const createInternalMeeting = {
@@ -23,6 +49,9 @@ const createInternalMeeting = {
       }),
       emailInvites: Joi.array().items(Joi.string().email()).default([]),
       notes: Joi.string().allow('', null).trim(),
+      // Recurring series (optional). scheduledAt doubles as the series startAt.
+      recurrence: recurrenceSchema.optional(),
+      end: endSchema.optional(),
     })
     .min(1),
 };
@@ -32,7 +61,7 @@ const getInternalMeetings = {
     title: Joi.string().trim(),
     status: Joi.string().valid('scheduled', 'ended', 'cancelled'),
     sortBy: Joi.string().default('-createdAt'),
-    limit: Joi.number().integer().min(1).max(100).default(10),
+    limit: Joi.number().integer().min(1).max(500).default(10),
     page: Joi.number().integer().min(1).default(1),
   }),
 };
@@ -47,6 +76,7 @@ const updateInternalMeeting = {
   params: Joi.object().keys({
     id: Joi.string().required().trim().min(1),
   }),
+  query: seriesModeQuery,
   body: Joi.object()
     .keys({
       title: Joi.string().trim(),
@@ -62,19 +92,26 @@ const updateInternalMeeting = {
       emailInvites: Joi.array().items(Joi.string().email()),
       notes: Joi.string().allow('', null).trim(),
       status: Joi.string().valid('scheduled', 'ended', 'cancelled'),
+      // Series rule edits (only honored when the target meeting belongs to a series).
+      recurrence: recurrenceUpdateSchema.optional(),
+      end: endSchema.optional(),
     })
     .min(1),
 };
 
 const deleteInternalMeeting = {
   params: Joi.object().keys({
-    id: Joi.string().required().custom(objectId),
+    // Mongo _id or LiveKit meetingId (meeting_…) — resolved in the service layer.
+    id: Joi.string().required().trim().min(1),
+  }),
+  query: seriesModeQuery.keys({
+    purge: Joi.boolean().truthy('true').falsy('false').default(false),
   }),
 };
 
 const resendInternalInvitations = {
   params: Joi.object().keys({
-    id: Joi.string().required().custom(objectId),
+    id: Joi.string().required().trim().min(1),
   }),
 };
 

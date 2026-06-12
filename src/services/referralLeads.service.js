@@ -568,7 +568,9 @@ const shapeLeadRow = async (row, options = {}) => {
       : null,
     lifecycleStage: o.lifecycleStage || null,
     employeeConverted: o.employeeConverted === true,
+    employeeStatus: o.employeeStatus || null,
     joiningDate: o.joiningDate || null,
+    resignDate: o.resignDate || null,
   };
 };
 
@@ -960,6 +962,7 @@ export const exportReferralLeadsCsv = async (req, res) => {
     'sales_agent_scope',
     'lifecycle_stage',
     'employee_converted',
+    'employee_status',
     'joining_date',
     'attribution_job_id',
     'attribution_job_title',
@@ -992,6 +995,7 @@ export const exportReferralLeadsCsv = async (req, res) => {
       r.currentSalesAgentJobId == null ? 'candidate' : 'job',
       r.lifecycleStage || '',
       r.employeeConverted === true ? 'true' : 'false',
+      r.employeeStatus || '',
       r.joiningDate ? new Date(r.joiningDate).toISOString() : '',
       r.attributionJobId || '',
       r.referralJobId?.title || r.referralJobTitle || '',

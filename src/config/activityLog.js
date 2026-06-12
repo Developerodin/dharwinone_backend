@@ -45,6 +45,8 @@ export const ActivityActions = {
   CANDIDATE_CREATE: 'candidate.create',
   CANDIDATE_UPDATE: 'candidate.update',
   CANDIDATE_DELETE: 'candidate.delete',
+  /** Admin overrode a locked (offer-sourced) compensation snapshot. metadata: { before, after }. */
+  CANDIDATE_COMPENSATION_OVERRIDE: 'candidate.compensation.override',
   CANDIDATE_ONBOARDING_SHARE: 'candidate.onboardingShare',
   JOB_CREATE: 'job.create',
   JOB_UPDATE: 'job.update',
