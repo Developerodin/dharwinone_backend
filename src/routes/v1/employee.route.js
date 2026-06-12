@@ -9,8 +9,6 @@ import * as employeeValidation from '../../validations/employee.validation.js';
 import * as attendanceValidation from '../../validations/attendance.validation.js';
 import attendanceController from '../../controllers/attendance.controller.js';
 import * as employeeController from '../../controllers/employee.controller.js';
-import requireFeatureFlag from '../../middlewares/requireFeatureFlag.js';
-import { FEATURE_FLAG_NAME } from '../../constants/salesAgentAttribution.js';
 
 const router = express.Router();
 
@@ -54,14 +52,12 @@ const canUpdateResignDate = [
 const canManageSalesAgentAttribution = [
   auth(),
   requirePermissions('candidates.manageSalesAgentAttribution'),
-  requireFeatureFlag(FEATURE_FLAG_NAME),
 ];
 const canRevokeSalesAgentAttribution = [
   auth(),
   requirePermissions('candidates.revokeSalesAgentAttribution'),
-  requireFeatureFlag(FEATURE_FLAG_NAME),
 ];
-const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.read'), requireFeatureFlag(FEATURE_FLAG_NAME)];
+const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.read')];
 
 router
   .route('/')
