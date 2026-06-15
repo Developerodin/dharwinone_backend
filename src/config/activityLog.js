@@ -76,6 +76,8 @@ export const ActivityActions = {
   TICKET_DELETE: 'ticket.delete',
   // Integration / admin settings (sensitive config surfaces)
   SETTINGS_BOLNA_CANDIDATE_AGENT_UPDATE: 'settings.bolnaCandidateAgent.update',
+  /** Admin bought a phone number from Plivo (real paid action). metadata: { number, type, monthlyRentalRate }. */
+  PHONE_NUMBER_PURCHASE: 'phoneNumber.purchase',
   // Organization — org units
   ORG_UNIT_CREATE: 'orgUnit.create',
   ORG_UNIT_UPDATE: 'orgUnit.update',
@@ -124,6 +126,7 @@ export const EntityTypes = {
   JOB: 'Job',
   JOB_APPLICATION: 'JobApplication',
   BOLNA_CANDIDATE_AGENT_SETTINGS: 'BolnaCandidateAgentSettings',
+  PHONE_NUMBER: 'PhoneNumber',
   SUPPORT_TICKET: 'SupportTicket',
   ORG_UNIT: 'OrgUnit',
   DEPARTMENT: 'Department',

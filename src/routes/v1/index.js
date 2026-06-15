@@ -51,6 +51,7 @@ import teamRoute from './team.route.js';
 import teamGroupRoute from './teamGroup.route.js';
 import pmAssistantRoute from './pmAssistant.route.js';
 import bolnaRoute from './bolna.route.js';
+import plivoRoute from './plivo.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
 import communicationRoute from './communication.route.js';
@@ -262,6 +263,10 @@ const defaultRoutes = [
   {
     path: '/bolna',
     route: bolnaRoute,
+  },
+  {
+    path: '/plivo',
+    route: plivoRoute,
   },
   {
     path: '/webhooks',
