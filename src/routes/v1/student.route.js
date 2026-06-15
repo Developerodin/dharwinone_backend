@@ -5,6 +5,7 @@ import requirePermissions from '../../middlewares/requirePermissions.js';
 import requireStudentsReadOrOwnStudent from '../../middlewares/requireStudentsReadOrOwnStudent.js';
 import * as studentValidation from '../../validations/student.validation.js';
 import * as studentController from '../../controllers/student.controller.js';
+import * as studentExcelController from '../../controllers/studentExcel.controller.js';
 import { studentProfileImageUpload } from '../../middlewares/upload.js';
 
 const router = express.Router();
@@ -12,6 +13,9 @@ const router = express.Router();
 router
   .route('/')
   .get(auth(), requirePermissions('students.read'), validate(studentValidation.getStudents), studentController.getStudents);
+
+// Excel export of students (MUST be before /:studentId so "export" isn't captured as an id)
+router.get('/export', auth(), requirePermissions('students.read'), studentExcelController.exportExcel);
 
 // Users with Student role but no Training student profile (so they don't appear in assignment)
 router.get(

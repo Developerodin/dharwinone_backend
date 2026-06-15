@@ -181,6 +181,21 @@ const getOwnerIdsWithEmployeeRole = async () => {
 };
 
 /**
+ * User ids with the Candidate user role only (active or pending).
+ * Excludes promoted employees who lost Candidate role on hire.
+ * @returns {Promise<import('mongoose').Types.ObjectId[]|null>} null if Candidate role missing
+ */
+const getOwnerIdsWithApplicantCandidateRoleOnly = async () => {
+  const candidateRole = await getRoleByName('Candidate');
+  if (!candidateRole?._id) return null;
+  const users = await User.find(
+    { roleIds: candidateRole._id, status: { $in: ['active', 'pending'] } },
+    { _id: 1 }
+  ).lean();
+  return users.map((u) => u._id);
+};
+
+/**
  * Update role by id
  * @param {ObjectId} roleId
  * @param {Object} updateBody
@@ -263,6 +278,7 @@ export {
   getEmployeeRole,
   getAtsJobSeekerRoleIds,
   getOwnerIdsWithCandidateRole,
+  getOwnerIdsWithApplicantCandidateRoleOnly,
   getOwnerIdsWithEmployeeRole,
   updateRoleById,
   deleteRoleById,

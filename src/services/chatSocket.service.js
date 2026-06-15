@@ -17,7 +17,12 @@ let io = null;
 const onlineUsers = new Map();
 
 const initSocket = (httpServer) => {
-  const corsOrigin = config.env === 'production' ? false : ['http://localhost:3001', 'http://127.0.0.1:3001'];
+  // Reuse the same allowed origins as the Express app (config.corsOrigin, from CORS_ORIGIN).
+  // Previously this was hardcoded to `false` in production, which sent no
+  // Access-Control-Allow-Origin header and blocked every browser handshake from the
+  // deployed frontends (CORS error in the console / socket never connects).
+  // `config.corsOrigin` is `true` when CORS_ORIGIN is unset (dev) or an array of origins.
+  const corsOrigin = config.corsOrigin;
   io = new Server(httpServer, {
     cors: { origin: corsOrigin, credentials: true },
     path: '/socket.io',

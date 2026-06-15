@@ -623,6 +623,7 @@ const referralLeadsQueryKeys = {
   convertedEmployees: Joi.boolean(),
   pendingReferrals: Joi.boolean(),
   employeeStatus: Joi.string().valid('active', 'resigned').allow(''),
+  candidateRoleOwnersOnly: Joi.boolean(),
 };
 
 const getReferralLeads = {

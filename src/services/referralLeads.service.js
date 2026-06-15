@@ -19,6 +19,7 @@ import {
   buildSalesAgentListEnrichmentStages,
 } from './referralLeadsQueryBuilder.js';
 import ReferralAttribution from '../models/referralAttribution.model.js';
+import { getOwnerIdsWithApplicantCandidateRoleOnly } from './role.service.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -342,9 +343,14 @@ export const buildReferralLeadsMatch = async (opts) => {
     ]);
   }
 
-  // Do not filter by `owner` ∈ Candidate-role users (unlike listCandidates). Referred
-  // signups from share-onboarding and public/invite often have Student-only or no
-  // `roleIds` until activation; they still have a Candidate document and must appear here.
+  // Default: do not filter by `owner` role. Referred signups from share-onboarding and
+  // public/invite often have Student-only or no `roleIds` until activation; they still
+  // have a Candidate document and must appear on the referral-leads page.
+  // Interview scheduling opts in via `candidateRoleOwnersOnly` to exclude promoted employees.
+  if (query.candidateRoleOwnersOnly) {
+    const ownerIds = await getOwnerIdsWithApplicantCandidateRoleOnly();
+    mongo.owner = { $in: ownerIds ?? [] };
+  }
 
   return mongo;
 };
