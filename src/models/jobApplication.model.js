@@ -32,9 +32,9 @@ const jobApplicationSchema = new mongoose.Schema(
     // Bolna verification call fields
     verificationCallExecutionId: { type: String, trim: true, index: true, sparse: true },
     verificationCallInitiatedAt: { type: Date },
-    verificationCallStatus: { 
-      type: String, 
-      enum: ['pending', 'initiated', 'completed', 'failed', 'no_answer'],
+    verificationCallStatus: {
+      type: String,
+      enum: ['pending', 'initiated', 'completed', 'failed', 'no_answer', 'withdrawn'],
     },
   },
   { timestamps: true }
