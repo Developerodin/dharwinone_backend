@@ -111,6 +111,29 @@ const callRecordSchema = mongoose.Schema(
     errorMessage: { type: String, default: null },
     completedAt: { type: Date, default: null },
     extractedData: mongoose.Schema.Types.Mixed,
+    /** Typed candidate-verification answers parsed from extractedData. */
+    verification: {
+      nameConfirmed: { type: Boolean, default: null },
+      correctedName: { type: String, default: null },
+      jobConfirmed: { type: Boolean, default: null },
+      availability: { type: String, default: null },
+      currentLocation: { type: String, default: null },
+      stillInterested: { type: String, enum: ['interested', 'not_interested', 'withdrew', null], default: null },
+      callOutcome: {
+        type: String,
+        enum: ['fully_confirmed', 'partially_confirmed', 'refused', 'voicemail', 'no_data', null],
+        default: null,
+      },
+      minConfidence: { type: Number, default: null },
+      fieldsPresent: { type: Number, default: 0 },
+      extractedAt: { type: Date, default: null },
+    },
+    /** Derived call-quality flag — stops broken calls masquerading as completed. */
+    callQuality: {
+      status: { type: String, enum: ['ok', 'needs_review'], default: 'ok' },
+      reasons: { type: [String], default: [] },
+      evaluatedAt: { type: Date, default: null },
+    },
     telephonyData: mongoose.Schema.Types.Mixed,
     purpose: { type: String, trim: true, default: null },
     agentId: { type: String, trim: true, default: null },
