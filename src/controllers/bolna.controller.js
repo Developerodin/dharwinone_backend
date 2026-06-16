@@ -562,16 +562,15 @@ const receiveCandidateWebhook = catchAsync(async (req, res) => {
     } else {
       logger.warn(`Candidate webhook: no JobApplication found for executionId=${record.executionId}`);
     }
-  }
 
-  // Phase 1: candidate explicitly asked to withdraw → reflect on the application.
-  if (record?.executionId && record?.verification?.stillInterested === 'withdrew') {
-    const JobApplication = (await import('../models/jobApplication.model.js')).default;
-    await JobApplication.updateOne(
-      { verificationCallExecutionId: record.executionId },
-      { $set: { verificationCallStatus: 'withdrawn' } }
-    );
-    logger.info(`[Bolna] Candidate withdrew via verification call execId=${record.executionId}`);
+    // Phase 1: candidate explicitly asked to withdraw → reflect on the application.
+    if (record?.verification?.stillInterested === 'withdrew') {
+      await JobApplication.updateOne(
+        { verificationCallExecutionId: record.executionId },
+        { $set: { verificationCallStatus: 'withdrawn' } }
+      );
+      logger.info(`[Bolna] Candidate withdrew via verification call execId=${record.executionId}`);
+    }
   }
 
   res.status(httpStatus.OK).send({
