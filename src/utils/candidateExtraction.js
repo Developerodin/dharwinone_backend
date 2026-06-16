@@ -19,7 +19,7 @@ const OUTCOME = new Set(['fully_confirmed', 'partially_confirmed', 'refused', 'v
 function readField(extractedData, name) {
   const cat = extractedData && extractedData[CATEGORY];
   const entry = cat && cat[name];
-  if (!entry || typeof entry !== 'object') return { value: null, confidence: null };
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { value: null, confidence: null };
   return {
     value: entry.objective ?? null,
     confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
@@ -42,7 +42,7 @@ function toText(v) {
 function toEnum(v, allowed) {
   const s = toText(v);
   if (!s) return null;
-  const k = s.toLowerCase().replace(/\s+/g, '_');
+  const k = s.toLowerCase().replace(/[\s-]+/g, '_');
   return allowed.has(k) ? k : null;
 }
 
@@ -67,7 +67,7 @@ export function parseCandidateExtraction(extractedData) {
   };
   const confs = [];
   let present = 0;
-  for (const key of Object.keys(out)) {
+  for (const key of Object.keys(FIELD)) {
     if (out[key] != null) {
       present += 1;
       if (raw[key].confidence != null) confs.push(raw[key].confidence);
@@ -79,6 +79,7 @@ export function parseCandidateExtraction(extractedData) {
 }
 
 const ERROR_MARKERS = [/an error occurred/i, /streamreader/i, /unexpected keyword argument/i];
+// Tunable confidence floor: completed-call extractions below this are treated as unreliable.
 const MIN_CONFIDENCE = 0.4;
 
 /**

@@ -115,3 +115,10 @@ test('deriveCallInsights marks extractionPresent false when no extracted_data', 
   assert.equal(r.verification.fieldsPresent, 0);
   assert.equal(r.callQuality.status, 'ok'); // not flagged empty — extraction absent
 });
+
+test('normalizes hyphenated enum values', () => {
+  const r = parseCandidateExtraction({
+    'Candidate Verification': { 'Still Interested': { objective: 'not-interested', confidence: 0.9 } },
+  });
+  assert.equal(r.stillInterested, 'not_interested');
+});
