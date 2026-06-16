@@ -53,4 +53,17 @@ const buyNumber = catchAsync(async (req, res) => {
   });
 });
 
-export { getAvailableNumbers, buyNumber };
+const getOwnedNumbers = catchAsync(async (req, res) => {
+  const { type, alias, limit, offset } = req.query;
+  const result = await plivoService.listOwnedNumbers({ type, alias, limit, offset });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to list Plivo numbers');
+  }
+  res.status(httpStatus.OK).send({
+    success: true,
+    numbers: result.numbers,
+    total: result.total,
+  });
+});
+
+export { getAvailableNumbers, buyNumber, getOwnedNumbers };

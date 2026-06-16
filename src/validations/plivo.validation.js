@@ -26,4 +26,13 @@ const buyNumber = {
     .required(),
 };
 
-export { searchAvailableNumbers, buyNumber };
+const listOwnedNumbers = {
+  query: Joi.object().keys({
+    type: Joi.string().valid('local', 'tollfree', 'mobile', 'national', 'fixed'),
+    alias: Joi.string().trim().allow(''),
+    limit: Joi.number().integer().min(1).max(20),
+    offset: Joi.number().integer().min(0),
+  }),
+};
+
+export { searchAvailableNumbers, buyNumber, listOwnedNumbers };

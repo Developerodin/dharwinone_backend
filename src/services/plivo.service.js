@@ -61,6 +61,29 @@ function normalizeNumber(n) {
   };
 }
 
+/**
+ * Normalize one Plivo owned/rented-number record to a stable client shape.
+ * Source: client.numbers.list() — the numbers already on the account.
+ * @param {Object} n
+ */
+function normalizeOwnedNumber(n) {
+  const carrier = n && (n.carrier || n.Carrier);
+  return {
+    number: pick(n, 'number', 'phoneNumber'),
+    alias: pick(n, 'alias') || '',
+    type: pick(n, 'numberType', 'type', 'number_type') || '',
+    region: pick(n, 'region', 'state') || '',
+    country: pick(n, 'country', 'countryIso', 'country_iso') || '',
+    addedOn: pick(n, 'addedOn', 'added_on') || '',
+    application: pick(n, 'application') || '',
+    monthlyRentalRate: pick(n, 'monthlyRentalRate', 'monthly_rental_rate') ?? null,
+    voiceEnabled: Boolean(pick(n, 'voiceEnabled', 'voice_enabled')),
+    smsEnabled: Boolean(pick(n, 'smsEnabled', 'sms_enabled')),
+    mmsEnabled: Boolean(pick(n, 'mmsEnabled', 'mms_enabled')),
+    carrier: (carrier && (carrier.type || carrier.Type)) || '',
+  };
+}
+
 /** Extract a clean human message from a Plivo SDK error. */
 function plivoErrorMessage(err) {
   if (!err) return 'Unknown Plivo error.';
@@ -151,6 +174,39 @@ async function buyNumber(number) {
 }
 
 /**
+ * List numbers already rented/owned on the connected Plivo account.
+ * @param {Object} params - { type?, alias?, limit?, offset? }
+ * @returns {Promise<{ success: boolean, numbers?: Object[], total?: number, error?: string }>}
+ */
+async function listOwnedNumbers({ type, alias, limit, offset } = {}) {
+  const { client, error } = getClient();
+  if (error) return { success: false, error };
+
+  const pageLimit = Math.min(20, Math.max(1, Number(limit) || 20));
+  const pageOffset = Math.max(0, Number(offset) || 0);
+  const optional = { limit: pageLimit, offset: pageOffset };
+  if (type) optional.numberType = type;
+  if (alias) optional.alias = alias;
+
+  try {
+    const res = await client.numbers.list(optional);
+    const list = Array.isArray(res) ? res : res?.objects || res?.objs || [];
+    const numbers = list.map(normalizeOwnedNumber).filter((n) => n.number);
+    const meta = (Array.isArray(res) && res.meta) || res?.meta || {};
+    const totalCount = Number(meta.total_count);
+    return {
+      success: true,
+      numbers,
+      total: Number.isFinite(totalCount) ? totalCount : numbers.length,
+    };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo owned-number list failed: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Fetch the call recording(s) Plivo stored for a given call.
  *
  * Plivo records DUAL-CHANNEL by default (agent + caller in one file), so this is
@@ -189,5 +245,6 @@ export default {
   getClient,
   searchAvailableNumbers,
   buyNumber,
+  listOwnedNumbers,
   getCallRecordings,
 };

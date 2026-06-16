@@ -16,6 +16,16 @@ router
     plivoController.getAvailableNumbers
   );
 
+// Numbers already rented/owned on the connected Plivo account.
+router
+  .route('/numbers/owned')
+  .get(
+    auth(),
+    requirePermissionOrAdministrator('calls.read'),
+    validate(plivoValidation.listOwnedNumbers),
+    plivoController.getOwnedNumbers
+  );
+
 // Buying a number is a real, paid action — gate behind calls.manage.
 router
   .route('/numbers/buy')
