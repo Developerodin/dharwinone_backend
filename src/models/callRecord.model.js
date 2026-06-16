@@ -135,6 +135,32 @@ const callRecordSchema = mongoose.Schema(
       evaluatedAt: { type: Date, default: null },
     },
     telephonyData: mongoose.Schema.Types.Mixed,
+    /**
+     * S3 mirror of the call recordings (Bolna agent leg + Plivo dual-channel),
+     * persisted for future review after the provider media expires. Written by
+     * callRecordingArchive.service.js. Each source is independent — Plivo's
+     * recording can land later than Bolna's.
+     */
+    recordingArchive: {
+      bolna: {
+        key: { type: String, default: null },
+        bucket: { type: String, default: null },
+        size: { type: Number, default: null },
+        contentType: { type: String, default: null },
+        sourceUrl: { type: String, default: null },
+        archivedAt: { type: Date, default: null },
+      },
+      plivo: {
+        key: { type: String, default: null },
+        bucket: { type: String, default: null },
+        size: { type: Number, default: null },
+        contentType: { type: String, default: null },
+        sourceUrl: { type: String, default: null },
+        archivedAt: { type: Date, default: null },
+      },
+    },
+    /** Set once at least one recording source has been mirrored to S3. */
+    recordingArchivedAt: { type: Date, default: null },
     purpose: { type: String, trim: true, default: null },
     agentId: { type: String, trim: true, default: null },
     candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },

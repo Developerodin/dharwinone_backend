@@ -84,6 +84,9 @@ const envVarsSchema = Joi.object()
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
     BOLNA_AGENT_ID: Joi.string().optional().description('Bolna agent ID'),
     BOLNA_CANDIDATE_AGENT_ID: Joi.string().optional().description('Bolna agent ID for candidate verification calls'),
+    BOLNA_ADDITIONAL_AGENT_IDS: Joi.string()
+      .optional()
+      .description('Comma-separated extra Bolna agent IDs (e.g. retired agents still holding call history) to also pull executions/recordings from'),
     BOLNA_FROM_PHONE_NUMBER: Joi.string().optional().description('Bolna caller ID in E.164 format'),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
@@ -420,6 +423,15 @@ const config = {
      * Must differ from agentId or flows overwrite each other’s behavior.
      */
     candidateAgentId: envVars.BOLNA_CANDIDATE_AGENT_ID || envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
+    /**
+     * Extra agent IDs to ALSO pull executions/recordings from. Set when an agent
+     * is retired/replaced (e.g. a new job-verification agent) but the old agent
+     * still holds historical call recordings. Comma-separated in env.
+     */
+    additionalAgentIds: String(envVars.BOLNA_ADDITIONAL_AGENT_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     fromPhoneNumber: envVars.BOLNA_FROM_PHONE_NUMBER || envVars.CALLER_ID || '',
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
     /** Applied to every outbound call; mirror in Bolna dashboard Call tab for each agent. */
@@ -564,6 +576,16 @@ const config = {
     },
   },
 };
+
+// Unified list of every Bolna agent we own — job recruiter, candidate, and any
+// retired agents kept around for their historical recordings. Use this anywhere
+// you enumerate agents (execution sync, recording backfill) so old-agent calls
+// are never missed.
+config.bolna.allAgentIds = [
+  ...new Set(
+    [config.bolna.agentId, config.bolna.candidateAgentId, ...config.bolna.additionalAgentIds].filter(Boolean)
+  ),
+];
 
 // Production: warn if email/share links would use localhost or SMTP is incomplete
 if (config.env === 'production') {

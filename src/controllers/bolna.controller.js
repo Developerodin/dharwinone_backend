@@ -4,14 +4,21 @@ import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import bolnaService from '../services/bolna.service.js';
-import plivoService from '../services/plivo.service.js';
 import { initiateCandidateVerificationCall } from '../services/bolnaCandidateVerification.service.js';
 import { initiateJobPostingVerificationCall } from '../services/bolnaJobPostingVerification.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import callSyncService from '../services/callSync.service.js';
+import {
+  resolveCallRecordingSources,
+  headersForRecordingUrl,
+  archiveCallRecordings,
+  getArchivedPlaybackUrlByExecution,
+  getArchivePresence,
+} from '../services/callRecordingArchive.service.js';
 import { ensureCandidateVerificationExtractions } from '../services/bolnaCandidateExtractionSetup.service.js';
 import { getJobById } from '../services/job.service.js';
 import Job from '../models/job.model.js';
+import { isTerminal } from '../models/callRecord.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhonePlausible, isPlaceholderPhone } from '../utils/phone.js';
@@ -397,53 +404,6 @@ async function assertCanAccessCall(req, executionId) {
   if (!allowed) throw new ApiError(httpStatus.FORBIDDEN, 'You do not have access to this call');
 }
 
-/** Pick upstream auth for a recording URL (Bolna vs Plivo-hosted media). */
-function headersForRecordingUrl(url) {
-  const host = String(url || '').toLowerCase();
-  if (host.includes('plivo.com') || host.includes('media.plivo')) {
-    const basic = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
-    return { Authorization: `Basic ${basic}` };
-  }
-  const { apiKey } = bolnaService.getConfig();
-  return { Authorization: `Bearer ${apiKey}` };
-}
-
-/**
- * Resolve both recording sources for a call from its Bolna executionId:
- *   - Bolna's own recording (agent leg only)
- *   - Plivo's recording (DUAL-CHANNEL — both agent and caller)
- * Bolna exposes the Plivo call UUID as telephony_data.provider_call_id.
- * Falls back to CallRecord.recordingUrl / telephonyData when the live Bolna
- * execution payload has not yet (or never) exposed telephony_data.
- */
-async function resolveCallRecordingSources(executionId) {
-  const stored = await callRecordService.getCallRecordingFields(executionId);
-  const storedTel =
-    stored?.telephonyData && typeof stored.telephonyData === 'object' ? stored.telephonyData : {};
-  let bolnaUrl = stored?.recordingUrl || storedTel.recording_url || null;
-  let providerCallId = storedTel.provider_call_id || null;
-  let provider = storedTel.provider || null;
-  let execError = null;
-
-  const exec = await bolnaService.getExecutionFull(executionId);
-  if (exec.success && exec.details) {
-    const tel = exec.details.telephony_data || {};
-    bolnaUrl = tel.recording_url || exec.details.recording_url || bolnaUrl;
-    providerCallId = tel.provider_call_id || providerCallId;
-    provider = tel.provider || provider;
-  } else {
-    execError = exec.error || 'Failed to fetch call details from Bolna';
-  }
-
-  let plivo = [];
-  if (providerCallId) {
-    const r = await plivoService.getCallRecordings(providerCallId);
-    if (r.success) plivo = (r.recordings || []).filter((x) => x.recordingUrl);
-  }
-
-  return { bolnaUrl, providerCallId, plivo, provider, execError };
-}
-
 /** Stream a remote (auth-protected) audio URL back to the JWT-authed client inline. */
 async function streamRemoteAudio(res, url, headers, fallbackType, filename) {
   const upstream = await fetch(url, { headers });
@@ -501,29 +461,34 @@ const getCallRecordingSources = catchAsync(async (req, res) => {
   await assertCanAccessCall(req, executionId);
   const { bolnaUrl, providerCallId, plivo, provider, execError } = await resolveCallRecordingSources(executionId);
   const base = `/v1/bolna/call-records/${encodeURIComponent(executionId)}/recordings`;
+  // A saved S3 copy keeps a recording reviewable even after the live source expires.
+  const archived = await getArchivePresence(executionId);
 
   res.status(httpStatus.OK).send({
     success: true,
     executionId,
     provider,
     recordings: {
-      bolna: bolnaUrl
-        ? { available: true, channel: 'agent_only', streamUrl: `${base}/bolna` }
-        : {
-            available: false,
-            reason: execError || 'no recording_url on call',
-          },
-      plivo: plivo.length
-        ? {
-            available: true,
-            channel: 'dual',
-            durationMs: plivo[0].durationMs ?? null,
-            streamUrl: `${base}/plivo`,
-          }
-        : {
-            available: false,
-            reason: providerCallId ? 'no recording found on Plivo' : 'no provider_call_id on call',
-          },
+      bolna:
+        bolnaUrl || archived.bolna
+          ? { available: true, channel: 'agent_only', streamUrl: `${base}/bolna`, archived: archived.bolna }
+          : {
+              available: false,
+              reason: execError || 'no recording_url on call',
+            },
+      plivo:
+        plivo.length || archived.plivo
+          ? {
+              available: true,
+              channel: 'dual',
+              durationMs: plivo[0]?.durationMs ?? null,
+              streamUrl: `${base}/plivo`,
+              archived: archived.plivo,
+            }
+          : {
+              available: false,
+              reason: providerCallId ? 'no recording found on Plivo' : 'no provider_call_id on call',
+            },
     },
   });
 });
@@ -533,16 +498,18 @@ const streamBolnaRecording = catchAsync(async (req, res) => {
   const { executionId } = req.params;
   await assertCanAccessCall(req, executionId);
   const { bolnaUrl } = await resolveCallRecordingSources(executionId);
-  if (!bolnaUrl) throw new ApiError(httpStatus.NOT_FOUND, 'No Bolna recording for this call');
-  const contentType = String(bolnaUrl).toLowerCase().includes('plivo') ? 'audio/mpeg' : 'audio/wav';
-  const ext = contentType === 'audio/mpeg' ? 'mp3' : 'wav';
-  await streamRemoteAudio(
-    res,
-    bolnaUrl,
-    headersForRecordingUrl(bolnaUrl),
-    contentType,
-    `${executionId}-agent.${ext}`
-  );
+  if (bolnaUrl) {
+    // Ensure a durable S3 copy exists for future review (best-effort, non-blocking).
+    archiveCallRecordings(executionId).catch(() => {});
+    const contentType = String(bolnaUrl).toLowerCase().includes('plivo') ? 'audio/mpeg' : 'audio/wav';
+    const ext = contentType === 'audio/mpeg' ? 'mp3' : 'wav';
+    await streamRemoteAudio(res, bolnaUrl, headersForRecordingUrl(bolnaUrl), contentType, `${executionId}-agent.${ext}`);
+    return;
+  }
+  // Live source gone — serve the archived S3 copy if we saved one.
+  const archivedUrl = await getArchivedPlaybackUrlByExecution(executionId, 'bolna');
+  if (archivedUrl) return res.redirect(archivedUrl);
+  throw new ApiError(httpStatus.NOT_FOUND, 'No Bolna recording for this call');
 });
 
 /** GET /bolna/call-records/:executionId/recordings/plivo — full dual-channel audio (Plivo). */
@@ -550,15 +517,21 @@ const streamPlivoRecording = catchAsync(async (req, res) => {
   const { executionId } = req.params;
   await assertCanAccessCall(req, executionId);
   const { plivo } = await resolveCallRecordingSources(executionId);
-  if (!plivo.length) throw new ApiError(httpStatus.NOT_FOUND, 'No Plivo recording for this call');
-  const basic = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
-  await streamRemoteAudio(
-    res,
-    plivo[0].recordingUrl,
-    { Authorization: `Basic ${basic}` },
-    'audio/mpeg',
-    `${executionId}-full.mp3`
-  );
+  if (plivo.length) {
+    archiveCallRecordings(executionId).catch(() => {});
+    const basic = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
+    await streamRemoteAudio(
+      res,
+      plivo[0].recordingUrl,
+      { Authorization: `Basic ${basic}` },
+      'audio/mpeg',
+      `${executionId}-full.mp3`
+    );
+    return;
+  }
+  const archivedUrl = await getArchivedPlaybackUrlByExecution(executionId, 'plivo');
+  if (archivedUrl) return res.redirect(archivedUrl);
+  throw new ApiError(httpStatus.NOT_FOUND, 'No Plivo recording for this call');
 });
 
 /**
@@ -582,6 +555,12 @@ const receiveWebhook = catchAsync(async (req, res) => {
   const record = result.record;
 
   if (record?.executionId) {
+    // Mirror Bolna + Plivo recordings to S3 for future review (best-effort, non-blocking).
+    if (isTerminal(record.status)) {
+      archiveCallRecordings(record.executionId).catch((err) =>
+        logger.error(`Recording archive error (${record.executionId}): ${err.message}`)
+      );
+    }
     const JobApplication = (await import('../models/jobApplication.model.js')).default;
     const application = await JobApplication.findOne({ verificationCallExecutionId: record.executionId })
       .select('candidate job')
@@ -621,6 +600,12 @@ const receiveCandidateWebhook = catchAsync(async (req, res) => {
   const record = result.record;
 
   if (record?.executionId) {
+    // Mirror Bolna + Plivo recordings to S3 for future review (best-effort, non-blocking).
+    if (isTerminal(record.status)) {
+      archiveCallRecordings(record.executionId).catch((err) =>
+        logger.error(`Recording archive error (${record.executionId}): ${err.message}`)
+      );
+    }
     const JobApplication = (await import('../models/jobApplication.model.js')).default;
     const application = await JobApplication.findOne({ verificationCallExecutionId: record.executionId })
       .select('candidate job')

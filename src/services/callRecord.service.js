@@ -697,11 +697,12 @@ async function backfillFromBolna(options = {}) {
   let errors = 0;
   let skippedForeign = 0;
 
-  // Backfill from both job recruiter agent and candidate agent
-  const agentIds = [
-    config.bolna?.agentId,
-    config.bolna?.candidateAgentId,
-  ].filter(Boolean);
+  // Backfill from every owned agent: job recruiter, candidate, AND any retired
+  // agents listed in BOLNA_ADDITIONAL_AGENT_IDS that still hold call history.
+  const agentIds =
+    Array.isArray(config.bolna?.allAgentIds) && config.bolna.allAgentIds.length
+      ? config.bolna.allAgentIds
+      : [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
   const uniqueAgentIds = [...new Set(agentIds)];
 
   for (const agentId of uniqueAgentIds) {

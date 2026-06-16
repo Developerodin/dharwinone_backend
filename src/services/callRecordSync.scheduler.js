@@ -92,7 +92,12 @@ async function reconcileStuckRecords() {
 }
 
 async function backfillFromAgentList() {
-  const agents = [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
+  // Pull from every owned agent (job recruiter, candidate, and any retired agents
+  // in BOLNA_ADDITIONAL_AGENT_IDS) so old-agent calls keep syncing.
+  const agents =
+    Array.isArray(config.bolna?.allAgentIds) && config.bolna.allAgentIds.length
+      ? config.bolna.allAgentIds
+      : [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
   const uniqueAgents = [...new Set(agents)];
   let scanned = 0;
   let applied = 0;
