@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCandidateExtraction } from '../candidateExtraction.js';
+import { parseCandidateExtraction, evaluateCallQuality, deriveCallInsights } from '../candidateExtraction.js';
 
 const sample = {
   'Candidate Verification': {
@@ -39,4 +39,79 @@ test('drops unknown enum values to null', () => {
     'Candidate Verification': { 'Still Interested': { objective: 'maybe', confidence: 0.9 } },
   });
   assert.equal(r.stillInterested, null);
+});
+
+// --- Task 2: evaluateCallQuality ---
+
+test('flags runtime-error transcript as needs_review', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: An error occurred: StreamReader.readline()...',
+    verification: { fieldsPresent: 0, minConfidence: null },
+    extractionPresent: false,
+  });
+  assert.equal(q.status, 'needs_review');
+  assert.ok(q.reasons.includes('runtime_error_in_transcript'));
+});
+
+test('flags completed call with no user turns', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: Hi\nassistant: Bye',
+    verification: { fieldsPresent: 2, minConfidence: 0.9 },
+    extractionPresent: true,
+  });
+  assert.equal(q.status, 'needs_review');
+  assert.ok(q.reasons.includes('no_user_turns'));
+});
+
+test('does NOT flag empty extraction when extraction not yet received', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: Hi\nuser: yes',
+    verification: { fieldsPresent: 0, minConfidence: null },
+    extractionPresent: false,
+  });
+  assert.equal(q.status, 'ok');
+});
+
+test('flags empty extraction when extraction present but empty', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: Hi\nuser: yes',
+    verification: { fieldsPresent: 0, minConfidence: null },
+    extractionPresent: true,
+  });
+  assert.equal(q.status, 'needs_review');
+  assert.ok(q.reasons.includes('empty_extraction'));
+});
+
+test('ok for a clean completed call', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: Hi\nuser: yes that is correct',
+    verification: { fieldsPresent: 5, minConfidence: 0.8 },
+    extractionPresent: true,
+  });
+  assert.equal(q.status, 'ok');
+  assert.deepEqual(q.reasons, []);
+});
+
+// --- Task 3: deriveCallInsights ---
+
+test('deriveCallInsights returns verification + callQuality', () => {
+  const r = deriveCallInsights({
+    status: 'completed',
+    transcript: 'assistant: Hi\nuser: yes',
+    extractedData: { 'Candidate Verification': { 'Name Confirmed': { objective: true, confidence: 0.9 } } },
+  });
+  assert.equal(r.verification.nameConfirmed, true);
+  assert.equal(r.verification.fieldsPresent, 1);
+  assert.equal(r.callQuality.status, 'ok');
+});
+
+test('deriveCallInsights marks extractionPresent false when no extracted_data', () => {
+  const r = deriveCallInsights({ status: 'completed', transcript: 'assistant: Hi\nuser: yes', extractedData: null });
+  assert.equal(r.verification.fieldsPresent, 0);
+  assert.equal(r.callQuality.status, 'ok'); // not flagged empty — extraction absent
 });
