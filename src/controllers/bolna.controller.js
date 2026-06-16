@@ -387,6 +387,15 @@ async function sendPostCallEmailAndNotification(record, application) {
   }
 }
 
+async function assertCanAccessCall(req, executionId) {
+  const record = await callRecordService.getCallRecordScopeFields(executionId);
+  if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
+  const isAdmin = await userIsAdmin(req.user);
+  const userId = req.user?.id || req.user?._id?.toString();
+  const allowed = await callRecordService.userCanAccessCallRecord(record, { userId, isAdmin });
+  if (!allowed) throw new ApiError(httpStatus.FORBIDDEN, 'You do not have access to this call');
+}
+
 /**
  * Resolve both recording sources for a call from its Bolna executionId:
  *   - Bolna's own recording (agent leg only)
@@ -435,6 +444,7 @@ async function streamRemoteAudio(res, url, headers, fallbackType, filename) {
  */
 const getCallRecordingSources = catchAsync(async (req, res) => {
   const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
   const { bolnaUrl, providerCallId, plivo, provider } = await resolveCallRecordingSources(executionId);
   const base = `/v1/bolna/call-records/${encodeURIComponent(executionId)}/recordings`;
 
@@ -464,6 +474,7 @@ const getCallRecordingSources = catchAsync(async (req, res) => {
 /** GET /bolna/call-records/:executionId/recordings/bolna — agent-leg audio (Bolna). */
 const streamBolnaRecording = catchAsync(async (req, res) => {
   const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
   const { bolnaUrl } = await resolveCallRecordingSources(executionId);
   if (!bolnaUrl) throw new ApiError(httpStatus.NOT_FOUND, 'No Bolna recording for this call');
   const { apiKey } = bolnaService.getConfig();
@@ -479,6 +490,7 @@ const streamBolnaRecording = catchAsync(async (req, res) => {
 /** GET /bolna/call-records/:executionId/recordings/plivo — full dual-channel audio (Plivo). */
 const streamPlivoRecording = catchAsync(async (req, res) => {
   const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
   const { plivo } = await resolveCallRecordingSources(executionId);
   if (!plivo.length) throw new ApiError(httpStatus.NOT_FOUND, 'No Plivo recording for this call');
   const basic = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');

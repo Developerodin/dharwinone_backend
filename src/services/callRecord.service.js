@@ -838,9 +838,32 @@ async function fillMissingBusinessNameFromJobs(limit = 100) {
 }
 
 /**
+ * Authorization check mirroring listCallRecords scoping: a non-admin may access
+ * a call record only if they created its job or own its candidate (or initiated it).
+ * @param {object} record - lean CallRecord with at least { job, candidate, createdBy }
+ * @param {{ userId?: string, isAdmin?: boolean }} ctx
+ */
+async function userCanAccessCallRecord(record, { userId, isAdmin } = {}) {
+  if (isAdmin) return true;
+  if (!record || !userId) return false;
+  if (record.createdBy && String(record.createdBy) === String(userId)) return true;
+  if (record.job && (await Job.exists({ _id: record.job, createdBy: userId }))) return true;
+  if (record.candidate && (await Employee.exists({ _id: record.candidate, owner: userId }))) return true;
+  return false;
+}
+
+async function getCallRecordScopeFields(executionId) {
+  return CallRecord.findOne({ executionId: String(executionId) })
+    .select('job candidate createdBy')
+    .lean();
+}
+
+/**
  * Re-derive verification + callQuality for stored records that have extractedData
  * or a transcript but no verification yet. Idempotent.
  */
+export { userCanAccessCallRecord, getCallRecordScopeFields };
+
 export async function backfillVerification(limit = 200) {
   const records = await CallRecord.find({
     'verification.extractedAt': null,
@@ -886,5 +909,7 @@ export default {
   backfillFromBolna,
   backfillVerification,
   normalizeStatus,
+  userCanAccessCallRecord,
+  getCallRecordScopeFields,
 };
 
