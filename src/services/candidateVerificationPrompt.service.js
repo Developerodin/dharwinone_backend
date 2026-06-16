@@ -21,7 +21,7 @@ export function resolveCandidateAgentGreeting(ctx, greetingOverride) {
       .replaceAll('{company_name}', hiringCompany);
   }
   // Short, friendly, TTS-safe. No em dashes or symbols.
-  return `Hi there! This is an automated call from ${hiringCompany}. We are calling about your recent job application. This will only take about two minutes. Is now a good time?`;
+  return `Hi there! This is an automated call from {company_name}. We are calling about your recent job application. This will only take about two minutes. Is now a good time?`;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,27 +317,86 @@ Say: "Our team will be in touch if something suitable comes up. Have a great day
 }
 
 // ---------------------------------------------------------------------------
-// Main prompt builder
+// Main prompt builder (Bolna {{variable}} template)
 // ---------------------------------------------------------------------------
+//
+// IMPORTANT: The system prompt is a STATIC template. Per-call candidate data is
+// NEVER baked into the prompt text. Instead it is injected at call time via
+// Bolna `user_data` using SINGLE-curly `{variable}` placeholders — confirmed
+// against the official Bolna docs (bolna.ai/docs/agent-setup/agent-tab). The
+// repo's docs/BOLNA_AGENT_VARIABLES.md shows {{double}}, which is WRONG — Bolna
+// only substitutes single braces, so {{x}} would be spoken literally.
+//
+// Why: the candidate agent is a single shared Bolna agent whose prompt is PATCHed
+// before each call. Baking literal values (e.g. "I have your name as Prakhar")
+// into that shared prompt is racy — a concurrent call, a failed PATCH, or Bolna
+// propagation lag could leave a PREVIOUS candidate's name/job live, so the agent
+// would greet the wrong person. Sending the data in `user_data` makes it travel
+// atomically with the call, so it can never belong to another candidate.
+//
+// buildCandidateAgentPromptTemplate() -> the static {{...}} template (PATCH this).
+// buildCandidateAgentTemplateVars(ctx) -> the rendered values to pass in user_data.
 
 /**
- * Build the complete system prompt for the candidate confirmation call agent.
- * Includes the 5-question flow, other opportunities handling, and all edge cases.
+ * Substitute {key} placeholders in a template with values from `vars`.
+ * Unknown placeholders are left intact (matches Bolna's own behaviour).
+ *
+ * NOTE: Bolna uses SINGLE curly braces `{variable_name}` (confirmed against the
+ * official docs at bolna.ai/docs/agent-setup/agent-tab). This must stay in sync
+ * with the brace style used in buildCandidateAgentPromptTemplate().
+ */
+export function substituteTemplateVars(template, vars = {}) {
+  return String(template).replace(/\{(\w+)\}/g, (match, key) =>
+    key in vars ? String(vars[key] ?? '') : match
+  );
+}
+
+/**
+ * Render the per-call values that fill the static prompt template.
+ * These are sent to Bolna in `user_data` (NOT baked into the shared prompt).
  *
  * @param {Record<string, string|number>} ctx - from buildCandidateVerificationPromptContext
  * @param {{ openingGreeting?: string, greetingOverride?: string, extraSystemInstructions?: string }} [opts]
+ * @returns {Record<string, string>} keys map 1:1 to {{placeholders}} in the template
  */
-export function buildCandidateAgentPrompt(ctx, opts = {}) {
+export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
   const hiringCompany = ctx.company_name || 'our company';
 
   const trimmedOpening = opts.openingGreeting != null ? String(opts.openingGreeting).trim() : '';
   const greeting = trimmedOpening || resolveCandidateAgentGreeting(ctx, opts.greetingOverride);
 
   const { q1, q2, q3, q4, q5 } = buildQuestionScripts(ctx);
-  const otherOpportunitiesSection = buildOtherOpportunitiesSection(ctx);
+  const otherOpportunitiesBlock = buildOtherOpportunitiesSection(ctx);
+  const extra =
+    opts.extraSystemInstructions && String(opts.extraSystemInstructions).trim()
+      ? String(opts.extraSystemInstructions).trim()
+      : '';
+
+  return {
+    company_name: hiringCompany,
+    greeting,
+    q1_line: q1,
+    q2_line: q2,
+    q3_line: q3,
+    q4_line: q4,
+    q5_line: q5,
+    candidate_name_or_applicant: ctx.candidate_name || 'the applicant',
+    other_opportunities_block: otherOpportunitiesBlock,
+    additional_instructions: extra ? `\n## ADDITIONAL INSTRUCTIONS\n${extra}` : '',
+  };
+}
+
+/**
+ * The complete, STATIC system prompt template for the candidate confirmation agent.
+ * Contains only {{placeholders}} — no per-call data. PATCH this onto the agent.
+ * Filled at call time by Bolna from the `user_data` produced by
+ * buildCandidateAgentTemplateVars().
+ */
+export function buildCandidateAgentPromptTemplate() {
+  const otherOpportunitiesSection = '{other_opportunities_block}';
 
   const base = `## WHO YOU ARE
-You are a friendly and professional automated voice assistant. You are calling on behalf of ${hiringCompany}. Your primary purpose is to confirm a few details from the candidate's job application. You are not a recruiter. You do not evaluate or screen candidates. You do not make or influence any hiring decisions.
+You are a friendly and professional automated voice assistant. You are calling on behalf of {company_name}. Your primary purpose is to confirm a few details from the candidate's job application. You are not a recruiter. You do not evaluate or screen candidates. You do not make or influence any hiring decisions.
 
 You may, if the candidate asks, share information about other active job openings that match their profile. This is always optional and never proactive.
 
@@ -367,7 +426,7 @@ This is a confirmation call. You will go through exactly five short questions to
 
 ### OPENING
 The following welcome message is already spoken by the system when the call connects:
-"${greeting}"
+"{greeting}"
 
 Do NOT repeat this welcome. After the candidate responds positively, begin with a brief bridge:
 "Wonderful. This will only take a couple of minutes."
@@ -383,7 +442,7 @@ Move to the VOICEMAIL SCRIPT below.
 ---
 
 ### QUESTION 1 — FULL NAME
-Say: "${q1}"
+Say: "{q1_line}"
 
 - If confirmed: "Perfect. Thank you." Move to Question 2.
 - If corrected: "Got it. I will note that. Thank you." Move to Question 2.
@@ -392,7 +451,7 @@ Say: "${q1}"
 ---
 
 ### QUESTION 2 — POSITION APPLIED FOR
-Say: "${q2}"
+Say: "{q2_line}"
 
 - If confirmed: "Great. Thank you for confirming that." Move to Question 3.
 - If corrected: "Understood. I have noted that. Thank you." Move to Question 3.
@@ -401,7 +460,7 @@ Say: "${q2}"
 ---
 
 ### QUESTION 3 — DATE OF APPLICATION
-Say: "${q3}"
+Say: "{q3_line}"
 
 - If confirmed: "Perfect. Thank you." Move to Question 4.
 - If corrected or unsure: "No worries at all. We have it on our end. Thank you." Move to Question 4.
@@ -410,7 +469,7 @@ Say: "${q3}"
 ---
 
 ### QUESTION 4 — CURRENT LOCATION
-Say: "${q4}"
+Say: "{q4_line}"
 
 - If confirmed: "Great. Thank you." Move to Question 5.
 - If corrected: "Got it. I have updated that. Thank you." Move to Question 5.
@@ -419,7 +478,7 @@ Say: "${q4}"
 ---
 
 ### QUESTION 5 — EXPECTED JOINING DATE
-Say: "${q5}"
+Say: "{q5_line}"
 
 - After their answer (whatever it is): "That is very helpful. Thank you for letting us know."
 Then move immediately to the CLOSING.
@@ -433,7 +492,7 @@ Deliver this closing message after Question 5. Speak it naturally in short piece
 Pause one second.
 "Our team will carefully review your application."
 Pause one second.
-"Someone from ${hiringCompany} will contact you about the next steps."
+"Someone from {company_name} will contact you about the next steps."
 Pause one second.
 
 Before ending, offer one final optional prompt:
@@ -452,7 +511,7 @@ If the candidate asks a question here, handle it using the HANDLING COMMON SITUA
 
 ### VOICEMAIL SCRIPT
 If the call connects but no one responds after two attempts:
-"Hi. This is an automated message from ${hiringCompany}."
+"Hi. This is an automated message from {company_name}."
 Pause.
 "We called to confirm a few details about your job application."
 Pause.
@@ -466,7 +525,7 @@ Then end the call.
 ## HANDLING COMMON SITUATIONS
 
 ### If the candidate asks what company is calling:
-"This call is from ${hiringCompany}. It is about your recent job application."
+"This call is from {company_name}. It is about your recent job application."
 
 ### If the candidate asks why they are being called:
 "We are just confirming a few quick details from your application. It will take about two minutes."
@@ -489,7 +548,7 @@ Then end the call.
 Then end the call.
 
 ### If a different person answers (not the candidate):
-"I am sorry to bother you. I was looking for ${ctx.candidate_name || 'the applicant'}. Is this a good time to reach them?"
+"I am sorry to bother you. I was looking for {candidate_name_or_applicant}. Is this a good time to reach them?"
 If they say no or they do not know: "No problem at all. Thank you. Have a good day." End the call.
 
 ### If the candidate asks about interview process or next steps:
@@ -497,7 +556,7 @@ If they say no or they do not know: "No problem at all. Thank you. Have a good d
 "I do not have those specifics on this call. Thank you for your patience."
 
 ### If the candidate asks about the company:
-"I represent ${hiringCompany} on this call. For more information about them, our team can share details by email."
+"I represent {company_name} on this call. For more information about them, our team can share details by email."
 
 ---
 
@@ -514,11 +573,25 @@ ${otherOpportunitiesSection}
 - Do not repeat a question more than once. Move on gracefully if they cannot answer.
 - Never invent a job opening, company name, location, or salary. Use only the matched jobs listed above.
 - Never invent information. If you do not know something, say the team will follow up by email.
-${
-  opts.extraSystemInstructions && String(opts.extraSystemInstructions).trim()
-    ? `\n## ADDITIONAL INSTRUCTIONS\n${String(opts.extraSystemInstructions).trim()}`
-    : ''
-}`;
+{additional_instructions}`;
 
   return base;
+}
+
+/**
+ * Backward-compatible full-render helper: returns the prompt with all
+ * per-call values already substituted (no {{placeholders}} left).
+ *
+ * The live call path does NOT use this — it PATCHes the static template
+ * and passes values via user_data so data travels atomically with the call.
+ * Kept for tests, debugging, and any caller that wants a fully rendered prompt.
+ *
+ * @param {Record<string, string|number>} ctx - from buildCandidateVerificationPromptContext
+ * @param {{ openingGreeting?: string, greetingOverride?: string, extraSystemInstructions?: string }} [opts]
+ */
+export function buildCandidateAgentPrompt(ctx, opts = {}) {
+  return substituteTemplateVars(
+    buildCandidateAgentPromptTemplate(),
+    buildCandidateAgentTemplateVars(ctx, opts)
+  );
 }

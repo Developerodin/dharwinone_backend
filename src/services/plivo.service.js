@@ -150,8 +150,44 @@ async function buyNumber(number) {
   }
 }
 
+/**
+ * Fetch the call recording(s) Plivo stored for a given call.
+ *
+ * Plivo records DUAL-CHANNEL by default (agent + caller in one file), so this is
+ * the source of truth for the full two-sided audio — unlike Bolna's own
+ * `recording_url`, which only carries the agent leg. Pass the Plivo call UUID,
+ * which Bolna exposes as `telephony_data.provider_call_id`.
+ *
+ * @param {string} callUuid - Plivo call UUID (Bolna's telephony_data.provider_call_id)
+ * @returns {Promise<{ success: boolean, recordings?: Object[], error?: string }>}
+ */
+async function getCallRecordings(callUuid) {
+  const { client, error } = getClient();
+  if (error) return { success: false, error };
+  if (!callUuid) return { success: false, error: 'callUuid is required.' };
+
+  try {
+    const res = await client.recordings.list({ callUuid: String(callUuid).trim() });
+    const list = Array.isArray(res) ? res : res?.objects || [];
+    const recordings = list.map((r) => ({
+      recordingId: pick(r, 'recordingId', 'recording_id'),
+      callUuid: pick(r, 'callUuid', 'call_uuid'),
+      recordingUrl: pick(r, 'recordingUrl', 'recording_url'),
+      durationMs: pick(r, 'recordingDurationMs', 'recording_duration_ms'),
+      type: pick(r, 'recordingType', 'recording_type'),
+      addTime: pick(r, 'addTime', 'add_time'),
+    }));
+    return { success: true, recordings };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo recording fetch failed (callUuid=${callUuid}): ${message}`);
+    return { success: false, error: message };
+  }
+}
+
 export default {
   getClient,
   searchAvailableNumbers,
   buyNumber,
+  getCallRecordings,
 };

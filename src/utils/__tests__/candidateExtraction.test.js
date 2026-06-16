@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCandidateExtraction, evaluateCallQuality, deriveCallInsights } from '../candidateExtraction.js';
+import { parseCandidateExtraction, evaluateCallQuality, deriveCallInsights, readBolnaCallSummary } from '../candidateExtraction.js';
 
 const sample = {
   'Candidate Verification': {
@@ -75,15 +75,28 @@ test('does NOT flag empty extraction when extraction not yet received', () => {
   assert.equal(q.status, 'ok');
 });
 
-test('flags empty extraction when extraction present but empty', () => {
+test('flags empty extraction when CV category present but fields empty', () => {
   const q = evaluateCallQuality({
     status: 'completed',
     transcript: 'assistant: Hi\nuser: yes',
     verification: { fieldsPresent: 0, minConfidence: null },
     extractionPresent: true,
+    structuredCategoryPresent: true,
   });
   assert.equal(q.status, 'needs_review');
   assert.ok(q.reasons.includes('empty_extraction'));
+});
+
+test('flags structured_extraction_not_configured when only General Call Summary', () => {
+  const q = evaluateCallQuality({
+    status: 'completed',
+    transcript: 'assistant: Hi\nuser: yes',
+    verification: { fieldsPresent: 0, minConfidence: null },
+    extractionPresent: true,
+    structuredCategoryPresent: false,
+  });
+  assert.equal(q.status, 'needs_review');
+  assert.ok(q.reasons.includes('structured_extraction_not_configured'));
 });
 
 test('ok for a clean completed call', () => {
@@ -121,4 +134,29 @@ test('normalizes hyphenated enum values', () => {
     'Candidate Verification': { 'Still Interested': { objective: 'not-interested', confidence: 0.9 } },
   });
   assert.equal(r.stillInterested, 'not_interested');
+});
+
+test('readBolnaCallSummary reads General Call Summary subjective', () => {
+  const s = readBolnaCallSummary({
+    General: {
+      'Call Summary': {
+        objective: null,
+        confidence: 0.95,
+        subjective: 'Applicant confirmed name and role.',
+      },
+    },
+  });
+  assert.equal(s?.subjective, 'Applicant confirmed name and role.');
+  assert.equal(s?.confidence, 0.95);
+});
+
+test('parseCandidateExtraction falls back to subjective for text fields', () => {
+  const r = parseCandidateExtraction({
+    'Candidate Verification': {
+      Availability: { objective: null, subjective: 'in two weeks', confidence: 0.9 },
+      'Current Location': { objective: null, subjective: 'Jaipur, Rajasthan', confidence: 0.88 },
+    },
+  });
+  assert.equal(r.availability, 'in two weeks');
+  assert.equal(r.currentLocation, 'Jaipur, Rajasthan');
 });

@@ -852,6 +852,13 @@ async function userCanAccessCallRecord(record, { userId, isAdmin } = {}) {
   return false;
 }
 
+/** Load persisted recording fields for an execution (webhook may have these before Bolna API catches up). */
+async function getCallRecordingFields(executionId) {
+  return CallRecord.findOne({ executionId: String(executionId) })
+    .select('recordingUrl telephonyData')
+    .lean();
+}
+
 async function getCallRecordScopeFields(executionId) {
   return CallRecord.findOne({ executionId: String(executionId) })
     .select('job candidate createdBy')
@@ -862,7 +869,7 @@ async function getCallRecordScopeFields(executionId) {
  * Re-derive verification + callQuality for stored records that have extractedData
  * or a transcript but no verification yet. Idempotent.
  */
-export { userCanAccessCallRecord, getCallRecordScopeFields };
+export { userCanAccessCallRecord, getCallRecordScopeFields, getCallRecordingFields };
 
 export async function backfillVerification(limit = 200) {
   const records = await CallRecord.find({
@@ -880,15 +887,13 @@ export async function backfillVerification(limit = 200) {
       status: r.status,
     });
     const now = new Date();
-    await CallRecord.updateOne(
-      { _id: r._id },
-      {
-        $set: {
-          verification: { ...insights.verification, extractedAt: now },
-          callQuality: { ...insights.callQuality, evaluatedAt: now },
-        },
-      }
-    );
+    const $set = {
+      callQuality: { ...insights.callQuality, evaluatedAt: now },
+    };
+    if (r.extractedData) {
+      $set.verification = { ...insights.verification, extractedAt: now };
+    }
+    await CallRecord.updateOne({ _id: r._id }, { $set });
     updated += 1;
   }
   return { updated, scanned: records.length };
@@ -911,5 +916,6 @@ export default {
   normalizeStatus,
   userCanAccessCallRecord,
   getCallRecordScopeFields,
+  getCallRecordingFields,
 };
 

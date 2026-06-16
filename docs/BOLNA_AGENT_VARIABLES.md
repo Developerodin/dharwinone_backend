@@ -110,15 +110,21 @@ const bolnaPayload = {
 
 ## Variable Usage in Agent Prompt
 
-These variables are automatically replaced in the agent prompt using double curly braces:
+These variables are automatically replaced in the agent prompt (and in the agent
+welcome message) using **SINGLE curly braces** — confirmed against the official
+[Bolna docs](https://www.bolna.ai/docs/agent-setup/agent-tab).
+
+> ⚠️ Bolna substitutes `{variable_name}`, NOT `{{variable_name}}`. Double braces
+> are spoken literally. An earlier version of this doc showed double braces and
+> was wrong.
 
 ```
-Hello! This is the recruitment assistant calling from {{company_name}}. 
-Am I speaking with {{candidate_name}}?
+Hello! This is the recruitment assistant calling from {company_name}. 
+Am I speaking with {candidate_name}?
 
-Thank you for applying to the {{job_title}} position.
+Thank you for applying to the {job_title} position.
 
-The salary range is {{salary_range}}.
+The salary range is {salary_range}.
 ```
 
 ## Testing Variables

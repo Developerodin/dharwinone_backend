@@ -9,6 +9,7 @@ import { initiateCandidateVerificationCall } from '../services/bolnaCandidateVer
 import { initiateJobPostingVerificationCall } from '../services/bolnaJobPostingVerification.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import callSyncService from '../services/callSync.service.js';
+import { ensureCandidateVerificationExtractions } from '../services/bolnaCandidateExtractionSetup.service.js';
 import { getJobById } from '../services/job.service.js';
 import Job from '../models/job.model.js';
 import config from '../config/config.js';
@@ -396,31 +397,51 @@ async function assertCanAccessCall(req, executionId) {
   if (!allowed) throw new ApiError(httpStatus.FORBIDDEN, 'You do not have access to this call');
 }
 
+/** Pick upstream auth for a recording URL (Bolna vs Plivo-hosted media). */
+function headersForRecordingUrl(url) {
+  const host = String(url || '').toLowerCase();
+  if (host.includes('plivo.com') || host.includes('media.plivo')) {
+    const basic = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString('base64');
+    return { Authorization: `Basic ${basic}` };
+  }
+  const { apiKey } = bolnaService.getConfig();
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
 /**
  * Resolve both recording sources for a call from its Bolna executionId:
  *   - Bolna's own recording (agent leg only)
  *   - Plivo's recording (DUAL-CHANNEL — both agent and caller)
  * Bolna exposes the Plivo call UUID as telephony_data.provider_call_id.
+ * Falls back to CallRecord.recordingUrl / telephonyData when the live Bolna
+ * execution payload has not yet (or never) exposed telephony_data.
  */
 async function resolveCallRecordingSources(executionId) {
-  // /executions/{id} (plural) carries telephony_data; /execution/{id} does not.
+  const stored = await callRecordService.getCallRecordingFields(executionId);
+  const storedTel =
+    stored?.telephonyData && typeof stored.telephonyData === 'object' ? stored.telephonyData : {};
+  let bolnaUrl = stored?.recordingUrl || storedTel.recording_url || null;
+  let providerCallId = storedTel.provider_call_id || null;
+  let provider = storedTel.provider || null;
+  let execError = null;
+
   const exec = await bolnaService.getExecutionFull(executionId);
-  if (!exec.success) {
-    throw new ApiError(
-      exec.notFound ? httpStatus.NOT_FOUND : httpStatus.BAD_GATEWAY,
-      exec.error || 'Failed to fetch call details'
-    );
+  if (exec.success && exec.details) {
+    const tel = exec.details.telephony_data || {};
+    bolnaUrl = tel.recording_url || exec.details.recording_url || bolnaUrl;
+    providerCallId = tel.provider_call_id || providerCallId;
+    provider = tel.provider || provider;
+  } else {
+    execError = exec.error || 'Failed to fetch call details from Bolna';
   }
-  const tel = exec.details?.telephony_data || {};
-  const bolnaUrl = tel.recording_url || exec.details?.recording_url || null;
-  const providerCallId = tel.provider_call_id || null;
 
   let plivo = [];
   if (providerCallId) {
     const r = await plivoService.getCallRecordings(providerCallId);
     if (r.success) plivo = (r.recordings || []).filter((x) => x.recordingUrl);
   }
-  return { bolnaUrl, providerCallId, plivo, provider: tel.provider || null };
+
+  return { bolnaUrl, providerCallId, plivo, provider, execError };
 }
 
 /** Stream a remote (auth-protected) audio URL back to the JWT-authed client inline. */
@@ -438,14 +459,47 @@ async function streamRemoteAudio(res, url, headers, fallbackType, filename) {
 }
 
 /**
- * GET /bolna/call-records/:executionId/recordings
- * Returns metadata for BOTH recordings with backend stream URLs (the raw
- * provider URLs need Bolna/Plivo auth, so they are proxied, not exposed).
+ * POST /bolna/call-records/:executionId/refresh
+ * Re-fetch execution from Bolna and merge extracted_data, transcript, recordings into CallRecord.
  */
+const refreshCallRecord = catchAsync(async (req, res) => {
+  const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
+  const exec = await bolnaService.getExecutionFull(executionId);
+  if (!exec.success) {
+    throw new ApiError(
+      exec.notFound ? httpStatus.NOT_FOUND : httpStatus.BAD_GATEWAY,
+      exec.error || 'Failed to fetch execution from Bolna'
+    );
+  }
+  const record = await callRecordService.updateFromExecutionDetails(executionId, exec.details, {
+    setCompletedAt: true,
+    setErrorMessage: true,
+  });
+  if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
+  res.status(httpStatus.OK).send({ success: true, record });
+});
+
+/**
+ * POST /bolna/candidate-agent/setup-extractions
+ * Create the seven Candidate Verification dispositions on the Bolna candidate agent (idempotent).
+ */
+const setupCandidateVerificationExtractions = catchAsync(async (req, res) => {
+  const result = await ensureCandidateVerificationExtractions(req.body?.agentId);
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Bolna disposition setup failed');
+  }
+  logger.info(
+    `[Bolna] Candidate verification extractions ${result.alreadyConfigured ? 'already present' : 'created'} ` +
+      `agent=${result.agentId} count=${result.createdCount ?? 0}`
+  );
+  res.status(httpStatus.OK).send({ success: true, ...result });
+});
+
 const getCallRecordingSources = catchAsync(async (req, res) => {
   const { executionId } = req.params;
   await assertCanAccessCall(req, executionId);
-  const { bolnaUrl, providerCallId, plivo, provider } = await resolveCallRecordingSources(executionId);
+  const { bolnaUrl, providerCallId, plivo, provider, execError } = await resolveCallRecordingSources(executionId);
   const base = `/v1/bolna/call-records/${encodeURIComponent(executionId)}/recordings`;
 
   res.status(httpStatus.OK).send({
@@ -455,7 +509,10 @@ const getCallRecordingSources = catchAsync(async (req, res) => {
     recordings: {
       bolna: bolnaUrl
         ? { available: true, channel: 'agent_only', streamUrl: `${base}/bolna` }
-        : { available: false },
+        : {
+            available: false,
+            reason: execError || 'no recording_url on call',
+          },
       plivo: plivo.length
         ? {
             available: true,
@@ -477,13 +534,14 @@ const streamBolnaRecording = catchAsync(async (req, res) => {
   await assertCanAccessCall(req, executionId);
   const { bolnaUrl } = await resolveCallRecordingSources(executionId);
   if (!bolnaUrl) throw new ApiError(httpStatus.NOT_FOUND, 'No Bolna recording for this call');
-  const { apiKey } = bolnaService.getConfig();
+  const contentType = String(bolnaUrl).toLowerCase().includes('plivo') ? 'audio/mpeg' : 'audio/wav';
+  const ext = contentType === 'audio/mpeg' ? 'mp3' : 'wav';
   await streamRemoteAudio(
     res,
     bolnaUrl,
-    { Authorization: `Bearer ${apiKey}` },
-    'audio/wav',
-    `${executionId}-agent.wav`
+    headersForRecordingUrl(bolnaUrl),
+    contentType,
+    `${executionId}-agent.${ext}`
   );
 });
 
@@ -600,12 +658,14 @@ export {
   initiateCandidateCall,
   getCallStatus,
   getCallRecords,
+  refreshCallRecord,
   getCallRecordingSources,
   streamBolnaRecording,
   streamPlivoRecording,
   receiveWebhook,
   receiveCandidateWebhook,
   syncMissingCallRecords,
+  setupCandidateVerificationExtractions,
   deleteCallRecord,
   getBolnaDiagnostics,
 };

@@ -27,6 +27,10 @@ router
   );
 
 router
+  .route('/candidate-agent/setup-extractions')
+  .post(auth(), requirePermissions('calls.manage'), bolnaController.setupCandidateVerificationExtractions);
+
+router
   .route('/diagnostics')
   .get(auth(), requirePermissionOrAdministrator('calls.manage'), bolnaController.getBolnaDiagnostics);
 
@@ -49,6 +53,24 @@ router
 router
   .route('/call-records/sync')
   .post(auth(), requirePermissions('calls.manage'), bolnaController.syncMissingCallRecords);
+
+router
+  .route('/call-records/:executionId/refresh')
+  .post(auth(), requirePermissions('calls.read'), validate(bolnaValidation.getCallStatus), bolnaController.refreshCallRecord);
+
+// Both recordings for a call: Bolna (agent-only) + Plivo (full dual-channel).
+// Metadata first, then proxied audio streams (provider URLs need Bolna/Plivo auth).
+router
+  .route('/call-records/:executionId/recordings')
+  .get(auth(), requirePermissions('calls.read'), bolnaController.getCallRecordingSources);
+
+router
+  .route('/call-records/:executionId/recordings/bolna')
+  .get(auth(), requirePermissions('calls.read'), bolnaController.streamBolnaRecording);
+
+router
+  .route('/call-records/:executionId/recordings/plivo')
+  .get(auth(), requirePermissions('calls.read'), bolnaController.streamPlivoRecording);
 
 router
   .route('/call-records/:id')

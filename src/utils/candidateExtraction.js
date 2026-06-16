@@ -20,8 +20,15 @@ function readField(extractedData, name) {
   const cat = extractedData && extractedData[CATEGORY];
   const entry = cat && cat[name];
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { value: null, confidence: null };
+  let value = entry.objective ?? null;
+  if (value == null || value === '') {
+    const subj = entry.subjective;
+    if (subj != null && String(subj).trim() !== '' && String(subj).toLowerCase() !== 'null') {
+      value = subj;
+    }
+  }
   return {
-    value: entry.objective ?? null,
+    value,
     confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
   };
 }
@@ -44,6 +51,22 @@ function toEnum(v, allowed) {
   if (!s) return null;
   const k = s.toLowerCase().replace(/[\s-]+/g, '_');
   return allowed.has(k) ? k : null;
+}
+
+function hasStructuredVerificationCategory(extractedData) {
+  const cat = extractedData && extractedData[CATEGORY];
+  return !!(cat && typeof cat === 'object' && !Array.isArray(cat) && Object.keys(cat).length > 0);
+}
+
+/** Bolna's default post-call summary (General → Call Summary → subjective). */
+export function readBolnaCallSummary(extractedData) {
+  const general = extractedData?.General;
+  const entry = general?.['Call Summary'];
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const subjective = toText(entry.subjective);
+  const confidence = typeof entry.confidence === 'number' ? entry.confidence : null;
+  if (!subjective) return null;
+  return { subjective, confidence };
 }
 
 export function parseCandidateExtraction(extractedData) {
@@ -84,10 +107,16 @@ const MIN_CONFIDENCE = 0.4;
 
 /**
  * Derive a call-quality flag. Pure (no timestamps — caller stamps evaluatedAt).
- * @param {{ status?: string, transcript?: string, verification: object, extractionPresent: boolean }} p
+ * @param {{ status?: string, transcript?: string, verification: object, extractionPresent: boolean, structuredCategoryPresent?: boolean }} p
  * @returns {{ status: 'ok'|'needs_review', reasons: string[] }}
  */
-export function evaluateCallQuality({ status, transcript, verification, extractionPresent }) {
+export function evaluateCallQuality({
+  status,
+  transcript,
+  verification,
+  extractionPresent,
+  structuredCategoryPresent = false,
+}) {
   const reasons = [];
   const isCompleted = String(status || '').toLowerCase() === 'completed';
   const t = String(transcript || '');
@@ -98,7 +127,9 @@ export function evaluateCallQuality({ status, transcript, verification, extracti
   if (isCompleted && userTurns === 0) reasons.push('no_user_turns');
 
   if (isCompleted && extractionPresent && verification && verification.fieldsPresent === 0) {
-    reasons.push('empty_extraction');
+    reasons.push(
+      structuredCategoryPresent ? 'empty_extraction' : 'structured_extraction_not_configured'
+    );
   }
   if (
     isCompleted &&
@@ -121,6 +152,13 @@ export function deriveCallInsights({ extractedData, transcript, status }) {
   const verification = parseCandidateExtraction(extractedData);
   const extractionPresent =
     !!extractedData && typeof extractedData === 'object' && Object.keys(extractedData).length > 0;
-  const callQuality = evaluateCallQuality({ status, transcript, verification, extractionPresent });
+  const structuredCategoryPresent = hasStructuredVerificationCategory(extractedData);
+  const callQuality = evaluateCallQuality({
+    status,
+    transcript,
+    verification,
+    extractionPresent,
+    structuredCategoryPresent,
+  });
   return { verification, callQuality };
 }

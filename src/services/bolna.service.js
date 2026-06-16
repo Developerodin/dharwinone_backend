@@ -244,6 +244,41 @@ async function getExecutionDetails(executionId) {
 }
 
 /**
+ * Get FULL execution details including telephony_data (recording_url,
+ * provider_call_id, etc). NOTE: this uses `/executions/{id}` (plural) — unlike
+ * `/execution/{id}` (singular, getExecutionDetails) which returns only a status
+ * stub WITHOUT telephony_data.
+ * @param {string} executionId
+ * @returns {Promise<{ success: boolean, details?: Object, notFound?: boolean, error?: string }>}
+ */
+async function getExecutionFull(executionId) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  if (!executionId) return { success: false, error: 'executionId is required.' };
+
+  try {
+    const res = await fetch(`${apiBase}/executions/${executionId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    });
+    const text = await res.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 404) return { success: false, notFound: true, error: 'execution not found' };
+    if (!res.ok) {
+      return { success: false, error: (data && (data.detail || data.message || data.error)) || text || res.statusText };
+    }
+    return { success: true, details: data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Get executions for an agent.
  * @param {Object} options - { agentId, page_number, page_size }
  * @returns {Promise<{ success: boolean, data?: Array, total?: number, has_more?: boolean, error?: string }>}
@@ -300,6 +335,46 @@ async function getAgentExecutions(options = {}) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, error: message };
+  }
+}
+
+/**
+ * Fetch an agent's full config from Bolna (GET /v2/agent/{id}).
+ * Used to VERIFY a PATCH actually landed before placing a call — Bolna renders
+ * the system prompt with a delay/cache, so a call placed immediately after a
+ * PATCH can otherwise run against a stale prompt.
+ * @param {string} agentId
+ * @returns {Promise<{ success: boolean, agent?: Object, error?: string }>}
+ */
+async function getAgent(agentId) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  if (!agentId) return { success: false, error: 'agentId is required.' };
+
+  try {
+    const res = await fetch(`${apiBase}/v2/agent/${agentId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const text = await res.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore JSON parse error */
+    }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error)) || text || res.statusText;
+      return { success: false, error: message };
+    }
+    return { success: true, agent: data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -391,12 +466,90 @@ async function verifyExecutionExistsInBolna(executionId) {
   return { exists: true, details: result.details };
 }
 
+async function bolnaApiRequest(method, path, body) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) return { success: false, error: 'BOLNA_API_KEY is not set.' };
+
+  try {
+    const res = await fetch(`${apiBase}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+    if (!res.ok) {
+      const message = (data && (data.message || data.error || data.detail)) || text || res.statusText;
+      return { success: false, error: message, status: res.status };
+    }
+    return { success: true, data, status: res.status };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * List dispositions, optionally scoped to an agent.
+ * @param {string} [agentId]
+ */
+async function listDispositions(agentId) {
+  const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+  const result = await bolnaApiRequest('GET', `/dispositions${q}`);
+  if (!result.success) return result;
+  const raw = result.data;
+  const dispositions = Array.isArray(raw) ? raw : raw.data || raw.dispositions || [];
+  return { success: true, dispositions };
+}
+
+/**
+ * Create one disposition linked to an agent.
+ */
+async function createDisposition(agentId, disposition) {
+  if (!agentId) return { success: false, error: 'agentId is required.' };
+  const result = await bolnaApiRequest('POST', '/dispositions/', {
+    agent_id: agentId,
+    ...disposition,
+  });
+  if (!result.success) return result;
+  const id = result.data?.id || result.data?.disposition_id;
+  return { success: true, id, disposition: result.data };
+}
+
+/**
+ * Bulk-create dispositions for an agent (atomic).
+ */
+async function bulkCreateDispositions(agentId, dispositions) {
+  if (!agentId) return { success: false, error: 'agentId is required.' };
+  if (!Array.isArray(dispositions) || dispositions.length === 0) {
+    return { success: false, error: 'dispositions array is required.' };
+  }
+  const result = await bolnaApiRequest('POST', '/dispositions/bulk', {
+    agent_id: agentId,
+    dispositions,
+  });
+  if (!result.success) return result;
+  return { success: true, ids: result.data?.ids || [], message: result.data?.message };
+}
+
 export default {
   initiateCall,
   getExecutionDetails,
+  getExecutionFull,
   getAgentExecutions,
+  getAgent,
   getConfig,
   updateAgentPrompt,
   verifyExecutionExistsInBolna,
+  listDispositions,
+  createDisposition,
+  bulkCreateDispositions,
 };
 
