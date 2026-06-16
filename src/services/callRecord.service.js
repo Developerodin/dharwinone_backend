@@ -3,6 +3,7 @@ import Job from '../models/job.model.js';
 import Employee from '../models/employee.model.js';
 import config from '../config/config.js';
 import { normalizePhone } from '../utils/phone.js';
+import { deriveCallInsights } from '../utils/candidateExtraction.js';
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -450,6 +451,17 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
     payload.extracted_data ?? data.extracted_data ?? details.extracted_data;
   if (extracted && typeof extracted === 'object') {
     update.extractedData = extracted;
+  }
+  // Phase 1: re-derive typed answers + quality from extraction/transcript on reconcile.
+  if (extracted || norm.transcript) {
+    const insights = deriveCallInsights({
+      extractedData: extracted,
+      transcript: norm.transcript,
+      status: norm.status,
+    });
+    const now = new Date();
+    update.verification = { ...insights.verification, extractedAt: now };
+    update.callQuality = { ...insights.callQuality, evaluatedAt: now };
   }
 
   const errRaw = payload.error_message ?? data.error_message ?? details.error_message;
