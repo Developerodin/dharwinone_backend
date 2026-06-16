@@ -837,6 +837,40 @@ async function fillMissingBusinessNameFromJobs(limit = 100) {
   return { updated };
 }
 
+/**
+ * Re-derive verification + callQuality for stored records that have extractedData
+ * or a transcript but no verification yet. Idempotent.
+ */
+export async function backfillVerification(limit = 200) {
+  const records = await CallRecord.find({
+    'verification.extractedAt': null,
+    $or: [{ extractedData: { $ne: null } }, { transcript: { $ne: null } }],
+  })
+    .limit(limit)
+    .lean();
+
+  let updated = 0;
+  for (const r of records) {
+    const insights = deriveCallInsights({
+      extractedData: r.extractedData,
+      transcript: r.transcript,
+      status: r.status,
+    });
+    const now = new Date();
+    await CallRecord.updateOne(
+      { _id: r._id },
+      {
+        $set: {
+          verification: { ...insights.verification, extractedAt: now },
+          callQuality: { ...insights.callQuality, evaluatedAt: now },
+        },
+      }
+    );
+    updated += 1;
+  }
+  return { updated, scanned: records.length };
+}
+
 export default {
   createFromWebhook,
   createRecord,
@@ -850,6 +884,7 @@ export default {
   deleteCallRecord,
   syncMissingData,
   backfillFromBolna,
+  backfillVerification,
   normalizeStatus,
 };
 
