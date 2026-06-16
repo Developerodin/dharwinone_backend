@@ -207,16 +207,21 @@ export async function applyEvent(payload, source, meta = {}) {
   if (norm.extractedData) set.extractedData = norm.extractedData;
   if (norm.telephonyData) set.telephonyData = norm.telephonyData;
   if (norm.language) set.language = norm.language;
-  // Phase 1: derive typed verification answers + quality flag whenever this event
-  // carries an extraction or transcript. extractedAt/evaluatedAt stamped from event ts.
+  // Phase 1: derive quality + typed verification when this event carries an
+  // extraction or transcript. extractedAt/evaluatedAt stamped from event ts.
   if (norm.extractedData || norm.transcript) {
     const insights = deriveCallInsights({
       extractedData: norm.extractedData,
       transcript: norm.transcript,
       status,
     });
-    set.verification = { ...insights.verification, extractedAt: eventTs };
+    // Quality can come from transcript alone (e.g. runtime-error markers).
     set.callQuality = { ...insights.callQuality, evaluatedAt: eventTs };
+    // Typed fields ONLY when extraction is present — never clobber a populated
+    // verification with nulls from a transcript-only event arriving later.
+    if (norm.extractedData) {
+      set.verification = { ...insights.verification, extractedAt: eventTs };
+    }
   }
   if (isTerminal(status)) set.completedAt = eventTs;
 

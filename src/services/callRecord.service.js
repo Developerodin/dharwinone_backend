@@ -452,7 +452,8 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
   if (extracted && typeof extracted === 'object') {
     update.extractedData = extracted;
   }
-  // Phase 1: re-derive typed answers + quality from extraction/transcript on reconcile.
+  // Phase 1: re-derive quality + typed verification on reconcile. Typed fields
+  // only when extraction is present, so transcript-only reconciles don't clobber.
   if (extracted || norm.transcript) {
     const insights = deriveCallInsights({
       extractedData: extracted,
@@ -460,8 +461,10 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
       status: norm.status,
     });
     const now = new Date();
-    update.verification = { ...insights.verification, extractedAt: now };
     update.callQuality = { ...insights.callQuality, evaluatedAt: now };
+    if (extracted) {
+      update.verification = { ...insights.verification, extractedAt: now };
+    }
   }
 
   const errRaw = payload.error_message ?? data.error_message ?? details.error_message;
