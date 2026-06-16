@@ -19,6 +19,7 @@
 import crypto from 'crypto';
 import logger from '../config/logger.js';
 import config from '../config/config.js';
+import { deriveCallInsights } from '../utils/candidateExtraction.js';
 import CallRecord, {
   STATUS_RANK,
   TERMINAL_STATUSES,
@@ -206,6 +207,17 @@ export async function applyEvent(payload, source, meta = {}) {
   if (norm.extractedData) set.extractedData = norm.extractedData;
   if (norm.telephonyData) set.telephonyData = norm.telephonyData;
   if (norm.language) set.language = norm.language;
+  // Phase 1: derive typed verification answers + quality flag whenever this event
+  // carries an extraction or transcript. extractedAt/evaluatedAt stamped from event ts.
+  if (norm.extractedData || norm.transcript) {
+    const insights = deriveCallInsights({
+      extractedData: norm.extractedData,
+      transcript: norm.transcript,
+      status,
+    });
+    set.verification = { ...insights.verification, extractedAt: eventTs };
+    set.callQuality = { ...insights.callQuality, evaluatedAt: eventTs };
+  }
   if (isTerminal(status)) set.completedAt = eventTs;
 
   const errMsg =
