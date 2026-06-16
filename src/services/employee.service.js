@@ -18,7 +18,7 @@ import { generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
-import { resolveCompanyEmailSettingsUserId } from './emailConnectionPolicy.service.js';
+import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
@@ -126,8 +126,9 @@ const normalizeCompanyAssignedEmailInput = (raw) => {
 /** When a company work email is saved, enable Assignment Hub on the recruiting user so mailbox hard-lock applies. */
 const syncCompanyEmailHubForCandidate = async (candidate) => {
   const email = normalizeCompanyAssignedEmailInput(candidate.companyAssignedEmail);
-  if (!email || !candidate.owner) return;
-  const settingsUid = resolveCompanyEmailSettingsUserId(candidate, candidate.owner);
+  const ownerId = normalizeMongoRefId(candidate.owner);
+  if (!email || !ownerId) return;
+  const settingsUid = resolveCompanyEmailSettingsUserId(candidate, ownerId);
   if (!settingsUid) return;
   await User.updateOne(
     { _id: settingsUid },
@@ -1438,7 +1439,8 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   queueSopReminderCheckForCandidate(String(candidate._id));
 
   // Sync critical fields to the linked User model
-  if (candidate.owner) {
+  const ownerId = normalizeMongoRefId(candidate.owner);
+  if (ownerId) {
     try {
       const userUpdateData = {};
       
@@ -1467,8 +1469,8 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
 
       // Only update if there are fields to sync
       if (Object.keys(userUpdateData).length > 0) {
-        logger.debug('Syncing candidate data to user:', candidate.owner, userUpdateData);
-        await updateUserById(candidate.owner, userUpdateData);
+        logger.debug('Syncing candidate data to user:', ownerId, userUpdateData);
+        await updateUserById(ownerId, userUpdateData);
         logger.debug('User synced successfully');
       }
     } catch (error) {
@@ -1479,7 +1481,7 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
 
     // Sync position to Student if user has a Student profile (for training module assignment)
     if ('position' in sanitized || (designationProvided && sanitized.position)) {
-      const student = await Student.findOne({ user: candidate.owner });
+      const student = await Student.findOne({ user: ownerId });
       if (student) {
         student.position = sanitized.position ?? null;
         await student.save();

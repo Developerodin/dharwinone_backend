@@ -24,6 +24,20 @@ export function normalizeAssignedEmail(raw) {
 }
 
 /**
+ * Extract a string ObjectId from a ref that may be populated ({ _id, name, ... }).
+ * @param {unknown} ref
+ * @returns {string|null}
+ */
+export function normalizeMongoRefId(ref) {
+  if (ref == null || ref === '') return null;
+  if (typeof ref === 'object' && ref._id != null) {
+    const inner = ref._id;
+    return mongoose.Types.ObjectId.isValid(inner) ? String(inner) : null;
+  }
+  return mongoose.Types.ObjectId.isValid(ref) ? String(ref) : null;
+}
+
+/**
  * @param {string} companyEmailProvider
  * @returns {MailProvider[]}
  */
@@ -52,12 +66,10 @@ export function evaluateMailboxLockPolicy(candidate, _adminUser, policySourceUse
   }
   const adminKey =
     policySourceUserId != null && policySourceUserId !== ''
-      ? String(policySourceUserId)
-      : candidate.adminId != null
-        ? String(candidate.adminId)
-        : candidate.owner != null
-          ? String(candidate.owner)
-          : '';
+      ? normalizeMongoRefId(policySourceUserId) || ''
+      : normalizeMongoRefId(candidate.adminId) ||
+        normalizeMongoRefId(candidate.owner) ||
+        '';
   if (!adminKey) {
     return { hardLockActive: false };
   }
@@ -92,10 +104,11 @@ export function computePolicyFingerprint(policy) {
  */
 export function resolveCompanyEmailSettingsUserId(candidate, ownerUserId) {
   if (!candidate || !ownerUserId) return null;
-  const ownerStr = String(ownerUserId);
-  let settingsUserId = candidate.adminId != null ? String(candidate.adminId) : '';
+  const ownerStr = normalizeMongoRefId(ownerUserId);
+  if (!ownerStr) return null;
+  let settingsUserId = normalizeMongoRefId(candidate.adminId) || '';
   if (!settingsUserId || settingsUserId === ownerStr) {
-    settingsUserId = candidate.assignedAgent != null ? String(candidate.assignedAgent) : '';
+    settingsUserId = normalizeMongoRefId(candidate.assignedAgent) || '';
   }
   if (!settingsUserId || settingsUserId === ownerStr) {
     return ownerStr;

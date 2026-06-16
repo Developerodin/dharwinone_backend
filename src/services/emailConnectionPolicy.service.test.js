@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeAssignedEmail,
+  normalizeMongoRefId,
   deriveAllowedProviders,
   evaluateMailboxLockPolicy,
   computePolicyFingerprint,
@@ -15,6 +16,34 @@ describe('emailConnectionPolicy', () => {
     assert.equal(normalizeAssignedEmail('  A@B.COM  '), 'a@b.com');
     assert.equal(normalizeAssignedEmail(''), '');
     assert.equal(normalizeAssignedEmail(null), '');
+  });
+
+  it('normalizeMongoRefId handles populated refs', () => {
+    const oid = '6965113c09b49b95c34c9eb9';
+    assert.equal(
+      normalizeMongoRefId({
+        _id: oid,
+        email: 'himanshu@dharwinbusinesssolutions.com',
+        name: 'Himanshu Dave',
+      }),
+      oid
+    );
+    assert.equal(normalizeMongoRefId(oid), oid);
+    assert.equal(normalizeMongoRefId(null), null);
+  });
+
+  it('resolveCompanyEmailSettingsUserId with populated owner and adminId', () => {
+    const owner = '6965113c09b49b95c34c9eb9';
+    const agent = '507f191e810c19729de860ea';
+    const populatedOwner = { _id: owner, email: 'o@corp.com', name: 'Owner' };
+    const populatedAdmin = { _id: owner, email: 'o@corp.com', name: 'Owner' };
+    assert.equal(
+      resolveCompanyEmailSettingsUserId(
+        { adminId: populatedAdmin, assignedAgent: agent },
+        populatedOwner
+      ),
+      agent
+    );
   });
 
   it('deriveAllowedProviders', () => {
