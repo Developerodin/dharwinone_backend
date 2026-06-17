@@ -16,15 +16,25 @@ export function deriveLifecycleStage(employee, opts = {}) {
   const acceptedOffer = opts.acceptedOffer === true;
   const anyOffer = opts.anyOffer === true;
   const hasInterview = opts.hasInterview === true;
+  const status = employee.referralPipelineStatus;
+  const isHired = status === 'hired';
 
+  // Being a current employee / awaiting-start requires a CONFIRMED hire (pipeline status
+  // 'hired'). A joiningDate alone is not enough — an applied candidate that happens to carry
+  // a joiningDate must still read as its hiring-cycle stage, not 'Employee'.
   if (employee.joiningDate) {
     const j = new Date(employee.joiningDate);
-    if (j <= now) return employee.isActive ? 'employee' : 'resigned';
-    return 'joined_pending_start';
+    // Resignation is a factual post-join state: joined then deactivated, regardless of status.
+    if (j <= now && employee.isActive !== true) return 'resigned';
+    if (isHired) {
+      if (j <= now) return 'employee';
+      return 'joined_pending_start';
+    }
+    // joiningDate set but not yet hired → fall through to the hiring-cycle stages below.
   }
   if (acceptedOffer) return 'preboarding';
   if (anyOffer) return 'offered';
-  if (employee.referralPipelineStatus === 'in_review' || hasInterview) return 'interview';
-  if (['applied', 'profile_complete'].includes(employee.referralPipelineStatus)) return 'applied';
+  if (status === 'in_review' || hasInterview) return 'interview';
+  if (['applied', 'profile_complete'].includes(status)) return 'applied';
   return 'pending';
 }

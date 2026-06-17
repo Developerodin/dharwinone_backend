@@ -34,6 +34,21 @@ test('applied -> applied', () => {
   assert.equal(deriveLifecycleStage(emp, { now, acceptedOffer: false, anyOffer: false }), 'applied');
 });
 
+test('applied candidate with a joiningDate but not hired -> applied (not employee)', () => {
+  const emp = { joiningDate: new Date('2026-01-01'), isActive: true, referralPipelineStatus: 'applied' };
+  assert.equal(deriveLifecycleStage(emp, { now, acceptedOffer: false, anyOffer: false }), 'applied');
+});
+
+test('in_review candidate with a joiningDate but not hired -> interview (not employee)', () => {
+  const emp = { joiningDate: new Date('2026-01-01'), isActive: true, referralPipelineStatus: 'in_review' };
+  assert.equal(deriveLifecycleStage(emp, { now, acceptedOffer: false, anyOffer: false }), 'interview');
+});
+
+test('future joining date but not hired -> falls through to hiring cycle (offered)', () => {
+  const emp = { joiningDate: new Date('2026-07-01'), isActive: true, referralPipelineStatus: 'in_review' };
+  assert.equal(deriveLifecycleStage(emp, { now, acceptedOffer: false, anyOffer: true }), 'offered');
+});
+
 test('isActiveEmployee true when joined and active', () => {
   assert.equal(
     isActiveEmployee({ joiningDate: new Date('2026-01-01'), isActive: true }, { now }),

@@ -536,13 +536,10 @@ const shapeLeadRow = async (row, options = {}) => {
     job = { title: o.referralJobTitle };
   }
 
-  // Employee lifecycle wins over (often stale/backfilled) pipeline status: someone who joined
-  // reads as Hired, someone who resigned reads as Resigned — regardless of referralPipelineStatus.
-  if (o.lifecycleStage === 'resigned') {
-    effectivePipelineStatus = 'resigned';
-  } else if (o.lifecycleStage === 'employee' || o.lifecycleStage === 'joined_pending_start') {
-    effectivePipelineStatus = 'hired';
-  }
+  // STATUS column reflects the raw referral pipeline status (applied / in_review / hired / ...).
+  // Employment lifecycle (joined / resigned) is surfaced separately via the STAGE column
+  // (lifecycleStage below) — do NOT collapse the two here, or applied-only candidates with a
+  // joiningDate would wrongly read as Hired.
 
   const referralLastOverride = await shapeReferralLastOverride(o.referralLastOverride);
 

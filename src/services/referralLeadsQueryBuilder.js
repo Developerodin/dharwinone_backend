@@ -85,12 +85,22 @@ export function buildOfferEnrichment() {
 export function buildLifecycleStageProjection() {
   return {
     $set: {
+      // Being a current employee / awaiting-start requires a CONFIRMED hire
+      // (referralPipelineStatus === 'hired'). A joiningDate alone is not enough — an applied
+      // candidate that happens to carry a joiningDate must still read as its hiring-cycle stage.
+      // Resignation stays factual (joined then deactivated), independent of pipeline status.
+      // Mirror of deriveLifecycleStage in utils/lifecycleStage.js — keep the two in sync.
       lifecycleStage: {
         $switch: {
           branches: [
             {
               case: {
-                $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }, { $eq: ['$isActive', true] }],
+                $and: [
+                  { $ne: ['$joiningDate', null] },
+                  { $lte: ['$joiningDate', '$$NOW'] },
+                  { $eq: ['$isActive', true] },
+                  { $eq: ['$referralPipelineStatus', 'hired'] },
+                ],
               },
               then: 'employee',
             },
@@ -101,7 +111,13 @@ export function buildLifecycleStageProjection() {
               then: 'resigned',
             },
             {
-              case: { $and: [{ $ne: ['$joiningDate', null] }, { $gt: ['$joiningDate', '$$NOW'] }] },
+              case: {
+                $and: [
+                  { $ne: ['$joiningDate', null] },
+                  { $gt: ['$joiningDate', '$$NOW'] },
+                  { $eq: ['$referralPipelineStatus', 'hired'] },
+                ],
+              },
               then: 'joined_pending_start',
             },
             { case: { $eq: ['$hasAcceptedOffer', true] }, then: 'preboarding' },
