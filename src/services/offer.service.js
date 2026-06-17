@@ -11,6 +11,7 @@ import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
+import { recordPlacementAudit } from './placementAudit.service.js';
 import logger from '../config/logger.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
@@ -535,6 +536,95 @@ const getOfferById = async (id, currentUser = null) => {
  * @param {Object} [options] - { skipAccessCheck: true } for internal flows (e.g. move from interview);
  *   skipSentNotification: true to skip the default "offer sent" in-app/email when a full offer letter was already sent.
  */
+
+/**
+ * Re-accept of a previously Cancelled offer: resurrect the existing Placement IN PLACE
+ * instead of detaching its offer and creating a second doc.
+ *
+ * The old approach (`$unset: { offer }` + `Placement.create`) left an orphaned placement with
+ * `offer === null`. Because `offer` is `required: true`, any later `placement.save()` on that
+ * orphan (e.g. moving it Pre-Boarding → Onboarding) threw
+ * `Placement validation failed: offer: Path 'offer' is required.` Resurrecting keeps the unique
+ * offer link attached, guarantees a single active placement per offer, and resets the
+ * pre-boarding/onboarding workflow to a clean Pending state. Audit history lives in AuditEvent.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} placementId - the existing Cancelled placement
+ * @param {object} placementBase - the freshly-computed placement field snapshot
+ * @param {object} [opts] - mongoose write options (e.g. { session })
+ */
+const resurrectCancelledPlacement = (placementId, placementBase, opts = {}) =>
+  Placement.updateOne(
+    { _id: placementId },
+    {
+      $set: {
+        status: 'Pending',
+        offerStatus: 'Accepted',
+        enteredOnboardingAt: null,
+        preBoardingStatus: 'Pending',
+        preBoardingTasks: [],
+        onboardingTasks: [],
+        onboardingCompletedAt: null,
+        cancelledBy: null,
+        cancelledAt: null,
+        deferredBy: null,
+        deferredAt: null,
+        joinedAt: null,
+        employeeId: placementBase.employeeId,
+        referredByUserId: placementBase.referredByUserId,
+        referralLeadJti: placementBase.referralLeadJti,
+        referralAttributionLockedAt: placementBase.referralAttributionLockedAt,
+        referralContext: placementBase.referralContext,
+        referralJobTitle: placementBase.referralJobTitle,
+        ...(placementBase.joiningDate ? { joiningDate: placementBase.joiningDate } : {}),
+      },
+      $unset: { _cancelledOfferRef: 1 },
+    },
+    opts
+  );
+
+/**
+ * Forward cascade ONLY: rejecting an offer cancels its still-active placement.
+ *
+ * Offer is the source of truth for commercial accept/reject; Placement is the source of truth for
+ * the operational onboarding lifecycle. This sync is deliberately one-directional — cancelling a
+ * placement never rejects the offer (an Accepted offer + Cancelled placement is a legitimate state).
+ * Bidirectional sync was rejected to avoid workflow loops and unintended side effects.
+ *
+ * Only pre-join states are cancelled. `Joined` is left untouched (someone already started, and the
+ * lifecycle forbids Joined → Cancelled); `Cancelled` is a no-op.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} offerId
+ * @param {import('mongoose').Types.ObjectId|string|null} actorId - user performing the rejection
+ */
+const PLACEMENT_STATUSES_CANCELLED_ON_OFFER_REJECT = ['Pending', 'Onboarding', 'Deferred'];
+const cascadeOfferRejectionToPlacement = async (offerId, actorId) => {
+  const placement = await Placement.findOne({ offer: offerId }).select('_id status').lean();
+  if (!placement) return;
+
+  // Always mirror the denormalized offer status — even a Joined placement must reflect Rejected so
+  // the Accepted-only Pre-Boarding/Onboarding queues drop it (spec: rejected → Offers & Placement only).
+  const update = { offerStatus: 'Rejected' };
+  const willCancel = PLACEMENT_STATUSES_CANCELLED_ON_OFFER_REJECT.includes(placement.status);
+  if (willCancel) {
+    update.status = 'Cancelled';
+    update.cancelledBy = actorId || null;
+    update.cancelledAt = new Date();
+  }
+
+  await Placement.updateOne({ _id: placement._id }, { $set: update });
+
+  if (willCancel) {
+    await recordPlacementAudit({
+      placementId: placement._id,
+      action: 'PLACEMENT_STATUS_CHANGED',
+      actorId: actorId || null,
+      fromValue: String(placement.status),
+      toValue: 'Cancelled',
+      details: { reason: 'offer_rejected_cascade' },
+    }).catch((e) => logger.warn(`offer-reject placement cascade audit: ${e?.message || e}`));
+  }
+};
+
 const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
   const offer = await Offer.findById(id);
   if (!offer) {
@@ -611,6 +701,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           job: offer.job,
           employeeId: candidate?.employeeId || null,
           status: 'Pending',
+          offerStatus: 'Accepted',
           createdBy: offer.createdBy,
           preBoardingStatus: 'Pending',
           preBoardingTasks: [],
@@ -638,12 +729,8 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           if (needsFreshPlacement) {
             try {
               if (existingPlacement?.status === 'Cancelled') {
-                await Placement.updateOne(
-                  { _id: existingPlacement._id },
-                  { $set: { _cancelledOfferRef: offer._id }, $unset: { offer: 1 } },
-                  opts
-                );
-                await Placement.create([placementBase], opts);
+                // Re-accept: resurrect the existing Cancelled placement in place (keeps offer attached).
+                await resurrectCancelledPlacement(existingPlacement._id, placementBase, opts);
               } else {
                 await Placement.findOneAndUpdate(
                   { offer: offer._id },
@@ -672,6 +759,8 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       offer.rejectedAt = new Date();
       offer.rejectionReason = updateBody.rejectionReason || '';
       await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Rejected' });
+      // Forward cascade: a rejected offer cancels its still-active placement (one-directional).
+      await cascadeOfferRejectionToPlacement(offer._id, currentUser?._id ?? currentUser?.id);
       await syncReferralPipelineStatusForCandidate(offer.candidate);
     }
     delete updateBody.status;
@@ -1035,6 +1124,7 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
       job: jobId,
       employeeId: candidate?.employeeId || null,
       status: 'Pending',
+      offerStatus: 'Accepted',
       createdBy: createdById,
       preBoardingStatus: 'Pending',
       preBoardingTasks: [],
@@ -1050,11 +1140,8 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     if (needsFreshPlacement) {
       try {
         if (existingPlacement?.status === 'Cancelled') {
-          await Placement.updateOne(
-            { _id: existingPlacement._id },
-            { $set: { _cancelledOfferRef: fresh._id }, $unset: { offer: 1 } }
-          );
-          await Placement.create([placementBase]);
+          // Re-accept via letter save: resurrect the existing Cancelled placement in place.
+          await resurrectCancelledPlacement(existingPlacement._id, placementBase);
         } else {
           await Placement.findOneAndUpdate(
             { offer: fresh._id },

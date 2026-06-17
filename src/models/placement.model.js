@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
-import { PLACEMENT_STATUSES, PRE_BOARDING_STATUSES } from '../constants/atsPipeline.js';
+import { PLACEMENT_STATUSES, PRE_BOARDING_STATUSES, OFFER_STATUSES } from '../constants/atsPipeline.js';
 
 /**
  * Placement - created when an offer is Accepted. Tracks the placed candidate.
@@ -41,6 +41,23 @@ const placementSchema = new mongoose.Schema(
       default: 'Pending',
       index: true,
     },
+    /**
+     * Denormalized mirror of the linked Offer.status (1:1, unique offer link). Synced at the 3
+     * offer.service write branches (accept create / re-accept resurrect / reject cascade). Lets the
+     * Pre-Boarding / Onboarding queues filter on offerStatus='Accepted' without joining Offer per
+     * request. If the offer-status write surface ever grows past those branches, drop this and join.
+     */
+    offerStatus: {
+      type: String,
+      enum: OFFER_STATUSES,
+      index: true,
+    },
+    /**
+     * Stamp of when this placement FIRST entered Onboarding (set once, never cleared). It is the
+     * stage discriminator: a Deferred/Cancelled placement belongs to the Onboarding queue iff this
+     * is set, otherwise to Pre-Boarding. Removes the need for a separate stage/cancelledFromStage field.
+     */
+    enteredOnboardingAt: { type: Date, default: null, index: true },
     preBoardingStatus: {
       type: String,
       enum: PRE_BOARDING_STATUSES,
@@ -155,6 +172,9 @@ const placementSchema = new mongoose.Schema(
 );
 
 placementSchema.index({ status: 1, createdAt: -1 });
+// Queue lookups: Pre-Boarding/Onboarding both lead with offerStatus='Accepted', then split on
+// status + enteredOnboardingAt. Compound covers both queue filters.
+placementSchema.index({ offerStatus: 1, status: 1, enteredOnboardingAt: 1 });
 
 placementSchema.plugin(toJSON);
 placementSchema.plugin(paginate);

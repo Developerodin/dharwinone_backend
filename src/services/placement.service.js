@@ -388,6 +388,53 @@ const emptyPaginateResult = (options) => {
 const PLACEMENT_LIST_PROMOTION_BACKFILL_MS = 60000;
 let lastPlacementListPromotionBackfillAt = 0;
 
+// Queue composition. Both queues require an Accepted offer (denormalized placement.offerStatus).
+// enteredOnboardingAt is the stage discriminator for the shared off-ramp statuses.
+const PRE_BOARDING_QUEUE_STATUSES = ['Pending', 'Deferred', 'Cancelled'];
+const ONBOARDING_ACTIVE_STATUSES = ['Onboarding', 'Joined'];
+const STAGE_OFFRAMP_STATUSES = ['Deferred', 'Cancelled'];
+
+/** Compose AND-clauses without clobbering an existing $or (access-control uses one). */
+const pushAnd = (query, clause) => {
+  query.$and = (query.$and || []).concat([clause]);
+};
+
+/**
+ * Build the queue query for a stage:
+ *   preBoarding → offerStatus=Accepted, enteredOnboardingAt=null, status∈{Pending,Deferred,Cancelled}
+ *   onboarding  → offerStatus=Accepted, status∈{Onboarding,Joined} OR
+ *                 (status∈{Deferred,Cancelled} AND enteredOnboardingAt≠null)
+ * `statusNarrow` (single status from the page dropdown) restricts within the stage.
+ */
+const applyStageFilter = (query, stage, statusNarrow) => {
+  query.offerStatus = 'Accepted';
+  const narrow =
+    typeof statusNarrow === 'string' && statusNarrow && !statusNarrow.includes(',') ? statusNarrow : null;
+
+  if (stage === 'preBoarding') {
+    query.enteredOnboardingAt = null;
+    query.status =
+      narrow && PRE_BOARDING_QUEUE_STATUSES.includes(narrow) ? narrow : { $in: PRE_BOARDING_QUEUE_STATUSES };
+    return;
+  }
+
+  if (stage === 'onboarding') {
+    if (narrow && ONBOARDING_ACTIVE_STATUSES.includes(narrow)) {
+      query.status = narrow; // Onboarding | Joined — unambiguous, no discriminator needed
+    } else if (narrow && STAGE_OFFRAMP_STATUSES.includes(narrow)) {
+      query.status = narrow; // Deferred | Cancelled — only the ones that reached onboarding
+      query.enteredOnboardingAt = { $ne: null };
+    } else {
+      pushAnd(query, {
+        $or: [
+          { status: { $in: ONBOARDING_ACTIVE_STATUSES } },
+          { status: { $in: STAGE_OFFRAMP_STATUSES }, enteredOnboardingAt: { $ne: null } },
+        ],
+      });
+    }
+  }
+};
+
 /**
  * Query placements with filter
  */
@@ -396,7 +443,10 @@ const queryPlacements = async (filter, options, currentUser) => {
   const query = {};
 
   if (filter.jobId) query.job = filter.jobId;
-  if (filter.status) {
+  if (filter.stage) {
+    // Stage owns the status/offerStatus/discriminator clause; filter.status narrows within it.
+    applyStageFilter(query, filter.stage, filter.status);
+  } else if (filter.status) {
     const raw = String(filter.status);
     if (raw.includes(',')) {
       const parts = raw
@@ -426,7 +476,8 @@ const queryPlacements = async (filter, options, currentUser) => {
         query.createdBy = userId;
       }
     } else {
-      query.$or = [{ job: { $in: myJobIds } }, { createdBy: userId }];
+      // $and-wrapped so it composes with a stage $or (onboarding queue) instead of clobbering it.
+      pushAnd(query, { $or: [{ job: { $in: myJobIds } }, { createdBy: userId }] });
     }
   }
 
@@ -580,6 +631,20 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
+  // Safeguard: a placement with no offer is structurally invalid (offer is required + unique).
+  // Such a doc could only exist from the legacy re-accept detach bug. Refuse to mutate it with a
+  // clean 422 instead of letting placement.save() throw a raw 500 ValidationError. Run the dated
+  // migration to repair existing orphans; the re-accept path no longer detaches the offer.
+  if (!placement.offer) {
+    throw new ApiError(
+      httpStatus.UNPROCESSABLE_ENTITY,
+      'This placement is not linked to an offer and cannot be updated. Re-accept the offer to restore the candidate.',
+      true,
+      '',
+      { errorCode: 'PLACEMENT_OFFER_MISSING' }
+    );
+  }
+
   const previousStatus = placement.status;
   const actorId = currentUser?.id ?? currentUser?._id;
   let joiningDateChangedForNotify = false;
@@ -633,6 +698,12 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
             effectiveSnapshotPreBoardingStatus: gateBasis.preBoardingStatus,
           },
         });
+      }
+      // Stage discriminator: stamp the first time this placement enters Onboarding (also on a
+      // legacy Pending→Joined jump). Set once, never cleared — it's what keeps a later
+      // Deferred/Cancelled in the Onboarding queue instead of falling back to Pre-Boarding.
+      if (!placement.enteredOnboardingAt) {
+        placement.enteredOnboardingAt = new Date();
       }
       if (updateBody.status === 'Joined') {
         placement.joinedAt = new Date();
