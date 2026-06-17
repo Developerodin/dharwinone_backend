@@ -1027,6 +1027,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   // Earlier shape ({ name, url } and uploadResult.fileUrl) silently dropped the resume because
   // uploadFileToS3 returns `url` (not fileUrl) and the candidate doc schema uses `label`, not `name`.
   let resumeDoc = null;
+  let resumeSkills = [];
   const documentDocs = [];
 
   if (files?.resume && files.resume[0]) {
@@ -1043,6 +1044,21 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       mimeType: r.mimeType,
       status: 0,
     };
+    // Auto-extract skills from the resume — same engine the Personal Information page uses.
+    // Best-effort: a slow/failed OpenAI call must NEVER block the public application, so swallow
+    // errors and fall back to no skills (recruiter/candidate can still add them manually).
+    try {
+      const { extractSkillsFromResumeBuffer } = await import('./resumeSkillsExtract.service.js');
+      const out = await extractSkillsFromResumeBuffer(
+        resumeFile.buffer,
+        resumeFile.mimetype || r.mimeType || 'application/octet-stream',
+        resumeFile.originalname || r.originalName || 'resume.pdf'
+      );
+      resumeSkills = Array.isArray(out?.skills) ? out.skills : [];
+      logger.info('✅ Resume skills extracted on apply:', { count: resumeSkills.length });
+    } catch (e) {
+      logger.warn('Resume skill extraction skipped (application continues):', { message: e?.message });
+    }
   }
 
   if (files?.documents && files.documents.length > 0) {
@@ -1080,7 +1096,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       // Default empty arrays for required fields
       qualifications: [],
       experiences: [],
-      skills: [],
+      skills: resumeSkills,
       socialLinks: [],
     };
 
@@ -1120,6 +1136,17 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       candidate.documents = [...(candidate.documents || []), ...newDocs];
       await candidate.save();
       logger.info('✅ Candidate documents updated');
+    }
+
+    // Merge resume-extracted skills, but never clobber manually-entered ones (dedupe by name).
+    if (resumeSkills.length > 0) {
+      const have = new Set((candidate.skills || []).map((s) => String(s.name || '').toLowerCase()));
+      const fresh = resumeSkills.filter((s) => s?.name && !have.has(String(s.name).toLowerCase()));
+      if (fresh.length > 0) {
+        candidate.skills = [...(candidate.skills || []), ...fresh];
+        await candidate.save();
+        logger.info('✅ Candidate skills updated from resume:', { added: fresh.length });
+      }
     }
   }
 

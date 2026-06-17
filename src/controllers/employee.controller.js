@@ -74,7 +74,7 @@ import { generateCandidateExportXlsxBuffer } from '../utils/candidateExportXlsx.
 import { importCandidatesFromExcel } from '../services/candidateExcel.service.js';
 import { sendCandidateProfileShareEmail, sendEmail } from '../services/email.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
-import { userHasRecruiterRole, userIsAgent, userIsAdmin } from '../utils/roleHelpers.js';
+import { userHasRecruiterRole, userIsAgent, userIsAdmin, userIsSalesAgent } from '../utils/roleHelpers.js';
 import { getUserPermissionContext } from '../services/permission.service.js';
 import logger from '../config/logger.js';
 import { dispatchSopRemindersForOpenCandidates } from '../services/sopReminder.service.js';
@@ -252,13 +252,25 @@ const list = catchAsync(async (req, res) => {
     'withoutReferrer',
     'ownerUserRole',
   ]);
-  if (!canViewAllEmployees(req)) {
-    // No org-wide read: default to "my" profile (owner = self). Agents use assignedAgent instead —
-    // otherwise owner=self + Candidate-role owner filter returns no rows (agents are not Candidate owners).
+  // Agent / sales-agent see all employees ONLY with full CRUD (read+create+edit+delete); else scoped.
+  const p = req.authContext?.permissions;
+  const hasFullEmployeeCrud = Boolean(
+    p?.has('employees.read') && p?.has('employees.create') && p?.has('employees.edit') && p?.has('employees.delete')
+  );
+  const isAdmin = await userIsAdmin(req.user);
+  if (!isAdmin && !hasFullEmployeeCrud) {
     const isAgent = await userIsAgent(req.user);
+    const isSalesAgent = await userIsSalesAgent(req.user);
     if (isAgent) {
+      // Agents: only employees assigned to them (assignedAgent = self).
       filter.agentIds = String(req.user._id);
-    } else {
+    } else if (isSalesAgent) {
+      // Sales agents: employees they referred OR are the assigned sales agent for — mirrors
+      // referral-leads scoping ($or referredByUserId / currentSalesAgentUserId). Default
+      // ownerUserRole 'employee' restricts to converted Employee-role profiles.
+      filter.salesAgentScopeUserId = String(req.user._id);
+    } else if (!canViewAllEmployees(req)) {
+      // No org-wide read: default to "my" profile (owner = self).
       filter.owner = req.user._id;
     }
   }

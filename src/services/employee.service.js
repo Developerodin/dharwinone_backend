@@ -725,6 +725,16 @@ const queryCandidates = async (filter, options) => {
     ];
   }
 
+  // Sales-agent scope: employees they referred OR are the assigned sales agent for.
+  // Mirrors referral-leads $or. Server-set only.
+  if (filter.salesAgentScopeUserId && mongoose.Types.ObjectId.isValid(filter.salesAgentScopeUserId)) {
+    const uid = new mongoose.Types.ObjectId(filter.salesAgentScopeUserId);
+    mongoFilter.$and = [
+      ...(mongoFilter.$and || []),
+      { $or: [{ referredByUserId: uid }, { currentSalesAgentUserId: uid }] },
+    ];
+  }
+
   // Employment status drives isActive: current = active only, resigned = show resigned (isActive false), all = both
   if (filter.employmentStatus === 'resigned') {
     // Resigned: show candidates with resign date on or in past (do not filter by isActive)

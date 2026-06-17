@@ -536,6 +536,14 @@ const shapeLeadRow = async (row, options = {}) => {
     job = { title: o.referralJobTitle };
   }
 
+  // Employee lifecycle wins over (often stale/backfilled) pipeline status: someone who joined
+  // reads as Hired, someone who resigned reads as Resigned — regardless of referralPipelineStatus.
+  if (o.lifecycleStage === 'resigned') {
+    effectivePipelineStatus = 'resigned';
+  } else if (o.lifecycleStage === 'employee' || o.lifecycleStage === 'joined_pending_start') {
+    effectivePipelineStatus = 'hired';
+  }
+
   const referralLastOverride = await shapeReferralLastOverride(o.referralLastOverride);
 
   if (o.profilePicture?.key) {
@@ -804,12 +812,34 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
+  // Effective status mirrors shapeLeadRow: a referred candidate who joined reads as 'hired',
+  // one who resigned (joined date passed + inactive) reads as 'resigned'; otherwise the raw
+  // pipeline status. Keeps the cards/funnel aggregates consistent with the list rows.
+  const effectiveStatusStage = {
+    $addFields: {
+      _effStatus: {
+        $cond: [
+          { $ne: [{ $ifNull: ['$joiningDate', null] }, null] },
+          {
+            $cond: [
+              { $and: [{ $lte: ['$joiningDate', '$$NOW'] }, { $ne: ['$isActive', true] }] },
+              'resigned',
+              'hired',
+            ],
+          },
+          { $ifNull: ['$referralPipelineStatus', 'pending'] },
+        ],
+      },
+    },
+  };
+
   const [totalArr, byStatus, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
     Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
     Employee.aggregate([
       { $match: match },
       ...ownerStages,
-      { $group: { _id: '$referralPipelineStatus', count: { $sum: 1 } } },
+      effectiveStatusStage,
+      { $group: { _id: '$_effStatus', count: { $sum: 1 } } },
     ]),
     canSeeOrgReferrerLeaderboard
       ? Employee.aggregate([
@@ -826,24 +856,18 @@ export const getReferralLeadsStats = async (req) => {
       { $count: 'c' },
     ]),
     computeSalesAgentStats(req.user?.tenantId, q),
-    // Hired referral leads split by the job type they were hired into (Full-time = paid,
-    // Internship = unpaid). Item lists are capped at 100 for the dashboard drill-down.
+    // Referred candidates who became employees (joiningDate set), split by their own
+    // compensationType (paid/unpaid). Keys off joiningDate — NOT referralPipelineStatus
+    // 'hired' — so backfilled employees who joined before the candidate/job flow still count.
+    // Item lists are capped at 100 for the dashboard drill-down.
     Employee.aggregate([
-      { $match: { ...match, referralPipelineStatus: 'hired' } },
+      { $match: { ...match, joiningDate: { $exists: true, $ne: null }, isActive: true } },
       ...ownerStages,
-      { $lookup: { from: 'jobs', localField: 'attributionJobId', foreignField: '_id', as: '_aJob' } },
-      { $lookup: { from: 'jobs', localField: 'referralJobId', foreignField: '_id', as: '_rJob' } },
-      {
-        $addFields: {
-          _jobType: { $ifNull: [{ $arrayElemAt: ['$_aJob.jobType', 0] }, { $arrayElemAt: ['$_rJob.jobType', 0] }] },
-          _jobTitle: { $ifNull: [{ $arrayElemAt: ['$_aJob.title', 0] }, { $arrayElemAt: ['$_rJob.title', 0] }] },
-        },
-      },
       {
         $group: {
-          _id: '$_jobType',
+          _id: { $ifNull: ['$compensationType', 'paid'] },
           count: { $sum: 1 },
-          items: { $push: { id: '$_id', name: '$fullName', email: '$email', jobTitle: '$_jobTitle' } },
+          items: { $push: { id: '$_id', name: '$fullName', email: '$email', jobTitle: '$designation' } },
         },
       },
       { $project: { count: 1, items: { $slice: ['$items', 100] } } },
@@ -884,19 +908,17 @@ export const getReferralLeadsStats = async (req) => {
     rank: idx + 1,
   }));
 
-  // Paid = hired into a Full-time job; Unpaid = hired into an Internship. Everything else
-  // (other job types or no linked job) is surfaced separately so the totals stay honest.
-  const PAID_JOB_TYPE = 'Full-time';
-  const UNPAID_JOB_TYPE = 'Internship';
+  // Paid / Unpaid by the employee's compensationType. Anything unexpected is surfaced
+  // separately so the totals stay honest.
   const shapeHire = (it) => ({
     id: String(it.id),
     name: it.name || 'Unknown',
     email: it.email || '',
     jobTitle: it.jobTitle || null,
   });
-  const paidBucket = hireByType.find((b) => b._id === PAID_JOB_TYPE);
-  const unpaidBucket = hireByType.find((b) => b._id === UNPAID_JOB_TYPE);
-  const otherBuckets = hireByType.filter((b) => b._id !== PAID_JOB_TYPE && b._id !== UNPAID_JOB_TYPE);
+  const paidBucket = hireByType.find((b) => b._id === 'paid');
+  const unpaidBucket = hireByType.find((b) => b._id === 'unpaid');
+  const otherBuckets = hireByType.filter((b) => b._id !== 'paid' && b._id !== 'unpaid');
   const paidHires = paidBucket?.count ?? 0;
   const unpaidHires = unpaidBucket?.count ?? 0;
   const otherHires = otherBuckets.reduce((n, b) => n + b.count, 0);
@@ -910,6 +932,8 @@ export const getReferralLeadsStats = async (req) => {
     conversionRate,
     pending,
     hired,
+    // Raw referralPipelineStatus counts (funnel uses these so it matches the cards exactly).
+    pipelineCounts: byStatusMap,
     paidHires,
     unpaidHires,
     otherHires,
