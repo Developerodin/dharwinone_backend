@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyLifecycleOverlay,
   bucketByEffectiveStatus,
+  rankSalesAgentHires,
   deriveReferralPipelineStatus,
   pipelineStatusToLifecycleStage,
 } from '../referralPipelineStatus.js';
@@ -192,6 +193,24 @@ describe('deriveReferralPipelineStatus', () => {
     assert.equal(m.pending, 1);
     assert.equal(m.offer, 1);
     assert.equal(m.hired, undefined);
+  });
+
+  it('rankSalesAgentHires counts effective hires (overlay), dedupes per agent', () => {
+    const ranked = rankSalesAgentHires(
+      [
+        // agent A: two distinct hired candidates (one stored hired+joined→employee, one stored joined)
+        { agent: 'A', cand: 'c1', status: 'hired', joiningDate: '2026-01-01', isActive: true },
+        { agent: 'A', cand: 'c2', status: 'joined', joiningDate: '2026-12-01', isActive: true },
+        // same candidate counted once for agent A
+        { agent: 'A', cand: 'c1', status: 'hired', joiningDate: '2026-01-01', isActive: true },
+        // agent B: stored employee but RESIGNED (joined+inactive) → not a current hire, excluded
+        { agent: 'B', cand: 'c3', status: 'employee', joiningDate: '2026-01-01', isActive: false },
+        // agent B: a still-applying candidate → excluded
+        { agent: 'B', cand: 'c4', status: 'applied' },
+      ],
+      now
+    );
+    assert.deepEqual(ranked, [{ userId: 'A', count: 2 }]);
   });
 
   it('pipelineStatusToLifecycleStage mirrors unified status', () => {

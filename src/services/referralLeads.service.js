@@ -21,6 +21,7 @@ import {
   PENDING_PIPELINE_STATUSES,
   applyLifecycleOverlay,
   bucketByEffectiveStatus,
+  rankSalesAgentHires,
   deriveReferralPipelineStatus,
   isTerminalMetaStatus,
   pipelineStatusToLifecycleStage,
@@ -807,20 +808,33 @@ async function computeSalesAgentStats(tenantId, filters = {}) {
     match.salesAgentUserId = new mongoose.Types.ObjectId(String(filters.salesAgentUserId));
   }
 
-  const board = await ReferralAttribution.aggregate([
+  // Hire = candidate whose EFFECTIVE status (same overlay as rows/cards) is employee/joined — not
+  // the raw stored field, which is stale for the time-driven tail. Project the candidate fields the
+  // overlay needs, then filter + dedupe + rank in JS so this stays a single source of truth.
+  // ponytail: loads current attribution rows for the tenant; fine at referral scale. Push the
+  // overlay into a $expr $switch + server-side $group if attributions ever reach tens of thousands.
+  const rows = await ReferralAttribution.aggregate([
     { $match: match },
     { $lookup: { from: 'employees', localField: 'subjectProfileId', foreignField: '_id', as: 'cand' } },
     { $unwind: '$cand' },
-    { $match: { 'cand.referralPipelineStatus': { $in: ['employee', 'joined'] } } },
-    { $group: { _id: { agent: '$salesAgentUserId', cand: '$subjectProfileId' } } },
-    { $group: { _id: '$_id.agent', count: { $sum: 1 } } },
-    { $sort: { count: -1 } },
-    { $limit: 5 },
-    { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
-    { $unwind: '$user' },
-    { $project: { userId: '$_id', name: '$user.name', count: 1, _id: 0 } },
+    {
+      $project: {
+        agent: '$salesAgentUserId',
+        cand: '$subjectProfileId',
+        status: '$cand.referralPipelineStatus',
+        joiningDate: '$cand.joiningDate',
+        isActive: '$cand.isActive',
+      },
+    },
   ]);
-  return board;
+
+  const ranked = rankSalesAgentHires(rows, new Date(), 5);
+
+  const users = await User.find({ _id: { $in: ranked.map((r) => r.userId) } })
+    .select('name')
+    .lean();
+  const nameById = Object.fromEntries(users.map((u) => [String(u._id), u.name]));
+  return ranked.map((r) => ({ userId: r.userId, name: nameById[r.userId] || 'Unknown', count: r.count }));
 }
 
 export const getReferralLeadsStats = async (req) => {

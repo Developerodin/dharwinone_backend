@@ -192,6 +192,33 @@ export function bucketByEffectiveStatus(rows = [], now = new Date()) {
   return map;
 }
 
+/** Effective statuses that count as a hire for the sales-agent leaderboard. */
+const HIRE_EFFECTIVE_STATUSES = new Set(['employee', 'joined']);
+
+/**
+ * Rank sales agents by distinct candidates they brought to an effective hire (employee/joined),
+ * using the same overlay as rows/cards. Each candidate counts once per agent.
+ *
+ * @param {Array<{agent:*, cand:*, status?:string, joiningDate?:*, isActive?:boolean}>} rows
+ * @param {Date} [now]
+ * @param {number} [limit]
+ * @returns {Array<{userId:string, count:number}>} sorted desc, top `limit`
+ */
+export function rankSalesAgentHires(rows = [], now = new Date(), limit = 5) {
+  const perAgent = new Map();
+  for (const r of rows) {
+    const eff = applyLifecycleOverlay(r.status, { joiningDate: r.joiningDate, isActive: r.isActive }, now);
+    if (!HIRE_EFFECTIVE_STATUSES.has(eff)) continue;
+    const agentId = String(r.agent);
+    if (!perAgent.has(agentId)) perAgent.set(agentId, new Set());
+    perAgent.get(agentId).add(String(r.cand));
+  }
+  return [...perAgent.entries()]
+    .map(([userId, cands]) => ({ userId, count: cands.size }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
 /**
  * Read-time overlay for the STATUS column. The post-join lifecycle (employee/resigned) is
  * time-driven — no ATS event fires when a joiningDate passes or someone resigns — so it must be
