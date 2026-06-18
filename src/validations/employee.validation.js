@@ -599,7 +599,7 @@ const assignShift = {
 
 const referralLeadsQueryKeys = {
   limit: Joi.number().integer().min(1).max(100),
-  cursor: Joi.string().trim().allow(''),
+  page: Joi.number().integer().min(1),
   search: Joi.string().trim().allow(''),
   referredByUserId: Joi.string().custom(objectId).allow(''),
   referralContext: Joi.string().valid('SHARE_CANDIDATE_ONBOARD', 'JOB_APPLY').allow(''),

@@ -611,28 +611,6 @@ const shapeLeadRow = async (row, options = {}) => {
   };
 };
 
-/**
- * Cursor: base64url JSON { referredAt ISO, id }
- */
-const encodeCursor = (referredAt, id) =>
-  Buffer.from(
-    JSON.stringify({
-      referredAt: referredAt?.toISOString?.() || new Date(referredAt).toISOString(),
-      id: String(id),
-    }),
-    'utf8'
-  ).toString('base64url');
-
-const decodeCursor = (cursor) => {
-  try {
-    const j = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (!j.id || !j.referredAt) return null;
-    return { referredAt: new Date(j.referredAt), id: String(j.id) };
-  } catch {
-    return null;
-  }
-};
-
 const usersCollectionName = () => User.collection.collectionName;
 const jobsCollectionName = () => Job.collection.collectionName;
 /**
@@ -750,50 +728,41 @@ export const listReferralLeads = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
   const limit = Math.min(Math.max(parseInt(q.limit, 10) || 25, 1), 100);
+  const page = Math.max(parseInt(q.page, 10) || 1, 1);
   const baseMatch = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
   const match = { ...baseMatch, ...applyNewFilters(q) };
   if (baseMatch.$and) {
     match.$and = [...baseMatch.$and];
   }
-  if (q.cursor) {
-    const c = decodeCursor(q.cursor);
-    if (c) {
-      const oid = new mongoose.Types.ObjectId(c.id);
-      const cursorClause = {
-        $or: [
-          { referredAt: { $lt: c.referredAt } },
-          { $and: [{ referredAt: c.referredAt }, { _id: { $lt: oid } }] },
-        ],
-      };
-      match.$and = [...(match.$and || []), cursorClause];
-    }
-  }
 
+  const ownerStages = referralLeadsRequireExistingOwnerStages();
   const pipeline = [
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
-    ...referralLeadsRequireExistingOwnerStages(),
+    ...ownerStages,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1, _id: -1 } },
-    { $limit: limit + 1 },
+    { $skip: (page - 1) * limit },
+    { $limit: limit },
   ];
 
-  const rows = await Employee.aggregate(pipeline);
+  // Total uses the same match + owner filter (no enrichment/populate, which don't change row count),
+  // so it matches the stats card total exactly.
+  const [rows, totalArr] = await Promise.all([
+    Employee.aggregate(pipeline),
+    Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
+  ]);
+  const total = totalArr[0]?.c ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
-  const hasMore = rows.length > limit;
-  const slice = hasMore ? rows.slice(0, limit) : rows;
-  let nextCursor = null;
-  if (hasMore && slice.length > 0) {
-    const last = slice[slice.length - 1];
-    nextCursor = encodeCursor(last.referredAt, last._id);
-  }
-
-  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(slice);
-  const results = await Promise.all(slice.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
+  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(rows);
+  const results = await Promise.all(rows.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
   return {
     results,
-    nextCursor,
-    hasMore,
+    page,
+    limit,
+    total,
+    totalPages,
     staleDataWarning: false,
   };
 };
