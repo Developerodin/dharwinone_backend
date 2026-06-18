@@ -230,10 +230,10 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     throw new ApiError(httpStatus.GONE, 'This meeting has ended');
   }
 
-  // True host identity is based on meeting host/recruiter/creator email only.
-  // forcePublicGuest: unauthenticated callers supply their own email, so it can't
-  // prove host identity — never grant host on that path (prevents privilege forgery).
-  const hostByEmail = !forcePublicGuest && participantEmail ? await isParticipantHost(roomName, participantEmail) : false;
+  // Host identity is based on meeting host/recruiter/creator email in the DB.
+  // Personalized join links and invitation emails include name/email query params;
+  // verify against the meeting record (same check as the authenticated token path).
+  const hostByEmail = participantEmail ? await isParticipantHost(roomName, participantEmail) : false;
 
   // If true, guest is before scheduled start and room not yet open — still issue a token with canPublish: false
   // so the public /join/room page can connect and show the lobby (instead of HTTP 403 on getPublicLiveKitToken).
@@ -284,6 +284,10 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
       });
       if (meeting.candidate?.email) allowedEmails.add(String(meeting.candidate.email).toLowerCase().trim());
       if (meeting.recruiter?.email) allowedEmails.add(String(meeting.recruiter.email).toLowerCase().trim());
+      const creator = meeting.createdBy;
+      if (creator && typeof creator === 'object' && creator.email) {
+        allowedEmails.add(String(creator.email).toLowerCase().trim());
+      }
       // "Invited" = email is on the meeting's list. Everyone else (uninvited) KNOCKS and
       // waits for the host — regardless of allowGuestJoin. allowGuestJoin only controls the
       // guest's UX on the client (auto-knock when true, explicit "Ask for permission" button

@@ -181,9 +181,6 @@ const getTokenPublic = catchAsync(async (req, res) => {
     participantName: name,
     participantIdentity,
     participantEmail: participantEmail?.trim() || null,
-    // Unauthenticated callers can never be granted host status: email is self-asserted
-    // here, so host privilege only comes from the authenticated /livekit/token path.
-    forcePublicGuest: true,
   });
 
   res.status(httpStatus.OK).json({
