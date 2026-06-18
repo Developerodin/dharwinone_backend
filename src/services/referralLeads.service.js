@@ -19,6 +19,8 @@ import { userIsSalesAgent, userIsAdmin, userIsAgent } from '../utils/roleHelpers
 import {
   CONVERTED_PIPELINE_STATUSES,
   PENDING_PIPELINE_STATUSES,
+  applyLifecycleOverlay,
+  bucketByEffectiveStatus,
   deriveReferralPipelineStatus,
   isTerminalMetaStatus,
   pipelineStatusToLifecycleStage,
@@ -128,6 +130,17 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
       return;
     }
 
+    const derivedIdle = deriveReferralPipelineStatus({ employee: c, apps, placements, offers, meetings });
+
+    /** A passed joiningDate means they actually joined — overrides terminal/job-deletion meta even
+     * with no surviving ATS rows (job/application can be deleted post-hire). */
+    if (derivedIdle === 'employee' || derivedIdle === 'resigned') {
+      if (derivedIdle !== current) {
+        await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: derivedIdle } });
+      }
+      return;
+    }
+
     /** Idle: no pipeline rows — do not clobber terminal/job-deletion rows unless profile catches up. */
     if (isTerminalMetaStatus(current)) {
       if (isProfileCompleteLean(c) && current !== 'profile_complete') {
@@ -136,7 +149,6 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
       return;
     }
 
-    const derivedIdle = deriveReferralPipelineStatus({ employee: c, apps, placements, offers, meetings });
     if (derivedIdle) {
       await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: derivedIdle } });
       return;
@@ -542,7 +554,17 @@ const shapeLeadRow = async (row, options = {}) => {
     job = { title: o.referralJobTitle };
   }
 
-  // STATUS column is referralPipelineStatus; lifecycleStage is a legacy mirror for API consumers.
+  // Post-join lifecycle (employee/resigned) is time-driven — recompute on read so a passed
+  // joiningDate / resignation surfaces even if no ATS event re-synced the stored status. Gated on
+  // the ORIGINAL stored status (not the job_removed-mutated value): a candidate who joined is an
+  // employee even if their referral job was later deleted, so this wins over job_removed.
+  // lifecycleStage stays a legacy mirror for API consumers.
+  const lifecycleOverride = applyLifecycleOverlay(o.referralPipelineStatus, o, new Date());
+  if (lifecycleOverride === 'employee' || lifecycleOverride === 'resigned') {
+    effectivePipelineStatus = lifecycleOverride;
+  } else if (effectivePipelineStatus === 'in_review') {
+    effectivePipelineStatus = 'interview';
+  }
 
   const referralLastOverride = await shapeReferralLastOverride(o.referralLastOverride);
 
@@ -812,20 +834,17 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
-  // Funnel aggregates use stored referralPipelineStatus (unified STATUS column).
-  const effectiveStatusStage = {
-    $addFields: {
-      _effStatus: { $ifNull: ['$referralPipelineStatus', 'pending'] },
-    },
-  };
-
-  const [totalArr, byStatus, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
+  const [totalArr, effRows, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
     Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
+    // Funnel/cards must agree with the displayed rows, so bucket by the SAME effective status the
+    // list uses (applyLifecycleOverlay) — not the raw stored field, which can be stale for the
+    // time-driven employee/resigned tail. Project the three fields the overlay needs and group in JS.
+    // ponytail: loads matched candidate rows (3 fields each); fine at referral-lead scale. If this
+    // ever spans tens of thousands, push the overlay into a $expr $switch and $group server-side.
     Employee.aggregate([
       { $match: match },
       ...ownerStages,
-      effectiveStatusStage,
-      { $group: { _id: '$_effStatus', count: { $sum: 1 } } },
+      { $project: { referralPipelineStatus: 1, joiningDate: 1, isActive: 1 } },
     ]),
     canSeeOrgReferrerLeaderboard
       ? Employee.aggregate([
@@ -862,7 +881,7 @@ export const getReferralLeadsStats = async (req) => {
 
   const totalAgg = totalArr[0]?.c ?? 0;
 
-  const byStatusMap = Object.fromEntries(byStatus.map((x) => [x._id || 'null', x.count]));
+  const byStatusMap = bucketByEffectiveStatus(effRows, new Date());
   let converted = 0;
   let pending = 0;
   const hired =

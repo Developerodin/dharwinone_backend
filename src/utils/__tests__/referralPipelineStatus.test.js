@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyLifecycleOverlay,
+  bucketByEffectiveStatus,
   deriveReferralPipelineStatus,
   pipelineStatusToLifecycleStage,
 } from '../referralPipelineStatus.js';
@@ -134,6 +136,62 @@ describe('deriveReferralPipelineStatus', () => {
       }),
       'resigned'
     );
+  });
+
+  it('overlay: passed joiningDate + active overrides stored status to employee', () => {
+    assert.equal(
+      applyLifecycleOverlay('hired', { joiningDate: '2026-01-01', isActive: true }, now),
+      'employee'
+    );
+  });
+
+  it('overlay: passed joiningDate + inactive overrides to resigned', () => {
+    assert.equal(
+      applyLifecycleOverlay('hired', { joiningDate: '2026-01-01', isActive: false }, now),
+      'resigned'
+    );
+  });
+
+  it('overlay: past joiningDate is authoritative over any stored status (onboard-invite employee)', () => {
+    // No ATS rows, stored 'pending', but a passed joiningDate means they joined.
+    assert.equal(
+      applyLifecycleOverlay('pending', { joiningDate: '2026-01-01', isActive: true }, now),
+      'employee'
+    );
+    assert.equal(
+      applyLifecycleOverlay('pending', { joiningDate: '2026-01-01', isActive: false }, now),
+      'resigned'
+    );
+  });
+
+  it('overlay: future joiningDate does not override stored status', () => {
+    assert.equal(
+      applyLifecycleOverlay('preboarding', { joiningDate: '2026-12-01', isActive: true }, now),
+      'preboarding'
+    );
+  });
+
+  it('overlay: normalizes legacy in_review to interview', () => {
+    assert.equal(applyLifecycleOverlay('in_review', {}, now), 'interview');
+  });
+
+  it('bucketByEffectiveStatus counts by overlay status, so cards agree with rows', () => {
+    const rows = [
+      // stored pending but joined+inactive → must count as resigned, NOT pending (Dhruv case)
+      { referralPipelineStatus: 'pending', joiningDate: '2026-01-01', isActive: false },
+      // stored hired but joined+active → counts as employee
+      { referralPipelineStatus: 'hired', joiningDate: '2026-01-01', isActive: true },
+      // genuine pending, no join date → stays pending
+      { referralPipelineStatus: 'pending' },
+      // future join date → stored status stands
+      { referralPipelineStatus: 'offer', joiningDate: '2026-12-01', isActive: true },
+    ];
+    const m = bucketByEffectiveStatus(rows, now);
+    assert.equal(m.resigned, 1);
+    assert.equal(m.employee, 1);
+    assert.equal(m.pending, 1);
+    assert.equal(m.offer, 1);
+    assert.equal(m.hired, undefined);
   });
 
   it('pipelineStatusToLifecycleStage mirrors unified status', () => {

@@ -174,3 +174,44 @@ export function pipelineStatusToLifecycleStage(status) {
 export function isTerminalMetaStatus(status) {
   return TERMINAL_META.has(status);
 }
+
+/**
+ * Count candidate rows by their EFFECTIVE status (same overlay the list rows use), so stats cards
+ * and funnel agree with the displayed rows. Single source of truth: delegates to applyLifecycleOverlay.
+ *
+ * @param {Array<{referralPipelineStatus?:string, joiningDate?:*, isActive?:boolean}>} rows
+ * @param {Date} [now]
+ * @returns {Record<string, number>} status → count
+ */
+export function bucketByEffectiveStatus(rows = [], now = new Date()) {
+  const map = {};
+  for (const r of rows) {
+    const eff = applyLifecycleOverlay(r.referralPipelineStatus, r, now);
+    map[eff] = (map[eff] || 0) + 1;
+  }
+  return map;
+}
+
+/**
+ * Read-time overlay for the STATUS column. The post-join lifecycle (employee/resigned) is
+ * time-driven — no ATS event fires when a joiningDate passes or someone resigns — so it must be
+ * recomputed on read rather than trusted from a possibly-stale stored field. A PAST joiningDate is
+ * authoritative (they joined; e.g. onboard-invite employees have no ATS rows at all), so it
+ * overrides any stored pipeline value — mirrors deriveReferralPipelineStatus. A FUTURE joiningDate
+ * means they have not joined yet, so the stored pipeline status (offer/preboarding/...) stands.
+ * Legacy `in_review` is normalized to `interview`.
+ *
+ * @param {string} storedStatus - stored referralPipelineStatus
+ * @param {object} [employee] - { joiningDate, isActive }
+ * @param {Date} [now]
+ */
+export function applyLifecycleOverlay(storedStatus, employee = {}, now = new Date()) {
+  if (employee?.joiningDate) {
+    const j = new Date(employee.joiningDate);
+    if (!Number.isNaN(j.getTime()) && j <= now) {
+      return employee.isActive === true ? 'employee' : 'resigned';
+    }
+  }
+  if (storedStatus === 'in_review') return 'interview';
+  return storedStatus || 'pending';
+}
