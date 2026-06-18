@@ -58,26 +58,15 @@ const ROUTE_MAP = {
   joining_reminder: () => '/ats/onboarding',
   onboarding_reminder: () => '/ats/onboarding',
   leave: () => '/settings/attendance/leave-requests',
-  certificate: ({ metadata }) => {
-    const id = stripId(metadata?.certificateId);
-    return id ? `/training/certificates?id=${id}` : '/training/certificates';
-  },
-  course: ({ metadata }) => {
-    const id = stripId(metadata?.courseId);
-    return id ? `/training/courses/${id}` : '/training/courses';
-  },
   project: ({ relatedEntity, metadata }) => {
     const id = stripId(relatedEntity?.id) || stripId(metadata?.projectId);
     return id ? `/apps/projects/project-list?id=${id}` : '/apps/projects/project-list';
   },
   account: () => '/ats/my-profile',
-  recruiter: ({ relatedEntity, metadata }) => {
-    const id = stripId(relatedEntity?.id) || stripId(metadata?.candidateId);
-    return id ? `/ats/candidates/${id}` : '/ats/candidates';
-  },
+  recruiter: () => '/ats/applications', // no candidate-detail route exists
   assignment: ({ relatedEntity, metadata }) => {
     const id = stripId(relatedEntity?.id) || stripId(metadata?.candidateId);
-    return id ? `/ats/candidates/${id}` : '/settings/agents/';
+    return id ? '/ats/applications' : '/settings/agents/';
   },
   sop: () => '/ats/onboarding',
   support_ticket: ({ relatedEntity, metadata }) => {

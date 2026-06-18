@@ -2390,7 +2390,7 @@ const assignRecruiterToCandidate = async (candidateId, recruiterId) => {
 
   const { notify, plainTextEmailBody } = await import('./notification.service.js');
   const candidateName = candidate.fullName || candidate.email || 'a candidate';
-  const candLink = `/candidates/${candidateId}`;
+  const candLink = '/ats/applications'; // no candidate-detail route exists; land on applications list
   const recMsg = `You have been assigned as recruiter to ${candidateName}.`;
   notify(recruiterId, {
     type: 'recruiter',
