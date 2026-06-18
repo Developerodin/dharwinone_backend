@@ -20,7 +20,6 @@ import {
   CONVERTED_PIPELINE_STATUSES,
   PENDING_PIPELINE_STATUSES,
   applyLifecycleOverlay,
-  bucketByEffectiveStatus,
   rankSalesAgentHires,
   deriveReferralPipelineStatus,
   isTerminalMetaStatus,
@@ -334,9 +333,10 @@ export const buildReferralLeadsMatch = async (opts) => {
     mongo.referralContext = query.referralContext;
   }
 
-  if (query.referralPipelineStatus && String(query.referralPipelineStatus).trim()) {
-    mongo.referralPipelineStatus = String(query.referralPipelineStatus).trim();
-  }
+  // NOTE: status is NOT filtered here. The column badge shows an EFFECTIVE status (joined→
+  // employee/resigned, deleted job→job_removed, in_review→interview) computed in shapeLeadRow, which
+  // diverges from the raw stored field. Status filtering happens downstream on the computed
+  // `effectiveStatus` field — see buildEffectiveStatusStages + effectiveStatusMatch.
 
   if (query.from || query.to) {
     mongo.referredAt = {};
@@ -724,6 +724,103 @@ const referralLeadsPopulateReferrerAndJobStages = () => {
   ];
 };
 
+/** Stored statuses that are NOT reinterpreted as job_removed when the job is gone (terminal already). */
+const JOB_REMOVED_EXEMPT = ['withdrawn', 'rejected', 'job_removed'];
+
+/**
+ * Aggregation stages that compute `effectiveStatus` — the SAME status the column badge shows
+ * (see shapeLeadRow), so the list/count/cards/export can FILTER and BUCKET by what the user sees
+ * instead of the raw stored field. Precedence mirrors shapeLeadRow exactly:
+ *   joined (joiningDate ≤ now) → employee/resigned  >  job gone → job_removed  >  in_review → interview  >  stored.
+ * "Job gone" = the referral's job was deleted (referralJobId dangling) OR an applied/JOB_APPLY lead
+ * whose latest application points at a deleted job (mirrors appliedJobPostingOrphansForJobApplyApplied).
+ * MUST run BEFORE referralLeadsPopulateReferrerAndJobStages (which replaces referralJobId with a doc).
+ *
+ * @param {Date} now
+ */
+export const buildEffectiveStatusStages = (now) => {
+  const jobsColl = jobsCollectionName();
+  const appsColl = JobApplication.collection.collectionName;
+  return [
+    { $lookup: { from: jobsColl, localField: 'referralJobId', foreignField: '_id', as: '_effRefJobHits' } },
+    {
+      $lookup: {
+        from: appsColl,
+        let: { cand: '$_id' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$candidate', '$$cand'] } } },
+          { $sort: { updatedAt: -1 } },
+          { $limit: 1 },
+          { $lookup: { from: jobsColl, localField: 'job', foreignField: '_id', as: '_jh' } },
+          { $project: { _id: 0, jobMissing: { $eq: [{ $size: '$_jh' }, 0] } } },
+        ],
+        as: '_effLatestApp',
+      },
+    },
+    {
+      $set: {
+        _effJobGone: {
+          $or: [
+            { $and: [{ $ne: ['$referralJobId', null] }, { $eq: [{ $size: '$_effRefJobHits' }, 0] }] },
+            {
+              $and: [
+                { $eq: ['$referralPipelineStatus', 'applied'] },
+                { $eq: ['$referralContext', 'JOB_APPLY'] },
+                {
+                  $or: [
+                    { $eq: [{ $size: '$_effLatestApp' }, 0] },
+                    { $eq: [{ $arrayElemAt: ['$_effLatestApp.jobMissing', 0] }, true] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+    {
+      $set: {
+        effectiveStatus: {
+          $switch: {
+            branches: [
+              // $type==='date' is the ONLY safe "has a real joiningDate" guard: $ne null does NOT
+              // exclude missing fields here ($lte treats missing/null as < any date → false employee
+              // matches). Mirrors applyLifecycleOverlay's `if (joiningDate)` real-date check.
+              {
+                case: {
+                  $and: [
+                    { $eq: [{ $type: '$joiningDate' }, 'date'] },
+                    { $lte: ['$joiningDate', now] },
+                    { $eq: ['$isActive', true] },
+                  ],
+                },
+                then: 'employee',
+              },
+              {
+                case: { $and: [{ $eq: [{ $type: '$joiningDate' }, 'date'] }, { $lte: ['$joiningDate', now] }] },
+                then: 'resigned',
+              },
+              {
+                case: { $and: ['$_effJobGone', { $not: [{ $in: ['$referralPipelineStatus', JOB_REMOVED_EXEMPT] }] }] },
+                then: 'job_removed',
+              },
+              { case: { $eq: ['$referralPipelineStatus', 'in_review'] }, then: 'interview' },
+            ],
+            default: { $ifNull: ['$referralPipelineStatus', 'pending'] },
+          },
+        },
+      },
+    },
+    { $unset: ['_effRefJobHits', '_effLatestApp', '_effJobGone'] },
+  ];
+};
+
+/** Match on the computed `effectiveStatus`. `[]` when no status is selected. */
+export const effectiveStatusMatch = (query) => {
+  const sel = query?.referralPipelineStatus ? String(query.referralPipelineStatus).trim() : '';
+  return sel ? [{ $match: { effectiveStatus: sel } }] : [];
+};
+
 export const listReferralLeads = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
@@ -736,21 +833,27 @@ export const listReferralLeads = async (req) => {
   }
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
+  const statusMatch = effectiveStatusMatch(q);
+  // effectiveStatus is only needed to FILTER; the row badge comes from shapeLeadRow. Skip its two
+  // lookups entirely when no status is selected.
+  const effStages = statusMatch.length ? buildEffectiveStatusStages(new Date()) : [];
   const pipeline = [
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
     ...ownerStages,
+    ...effStages,
+    ...statusMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1, _id: -1 } },
     { $skip: (page - 1) * limit },
     { $limit: limit },
   ];
 
-  // Total uses the same match + owner filter (no enrichment/populate, which don't change row count),
-  // so it matches the stats card total exactly.
+  // Total uses the same match + owner filter + effective-status filter (no enrichment/populate, which
+  // don't change row count), so it matches the stats card total exactly.
   const [rows, totalArr] = await Promise.all([
     Employee.aggregate(pipeline),
-    Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
+    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, { $count: 'c' }]),
   ]);
   const total = totalArr[0]?.c ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -816,18 +919,20 @@ export const getReferralLeadsStats = async (req) => {
   const canSeeOrgReferrerLeaderboard = (await userIsAdmin(req.user)) || (await userIsAgent(req.user));
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
+  const now = new Date();
+  const effStages = buildEffectiveStatusStages(now);
+  const statusMatch = effectiveStatusMatch(q);
 
-  const [totalArr, effRows, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
-    Employee.aggregate([{ $match: match }, ...ownerStages, { $count: 'c' }]),
-    // Funnel/cards must agree with the displayed rows, so bucket by the SAME effective status the
-    // list uses (applyLifecycleOverlay) — not the raw stored field, which can be stale for the
-    // time-driven employee/resigned tail. Project the three fields the overlay needs and group in JS.
-    // ponytail: loads matched candidate rows (3 fields each); fine at referral-lead scale. If this
-    // ever spans tens of thousands, push the overlay into a $expr $switch and $group server-side.
+  const [totalArr, statusGroups, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
+    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, { $count: 'c' }]),
+    // Funnel/cards bucket by the SAME effectiveStatus the list filters + the badge shows (includes the
+    // time-driven employee/resigned tail AND job_removed), so cards always agree with the rows.
     Employee.aggregate([
       { $match: match },
       ...ownerStages,
-      { $project: { referralPipelineStatus: 1, joiningDate: 1, isActive: 1 } },
+      ...effStages,
+      ...statusMatch,
+      { $group: { _id: '$effectiveStatus', c: { $sum: 1 } } },
     ]),
     canSeeOrgReferrerLeaderboard
       ? Employee.aggregate([
@@ -841,6 +946,8 @@ export const getReferralLeadsStats = async (req) => {
     Employee.aggregate([
       { $match: { ...match, currentSalesAgentUserId: null } },
       ...ownerStages,
+      ...effStages,
+      ...statusMatch,
       { $count: 'c' },
     ]),
     computeSalesAgentStats(req.user?.tenantId, q),
@@ -851,6 +958,8 @@ export const getReferralLeadsStats = async (req) => {
     Employee.aggregate([
       { $match: { ...match, joiningDate: { $exists: true, $ne: null }, isActive: true } },
       ...ownerStages,
+      ...effStages,
+      ...statusMatch,
       {
         $group: {
           _id: { $ifNull: ['$compensationType', 'paid'] },
@@ -864,7 +973,8 @@ export const getReferralLeadsStats = async (req) => {
 
   const totalAgg = totalArr[0]?.c ?? 0;
 
-  const byStatusMap = bucketByEffectiveStatus(effRows, new Date());
+  const byStatusMap = {};
+  for (const g of statusGroups) byStatusMap[g._id] = g.c;
   let converted = 0;
   let pending = 0;
   const hired =
@@ -947,11 +1057,14 @@ export const exportReferralLeadsCsv = async (req, res) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = { ...req.query, search: undefined };
   const match = { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
+  const exportStatusMatch = effectiveStatusMatch(q);
   const cap = 5000;
   const rows = await Employee.aggregate([
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
     ...referralLeadsRequireExistingOwnerStages(),
+    ...(exportStatusMatch.length ? buildEffectiveStatusStages(new Date()) : []),
+    ...exportStatusMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1 } },
     { $limit: cap },
