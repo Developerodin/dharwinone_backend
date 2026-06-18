@@ -21,7 +21,7 @@ test('buildLeadMatchStage handles unassigned=true', () => {
 
 test('applyNewFilters handles hiredOnly', () => {
   const match = applyNewFilters({ hiredOnly: true });
-  assert.equal(match.referralPipelineStatus, 'hired');
+  assert.deepEqual(match.referralPipelineStatus, { $in: ['hired', 'joined', 'employee'] });
 });
 
 test('buildSalesAgentEnrichment $lookup attaches current attribution', () => {

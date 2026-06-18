@@ -13,10 +13,21 @@ export function buildLeadMatchStage(filters = {}, scope = {}) {
     match.currentSalesAgentUserId = null;
   }
   if (filters.hiredOnly === true || filters.hiredOnly === 'true') {
-    match.referralPipelineStatus = 'hired';
+    match.referralPipelineStatus = { $in: ['hired', 'joined', 'employee'] };
   }
   if (filters.pendingReferrals === true || filters.pendingReferrals === 'true') {
-    match.referralPipelineStatus = { $in: ['pending', 'profile_complete', 'applied', 'in_review'] };
+    match.referralPipelineStatus = {
+      $in: [
+        'pending',
+        'profile_complete',
+        'applied',
+        'in_review',
+        'interview',
+        'offer',
+        'preboarding',
+        'deferred',
+      ],
+    };
   }
   if (filters.convertedEmployees === true || filters.convertedEmployees === 'true') {
     // Conversion is historical: include resigned employees (isActive=false) too.
@@ -85,44 +96,22 @@ export function buildOfferEnrichment() {
 export function buildLifecycleStageProjection() {
   return {
     $set: {
-      // Being a current employee / awaiting-start requires a CONFIRMED hire
-      // (referralPipelineStatus === 'hired'). A joiningDate alone is not enough — an applied
-      // candidate that happens to carry a joiningDate must still read as its hiring-cycle stage.
-      // Resignation stays factual (joined then deactivated), independent of pipeline status.
-      // Mirror of deriveLifecycleStage in utils/lifecycleStage.js — keep the two in sync.
+      // Legacy API field — derived from unified referralPipelineStatus (see pipelineStatusToLifecycleStage).
       lifecycleStage: {
         $switch: {
           branches: [
+            { case: { $eq: ['$referralPipelineStatus', 'employee'] }, then: 'employee' },
+            { case: { $eq: ['$referralPipelineStatus', 'resigned'] }, then: 'resigned' },
+            { case: { $eq: ['$referralPipelineStatus', 'joined'] }, then: 'joined_pending_start' },
             {
-              case: {
-                $and: [
-                  { $ne: ['$joiningDate', null] },
-                  { $lte: ['$joiningDate', '$$NOW'] },
-                  { $eq: ['$isActive', true] },
-                  { $eq: ['$referralPipelineStatus', 'hired'] },
-                ],
-              },
-              then: 'employee',
+              case: { $in: ['$referralPipelineStatus', ['preboarding', 'deferred', 'hired']] },
+              then: 'preboarding',
             },
+            { case: { $eq: ['$referralPipelineStatus', 'offer'] }, then: 'offered' },
             {
-              case: {
-                $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }, { $ne: ['$isActive', true] }],
-              },
-              then: 'resigned',
+              case: { $in: ['$referralPipelineStatus', ['interview', 'in_review']] },
+              then: 'interview',
             },
-            {
-              case: {
-                $and: [
-                  { $ne: ['$joiningDate', null] },
-                  { $gt: ['$joiningDate', '$$NOW'] },
-                  { $eq: ['$referralPipelineStatus', 'hired'] },
-                ],
-              },
-              then: 'joined_pending_start',
-            },
-            { case: { $eq: ['$hasAcceptedOffer', true] }, then: 'preboarding' },
-            { case: { $eq: ['$hasAnyOffer', true] }, then: 'offered' },
-            { case: { $eq: ['$referralPipelineStatus', 'in_review'] }, then: 'interview' },
             {
               case: { $in: ['$referralPipelineStatus', ['applied', 'profile_complete']] },
               then: 'applied',
@@ -134,11 +123,10 @@ export function buildLifecycleStageProjection() {
       employeeConverted: {
         $cond: [
           {
-            // Conversion is a historical fact — stays true after resignation.
             $and: [{ $ne: ['$joiningDate', null] }, { $lte: ['$joiningDate', '$$NOW'] }],
           },
           true,
-          false,
+          { $in: ['$referralPipelineStatus', ['employee', 'resigned', 'joined']] },
         ],
       },
       employeeStatus: {
@@ -206,7 +194,6 @@ export function buildCurrentAttributionIdEnrichment() {
 
 export function buildSalesAgentListEnrichmentStages() {
   return [
-    ...buildOfferEnrichment(),
     buildLifecycleStageProjection(),
     ...buildSalesAgentEnrichment(),
     ...buildCurrentAttributionIdEnrichment(),

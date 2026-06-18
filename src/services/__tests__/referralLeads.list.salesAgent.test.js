@@ -9,6 +9,10 @@ test('applyNewFilters supports pendingReferrals filter', () => {
     'profile_complete',
     'applied',
     'in_review',
+    'interview',
+    'offer',
+    'preboarding',
+    'deferred',
   ]);
 });
 

@@ -606,11 +606,18 @@ const referralLeadsQueryKeys = {
   referralPipelineStatus: Joi.string()
     .valid(
       'profile_complete',
+      'pending',
       'applied',
       'in_review',
+      'interview',
+      'offer',
+      'preboarding',
+      'deferred',
       'hired',
+      'joined',
+      'employee',
+      'resigned',
       'rejected',
-      'pending',
       'withdrawn',
       'job_removed'
     )

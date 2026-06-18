@@ -246,11 +246,21 @@ const employeeSchema = new mongoose.Schema(
       type: String,
       enum: [
         'profile_complete',
-        'applied',
-        'in_review',
-        'hired',
-        'rejected',
         'pending',
+        'applied',
+        /** @deprecated legacy — prefer `interview`; kept for backfill reads */
+        'in_review',
+        'interview',
+        'offer',
+        'preboarding',
+        'deferred',
+        /** Placement Onboarding phase (not yet joined). */
+        'hired',
+        /** Placement Joined — awaiting or past start per joiningDate. */
+        'joined',
+        'employee',
+        'resigned',
+        'rejected',
         'withdrawn',
         /** Job posting was deleted; referral had been tied to that job (see job.service deleteJobById). */
         'job_removed',

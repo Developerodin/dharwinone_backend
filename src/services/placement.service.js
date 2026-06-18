@@ -10,6 +10,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
 import { ALLOWED_TRANSITIONS, PLACEMENT_STATUSES } from '../constants/atsPipeline.js';
+import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 // Any pipeline-scope perm (15 keys across pre-boarding/onboarding/offers) grants full read
 // across placements — same as admin. Used to bypass owner/job-ownership gates for non-admin
@@ -979,6 +980,12 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
     (justJoined || joiningDateUpdated || updateBody.status !== undefined)
   ) {
     await tryPromotePlacementCandidateIfEligible(placement);
+  }
+
+  if (placement.candidate) {
+    await syncReferralPipelineStatusForCandidate(placement.candidate).catch((e) =>
+      logger.warn(`syncReferralPipelineStatusForCandidate: ${e?.message || e}`)
+    );
   }
 
   return getPlacementById(placement._id, currentUser);

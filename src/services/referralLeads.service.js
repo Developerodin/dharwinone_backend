@@ -6,6 +6,9 @@ import User from '../models/user.model.js';
 import ActivityLog from '../models/activityLog.model.js';
 import Job from '../models/job.model.js';
 import JobApplication from '../models/jobApplication.model.js';
+import Offer from '../models/offer.model.js';
+import Placement from '../models/placement.model.js';
+import Meeting from '../models/meeting.model.js';
 import config from '../config/config.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import * as activityLogService from './activityLog.service.js';
@@ -13,7 +16,13 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { logReferralEvent } from './referralAttribution.service.js';
 import logger from '../config/logger.js';
 import { userIsSalesAgent, userIsAdmin, userIsAgent } from '../utils/roleHelpers.js';
-import { isActiveEmployee } from '../utils/lifecycleStage.js';
+import {
+  CONVERTED_PIPELINE_STATUSES,
+  PENDING_PIPELINE_STATUSES,
+  deriveReferralPipelineStatus,
+  isTerminalMetaStatus,
+  pipelineStatusToLifecycleStage,
+} from '../utils/referralPipelineStatus.js';
 import {
   applyNewFilters,
   buildSalesAgentListEnrichmentStages,
@@ -23,7 +32,6 @@ import { getOwnerIdsWithApplicantCandidateRoleOnly } from './role.service.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Job application statuses → funnel priority for picking primary row + pipeline stage (higher = further along). */
 const APP_STAGE_RANK = {
   Hired: 6,
   Offered: 5,
@@ -36,16 +44,7 @@ const APP_STAGE_RANK = {
 const isProfileCompleteLean = (candidate) =>
   Boolean(candidate?.isCompleted || candidate?.isProfileCompleted === 100);
 
-/**
- * Derive referral pipeline status from all applications for this candidate (must be non-empty array).
- */
-const derivePipelineFromApplications = (apps) => {
-  if (apps.some((a) => a.status === 'Hired')) return 'hired';
-  if (apps.some((a) => ['Screening', 'Interview', 'Offered'].includes(a.status))) return 'in_review';
-  if (apps.some((a) => a.status === 'Applied')) return 'applied';
-  if (apps.length && apps.every((a) => a.status === 'Rejected')) return 'rejected';
-  return 'applied';
-};
+const ATTRIBUTION_ANCHOR_STATUSES = new Set(['preboarding', 'hired', 'joined', 'employee']);
 
 /**
  * Prefer the furthest-along application for denormalised job column (tie-break: most recently updated).
@@ -65,7 +64,7 @@ const pickPrimaryApplication = (apps) => {
 /**
  * Single source of truth for `referralPipelineStatus` / denormalised job fields on referred candidates.
  *
- * - With applications: maps ATS application statuses → applied | in_review | hired | rejected; updates referralJob*.
+ * - With pipeline data: derives unified status from applications, interviews, offers, placements.
  * - With none: pending/profile_complete while idle; withdrawn after last application deleted; preserves job_removed / withdrawn unless applications appear again.
  *
  * @param {import('mongoose').Types.ObjectId|string} candidateId
@@ -94,20 +93,17 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
 
   const current = c.referralPipelineStatus || 'pending';
 
-  /** Already an active employee — skip ATS application lifecycle; show as hired in referral leads. */
-  if (isActiveEmployee(c)) {
-    if (current !== 'hired') {
-      await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: 'hired' } });
-    }
-    return;
-  }
+  const [apps, placements, offers, meetings] = await Promise.all([
+    JobApplication.find({ candidate: cid })
+      .sort({ updatedAt: -1 })
+      .select('job status updatedAt createdAt')
+      .lean(),
+    Placement.find({ candidate: cid }).select('status job updatedAt').lean(),
+    Offer.find({ candidate: cid }).select('status updatedAt').lean(),
+    Meeting.find({ 'candidate.id': cid }).select('status interviewResult updatedAt').lean(),
+  ]);
 
-  const apps = await JobApplication.find({ candidate: cid })
-    .sort({ updatedAt: -1 })
-    .select('job status updatedAt createdAt')
-    .lean();
-
-  if (!apps.length) {
+  if (!apps.length && !placements.length && !offers.length) {
     if (fromApplicationDeletion) {
       let jobOid = null;
       let title = null;
@@ -132,14 +128,17 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
       return;
     }
 
-    /** Idle: no applications — do not clobber terminal/job-deletion rows unless profile catches up. */
-    // B10 fix: allow withdrawn/job_removed candidates to restore to 'profile_complete' once their
-    // profile is filled. Without this, a withdrawn referral stays terminally withdrawn even after
-    // the candidate completes their profile, blocking future pipeline visibility.
-    if (current === 'job_removed' || current === 'withdrawn') {
+    /** Idle: no pipeline rows — do not clobber terminal/job-deletion rows unless profile catches up. */
+    if (isTerminalMetaStatus(current)) {
       if (isProfileCompleteLean(c) && current !== 'profile_complete') {
         await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: 'profile_complete' } });
       }
+      return;
+    }
+
+    const derivedIdle = deriveReferralPipelineStatus({ employee: c, apps, placements, offers, meetings });
+    if (derivedIdle) {
+      await Employee.updateOne({ _id: cid }, { $set: { referralPipelineStatus: derivedIdle } });
       return;
     }
 
@@ -150,23 +149,30 @@ export async function syncReferralPipelineStatusForCandidate(candidateId, option
     return;
   }
 
-  /** Active pipeline — applications exist (clears withdrawn/job_removed semantics). */
-  const nextPipeline = derivePipelineFromApplications(apps);
+  /** Active pipeline — derive from ATS sources (clears withdrawn/job_removed semantics). */
+  const nextPipeline =
+    deriveReferralPipelineStatus({ employee: c, apps, placements, offers, meetings }) || 'applied';
   const primary = pickPrimaryApplication(apps);
-  const jobOid = primary?.job || null;
+  const primaryPlacement = placements?.length
+    ? [...placements].sort(
+        (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
+      )[0]
+    : null;
+  const jobOid = primary?.job || primaryPlacement?.job || null;
   let title = null;
   if (jobOid) {
     const job = await Job.findById(jobOid).select('title').lean();
     title = job?.title || null;
   }
 
-  const willTransitionToHired = nextPipeline === 'hired' && current !== 'hired';
+  const willAnchorAttribution =
+    ATTRIBUTION_ANCHOR_STATUSES.has(nextPipeline) && !ATTRIBUTION_ANCHOR_STATUSES.has(current);
   const $set = {
     referralPipelineStatus: nextPipeline,
     referralJobId: jobOid,
     referralJobTitle: title,
   };
-  if (willTransitionToHired && jobOid && !c.attributionJobId) {
+  if (willAnchorAttribution && jobOid && !c.attributionJobId) {
     $set.attributionJobId = jobOid;
   }
   await Employee.updateOne({ _id: cid }, { $set });
@@ -536,10 +542,7 @@ const shapeLeadRow = async (row, options = {}) => {
     job = { title: o.referralJobTitle };
   }
 
-  // STATUS column reflects the raw referral pipeline status (applied / in_review / hired / ...).
-  // Employment lifecycle (joined / resigned) is surfaced separately via the STAGE column
-  // (lifecycleStage below) — do NOT collapse the two here, or applied-only candidates with a
-  // joiningDate would wrongly read as Hired.
+  // STATUS column is referralPipelineStatus; lifecycleStage is a legacy mirror for API consumers.
 
   const referralLastOverride = await shapeReferralLastOverride(o.referralLastOverride);
 
@@ -577,7 +580,7 @@ const shapeLeadRow = async (row, options = {}) => {
     salesAgentCurrentAttributionId: o.currentSalesAgentAttributionId
       ? String(o.currentSalesAgentAttributionId)
       : null,
-    lifecycleStage: o.lifecycleStage || null,
+    lifecycleStage: o.lifecycleStage || pipelineStatusToLifecycleStage(effectivePipelineStatus),
     employeeConverted: o.employeeConverted === true,
     employeeStatus: o.employeeStatus || null,
     joiningDate: o.joiningDate || null,
@@ -772,8 +775,8 @@ export const listReferralLeads = async (req) => {
   };
 };
 
-const CONVERTED_STATUSES = ['applied', 'in_review', 'hired'];
-const PENDING_STATUSES = ['pending', 'profile_complete'];
+const CONVERTED_STATUSES = CONVERTED_PIPELINE_STATUSES;
+const PENDING_STATUSES = PENDING_PIPELINE_STATUSES;
 
 async function computeSalesAgentStats(tenantId, filters = {}) {
   const match = { isCurrent: true, isRevoked: false };
@@ -786,7 +789,7 @@ async function computeSalesAgentStats(tenantId, filters = {}) {
     { $match: match },
     { $lookup: { from: 'employees', localField: 'subjectProfileId', foreignField: '_id', as: 'cand' } },
     { $unwind: '$cand' },
-    { $match: { 'cand.referralPipelineStatus': 'hired' } },
+    { $match: { 'cand.referralPipelineStatus': { $in: ['employee', 'joined'] } } },
     { $group: { _id: { agent: '$salesAgentUserId', cand: '$subjectProfileId' } } },
     { $group: { _id: '$_id.agent', count: { $sum: 1 } } },
     { $sort: { count: -1 } },
@@ -809,24 +812,10 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
 
-  // Effective status mirrors shapeLeadRow: a referred candidate who joined reads as 'hired',
-  // one who resigned (joined date passed + inactive) reads as 'resigned'; otherwise the raw
-  // pipeline status. Keeps the cards/funnel aggregates consistent with the list rows.
+  // Funnel aggregates use stored referralPipelineStatus (unified STATUS column).
   const effectiveStatusStage = {
     $addFields: {
-      _effStatus: {
-        $cond: [
-          { $ne: [{ $ifNull: ['$joiningDate', null] }, null] },
-          {
-            $cond: [
-              { $and: [{ $lte: ['$joiningDate', '$$NOW'] }, { $ne: ['$isActive', true] }] },
-              'resigned',
-              'hired',
-            ],
-          },
-          { $ifNull: ['$referralPipelineStatus', 'pending'] },
-        ],
-      },
+      _effStatus: { $ifNull: ['$referralPipelineStatus', 'pending'] },
     },
   };
 
@@ -876,7 +865,8 @@ export const getReferralLeadsStats = async (req) => {
   const byStatusMap = Object.fromEntries(byStatus.map((x) => [x._id || 'null', x.count]));
   let converted = 0;
   let pending = 0;
-  const hired = byStatusMap.hired || 0;
+  const hired =
+    (byStatusMap.hired || 0) + (byStatusMap.joined || 0) + (byStatusMap.employee || 0);
   for (const s of CONVERTED_STATUSES) {
     converted += byStatusMap[s] || 0;
   }
