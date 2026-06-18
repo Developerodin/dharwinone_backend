@@ -205,12 +205,17 @@ describe('deriveReferralPipelineStatus', () => {
         { agent: 'A', cand: 'c1', status: 'hired', joiningDate: '2026-01-01', isActive: true },
         // agent B: stored employee but RESIGNED (joined+inactive) → not a current hire, excluded
         { agent: 'B', cand: 'c3', status: 'employee', joiningDate: '2026-01-01', isActive: false },
+        // agent B: preboarding hire (no join date yet) → counts toward leaderboard
+        { agent: 'B', cand: 'c5', status: 'hired' },
         // agent B: a still-applying candidate → excluded
         { agent: 'B', cand: 'c4', status: 'applied' },
       ],
       now
     );
-    assert.deepEqual(ranked, [{ userId: 'A', count: 2 }]);
+    assert.deepEqual(ranked, [
+      { userId: 'A', count: 2 },
+      { userId: 'B', count: 1 },
+    ]);
   });
 
   it('pipelineStatusToLifecycleStage mirrors unified status', () => {

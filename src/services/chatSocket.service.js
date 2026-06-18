@@ -353,7 +353,7 @@ const emitNewMessage = async (conversationId, message) => {
               type: 'chat_message',
               title: payload.sender?.name || 'New message',
               message: String(payload.content || '').slice(0, 120),
-              link: `/communication/chats/${conversationId}`,
+              link: `/communication/chats?conv=${conversationId}`,
               triggeredBy: payload.sender?._id || payload.sender?.id,
               relatedEntity: { type: 'conversation', id: conversationId },
             }).catch((err) => logger.warn(`chat notify failed: ${err.message}`));

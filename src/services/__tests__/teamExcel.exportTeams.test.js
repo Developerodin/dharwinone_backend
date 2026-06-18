@@ -4,11 +4,11 @@ import XLSX from 'xlsx';
 import { buildExportWorkbookBuffer, _defangCell } from '../teamExcel.service.js';
 
 const team = {
-  name: 'Alpha', teamLead: { name: 'Lana', email: 'l@x.com' },
+  name: 'Alpha', teamLead: { fullName: 'Lana', email: 'l@x.com' },
   department: 'Engg', description: 'd',
 };
 const member = {
-  employeeId: { _id: 'o1', employeeId: 'DBS101', name: 'Asha', email: 'a@x.com', isActive: true },
+  employeeId: { _id: 'o1', employeeId: 'DBS101', fullName: 'Asha', email: 'a@x.com', isActive: true },
   seniority: 'Lead', assignmentMode: 'manual', createdAt: '2026-05-01T00:00:00Z',
 };
 
@@ -24,7 +24,9 @@ test('buildExportWorkbookBuffer produces single Teams sheet with all columns and
     'Team Seniority', 'Active', 'Source', 'Joined',
   ]);
   assert.equal(aoa[3][0], 'Alpha');
+  assert.equal(aoa[3][1], 'Lana');   // Team Lead Name — derived from teamLead.fullName
   assert.equal(aoa[3][7], 'a@x.com');
+  assert.equal(aoa[3][8], 'Asha');   // Employee Name — derived from employeeId.fullName
   assert.equal(aoa[3][10], 'Yes');
 });
 

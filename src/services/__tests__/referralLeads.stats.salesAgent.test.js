@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { SALES_AGENT_LEADERBOARD_HIRE_STATUSES } from '../../utils/referralPipelineStatus.js';
+
+test('sales-agent leaderboard hire statuses align with stats.hired buckets', () => {
+  assert.deepEqual(SALES_AGENT_LEADERBOARD_HIRE_STATUSES, ['hired', 'joined', 'employee']);
+});
 
 test('stats response shape includes sales-agent leaderboard fields', () => {
   const stats = {

@@ -584,14 +584,14 @@ export function buildExportWorkbookBuffer({ teams, membersByTeam, activeCount })
       const e = m.employeeId || {};
       aoa.push([
         t.name,
-        t.teamLead?.name || '',
+        t.teamLead?.fullName || '',
         t.teamLead?.email || '',
         t.department || '',
         t.description || '',
         String(e._id || ''),
         e.employeeId || '',
         e.email || '',
-        e.name || '',
+        e.fullName || '',
         m.seniority || 'Member',
         e.isActive ? 'Yes' : 'No',
         m.assignmentMode || 'manual',
@@ -607,13 +607,13 @@ export function buildExportWorkbookBuffer({ teams, membersByTeam, activeCount })
 
 export async function runExport({ filter = {}, includeInactive = false }) {
   const startedAt = Date.now();
-  const teams = await Team.find(filter).populate('teamLead', 'name email').lean();
+  const teams = await Team.find(filter).populate('teamLead', 'fullName email').lean();
   const membersByTeam = {};
   let activeCount = 0;
   let membersExported = 0;
   for (const t of teams) {
     const members = await TeamMember.find({ teamId: t._id })
-      .populate('employeeId', '_id employeeId name email isActive').lean();
+      .populate('employeeId', '_id employeeId fullName email isActive').lean();
     const filtered = includeInactive ? members : members.filter((m) => m.employeeId?.isActive);
     activeCount += filtered.length;
     membersExported += filtered.length;

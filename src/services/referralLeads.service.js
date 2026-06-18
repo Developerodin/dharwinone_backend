@@ -20,7 +20,7 @@ import {
   CONVERTED_PIPELINE_STATUSES,
   PENDING_PIPELINE_STATUSES,
   applyLifecycleOverlay,
-  rankSalesAgentHires,
+  SALES_AGENT_LEADERBOARD_HIRE_STATUSES,
   deriveReferralPipelineStatus,
   isTerminalMetaStatus,
   pipelineStatusToLifecycleStage,
@@ -873,40 +873,29 @@ export const listReferralLeads = async (req) => {
 const CONVERTED_STATUSES = CONVERTED_PIPELINE_STATUSES;
 const PENDING_STATUSES = PENDING_PIPELINE_STATUSES;
 
-async function computeSalesAgentStats(tenantId, filters = {}) {
-  const match = { isCurrent: true, isRevoked: false };
-  if (tenantId) match.tenantId = tenantId;
-  if (filters.salesAgentUserId && mongoose.Types.ObjectId.isValid(String(filters.salesAgentUserId))) {
-    match.salesAgentUserId = new mongoose.Types.ObjectId(String(filters.salesAgentUserId));
-  }
-
-  // Hire = candidate whose EFFECTIVE status (same overlay as rows/cards) is employee/joined — not
-  // the raw stored field, which is stale for the time-driven tail. Project the candidate fields the
-  // overlay needs, then filter + dedupe + rank in JS so this stays a single source of truth.
-  // ponytail: loads current attribution rows for the tenant; fine at referral scale. Push the
-  // overlay into a $expr $switch + server-side $group if attributions ever reach tens of thousands.
-  const rows = await ReferralAttribution.aggregate([
-    { $match: match },
-    { $lookup: { from: 'employees', localField: 'subjectProfileId', foreignField: '_id', as: 'cand' } },
-    { $unwind: '$cand' },
-    {
-      $project: {
-        agent: '$salesAgentUserId',
-        cand: '$subjectProfileId',
-        status: '$cand.referralPipelineStatus',
-        joiningDate: '$cand.joiningDate',
-        isActive: '$cand.isActive',
-      },
-    },
+async function computeSalesAgentStats(match, ownerStages, effStages, statusMatch, limit = 5) {
+  const groups = await Employee.aggregate([
+    { $match: { ...match, currentSalesAgentUserId: { $ne: null } } },
+    ...ownerStages,
+    ...effStages,
+    ...statusMatch,
+    { $match: { effectiveStatus: { $in: SALES_AGENT_LEADERBOARD_HIRE_STATUSES } } },
+    { $group: { _id: '$currentSalesAgentUserId', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: limit },
   ]);
 
-  const ranked = rankSalesAgentHires(rows, new Date(), 5);
+  if (!groups.length) return [];
 
-  const users = await User.find({ _id: { $in: ranked.map((r) => r.userId) } })
+  const users = await User.find({ _id: { $in: groups.map((g) => g._id) } })
     .select('name')
     .lean();
   const nameById = Object.fromEntries(users.map((u) => [String(u._id), u.name]));
-  return ranked.map((r) => ({ userId: r.userId, name: nameById[r.userId] || 'Unknown', count: r.count }));
+  return groups.map((g) => ({
+    userId: String(g._id),
+    name: nameById[String(g._id)] || 'Unknown',
+    count: g.count,
+  }));
 }
 
 export const getReferralLeadsStats = async (req) => {
@@ -950,7 +939,7 @@ export const getReferralLeadsStats = async (req) => {
       ...statusMatch,
       { $count: 'c' },
     ]),
-    computeSalesAgentStats(req.user?.tenantId, q),
+    computeSalesAgentStats(match, ownerStages, effStages, statusMatch),
     // Referred candidates who became employees (joiningDate set), split by their own
     // compensationType (paid/unpaid). Keys off joiningDate — NOT referralPipelineStatus
     // 'hired' — so backfilled employees who joined before the candidate/job flow still count.

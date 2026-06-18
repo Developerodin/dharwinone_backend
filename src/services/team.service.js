@@ -142,7 +142,7 @@ export const createTeamMemberRow = async (createdById, payload) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position designation companyAssignedEmail' },
+    { path: 'employeeId', select: 'employeeId fullName email isActive profilePicture department position designation companyAssignedEmail' },
   ]);
   return member;
 };
@@ -176,7 +176,7 @@ export const moveTeamMemberToTeam = async (teamMemberId, teamId, currentUser) =>
     await member.populate([
       { path: 'createdBy', select: 'name email' },
       { path: 'teamId', select: 'name' },
-      { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+      { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
     ]);
     return member;
   }
@@ -198,7 +198,7 @@ export const moveTeamMemberToTeam = async (teamMemberId, teamId, currentUser) =>
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
   ]);
   return member;
 };
@@ -248,7 +248,7 @@ const createTeamMember = async (createdById, payload) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
   ]);
   return member;
 };
@@ -326,7 +326,7 @@ const queryTeamMembers = async (filter, options) => {
       .populate([
         { path: 'createdBy', select: 'name email' },
         { path: 'teamId', select: 'name' },
-        { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+        { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
       ])
       .exec(),
     TeamMember.countDocuments(finalFilter).exec(),
@@ -343,7 +343,7 @@ const getTeamMemberById = async (id) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
   ]);
   return member;
 };
@@ -366,7 +366,7 @@ const updateTeamMemberById = async (id, updateBody, currentUser) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId name email isActive profilePicture department position' },
+    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
   ]);
   return member;
 };

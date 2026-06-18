@@ -192,8 +192,10 @@ export function bucketByEffectiveStatus(rows = [], now = new Date()) {
   return map;
 }
 
-/** Effective statuses that count as a hire for the sales-agent leaderboard. */
-const HIRE_EFFECTIVE_STATUSES = new Set(['employee', 'joined']);
+/** Effective statuses that count as a hire for the sales-agent leaderboard (aligned with stats.hired). */
+export const SALES_AGENT_LEADERBOARD_HIRE_STATUSES = ['hired', 'joined', 'employee'];
+
+const HIRE_EFFECTIVE_STATUSES = new Set(SALES_AGENT_LEADERBOARD_HIRE_STATUSES);
 
 /**
  * Rank sales agents by distinct candidates they brought to an effective hire (employee/joined),

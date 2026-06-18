@@ -18,4 +18,10 @@ test('queryTeamMembers populates employeeId on every result', async (t) => {
   const flat = populateCalls.flat();
   const paths = flat.map((p) => p?.path).filter(Boolean);
   assert.ok(paths.includes('employeeId'), 'employeeId not populated');
+
+  // deriveDisplayFields() gates the linked-display path on emp.fullName, so the
+  // employeeId populate MUST select fullName — selecting only `name` leaves
+  // fullName undefined and every imported member renders with a blank name.
+  const empSpec = flat.find((p) => p?.path === 'employeeId');
+  assert.match(empSpec.select, /\bfullName\b/, 'employeeId select must include fullName');
 });
