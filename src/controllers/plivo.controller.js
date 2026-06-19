@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
@@ -129,8 +130,15 @@ const getSdkToken = catchAsync(async (req, res) => {
  */
 const sdkAnswer = catchAsync(async (req, res) => {
   const src = { ...req.query, ...req.body };
+  const pathIntent = typeof req.params?.intent === 'string' ? req.params.intent : '';
   const to =
-    src.To ?? src.to ?? src.DialBLegTo ?? src['SIP-H-To'] ?? src['X-Destination'] ?? '';
+    src.To ??
+    src.to ??
+    src.DialBLegTo ??
+    src['SIP-H-To'] ??
+    src['X-Destination'] ??
+    src.Dialed ??
+    '';
   const callerId =
     src['X-PH-callerId'] ??
     src['X-PH-CallerId'] ??
@@ -140,7 +148,15 @@ const sdkAnswer = catchAsync(async (req, res) => {
     src.From ??
     '';
   const intentToken =
-    src['X-PH-intent'] ?? src['X-PH-Intent'] ?? src['x-ph-intent'] ?? src.intent ?? '';
+    pathIntent ||
+    (src['X-PH-intent'] ??
+      src['X-PH-Intent'] ??
+      src['x-ph-intent'] ??
+      src.intent ??
+      '');
+  logger.info(
+    `Plivo sdk-answer hit mongoReady=${mongoose.connection.readyState === 1} pathIntent=${Boolean(pathIntent)} keys=${Object.keys(src).join(',')}`
+  );
   const xml = await plivoService.sdkAnswerXml({ to, callerId, intentToken });
   if (!xml) {
     logger.warn(
@@ -148,6 +164,8 @@ const sdkAnswer = catchAsync(async (req, res) => {
     );
   } else {
     logger.info(`Plivo sdk-answer Dial XML (to=…${String(to).slice(-4)}, intent=${intentToken ? 'yes' : 'no'})`);
+    const dest = plivoService.normalizePlivoDialTarget(to);
+    if (dest) plivoService.clearBrowserCallIntent(dest).catch(() => {});
   }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
   plivoService.resetWebrtcAnswerUrl().catch(() => {});

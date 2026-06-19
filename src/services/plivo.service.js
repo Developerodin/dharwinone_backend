@@ -470,25 +470,34 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
 }
 
 /** @param {string} destE164 */
-async function consumeBrowserCallIntent(destE164) {
+async function peekBrowserCallIntent(destE164) {
   if (mongoose.connection.readyState === 1) {
-    const doc = await PlivoBrowserCallIntent.findOneAndDelete({
+    const doc = await PlivoBrowserCallIntent.findOne({
       dest: destE164,
       expiresAt: { $gt: new Date() },
     }).lean();
-    if (doc) {
-      browserCallIntents.delete(destE164);
-      return { callerId: doc.callerId };
-    }
+    if (doc) return { callerId: doc.callerId };
   }
   purgeExpiredBrowserCallIntents();
   const entry = browserCallIntents.get(destE164);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    browserCallIntents.delete(destE164);
-    return null;
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return { callerId: entry.callerId };
+}
+
+/** @param {string} destE164 */
+async function clearBrowserCallIntent(destE164) {
+  if (mongoose.connection.readyState === 1) {
+    await PlivoBrowserCallIntent.deleteOne({ dest: destE164 });
   }
   browserCallIntents.delete(destE164);
-  return { callerId: entry.callerId };
+}
+
+/** @param {string} destE164 */
+async function consumeBrowserCallIntent(destE164) {
+  const peeked = await peekBrowserCallIntent(destE164);
+  if (!peeked) return null;
+  await clearBrowserCallIntent(destE164);
+  return peeked;
 }
 
 function webrtcAnswerUrl() {
@@ -496,13 +505,16 @@ function webrtcAnswerUrl() {
   return `${base}/v1/public/plivo/sdk-answer`;
 }
 
-/** Plivo does not forward X-PH-* SIP headers to the answer webhook; embed intent in the app URL. */
+/** Plivo does not forward X-PH-* SIP headers to the answer webhook; embed intent in path. */
 function webrtcAnswerUrlWithIntent(intent) {
-  return `${webrtcAnswerUrl()}?intent=${encodeURIComponent(intent)}`;
+  return `${webrtcAnswerUrl()}/i/${encodeURIComponent(intent)}`;
 }
 
 function isArmedWebrtcAnswerUrl(url) {
-  return typeof url === 'string' && /\/sdk-answer\?intent=/.test(url);
+  return (
+    typeof url === 'string' &&
+    (/\/sdk-answer\/i\//.test(url) || /\/sdk-answer\?intent=/.test(url))
+  );
 }
 
 function sleep(ms) {
@@ -739,7 +751,7 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
     }
   }
   if (!isE164(from) && isE164(dest)) {
-    const intent = await consumeBrowserCallIntent(dest);
+    const intent = await peekBrowserCallIntent(dest);
     if (intent) {
       from = intent.callerId;
       intentSource = 'store';
@@ -774,6 +786,7 @@ export default {
   registerBrowserCallIntent,
   publishWebrtcAnswerIntent,
   resetWebrtcAnswerUrl,
+  clearBrowserCallIntent,
   webrtcAnswerUrlWithIntent,
   isArmedWebrtcAnswerUrl,
   sdkAnswerXml,

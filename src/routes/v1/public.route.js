@@ -175,6 +175,8 @@ router.post(
  */
 router.get('/plivo/answer', plivoController.answerCall);
 
+router.all('/plivo/sdk-answer/i/:intent', plivoController.sdkAnswer);
+
 /**
  * GET|POST /v1/public/plivo/sdk-answer
  * Plivo answer webhook for browser-SDK (WebRTC) calls. No auth — Plivo's servers

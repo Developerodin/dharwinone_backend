@@ -95,25 +95,37 @@ test('sdkAnswerXml resolves caller ID from X-PH-intent token without store', asy
   assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });
 
-test('sdkAnswerXml browser call intent is consumed once', async () => {
+test('sdkAnswerXml browser call intent is cleared after successful dial', async () => {
   await plivoService.registerBrowserCallIntent({
     toNumber: '+918755887760',
     callerId: '+18336990430',
   });
   await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' });
+  await plivoService.clearBrowserCallIntent('+918755887760');
   assert.equal(await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' }), null);
 });
 
-test('webrtcAnswerUrlWithIntent embeds the HMAC token as a query param', () => {
+test('webrtcAnswerUrlWithIntent embeds the HMAC token in the path', () => {
   const intent = 'destsig';
   const url = plivoService.webrtcAnswerUrlWithIntent(intent);
-  assert.match(url, /\/v1\/public\/plivo\/sdk-answer\?intent=/);
-  assert.ok(url.includes(encodeURIComponent(intent)));
+  assert.match(url, /\/v1\/public\/plivo\/sdk-answer\/i\//);
+  assert.ok(url.endsWith(`/i/${encodeURIComponent(intent)}`));
 });
 
-test('isArmedWebrtcAnswerUrl detects intent query on sdk-answer', () => {
+test('isArmedWebrtcAnswerUrl detects intent path and legacy query on sdk-answer', () => {
+  assert.equal(plivoService.isArmedWebrtcAnswerUrl('https://x/v1/public/plivo/sdk-answer/i/abc'), true);
   assert.equal(plivoService.isArmedWebrtcAnswerUrl('https://x/v1/public/plivo/sdk-answer?intent=abc'), true);
   assert.equal(plivoService.isArmedWebrtcAnswerUrl('https://x/v1/public/plivo/sdk-answer'), false);
+});
+
+test('sdkAnswerXml browser call intent survives failed webhook then succeeds', async () => {
+  await plivoService.registerBrowserCallIntent({
+    toNumber: '+918755887760',
+    callerId: '+18336990430',
+  });
+  assert.equal(await plivoService.sdkAnswerXml({ to: '', callerId: '' }), null);
+  const xml = await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' });
+  assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });
 
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
