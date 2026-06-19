@@ -154,4 +154,7 @@ test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for bro
   const payload = JSON.parse(Buffer.from(enriched.split('.')[1], 'base64url').toString());
   assert.equal(payload.grants.voice.outgoing_allow, true);
   assert.deepEqual(payload.per.voice, payload.grants.voice);
+  // Plivo signs with noTimestamp:true; a stray `iat` is rejected at login with
+  // INVALID_ACCESS_TOKEN. The enriched token must not carry one.
+  assert.equal(payload.iat, undefined, 'enriched token must not contain an iat claim');
 });

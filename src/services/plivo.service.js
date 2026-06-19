@@ -746,8 +746,12 @@ function enrichAccessTokenForBrowserSdk(plivoJwt) {
   if (payload.grants?.voice && !payload.per?.voice) {
     payload.per = { voice: { ...payload.grants.voice } };
   }
+  // Plivo's own AccessToken.toJwt() signs with noTimestamp:true (no `iat`).
+  // Re-signing without it injects an `iat` claim Plivo rejects at login with
+  // INVALID_ACCESS_TOKEN, so mirror Plivo's shape exactly.
   return jwt.sign(payload, config.plivo.authToken, {
     algorithm: 'HS256',
+    noTimestamp: true,
     header: { typ: header.typ || 'JWT', cty: header.cty || 'plivo;v=1' },
   });
 }
