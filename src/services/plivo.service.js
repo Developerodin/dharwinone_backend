@@ -11,6 +11,7 @@
  */
 
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import plivo from 'plivo';
 import logger from '../config/logger.js';
 import config from '../config/config.js';
@@ -448,6 +449,24 @@ async function ensureWebrtcApp() {
 }
 
 /**
+ * plivo-browser-sdk v2 gates client.call() on JWT claim `per.voice.outgoing_allow`.
+ * The Node `plivo` SDK v4 only emits `grants.voice` — login succeeds but outbound
+ * calls are rejected client-side with "Outgoing call permission not granted".
+ */
+function enrichAccessTokenForBrowserSdk(plivoJwt) {
+  const [headerB64, payloadB64] = plivoJwt.split('.');
+  const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString());
+  const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+  if (payload.grants?.voice && !payload.per?.voice) {
+    payload.per = { voice: { ...payload.grants.voice } };
+  }
+  return jwt.sign(payload, config.plivo.authToken, {
+    algorithm: 'HS256',
+    header: { typ: header.typ || 'JWT', cty: header.cty || 'plivo;v=1' },
+  });
+}
+
+/**
  * Mint a short-lived, outbound-only WebRTC access token for the shared endpoint.
  * @param {Object} p - { uid } caller-unique id for tracing (e.g. user id)
  * @returns {Promise<{ success: boolean, token?: string, username?: string, error?: string }>}
@@ -468,7 +487,11 @@ async function mintWebrtcToken({ uid } = {}) {
       String(uid || ensured.username)
     );
     token.addVoiceGrants(false, true); // incoming: no, outgoing: yes
-    return { success: true, token: token.toJwt(), username: ensured.username };
+    return {
+      success: true,
+      token: enrichAccessTokenForBrowserSdk(token.toJwt()),
+      username: ensured.username,
+    };
   } catch (err) {
     const message = plivoErrorMessage(err);
     logger.error(`Plivo WebRTC token mint failed: ${message}`);
@@ -503,6 +526,7 @@ export default {
   bridgeAnswerXml,
   verifyCallSignature,
   ensureWebrtcApp,
+  enrichAccessTokenForBrowserSdk,
   mintWebrtcToken,
   sdkAnswerXml,
 };

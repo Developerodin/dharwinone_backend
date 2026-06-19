@@ -9,10 +9,13 @@
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';
+import plivo from 'plivo';
 
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.MONGODB_URL = process.env.MONGODB_URL || 'mongodb://localhost:27017/dharwin-test';
 process.env.JWT_SECRET = 'test_secret_at_least_32_chars_long_xx';
+process.env.PLIVO_AUTH_ID = process.env.PLIVO_AUTH_ID || 'TEST_PLIVO_AUTH';
+process.env.PLIVO_AUTH_TOKEN = process.env.PLIVO_AUTH_TOKEN || 'test_plivo_auth_token_secret';
 
 const TO = '+14155550100';
 const CALLER = '+14155550199';
@@ -55,4 +58,19 @@ test('sdkAnswerXml restores a stripped "+" and dials with the caller ID', () => 
 
 test('sdkAnswerXml returns null on a non-numeric destination', () => {
   assert.equal(plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
+});
+
+test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
+  const raw = new plivo.AccessToken(
+    process.env.PLIVO_AUTH_ID,
+    process.env.PLIVO_AUTH_TOKEN,
+    'endpoint-user',
+    { lifetime: 3600 },
+    'trace-uid'
+  );
+  raw.addVoiceGrants(false, true);
+  const enriched = plivoService.enrichAccessTokenForBrowserSdk(raw.toJwt());
+  const payload = JSON.parse(Buffer.from(enriched.split('.')[1], 'base64url').toString());
+  assert.equal(payload.grants.voice.outgoing_allow, true);
+  assert.deepEqual(payload.per.voice, payload.grants.voice);
 });
