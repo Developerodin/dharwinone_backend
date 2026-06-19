@@ -728,11 +728,14 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
   const dest = normalizePlivoDialTarget(to);
   let from = normalizePlivoDialTarget(callerId);
   let intentSource = isE164(from) ? 'header' : null;
+  let tokenVerified = false;
+  let storeHit = false;
   if (!isE164(from) && isE164(dest) && intentToken) {
     const fromToken = verifyBrowserCallIntentToken(intentToken, dest);
     if (fromToken) {
       from = fromToken;
       intentSource = 'token';
+      tokenVerified = true;
     }
   }
   if (!isE164(from) && isE164(dest)) {
@@ -740,11 +743,12 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
     if (intent) {
       from = intent.callerId;
       intentSource = 'store';
+      storeHit = true;
     }
   }
   if (!isE164(dest) || !isE164(from)) {
     logger.warn(
-      `Plivo sdkAnswerXml missing dial params (dest=${dest || 'empty'}, from=${from || 'empty'}, source=${intentSource || 'none'})`
+      `Plivo sdkAnswerXml reconstruct failed intentPresent=${Boolean(intentToken)} tokenVerified=${tokenVerified} storeHit=${storeHit} dest=${dest || 'empty'} from=${from || 'empty'} source=${intentSource || 'none'}`
     );
     return null;
   }
