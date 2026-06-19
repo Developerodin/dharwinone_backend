@@ -74,9 +74,23 @@ test('sdkAnswerXml uses registered browser call intent when callerId header is m
     callerId: '+18336990430',
   });
   assert.equal(r.success, true);
+  assert.ok(r.intent);
   const xml = await plivoService.sdkAnswerXml({
     to: '918755887760@phone.plivo.com',
     callerId: '',
+  });
+  assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
+});
+
+test('sdkAnswerXml resolves caller ID from X-PH-intent token without store', async () => {
+  const r = await plivoService.registerBrowserCallIntent({
+    toNumber: '+918755887760',
+    callerId: '+18336990430',
+  });
+  const xml = await plivoService.sdkAnswerXml({
+    to: '918755887760@phone.plivo.com',
+    callerId: '',
+    intentToken: r.intent,
   });
   assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });

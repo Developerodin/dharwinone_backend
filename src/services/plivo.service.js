@@ -399,6 +399,38 @@ let webrtcUsername = null;
 // consumes it when the webhook arrives without a usable caller ID.
 const BROWSER_CALL_INTENT_TTL_MS = 120000;
 const browserCallIntents = new Map();
+const BROWSER_INTENT_SIG_LEN = 64;
+const BROWSER_INTENT_EXP_LEN = 10;
+
+/** HMAC token for X-PH-intent — survives multi-instance webhooks when Plivo forwards the header. */
+function mintBrowserCallIntentToken(destE164, callerIdE164) {
+  const expSec = Math.floor((Date.now() + BROWSER_CALL_INTENT_TTL_MS) / 1000);
+  const sig = crypto
+    .createHmac('sha256', config.jwt.secret)
+    .update(`${destE164}|${callerIdE164}|${expSec}`)
+    .digest('hex');
+  const fromDigits = String(callerIdE164).replace(/\D/g, '');
+  return `${fromDigits}${expSec}${sig}`;
+}
+
+function verifyBrowserCallIntentToken(token, destE164) {
+  const t = String(token || '').trim();
+  if (t.length <= BROWSER_INTENT_SIG_LEN + BROWSER_INTENT_EXP_LEN) return null;
+  const sig = t.slice(-BROWSER_INTENT_SIG_LEN);
+  const expSec = Number(t.slice(-BROWSER_INTENT_SIG_LEN - BROWSER_INTENT_EXP_LEN, -BROWSER_INTENT_SIG_LEN));
+  const fromDigits = t.slice(0, -BROWSER_INTENT_SIG_LEN - BROWSER_INTENT_EXP_LEN);
+  if (!fromDigits || !Number.isFinite(expSec) || expSec * 1000 < Date.now()) return null;
+  const from = toE164ish(fromDigits);
+  if (!isE164(from)) return null;
+  const expected = crypto
+    .createHmac('sha256', config.jwt.secret)
+    .update(`${destE164}|${from}|${expSec}`)
+    .digest('hex');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return from;
+}
 
 function purgeExpiredBrowserCallIntents() {
   const now = Date.now();
@@ -411,7 +443,7 @@ function purgeExpiredBrowserCallIntents() {
  * Store outbound browser-call metadata keyed by normalized destination E.164.
  * Persists to Mongo when connected so Render multi-instance webhooks can read it.
  * @param {{ toNumber: string, callerId: string }} p
- * @returns {Promise<{ success: boolean, error?: string }>}
+ * @returns {Promise<{ success: boolean, intent?: string, error?: string }>}
  */
 async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
   const dest = normalizePlivoDialTarget(toNumber);
@@ -419,6 +451,7 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
   if (!isE164(dest)) return { success: false, error: 'toNumber must be E.164 (e.g. +14155550100).' };
   if (!isE164(from)) return { success: false, error: 'callerId must be E.164.' };
   const expiresAt = new Date(Date.now() + BROWSER_CALL_INTENT_TTL_MS);
+  const intent = mintBrowserCallIntentToken(dest, from);
   purgeExpiredBrowserCallIntents();
   browserCallIntents.set(dest, { callerId: from, expiresAt: expiresAt.getTime() });
   if (mongoose.connection.readyState === 1) {
@@ -428,7 +461,7 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
       { upsert: true, new: true }
     );
   }
-  return { success: true };
+  return { success: true, intent };
 }
 
 /** @param {string} destE164 */
@@ -584,27 +617,34 @@ async function mintWebrtcToken({ uid } = {}) {
 /**
  * Answer XML for a browser-SDK outbound call. Plivo POSTs the dialed number as
  * `To`; the chosen caller ID may arrive as `X-PH-callerId` (often missing).
- * Falls back to a short-lived intent registered by POST /plivo/browser-call-intent.
+ * Falls back to X-PH-intent HMAC token, then Mongo/memory intent registry.
  */
-async function sdkAnswerXml({ to, callerId }) {
+async function sdkAnswerXml({ to, callerId, intentToken }) {
   const dest = normalizePlivoDialTarget(to);
   let from = normalizePlivoDialTarget(callerId);
   let intentSource = isE164(from) ? 'header' : null;
+  if (!isE164(from) && isE164(dest) && intentToken) {
+    const fromToken = verifyBrowserCallIntentToken(intentToken, dest);
+    if (fromToken) {
+      from = fromToken;
+      intentSource = 'token';
+    }
+  }
   if (!isE164(from) && isE164(dest)) {
     const intent = await consumeBrowserCallIntent(dest);
     if (intent) {
       from = intent.callerId;
-      intentSource = 'intent';
+      intentSource = 'store';
     }
   }
   if (!isE164(dest) || !isE164(from)) {
     logger.warn(
-      `Plivo sdkAnswerXml missing dial params (dest=${dest || 'empty'}, from=${from || 'empty'}, intent=${intentSource || 'none'})`
+      `Plivo sdkAnswerXml missing dial params (dest=${dest || 'empty'}, from=${from || 'empty'}, source=${intentSource || 'none'})`
     );
     return null;
   }
-  if (intentSource === 'intent') {
-    logger.info(`Plivo sdk-answer using browser call intent for dest ...${dest.slice(-4)}`);
+  if (intentSource && intentSource !== 'header') {
+    logger.info(`Plivo sdk-answer caller ID via ${intentSource} for dest ...${dest.slice(-4)}`);
   }
   return bridgeAnswerXml({ toNumber: dest, callerId: from });
 }
