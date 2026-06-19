@@ -12,9 +12,11 @@
 
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import plivo from 'plivo';
 import logger from '../config/logger.js';
 import config from '../config/config.js';
+import PlivoBrowserCallIntent from '../models/plivoBrowserCallIntent.model.js';
 
 /**
  * Build a Plivo SDK client from configured credentials.
@@ -407,21 +409,40 @@ function purgeExpiredBrowserCallIntents() {
 
 /**
  * Store outbound browser-call metadata keyed by normalized destination E.164.
+ * Persists to Mongo when connected so Render multi-instance webhooks can read it.
  * @param {{ toNumber: string, callerId: string }} p
- * @returns {{ success: boolean, error?: string }}
+ * @returns {Promise<{ success: boolean, error?: string }>}
  */
-function registerBrowserCallIntent({ toNumber, callerId } = {}) {
+async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
   const dest = normalizePlivoDialTarget(toNumber);
   const from = normalizePlivoDialTarget(callerId);
   if (!isE164(dest)) return { success: false, error: 'toNumber must be E.164 (e.g. +14155550100).' };
   if (!isE164(from)) return { success: false, error: 'callerId must be E.164.' };
+  const expiresAt = new Date(Date.now() + BROWSER_CALL_INTENT_TTL_MS);
   purgeExpiredBrowserCallIntents();
-  browserCallIntents.set(dest, { callerId: from, expiresAt: Date.now() + BROWSER_CALL_INTENT_TTL_MS });
+  browserCallIntents.set(dest, { callerId: from, expiresAt: expiresAt.getTime() });
+  if (mongoose.connection.readyState === 1) {
+    await PlivoBrowserCallIntent.findOneAndUpdate(
+      { dest },
+      { dest, callerId: from, expiresAt },
+      { upsert: true, new: true }
+    );
+  }
   return { success: true };
 }
 
 /** @param {string} destE164 */
-function consumeBrowserCallIntent(destE164) {
+async function consumeBrowserCallIntent(destE164) {
+  if (mongoose.connection.readyState === 1) {
+    const doc = await PlivoBrowserCallIntent.findOneAndDelete({
+      dest: destE164,
+      expiresAt: { $gt: new Date() },
+    }).lean();
+    if (doc) {
+      browserCallIntents.delete(destE164);
+      return { callerId: doc.callerId };
+    }
+  }
   purgeExpiredBrowserCallIntents();
   const entry = browserCallIntents.get(destE164);
   if (!entry || entry.expiresAt <= Date.now()) {
@@ -565,14 +586,26 @@ async function mintWebrtcToken({ uid } = {}) {
  * `To`; the chosen caller ID may arrive as `X-PH-callerId` (often missing).
  * Falls back to a short-lived intent registered by POST /plivo/browser-call-intent.
  */
-function sdkAnswerXml({ to, callerId }) {
+async function sdkAnswerXml({ to, callerId }) {
   const dest = normalizePlivoDialTarget(to);
   let from = normalizePlivoDialTarget(callerId);
+  let intentSource = isE164(from) ? 'header' : null;
   if (!isE164(from) && isE164(dest)) {
-    const intent = consumeBrowserCallIntent(dest);
-    if (intent) from = intent.callerId;
+    const intent = await consumeBrowserCallIntent(dest);
+    if (intent) {
+      from = intent.callerId;
+      intentSource = 'intent';
+    }
   }
-  if (!isE164(dest) || !isE164(from)) return null;
+  if (!isE164(dest) || !isE164(from)) {
+    logger.warn(
+      `Plivo sdkAnswerXml missing dial params (dest=${dest || 'empty'}, from=${from || 'empty'}, intent=${intentSource || 'none'})`
+    );
+    return null;
+  }
+  if (intentSource === 'intent') {
+    logger.info(`Plivo sdk-answer using browser call intent for dest ...${dest.slice(-4)}`);
+  }
   return bridgeAnswerXml({ toNumber: dest, callerId: from });
 }
 

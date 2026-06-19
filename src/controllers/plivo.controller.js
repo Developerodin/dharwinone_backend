@@ -139,7 +139,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
     src.callerId ??
     src.From ??
     '';
-  const xml = plivoService.sdkAnswerXml({ to, callerId });
+  const xml = await plivoService.sdkAnswerXml({ to, callerId });
   if (!xml) {
     logger.warn(
       `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)}, keys=${Object.keys(src).join(',')})`
@@ -154,7 +154,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
  */
 const postBrowserCallIntent = catchAsync(async (req, res) => {
   const { toNumber, callerId } = req.body;
-  const result = plivoService.registerBrowserCallIntent({ toNumber, callerId });
+  const result = await plivoService.registerBrowserCallIntent({ toNumber, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_REQUEST, result.error || 'Invalid browser call intent');
   }

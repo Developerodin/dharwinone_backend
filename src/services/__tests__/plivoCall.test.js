@@ -50,44 +50,44 @@ test('placeBridgeCall rejects non-E.164 input before hitting Plivo', async () =>
   assert.equal(r.success, false);
 });
 
-test('sdkAnswerXml restores a stripped "+" and dials with the caller ID', () => {
+test('sdkAnswerXml restores a stripped "+" and dials with the caller ID', async () => {
   // Browser SDK may pass the number without "+".
-  const xml = plivoService.sdkAnswerXml({ to: '14155550100', callerId: '14155550199' });
+  const xml = await plivoService.sdkAnswerXml({ to: '14155550100', callerId: '14155550199' });
   assert.match(xml, /<Dial callerId="\+14155550199"><Number>\+14155550100<\/Number><\/Dial>/);
 });
 
-test('sdkAnswerXml accepts Plivo SIP URI To values from browser-SDK webhooks', () => {
-  const xml = plivoService.sdkAnswerXml({
+test('sdkAnswerXml accepts Plivo SIP URI To values from browser-SDK webhooks', async () => {
+  const xml = await plivoService.sdkAnswerXml({
     to: '918755887760@phone.plivo.com',
     callerId: '18336990430',
   });
   assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });
 
-test('sdkAnswerXml returns null on a non-numeric destination', () => {
-  assert.equal(plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
+test('sdkAnswerXml returns null on a non-numeric destination', async () => {
+  assert.equal(await plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
 });
 
-test('sdkAnswerXml uses registered browser call intent when callerId header is missing', () => {
-  const r = plivoService.registerBrowserCallIntent({
+test('sdkAnswerXml uses registered browser call intent when callerId header is missing', async () => {
+  const r = await plivoService.registerBrowserCallIntent({
     toNumber: '+918755887760',
     callerId: '+18336990430',
   });
   assert.equal(r.success, true);
-  const xml = plivoService.sdkAnswerXml({
+  const xml = await plivoService.sdkAnswerXml({
     to: '918755887760@phone.plivo.com',
     callerId: '',
   });
   assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });
 
-test('sdkAnswerXml browser call intent is consumed once', () => {
-  plivoService.registerBrowserCallIntent({
+test('sdkAnswerXml browser call intent is consumed once', async () => {
+  await plivoService.registerBrowserCallIntent({
     toNumber: '+918755887760',
     callerId: '+18336990430',
   });
-  plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' });
-  assert.equal(plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' }), null);
+  await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' });
+  assert.equal(await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' }), null);
 });
 
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
