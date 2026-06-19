@@ -106,4 +106,30 @@ const answerCall = catchAsync(async (req, res) => {
   res.type('text/xml').send(plivoService.bridgeAnswerXml({ toNumber: to, callerId }));
 });
 
-export { getAvailableNumbers, buyNumber, getOwnedNumbers, placeCall, answerCall };
+/**
+ * POST /v1/plivo/sdk-token — mint a short-lived, outbound-only WebRTC access
+ * token for the browser softphone. Self-provisions the shared Plivo Application
+ * + endpoint on first call.
+ */
+const getSdkToken = catchAsync(async (req, res) => {
+  const result = await plivoService.mintWebrtcToken({ uid: req.user.id });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to mint WebRTC token');
+  }
+  res.status(httpStatus.OK).send({ success: true, token: result.token, username: result.username });
+});
+
+/**
+ * POST /v1/public/plivo/sdk-answer — Plivo fetches this when a browser-SDK call
+ * is placed (no auth — Plivo's servers hit it). Plivo passes the dialed number as
+ * `To` and the chosen caller ID as the `X-PH-callerId` custom header. A real call
+ * only reaches here from our token-authenticated endpoint; Plivo also enforces
+ * that the caller ID is an owned number on <Dial>.
+ */
+const sdkAnswer = catchAsync(async (req, res) => {
+  const src = { ...req.query, ...req.body };
+  const xml = plivoService.sdkAnswerXml({ to: src.To, callerId: src['X-PH-callerId'] });
+  res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
+});
+
+export { getAvailableNumbers, buyNumber, getOwnedNumbers, placeCall, answerCall, getSdkToken, sdkAnswer };

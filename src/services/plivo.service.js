@@ -330,6 +330,120 @@ async function placeBridgeCall({ agentPhone, toNumber, callerId } = {}) {
   }
 }
 
+// --- WebRTC browser softphone (plivo-browser-sdk) ---------------------------
+// One shared, outbound-only SIP endpoint + a Plivo Application whose answer_url
+// is our public /v1/public/plivo/sdk-answer. Browsers log in with a short-lived
+// access token (no password in the client) and place calls; Plivo fetches the
+// answer XML which dials the target with the chosen bought number as caller ID.
+
+const WEBRTC_APP_NAME = 'dharwin-webrtc-dialer';
+const WEBRTC_ENDPOINT_USERNAME = 'dharwin-web';
+
+function webrtcAnswerUrl() {
+  const base = (config.plivo.answerBaseUrl || config.backendPublicUrl || '').replace(/\/$/, '');
+  return `${base}/v1/public/plivo/sdk-answer`;
+}
+
+/** First defined of res.objects / res array (SDK list shapes vary). */
+function listItems(res) {
+  return Array.isArray(res) ? res : res?.objects || res?.objs || [];
+}
+
+/**
+ * Idempotently ensure the shared WebRTC Application + endpoint exist and the
+ * Application's answer_url points at this backend. Returns the endpoint username.
+ * @returns {Promise<{ success: boolean, username?: string, error?: string }>}
+ */
+async function ensureWebrtcApp() {
+  const { client, error } = getClient();
+  if (error) return { success: false, error };
+
+  const answerUrl = webrtcAnswerUrl();
+  if (/localhost|127\.0\.0\.1|\b0\.0\.0\.0\b/.test(answerUrl)) {
+    return {
+      success: false,
+      error:
+        'WebRTC answer URL is not publicly reachable. Set PLIVO_ANSWER_BASE_URL (or BACKEND_PUBLIC_URL) to a public https URL so Plivo can fetch the call XML.',
+    };
+  }
+
+  try {
+    // Application — find by name, else create; keep its answer_url current.
+    const apps = listItems(await client.applications.list());
+    let app = apps.find((a) => pick(a, 'appName', 'app_name') === WEBRTC_APP_NAME);
+    if (!app) {
+      app = await client.applications.create(WEBRTC_APP_NAME, {
+        answerUrl,
+        answerMethod: 'POST',
+      });
+    } else if (pick(app, 'answerUrl', 'answer_url') !== answerUrl) {
+      await client.applications.update(pick(app, 'appId', 'app_id'), { answerUrl, answerMethod: 'POST' });
+    }
+    const appId = pick(app, 'appId', 'app_id');
+
+    // Endpoint — find by username, else create (password is required by Plivo but
+    // never leaves the server; browsers authenticate with the access token).
+    const endpoints = listItems(await client.endpoints.list());
+    const existing = endpoints.find((e) => pick(e, 'username') === WEBRTC_ENDPOINT_USERNAME);
+    if (!existing) {
+      const password = crypto.randomBytes(18).toString('base64url');
+      await client.endpoints.create(WEBRTC_ENDPOINT_USERNAME, password, 'Dharwin web dialer', { appId });
+    }
+
+    return { success: true, username: WEBRTC_ENDPOINT_USERNAME };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo WebRTC provisioning failed: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Mint a short-lived, outbound-only WebRTC access token for the shared endpoint.
+ * @param {Object} p - { uid } caller-unique id for tracing (e.g. user id)
+ * @returns {Promise<{ success: boolean, token?: string, username?: string, error?: string }>}
+ */
+async function mintWebrtcToken({ uid } = {}) {
+  if (!config.plivo.authId || !config.plivo.authToken) {
+    return { success: false, error: 'PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN are not set.' };
+  }
+  const ensured = await ensureWebrtcApp();
+  if (!ensured.success) return ensured;
+
+  try {
+    const token = new plivo.AccessToken(
+      config.plivo.authId,
+      config.plivo.authToken,
+      ensured.username,
+      { lifetime: 3600 },
+      String(uid || ensured.username)
+    );
+    token.addVoiceGrants(false, true); // incoming: no, outgoing: yes
+    return { success: true, token: token.toJwt(), username: ensured.username };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo WebRTC token mint failed: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Answer XML for a browser-SDK outbound call. Plivo POSTs the dialed number as
+ * `To`; the chosen caller ID rides along as the `X-PH-callerId` custom header.
+ * Falls back to the From leg's number if no caller ID was supplied.
+ */
+function sdkAnswerXml({ to, callerId }) {
+  // The browser SDK may strip the leading "+"; restore it for E.164.
+  const plus = (v) => {
+    const t = String(v || '').trim();
+    return t && !t.startsWith('+') && /^\d+$/.test(t) ? `+${t}` : t;
+  };
+  const dest = plus(to);
+  const from = plus(callerId);
+  if (!isE164(dest) || !isE164(from)) return null;
+  return bridgeAnswerXml({ toNumber: dest, callerId: from });
+}
+
 export default {
   getClient,
   searchAvailableNumbers,
@@ -339,4 +453,7 @@ export default {
   placeBridgeCall,
   bridgeAnswerXml,
   verifyCallSignature,
+  ensureWebrtcApp,
+  mintWebrtcToken,
+  sdkAnswerXml,
 };

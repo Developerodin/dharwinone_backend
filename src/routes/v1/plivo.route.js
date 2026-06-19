@@ -47,4 +47,10 @@ router
     plivoController.placeCall
   );
 
+// Browser softphone (WebRTC): mint a short-lived outbound-only access token.
+// The public answer webhook (/plivo/sdk-answer) lives in public.route.js.
+router
+  .route('/sdk-token')
+  .post(auth(), requirePermissionOrAdministrator('calls.manage'), plivoController.getSdkToken);
+
 export default router;

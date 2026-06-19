@@ -46,3 +46,13 @@ test('placeBridgeCall rejects non-E.164 input before hitting Plivo', async () =>
   const r = await plivoService.placeBridgeCall({ agentPhone: '12345', toNumber: TO, callerId: CALLER });
   assert.equal(r.success, false);
 });
+
+test('sdkAnswerXml restores a stripped "+" and dials with the caller ID', () => {
+  // Browser SDK may pass the number without "+".
+  const xml = plivoService.sdkAnswerXml({ to: '14155550100', callerId: '14155550199' });
+  assert.match(xml, /<Dial callerId="\+14155550199"><Number>\+14155550100<\/Number><\/Dial>/);
+});
+
+test('sdkAnswerXml returns null on a non-numeric destination', () => {
+  assert.equal(plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
+});

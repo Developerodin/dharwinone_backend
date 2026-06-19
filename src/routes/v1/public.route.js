@@ -175,4 +175,12 @@ router.post(
  */
 router.get('/plivo/answer', plivoController.answerCall);
 
+/**
+ * GET|POST /v1/public/plivo/sdk-answer
+ * Plivo answer webhook for browser-SDK (WebRTC) calls. No auth — Plivo's servers
+ * hit it. Returns <Dial> XML bridging to the dialed number with the chosen bought
+ * caller ID. A real call only reaches here from our token-authenticated endpoint.
+ */
+router.all('/plivo/sdk-answer', plivoController.sdkAnswer);
+
 export default router;
