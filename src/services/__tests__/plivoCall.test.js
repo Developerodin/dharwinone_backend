@@ -104,6 +104,13 @@ test('sdkAnswerXml browser call intent is consumed once', async () => {
   assert.equal(await plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' }), null);
 });
 
+test('webrtcAnswerUrlWithIntent embeds the HMAC token as a query param', () => {
+  const intent = 'destsig';
+  const url = plivoService.webrtcAnswerUrlWithIntent(intent);
+  assert.match(url, /\/v1\/public\/plivo\/sdk-answer\?intent=/);
+  assert.ok(url.includes(encodeURIComponent(intent)));
+});
+
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
   const raw = new plivo.AccessToken(
     process.env.PLIVO_AUTH_ID,

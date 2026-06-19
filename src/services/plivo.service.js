@@ -393,6 +393,7 @@ const WEBRTC_ENDPOINT_ALIAS = 'dharwin-webrtc-dialer';
 // ponytail: process-lifetime cache of the resolved real username — provisioning
 // is idempotent, so after one success skip the Plivo round-trips. null = not yet.
 let webrtcUsername = null;
+let webrtcAppId = null;
 
 // Plivo often does not forward browser-SDK X-PH-* headers to the answer webhook.
 // The UI registers {dest, callerId} here immediately before client.call(); sdk-answer
@@ -461,6 +462,10 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
       { upsert: true, new: true }
     );
   }
+  const armed = await publishWebrtcAnswerIntent(intent);
+  if (!armed.success) {
+    return { success: false, error: armed.error || 'Failed to arm sdk-answer URL for browser call.' };
+  }
   return { success: true, intent };
 }
 
@@ -491,6 +496,67 @@ function webrtcAnswerUrl() {
   return `${base}/v1/public/plivo/sdk-answer`;
 }
 
+/** Plivo does not forward X-PH-* SIP headers to the answer webhook; embed intent in the app URL. */
+function webrtcAnswerUrlWithIntent(intent) {
+  return `${webrtcAnswerUrl()}?intent=${encodeURIComponent(intent)}`;
+}
+
+async function resolveWebrtcAppId() {
+  if (webrtcAppId) return webrtcAppId;
+  const { client, error } = getClient();
+  if (error) return null;
+  const apps = listItems(await client.applications.list());
+  const app = apps.find((a) => pick(a, 'appName', 'app_name') === WEBRTC_APP_NAME);
+  if (!app) return null;
+  webrtcAppId = pick(app, 'appId', 'app_id');
+  return webrtcAppId;
+}
+
+/**
+ * Point the shared WebRTC Application answer_url at sdk-answer?intent=… so Plivo
+ * POSTs the HMAC token even when SIP X-PH-* headers are stripped.
+ * @param {string} intent
+ * @returns {Promise<{ success: boolean, answerUrl?: string, error?: string }>}
+ */
+async function publishWebrtcAnswerIntent(intent) {
+  if (!intent) return { success: false, error: 'intent token required' };
+  const answerUrl = webrtcAnswerUrlWithIntent(intent);
+  if (process.env.NODE_ENV === 'test') {
+    return { success: true, answerUrl };
+  }
+  const { client, error } = getClient();
+  if (error) return { success: false, error };
+  const appId = await resolveWebrtcAppId();
+  if (!appId) {
+    const ensured = await ensureWebrtcApp();
+    if (!ensured.success) return { success: false, error: ensured.error || 'WebRTC app not provisioned' };
+  }
+  const resolvedId = webrtcAppId || (await resolveWebrtcAppId());
+  if (!resolvedId) return { success: false, error: 'WebRTC application id not found' };
+  try {
+    await client.applications.update(resolvedId, { answerUrl, answerMethod: 'POST' });
+    logger.info(`Plivo WebRTC answer_url armed for browser outbound (…${intent.slice(-8)})`);
+    return { success: true, answerUrl };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo publish answer intent URL failed: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/** Reset answer_url after sdk-answer so the next call must re-arm via browser-call-intent. */
+async function resetWebrtcAnswerUrl() {
+  if (process.env.NODE_ENV === 'test') return;
+  const { client, error } = getClient();
+  if (error || !webrtcAppId) return;
+  const answerUrl = webrtcAnswerUrl();
+  try {
+    await client.applications.update(webrtcAppId, { answerUrl, answerMethod: 'POST' });
+  } catch (err) {
+    logger.warn(`Plivo reset WebRTC answer_url failed: ${plivoErrorMessage(err)}`);
+  }
+}
+
 /** First defined of res.objects / res array (SDK list shapes vary). */
 function listItems(res) {
   return Array.isArray(res) ? res : res?.objects || res?.objs || [];
@@ -502,7 +568,7 @@ function listItems(res) {
  * @returns {Promise<{ success: boolean, username?: string, error?: string }>}
  */
 async function ensureWebrtcApp() {
-  if (webrtcUsername) return { success: true, username: webrtcUsername };
+  if (webrtcUsername && webrtcAppId) return { success: true, username: webrtcUsername };
 
   const { client, error } = getClient();
   if (error) return { success: false, error };
@@ -529,6 +595,7 @@ async function ensureWebrtcApp() {
       await client.applications.update(pick(app, 'appId', 'app_id'), { answerUrl, answerMethod: 'POST' });
     }
     const appId = pick(app, 'appId', 'app_id');
+    webrtcAppId = appId;
 
     // Endpoint — find OUR endpoint by alias (username is unknowable up front
     // because Plivo appends random digits on create), else create one. Password
@@ -663,5 +730,8 @@ export default {
   mintWebrtcToken,
   normalizePlivoDialTarget,
   registerBrowserCallIntent,
+  publishWebrtcAnswerIntent,
+  resetWebrtcAnswerUrl,
+  webrtcAnswerUrlWithIntent,
   sdkAnswerXml,
 };

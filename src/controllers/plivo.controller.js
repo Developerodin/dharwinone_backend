@@ -148,6 +148,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
     );
   }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
+  plivoService.resetWebrtcAnswerUrl().catch(() => {});
 });
 
 /**
