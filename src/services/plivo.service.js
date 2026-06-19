@@ -85,14 +85,25 @@ function normalizeOwnedNumber(n) {
   };
 }
 
-/** Extract a clean human message from a Plivo SDK error. */
+/** Extract a clean human message from a Plivo SDK error (never "[object Object]"). */
 function plivoErrorMessage(err) {
   if (!err) return 'Unknown Plivo error.';
-  const fromBody =
-    err.message ||
-    (err.error && (err.error.message || err.error.error)) ||
-    (typeof err.body === 'object' && (err.body.error || err.body.message));
-  return String(fromBody || err);
+  if (typeof err === 'string') return err;
+  const candidates = [
+    err.message,
+    err.error && (err.error.message || err.error.error || err.error),
+    typeof err.body === 'object' ? err.body.error || err.body.message : err.body,
+    err.statusCode && `HTTP ${err.statusCode}`,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c;
+  }
+  // Last resort: stringify so the real Plivo payload is never hidden behind [object Object].
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
 }
 
 /**
@@ -392,7 +403,8 @@ async function ensureWebrtcApp() {
     const existing = endpoints.find((e) => pick(e, 'username') === WEBRTC_ENDPOINT_USERNAME);
     if (!existing) {
       const password = crypto.randomBytes(18).toString('base64url');
-      await client.endpoints.create(WEBRTC_ENDPOINT_USERNAME, password, 'Dharwin web dialer', { appId });
+      // SDK signature: create(username, password, alias, appId) — appId is positional, not an object.
+      await client.endpoints.create(WEBRTC_ENDPOINT_USERNAME, password, 'Dharwin web dialer', appId);
     }
 
     webrtcProvisioned = true;
