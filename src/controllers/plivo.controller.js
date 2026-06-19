@@ -142,10 +142,32 @@ const sdkAnswer = catchAsync(async (req, res) => {
   const xml = plivoService.sdkAnswerXml({ to, callerId });
   if (!xml) {
     logger.warn(
-      `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)})`
+      `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)}, keys=${Object.keys(src).join(',')})`
     );
   }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
 });
 
-export { getAvailableNumbers, buyNumber, getOwnedNumbers, placeCall, answerCall, getSdkToken, sdkAnswer };
+/**
+ * POST /v1/plivo/browser-call-intent — register dest+callerId before browser SDK
+ * client.call(). Plivo's sdk-answer webhook often omits X-PH-callerId.
+ */
+const postBrowserCallIntent = catchAsync(async (req, res) => {
+  const { toNumber, callerId } = req.body;
+  const result = plivoService.registerBrowserCallIntent({ toNumber, callerId });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_REQUEST, result.error || 'Invalid browser call intent');
+  }
+  res.status(httpStatus.NO_CONTENT).send();
+});
+
+export {
+  getAvailableNumbers,
+  buyNumber,
+  getOwnedNumbers,
+  placeCall,
+  answerCall,
+  getSdkToken,
+  sdkAnswer,
+  postBrowserCallIntent,
+};

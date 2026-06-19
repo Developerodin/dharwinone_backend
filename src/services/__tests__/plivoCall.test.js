@@ -68,6 +68,28 @@ test('sdkAnswerXml returns null on a non-numeric destination', () => {
   assert.equal(plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
 });
 
+test('sdkAnswerXml uses registered browser call intent when callerId header is missing', () => {
+  const r = plivoService.registerBrowserCallIntent({
+    toNumber: '+918755887760',
+    callerId: '+18336990430',
+  });
+  assert.equal(r.success, true);
+  const xml = plivoService.sdkAnswerXml({
+    to: '918755887760@phone.plivo.com',
+    callerId: '',
+  });
+  assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
+});
+
+test('sdkAnswerXml browser call intent is consumed once', () => {
+  plivoService.registerBrowserCallIntent({
+    toNumber: '+918755887760',
+    callerId: '+18336990430',
+  });
+  plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' });
+  assert.equal(plivoService.sdkAnswerXml({ to: '+918755887760', callerId: '' }), null);
+});
+
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
   const raw = new plivo.AccessToken(
     process.env.PLIVO_AUTH_ID,

@@ -392,6 +392,46 @@ const WEBRTC_ENDPOINT_ALIAS = 'dharwin-webrtc-dialer';
 // is idempotent, so after one success skip the Plivo round-trips. null = not yet.
 let webrtcUsername = null;
 
+// Plivo often does not forward browser-SDK X-PH-* headers to the answer webhook.
+// The UI registers {dest, callerId} here immediately before client.call(); sdk-answer
+// consumes it when the webhook arrives without a usable caller ID.
+const BROWSER_CALL_INTENT_TTL_MS = 120000;
+const browserCallIntents = new Map();
+
+function purgeExpiredBrowserCallIntents() {
+  const now = Date.now();
+  for (const [dest, entry] of browserCallIntents) {
+    if (entry.expiresAt <= now) browserCallIntents.delete(dest);
+  }
+}
+
+/**
+ * Store outbound browser-call metadata keyed by normalized destination E.164.
+ * @param {{ toNumber: string, callerId: string }} p
+ * @returns {{ success: boolean, error?: string }}
+ */
+function registerBrowserCallIntent({ toNumber, callerId } = {}) {
+  const dest = normalizePlivoDialTarget(toNumber);
+  const from = normalizePlivoDialTarget(callerId);
+  if (!isE164(dest)) return { success: false, error: 'toNumber must be E.164 (e.g. +14155550100).' };
+  if (!isE164(from)) return { success: false, error: 'callerId must be E.164.' };
+  purgeExpiredBrowserCallIntents();
+  browserCallIntents.set(dest, { callerId: from, expiresAt: Date.now() + BROWSER_CALL_INTENT_TTL_MS });
+  return { success: true };
+}
+
+/** @param {string} destE164 */
+function consumeBrowserCallIntent(destE164) {
+  purgeExpiredBrowserCallIntents();
+  const entry = browserCallIntents.get(destE164);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    browserCallIntents.delete(destE164);
+    return null;
+  }
+  browserCallIntents.delete(destE164);
+  return { callerId: entry.callerId };
+}
+
 function webrtcAnswerUrl() {
   const base = (config.plivo.answerBaseUrl || config.backendPublicUrl || '').replace(/\/$/, '');
   return `${base}/v1/public/plivo/sdk-answer`;
@@ -522,12 +562,16 @@ async function mintWebrtcToken({ uid } = {}) {
 
 /**
  * Answer XML for a browser-SDK outbound call. Plivo POSTs the dialed number as
- * `To`; the chosen caller ID rides along as the `X-PH-callerId` custom header.
- * Falls back to the From leg's number if no caller ID was supplied.
+ * `To`; the chosen caller ID may arrive as `X-PH-callerId` (often missing).
+ * Falls back to a short-lived intent registered by POST /plivo/browser-call-intent.
  */
 function sdkAnswerXml({ to, callerId }) {
   const dest = normalizePlivoDialTarget(to);
-  const from = normalizePlivoDialTarget(callerId);
+  let from = normalizePlivoDialTarget(callerId);
+  if (!isE164(from) && isE164(dest)) {
+    const intent = consumeBrowserCallIntent(dest);
+    if (intent) from = intent.callerId;
+  }
   if (!isE164(dest) || !isE164(from)) return null;
   return bridgeAnswerXml({ toNumber: dest, callerId: from });
 }
@@ -545,5 +589,6 @@ export default {
   enrichAccessTokenForBrowserSdk,
   mintWebrtcToken,
   normalizePlivoDialTarget,
+  registerBrowserCallIntent,
   sdkAnswerXml,
 };

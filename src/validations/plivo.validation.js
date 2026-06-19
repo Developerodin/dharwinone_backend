@@ -50,4 +50,13 @@ const placeCall = {
     .required(),
 };
 
-export { searchAvailableNumbers, buyNumber, listOwnedNumbers, placeCall };
+const browserCallIntent = {
+  body: Joi.object()
+    .keys({
+      toNumber: e164.required(),
+      callerId: e164.required(),
+    })
+    .required(),
+};
+
+export { searchAvailableNumbers, buyNumber, listOwnedNumbers, placeCall, browserCallIntent };

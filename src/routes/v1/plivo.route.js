@@ -53,4 +53,14 @@ router
   .route('/sdk-token')
   .post(auth(), requirePermissionOrAdministrator('calls.manage'), plivoController.getSdkToken);
 
+// Register dest+callerId before browser client.call() — sdk-answer consumes it.
+router
+  .route('/browser-call-intent')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.manage'),
+    validate(plivoValidation.browserCallIntent),
+    plivoController.postBrowserCallIntent
+  );
+
 export default router;
