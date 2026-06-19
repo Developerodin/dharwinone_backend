@@ -338,6 +338,9 @@ async function placeBridgeCall({ agentPhone, toNumber, callerId } = {}) {
 
 const WEBRTC_APP_NAME = 'dharwin-webrtc-dialer';
 const WEBRTC_ENDPOINT_USERNAME = 'dharwin-web';
+// ponytail: process-lifetime cache — provisioning is idempotent, so after one
+// success skip the Plivo list/create round-trips. Resets on restart/redeploy.
+let webrtcProvisioned = false;
 
 function webrtcAnswerUrl() {
   const base = (config.plivo.answerBaseUrl || config.backendPublicUrl || '').replace(/\/$/, '');
@@ -355,6 +358,8 @@ function listItems(res) {
  * @returns {Promise<{ success: boolean, username?: string, error?: string }>}
  */
 async function ensureWebrtcApp() {
+  if (webrtcProvisioned) return { success: true, username: WEBRTC_ENDPOINT_USERNAME };
+
   const { client, error } = getClient();
   if (error) return { success: false, error };
 
@@ -390,6 +395,7 @@ async function ensureWebrtcApp() {
       await client.endpoints.create(WEBRTC_ENDPOINT_USERNAME, password, 'Dharwin web dialer', { appId });
     }
 
+    webrtcProvisioned = true;
     return { success: true, username: WEBRTC_ENDPOINT_USERNAME };
   } catch (err) {
     const message = plivoErrorMessage(err);
