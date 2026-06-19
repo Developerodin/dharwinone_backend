@@ -703,6 +703,22 @@ async function ensureWebrtcApp() {
         WEBRTC_ENDPOINT_ALIAS,
         appId
       );
+    } else {
+      // Enforce the endpoint -> our application binding. Plivo support confirmed
+      // failing outbound calls were routing to a stale "Direct Dial" demo app
+      // whose XML is a bare <Hangup/> (cause 3020, hangupSource "Answer XML").
+      // The endpoint's app can drift; re-bind it every provisioning so outbound
+      // WebRTC always fetches OUR sdk-answer URL. Idempotent — runs once per boot.
+      const endpointId = pick(endpoint, 'endpointId', 'endpoint_id');
+      const boundApp = String(pick(endpoint, 'application') || '');
+      if (endpointId && !boundApp.includes(String(appId))) {
+        try {
+          await client.endpoints.update(endpointId, { appId });
+          logger.info(`Plivo WebRTC endpoint re-bound to app ${appId}`);
+        } catch (e) {
+          logger.warn(`Plivo WebRTC endpoint re-bind failed: ${plivoErrorMessage(e)}`);
+        }
+      }
     }
 
     const realUsername = pick(endpoint, 'username');
