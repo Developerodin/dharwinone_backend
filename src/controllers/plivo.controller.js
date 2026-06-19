@@ -66,4 +66,44 @@ const getOwnedNumbers = catchAsync(async (req, res) => {
   });
 });
 
-export { getAvailableNumbers, buyNumber, getOwnedNumbers };
+/**
+ * POST /v1/plivo/call — start a click-to-call bridge. Plivo rings the agent's own
+ * phone, then dials the target showing the bought number as caller ID.
+ */
+const placeCall = catchAsync(async (req, res) => {
+  const { toNumber, agentPhone, callerId } = req.body;
+  const result = await plivoService.placeBridgeCall({ toNumber, agentPhone, callerId });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to place call');
+  }
+
+  await activityLogService.createActivityLog(
+    req.user.id,
+    ActivityActions.PHONE_CALL_PLACE,
+    EntityTypes.PHONE_NUMBER,
+    toNumber,
+    { toNumber, callerId },
+    req
+  );
+
+  res.status(httpStatus.OK).send({
+    success: true,
+    requestUuid: result.requestUuid,
+    message: result.message,
+  });
+});
+
+/**
+ * GET /v1/public/plivo/answer — Plivo fetches this when the agent's phone is
+ * answered. No auth (Plivo's servers hit it); the `sig` HMAC gates it so only
+ * URLs our backend minted are honored. Returns Plivo bridge XML.
+ */
+const answerCall = catchAsync(async (req, res) => {
+  const { to, callerId, sig } = req.query;
+  if (!plivoService.verifyCallSignature(to, callerId, sig)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Invalid call signature');
+  }
+  res.type('text/xml').send(plivoService.bridgeAnswerXml({ toNumber: to, callerId }));
+});
+
+export { getAvailableNumbers, buyNumber, getOwnedNumbers, placeCall, answerCall };

@@ -1,0 +1,48 @@
+/**
+ * Guards the Plivo click-to-call security path: the HMAC that stops the public
+ * answer-XML endpoint from being abused to dial arbitrary numbers, plus the
+ * bridge XML shape. Run: node --test src/services/__tests__/plivoCall.test.js
+ *
+ * Env is set before the dynamic import so config validation passes without a
+ * real .env (config throws otherwise).
+ */
+import test, { before } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'crypto';
+
+process.env.NODE_ENV = process.env.NODE_ENV || 'test';
+process.env.MONGODB_URL = process.env.MONGODB_URL || 'mongodb://localhost:27017/dharwin-test';
+process.env.JWT_SECRET = 'test_secret_at_least_32_chars_long_xx';
+
+const TO = '+14155550100';
+const CALLER = '+14155550199';
+const goodSig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(`${TO}|${CALLER}`).digest('hex');
+
+// Loaded after env is set so config validation passes without a real .env.
+let plivoService;
+before(async () => {
+  ({ default: plivoService } = await import('../plivo.service.js'));
+});
+
+test('verifyCallSignature accepts a correctly signed pair', () => {
+  assert.equal(plivoService.verifyCallSignature(TO, CALLER, goodSig), true);
+});
+
+test('verifyCallSignature rejects a tampered destination (toll-fraud guard)', () => {
+  assert.equal(plivoService.verifyCallSignature('+19998887777', CALLER, goodSig), false);
+});
+
+test('verifyCallSignature rejects empty / wrong-length sig without throwing', () => {
+  assert.equal(plivoService.verifyCallSignature(TO, CALLER, ''), false);
+  assert.equal(plivoService.verifyCallSignature(TO, CALLER, 'abc'), false);
+});
+
+test('bridgeAnswerXml dials the target with the bought caller ID', () => {
+  const xml = plivoService.bridgeAnswerXml({ toNumber: TO, callerId: CALLER });
+  assert.match(xml, /<Dial callerId="\+14155550199"><Number>\+14155550100<\/Number><\/Dial>/);
+});
+
+test('placeBridgeCall rejects non-E.164 input before hitting Plivo', async () => {
+  const r = await plivoService.placeBridgeCall({ agentPhone: '12345', toNumber: TO, callerId: CALLER });
+  assert.equal(r.success, false);
+});

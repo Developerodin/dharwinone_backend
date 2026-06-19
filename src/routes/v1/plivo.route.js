@@ -36,4 +36,15 @@ router
     plivoController.buyNumber
   );
 
+// Placing a call is billable — gate behind calls.manage. The public answer-XML
+// endpoint (Plivo's webhook) lives in public.route.js, HMAC-signature gated.
+router
+  .route('/call')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.manage'),
+    validate(plivoValidation.placeCall),
+    plivoController.placeCall
+  );
+
 export default router;

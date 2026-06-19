@@ -103,6 +103,8 @@ const envVarsSchema = Joi.object()
     // Plivo — phone number search + purchase (HTTP Basic auth)
     PLIVO_AUTH_ID: Joi.string().optional().description('Plivo Auth ID'),
     PLIVO_AUTH_TOKEN: Joi.string().optional().description('Plivo Auth Token'),
+    /** Public base URL Plivo fetches the call answer-XML from. Defaults to BACKEND_PUBLIC_URL. Must be publicly reachable (not localhost) — use an ngrok tunnel in dev. */
+    PLIVO_ANSWER_BASE_URL: Joi.string().optional().description('Public base URL for Plivo answer_url webhook'),
 
     // Apollo.io — HR contact enrichment for External Jobs
     APOLLO_IO_API_KEY: Joi.string().optional().description('Apollo.io Master API key for people search and enrichment'),
@@ -440,6 +442,8 @@ const config = {
   plivo: {
     authId: envVars.PLIVO_AUTH_ID || '',
     authToken: envVars.PLIVO_AUTH_TOKEN || '',
+    /** Where Plivo fetches call answer-XML. Must be publicly reachable; falls back to the backend public URL. */
+    answerBaseUrl: (envVars.PLIVO_ANSWER_BASE_URL || resolvedBackendPublicUrl).replace(/\/$/, ''),
   },
   apollo: {
     apiKey: envVars.APOLLO_IO_API_KEY || '',

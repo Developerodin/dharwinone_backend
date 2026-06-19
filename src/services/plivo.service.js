@@ -10,6 +10,7 @@
  * route layer and confirm it in the UI.
  */
 
+import crypto from 'crypto';
 import plivo from 'plivo';
 import logger from '../config/logger.js';
 import config from '../config/config.js';
@@ -241,10 +242,101 @@ async function getCallRecordings(callUuid) {
   }
 }
 
+/** E.164-ish sanity check: leading +, 8–15 digits. Plivo rejects bad numbers anyway, but fail fast + cheap. */
+function isE164(num) {
+  return /^\+[1-9]\d{7,14}$/.test(String(num || '').trim());
+}
+
+/**
+ * HMAC of the answer-XML params so the public /plivo/answer endpoint can't be
+ * abused to dial arbitrary numbers (toll fraud). Only URLs we mint verify.
+ */
+function callSignature(toNumber, callerId) {
+  return crypto
+    .createHmac('sha256', config.jwt.secret)
+    .update(`${toNumber}|${callerId}`)
+    .digest('hex');
+}
+
+function verifyCallSignature(toNumber, callerId, sig) {
+  const expected = callSignature(toNumber, callerId);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(String(sig || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Plivo answer XML that bridges the answered agent leg to the dialed number, showing the bought number as caller ID. */
+function bridgeAnswerXml({ toNumber, callerId }) {
+  const response = new plivo.Response();
+  const dial = response.addDial({ callerId: String(callerId) });
+  dial.addNumber(String(toNumber));
+  return response.toXML();
+}
+
+/**
+ * Click-to-call bridge. Plivo first rings the agent's own phone (`agentPhone`);
+ * when they answer it fetches our signed answer URL, which dials `toNumber` and
+ * presents the bought `callerId`. No browser audio — the agent talks on their phone.
+ * @param {Object} p - { agentPhone, toNumber, callerId }
+ * @returns {Promise<{ success: boolean, requestUuid?: string, message?: string, error?: string }>}
+ */
+async function placeBridgeCall({ agentPhone, toNumber, callerId } = {}) {
+  const { client, error } = getClient();
+  if (error) return { success: false, error };
+  if (!isE164(agentPhone)) return { success: false, error: 'agentPhone must be E.164 (e.g. +14155550100).' };
+  if (!isE164(toNumber)) return { success: false, error: 'toNumber must be E.164 (e.g. +14155550100).' };
+  if (!isE164(callerId)) return { success: false, error: 'callerId (your bought number) must be E.164.' };
+
+  // Caller-ID must be a number this account actually owns — block spoofing an
+  // arbitrary number as the outbound caller ID. (Plivo also rejects non-owned
+  // caller IDs, but fail fast here with a clear authorization error.)
+  try {
+    const ownedNum = await client.numbers.get(String(callerId).trim());
+    if (pick(ownedNum, 'voiceEnabled', 'voice_enabled') === false) {
+      return { success: false, error: 'callerId is not voice-enabled on this account.' };
+    }
+  } catch (err) {
+    return { success: false, error: 'callerId is not a phone number owned by this account.' };
+  }
+
+  // Plivo's servers fetch the answer URL — localhost is unreachable and Plivo
+  // rejects it with "answer_url parameter is not valid". Fail with a clear hint.
+  const base = config.plivo.answerBaseUrl || config.backendPublicUrl;
+  if (/localhost|127\.0\.0\.1|\b0\.0\.0\.0\b/.test(base)) {
+    return {
+      success: false,
+      error:
+        'Call answer URL is not publicly reachable. Set PLIVO_ANSWER_BASE_URL (or BACKEND_PUBLIC_URL) to a public https URL — e.g. an ngrok tunnel in dev — so Plivo can fetch the call XML.',
+    };
+  }
+
+  const sig = callSignature(toNumber, callerId);
+  const answerUrl =
+    `${base}/v1/public/plivo/answer` +
+    `?to=${encodeURIComponent(toNumber)}&callerId=${encodeURIComponent(callerId)}&sig=${sig}`;
+
+  try {
+    const res = await client.calls.create(callerId, agentPhone, answerUrl, { answerMethod: 'GET' });
+    logger.info(`Plivo bridge call started (agent=...${agentPhone.slice(-4)} → ...${toNumber.slice(-4)})`);
+    return {
+      success: true,
+      requestUuid: pick(res, 'requestUuid', 'request_uuid'),
+      message: pick(res, 'message') || 'Call initiated. Your phone will ring shortly.',
+    };
+  } catch (err) {
+    const message = plivoErrorMessage(err);
+    logger.error(`Plivo bridge call failed (to=...${String(toNumber).slice(-4)}): ${message}`);
+    return { success: false, error: message };
+  }
+}
+
 export default {
   getClient,
   searchAvailableNumbers,
   buyNumber,
   listOwnedNumbers,
   getCallRecordings,
+  placeBridgeCall,
+  bridgeAnswerXml,
+  verifyCallSignature,
 };

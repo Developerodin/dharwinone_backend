@@ -78,6 +78,8 @@ export const ActivityActions = {
   SETTINGS_BOLNA_CANDIDATE_AGENT_UPDATE: 'settings.bolnaCandidateAgent.update',
   /** Admin bought a phone number from Plivo (real paid action). metadata: { number, type, monthlyRentalRate }. */
   PHONE_NUMBER_PURCHASE: 'phoneNumber.purchase',
+  /** Placed an outbound click-to-call bridge via Plivo (billable). metadata: { toNumber, callerId }. */
+  PHONE_CALL_PLACE: 'phoneNumber.callPlace',
   // Organization — org units
   ORG_UNIT_CREATE: 'orgUnit.create',
   ORG_UNIT_UPDATE: 'orgUnit.update',

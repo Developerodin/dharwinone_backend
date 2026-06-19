@@ -35,4 +35,19 @@ const listOwnedNumbers = {
   }),
 };
 
-export { searchAvailableNumbers, buyNumber, listOwnedNumbers };
+const e164 = Joi.string()
+  .trim()
+  .pattern(/^\+[1-9]\d{7,14}$/)
+  .messages({ 'string.pattern.base': '{#label} must be E.164 format, e.g. +14155550100' });
+
+const placeCall = {
+  body: Joi.object()
+    .keys({
+      toNumber: e164.required(),
+      agentPhone: e164.required(),
+      callerId: e164.required(),
+    })
+    .required(),
+};
+
+export { searchAvailableNumbers, buyNumber, listOwnedNumbers, placeCall };

@@ -9,6 +9,7 @@ import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
+import * as plivoController from '../../controllers/plivo.controller.js';
 import { uploadJobApplicationFiles } from '../../middlewares/upload.js';
 import { publicRegistrationLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
 
@@ -165,5 +166,13 @@ router.post(
   validate(jobValidation.publicApplyToJob),
   jobController.publicApplyToJob
 );
+
+/**
+ * GET /v1/public/plivo/answer
+ * Plivo answer webhook for click-to-call bridges (no auth — Plivo's servers hit it).
+ * The `sig` HMAC over `to|callerId` gates it so it can't be abused to dial arbitrary
+ * numbers. Returns Plivo XML that dials `to` with the bought number as caller ID.
+ */
+router.get('/plivo/answer', plivoController.answerCall);
 
 export default router;
