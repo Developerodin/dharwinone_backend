@@ -144,8 +144,10 @@ const sdkAnswer = catchAsync(async (req, res) => {
   const xml = await plivoService.sdkAnswerXml({ to, callerId, intentToken });
   if (!xml) {
     logger.warn(
-      `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)}, keys=${Object.keys(src).join(',')})`
+      `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)}, intent=${intentToken ? 'yes' : 'no'}, keys=${Object.keys(src).join(',')})`
     );
+  } else {
+    logger.info(`Plivo sdk-answer Dial XML (to=…${String(to).slice(-4)}, intent=${intentToken ? 'yes' : 'no'})`);
   }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
   plivoService.resetWebrtcAnswerUrl().catch(() => {});

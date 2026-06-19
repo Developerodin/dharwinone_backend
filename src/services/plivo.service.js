@@ -501,6 +501,35 @@ function webrtcAnswerUrlWithIntent(intent) {
   return `${webrtcAnswerUrl()}?intent=${encodeURIComponent(intent)}`;
 }
 
+function isArmedWebrtcAnswerUrl(url) {
+  return typeof url === 'string' && /\/sdk-answer\?intent=/.test(url);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readWebrtcAppAnswerUrl() {
+  const { client, error } = getClient();
+  if (error) return null;
+  const appId = await resolveWebrtcAppId();
+  if (!appId) return null;
+  const apps = listItems(await client.applications.list());
+  const app = apps.find((a) => pick(a, 'appId', 'app_id') === appId);
+  return app ? pick(app, 'answerUrl', 'answer_url') : null;
+}
+
+/** Poll Plivo until the application answer_url matches what we just published. */
+async function waitForPublishedAnswerUrl(expectedUrl, { timeoutMs = 5000, intervalMs = 250 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const live = await readWebrtcAppAnswerUrl();
+    if (live === expectedUrl) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
 async function resolveWebrtcAppId() {
   if (webrtcAppId) return webrtcAppId;
   const { client, error } = getClient();
@@ -535,6 +564,11 @@ async function publishWebrtcAnswerIntent(intent) {
   if (!resolvedId) return { success: false, error: 'WebRTC application id not found' };
   try {
     await client.applications.update(resolvedId, { answerUrl, answerMethod: 'POST' });
+    const propagated = await waitForPublishedAnswerUrl(answerUrl);
+    if (!propagated) {
+      logger.warn('Plivo WebRTC answer_url armed but not yet visible on application read-back');
+      return { success: false, error: 'Plivo answer_url did not propagate in time. Retry the call.' };
+    }
     logger.info(`Plivo WebRTC answer_url armed for browser outbound (…${intent.slice(-8)})`);
     return { success: true, answerUrl };
   } catch (err) {
@@ -591,8 +625,12 @@ async function ensureWebrtcApp() {
         answerUrl,
         answerMethod: 'POST',
       });
-    } else if (pick(app, 'answerUrl', 'answer_url') !== answerUrl) {
-      await client.applications.update(pick(app, 'appId', 'app_id'), { answerUrl, answerMethod: 'POST' });
+    } else {
+      const currentUrl = pick(app, 'answerUrl', 'answer_url');
+      // Do not clobber a per-call armed URL (?intent=) set by publishWebrtcAnswerIntent.
+      if (!isArmedWebrtcAnswerUrl(currentUrl) && currentUrl !== answerUrl) {
+        await client.applications.update(pick(app, 'appId', 'app_id'), { answerUrl, answerMethod: 'POST' });
+      }
     }
     const appId = pick(app, 'appId', 'app_id');
     webrtcAppId = appId;
@@ -733,5 +771,6 @@ export default {
   publishWebrtcAnswerIntent,
   resetWebrtcAnswerUrl,
   webrtcAnswerUrlWithIntent,
+  isArmedWebrtcAnswerUrl,
   sdkAnswerXml,
 };

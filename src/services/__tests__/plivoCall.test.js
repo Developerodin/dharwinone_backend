@@ -111,6 +111,11 @@ test('webrtcAnswerUrlWithIntent embeds the HMAC token as a query param', () => {
   assert.ok(url.includes(encodeURIComponent(intent)));
 });
 
+test('isArmedWebrtcAnswerUrl detects intent query on sdk-answer', () => {
+  assert.equal(plivoService.isArmedWebrtcAnswerUrl('https://x/v1/public/plivo/sdk-answer?intent=abc'), true);
+  assert.equal(plivoService.isArmedWebrtcAnswerUrl('https://x/v1/public/plivo/sdk-answer'), false);
+});
+
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
   const raw = new plivo.AccessToken(
     process.env.PLIVO_AUTH_ID,
