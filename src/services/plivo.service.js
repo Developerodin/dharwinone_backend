@@ -270,6 +270,27 @@ function isE164(num) {
   return /^\+[1-9]\d{7,14}$/.test(String(num || '').trim());
 }
 
+/** Restore leading "+" when Plivo/browser send digits-only E.164. */
+function toE164ish(value) {
+  const t = String(value || '').trim();
+  if (!t) return '';
+  if (t.startsWith('+')) return t;
+  if (/^\d+$/.test(t)) return `+${t}`;
+  return t;
+}
+
+/**
+ * Plivo browser-SDK answer webhooks often send `To` as a SIP URI
+ * (e.g. 918755887760@phone.plivo.com), not bare E.164 — normalize before Dial XML.
+ */
+function normalizePlivoDialTarget(value) {
+  const t = String(value || '').trim();
+  if (!t) return '';
+  const sipUser = t.match(/^(?:sip:)?(\+?\d+)@/i);
+  if (sipUser) return toE164ish(sipUser[1]);
+  return toE164ish(t);
+}
+
 /**
  * HMAC of the answer-XML params so the public /plivo/answer endpoint can't be
  * abused to dial arbitrary numbers (toll fraud). Only URLs we mint verify.
@@ -505,13 +526,8 @@ async function mintWebrtcToken({ uid } = {}) {
  * Falls back to the From leg's number if no caller ID was supplied.
  */
 function sdkAnswerXml({ to, callerId }) {
-  // The browser SDK may strip the leading "+"; restore it for E.164.
-  const plus = (v) => {
-    const t = String(v || '').trim();
-    return t && !t.startsWith('+') && /^\d+$/.test(t) ? `+${t}` : t;
-  };
-  const dest = plus(to);
-  const from = plus(callerId);
+  const dest = normalizePlivoDialTarget(to);
+  const from = normalizePlivoDialTarget(callerId);
   if (!isE164(dest) || !isE164(from)) return null;
   return bridgeAnswerXml({ toNumber: dest, callerId: from });
 }
@@ -528,5 +544,6 @@ export default {
   ensureWebrtcApp,
   enrichAccessTokenForBrowserSdk,
   mintWebrtcToken,
+  normalizePlivoDialTarget,
   sdkAnswerXml,
 };

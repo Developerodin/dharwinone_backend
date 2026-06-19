@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 import plivoService from '../services/plivo.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -128,7 +129,22 @@ const getSdkToken = catchAsync(async (req, res) => {
  */
 const sdkAnswer = catchAsync(async (req, res) => {
   const src = { ...req.query, ...req.body };
-  const xml = plivoService.sdkAnswerXml({ to: src.To, callerId: src['X-PH-callerId'] });
+  const to =
+    src.To ?? src.to ?? src.DialBLegTo ?? src['SIP-H-To'] ?? src['X-Destination'] ?? '';
+  const callerId =
+    src['X-PH-callerId'] ??
+    src['X-PH-CallerId'] ??
+    src['x-ph-callerid'] ??
+    src.CallerId ??
+    src.callerId ??
+    src.From ??
+    '';
+  const xml = plivoService.sdkAnswerXml({ to, callerId });
+  if (!xml) {
+    logger.warn(
+      `Plivo sdk-answer Hangup — could not build Dial XML (to=${String(to).slice(0, 40)}, callerId=${String(callerId).slice(0, 20)})`
+    );
+  }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
 });
 

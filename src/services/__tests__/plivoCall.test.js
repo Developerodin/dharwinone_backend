@@ -56,6 +56,14 @@ test('sdkAnswerXml restores a stripped "+" and dials with the caller ID', () => 
   assert.match(xml, /<Dial callerId="\+14155550199"><Number>\+14155550100<\/Number><\/Dial>/);
 });
 
+test('sdkAnswerXml accepts Plivo SIP URI To values from browser-SDK webhooks', () => {
+  const xml = plivoService.sdkAnswerXml({
+    to: '918755887760@phone.plivo.com',
+    callerId: '18336990430',
+  });
+  assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
+});
+
 test('sdkAnswerXml returns null on a non-numeric destination', () => {
   assert.equal(plivoService.sdkAnswerXml({ to: 'abc', callerId: CALLER }), null);
 });
