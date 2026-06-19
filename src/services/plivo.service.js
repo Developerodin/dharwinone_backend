@@ -765,12 +765,18 @@ async function mintWebrtcToken({ uid } = {}) {
   if (!ensured.success) return ensured;
 
   try {
+    // The 5th arg is the token nonce (becomes the JWT `jti`). Plivo rejects a
+    // reused jti within the token lifetime with INVALID_ACCESS_TOKEN, so it must
+    // be unique per mint — a constant (e.g. the user id) breaks repeat logins.
+    const nonce = `${uid || ensured.username}-${Date.now().toString(36)}-${crypto
+      .randomBytes(4)
+      .toString('hex')}`;
     const token = new plivo.AccessToken(
       config.plivo.authId,
       config.plivo.authToken,
       ensured.username,
       { lifetime: 3600 },
-      String(uid || ensured.username)
+      nonce
     );
     token.addVoiceGrants(false, true); // incoming: no, outgoing: yes
     return {
