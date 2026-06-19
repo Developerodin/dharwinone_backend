@@ -169,12 +169,12 @@ const sdkAnswer = catchAsync(async (req, res) => {
     logger.info(
       `Plivo sdk-answer RESULT xmlType=Dial to=…${String(to).slice(-4)} intent=${intentToken ? 'yes' : 'no'} intentTail=${intentToken ? String(intentToken).slice(-8) : 'none'}`
     );
-    const dest = plivoService.normalizePlivoDialTarget(to);
-    if (dest) plivoService.clearBrowserCallIntent(dest).catch(() => {});
-    else if (intentToken) plivoService.clearBrowserCallIntentByToken(intentToken).catch(() => {});
   }
+  // Don't clear the intent inline and don't reset the answer_url: Plivo can fetch
+  // the answer_url more than once per call, and a premature delete/reset turns the
+  // second fetch into a Hangup. The 120s TTL (and dest-keyed upsert on the next
+  // call) cleans it up. answer_url stays static — no reset needed.
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
-  plivoService.resetWebrtcAnswerUrl().catch(() => {});
 });
 
 /**

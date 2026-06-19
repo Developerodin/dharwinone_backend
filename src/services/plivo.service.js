@@ -471,13 +471,12 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
   } else {
     logger.warn('Plivo browser-call-intent stored in memory only — Mongo not connected');
   }
-  const armed = await publishWebrtcAnswerIntent(intent);
-  if (!armed.success) {
-    return { success: false, error: armed.error || 'Failed to arm sdk-answer URL for browser call.' };
-  }
-  logger.info(
-    `Plivo browser-call-intent ok dest=…${dest.slice(-4)} mongoReady=${mongoReady} armed=path`
-  );
+  // No per-call URL arming. The Application answer_url is static (set in
+  // ensureWebrtcApp at softphone connect), so it's always live in Plivo's voice
+  // routing at INVITE time — killing the propagation race that returned 480
+  // Unavailable. The webhook reconstructs the caller ID from this stored intent
+  // (by dest, or the X-PH-intent token).
+  logger.info(`Plivo browser-call-intent ok dest=…${dest.slice(-4)} mongoReady=${mongoReady}`);
   return { success: true, intent };
 }
 
@@ -676,8 +675,10 @@ async function ensureWebrtcApp() {
       });
     } else {
       const currentUrl = pick(app, 'answerUrl', 'answer_url');
-      // Do not clobber a per-call armed URL (?intent=) set by publishWebrtcAnswerIntent.
-      if (!isArmedWebrtcAnswerUrl(currentUrl) && currentUrl !== answerUrl) {
+      // Keep answer_url static. Reset any stale per-call armed URL (…/i/<intent>)
+      // left by the old arming code so Plivo's voice routing always has a live,
+      // fetchable webhook at INVITE time.
+      if (currentUrl !== answerUrl) {
         await client.applications.update(pick(app, 'appId', 'app_id'), { answerUrl, answerMethod: 'POST' });
       }
     }
