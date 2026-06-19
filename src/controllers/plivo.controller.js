@@ -166,6 +166,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
     logger.info(`Plivo sdk-answer Dial XML (to=…${String(to).slice(-4)}, intent=${intentToken ? 'yes' : 'no'})`);
     const dest = plivoService.normalizePlivoDialTarget(to);
     if (dest) plivoService.clearBrowserCallIntent(dest).catch(() => {});
+    else if (intentToken) plivoService.clearBrowserCallIntentByToken(intentToken).catch(() => {});
   }
   res.type('text/xml').send(xml || '<Response><Hangup/></Response>');
   plivoService.resetWebrtcAnswerUrl().catch(() => {});

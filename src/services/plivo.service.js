@@ -400,6 +400,7 @@ let webrtcAppId = null;
 // consumes it when the webhook arrives without a usable caller ID.
 const BROWSER_CALL_INTENT_TTL_MS = 120000;
 const browserCallIntents = new Map();
+const browserCallIntentsByToken = new Map();
 const BROWSER_INTENT_SIG_LEN = 64;
 const BROWSER_INTENT_EXP_LEN = 10;
 
@@ -438,6 +439,9 @@ function purgeExpiredBrowserCallIntents() {
   for (const [dest, entry] of browserCallIntents) {
     if (entry.expiresAt <= now) browserCallIntents.delete(dest);
   }
+  for (const [token, entry] of browserCallIntentsByToken) {
+    if (entry.expiresAt <= now) browserCallIntentsByToken.delete(token);
+  }
 }
 
 /**
@@ -454,19 +458,47 @@ async function registerBrowserCallIntent({ toNumber, callerId } = {}) {
   const expiresAt = new Date(Date.now() + BROWSER_CALL_INTENT_TTL_MS);
   const intent = mintBrowserCallIntentToken(dest, from);
   purgeExpiredBrowserCallIntents();
-  browserCallIntents.set(dest, { callerId: from, expiresAt: expiresAt.getTime() });
-  if (mongoose.connection.readyState === 1) {
+  const expiresMs = expiresAt.getTime();
+  browserCallIntents.set(dest, { callerId: from, expiresAt: expiresMs, intent });
+  browserCallIntentsByToken.set(intent, { dest, callerId: from, expiresAt: expiresMs });
+  const mongoReady = mongoose.connection.readyState === 1;
+  if (mongoReady) {
     await PlivoBrowserCallIntent.findOneAndUpdate(
       { dest },
-      { dest, callerId: from, expiresAt },
+      { dest, callerId: from, intent, expiresAt },
       { upsert: true, new: true }
     );
+  } else {
+    logger.warn('Plivo browser-call-intent stored in memory only — Mongo not connected');
   }
   const armed = await publishWebrtcAnswerIntent(intent);
   if (!armed.success) {
     return { success: false, error: armed.error || 'Failed to arm sdk-answer URL for browser call.' };
   }
+  logger.info(
+    `Plivo browser-call-intent ok dest=…${dest.slice(-4)} mongoReady=${mongoReady} armed=path`
+  );
   return { success: true, intent };
+}
+
+/** @param {string} intentToken */
+async function peekBrowserCallIntentByToken(intentToken) {
+  const token = String(intentToken || '').trim();
+  if (!token) return null;
+  if (mongoose.connection.readyState === 1) {
+    const doc = await PlivoBrowserCallIntent.findOne({
+      intent: token,
+      expiresAt: { $gt: new Date() },
+    }).lean();
+    if (doc) return { dest: doc.dest, callerId: doc.callerId };
+  }
+  purgeExpiredBrowserCallIntents();
+  const entry = browserCallIntentsByToken.get(token);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    browserCallIntentsByToken.delete(token);
+    return null;
+  }
+  return { dest: entry.dest, callerId: entry.callerId };
 }
 
 /** @param {string} destE164 */
@@ -487,17 +519,22 @@ async function peekBrowserCallIntent(destE164) {
 /** @param {string} destE164 */
 async function clearBrowserCallIntent(destE164) {
   if (mongoose.connection.readyState === 1) {
+    const doc = await PlivoBrowserCallIntent.findOne({ dest: destE164 }).lean();
+    if (doc?.intent) browserCallIntentsByToken.delete(doc.intent);
     await PlivoBrowserCallIntent.deleteOne({ dest: destE164 });
   }
+  const mem = browserCallIntents.get(destE164);
+  if (mem?.intent) browserCallIntentsByToken.delete(mem.intent);
   browserCallIntents.delete(destE164);
 }
 
-/** @param {string} destE164 */
-async function consumeBrowserCallIntent(destE164) {
-  const peeked = await peekBrowserCallIntent(destE164);
-  if (!peeked) return null;
-  await clearBrowserCallIntent(destE164);
-  return peeked;
+/** @param {string} intentToken */
+async function clearBrowserCallIntentByToken(intentToken) {
+  const token = String(intentToken || '').trim();
+  if (!token) return;
+  const peeked = await peekBrowserCallIntentByToken(token);
+  if (peeked?.dest) await clearBrowserCallIntent(peeked.dest);
+  else browserCallIntentsByToken.delete(token);
 }
 
 function webrtcAnswerUrl() {
@@ -737,13 +774,23 @@ async function mintWebrtcToken({ uid } = {}) {
  * Falls back to X-PH-intent HMAC token, then Mongo/memory intent registry.
  */
 async function sdkAnswerXml({ to, callerId, intentToken }) {
-  const dest = normalizePlivoDialTarget(to);
+  let dest = normalizePlivoDialTarget(to);
   let from = normalizePlivoDialTarget(callerId);
   let intentSource = isE164(from) ? 'header' : null;
   let tokenVerified = false;
   let storeHit = false;
-  if (!isE164(from) && isE164(dest) && intentToken) {
-    const fromToken = verifyBrowserCallIntentToken(intentToken, dest);
+  const token = String(intentToken || '').trim();
+  if (token && !isE164(dest)) {
+    const byToken = await peekBrowserCallIntentByToken(token);
+    if (byToken) {
+      dest = byToken.dest;
+      if (!isE164(from)) from = byToken.callerId;
+      intentSource = 'token-store';
+      storeHit = true;
+    }
+  }
+  if (!isE164(from) && isE164(dest) && token) {
+    const fromToken = verifyBrowserCallIntentToken(token, dest);
     if (fromToken) {
       from = fromToken;
       intentSource = 'token';
@@ -754,13 +801,13 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
     const intent = await peekBrowserCallIntent(dest);
     if (intent) {
       from = intent.callerId;
-      intentSource = 'store';
+      intentSource = intentSource || 'store';
       storeHit = true;
     }
   }
   if (!isE164(dest) || !isE164(from)) {
     logger.warn(
-      `Plivo sdkAnswerXml reconstruct failed intentPresent=${Boolean(intentToken)} tokenVerified=${tokenVerified} storeHit=${storeHit} dest=${dest || 'empty'} from=${from || 'empty'} source=${intentSource || 'none'}`
+      `Plivo sdkAnswerXml reconstruct failed intentPresent=${Boolean(token)} tokenVerified=${tokenVerified} storeHit=${storeHit} dest=${dest || 'empty'} from=${from || 'empty'} source=${intentSource || 'none'}`
     );
     return null;
   }
@@ -787,6 +834,7 @@ export default {
   publishWebrtcAnswerIntent,
   resetWebrtcAnswerUrl,
   clearBrowserCallIntent,
+  clearBrowserCallIntentByToken,
   webrtcAnswerUrlWithIntent,
   isArmedWebrtcAnswerUrl,
   sdkAnswerXml,

@@ -128,6 +128,19 @@ test('sdkAnswerXml browser call intent survives failed webhook then succeeds', a
   assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
 });
 
+test('sdkAnswerXml resolves dest and caller from intent token when To is missing', async () => {
+  const r = await plivoService.registerBrowserCallIntent({
+    toNumber: '+918755887760',
+    callerId: '+18336990430',
+  });
+  const xml = await plivoService.sdkAnswerXml({
+    to: '',
+    callerId: '',
+    intentToken: r.intent,
+  });
+  assert.match(xml, /<Dial callerId="\+18336990430"><Number>\+918755887760<\/Number><\/Dial>/);
+});
+
 test('enrichAccessTokenForBrowserSdk mirrors grants.voice into per.voice for browser SDK', () => {
   const raw = new plivo.AccessToken(
     process.env.PLIVO_AUTH_ID,

@@ -8,6 +8,7 @@ const plivoBrowserCallIntentSchema = new mongoose.Schema(
   {
     dest: { type: String, required: true, unique: true, trim: true },
     callerId: { type: String, required: true, trim: true },
+    intent: { type: String, trim: true, index: true },
     expiresAt: { type: Date, required: true },
   },
   { timestamps: true }
