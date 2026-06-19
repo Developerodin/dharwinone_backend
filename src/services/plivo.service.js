@@ -348,7 +348,8 @@ async function placeBridgeCall({ agentPhone, toNumber, callerId } = {}) {
 // answer XML which dials the target with the chosen bought number as caller ID.
 
 const WEBRTC_APP_NAME = 'dharwin-webrtc-dialer';
-const WEBRTC_ENDPOINT_USERNAME = 'dharwin-web';
+// Plivo SIP endpoint username must be alphanumeric (no hyphen/underscore).
+const WEBRTC_ENDPOINT_USERNAME = 'dharwinweb';
 // ponytail: process-lifetime cache — provisioning is idempotent, so after one
 // success skip the Plivo list/create round-trips. Resets on restart/redeploy.
 let webrtcProvisioned = false;
@@ -402,7 +403,8 @@ async function ensureWebrtcApp() {
     const endpoints = listItems(await client.endpoints.list());
     const existing = endpoints.find((e) => pick(e, 'username') === WEBRTC_ENDPOINT_USERNAME);
     if (!existing) {
-      const password = crypto.randomBytes(18).toString('base64url');
+      // Plivo requires an alphanumeric password — hex keeps it to [0-9a-f].
+      const password = crypto.randomBytes(16).toString('hex');
       // SDK signature: create(username, password, alias, appId) — appId is positional, not an object.
       await client.endpoints.create(WEBRTC_ENDPOINT_USERNAME, password, 'Dharwin web dialer', appId);
     }
