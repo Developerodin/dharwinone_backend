@@ -162,6 +162,10 @@ const createBackdatedAttendanceRequest = async (studentId, attendanceEntries, no
           );
         }
       }
+      // Cap regularization at one standard shift (8h). Blocks bad spans like 09:00 -> 05:00 (20h).
+      if (punchOut - punchIn > 8 * 60 * 60 * 1000) {
+        throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: Duration cannot exceed 8 hours`);
+      }
     }
 
     normalizedEntries.push({
@@ -301,6 +305,10 @@ const createBackdatedAttendanceRequestForUser = async (userId, attendanceEntries
             `Attendance entry ${i + 1}: Punch out time must be after punch in time`
           );
         }
+      }
+      // Cap regularization at one standard shift (8h). Blocks bad spans like 09:00 -> 05:00 (20h).
+      if (punchOut - punchIn > 8 * 60 * 60 * 1000) {
+        throw new ApiError(httpStatus.BAD_REQUEST, `Attendance entry ${i + 1}: Duration cannot exceed 8 hours`);
       }
     }
 

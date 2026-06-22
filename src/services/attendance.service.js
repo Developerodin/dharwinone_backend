@@ -964,8 +964,15 @@ const autoPunchOut = async (record, durationHours) => {
   doc.punchOut = now;
   doc.notes = (doc.notes ? doc.notes + '\n' : '') + `[Auto-punched out after ${durationHours} hours in ${doc.timezone || 'UTC'} timezone]`;
   doc.status = 'Present';
-  const student = await Student.findById(doc.student).populate('shift', 'name timezone startTime endTime').lean();
-  const shift = student?.shift && (student.shift.startTime || student.shift.timezone) ? student.shift : null;
+  // Resolve shift from Student (trainees) or Employee (User-role staff) so employee records also auto-close at 12h.
+  let shift = null;
+  if (doc.student) {
+    const student = await Student.findById(doc.student).populate('shift', 'name timezone startTime endTime').lean();
+    shift = student?.shift && (student.shift.startTime || student.shift.timezone) ? student.shift : null;
+  } else if (doc.user) {
+    const employee = await Employee.findOne({ owner: doc.user }).populate('shift', 'name timezone startTime endTime').lean();
+    shift = employee?.shift && (employee.shift.startTime || employee.shift.timezone) ? employee.shift : null;
+  }
   doc.duration = computeDurationMs(doc.punchIn, now, shift);
   await doc.save();
   return doc;
@@ -1351,6 +1358,10 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
           const isNightShift = (punchInHour >= 12 && punchOutHour < 12) || (hoursDiff >= 1 && hoursDiff <= 16);
           if (isNightShift) punchOut.setUTCDate(punchOut.getUTCDate() + 1);
           else throw new ApiError(httpStatus.BAD_REQUEST, `Entry ${i + 1}: Punch out must be after punch in`);
+        }
+        // Regularization capped at one standard shift (8h). Blocks bad spans like 09:00 -> 05:00 (20h).
+        if (punchOut - punchIn > 8 * 60 * 60 * 1000) {
+          throw new ApiError(httpStatus.BAD_REQUEST, `Entry ${i + 1}: Duration cannot exceed 8 hours`);
         }
       }
 
