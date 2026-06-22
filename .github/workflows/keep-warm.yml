@@ -1,0 +1,24 @@
+name: keep-warm
+
+# Pings the Render free-tier backend so it never hits the 15-min idle spin-down.
+# Cold starts make Plivo's answer_url fetch time out ("Error Reaching Action URL"),
+# which breaks call audio. This keeps the service warm.
+#
+# NOTE: GitHub bills each scheduled run as >=1 job-minute. At */10 that's ~4320
+# min/mo — fine for a PUBLIC repo (unlimited), but a PRIVATE repo only gets
+# ~2000 free min/mo and will run out in ~2 weeks. If private, use cron-job.org
+# instead, or upgrade the Render service to Starter (no spin-down, no ping needed).
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min (beats the 15-min spin-down)
+  workflow_dispatch:          # manual trigger button
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 https://backend-jz9i.onrender.com/)
+          echo "backend responded: $code"
