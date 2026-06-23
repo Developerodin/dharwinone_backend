@@ -571,7 +571,9 @@ export const exportComplianceReport = async (actor = null, { format = 'json' } =
           .join(',')
       );
     }
-    result.csv = lines.join('\n');
+    // Lead with a UTF-8 BOM so Excel reads the file as UTF-8 (else "→" and
+    // accented names render as mojibake — Excel ignores the HTTP charset).
+    result.csv = String.fromCharCode(0xfeff) + lines.join('\n');
   }
   return {
     result,
