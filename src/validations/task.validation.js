@@ -65,6 +65,7 @@ const getTasks = {
     createdBy: commaSeparatedObjectIds.optional(),
     search: Joi.string().optional(),
     assignedToMe: Joi.boolean().optional(),
+    leaving: Joi.boolean().optional(),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(200).optional(),
     page: Joi.number().integer().optional(),

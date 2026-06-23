@@ -201,6 +201,10 @@ export const applyOffboardingFlags = (plainTasks, byOwner) => {
   return plainTasks;
 };
 
+/** Pure: owner User id strings for employees whose resignDate buckets to soon/resigned. */
+export const selectLeavingOwners = (employees, now) =>
+  employees.filter((e) => e.owner && resignBucket(e.resignDate, now) !== null).map((e) => String(e.owner));
+
 /** DB wrapper: enrich populated Task docs with derived offboarding fields. */
 const enrichWithOffboarding = async (results, now) => {
   const plain = results.map((d) => (d?.toJSON ? d.toJSON() : d));
@@ -254,10 +258,12 @@ const queryTasks = async (filter, options) => {
   const userRoleIds = filter.userRoleIds;
   const apiPermissions = filter.apiPermissions instanceof Set ? filter.apiPermissions : new Set();
   const assignedToMe = filter.assignedToMe === true || filter.assignedToMe === 'true';
+  const leavingOnly = filter.leaving === true || filter.leaving === 'true';
   delete filter.userRoleIds;
   delete filter.userId;
   delete filter.apiPermissions;
   delete filter.assignedToMe;
+  delete filter.leaving;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   /** Org-wide list when admin OR role grants tasks.read / tasks.manage. */
@@ -309,6 +315,20 @@ const queryTasks = async (filter, options) => {
     if (orphanIds.length) {
       finalFilter = { $and: [finalFilter, { _id: { $nin: orphanIds } }] };
     }
+  }
+
+  // "Leaving" filter: only OPEN tasks assigned to an employee who is resigning soon
+  // or already resigned. Computed server-side so it works across pagination, like priority.
+  if (leavingOnly) {
+    const leavingEmps = await Employee.find({ resignDate: { $ne: null } })
+      .select('owner resignDate')
+      .lean();
+    const leavingOwnerIds = selectLeavingOwners(leavingEmps, new Date()).map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    finalFilter = {
+      $and: [finalFilter, { assignedTo: { $in: leavingOwnerIds }, status: { $ne: 'completed' } }],
+    };
   }
 
   const sort = options.sortBy || '-createdAt';
