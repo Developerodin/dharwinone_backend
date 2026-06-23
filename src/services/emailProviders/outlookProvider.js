@@ -223,7 +223,7 @@ export function getAuthUrl(userId, options = {}) {
  * @param {{ email: string, accessToken: string, refreshToken?: string|null, tokenExpiry?: Date }} tokens
  * @param {Awaited<ReturnType<typeof getAssignedMailboxPolicy>>} policy
  */
-async function upsertOutlookAccount(userId, { email, accessToken, refreshToken, tokenExpiry }, policy) {
+async function upsertOutlookAccount(userId, { email, accessToken, refreshToken, tokenExpiry, oauthClientId }, policy) {
   if (policy.hardLockActive) {
     if (email !== policy.expectedEmail) {
       logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=outlook', String(userId));
@@ -248,6 +248,7 @@ async function upsertOutlookAccount(userId, { email, accessToken, refreshToken, 
     existing.accessToken = accessToken;
     if (refreshToken) existing.refreshToken = refreshToken;
     existing.tokenExpiry = expiry;
+    if (oauthClientId) existing.oauthClientId = oauthClientId;
     existing.status = 'active';
     await existing.save();
     if (policy.hardLockActive) {
@@ -280,6 +281,7 @@ async function upsertOutlookAccount(userId, { email, accessToken, refreshToken, 
     accessToken,
     refreshToken: refreshToken || null,
     tokenExpiry: expiry,
+    oauthClientId: oauthClientId || null,
     status: 'active',
   });
   if (policy.hardLockActive) {
@@ -326,9 +328,13 @@ export async function connectWithTokens(userId, { accessToken, refreshToken, tok
     if (!Number.isNaN(parsed.getTime())) expiry = parsed;
   }
 
+  // Tokens came from the mobile app (react-native-app-auth), so they were issued by the
+  // app's Azure registration. Record it so refresh reuses the matching client_id.
+  const appClientId = (config.microsoftApp.clientId || '').trim() || null;
+
   return upsertOutlookAccount(
     userId,
-    { email, accessToken, refreshToken: refreshToken || null, tokenExpiry: expiry },
+    { email, accessToken, refreshToken: refreshToken || null, tokenExpiry: expiry, oauthClientId: appClientId },
     policy
   );
 }
@@ -391,6 +397,8 @@ export async function handleCallback(code, userId, stateEncoded = '') {
       accessToken: tokenResponse.accessToken,
       refreshToken,
       tokenExpiry,
+      // Web auth-code flow uses the backend's (website) Azure registration.
+      oauthClientId: (config.microsoft.clientId || '').trim() || null,
     },
     policy
   );
@@ -417,20 +425,48 @@ async function _refreshTokenImpl(account) {
     );
   }
 
-  const { clientId, clientSecret, tenantId } = config.microsoft;
-  const tenant = ((tenantId || 'common').trim() || 'common');
-  const tokenUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
+  // Outlook refresh tokens are bound to the Azure App Registration (client_id) that issued them.
+  // Web accounts use the website registration (confidential, with secret); app accounts use the
+  // mobile registration (public/PKCE, no secret). Pick the registration recorded on the account,
+  // with a fallback that tries both for legacy accounts predating the oauthClientId field.
+  const webReg = {
+    kind: 'web',
+    clientId: (config.microsoft.clientId || '').trim(),
+    clientSecret: config.microsoft.clientSecret || '',
+    tenantId: (config.microsoft.tenantId || 'common').trim() || 'common',
+  };
+  const appReg = (config.microsoftApp.clientId || '').trim()
+    ? {
+        kind: 'app',
+        clientId: config.microsoftApp.clientId.trim(),
+        clientSecret: '', // mobile public client — no secret is sent
+        tenantId: (config.microsoftApp.tenantId || config.microsoft.tenantId || 'common').trim() || 'common',
+      }
+    : null;
 
-  async function tryRefresh(scopeStr, { includeSecret = true } = {}) {
+  const accountClient = (account.oauthClientId || '').trim();
+  let candidates;
+  if (accountClient && appReg && accountClient === appReg.clientId) {
+    candidates = [appReg];
+  } else if (accountClient && accountClient === webReg.clientId) {
+    candidates = [webReg];
+  } else {
+    // Legacy account (no/unknown recorded client): try web first, then the app registration.
+    candidates = [webReg, appReg].filter((r) => r && r.clientId);
+  }
+  if (candidates.length === 0) candidates = [webReg];
+
+  async function tryRefresh(reg, scopeStr, { includeSecret = true } = {}) {
     const params = new URLSearchParams({
-      client_id: clientId,
+      client_id: reg.clientId,
       grant_type: 'refresh_token',
       refresh_token: rt,
       scope: scopeStr,
     });
-    if (includeSecret && clientSecret) {
-      params.set('client_secret', clientSecret);
+    if (includeSecret && reg.clientSecret) {
+      params.set('client_secret', reg.clientSecret);
     }
+    const tokenUrl = `https://login.microsoftonline.com/${reg.tenantId}/oauth2/v2.0/token`;
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -446,22 +482,45 @@ async function _refreshTokenImpl(account) {
     return { res: response, data: parsed };
   }
 
-  async function refreshWithScopes(scopeStr) {
-    let result = await tryRefresh(scopeStr, { includeSecret: true });
-    if (result.data.error === 'invalid_client' && clientSecret) {
-      logger.warn('[Outlook] Retrying token refresh without client_secret (mobile public client token)');
-      result = await tryRefresh(scopeStr, { includeSecret: false });
+  async function refreshWithScopes(reg, scopeStr) {
+    let result = await tryRefresh(reg, scopeStr, { includeSecret: true });
+    if (result.data.error === 'invalid_client' && reg.clientSecret) {
+      logger.warn('[Outlook] Retrying token refresh without client_secret (public client token)');
+      result = await tryRefresh(reg, scopeStr, { includeSecret: false });
+    }
+    return result;
+  }
+
+  async function refreshWithReg(reg) {
+    let result = await refreshWithScopes(reg, REFRESH_TOKEN_SCOPE);
+    if (
+      result.data.error === 'invalid_scope' ||
+      (result.data.error === 'invalid_request' && String(result.data.error_description).includes('scope'))
+    ) {
+      logger.warn('[Outlook] Retrying token refresh with narrower scopes');
+      result = await refreshWithScopes(reg, REFRESH_TOKEN_SCOPE_FALLBACK);
     }
     return result;
   }
 
   let res;
   let data = {};
+  let usedReg = candidates[0];
   try {
-    ({ res, data } = await refreshWithScopes(REFRESH_TOKEN_SCOPE));
-    if (data.error === 'invalid_scope' || (data.error === 'invalid_request' && String(data.error_description).includes('scope'))) {
-      logger.warn('[Outlook] Retrying token refresh with narrower scopes');
-      ({ res, data } = await refreshWithScopes(REFRESH_TOKEN_SCOPE_FALLBACK));
+    for (let i = 0; i < candidates.length; i += 1) {
+      usedReg = candidates[i];
+      // eslint-disable-next-line no-await-in-loop -- registrations tried sequentially; stop on first success
+      ({ res, data } = await refreshWithReg(usedReg));
+      if (res.ok && !data.error) break;
+      // A token issued by a different registration fails with invalid_grant/invalid_client.
+      // If another registration is available, try it before giving up.
+      const clientMismatch = data.error === 'invalid_grant' || data.error === 'invalid_client';
+      if (!clientMismatch || i === candidates.length - 1) break;
+      logger.warn(
+        '[Outlook] refresh via %s client failed (%s); trying next registration',
+        usedReg.kind,
+        data.error
+      );
     }
   } catch (netErr) {
     logger.error('[Outlook] Token refresh network error: %s', netErr.message);
@@ -504,6 +563,11 @@ async function _refreshTokenImpl(account) {
   }
   const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 3600;
   account.tokenExpiry = new Date(Date.now() + Math.max(60, expiresIn) * 1000);
+  // Record (or correct) which registration actually refreshed this account so subsequent
+  // refreshes skip straight to the right client instead of trying both.
+  if (usedReg.clientId && account.oauthClientId !== usedReg.clientId) {
+    account.oauthClientId = usedReg.clientId;
+  }
   account.status = 'active';
   await account.save();
   return account;

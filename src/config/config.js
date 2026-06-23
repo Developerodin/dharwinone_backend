@@ -115,6 +115,10 @@ const envVarsSchema = Joi.object()
     MICROSOFT_CLIENT_SECRET: Joi.string().optional().description('Microsoft OAuth client secret'),
     MICROSOFT_REDIRECT_URI: Joi.string().optional().description('Microsoft OAuth redirect URI'),
     MICROSOFT_TENANT_ID: Joi.string().optional().default('common').description('Microsoft tenant ID (common for multi-tenant)'),
+    // Separate Azure App Registration used by the mobile app (react-native-app-auth, public/PKCE client).
+    // Refresh tokens are bound to the issuing client_id, so app-connected mailboxes must be refreshed with this client.
+    MICROSOFT_APP_CLIENT_ID: Joi.string().optional().description('Microsoft OAuth client ID for the mobile app (public/PKCE client)'),
+    MICROSOFT_APP_TENANT_ID: Joi.string().optional().description('Microsoft tenant ID for the mobile app registration (defaults to MICROSOFT_TENANT_ID)'),
 
     // Auth rate limit (deployed apps often share IPs; increase to avoid 429 on sign-in)
     RATE_LIMIT_AUTH_WINDOW_MINUTES: Joi.number().optional().default(15).description('Auth rate limit window in minutes'),
@@ -393,6 +397,15 @@ const config = {
     })(),
     tenantId: (() => {
       const t = (envVars.MICROSOFT_TENANT_ID || 'common').trim();
+      return t || 'common';
+    })(),
+  },
+  // Mobile app's Azure App Registration (public/PKCE client). Used to refresh tokens for
+  // accounts connected from the app, since refresh tokens are bound to their issuing client_id.
+  microsoftApp: {
+    clientId: (envVars.MICROSOFT_APP_CLIENT_ID || '').trim(),
+    tenantId: (() => {
+      const t = (envVars.MICROSOFT_APP_TENANT_ID || envVars.MICROSOFT_TENANT_ID || 'common').trim();
       return t || 'common';
     })(),
   },
