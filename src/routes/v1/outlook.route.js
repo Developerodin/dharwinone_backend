@@ -30,6 +30,12 @@ router.use(auth());
 
 router.get('/accounts', requirePermissions('emails.read'), validate(outlookValidation.listOutlookAccounts), outlookController.listOutlookAccounts);
 router.get('/auth/microsoft', requirePermissions('emails.manage'), validate(outlookValidation.getMicrosoftAuthUrl), outlookController.getMicrosoftAuthUrl);
+router.post(
+  '/auth/microsoft/connect',
+  requirePermissions('emails.manage'),
+  validate(outlookValidation.connectMicrosoftAccount),
+  outlookController.connectMicrosoftAccount
+);
 router.delete(
   '/accounts/:id',
   requirePermissions('emails.manage'),
