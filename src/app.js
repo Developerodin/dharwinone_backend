@@ -139,7 +139,7 @@ app.get('/', (req, res) => {
   if (config.env === 'development') {
     payload.docs = '/v1/docs';
   }
-  res.status(httpStatus.OK).json(payload);
+  res.status(httpStatus.OK).json(payload);  
 });
 app.get('/health', (req, res) => {
   res.status(httpStatus.OK).json({ status: 'ok' });
