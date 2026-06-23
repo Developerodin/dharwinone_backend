@@ -13,6 +13,16 @@ const getMicrosoftAuthUrl = catchAsync(async (req, res) => {
   res.json({ url });
 });
 
+const connectMicrosoftAccount = catchAsync(async (req, res) => {
+  const { accessToken, refreshToken, tokenExpiry } = req.body;
+  const account = await outlookClientService.connectOutlookWithTokens(req.user.id, {
+    accessToken,
+    refreshToken,
+    tokenExpiry,
+  });
+  res.status(httpStatus.CREATED).json(account);
+});
+
 const microsoftCallback = catchAsync(async (req, res) => {
   const { code, state } = req.query;
   let userId;
@@ -182,6 +192,7 @@ const createLabel = catchAsync(async (req, res) => {
 export {
   listOutlookAccounts,
   getMicrosoftAuthUrl,
+  connectMicrosoftAccount,
   microsoftCallback,
   disconnectOutlookAccount,
   listMessages,

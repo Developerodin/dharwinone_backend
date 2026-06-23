@@ -41,6 +41,36 @@ export async function handleMicrosoftCallback(code, userId, stateEncoded = '') {
   return account;
 }
 
+export async function connectOutlookWithTokens(userId, tokens) {
+  const policy = await getAssignedMailboxPolicy(userId);
+  if (policy.hardLockActive && !policy.allowedProviders.includes('outlook')) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Your organization requires Google Gmail for this mailbox. Use Connect Gmail.',
+      true,
+      '',
+      { errorCode: 'WRONG_PROVIDER' }
+    );
+  }
+  try {
+    const account = await outlookProvider.connectWithTokens(userId, tokens);
+    await warnCompanyEmailMismatchForOwner(userId, account?.email).catch(() => {});
+    return {
+      id: account._id.toString(),
+      provider: account.provider,
+      email: account.email,
+      status: account.status,
+      createdAt: account.createdAt,
+    };
+  } catch (err) {
+    const codeErr = err?.code;
+    if (codeErr === 'MAILBOX_MISMATCH' || codeErr === 'WRONG_PROVIDER') {
+      throw new ApiError(httpStatus.BAD_REQUEST, err.message, true, '', { errorCode: codeErr });
+    }
+    throw err;
+  }
+}
+
 export async function disconnectOutlookAccount(accountId, userId) {
   const policy = await getAssignedMailboxPolicy(userId);
   if (policy.hardLockActive) {

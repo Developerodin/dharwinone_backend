@@ -218,6 +218,122 @@ export function getAuthUrl(userId, options = {}) {
 }
 
 /**
+ * Create or update EmailAccount after OAuth (web callback or mobile token upload).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ email: string, accessToken: string, refreshToken?: string|null, tokenExpiry?: Date }} tokens
+ * @param {Awaited<ReturnType<typeof getAssignedMailboxPolicy>>} policy
+ */
+async function upsertOutlookAccount(userId, { email, accessToken, refreshToken, tokenExpiry }, policy) {
+  if (policy.hardLockActive) {
+    if (email !== policy.expectedEmail) {
+      logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=outlook', String(userId));
+      const err = new Error('MAILBOX_MISMATCH');
+      err.code = 'MAILBOX_MISMATCH';
+      throw err;
+    }
+    if (!policy.allowedProviders.includes('outlook')) {
+      const err = new Error('WRONG_PROVIDER');
+      err.code = 'WRONG_PROVIDER';
+      throw err;
+    }
+  }
+
+  const expiry =
+    tokenExpiry instanceof Date && !Number.isNaN(tokenExpiry.getTime())
+      ? tokenExpiry
+      : new Date(Date.now() + 50 * 60 * 1000);
+
+  const existing = await EmailAccount.findOne({ user: userId, provider: 'outlook', email });
+  if (existing) {
+    existing.accessToken = accessToken;
+    if (refreshToken) existing.refreshToken = refreshToken;
+    existing.tokenExpiry = expiry;
+    existing.status = 'active';
+    await existing.save();
+    if (policy.hardLockActive) {
+      try {
+        await revokeAllOtherEmailAccounts(userId, existing._id);
+      } catch (revErr) {
+        logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+      }
+      logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
+    }
+    return existing;
+  }
+
+  const activeOutlookCount = await EmailAccount.countDocuments({
+    user: userId,
+    provider: 'outlook',
+    status: 'active',
+  });
+  const skipCap = policy.hardLockActive && email === policy.expectedEmail;
+  if (!skipCap && activeOutlookCount >= MAX_OUTLOOK_ACCOUNTS_PER_USER) {
+    throw new Error(
+      'Only one Outlook account is allowed. Disconnect it to connect a different mailbox.'
+    );
+  }
+
+  const created = await EmailAccount.create({
+    user: userId,
+    provider: 'outlook',
+    email,
+    accessToken,
+    refreshToken: refreshToken || null,
+    tokenExpiry: expiry,
+    status: 'active',
+  });
+  if (policy.hardLockActive) {
+    try {
+      await revokeAllOtherEmailAccounts(userId, created._id);
+    } catch (revErr) {
+      logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
+    }
+    logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
+  }
+  return created;
+}
+
+/**
+ * Persist Outlook tokens from mobile (react-native-app-auth). Validates access token via Graph /me.
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ accessToken: string, refreshToken?: string|null, tokenExpiry?: Date|string|null }} tokens
+ */
+export async function connectWithTokens(userId, { accessToken, refreshToken, tokenExpiry }) {
+  const policy = await getAssignedMailboxPolicy(userId);
+  if (policy.hardLockActive && !policy.allowedProviders.includes('outlook')) {
+    const err = new Error('WRONG_PROVIDER');
+    err.code = 'WRONG_PROVIDER';
+    throw err;
+  }
+
+  const client = createGraphClient(accessToken);
+  let me;
+  try {
+    me = await client.api('/me').select('mail,userPrincipalName').get();
+  } catch (err) {
+    logger.error('[Outlook] connectWithTokens Graph /me failed: %s', err?.message);
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid or expired Microsoft access token.', true);
+  }
+
+  const email = (me.mail || me.userPrincipalName || '').toLowerCase();
+  if (!email) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Could not fetch user email from Microsoft.');
+  }
+
+  let expiry = null;
+  if (tokenExpiry) {
+    const parsed = tokenExpiry instanceof Date ? tokenExpiry : new Date(tokenExpiry);
+    if (!Number.isNaN(parsed.getTime())) expiry = parsed;
+  }
+
+  return upsertOutlookAccount(
+    userId,
+    { email, accessToken, refreshToken: refreshToken || null, tokenExpiry: expiry },
+    policy
+  );
+}
+
+/**
  * Exchange authorization code for tokens, create/update EmailAccount.
  * @param {string} code
  * @param {string|import('mongoose').Types.ObjectId} userId
@@ -255,20 +371,6 @@ export async function handleCallback(code, userId, stateEncoded = '') {
   const email = (me.mail || me.userPrincipalName || '').toLowerCase();
   if (!email) throw new Error('Could not fetch user email from Microsoft');
 
-  if (policy.hardLockActive) {
-    if (email !== policy.expectedEmail) {
-      logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=outlook', String(userId));
-      const err = new Error('MAILBOX_MISMATCH');
-      err.code = 'MAILBOX_MISMATCH';
-      throw err;
-    }
-    if (!policy.allowedProviders.includes('outlook')) {
-      const err = new Error('WRONG_PROVIDER');
-      err.code = 'WRONG_PROVIDER';
-      throw err;
-    }
-  }
-
   const tokenExpiry =
     tokenResponse.expiresOn != null
       ? new Date(tokenResponse.expiresOn)
@@ -282,54 +384,16 @@ export async function handleCallback(code, userId, stateEncoded = '') {
     );
   }
 
-  const existing = await EmailAccount.findOne({ user: userId, provider: 'outlook', email });
-  if (existing) {
-    existing.accessToken = tokenResponse.accessToken;
-    if (refreshToken) existing.refreshToken = refreshToken;
-    existing.tokenExpiry = tokenExpiry;
-    existing.status = 'active';
-    await existing.save();
-    if (policy.hardLockActive) {
-      try {
-        await revokeAllOtherEmailAccounts(userId, existing._id);
-      } catch (revErr) {
-        logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
-      }
-      logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
-    }
-    return existing;
-  }
-
-  const activeOutlookCount = await EmailAccount.countDocuments({
-    user: userId,
-    provider: 'outlook',
-    status: 'active',
-  });
-  const skipCap = policy.hardLockActive && email === policy.expectedEmail;
-  if (!skipCap && activeOutlookCount >= MAX_OUTLOOK_ACCOUNTS_PER_USER) {
-    throw new Error(
-      'Only one Outlook account is allowed. Disconnect it to connect a different mailbox.'
-    );
-  }
-
-  const created = await EmailAccount.create({
-    user: userId,
-    provider: 'outlook',
-    email,
-    accessToken: tokenResponse.accessToken,
-    refreshToken,
-    tokenExpiry,
-    status: 'active',
-  });
-  if (policy.hardLockActive) {
-    try {
-      await revokeAllOtherEmailAccounts(userId, created._id);
-    } catch (revErr) {
-      logger.error('[mailbox_lock] bulk_revoke_failed userId=%s %s', String(userId), revErr?.message);
-    }
-    logger.info('[mailbox_lock] enforced userId=%s provider=outlook', String(userId));
-  }
-  return created;
+  return upsertOutlookAccount(
+    userId,
+    {
+      email,
+      accessToken: tokenResponse.accessToken,
+      refreshToken,
+      tokenExpiry,
+    },
+    policy
+  );
 }
 
 /**
@@ -357,14 +421,16 @@ async function _refreshTokenImpl(account) {
   const tenant = ((tenantId || 'common').trim() || 'common');
   const tokenUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
 
-  async function tryRefresh(scopeStr) {
+  async function tryRefresh(scopeStr, { includeSecret = true } = {}) {
     const params = new URLSearchParams({
       client_id: clientId,
-      client_secret: clientSecret,
       grant_type: 'refresh_token',
       refresh_token: rt,
       scope: scopeStr,
     });
+    if (includeSecret && clientSecret) {
+      params.set('client_secret', clientSecret);
+    }
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -380,13 +446,22 @@ async function _refreshTokenImpl(account) {
     return { res: response, data: parsed };
   }
 
+  async function refreshWithScopes(scopeStr) {
+    let result = await tryRefresh(scopeStr, { includeSecret: true });
+    if (result.data.error === 'invalid_client' && clientSecret) {
+      logger.warn('[Outlook] Retrying token refresh without client_secret (mobile public client token)');
+      result = await tryRefresh(scopeStr, { includeSecret: false });
+    }
+    return result;
+  }
+
   let res;
   let data = {};
   try {
-    ({ res, data } = await tryRefresh(REFRESH_TOKEN_SCOPE));
+    ({ res, data } = await refreshWithScopes(REFRESH_TOKEN_SCOPE));
     if (data.error === 'invalid_scope' || (data.error === 'invalid_request' && String(data.error_description).includes('scope'))) {
       logger.warn('[Outlook] Retrying token refresh with narrower scopes');
-      ({ res, data } = await tryRefresh(REFRESH_TOKEN_SCOPE_FALLBACK));
+      ({ res, data } = await refreshWithScopes(REFRESH_TOKEN_SCOPE_FALLBACK));
     }
   } catch (netErr) {
     logger.error('[Outlook] Token refresh network error: %s', netErr.message);
