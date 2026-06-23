@@ -40,4 +40,12 @@ const disconnectOutlookAccount = {
   }),
 };
 
-export { listOutlookAccounts, getMicrosoftAuthUrl, microsoftCallback, disconnectOutlookAccount };
+const connectMicrosoftAccount = {
+  body: Joi.object().keys({
+    accessToken: Joi.string().trim().required(),
+    refreshToken: Joi.string().trim().allow('', null),
+    tokenExpiry: Joi.alternatives().try(Joi.date().iso(), Joi.string().isoDate()).allow(null),
+  }),
+};
+
+export { listOutlookAccounts, getMicrosoftAuthUrl, microsoftCallback, disconnectOutlookAccount, connectMicrosoftAccount };
