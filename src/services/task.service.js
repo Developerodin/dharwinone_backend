@@ -317,18 +317,19 @@ const queryTasks = async (filter, options) => {
     }
   }
 
-  // "Leaving" filter: only OPEN tasks assigned to an employee who is resigning soon
-  // or already resigned. Computed server-side so it works across pagination, like priority.
+  // "Leaving" filter + counter: OPEN tasks assigned to an employee resigning soon
+  // or already resigned. Computed server-side so both the filter and the total
+  // count work across pagination (not just the loaded page), like priority.
+  const leavingEmps = await Employee.find({ resignDate: { $ne: null } })
+    .select('owner resignDate')
+    .lean();
+  const leavingOwnerIds = selectLeavingOwners(leavingEmps, new Date()).map(
+    (id) => new mongoose.Types.ObjectId(id)
+  );
+  const leavingConstraint = { assignedTo: { $in: leavingOwnerIds }, status: { $ne: 'completed' } };
+  const baseFilter = finalFilter;
   if (leavingOnly) {
-    const leavingEmps = await Employee.find({ resignDate: { $ne: null } })
-      .select('owner resignDate')
-      .lean();
-    const leavingOwnerIds = selectLeavingOwners(leavingEmps, new Date()).map(
-      (id) => new mongoose.Types.ObjectId(id)
-    );
-    finalFilter = {
-      $and: [finalFilter, { assignedTo: { $in: leavingOwnerIds }, status: { $ne: 'completed' } }],
-    };
+    finalFilter = { $and: [baseFilter, leavingConstraint] };
   }
 
   const sort = options.sortBy || '-createdAt';
@@ -338,7 +339,7 @@ const queryTasks = async (filter, options) => {
   const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
   const skip = (page - 1) * limit;
 
-  const [results, totalResults] = await Promise.all([
+  const [results, totalResults, leavingTotal] = await Promise.all([
     Task.find(finalFilter)
       .sort(sort)
       .skip(skip)
@@ -351,11 +352,15 @@ const queryTasks = async (filter, options) => {
       ])
       .exec(),
     Task.countDocuments(finalFilter).exec(),
+    // True count of leaving tasks the user can see, scoped like the main query.
+    leavingOwnerIds.length
+      ? Task.countDocuments({ $and: [baseFilter, leavingConstraint] }).exec()
+      : Promise.resolve(0),
   ]);
 
   const totalPages = Math.ceil(totalResults / limit);
   const enriched = await enrichWithOffboarding(results, new Date());
-  return { results: enriched, page, limit, totalPages, totalResults };
+  return { results: enriched, page, limit, totalPages, totalResults, leavingTotal };
 };
 
 const getTaskById = async (id) => {
