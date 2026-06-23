@@ -22,6 +22,8 @@ import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailC
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
+import { resignBucket } from '../utils/resignBucket.js';
+import { notify } from './notification.service.js';
 import {
   canFullEmployeeRecordEdit,
   canMutateEmployeeRecord,
@@ -2897,6 +2899,31 @@ const updateJoiningDate = async (candidateId, joiningDate, user) => {
 };
 
 /**
+ * Notify an employee's reporting manager that the employee is leaving, when the
+ * resignDate falls within the soon-window. Fires at most once.
+ * notifyFn is injectable for testing; defaults to the real notify().
+ * ponytail: fires only on resignDate set/edit within window; a far-future date
+ * silently crossing 30d won't re-notify — board badge/counter cover that. Add a
+ * daily scan only if that gap is observed.
+ * @param {Object} candidate - { fullName, resignDate, reportingManager }
+ * @param {Date} now
+ * @param {Function} [notifyFn=notify]
+ */
+const maybeNotifyManagerOfResign = async (candidate, now, notifyFn = notify) => {
+  if (!candidate?.reportingManager) return;
+  if (resignBucket(candidate.resignDate, now) !== 'soon') return;
+  const when = new Date(candidate.resignDate).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+  await notifyFn(candidate.reportingManager, {
+    type: 'task',
+    title: 'Team member leaving',
+    message: `${candidate.fullName} is leaving on ${when}. Review their open tasks for reassignment.`,
+    link: '/task/kanban-board?leaving=1',
+  });
+};
+
+/**
  * Update candidate resign date (makes candidate inactive)
  * @param {string} candidateId - Candidate ID
  * @param {Date} resignDate - Resign date (can be null to clear/reactivate)
@@ -2923,6 +2950,13 @@ const updateResignDate = async (candidateId, resignDate, user) => {
   candidate.resignDate = resignDate ? new Date(resignDate) : null;
   // isActive will be automatically set by pre-save hook based on resignDate
   await candidate.save();
+
+  // Best-effort manager alert; never block the resign update on notification failure.
+  try {
+    await maybeNotifyManagerOfResign(candidate, new Date());
+  } catch (e) {
+    logger.error(`resign notify failed for candidate ${candidateId}: ${e.message}`);
+  }
 
   // Populate fields
   await candidate.populate([
@@ -3628,6 +3662,7 @@ export {
   // Joining and resign dates
   updateJoiningDate,
   updateResignDate,
+  maybeNotifyManagerOfResign,
   // Week-off calendar
   updateWeekOffForCandidates,
   getCandidateWeekOff,
