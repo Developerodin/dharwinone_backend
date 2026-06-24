@@ -73,7 +73,14 @@ const loadHeadMap = async (headIds) => {
   const rows = await Employee.find({ _id: { $in: ids } })
     .select('fullName email designation departmentId')
     .lean();
-  return new Map(rows.map((e) => [String(e._id), { id: String(e._id), fullName: e.fullName, email: e.email, designation: e.designation, departmentId: e.departmentId ? String(e.departmentId) : null }]));
+  const map = new Map(rows.map((e) => [String(e._id), { id: String(e._id), fullName: e.fullName, email: e.email, designation: e.designation, departmentId: e.departmentId ? String(e.departmentId) : null }]));
+  // Leadership heads can be any login user with no Employee record — resolve the rest from User.
+  const missing = ids.map(String).filter((id) => !map.has(id));
+  if (missing.length) {
+    const users = await User.find({ _id: { $in: missing } }).select('name email').lean();
+    for (const u of users) map.set(String(u._id), { id: String(u._id), fullName: u.name, email: u.email, designation: undefined, departmentId: null });
+  }
+  return map;
 };
 
 const attachHeadEmployees = async (tree) => {
@@ -90,6 +97,30 @@ const attachHeadEmployees = async (tree) => {
     for (const n of nodes || []) {
       const hid = n.headEmployeeId ? String(n.headEmployeeId) : null;
       n.headEmployee = hid ? headMap.get(hid) ?? null : null;
+      decorate(n.children);
+    }
+  };
+  decorate(tree.roots);
+  return tree;
+};
+
+// Department nodes carry their canonical department's colour. Empty colour ('')
+// means the chart auto-assigns a deterministic distinct colour client-side.
+const attachDepartmentColors = async (tree) => {
+  const deptIds = [];
+  const collect = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.type === 'department' && n.departmentId) deptIds.push(String(n.departmentId));
+      collect(n.children);
+    }
+  };
+  collect(tree.roots);
+  if (!deptIds.length) return tree;
+  const rows = await Department.find({ _id: { $in: [...new Set(deptIds)] } }).select('color').lean();
+  const colorById = new Map(rows.map((d) => [String(d._id), d.color || '']));
+  const decorate = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.type === 'department' && n.departmentId) n.color = colorById.get(String(n.departmentId)) || '';
       decorate(n.children);
     }
   };
@@ -151,7 +182,8 @@ export const buildTree = async (actor = null) => {
   const tree = buildTreeFromData(units, employees);
   await attachHeadEmployees(tree);
   const withSpan = attachSpanMetrics(tree, units, employees);
-  return attachVacantSlots(withSpan);
+  const withSlots = await attachVacantSlots(withSpan);
+  return attachDepartmentColors(withSlots);
 };
 
 /** Lazy subtree for chart expansion — rootId null loads top levels only. */
@@ -161,7 +193,8 @@ export const buildTreeLazy = async (actor = null, { rootId = null, depth = 2 } =
   const units = filterUnitsToSubtree(allUnits, rootId, depth);
   const tree = buildTreeFromData(units, employees);
   await attachHeadEmployees(tree);
-  return attachSpanMetrics(tree, allUnits, employees);
+  const withSpan = attachSpanMetrics(tree, allUnits, employees);
+  return attachDepartmentColors(withSpan);
 };
 
 /** Search org units/employees by name for chart discovery. */
@@ -231,15 +264,22 @@ const assertPlacement = (units, candidateUnit, parentId) => {
 
 const assertHeadAssignment = async (unit, headEmployeeId) => {
   if (!headEmployeeId) return;
-  const emp = await Employee.findById(headEmployeeId).select('fullName departmentId isActive').lean();
-  if (!emp || emp.isActive === false) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Selected head employee is not active');
-  }
-  if (unit.type === 'department' && unit.departmentId) {
-    if (String(emp.departmentId || '') !== String(unit.departmentId)) {
+  if (unit.type === 'department') {
+    const emp = await Employee.findById(headEmployeeId).select('departmentId isActive').lean();
+    if (!emp || emp.isActive === false) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Selected head employee is not active');
+    }
+    if (unit.departmentId && String(emp.departmentId || '') !== String(unit.departmentId)) {
       throw new ApiError(httpStatus.BAD_REQUEST, 'Head employee must belong to this department');
     }
+    return;
   }
+  // Leadership nodes (ceo/manager/supervisor): any active login user, or a legacy active employee.
+  const user = await User.findById(headEmployeeId).select('status').lean();
+  if (user && ['active', 'pending'].includes(user.status)) return;
+  const emp = await Employee.findById(headEmployeeId).select('isActive').lean();
+  if (emp && emp.isActive !== false) return;
+  throw new ApiError(httpStatus.BAD_REQUEST, 'Selected head is not an active user');
 };
 
 export const listOrgUnits = async () => {
@@ -466,16 +506,21 @@ export const deactivateOrgUnit = async (id) => {
 };
 
 /**
- * Active employees eligible to be assigned as org-unit heads (scoped to the actor).
- * When departmentId is given (department nodes), only that department's members are
- * returned — a department head must belong to that department.
+ * People eligible to be assigned as org-unit heads.
+ * Department nodes: only that department's active members (a dept head must belong to it).
+ * Leadership nodes (ceo/manager/supervisor): any active login user — not just employees.
  */
 export const listAssignableHeads = async (actor = null, departmentId = null) => {
-  const empScope = await employeeScopeFilter();
-  const scope = departmentId ? { ...empScope, departmentId } : empScope;
-  const employees = await loadActiveEmployeesPlain(scope);
-  return employees
-    .map((e) => ({ id: e.id, name: e.fullName }))
+  if (departmentId) {
+    const empScope = await employeeScopeFilter();
+    const employees = await loadActiveEmployeesPlain({ ...empScope, departmentId });
+    return employees
+      .map((e) => ({ id: e.id, name: e.fullName }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+  const users = await User.find({ status: { $in: ['active', 'pending'] } }).select('name email').lean();
+  return users
+    .map((u) => ({ id: String(u._id), name: u.name || u.email }))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 };
 

@@ -113,6 +113,12 @@ export const validateOrgUnitPlacement = (units, candidateUnit, parentId) => {
   if (childType === 'department' && !candidateUnit.departmentId) {
     return { ok: false, reason: 'Department nodes must reference a canonical department' };
   }
+  if (childType === 'ceo') {
+    const otherCeo = (units || []).some(
+      (u) => u.type === 'ceo' && u.isActive !== false && idStr(u.id) !== idStr(candidateUnit.id)
+    );
+    if (otherCeo) return { ok: false, reason: 'Only one CEO node is allowed' };
+  }
   const parentKey = idStr(parentId);
   const parent = parentKey ? (units || []).find((u) => idStr(u.id) === parentKey) : null;
   const parentType = parent?.type ?? null;

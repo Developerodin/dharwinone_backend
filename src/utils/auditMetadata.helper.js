@@ -104,6 +104,7 @@ export const snapshotDepartment = (doc) => {
   return {
     name: o.name,
     code: o.code,
+    color: o.color,
     isActive: o.isActive,
   };
 };

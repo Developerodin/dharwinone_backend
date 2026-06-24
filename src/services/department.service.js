@@ -18,7 +18,7 @@ export const canDeactivateDepartment = ({ referencingUnits, assignedEmployees })
 export const createDepartment = async (body) => {
   if (await Department.isNameTaken(body.name)) throw new ApiError(httpStatus.BAD_REQUEST, 'Department name already taken');
   const dept = await Department.create(body);
-  const fieldsUpdated = pickFieldsUpdated(body, ['name', 'code']);
+  const fieldsUpdated = pickFieldsUpdated(body, ['name', 'code', 'color']);
   return buildAuditEnvelope(dept, {
     action: ActivityActions.DEPARTMENT_CREATE,
     entityType: EntityTypes.DEPARTMENT,
@@ -40,6 +40,7 @@ export const listDepartments = async () =>
     id: String(d._id),
     name: d.name,
     code: d.code ?? '',
+    color: d.color ?? '',
     isActive: d.isActive !== false,
   }));
 
@@ -53,7 +54,7 @@ export const updateDepartmentById = async (id, body) => {
   Object.assign(dept, body);
   await dept.save();
   const after = snapshotDepartment(dept);
-  const metadata = buildUpdateAuditMetadata(before, after, body, ['name', 'code'], []);
+  const metadata = buildUpdateAuditMetadata(before, after, body, ['name', 'code', 'color'], []);
   return buildAuditEnvelope(
     dept,
     metadata

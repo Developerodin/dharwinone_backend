@@ -96,6 +96,16 @@ test('validateOrgUnitPlacement rejects invalid parent-child', () => {
   assert.equal(verdict.ok, false);
 });
 
+test('validateOrgUnitPlacement allows only one CEO node', () => {
+  const units = [u('c', 'ceo')];
+  // Creating a second CEO is rejected.
+  assert.equal(validateOrgUnitPlacement(units, { type: 'ceo' }, null).ok, false);
+  // Re-validating the existing CEO against itself stays allowed (self excluded).
+  assert.equal(validateOrgUnitPlacement(units, { id: 'c', type: 'ceo' }, null).ok, true);
+  // First CEO into an empty org is allowed.
+  assert.equal(validateOrgUnitPlacement([], { type: 'ceo' }, null).ok, true);
+});
+
 test('childrenValidAfterTypeChange rejects a demotion that orphans a child', () => {
   // manager 'm' has supervisor child 's'. Demoting 'm' to 'supervisor' makes
   // supervisor→supervisor illegal.
