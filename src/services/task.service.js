@@ -9,6 +9,8 @@ import { userIsAdmin } from '../utils/roleHelpers.js';
 import { isKanbanViewOnlyScope } from '../utils/kanbanScope.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
 import { reserveTaskSeqRange, formatTaskCode } from './pmTaskCode.js';
+import Employee from '../models/employee.model.js';
+import { resignBucket } from '../utils/resignBucket.js';
 
 const TASK_LIST_LIMIT_MAX = 200;
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -166,6 +168,64 @@ const createTask = async (createdById, payload) => {
   return task;
 };
 
+const OFFBOARDING_SEVERITY = { resigned: 2, soon: 1 };
+
+/** Pure: lean employee docs -> Map ownerId -> { bucket, name, resignDate }. */
+export const buildOffboardingMap = (employees, now) => {
+  const byOwner = new Map();
+  for (const e of employees) {
+    const bucket = resignBucket(e.resignDate, now);
+    if (bucket) byOwner.set(String(e.owner), { bucket, name: e.fullName, resignDate: e.resignDate });
+  }
+  return byOwner;
+};
+
+/** Pure: set offboardingFlag + offboardingAssignees on OPEN tasks. Mutates and returns. */
+export const applyOffboardingFlags = (plainTasks, byOwner) => {
+  for (const t of plainTasks) {
+    if (t.status === 'completed') continue;
+    const flagged = [];
+    for (const u of t.assignedTo || []) {
+      const uid = String(u?.id || u?._id || u || '');
+      const hit = byOwner.get(uid);
+      if (hit) flagged.push({ id: uid, name: hit.name, resignDate: hit.resignDate, bucket: hit.bucket });
+    }
+    t.offboardingAssignees = flagged;
+    if (flagged.length) {
+      t.offboardingFlag = flagged.reduce(
+        (best, f) => (OFFBOARDING_SEVERITY[f.bucket] > OFFBOARDING_SEVERITY[best] ? f.bucket : best),
+        flagged[0].bucket
+      );
+    }
+  }
+  return plainTasks;
+};
+
+/** Pure: owner User id strings for employees whose resignDate buckets to soon/resigned. */
+export const selectLeavingOwners = (employees, now) =>
+  employees.filter((e) => e.owner && resignBucket(e.resignDate, now) !== null).map((e) => String(e.owner));
+
+/** DB wrapper: enrich populated Task docs with derived offboarding fields. */
+const enrichWithOffboarding = async (results, now) => {
+  const plain = results.map((d) => (d?.toJSON ? d.toJSON() : d));
+  const ids = new Set();
+  for (const t of plain) {
+    if (t.status === 'completed') continue;
+    for (const u of t.assignedTo || []) {
+      const uid = String(u?.id || u?._id || u || '');
+      if (uid) ids.add(uid);
+    }
+  }
+  if (ids.size === 0) return plain;
+  const employees = await Employee.find({
+    owner: { $in: [...ids] },
+    resignDate: { $ne: null },
+  })
+    .select('owner fullName resignDate')
+    .lean();
+  return applyOffboardingFlags(plain, buildOffboardingMap(employees, now));
+};
+
 const queryTasks = async (filter, options) => {
   applyCommaFilter(filter, 'priority');
   expandPriorityFilterForDefaultMedium(filter);
@@ -198,10 +258,12 @@ const queryTasks = async (filter, options) => {
   const userRoleIds = filter.userRoleIds;
   const apiPermissions = filter.apiPermissions instanceof Set ? filter.apiPermissions : new Set();
   const assignedToMe = filter.assignedToMe === true || filter.assignedToMe === 'true';
+  const leavingOnly = filter.leaving === true || filter.leaving === 'true';
   delete filter.userRoleIds;
   delete filter.userId;
   delete filter.apiPermissions;
   delete filter.assignedToMe;
+  delete filter.leaving;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   /** Org-wide list when admin OR role grants tasks.read / tasks.manage. */
@@ -255,6 +317,21 @@ const queryTasks = async (filter, options) => {
     }
   }
 
+  // "Leaving" filter + counter: OPEN tasks assigned to an employee resigning soon
+  // or already resigned. Computed server-side so both the filter and the total
+  // count work across pagination (not just the loaded page), like priority.
+  const leavingEmps = await Employee.find({ resignDate: { $ne: null } })
+    .select('owner resignDate')
+    .lean();
+  const leavingOwnerIds = selectLeavingOwners(leavingEmps, new Date()).map(
+    (id) => new mongoose.Types.ObjectId(id)
+  );
+  const leavingConstraint = { assignedTo: { $in: leavingOwnerIds }, status: { $ne: 'completed' } };
+  const baseFilter = finalFilter;
+  if (leavingOnly) {
+    finalFilter = { $and: [baseFilter, leavingConstraint] };
+  }
+
   const sort = options.sortBy || '-createdAt';
   const limit = options.limit && parseInt(options.limit, 10) > 0
     ? Math.min(TASK_LIST_LIMIT_MAX, parseInt(options.limit, 10))
@@ -262,7 +339,7 @@ const queryTasks = async (filter, options) => {
   const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
   const skip = (page - 1) * limit;
 
-  const [results, totalResults] = await Promise.all([
+  const [results, totalResults, leavingTotal] = await Promise.all([
     Task.find(finalFilter)
       .sort(sort)
       .skip(skip)
@@ -275,10 +352,15 @@ const queryTasks = async (filter, options) => {
       ])
       .exec(),
     Task.countDocuments(finalFilter).exec(),
+    // True count of leaving tasks the user can see, scoped like the main query.
+    leavingOwnerIds.length
+      ? Task.countDocuments({ $and: [baseFilter, leavingConstraint] }).exec()
+      : Promise.resolve(0),
   ]);
 
   const totalPages = Math.ceil(totalResults / limit);
-  return { results, page, limit, totalPages, totalResults };
+  const enriched = await enrichWithOffboarding(results, new Date());
+  return { results: enriched, page, limit, totalPages, totalResults, leavingTotal };
 };
 
 const getTaskById = async (id) => {
@@ -499,4 +581,5 @@ export {
   applyCommaFilter,
   expandPriorityFilterForDefaultMedium,
   sanitizeTaskWritePayload,
+  enrichWithOffboarding,
 };
