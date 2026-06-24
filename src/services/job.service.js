@@ -835,6 +835,9 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
     job: jobId,
     candidate: candidateId,
     appliedBy: appliedById,
+    // Internal applicant: a logged-in user applying as themselves. Recruiter-applies-on-behalf
+    // leaves this null (external). Public apply also leaves it null. Drives the internal/external badge.
+    applicantUser: isSelfApply ? userId : null,
     status: 'Applied',
   });
   await syncReferralPipelineAfterJobApplication(jobId, candidateId, job);

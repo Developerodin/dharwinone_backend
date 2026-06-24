@@ -444,6 +444,15 @@ const publicApplyToJob = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(result);
 });
 
+// Lightweight existence check for the public apply form: lets the UI show a friendly
+// "log in to apply" hint before the user fills the whole form. Returns only a boolean
+// (no account details) and is rate-limited at the route to limit enumeration.
+const checkPublicEmail = catchAsync(async (req, res) => {
+  const email = String(req.query.email || '').toLowerCase().trim();
+  const exists = email ? !!(await User.exists({ email })) : false;
+  res.send({ exists });
+});
+
 const listBookmarks = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const results = await listJobBookmarks(req.params.jobId, userId);
@@ -489,6 +498,7 @@ export {
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,
+  checkPublicEmail,
   listBookmarks,
   addBookmark,
   deleteBookmark,

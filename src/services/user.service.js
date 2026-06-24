@@ -102,6 +102,35 @@ const queryUsers = async (filter, options, requester = null) => {
     }
   }
   const users = await User.paginate(mongoFilter, options);
+  // Attach the company-assigned (official) email from each linked Employee profile so callers
+  // (meeting / interview invites) can prefer it over the personal login email. Best-effort: a
+  // failure here must never break the user list.
+  try {
+    const ownerIds = (users.results || []).map((u) => u._id).filter(Boolean);
+    if (ownerIds.length) {
+      const Employee = (await import('../models/employee.model.js')).default;
+      const emps = await Employee.find({
+        owner: { $in: ownerIds },
+        companyAssignedEmail: { $nin: [null, ''] },
+      })
+        .select('owner companyAssignedEmail companyEmailProvider')
+        .lean();
+      if (emps.length) {
+        const byOwner = new Map(emps.map((e) => [String(e.owner), e]));
+        users.results = users.results.map((u) => {
+          const obj = typeof u.toJSON === 'function' ? u.toJSON() : u;
+          const emp = byOwner.get(String(obj.id || obj._id));
+          if (emp) {
+            obj.companyAssignedEmail = emp.companyAssignedEmail;
+            obj.companyEmailProvider = emp.companyEmailProvider || '';
+          }
+          return obj;
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn(`queryUsers companyAssignedEmail enrich failed: ${err?.message || err}`);
+  }
   return users;
 };
 

@@ -168,6 +168,14 @@ router.post(
 );
 
 /**
+ * GET /v1/public/account-exists?email=
+ * Lightweight check so the public apply form can prompt existing users to log in
+ * instead of erroring after a full submit. Returns a boolean only (no account
+ * details); rate-limited to limit enumeration. Separate path from /jobs/:jobId.
+ */
+router.get('/account-exists', publicRegistrationLimiter, jobController.checkPublicEmail);
+
+/**
  * GET /v1/public/plivo/answer
  * Plivo answer webhook for click-to-call bridges (no auth — Plivo's servers hit it).
  * The `sig` HMAC over `to|callerId` gates it so it can't be abused to dial arbitrary
