@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 // Mirrors the notify() branch in emitNewMessage() so we can unit-test
 // the isActive check without a real Socket.io server.
-const makeEmitNewMessage = (io, notifyFn) => async (conversationId, message, participants) => {
+// `permittedIds` (when provided) is the set of user ids allowed to view chats
+// (chats.read). null means "no gate" — preserves the older tests below.
+const makeEmitNewMessage = (io, notifyFn, permittedIds = null) => async (conversationId, message, participants) => {
   const payload = typeof message.toObject === 'function' ? message.toObject() : { ...message };
   if (payload._id && !payload.id) payload.id = payload._id.toString();
   const senderStr = String(payload.sender?._id || payload.sender?.id || '');
@@ -17,7 +19,7 @@ const makeEmitNewMessage = (io, notifyFn) => async (conversationId, message, par
       const isActive = room && [...room].some(
         (sid) => io.sockets.sockets.get(sid)?.data?.userId === uidStr
       );
-      if (!isActive) {
+      if (!isActive && (permittedIds === null || permittedIds.has(uidStr))) {
         notifyFn(uid, {
           type: 'chat_message',
           title: payload.sender?.name || 'New message',
@@ -64,6 +66,24 @@ describe('emitNewMessage — notify() branch', () => {
   it('skips notify() when recipient is actively viewing the conversation', async () => {
     const notifyFn = mock.fn(async () => {});
     const emitNewMessage = makeEmitNewMessage(makeIo(recipient), notifyFn);
+    await emitNewMessage(conversationId, message, [sender._id, recipient]);
+
+    assert.equal(notifyFn.mock.calls.length, 0);
+  });
+
+  it('notifies a recipient who has chat-view permission', async () => {
+    const notifyFn = mock.fn(async () => {});
+    const permittedIds = new Set([recipient]);
+    const emitNewMessage = makeEmitNewMessage(makeIo(null), notifyFn, permittedIds);
+    await emitNewMessage(conversationId, message, [sender._id, recipient]);
+
+    assert.equal(notifyFn.mock.calls.length, 1);
+  });
+
+  it('skips notify() for a recipient lacking chat-view permission', async () => {
+    const notifyFn = mock.fn(async () => {});
+    const permittedIds = new Set(); // recipient not permitted to view chats
+    const emitNewMessage = makeEmitNewMessage(makeIo(null), notifyFn, permittedIds);
     await emitNewMessage(conversationId, message, [sender._id, recipient]);
 
     assert.equal(notifyFn.mock.calls.length, 0);

@@ -8,6 +8,7 @@ import ChatCall from '../models/chatCall.model.js';
 import * as chatService from './chat.service.js';
 import logger from '../config/logger.js';
 import { notify } from './notification.service.js';
+import { getUserIdsWithApiPermission } from './permission.service.js';
 import * as chatCallService from './chatCall.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 
@@ -333,6 +334,11 @@ const emitNewMessage = async (conversationId, message) => {
     const participantIds = await chatService.getConversationParticipantIds(conversationId);
     if (participantIds && participantIds.length) {
       const senderStr = String(payload.sender?._id || payload.sender?.id || '');
+      // Only persist a bell notification for participants who can actually open the
+      // chats page (chats.read). Otherwise they get a notification whose link the
+      // route guard blocks (e.g. employees added to a conversation without chat access).
+      // ponytail: per-message role scan (2 queries); add a short TTL cache if chat volume makes this hot.
+      const chatPermittedIds = new Set(await getUserIdsWithApiPermission('chats.read'));
       participantIds.forEach((uid) => {
         const uidStr = String(uid);
         // conversation_updated to all participants (sidebar badge/preview)
@@ -348,7 +354,7 @@ const emitNewMessage = async (conversationId, message) => {
           const isActive = room && [...room].some(
             (sid) => io.sockets.sockets.get(sid)?.data?.userId === uidStr
           );
-          if (!isActive) {
+          if (!isActive && chatPermittedIds.has(uidStr)) {
             notify(uid, {
               type: 'chat_message',
               title: payload.sender?.name || 'New message',
