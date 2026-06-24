@@ -34,6 +34,19 @@ const emailAccountSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
+    // High-water mark for the new-mail push poller (jobs/emailNotificationPoller.js):
+    // inbox messages received at/before this time have already been considered for a push.
+    lastNotifiedAt: {
+      type: Date,
+      default: null,
+    },
+    // OAuth client_id (Azure App Registration) that issued this account's tokens.
+    // Outlook refresh tokens are bound to their issuing client, so refresh must reuse it.
+    // null for legacy accounts connected before this field existed (refresh self-heals it).
+    oauthClientId: {
+      type: String,
+      default: null,
+    },
     status: {
       type: String,
       enum: ['active', 'revoked', 'error'],

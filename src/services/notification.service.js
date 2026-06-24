@@ -3,6 +3,7 @@ import User from '../models/user.model.js';
 import logger from '../config/logger.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { resolveNotificationLink, normalizeNotificationLink } from '../utils/notificationLink.js';
+import { sendPushToUser } from './push.service.js';
 
 /**
  * In-app + queued notification entry points: `notify`, `notifyByEmail`, `createNotification`.
@@ -137,6 +138,16 @@ export const createNotification = async (userId, options) => {
   pushToSse(userId, { type: 'notification', notification: payload });
   const count = await Notification.countDocuments({ user: userId, read: false });
   pushToSse(userId, { type: 'unread_count', count });
+
+  // Mobile push (fire-and-forget). Reaches devices when the app is backgrounded/closed.
+  // The inApp preference was already honored by callers (notify/notifyByEmail) before
+  // reaching createNotification, so an in-app notification implies a push is wanted.
+  sendPushToUser(userId, {
+    title: title || 'Notification',
+    body: message || '',
+    data: { type: 'notification', notificationType: type, link: finalLink, notificationId: String(doc._id) },
+  }).catch((e) => logger.warn('[push] notify push failed: %s', e?.message || e));
+
   return doc;
 };
 

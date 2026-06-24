@@ -1,8 +1,10 @@
+import httpStatus from 'http-status';
 import { google } from 'googleapis';
 import config from '../../config/config.js';
 import EmailAccount from '../../models/emailAccount.model.js';
 import { MAX_GMAIL_ACCOUNTS_PER_USER } from '../../constants/emailAccountLimits.js';
 import logger from '../../config/logger.js';
+import ApiError from '../../utils/ApiError.js';
 import {
   getAssignedMailboxPolicy,
   revokeAllOtherEmailAccounts,
@@ -21,6 +23,25 @@ function createOAuth2Client() {
     throw new Error('GCP_GOOGLE_CLIENT_ID and GCP_GOOGLE_CLIENT_SECRET must be set for Gmail OAuth');
   }
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+
+/**
+ * OAuth client for the account's refresh token. Refresh tokens are bound to the client_id
+ * that minted them: tokens connected from the mobile app were issued by an installed-app
+ * (Android/iOS) client that has NO secret, so they must be refreshed with that same client_id
+ * and no secret. Web auth-code accounts fall back to the web client (id + secret).
+ */
+function refreshClientForAccount(account) {
+  const id = (account.oauthClientId || '').trim();
+  if (id) {
+    const android = (config.googleApp?.androidClientId || '').trim();
+    const ios = (config.googleApp?.iosClientId || '').trim();
+    if (id === android || id === ios) {
+      // Installed-app client: client_id only, no secret.
+      return new google.auth.OAuth2(id);
+    }
+  }
+  return createOAuth2Client();
 }
 
 function getGmailClient(auth) {
@@ -120,12 +141,38 @@ export async function handleCallback(code, userId, stateEncoded = '') {
   }
 
   const tokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
+  return upsertGmailAccount(
+    userId,
+    {
+      email,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      tokenExpiry,
+      // Web auth-code flow uses the backend's (web) Google client.
+      oauthClientId: (config.google.clientId || '').trim() || null,
+    },
+    policy
+  );
+}
 
+/**
+ * Create or update a Gmail EmailAccount and enforce mailbox-lock policy.
+ * Shared by the web auth-code flow (handleCallback) and the mobile token flow (connectWithTokens).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ email: string, accessToken: string, refreshToken?: string|null, tokenExpiry?: Date|null, oauthClientId?: string|null }} fields
+ * @param {Awaited<ReturnType<typeof getAssignedMailboxPolicy>>} policy
+ */
+async function upsertGmailAccount(
+  userId,
+  { email, accessToken, refreshToken, tokenExpiry = null, oauthClientId = null },
+  policy
+) {
   const existing = await EmailAccount.findOne({ user: userId, provider: 'gmail', email });
   if (existing) {
-    existing.accessToken = tokens.access_token;
-    existing.refreshToken = tokens.refresh_token || existing.refreshToken;
+    existing.accessToken = accessToken;
+    existing.refreshToken = refreshToken || existing.refreshToken;
     existing.tokenExpiry = tokenExpiry;
+    existing.oauthClientId = oauthClientId || existing.oauthClientId;
     existing.status = 'active';
     await existing.save();
     if (policy.hardLockActive) {
@@ -155,9 +202,10 @@ export async function handleCallback(code, userId, stateEncoded = '') {
     user: userId,
     provider: 'gmail',
     email,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token || null,
+    accessToken,
+    refreshToken: refreshToken || null,
     tokenExpiry,
+    oauthClientId: oauthClientId || null,
     status: 'active',
   });
   if (policy.hardLockActive) {
@@ -172,11 +220,75 @@ export async function handleCallback(code, userId, stateEncoded = '') {
 }
 
 /**
+ * Persist Gmail tokens from the mobile app (react-native-app-auth). Validates the access token
+ * via Google userinfo. Installed-app clients have no secret; record the issuing client_id so
+ * refresh reuses the matching client (see refreshClientForAccount).
+ * @param {string|import('mongoose').Types.ObjectId} userId
+ * @param {{ accessToken: string, refreshToken?: string|null, tokenExpiry?: Date|string|null }} tokens
+ */
+export async function connectWithTokens(userId, { accessToken, refreshToken, tokenExpiry }) {
+  const policy = await getAssignedMailboxPolicy(userId);
+  if (policy.hardLockActive && !policy.allowedProviders.includes('gmail')) {
+    const err = new Error('WRONG_PROVIDER');
+    err.code = 'WRONG_PROVIDER';
+    throw err;
+  }
+
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  let email = '';
+  try {
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const { data } = await oauth2.userinfo.get();
+    email = (data.email || '').toLowerCase();
+  } catch (err) {
+    logger.error('[Gmail] connectWithTokens userinfo failed: %s', err?.message);
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid or expired Google access token.', true);
+  }
+  if (!email) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Could not fetch user email from Google.');
+  }
+
+  if (policy.hardLockActive) {
+    if (email !== policy.expectedEmail) {
+      await revokeGoogleAccessToken(accessToken);
+      logger.warn('[mailbox_lock] mismatch_rejected userId=%s provider=gmail', String(userId));
+      const err = new Error('MAILBOX_MISMATCH');
+      err.code = 'MAILBOX_MISMATCH';
+      throw err;
+    }
+    if (!policy.allowedProviders.includes('gmail')) {
+      await revokeGoogleAccessToken(accessToken);
+      const err = new Error('WRONG_PROVIDER');
+      err.code = 'WRONG_PROVIDER';
+      throw err;
+    }
+  }
+
+  let expiry = null;
+  if (tokenExpiry) {
+    const parsed = tokenExpiry instanceof Date ? tokenExpiry : new Date(tokenExpiry);
+    if (!Number.isNaN(parsed.getTime())) expiry = parsed;
+  }
+
+  // Tokens came from the mobile app; record the issuing client so refresh reuses the matching
+  // client_id. iOS is gated off for now, so the Android client is the only configured one.
+  const appClientId =
+    (config.googleApp.androidClientId || '').trim() || (config.googleApp.iosClientId || '').trim() || null;
+
+  return upsertGmailAccount(
+    userId,
+    { email, accessToken, refreshToken: refreshToken || null, tokenExpiry: expiry, oauthClientId: appClientId },
+    policy
+  );
+}
+
+/**
  * Refresh access token if expired.
  */
 export async function refreshToken(account) {
   if (!account.refreshToken) throw new Error('No refresh token for this account');
-  const oauth2Client = createOAuth2Client();
+  const oauth2Client = refreshClientForAccount(account);
   oauth2Client.setCredentials({
     refresh_token: account.refreshToken,
   });
@@ -197,6 +309,47 @@ async function ensureValidToken(account) {
     await refreshToken(account);
   }
   return account;
+}
+
+/**
+ * Lightweight inbox check for the new-mail push poller. Returns inbound messages newer
+ * than sinceDate (chronological), each as { id, from, subject, internalMs }.
+ * Bounded to a small page and recent window to keep Gmail API quota low.
+ * @param {Object} account EmailAccount
+ * @param {Date|string|null} sinceDate
+ */
+export async function getNewInboxMessages(account, sinceDate) {
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  const listRes = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 10,
+    labelIds: ['INBOX'],
+    q: '-is:chat newer_than:2d',
+  });
+  const ids = (listRes.data.messages || []).map((m) => m.id);
+  const sinceMs = sinceDate ? new Date(sinceDate).getTime() : 0;
+  const out = [];
+  for (const id of ids) {
+    // eslint-disable-next-line no-await-in-loop
+    const full = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'metadata',
+      metadataHeaders: ['From', 'Subject'],
+    });
+    const internalMs = Number(full.data.internalDate || 0);
+    if (internalMs <= sinceMs) continue;
+    const headers = (full.data.payload?.headers || []).reduce((acc, h) => {
+      acc[(h.name || '').toLowerCase()] = h.value;
+      return acc;
+    }, {});
+    out.push({ id, from: headers.from || '', subject: headers.subject || '(No subject)', internalMs });
+  }
+  return out.sort((a, b) => a.internalMs - b.internalMs);
 }
 
 /**

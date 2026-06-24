@@ -63,6 +63,15 @@ const envVarsSchema = Joi.object()
     GCP_GOOGLE_CLIENT_ID: Joi.string().optional().description('Google OAuth client ID (for Gmail)'),
     GCP_GOOGLE_CLIENT_SECRET: Joi.string().optional().description('Google OAuth client secret (for Gmail)'),
     GCP_GOOGLE_REDIRECT_URI: Joi.string().optional().description('Google OAuth redirect URI'),
+    GCP_GOOGLE_APP_CLIENT_ID_ANDROID: Joi.string()
+      .optional()
+      .description('Google OAuth client ID for the Android app (installed/PKCE client, no secret)'),
+    GCP_GOOGLE_APP_CLIENT_ID_IOS: Joi.string()
+      .optional()
+      .description('Google OAuth client ID for the iOS app (installed/PKCE client, no secret)'),
+    EXPO_ACCESS_TOKEN: Joi.string()
+      .optional()
+      .description('Expo access token for sending push notifications (optional; enables enhanced security + rate limits)'),
 
     // LiveKit
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
@@ -115,6 +124,10 @@ const envVarsSchema = Joi.object()
     MICROSOFT_CLIENT_SECRET: Joi.string().optional().description('Microsoft OAuth client secret'),
     MICROSOFT_REDIRECT_URI: Joi.string().optional().description('Microsoft OAuth redirect URI'),
     MICROSOFT_TENANT_ID: Joi.string().optional().default('common').description('Microsoft tenant ID (common for multi-tenant)'),
+    // Separate Azure App Registration used by the mobile app (react-native-app-auth, public/PKCE client).
+    // Refresh tokens are bound to the issuing client_id, so app-connected mailboxes must be refreshed with this client.
+    MICROSOFT_APP_CLIENT_ID: Joi.string().optional().description('Microsoft OAuth client ID for the mobile app (public/PKCE client)'),
+    MICROSOFT_APP_TENANT_ID: Joi.string().optional().description('Microsoft tenant ID for the mobile app registration (defaults to MICROSOFT_TENANT_ID)'),
 
     // Auth rate limit (deployed apps often share IPs; increase to avoid 429 on sign-in)
     RATE_LIMIT_AUTH_WINDOW_MINUTES: Joi.number().optional().default(15).description('Auth rate limit window in minutes'),
@@ -376,6 +389,16 @@ const config = {
       return fromEnv || fallback;
     })(),
   },
+  // Expo push notifications. accessToken is optional (see push.service.js).
+  expo: {
+    accessToken: (envVars.EXPO_ACCESS_TOKEN || '').trim(),
+  },
+  // Mobile app's Google OAuth clients (installed/PKCE, no secret). Used to refresh tokens for
+  // Gmail accounts connected from the app, since refresh tokens are bound to their issuing client_id.
+  googleApp: {
+    androidClientId: (envVars.GCP_GOOGLE_APP_CLIENT_ID_ANDROID || '').trim(),
+    iosClientId: (envVars.GCP_GOOGLE_APP_CLIENT_ID_IOS || '').trim(),
+  },
   microsoft: {
     clientId: envVars.MICROSOFT_CLIENT_ID || '',
     clientSecret: envVars.MICROSOFT_CLIENT_SECRET || '',
@@ -393,6 +416,15 @@ const config = {
     })(),
     tenantId: (() => {
       const t = (envVars.MICROSOFT_TENANT_ID || 'common').trim();
+      return t || 'common';
+    })(),
+  },
+  // Mobile app's Azure App Registration (public/PKCE client). Used to refresh tokens for
+  // accounts connected from the app, since refresh tokens are bound to their issuing client_id.
+  microsoftApp: {
+    clientId: (envVars.MICROSOFT_APP_CLIENT_ID || '').trim(),
+    tenantId: (() => {
+      const t = (envVars.MICROSOFT_APP_TENANT_ID || envVars.MICROSOFT_TENANT_ID || 'common').trim();
       return t || 'common';
     })(),
   },

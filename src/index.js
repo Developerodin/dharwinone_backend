@@ -33,6 +33,7 @@ import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
 import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
 import { startRetentionEnforcer, stopRetentionEnforcer } from './jobs/retentionEnforcer.js';
+import { startEmailNotificationPoller, stopEmailNotificationPoller } from './jobs/emailNotificationPoller.js';
 import { canUseRedis } from './config/redis.js';
 import {
   startWorkforceReconciliationScheduler,
@@ -92,6 +93,7 @@ mongoose
         startRetentionEnforcer();
         startWorkforceReconciliationScheduler({ intervalHours: 24 });
         startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
+        startEmailNotificationPoller();
       }
     });
   })
@@ -127,6 +129,7 @@ const exitHandler = () => {
       stopRetentionEnforcer();
       stopWorkforceReconciliationScheduler();
       stopSalesAgentCacheReconcilerScheduler();
+      stopEmailNotificationPoller();
       process.exit(1);
     });
   } else {

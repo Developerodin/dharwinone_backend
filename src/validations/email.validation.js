@@ -17,6 +17,14 @@ const googleCallback = {
     .unknown(true),
 };
 
+const connectGoogleAccount = {
+  body: Joi.object().keys({
+    accessToken: Joi.string().trim().required(),
+    refreshToken: Joi.string().trim().allow('', null),
+    tokenExpiry: Joi.alternatives().try(Joi.date().iso(), Joi.string().isoDate()).allow(null),
+  }),
+};
+
 const listMessages = {
   query: Joi.object().keys({
     accountId: Joi.string().custom(objectId).required(),
@@ -298,6 +306,7 @@ export {
   connectionPolicy,
   getGoogleAuthUrl,
   googleCallback,
+  connectGoogleAccount,
   disconnectAccount,
   listMessages,
   listThreads,
