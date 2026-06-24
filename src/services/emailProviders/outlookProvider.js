@@ -1024,22 +1024,24 @@ export async function replyMessage(account, messageId, { html, attachments = [] 
   const replyHtml = outlookSendHtmlBody(html || '');
   if (attachments.length > 0) {
     const orig = await getMessage(account, messageId);
-    const replyBody = {
-      message: {
-        body: {
-          contentType: 'HTML',
-          content: replyHtml,
-        },
-        toRecipients: [{ emailAddress: { address: orig.from.replace(/.*</, '').replace(/>.*/, '') } }],
-        attachments: attachments.map((att) => ({
-          '@odata.type': '#microsoft.graph.fileAttachment',
-          name: att.filename || 'attachment',
-          contentType: att.mimeType || 'application/octet-stream',
-          contentBytes: typeof att.content === 'string' ? att.content : Buffer.from(att.content).toString('base64'),
-        })),
+    const replyToAddress = String(orig?.from || '').replace(/.*</, '').replace(/>.*/, '').trim();
+    const message = {
+      body: {
+        contentType: 'HTML',
+        content: replyHtml,
       },
-      comment: '',
+      attachments: attachments.map((att) => ({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: att.filename || 'attachment',
+        contentType: att.mimeType || 'application/octet-stream',
+        contentBytes: typeof att.content === 'string' ? att.content : Buffer.from(att.content).toString('base64'),
+      })),
     };
+    // Only override recipients when we can parse one; otherwise let Graph reply to the original sender.
+    if (replyToAddress) {
+      message.toRecipients = [{ emailAddress: { address: replyToAddress } }];
+    }
+    const replyBody = { message, comment: '' };
     await client.api(`${msgPath(messageId)}/reply`).post(replyBody);
   } else {
     await client.api(`${msgPath(messageId)}/reply`).post({
