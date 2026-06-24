@@ -630,6 +630,36 @@ function isGraphUnauthorized(err) {
 }
 
 /**
+ * Lightweight inbox check for the new-mail push poller. Returns inbound messages newer
+ * than sinceDate (chronological), each as { id, from, subject, internalMs }.
+ * @param {Object} account EmailAccount
+ * @param {Date|string|null} sinceDate
+ */
+export async function getNewInboxMessages(account, sinceDate) {
+  const res = await with401Refresh(account, () =>
+    createGraphClient(account.accessToken)
+      .api('/me/mailFolders/inbox/messages')
+      .top(10)
+      .select('subject,from,receivedDateTime')
+      .orderby('receivedDateTime desc')
+      .get()
+  );
+  const sinceMs = sinceDate ? new Date(sinceDate).getTime() : 0;
+  const out = [];
+  for (const m of res.value || []) {
+    const internalMs = new Date(m.receivedDateTime).getTime();
+    if (!internalMs || internalMs <= sinceMs) continue;
+    out.push({
+      id: m.id,
+      from: m.from?.emailAddress?.address || m.from?.emailAddress?.name || '',
+      subject: m.subject || '(No subject)',
+      internalMs,
+    });
+  }
+  return out.sort((a, b) => a.internalMs - b.internalMs);
+}
+
+/**
  * ensureValidToken before first Graph call; on 401, refresh then retry.
  * Callbacks must use account.accessToken at execution time (e.g. createGraphClient(account.accessToken)
  * inside the arrow) — never capture the token in an outer const before with401Refresh.

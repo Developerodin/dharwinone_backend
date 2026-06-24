@@ -312,6 +312,47 @@ async function ensureValidToken(account) {
 }
 
 /**
+ * Lightweight inbox check for the new-mail push poller. Returns inbound messages newer
+ * than sinceDate (chronological), each as { id, from, subject, internalMs }.
+ * Bounded to a small page and recent window to keep Gmail API quota low.
+ * @param {Object} account EmailAccount
+ * @param {Date|string|null} sinceDate
+ */
+export async function getNewInboxMessages(account, sinceDate) {
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  const listRes = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 10,
+    labelIds: ['INBOX'],
+    q: '-is:chat newer_than:2d',
+  });
+  const ids = (listRes.data.messages || []).map((m) => m.id);
+  const sinceMs = sinceDate ? new Date(sinceDate).getTime() : 0;
+  const out = [];
+  for (const id of ids) {
+    // eslint-disable-next-line no-await-in-loop
+    const full = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'metadata',
+      metadataHeaders: ['From', 'Subject'],
+    });
+    const internalMs = Number(full.data.internalDate || 0);
+    if (internalMs <= sinceMs) continue;
+    const headers = (full.data.payload?.headers || []).reduce((acc, h) => {
+      acc[(h.name || '').toLowerCase()] = h.value;
+      return acc;
+    }, {});
+    out.push({ id, from: headers.from || '', subject: headers.subject || '(No subject)', internalMs });
+  }
+  return out.sort((a, b) => a.internalMs - b.internalMs);
+}
+
+/**
  * List messages in a label.
  * @param {Object} opts - labelId, pageToken (from prev response), pageSize, query
  */

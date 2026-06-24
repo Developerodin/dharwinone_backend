@@ -69,6 +69,9 @@ const envVarsSchema = Joi.object()
     GCP_GOOGLE_APP_CLIENT_ID_IOS: Joi.string()
       .optional()
       .description('Google OAuth client ID for the iOS app (installed/PKCE client, no secret)'),
+    EXPO_ACCESS_TOKEN: Joi.string()
+      .optional()
+      .description('Expo access token for sending push notifications (optional; enables enhanced security + rate limits)'),
 
     // LiveKit
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
@@ -385,6 +388,10 @@ const config = {
       }
       return fromEnv || fallback;
     })(),
+  },
+  // Expo push notifications. accessToken is optional (see push.service.js).
+  expo: {
+    accessToken: (envVars.EXPO_ACCESS_TOKEN || '').trim(),
   },
   // Mobile app's Google OAuth clients (installed/PKCE, no secret). Used to refresh tokens for
   // Gmail accounts connected from the app, since refresh tokens are bound to their issuing client_id.

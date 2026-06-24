@@ -8,6 +8,7 @@ import ChatCall from '../models/chatCall.model.js';
 import * as chatService from './chat.service.js';
 import logger from '../config/logger.js';
 import { notify } from './notification.service.js';
+import { sendPushToUser } from './push.service.js';
 import * as chatCallService from './chatCall.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 
@@ -167,6 +168,19 @@ const initSocket = (httpServer) => {
               callType,
               caller: { id: userId, name: socket.userName },
             });
+            // Mobile push so the callee is alerted when the app is backgrounded/closed.
+            sendPushToUser(pidStr, {
+              title: `Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
+              body: `${socket.userName || 'Someone'} is calling`,
+              data: {
+                type: 'incoming_call',
+                callId,
+                conversationId,
+                callType,
+                callerName: socket.userName || 'Someone',
+              },
+              channelId: 'incoming-calls',
+            }).catch((e) => logger.warn('[push] call push failed: %s', e?.message || e));
           }
         });
         cb?.({ success: true, callId });
