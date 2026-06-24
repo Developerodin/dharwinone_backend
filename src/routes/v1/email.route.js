@@ -33,6 +33,12 @@ router.get(
 );
 router.get('/accounts', requirePermissions('emails.read'), validate(emailValidation.listGmailAccounts), emailController.listGmailAccounts);
 router.get('/auth/google', requirePermissions('emails.manage'), validate(emailValidation.getGoogleAuthUrl), emailController.getGoogleAuthUrl);
+router.post(
+  '/auth/google/connect',
+  requirePermissions('emails.manage'),
+  validate(emailValidation.connectGoogleAccount),
+  emailController.connectGoogleAccount
+);
 router.delete(
   '/accounts/:id',
   requirePermissions('emails.manage'),

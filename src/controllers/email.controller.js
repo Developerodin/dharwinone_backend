@@ -41,6 +41,16 @@ const googleCallback = catchAsync(async (req, res) => {
   }
 });
 
+const connectGoogleAccount = catchAsync(async (req, res) => {
+  const { accessToken, refreshToken, tokenExpiry } = req.body;
+  const account = await emailClientService.connectGmailWithTokens(req.user.id, {
+    accessToken,
+    refreshToken,
+    tokenExpiry,
+  });
+  res.status(httpStatus.CREATED).json(account);
+});
+
 const disconnectGmailAccount = catchAsync(async (req, res) => {
   await emailClientService.disconnectGmailAccount(req.params.id, req.user.id);
   res.json({ success: true });
@@ -194,6 +204,7 @@ export {
   listGmailAccounts,
   getGoogleAuthUrl,
   googleCallback,
+  connectGoogleAccount,
   disconnectGmailAccount,
   listMessages,
   listThreads,

@@ -63,6 +63,12 @@ const envVarsSchema = Joi.object()
     GCP_GOOGLE_CLIENT_ID: Joi.string().optional().description('Google OAuth client ID (for Gmail)'),
     GCP_GOOGLE_CLIENT_SECRET: Joi.string().optional().description('Google OAuth client secret (for Gmail)'),
     GCP_GOOGLE_REDIRECT_URI: Joi.string().optional().description('Google OAuth redirect URI'),
+    GCP_GOOGLE_APP_CLIENT_ID_ANDROID: Joi.string()
+      .optional()
+      .description('Google OAuth client ID for the Android app (installed/PKCE client, no secret)'),
+    GCP_GOOGLE_APP_CLIENT_ID_IOS: Joi.string()
+      .optional()
+      .description('Google OAuth client ID for the iOS app (installed/PKCE client, no secret)'),
 
     // LiveKit
     LIVEKIT_URL: Joi.string().optional().default('ws://localhost:7880').description('LiveKit server URL'),
@@ -379,6 +385,12 @@ const config = {
       }
       return fromEnv || fallback;
     })(),
+  },
+  // Mobile app's Google OAuth clients (installed/PKCE, no secret). Used to refresh tokens for
+  // Gmail accounts connected from the app, since refresh tokens are bound to their issuing client_id.
+  googleApp: {
+    androidClientId: (envVars.GCP_GOOGLE_APP_CLIENT_ID_ANDROID || '').trim(),
+    iosClientId: (envVars.GCP_GOOGLE_APP_CLIENT_ID_IOS || '').trim(),
   },
   microsoft: {
     clientId: envVars.MICROSOFT_CLIENT_ID || '',
