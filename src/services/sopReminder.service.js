@@ -1,7 +1,7 @@
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import SopNotificationState from '../models/sopNotificationState.model.js';
-import { createNotification } from './notification.service.js';
+import { notify } from './notification.service.js';
 import { evaluateSopForCandidate, listSopOpenOverviewForManage } from './sopChecklist.service.js';
 import Employee from '../models/employee.model.js';
 
@@ -115,7 +115,7 @@ async function runSopReminderCheckForCandidate(candidateId, precomputedEval = nu
       st.lastNotifiedAt = new Date();
       await st.save();
     }
-    await createNotification(rid, {
+    await notify(rid, {
       type: 'sop',
       title: v > 0 ? `Onboarding (SOP v${v}): ${name}` : `Onboarding: ${name}`,
       message,
