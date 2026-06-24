@@ -46,3 +46,32 @@ describe('isChannelAllowed', () => {
     }
   });
 });
+
+describe('isChannelAllowed — newly gated types', () => {
+  // [type, inAppKey] for the 5 types added in this task
+  const newInAppPairs = [
+    ['chat_message', 'chatMessagesInApp'],
+    ['placement_update', 'placementUpdatesInApp'],
+    ['assignment', 'assignmentUpdatesInApp'],
+    ['project', 'projectUpdatesInApp'],
+    ['sop', 'sopAssignmentsInApp'],
+  ];
+
+  // Default-allow is already covered by the existing "pref key not set" test — only assert suppression here.
+  for (const [type, inAppKey] of newInAppPairs) {
+    it(`suppresses in-app for ${type} when ${inAppKey} is false`, () => {
+      assert.equal(isChannelAllowed(type, 'inApp', { [inAppKey]: false }), false);
+    });
+  }
+
+  it('suppresses email for placement_update when placementUpdates is false', () => {
+    assert.equal(isChannelAllowed('placement_update', 'email', { placementUpdates: false }), false);
+  });
+
+  it('never gates account/system/general (unmapped, always allowed)', () => {
+    for (const type of ['account', 'system', 'general']) {
+      assert.equal(isChannelAllowed(type, 'inApp', {}), true);
+      assert.equal(isChannelAllowed(type, 'email', {}), true);
+    }
+  });
+});

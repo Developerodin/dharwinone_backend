@@ -106,6 +106,12 @@ const userSchema = mongoose.Schema(
       recruiterUpdatesInApp: { type: Boolean, default: true },
       supportTicketUpdates: { type: Boolean, default: true },
       supportTicketUpdatesInApp: { type: Boolean, default: true },
+      placementUpdates: { type: Boolean, default: true },
+      placementUpdatesInApp: { type: Boolean, default: true },
+      chatMessagesInApp: { type: Boolean, default: true },
+      assignmentUpdatesInApp: { type: Boolean, default: true },
+      projectUpdatesInApp: { type: Boolean, default: true },
+      sopAssignmentsInApp: { type: Boolean, default: true },
     },
     platformSuperUser: {
       type: Boolean,

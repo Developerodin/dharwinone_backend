@@ -21,6 +21,11 @@ export const NOTIFICATION_PREF_KEYS = {
   course:           { email: 'courseUpdates',         inApp: 'courseUpdatesInApp' },
   recruiter:        { email: 'recruiterUpdates',      inApp: 'recruiterUpdatesInApp' },
   support_ticket:   { email: 'supportTicketUpdates',  inApp: 'supportTicketUpdatesInApp' },
+  placement_update: { email: 'placementUpdates', inApp: 'placementUpdatesInApp' },
+  chat_message:     { inApp: 'chatMessagesInApp' },
+  assignment:       { inApp: 'assignmentUpdatesInApp' },
+  project:          { inApp: 'projectUpdatesInApp' },
+  sop:              { inApp: 'sopAssignmentsInApp' },
 };
 
 export const isChannelAllowed = (type, channel, prefs) => {
