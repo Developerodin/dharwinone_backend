@@ -40,6 +40,16 @@ const taskSchema = new mongoose.Schema(
     /** Optional hints from AI task breakdown for staffing (e.g. Python, React). */
     requiredSkills: [{ type: String, trim: true }],
     assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    // Offboarding history: users removed from assignedTo during exit reassignment.
+    // Never auto-pruned — keeps "they worked on this task" queryable after reassignment.
+    formerAssignees: [
+      {
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        removedAt: { type: Date },
+        reason: { type: String, trim: true },
+      },
+    ],
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', index: true },
     likesCount: { type: Number, default: 0 },
     commentsCount: { type: Number, default: 0 },

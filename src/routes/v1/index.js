@@ -24,6 +24,7 @@ import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
 import employeeRoute from './employee.route.js';
 import candidateSopTemplateRoute from './candidateSopTemplate.route.js';
+import offboardingSopRoute from './offboardingSop.route.js';
 import jobRoute from './job.route.js';
 import externalJobRoute from './externalJob.route.js';
 import recruiterActivityRoute from './recruiterActivity.route.js';
@@ -169,10 +170,14 @@ const defaultRoutes = [
     path: '/employees',
     route: employeeRoute,
   },
-  {
-    path: '/candidate-sop-templates',
-    route: candidateSopTemplateRoute,
-  },
+    {
+      path: '/candidate-sop-templates',
+      route: candidateSopTemplateRoute,
+    },
+    {
+      path: '/offboarding-sop',
+      route: offboardingSopRoute,
+    },
   {
     path: '/jobs',
     route: jobRoute,
