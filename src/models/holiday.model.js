@@ -26,6 +26,13 @@ const holidaySchema = mongoose.Schema(
       default: true,
       index: true,
     },
+    /** Named holiday set, e.g. "US Holidays 2026". Empty = ungrouped. */
+    group: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
   },
   {
     timestamps: true,

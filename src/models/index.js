@@ -9,6 +9,7 @@ import Mentor from './mentor.model.js';
 import Attendance from './attendance.model.js';
 import Holiday from './holiday.model.js';
 import StudentGroup from './studentGroup.model.js';
+import HolidayGroup from './holidayGroup.model.js';
 import Shift from './shift.model.js';
 import Employee from './employee.model.js';
 import Meeting from './meeting.model.js';
@@ -19,5 +20,5 @@ import AuditEvent from './auditEvent.model.js';
 import Recording from './recording.model.js';
 import EmailAccount from './emailAccount.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, Shift, Employee, Meeting, JobApplication, Offer, Placement, AuditEvent, Recording, EmailAccount };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, HolidayGroup, Shift, Employee, Meeting, JobApplication, Offer, Placement, AuditEvent, Recording, EmailAccount };
 

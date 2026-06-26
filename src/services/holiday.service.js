@@ -9,7 +9,7 @@ import ApiError from '../utils/ApiError.js';
  * @returns {Promise<Holiday>}
  */
 const createHoliday = async (holidayBody, _user) => {
-  const { title, date, endDate, isActive } = holidayBody;
+  const { title, date, endDate, isActive, group } = holidayBody;
 
   const normalizedDate = new Date(date);
   normalizedDate.setUTCHours(0, 0, 0, 0);
@@ -28,6 +28,7 @@ const createHoliday = async (holidayBody, _user) => {
     date: normalizedDate,
     endDate: normalizedEndDate,
     isActive: isActive !== undefined ? isActive : true,
+    group: group != null ? group : '',
   });
 
   return holiday;

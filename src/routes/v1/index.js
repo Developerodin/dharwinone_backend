@@ -18,6 +18,7 @@ import analyticsRoute from './analytics.route.js';
 import attendanceRoute from './attendance.route.js';
 import holidayRoute from './holiday.route.js';
 import studentGroupRoute from './studentGroup.route.js';
+import holidayGroupRoute from './holidayGroup.route.js';
 import shiftRoute from './shift.route.js';
 import positionRoute from './position.route.js';
 import leaveRequestRoute from './leaveRequest.route.js';
@@ -144,6 +145,10 @@ const defaultRoutes = [
   {
     path: '/student-groups',
     route: studentGroupRoute,
+  },
+  {
+    path: '/holiday-groups',
+    route: holidayGroupRoute,
   },
   {
     path: '/shifts',

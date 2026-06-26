@@ -16,6 +16,7 @@ const createHoliday = {
       'date.base': 'End date must be a valid date',
     }),
     isActive: Joi.boolean().optional().default(true),
+    group: Joi.string().optional().allow('').trim().max(120),
   }),
 };
 
@@ -28,6 +29,7 @@ const updateHoliday = {
     date: Joi.date().optional(),
     endDate: Joi.date().optional().allow(null),
     isActive: Joi.boolean().optional(),
+    group: Joi.string().optional().allow('').trim().max(120),
   }),
 };
 
@@ -40,6 +42,7 @@ const getHoliday = {
 const getHolidays = {
   query: Joi.object().keys({
     title: Joi.string().optional().trim(),
+    group: Joi.string().optional().trim(),
     date: Joi.date().optional(),
     startDate: Joi.date().optional(),
     endDate: Joi.date().optional(),

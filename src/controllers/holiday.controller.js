@@ -19,7 +19,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'date', 'startDate', 'endDate', 'isActive']);
+  const filter = pick(req.query, ['title', 'group', 'date', 'startDate', 'endDate', 'isActive']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryHolidays(filter, options);
   res.status(httpStatus.OK).send({
