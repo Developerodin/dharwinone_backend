@@ -16,7 +16,11 @@ router
 
 router.get('/overview', ...canManage, controller.getOverview);
 
+router.get('/assignable-users', ...canManage, controller.getAssignableUsers);
+
 router.get('/:employeeId/status', ...canManage, validate(v.employeeIdParam), controller.getStatus);
+
+router.get('/:employeeId/open-tasks', ...canManage, validate(v.employeeIdParam), controller.getOpenTasks);
 
 router.post('/:employeeId/run/:stepKey', ...canManage, validate(v.runStep), controller.runStep);
 

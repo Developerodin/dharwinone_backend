@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import Employee from '../models/employee.model.js';
 import EmailAccount from '../models/emailAccount.model.js';
 import Task from '../models/task.model.js';
+import User from '../models/user.model.js';
 import TeamMember from '../models/team.model.js';
 import { applyReassign } from './offboarding.pure.js';
 import { evaluateOffboardingForEmployee } from './offboardingChecklist.service.js';
@@ -28,6 +29,42 @@ const reassignTasks = async (owner, toUserIds) => {
     task.formerAssignees = r.formerAssignees;
     await task.save();
   }
+};
+
+/**
+ * Users eligible to receive reassigned tasks. Served here (under employees.manage)
+ * so the offboarding picker never needs the separate users.read permission.
+ */
+export const listAssignableUsers = async () => {
+  const users = await User.find({ status: { $nin: ['deleted', 'disabled'] } })
+    .select('name email')
+    .sort({ name: 1 })
+    .lean();
+  return users.map((u) => ({ id: String(u._id), name: u.name || null, email: u.email || null }));
+};
+
+/** Open (non-completed) tasks the departing employee is still assigned to. */
+export const listOpenTasksForEmployee = async (employeeId) => {
+  const employee = await Employee.findById(employeeId).select('owner').lean();
+  if (!employee) throw new ApiError(httpStatus.NOT_FOUND, 'Employee not found');
+  if (!employee.owner) return [];
+  const tasks = await Task.find({ assignedTo: employee.owner, status: { $ne: 'completed' } })
+    .select('title taskCode status priority assignedTo')
+    .populate('assignedTo', 'name email')
+    .sort({ updatedAt: -1 })
+    .lean();
+  return tasks.map((t) => ({
+    id: String(t._id),
+    title: t.title,
+    taskCode: t.taskCode || null,
+    status: t.status,
+    priority: t.priority,
+    assignees: (t.assignedTo || []).map((u) => ({
+      id: String(u._id ?? u),
+      name: u.name || null,
+      email: u.email || null,
+    })),
+  }));
 };
 
 const disableTeams = async (employeeId) => {

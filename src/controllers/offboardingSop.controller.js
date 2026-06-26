@@ -4,7 +4,11 @@ import {
   evaluateOffboardingForEmployee,
   listOpenOffboardingOverview,
 } from '../services/offboardingChecklist.service.js';
-import { runOffboardingStep } from '../services/offboardingActions.service.js';
+import {
+  runOffboardingStep,
+  listOpenTasksForEmployee,
+  listAssignableUsers,
+} from '../services/offboardingActions.service.js';
 
 const getConfig = catchAsync(async (req, res) => {
   res.send(await getOffboardingConfig());
@@ -27,4 +31,12 @@ const runStep = catchAsync(async (req, res) => {
   res.send(await runOffboardingStep(req.params.employeeId, req.params.stepKey, req.body));
 });
 
-export default { getConfig, putConfig, getOverview, getStatus, runStep };
+const getOpenTasks = catchAsync(async (req, res) => {
+  res.send({ tasks: await listOpenTasksForEmployee(req.params.employeeId) });
+});
+
+const getAssignableUsers = catchAsync(async (req, res) => {
+  res.send({ users: await listAssignableUsers() });
+});
+
+export default { getConfig, putConfig, getOverview, getStatus, runStep, getOpenTasks, getAssignableUsers };
