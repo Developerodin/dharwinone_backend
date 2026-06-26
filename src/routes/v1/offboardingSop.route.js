@@ -14,6 +14,8 @@ router
   .get(...canManage, controller.getConfig)
   .put(...canManage, validate(v.saveConfig), controller.putConfig);
 
+router.get('/overview', ...canManage, controller.getOverview);
+
 router.get('/:employeeId/status', ...canManage, validate(v.employeeIdParam), controller.getStatus);
 
 router.post('/:employeeId/run/:stepKey', ...canManage, validate(v.runStep), controller.runStep);

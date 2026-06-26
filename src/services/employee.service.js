@@ -2924,6 +2924,41 @@ const maybeNotifyManagerOfResign = async (candidate, now, notifyFn = notify) => 
 };
 
 /**
+ * Notify offboarding stakeholders the moment a resignation date is first set: the
+ * employee's admin and assigned agents, plus whoever added the date (the actor).
+ * The exit checklist auto-activates on resignDate, so this is the "it started" ping.
+ * Fires once per empty->set transition; clearing or editing an existing date is silent.
+ * @param {Object} candidate - { fullName, resignDate, adminId, assignedAgent, assignedRecruiter }
+ * @param {Object} actorUser - the user performing the update (req.user)
+ * @param {Function} [notifyFn=notify]
+ */
+const notifyOffboardingStakeholders = async (candidate, actorUser, notifyFn = notify) => {
+  if (!candidate?.resignDate) return;
+  const recipients = [
+    ...new Set(
+      [candidate.adminId, candidate.assignedAgent, candidate.assignedRecruiter, actorUser?.id || actorUser?._id]
+        .filter(Boolean)
+        .map((id) => String(id))
+    ),
+  ];
+  if (!recipients.length) return;
+  const name = candidate.fullName || 'Employee';
+  const when = new Date(candidate.resignDate).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+  await Promise.all(
+    recipients.map((rid) =>
+      notifyFn(rid, {
+        type: 'sop',
+        title: `Offboarding started: ${name}`,
+        message: `${name} has a resignation date of ${when}. The exit checklist is now active — reassign tasks, deactivate email, and remove org/team access.`,
+        link: '/settings/offboarding/sop',
+      })
+    )
+  );
+};
+
+/**
  * Update candidate resign date (makes candidate inactive)
  * @param {string} candidateId - Candidate ID
  * @param {Date} resignDate - Resign date (can be null to clear/reactivate)
@@ -2945,6 +2980,9 @@ const updateResignDate = async (candidateId, resignDate, user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Resign date cannot be before joining date');
   }
 
+  // Capture before mutation so we only fire offboarding notices on empty->set.
+  const hadResignBefore = Boolean(candidate.resignDate);
+
   // Allow clearing resign date (setting to null) to reactivate candidate.
   // Employee ID is never changed here; resigned candidates keep their ID for records.
   candidate.resignDate = resignDate ? new Date(resignDate) : null;
@@ -2956,6 +2994,15 @@ const updateResignDate = async (candidateId, resignDate, user) => {
     await maybeNotifyManagerOfResign(candidate, new Date());
   } catch (e) {
     logger.error(`resign notify failed for candidate ${candidateId}: ${e.message}`);
+  }
+
+  // Auto-start signal: ping admin + agents + the actor when a resign date is first set.
+  if (candidate.resignDate && !hadResignBefore) {
+    try {
+      await notifyOffboardingStakeholders(candidate, user);
+    } catch (e) {
+      logger.error(`offboarding notify failed for candidate ${candidateId}: ${e.message}`);
+    }
   }
 
   // Populate fields

@@ -46,3 +46,39 @@ export const evaluateOffboardingForEmployee = async (employeeId) => {
   const nextStep = steps.find((s) => !s.done) || null;
   return { steps, completedCount, totalCount, skipped: false, nextStep };
 };
+
+/**
+ * Auto-list every employee with a resignation date set (notice-period OR already left)
+ * that still has open exit steps. No manual id entry — this is the offboarding dashboard.
+ * Sequential evaluate avoids hammering Mongo with hundreds of parallel aggregations.
+ * @param {{ limit?: number }} [opts]
+ */
+export const listOpenOffboardingOverview = async ({ limit = 200 } = {}) => {
+  const cap = Math.min(Math.max(Number(limit) || 200, 1), 500);
+  const employees = await Employee.find({ resignDate: { $exists: true, $ne: null } })
+    .select('_id fullName employeeId email resignDate')
+    .sort({ resignDate: 1 })
+    .limit(cap)
+    .lean();
+
+  const rows = [];
+  for (const e of employees) {
+    const id = String(e._id);
+    const ev = await evaluateOffboardingForEmployee(id);
+    if (ev.skipped || !ev.steps.length) continue;
+    if (!ev.steps.some((s) => !s.done)) continue;
+    rows.push({
+      employeeId: id,
+      fullName: e.fullName || '',
+      empCode: e.employeeId ?? null,
+      email: e.email ?? null,
+      resignDate: e.resignDate,
+      completedCount: ev.completedCount,
+      totalCount: ev.totalCount,
+      nextStep: ev.nextStep,
+      steps: ev.steps,
+    });
+  }
+
+  return { scannedCount: employees.length, withOpenCount: rows.length, results: rows };
+};
