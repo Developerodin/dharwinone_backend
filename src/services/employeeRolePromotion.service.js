@@ -228,6 +228,10 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
     // User already holds HR Employee role: ensure their profile has an employeeId regardless of whether
     // the duplicate-Candidate cleanup runs (covers users promoted earlier when ID gen was off).
     await ensureEmployeeIdForOwner(promoteUid, { employeeDocId: emp._id });
+    await User.updateOne(
+      { _id: promoteUid },
+      { $set: { status: 'active', isEmailVerified: true } }
+    );
     if (hasCandidate && candId) {
       await User.updateOne({ _id: promoteUid }, { $pull: { roleIds: candId } });
       const Student = (await import('../models/student.model.js')).default;
@@ -264,7 +268,10 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
   // Add Employee role first so the user is never left with zero roles.
   await User.updateOne(
     { _id: promoteUid },
-    { $addToSet: { roleIds: employeeRole._id } }
+    {
+      $addToSet: { roleIds: employeeRole._id },
+      $set: { status: 'active', isEmailVerified: true },
+    }
   );
   await User.updateOne(
     { _id: promoteUid },

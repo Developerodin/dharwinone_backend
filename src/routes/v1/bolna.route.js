@@ -28,54 +28,54 @@ router
 
 router
   .route('/candidate-agent/setup-extractions')
-  .post(auth(), requirePermissions('calls.manage'), bolnaController.setupCandidateVerificationExtractions);
+  .post(auth(), requirePermissions('calls.create'), bolnaController.setupCandidateVerificationExtractions);
 
 router
   .route('/diagnostics')
-  .get(auth(), requirePermissionOrAdministrator('calls.manage'), bolnaController.getBolnaDiagnostics);
+  .get(auth(), requirePermissionOrAdministrator('calls.view'), bolnaController.getBolnaDiagnostics);
 
 router
   .route('/call')
-  .post(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.initiateCall), bolnaController.initiateCall);
+  .post(auth(), requirePermissions('calls.create'), validate(bolnaValidation.initiateCall), bolnaController.initiateCall);
 
 router
   .route('/candidate-call')
-  .post(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.initiateCandidateCall), bolnaController.initiateCandidateCall);
+  .post(auth(), requirePermissions('calls.create'), validate(bolnaValidation.initiateCandidateCall), bolnaController.initiateCandidateCall);
 
 router
   .route('/call-status/:executionId')
-  .get(auth(), requirePermissions('calls.read'), validate(bolnaValidation.getCallStatus), bolnaController.getCallStatus);
+  .get(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallStatus), bolnaController.getCallStatus);
 
 router
   .route('/call-records')
-  .get(auth(), requirePermissions('calls.read'), validate(bolnaValidation.getCallRecords), bolnaController.getCallRecords);
+  .get(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallRecords), bolnaController.getCallRecords);
 
 router
   .route('/call-records/sync')
-  .post(auth(), requirePermissions('calls.manage'), bolnaController.syncMissingCallRecords);
+  .post(auth(), requirePermissions('calls.create'), bolnaController.syncMissingCallRecords);
 
 router
   .route('/call-records/:executionId/refresh')
-  .post(auth(), requirePermissions('calls.read'), validate(bolnaValidation.getCallStatus), bolnaController.refreshCallRecord);
+  .post(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallStatus), bolnaController.refreshCallRecord);
 
 // Both recordings for a call: Bolna (agent-only) + Plivo (full dual-channel).
 // Metadata first, then proxied audio streams (provider URLs need Bolna/Plivo auth).
 router
   .route('/call-records/:executionId/recordings')
-  .get(auth(), requirePermissions('calls.read'), bolnaController.getCallRecordingSources);
+  .get(auth(), requirePermissions('calls.view'), bolnaController.getCallRecordingSources);
 
 router
   .route('/call-records/:executionId/recordings/bolna')
-  .get(auth(), requirePermissions('calls.read'), bolnaController.streamBolnaRecording);
+  .get(auth(), requirePermissions('calls.view'), bolnaController.streamBolnaRecording);
 
 router
   .route('/call-records/:executionId/recordings/plivo')
-  .get(auth(), requirePermissions('calls.read'), bolnaController.streamPlivoRecording);
+  .get(auth(), requirePermissions('calls.view'), bolnaController.streamPlivoRecording);
 
 router
   .route('/call-records/:id')
-  .patch(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.patchCallRecord), bolnaController.patchCallRecord)
-  .delete(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.deleteCallRecord), bolnaController.deleteCallRecord);
+  .patch(auth(), requirePermissions('calls.edit'), validate(bolnaValidation.patchCallRecord), bolnaController.patchCallRecord)
+  .delete(auth(), requirePermissions('calls.delete'), validate(bolnaValidation.deleteCallRecord), bolnaController.deleteCallRecord);
 
 export default router;
 

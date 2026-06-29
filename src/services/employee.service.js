@@ -297,10 +297,13 @@ const createCandidate = async (ownerId, payload) => {
         throw new ApiError(httpStatus.CONFLICT, `Candidate with email ${candidateData.email} already exists`);
       }
       
-      // Check if all required data is provided for auto email verification
-      if (hasAllRequiredData(candidateData)) {
-        shouldAutoVerifyEmail = true;
-      }
+      // Public self-registration users stay pending until email verification.
+      // Admin-created/active owner users should not show as "email pending" just
+      // because their employee profile is missing optional resume fields.
+      const ownerUserForVerification = resolvedOwnerId
+        ? await User.findById(resolvedOwnerId).select('status').lean()
+        : null;
+      shouldAutoVerifyEmail = ownerUserForVerification?.status === 'active' || hasAllRequiredData(candidateData);
       
       // eslint-disable-next-line no-unused-vars -- password intentionally discarded
       const { password, joiningDate: inputJoiningDate, ...rest } = candidateData; // never store password on candidate
@@ -324,7 +327,7 @@ const createCandidate = async (ownerId, payload) => {
       candidate.isCompleted = candidate.isProfileCompleted === 100;
       await candidate.save();
       
-      // Auto-verify email if all required data is provided
+      // Auto-verify email for active/admin-created owners; pending public users still verify by email link.
       if (shouldAutoVerifyEmail) {
         await updateUserById(resolvedOwnerId, { isEmailVerified: true });
       }
@@ -960,9 +963,18 @@ const queryCandidates = async (filter, options) => {
     
     // Fetch all users at once for better performance
     const users = ownerIds.length > 0 
-      ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified countryCode').lean()
+      ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified status countryCode').lean()
       : [];
-    const userMap = new Map(users.map(u => [String(u._id), { isEmailVerified: u.isEmailVerified || false, countryCode: u.countryCode || null }]));
+    const userMap = new Map(
+      users.map((u) => [
+        String(u._id),
+        {
+          isEmailVerified: u.isEmailVerified === true || u.status === 'active',
+          status: u.status || null,
+          countryCode: u.countryCode || null,
+        },
+      ])
+    );
 
     const studentsForOwners =
       ownerIds.length > 0
@@ -995,13 +1007,15 @@ const queryCandidates = async (filter, options) => {
       }
       
       if (ownerId) {
-        const userData = userMap.get(ownerId) || { isEmailVerified: false, countryCode: null };
+        const userData = userMap.get(ownerId) || { isEmailVerified: false, status: null, countryCode: null };
         candidateObj.isEmailVerified = userData.isEmailVerified;
+        candidateObj.ownerStatus = userData.status;
         candidateObj.countryCode = userData.countryCode;
         candidateObj.studentId = studentIdByOwnerId.get(ownerId) || null;
         candidateObj.ownerId = ownerId;
       } else {
         candidateObj.isEmailVerified = false;
+        candidateObj.ownerStatus = null;
         candidateObj.countryCode = null;
         candidateObj.studentId = null;
         candidateObj.ownerId = null;
@@ -1062,9 +1076,18 @@ const queryCandidates = async (filter, options) => {
       
       // Fetch all users at once for better performance
       const users = ownerIds.length > 0 
-        ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified countryCode').lean()
+        ? await User.find({ _id: { $in: ownerIds } }).select('_id isEmailVerified status countryCode').lean()
         : [];
-      const userMap = new Map(users.map(u => [String(u._id), { isEmailVerified: u.isEmailVerified || false, countryCode: u.countryCode || null }]));
+      const userMap = new Map(
+        users.map((u) => [
+          String(u._id),
+          {
+            isEmailVerified: u.isEmailVerified === true || u.status === 'active',
+            status: u.status || null,
+            countryCode: u.countryCode || null,
+          },
+        ])
+      );
 
       const studentsForOwners =
         ownerIds.length > 0
@@ -1096,13 +1119,15 @@ const queryCandidates = async (filter, options) => {
         }
         
         if (ownerId) {
-          const userData = userMap.get(ownerId) || { isEmailVerified: false, countryCode: null };
+          const userData = userMap.get(ownerId) || { isEmailVerified: false, status: null, countryCode: null };
           candidateObj.isEmailVerified = userData.isEmailVerified;
+          candidateObj.ownerStatus = userData.status;
           candidateObj.countryCode = userData.countryCode;
           candidateObj.studentId = studentIdByOwnerId.get(ownerId) || null;
           candidateObj.ownerId = ownerId;
         } else {
           candidateObj.isEmailVerified = false;
+          candidateObj.ownerStatus = null;
           candidateObj.countryCode = null;
           candidateObj.studentId = null;
           candidateObj.ownerId = null;

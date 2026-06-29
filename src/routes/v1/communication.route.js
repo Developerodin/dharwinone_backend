@@ -9,6 +9,6 @@ const router = express.Router();
 
 router
   .route('/calls')
-  .get(auth(), requirePermissions('calls.read'), validate(communicationValidation.listUnifiedCalls), communicationController.listUnifiedCalls);
+  .get(auth(), requirePermissions('calls.view'), validate(communicationValidation.listUnifiedCalls), communicationController.listUnifiedCalls);
 
 export default router;

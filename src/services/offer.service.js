@@ -1105,10 +1105,26 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   };
   await Offer.findByIdAndUpdate(id, updateOp);
 
+  const candidateIdForCompensation = fresh.candidate?._id ?? fresh.candidate;
+  const employeeSnapshot = {
+    compensationType: fresh.compensationType || compensationTypeForJobType(fresh.jobType),
+    compensationSource: fresh.compensationSource || 'jobTypeDerived',
+  };
+  if (fresh.joiningDate) employeeSnapshot.joiningDate = fresh.joiningDate;
+
+  const shouldRepairAcceptedEmployeeCompensation =
+    !transitionToAccepted && fresh.status === 'Accepted' && hasPayload && letterPayload?.jobType !== undefined;
+  if (shouldRepairAcceptedEmployeeCompensation && candidateIdForCompensation) {
+    const employee = await Employee.findById(candidateIdForCompensation).select('compensationSource').lean();
+    if (employee && employee.compensationSource !== 'manual') {
+      await Employee.findByIdAndUpdate(candidateIdForCompensation, employeeSnapshot);
+    }
+  }
+
   // When transitioning Draft → Accepted via letter save, create the Placement record
   // (same lifecycle as updateOfferById Accepted path) so Pre-boarding link appears.
   if (transitionToAccepted) {
-    const candidateId = fresh.candidate?._id ?? fresh.candidate;
+    const candidateId = candidateIdForCompensation;
     const jobId = fresh.job?._id ?? fresh.job;
     const createdById = fresh.createdBy?._id ?? fresh.createdBy;
 
@@ -1153,6 +1169,8 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
         if (e?.code !== 11000) throw e;
       }
     }
+
+    await Employee.findByIdAndUpdate(candidateId, employeeSnapshot);
 
     if (fresh.jobApplication) {
       await JobApplication.findByIdAndUpdate(fresh.jobApplication, { status: 'Hired' });
