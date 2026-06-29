@@ -306,6 +306,26 @@ export const permissionAliases = {
   // Company work email (Settings). Legacy: hub routes used candidates.manage.
   'company-email.read': ['company-email.read', 'company-email.manage', 'candidates.manage', 'employees.manage'],
   'company-email.manage': ['company-email.manage', 'candidates.manage', 'employees.manage'],
+  // Company work numbers (Settings + Communication). Legacy: calls.manage for telephony admins.
+  'company-number.read': [
+    'company-number.read',
+    'company-number.manage',
+    'settings.company-number:view',
+    'settings.company-number:view,create,edit,delete',
+    'communication.company-work-numbers:view',
+    'communication.company-work-numbers:view,create,edit,delete',
+    'calls.view',
+    'calls.manage',
+  ],
+  'company-number.manage': [
+    'company-number.manage',
+    'settings.company-number:create,edit,delete',
+    'settings.company-number:view,create,edit,delete',
+    'communication.company-work-numbers:create,edit,delete',
+    'communication.company-work-numbers:view,create,edit,delete',
+    'calls.create',
+    'calls.manage',
+  ],
   // Employee SOP template editor (Settings). Legacy: route used candidates.manage for template CRUD.
   'candidate-sop.read': ['candidate-sop.read', 'candidate-sop.manage', 'candidates.manage', 'employees.manage'],
   'candidate-sop.manage': ['candidate-sop.manage', 'candidates.manage', 'employees.manage'],

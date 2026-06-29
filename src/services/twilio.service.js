@@ -749,14 +749,15 @@ function buildBridgeAnswerTwiml({ to, callerId }) {
 }
 
 /**
- * Resolve the Voice SDK identity that inbound PSTN calls should ring.
- * ATS owns numbers account-wide (no per-number→user map), so route to the
- * configured default user. Returns '' when unset → caller hears a graceful hangup.
- * ponytail: single default user; add a per-number owner map if multi-user inbound is needed.
+ * Resolve Voice SDK identity for inbound PSTN. Uses CompanyPhoneNumber.assignedTo
+ * when mapped; falls back to TWILIO_INBOUND_DEFAULT_USER for legacy single-user routing.
+ * @param {string} [calledNumber] E.164 or Twilio To value
+ * @returns {Promise<string>} client identity (user_<mongoId>) or ''
  */
-function resolveInboundIdentity() {
-  const { inboundDefaultUser } = getConfig();
-  return inboundDefaultUser ? clientIdentity(inboundDefaultUser) : '';
+async function resolveInboundIdentity(calledNumber = '') {
+  const { resolveInboundUserIdForCalledNumber } = await import('./companyPhoneNumber.service.js');
+  const userId = await resolveInboundUserIdForCalledNumber(calledNumber);
+  return userId ? clientIdentity(userId) : '';
 }
 
 /**

@@ -54,6 +54,7 @@ import teamGroupRoute from './teamGroup.route.js';
 import pmAssistantRoute from './pmAssistant.route.js';
 import bolnaRoute from './bolna.route.js';
 import plivoRoute from './plivo.route.js';
+import companyPhoneNumberRoute from './companyPhoneNumber.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
 import communicationRoute from './communication.route.js';
@@ -278,6 +279,10 @@ const defaultRoutes = [
   {
     path: '/plivo',
     route: plivoRoute,
+  },
+  {
+    path: '/company-phone-numbers',
+    route: companyPhoneNumberRoute,
   },
   {
     path: '/webhooks',

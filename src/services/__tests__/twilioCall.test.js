@@ -76,8 +76,8 @@ test('createAccessToken returns identity for Voice SDK', () => {
   assert.equal(r.identity, `user_${uid}`);
 });
 
-test('resolveInboundIdentity returns empty when no default user configured', () => {
-  assert.equal(twilioService.resolveInboundIdentity(), '');
+test('resolveInboundIdentity returns empty when no mapping or default user', async () => {
+  assert.equal(await twilioService.resolveInboundIdentity('+15551234567'), '');
 });
 
 test('buildInboundToClientTwiml rings the resolved client', () => {

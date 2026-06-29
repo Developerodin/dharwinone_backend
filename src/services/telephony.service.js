@@ -50,6 +50,7 @@ function mapTwilioOwnedNumber(n) {
   const iso = n.isoCountry || 'US';
   const regionLabel = iso === 'US' ? 'United States' : iso;
   return {
+    sid: n.sid || '',
     number: digits,
     alias: n.friendlyName || '',
     type: inferTwilioNumberType(n.phoneNumber),
@@ -62,7 +63,6 @@ function mapTwilioOwnedNumber(n) {
     smsEnabled: Boolean(n.capabilities?.sms),
     mmsEnabled: Boolean(n.capabilities?.mms),
     carrier: 'twilio',
-    sid: n.sid,
   };
 }
 
@@ -148,10 +148,15 @@ async function buyNumber(number) {
     const result = await twilioService.purchaseNumber({ phoneNumber: number });
     if (!result.success) return result;
     const purchased = result.number?.phoneNumber || number;
+    const e164 = purchased.startsWith('+') ? purchased : `+${String(purchased).replace(/\D/g, '')}`;
     return {
       success: true,
       number: String(purchased).replace(/^\+/, ''),
+      phoneNumberE164: e164,
       message: 'Number purchased successfully.',
+      providerSid: result.number?.sid || '',
+      friendlyName: result.number?.friendlyName || e164,
+      capabilities: result.number?.capabilities,
     };
   }
   return plivoService.buyNumber(number);

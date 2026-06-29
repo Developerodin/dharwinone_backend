@@ -66,7 +66,7 @@ const inboundVoice = catchAsync(async (req, res) => {
     const calledNumber = body.To || body.Called || '';
     const callerNumber = body.From || body.Caller || '';
     const callSid = body.CallSid || '';
-    const identity = twilioService.resolveInboundIdentity();
+    const identity = await twilioService.resolveInboundIdentity(calledNumber);
     if (!identity) {
       logger.info('[Twilio] voice inbound — TWILIO_INBOUND_DEFAULT_USER unset, not routed', { calledNumber });
       return sendTwiml(

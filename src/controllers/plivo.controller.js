@@ -6,6 +6,7 @@ import logger from '../config/logger.js';
 import plivoService from '../services/plivo.service.js';
 import telephonyService from '../services/telephony.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
+import * as companyPhoneNumberService from '../services/companyPhoneNumber.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const getAvailableNumbers = catchAsync(async (req, res) => {
@@ -58,6 +59,8 @@ const buyNumber = catchAsync(async (req, res) => {
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to buy Plivo number');
   }
+
+  await companyPhoneNumberService.recordCompanyPhoneNumberPurchase(req.user, result);
 
   await activityLogService.createActivityLog(
     req.user.id,
