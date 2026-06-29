@@ -2,28 +2,56 @@ import Employee from '../models/employee.model.js';
 import EmailAccount from '../models/emailAccount.model.js';
 import Task from '../models/task.model.js';
 import TeamMember from '../models/team.model.js';
+import OrgUnit from '../models/orgUnit.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import { getOffboardingConfig } from './offboardingConfig.service.js';
 import { evaluateSteps } from './offboarding.pure.js';
 
 const EMPTY = { steps: [], completedCount: 0, totalCount: 0, skipped: true, nextStep: null };
 
+/**
+ * Active team rows for an employee: linked rows (employeeId) PLUS orphan/legacy rows
+ * (employeeId null) matched by the employee's email. Shared by the validator and the
+ * removal action so both see the same memberships.
+ */
+export const buildActiveTeamFilter = ({ _id, email }) => {
+  const or = [{ employeeId: _id }];
+  if (email) or.push({ employeeId: null, legacyEmail: email });
+  return { isActive: true, $or: or };
+};
+
+/**
+ * Match backdated-attendance requests for one person across BOTH creation paths:
+ * user-based ({user}/{userEmail}) and student-based ({studentEmail}). Shared by the
+ * status count and the Exit SOP list so neither misses student-filed requests.
+ */
+export const backdatedRequestMatch = ({ email, owner }) => {
+  const or = [];
+  if (email) or.push({ userEmail: email }, { studentEmail: email });
+  if (owner) or.push({ user: owner });
+  return or.length ? { $or: or } : { _id: null };
+};
+
 /** Build the plain decision context for one employee. owner = the User behind the Employee. */
 export const loadOffboardingContext = async (employee) => {
   const owner = employee.owner;
-  const [pendingBackdatedCount, emailAccount, openAssignedTaskCount, activeTeamRowCount] = await Promise.all([
-    owner ? BackdatedAttendanceRequest.countDocuments({ user: owner, status: 'pending' }) : 0,
-    owner ? EmailAccount.findOne({ user: owner }).select('status').lean() : null,
-    owner ? Task.countDocuments({ assignedTo: owner, status: { $ne: 'completed' } }) : 0,
-    TeamMember.countDocuments({ employeeId: employee._id, isActive: true }),
-  ]);
+  const [pendingBackdatedCount, activeEmailCount, openAssignedTaskCount, activeTeamRowCount, headUnitCount] =
+    await Promise.all([
+      BackdatedAttendanceRequest.countDocuments({ status: 'pending', ...backdatedRequestMatch(employee) }),
+      owner ? EmailAccount.countDocuments({ user: owner, status: 'active' }) : 0,
+      owner ? Task.countDocuments({ assignedTo: owner, status: { $ne: 'completed' } }) : 0,
+      TeamMember.countDocuments(buildActiveTeamFilter(employee)),
+      OrgUnit.countDocuments({ headEmployeeId: employee._id, isActive: { $ne: false } }),
+    ]);
   return {
     pendingBackdatedCount,
     hasCompanyEmail: Boolean(employee.companyAssignedEmail),
-    emailStatus: emailAccount?.status ?? null,
+    activeEmailCount,
     openAssignedTaskCount,
     employeeIsActive: employee.isActive !== false,
     activeTeamRowCount,
+    // In the org tree if a department member OR the head of any unit.
+    inOrgStructure: Boolean(employee.departmentId) || headUnitCount > 0,
   };
 };
 
@@ -33,7 +61,7 @@ export const loadOffboardingContext = async (employee) => {
  */
 export const evaluateOffboardingForEmployee = async (employeeId) => {
   const employee = await Employee.findById(employeeId)
-    .select('owner companyAssignedEmail isActive resignDate fullName')
+    .select('owner companyAssignedEmail email departmentId isActive resignDate fullName')
     .lean();
   if (!employee || !employee.resignDate) return { ...EMPTY };
 

@@ -62,11 +62,14 @@ export const DEFAULT_OFFBOARDING_STEPS = () => [
 
 const DECIDERS = {
   attendance_complete: ({ pendingBackdatedCount }) => (pendingBackdatedCount || 0) === 0,
-  email_deactivated: ({ hasCompanyEmail, emailStatus }) => !hasCompanyEmail || emailStatus !== 'active',
+  // Pending while a company mailbox is still assigned OR any mailbox is active.
+  // Run nulls companyAssignedEmail and revokes every active EmailAccount, clearing both.
+  email_deactivated: ({ hasCompanyEmail, activeEmailCount }) => !hasCompanyEmail && (activeEmailCount || 0) === 0,
   tasks_reassigned: ({ openAssignedTaskCount }) => (openAssignedTaskCount || 0) === 0,
-  // Done once team memberships are archived. The org-node drop on the last
-  // working day (employee.isActive flip) is handled by the scheduler, not this step.
-  org_team_disabled: ({ activeTeamRowCount }) => (activeTeamRowCount || 0) === 0,
+  // Done only when team memberships are archived AND the employee is out of the org
+  // structure (no department membership and not a unit head). Run detaches both now.
+  org_team_disabled: ({ activeTeamRowCount, inOrgStructure }) =>
+    (activeTeamRowCount || 0) === 0 && !inOrgStructure,
 };
 
 /**

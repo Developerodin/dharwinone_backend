@@ -5,9 +5,10 @@ import EmailAccount from '../models/emailAccount.model.js';
 import Task from '../models/task.model.js';
 import User from '../models/user.model.js';
 import TeamMember from '../models/team.model.js';
+import OrgUnit from '../models/orgUnit.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import { applyReassign } from './offboarding.pure.js';
-import { evaluateOffboardingForEmployee } from './offboardingChecklist.service.js';
+import { evaluateOffboardingForEmployee, buildActiveTeamFilter, backdatedRequestMatch } from './offboardingChecklist.service.js';
 
 const REASON = 'offboarding';
 
@@ -16,8 +17,10 @@ const deactivateEmail = async (owner, employeeId) => {
     await EmailAccount.updateMany({ user: owner, status: 'active' }, { $set: { status: 'revoked' } });
   }
   // Strip the company-assigned address off the employee so the step reflects a real change.
+  // Reset the provider to '' (Auto-detect) too, so the roster doesn't keep showing the
+  // provider of the mailbox that was just removed.
   if (employeeId) {
-    await Employee.updateOne({ _id: employeeId }, { $set: { companyAssignedEmail: null } });
+    await Employee.updateOne({ _id: employeeId }, { $set: { companyAssignedEmail: '', companyEmailProvider: '' } });
   }
 };
 
@@ -96,10 +99,9 @@ export const listOpenTasksForEmployee = async (employeeId) => {
 
 /** All backdated-attendance requests (pending + historical) for the departing employee (user-based). */
 export const listBackdatedRequestsForEmployee = async (employeeId) => {
-  const employee = await Employee.findById(employeeId).select('owner').lean();
+  const employee = await Employee.findById(employeeId).select('owner email').lean();
   if (!employee) throw new ApiError(httpStatus.NOT_FOUND, 'Employee not found');
-  if (!employee.owner) return [];
-  const reqs = await BackdatedAttendanceRequest.find({ user: employee.owner })
+  const reqs = await BackdatedAttendanceRequest.find(backdatedRequestMatch(employee))
     .select('attendanceEntries notes status adminComment requestedBy reviewedBy reviewedAt createdAt')
     .populate('requestedBy', 'name email')
     .populate('reviewedBy', 'name email')
@@ -123,11 +125,16 @@ export const listBackdatedRequestsForEmployee = async (employeeId) => {
   }));
 };
 
-const disableTeams = async (employeeId) => {
+const disableTeamsAndOrg = async (employee) => {
+  // Archive linked AND orphan/legacy team memberships (matched by email).
   await TeamMember.updateMany(
-    { employeeId, isActive: true },
+    buildActiveTeamFilter(employee),
     { $set: { isActive: false, removedAt: new Date(), removedReason: REASON } }
   );
+  // Detach from the org structure now (the scheduler would otherwise only drop the node
+  // on the last working day): clear department membership and any unit-head roles.
+  await Employee.updateOne({ _id: employee._id }, { $set: { departmentId: null, department: '' } });
+  await OrgUnit.updateMany({ headEmployeeId: employee._id }, { $set: { headEmployeeId: null } });
 };
 
 /**
@@ -137,7 +144,7 @@ const disableTeams = async (employeeId) => {
  * @param {{ toUserIds?: string[] }} [body]
  */
 export const runOffboardingStep = async (employeeId, stepKey, body = {}) => {
-  const employee = await Employee.findById(employeeId).select('owner resignDate').lean();
+  const employee = await Employee.findById(employeeId).select('owner email resignDate').lean();
   if (!employee) throw new ApiError(httpStatus.NOT_FOUND, 'Employee not found');
   if (!employee.resignDate) throw new ApiError(httpStatus.BAD_REQUEST, 'Employee has no resignation date set');
 
@@ -149,7 +156,7 @@ export const runOffboardingStep = async (employeeId, stepKey, body = {}) => {
       await reassignTasks(employee.owner, body);
       break;
     case 'org_team_disabled':
-      await disableTeams(employeeId);
+      await disableTeamsAndOrg(employee);
       break;
     default:
       throw new ApiError(httpStatus.BAD_REQUEST, `Unknown or non-actionable step: ${stepKey}`);

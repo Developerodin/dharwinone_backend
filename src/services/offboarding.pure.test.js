@@ -53,11 +53,12 @@ describe('applyReassign', () => {
 
 const FULL_CTX = {
   pendingBackdatedCount: 0,
-  hasCompanyEmail: true,
-  emailStatus: 'revoked',
+  hasCompanyEmail: false,
+  activeEmailCount: 0,
   openAssignedTaskCount: 0,
   employeeIsActive: false,
   activeTeamRowCount: 0,
+  inOrgStructure: false,
 };
 
 describe('DEFAULT_OFFBOARDING_STEPS', () => {
@@ -85,13 +86,18 @@ describe('evaluateSteps', () => {
     assert.equal(rows.find((r) => r.checkerKey === 'attendance_complete').done, false);
   });
 
-  it('email done when no company email exists at all', () => {
-    const rows = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, hasCompanyEmail: false, emailStatus: null });
+  it('email done when nothing assigned and no active mailbox', () => {
+    const rows = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), FULL_CTX);
     assert.equal(rows.find((r) => r.checkerKey === 'email_deactivated').done, true);
   });
 
-  it('email not done while account still active', () => {
-    const rows = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, emailStatus: 'active' });
+  it('email not done while any mailbox is still active', () => {
+    const rows = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, activeEmailCount: 1 });
+    assert.equal(rows.find((r) => r.checkerKey === 'email_deactivated').done, false);
+  });
+
+  it('email not done while a company mailbox is still assigned (even with no connected account)', () => {
+    const rows = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, hasCompanyEmail: true });
     assert.equal(rows.find((r) => r.checkerKey === 'email_deactivated').done, false);
   });
 
@@ -100,17 +106,21 @@ describe('evaluateSteps', () => {
     assert.equal(rows.find((r) => r.checkerKey === 'tasks_reassigned').done, false);
   });
 
-  it('org_team reflects team archival, independent of employee active state', () => {
+  it('org_team not done while team rows OR org membership remain, independent of employee active state', () => {
     // Team rows still active → not done, even if employee already inactive.
     const hasTeam = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, activeTeamRowCount: 1 });
     assert.equal(hasTeam.find((r) => r.checkerKey === 'org_team_disabled').done, false);
-    // Teams archived while employee still active (notice period) → done.
-    const archivedWhileActive = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), {
+    // Still in the org structure (department member or unit head) → not done.
+    const inOrg = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, inOrgStructure: true });
+    assert.equal(inOrg.find((r) => r.checkerKey === 'org_team_disabled').done, false);
+    // Teams archived AND out of org structure while employee still active (notice period) → done.
+    const clearedWhileActive = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), {
       ...FULL_CTX,
       employeeIsActive: true,
       activeTeamRowCount: 0,
+      inOrgStructure: false,
     });
-    assert.equal(archivedWhileActive.find((r) => r.checkerKey === 'org_team_disabled').done, true);
+    assert.equal(clearedWhileActive.find((r) => r.checkerKey === 'org_team_disabled').done, true);
   });
 
   it('skips disabled steps and sorts by sortOrder', () => {
