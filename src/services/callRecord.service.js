@@ -556,6 +556,27 @@ async function updateCallRecordByExecutionId(executionId, updateData, options = 
   return record;
 }
 
+/**
+ * Update agent-supplied annotations on a call (Batch B): notes, tags, relatedTo.
+ * Only these three keys are settable here — explicit allow-list, no mass-assignment.
+ * Joi (patchCallRecord) has already validated shapes/enums upstream.
+ * @param {string} id
+ * @param {{ notes?: string, tags?: string[], relatedTo?: { entityType: string|null, entityId: string|null } }} patch
+ */
+async function updateCallRecordAnnotations(id, patch = {}) {
+  const $set = {};
+  if (patch.notes !== undefined) $set.notes = patch.notes;
+  if (patch.tags !== undefined) $set.tags = patch.tags;
+  if (patch.relatedTo !== undefined) {
+    $set['relatedTo.entityType'] = patch.relatedTo?.entityType ?? null;
+    $set['relatedTo.entityId'] = patch.relatedTo?.entityId ?? null;
+  }
+  if (Object.keys($set).length === 0) {
+    return CallRecord.findById(id).lean();
+  }
+  return CallRecord.findByIdAndUpdate(id, { $set }, { new: true, runValidators: true }).lean();
+}
+
 async function deleteCallRecord(id) {
   const record = await CallRecord.findByIdAndDelete(id).lean();
   return record;
@@ -910,6 +931,7 @@ export default {
   updateCallRecordByExecutionId,
   findRecordsNeedingSync,
   findCallRecordsToSyncForCron,
+  updateCallRecordAnnotations,
   deleteCallRecord,
   syncMissingData,
   backfillFromBolna,

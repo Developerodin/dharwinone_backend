@@ -1,5 +1,6 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
+import { CALL_TAGS, CALL_RELATED_ENTITY_TYPES } from '../models/callRecord.model.js';
 
 const initiateCall = {
   body: Joi.object()
@@ -56,6 +57,22 @@ const deleteCallRecord = {
   }),
 };
 
+const patchCallRecord = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      notes: Joi.string().allow('').max(2000),
+      tags: Joi.array().items(Joi.string().valid(...CALL_TAGS)).max(20),
+      relatedTo: Joi.object().keys({
+        entityType: Joi.string().valid(...CALL_RELATED_ENTITY_TYPES).allow(null),
+        entityId: Joi.string().custom(objectId).allow(null),
+      }),
+    })
+    .min(1),
+};
+
 const patchBolnaCandidateAgentSettings = {
   body: Joi.object()
     .keys({
@@ -71,6 +88,7 @@ export {
   getCallStatus,
   getCallRecords,
   deleteCallRecord,
+  patchCallRecord,
   patchBolnaCandidateAgentSettings,
 };
 

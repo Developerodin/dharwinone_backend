@@ -56,6 +56,29 @@ export const CALL_RECORD_SOURCES = [
   'legacy',
 ];
 
+/** Generic CRM call tags an agent can apply (Batch B). Free `purpose` stays for recruitment. */
+export const CALL_TAGS = [
+  'sales',
+  'support',
+  'follow_up',
+  'complaint',
+  'demo',
+  'payment',
+  'other',
+];
+
+/** Entity types a call can be linked to via `relatedTo`. */
+export const CALL_RELATED_ENTITY_TYPES = [
+  'lead',
+  'client',
+  'customer',
+  'candidate',
+  'job',
+  'deal',
+  'ticket',
+  'project',
+];
+
 const callRecordSchema = mongoose.Schema(
   {
     /**
@@ -165,6 +188,19 @@ const callRecordSchema = mongoose.Schema(
     agentId: { type: String, trim: true, default: null },
     candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
     job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
+    /** Free-text agent notes added during/after the call (Batch B — manual annotation). */
+    notes: { type: String, default: '' },
+    /** Generic CRM call tags (sales/support/follow-up/etc). Subset of CALL_TAGS. */
+    tags: { type: [String], default: [] },
+    /**
+     * Polymorphic link to the CRM entity this call relates to. One pair instead
+     * of six nullable FKs; recruitment `job`/`candidate` refs above stay for the
+     * verification flow. entityId is not validated against the target collection.
+     */
+    relatedTo: {
+      entityType: { type: String, enum: [...CALL_RELATED_ENTITY_TYPES, null], default: null },
+      entityId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    },
     raw: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

@@ -74,6 +74,7 @@ router
 
 router
   .route('/call-records/:id')
+  .patch(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.patchCallRecord), bolnaController.patchCallRecord)
   .delete(auth(), requirePermissions('calls.manage'), validate(bolnaValidation.deleteCallRecord), bolnaController.deleteCallRecord);
 
 export default router;

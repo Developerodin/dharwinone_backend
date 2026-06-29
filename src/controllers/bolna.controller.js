@@ -319,6 +319,20 @@ const deleteCallRecord = catchAsync(async (req, res) => {
   });
 });
 
+/** PATCH /call-records/:id — set agent annotations (notes / tags / relatedTo). */
+const patchCallRecord = catchAsync(async (req, res) => {
+  const { notes, tags, relatedTo } = req.body;
+  const record = await callRecordService.updateCallRecordAnnotations(req.params.id, {
+    notes,
+    tags,
+    relatedTo,
+  });
+  if (!record) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
+  }
+  res.status(httpStatus.OK).send({ success: true, record });
+});
+
 async function sendPostCallEmailAndNotification(record, application) {
   if (!record?.executionId || !application) return;
   const callStatus = record.status || 'pending';
@@ -652,6 +666,7 @@ export {
   syncMissingCallRecords,
   setupCandidateVerificationExtractions,
   deleteCallRecord,
+  patchCallRecord,
   getBolnaDiagnostics,
 };
 
