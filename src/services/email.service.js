@@ -8,9 +8,10 @@ import { formatInZone } from '../utils/timezone.js';
 
 /**
  * Resolve delivery address: if recipient (lookup by personal/login email) is an
- * Employee with a non-empty companyAssignedEmail (professional mailbox), route
- * mail there; else send to the given address unchanged. External/non-employee
- * addresses pass through.
+ * Employee with a non-empty companyAssignedEmail (professional mailbox), route ALL
+ * mail there as soon as it is assigned. The employee is forced to connect that mailbox
+ * in the portal and cannot disconnect it (mailbox hard-lock), so professional delivery
+ * stays live. External/non-employee addresses pass through.
  */
 const resolveDeliveryEmail = async (to) => {
   if (!to) return to;

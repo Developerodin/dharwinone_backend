@@ -115,13 +115,15 @@ const updateStudentGroupById = async (groupId, updateBody, _user) => {
 
   if (updateBody.studentIds !== undefined) {
     const ids = updateBody.studentIds;
+    // Prune refs to students that no longer exist — a member deleted after being
+    // added would otherwise make the group permanently un-editable (surfaces in UI
+    // as an "Unknown student" chip). ponytail: self-heal orphans instead of throwing.
+    let validIds = ids;
     if (ids.length > 0) {
-      const count = await Student.countDocuments({ _id: { $in: ids } });
-      if (count !== ids.length) {
-        throw new ApiError(httpStatus.NOT_FOUND, 'Some students not found. Check that all student IDs exist.');
-      }
+      const existing = await Student.find({ _id: { $in: ids } }).select('_id').lean();
+      validIds = existing.map((s) => s._id);
     }
-    group.students = ids;
+    group.students = validIds;
     delete updateBody.studentIds;
   }
 
