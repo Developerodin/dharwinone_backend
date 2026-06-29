@@ -31,5 +31,11 @@ export const runStep = {
   }),
   body: Joi.object({
     toUserIds: Joi.array().items(Joi.string().custom(objectId)),
+    assignments: Joi.array().items(
+      Joi.object({
+        taskId: Joi.string().custom(objectId).required(),
+        toUserIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
+      })
+    ),
   }),
 };

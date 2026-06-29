@@ -22,6 +22,13 @@ router.get('/:employeeId/status', ...canManage, validate(v.employeeIdParam), con
 
 router.get('/:employeeId/open-tasks', ...canManage, validate(v.employeeIdParam), controller.getOpenTasks);
 
+router.get(
+  '/:employeeId/backdated-requests',
+  ...canManage,
+  validate(v.employeeIdParam),
+  controller.getBackdatedRequests
+);
+
 router.post('/:employeeId/run/:stepKey', ...canManage, validate(v.runStep), controller.runStep);
 
 export default router;

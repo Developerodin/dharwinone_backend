@@ -64,8 +64,9 @@ const DECIDERS = {
   attendance_complete: ({ pendingBackdatedCount }) => (pendingBackdatedCount || 0) === 0,
   email_deactivated: ({ hasCompanyEmail, emailStatus }) => !hasCompanyEmail || emailStatus !== 'active',
   tasks_reassigned: ({ openAssignedTaskCount }) => (openAssignedTaskCount || 0) === 0,
-  org_team_disabled: ({ employeeIsActive, activeTeamRowCount }) =>
-    employeeIsActive === false && (activeTeamRowCount || 0) === 0,
+  // Done once team memberships are archived. The org-node drop on the last
+  // working day (employee.isActive flip) is handled by the scheduler, not this step.
+  org_team_disabled: ({ activeTeamRowCount }) => (activeTeamRowCount || 0) === 0,
 };
 
 /**

@@ -8,6 +8,7 @@ import {
   runOffboardingStep,
   listOpenTasksForEmployee,
   listAssignableUsers,
+  listBackdatedRequestsForEmployee,
 } from '../services/offboardingActions.service.js';
 
 const getConfig = catchAsync(async (req, res) => {
@@ -39,4 +40,17 @@ const getAssignableUsers = catchAsync(async (req, res) => {
   res.send({ users: await listAssignableUsers() });
 });
 
-export default { getConfig, putConfig, getOverview, getStatus, runStep, getOpenTasks, getAssignableUsers };
+const getBackdatedRequests = catchAsync(async (req, res) => {
+  res.send({ requests: await listBackdatedRequestsForEmployee(req.params.employeeId) });
+});
+
+export default {
+  getConfig,
+  putConfig,
+  getOverview,
+  getStatus,
+  runStep,
+  getOpenTasks,
+  getAssignableUsers,
+  getBackdatedRequests,
+};

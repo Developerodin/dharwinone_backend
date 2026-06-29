@@ -100,11 +100,17 @@ describe('evaluateSteps', () => {
     assert.equal(rows.find((r) => r.checkerKey === 'tasks_reassigned').done, false);
   });
 
-  it('org_team not done while employee still active or team rows remain', () => {
-    const stillActive = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, employeeIsActive: true });
-    assert.equal(stillActive.find((r) => r.checkerKey === 'org_team_disabled').done, false);
+  it('org_team reflects team archival, independent of employee active state', () => {
+    // Team rows still active → not done, even if employee already inactive.
     const hasTeam = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), { ...FULL_CTX, activeTeamRowCount: 1 });
     assert.equal(hasTeam.find((r) => r.checkerKey === 'org_team_disabled').done, false);
+    // Teams archived while employee still active (notice period) → done.
+    const archivedWhileActive = evaluateSteps(DEFAULT_OFFBOARDING_STEPS(), {
+      ...FULL_CTX,
+      employeeIsActive: true,
+      activeTeamRowCount: 0,
+    });
+    assert.equal(archivedWhileActive.find((r) => r.checkerKey === 'org_team_disabled').done, true);
   });
 
   it('skips disabled steps and sorts by sortOrder', () => {

@@ -5,29 +5,56 @@ import EmailAccount from '../models/emailAccount.model.js';
 import Task from '../models/task.model.js';
 import User from '../models/user.model.js';
 import TeamMember from '../models/team.model.js';
+import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import { applyReassign } from './offboarding.pure.js';
 import { evaluateOffboardingForEmployee } from './offboardingChecklist.service.js';
 
 const REASON = 'offboarding';
 
-const deactivateEmail = async (owner) => {
-  if (!owner) return;
-  await EmailAccount.updateMany({ user: owner, status: 'active' }, { $set: { status: 'revoked' } });
+const deactivateEmail = async (owner, employeeId) => {
+  if (owner) {
+    await EmailAccount.updateMany({ user: owner, status: 'active' }, { $set: { status: 'revoked' } });
+  }
+  // Strip the company-assigned address off the employee so the step reflects a real change.
+  if (employeeId) {
+    await Employee.updateOne({ _id: employeeId }, { $set: { companyAssignedEmail: null } });
+  }
 };
 
-const reassignTasks = async (owner, toUserIds) => {
+const saveReassign = async (task, owner, toUserIds, now) => {
+  const r = applyReassign(task, owner, toUserIds, REASON, now);
+  if (!r.changed && r.assignedTo.length === task.assignedTo.length) return;
+  task.assignedTo = r.assignedTo;
+  task.formerAssignees = r.formerAssignees;
+  await task.save();
+};
+
+const reassignTasks = async (owner, { toUserIds, assignments } = {}) => {
   if (!owner) return;
-  if (!Array.isArray(toUserIds) || toUserIds.length === 0) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'toUserIds is required to reassign tasks');
-  }
   const now = new Date();
+
+  // Per-task mode: each entry routes one task to its own recipients.
+  if (Array.isArray(assignments) && assignments.length > 0) {
+    const ids = assignments.map((a) => a.taskId);
+    const tasks = await Task.find({ _id: { $in: ids }, assignedTo: owner, status: { $ne: 'completed' } }).select(
+      'assignedTo formerAssignees'
+    );
+    const byId = new Map(tasks.map((t) => [String(t._id), t]));
+    for (const { taskId, toUserIds: to } of assignments) {
+      const task = byId.get(String(taskId));
+      if (!task || !Array.isArray(to) || to.length === 0) continue;
+      await saveReassign(task, owner, to, now);
+    }
+    return;
+  }
+
+  // Bulk mode: every open task to the same recipients.
+  if (!Array.isArray(toUserIds) || toUserIds.length === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'toUserIds or assignments is required to reassign tasks');
+  }
   const tasks = await Task.find({ assignedTo: owner, status: { $ne: 'completed' } }).select('assignedTo formerAssignees');
   for (const task of tasks) {
-    const r = applyReassign(task, owner, toUserIds, REASON, now);
-    if (!r.changed && r.assignedTo.length === task.assignedTo.length) continue;
-    task.assignedTo = r.assignedTo;
-    task.formerAssignees = r.formerAssignees;
-    await task.save();
+    await saveReassign(task, owner, toUserIds, now);
   }
 };
 
@@ -67,6 +94,35 @@ export const listOpenTasksForEmployee = async (employeeId) => {
   }));
 };
 
+/** All backdated-attendance requests (pending + historical) for the departing employee (user-based). */
+export const listBackdatedRequestsForEmployee = async (employeeId) => {
+  const employee = await Employee.findById(employeeId).select('owner').lean();
+  if (!employee) throw new ApiError(httpStatus.NOT_FOUND, 'Employee not found');
+  if (!employee.owner) return [];
+  const reqs = await BackdatedAttendanceRequest.find({ user: employee.owner })
+    .select('attendanceEntries notes status adminComment requestedBy reviewedBy reviewedAt createdAt')
+    .populate('requestedBy', 'name email')
+    .populate('reviewedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .lean();
+  return reqs.map((r) => ({
+    id: String(r._id),
+    attendanceEntries: (r.attendanceEntries || []).map((e) => ({
+      date: e.date,
+      punchIn: e.punchIn,
+      punchOut: e.punchOut ?? null,
+      timezone: e.timezone || null,
+    })),
+    notes: r.notes ?? null,
+    status: r.status,
+    adminComment: r.adminComment ?? null,
+    requestedByName: r.requestedBy?.name || r.requestedBy?.email || null,
+    reviewedByName: r.reviewedBy?.name || r.reviewedBy?.email || null,
+    reviewedAt: r.reviewedAt ?? null,
+    createdAt: r.createdAt,
+  }));
+};
+
 const disableTeams = async (employeeId) => {
   await TeamMember.updateMany(
     { employeeId, isActive: true },
@@ -87,10 +143,10 @@ export const runOffboardingStep = async (employeeId, stepKey, body = {}) => {
 
   switch (stepKey) {
     case 'email_deactivated':
-      await deactivateEmail(employee.owner);
+      await deactivateEmail(employee.owner, employeeId);
       break;
     case 'tasks_reassigned':
-      await reassignTasks(employee.owner, body.toUserIds);
+      await reassignTasks(employee.owner, body);
       break;
     case 'org_team_disabled':
       await disableTeams(employeeId);
