@@ -1476,18 +1476,16 @@ export async function syncAiStaffedCandidatesToProjectTeam(project, user, rows) 
     if (!c) continue;
     const emailRaw = String(c.email || '').trim();
     const emailNorm = normalizeEmail(emailRaw || `candidate-${cid}@project-roster.local`);
-    const name = String(c.fullName || '').trim() || emailNorm.split('@')[0] || 'Teammate';
     const existing = await TeamMember.findOne({
       teamId: teamGroup._id,
-      legacyEmail: emailNorm,
+      isActive: { $ne: false },
+      $or: [{ employeeId: cid }, { legacyEmail: emailNorm }],
     }).exec();
     if (existing) continue;
     await createTeamMemberRow(uid, {
       teamId: teamGroup._id,
-      legacyName: name,
-      legacyEmail: emailNorm,
+      employeeId: cid,
       assignmentMode: 'ai-suggested',
-      orphanReason: 'manual_create',
     });
     membersAdded += 1;
   }

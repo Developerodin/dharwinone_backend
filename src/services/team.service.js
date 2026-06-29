@@ -113,6 +113,20 @@ const canManageTeam = async (user, resource) => {
 };
 
 /**
+ * Returns the sole Employee whose personal or company-assigned email matches, else null.
+ * @param {string} emailRaw
+ * @returns {Promise<import('mongoose').Document|null>}
+ */
+export const findUniqueEmployeeByEmail = async (emailRaw) => {
+  const emailNorm = normalizeEmail(emailRaw);
+  if (!emailNorm) return null;
+  const matches = await Employee.find({
+    $or: [{ email: emailNorm }, { companyAssignedEmail: emailNorm }],
+  }).select('designation department');
+  return matches.length === 1 ? matches[0] : null;
+};
+
+/**
  * Creates a TeamMember row in FK or orphan shape. Rejects legacy denormalized fields.
  */
 export const createTeamMemberRow = async (createdById, payload) => {
@@ -135,8 +149,18 @@ export const createTeamMemberRow = async (createdById, payload) => {
     if (!emp) throw new ApiError(httpStatus.NOT_FOUND, `Employee ${payload.employeeId} not found`);
     doc.roleSnapshot = buildRoleSnapshot(emp, payload.seniority);
   } else {
-    doc.orphanReason = payload.orphanReason || 'manual_create';
-    doc.orphanDetectedAt = new Date();
+    const matched = await findUniqueEmployeeByEmail(payload.legacyEmail);
+    if (matched) {
+      doc.employeeId = matched._id;
+      doc.roleSnapshot = buildRoleSnapshot(matched, payload.seniority);
+      delete doc.legacyName;
+      delete doc.legacyEmail;
+      delete doc.orphanReason;
+      delete doc.orphanDetectedAt;
+    } else {
+      doc.orphanReason = payload.orphanReason || 'manual_create';
+      doc.orphanDetectedAt = new Date();
+    }
   }
   const member = await TeamMember.create(doc);
   await member.populate([

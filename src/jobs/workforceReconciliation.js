@@ -3,7 +3,7 @@ import TeamMember, { buildRoleSnapshot } from '../models/team.model.js';
 import TeamGroup from '../models/teamGroup.model.js';
 import Employee from '../models/employee.model.js';
 import Position from '../models/position.model.js';
-import { normalizeEmail } from '../utils/normalizeEmail.js';
+import { findUniqueEmployeeByEmail } from '../services/team.service.js';
 import logger from '../config/logger.js';
 
 const LOG_COLLECTION = 'reconciliation_log';
@@ -58,21 +58,16 @@ export const retryOrphanMatch = async () => {
   let linked = 0;
   const orphans = await TeamMember.find({ employeeId: null, isActive: true });
   for (const tm of orphans) {
-    const emailNorm = normalizeEmail(tm.legacyEmail);
-    if (!emailNorm) continue;
-    const candidates = await Employee.find({
-      $or: [{ email: emailNorm }, { companyAssignedEmail: emailNorm }],
-    });
-    if (candidates.length === 1) {
-      tm.employeeId = candidates[0]._id;
-      tm.roleSnapshot = buildRoleSnapshot(candidates[0], tm.seniority);
-      tm.legacyName = null;
-      tm.legacyEmail = null;
-      tm.orphanReason = null;
-      tm.orphanDetectedAt = null;
-      await tm.save();
-      linked += 1;
-    }
+    const emp = await findUniqueEmployeeByEmail(tm.legacyEmail);
+    if (!emp) continue;
+    tm.employeeId = emp._id;
+    tm.roleSnapshot = buildRoleSnapshot(emp, tm.seniority);
+    tm.legacyName = null;
+    tm.legacyEmail = null;
+    tm.orphanReason = null;
+    tm.orphanDetectedAt = null;
+    await tm.save();
+    linked += 1;
   }
   await writeLog('retryOrphanMatch', { linked });
   return { linked };

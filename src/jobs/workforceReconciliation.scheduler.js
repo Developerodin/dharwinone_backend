@@ -26,6 +26,9 @@ export async function runWorkforceReconciliationTick() {
 export function startWorkforceReconciliationScheduler({ intervalHours = DEFAULT_INTERVAL_HOURS } = {}) {
   if (intervalId) return;
   const ms = Math.max(1, Number(intervalHours)) * 60 * 60 * 1000;
+  runWorkforceReconciliationTick().catch((err) =>
+    logger.warn(`[workforceReconciliation] initial tick error: ${err.message}`)
+  );
   intervalId = setInterval(() => {
     runWorkforceReconciliationTick().catch((err) =>
       logger.warn(`[workforceReconciliation] tick error: ${err.message}`)
