@@ -4,12 +4,12 @@ import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import plivoService from '../services/plivo.service.js';
+import telephonyService from '../services/telephony.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const getAvailableNumbers = catchAsync(async (req, res) => {
-  const { countryIso, type, pattern, services, city, region, limit, offset } = req.query;
-  const result = await plivoService.searchAvailableNumbers({
+  const {
     countryIso,
     type,
     pattern,
@@ -18,9 +18,27 @@ const getAvailableNumbers = catchAsync(async (req, res) => {
     region,
     limit,
     offset,
+    pageToken,
+    postalCode,
+    nearNumber,
+    distance,
+  } = req.query;
+  const result = await telephonyService.searchAvailableNumbers({
+    countryIso,
+    type,
+    pattern,
+    services,
+    city,
+    region,
+    limit,
+    offset,
+    pageToken,
+    postalCode,
+    nearNumber,
+    distance,
   });
   if (!result.success) {
-    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to search Plivo numbers');
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to search available numbers');
   }
   res.status(httpStatus.OK).send({
     success: true,
@@ -29,12 +47,14 @@ const getAvailableNumbers = catchAsync(async (req, res) => {
     offset: result.offset,
     limit: result.limit,
     total: result.total,
+    nextPageToken: result.nextPageToken,
+    provider: result.provider || telephonyService.getProviderName(),
   });
 });
 
 const buyNumber = catchAsync(async (req, res) => {
   const { number } = req.body;
-  const result = await plivoService.buyNumber(number);
+  const result = await telephonyService.buyNumber(number);
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to buy Plivo number');
   }
@@ -57,7 +77,7 @@ const buyNumber = catchAsync(async (req, res) => {
 
 const getOwnedNumbers = catchAsync(async (req, res) => {
   const { type, alias, limit, offset } = req.query;
-  const result = await plivoService.listOwnedNumbers({ type, alias, limit, offset });
+  const result = await telephonyService.listOwnedNumbers({ type, alias, limit, offset });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to list Plivo numbers');
   }
@@ -65,6 +85,7 @@ const getOwnedNumbers = catchAsync(async (req, res) => {
     success: true,
     numbers: result.numbers,
     total: result.total,
+    provider: telephonyService.getProviderName(),
   });
 });
 
@@ -74,7 +95,7 @@ const getOwnedNumbers = catchAsync(async (req, res) => {
  */
 const placeCall = catchAsync(async (req, res) => {
   const { toNumber, agentPhone, callerId } = req.body;
-  const result = await plivoService.placeBridgeCall({ toNumber, agentPhone, callerId });
+  const result = await telephonyService.placeBridgeCall({ toNumber, agentPhone, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to place call');
   }
@@ -102,10 +123,10 @@ const placeCall = catchAsync(async (req, res) => {
  */
 const answerCall = catchAsync(async (req, res) => {
   const { to, callerId, sig } = req.query;
-  if (!plivoService.verifyCallSignature(to, callerId, sig)) {
+  if (!telephonyService.verifyCallSignature(to, callerId, sig)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Invalid call signature');
   }
-  res.type('text/xml').send(plivoService.bridgeAnswerXml({ toNumber: to, callerId }));
+  res.type('text/xml').send(telephonyService.bridgeAnswerXml({ toNumber: to, callerId }));
 });
 
 /**
@@ -114,11 +135,17 @@ const answerCall = catchAsync(async (req, res) => {
  * + endpoint on first call.
  */
 const getSdkToken = catchAsync(async (req, res) => {
-  const result = await plivoService.mintWebrtcToken({ uid: req.user.id });
+  const result = await telephonyService.mintBrowserToken({ uid: req.user.id });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to mint WebRTC token');
   }
-  res.status(httpStatus.OK).send({ success: true, token: result.token, username: result.username });
+  res.status(httpStatus.OK).send({
+    success: true,
+    token: result.token,
+    username: result.username,
+    identity: result.identity,
+    provider: telephonyService.getProviderName(),
+  });
 });
 
 /**
@@ -160,7 +187,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
   logger.info(
     `Plivo sdk-answer hit mongoReady=${mongoose.connection.readyState === 1} pathIntent=${Boolean(pathIntent)} keys=${Object.keys(src).join(',')}`
   );
-  const xml = await plivoService.sdkAnswerXml({ to, callerId, intentToken });
+  const xml = await telephonyService.sdkAnswerXml({ to, callerId, intentToken });
   if (!xml) {
     logger.warn(
       `Plivo sdk-answer RESULT xmlType=Hangup to=${String(to).slice(0, 40)} callerId=${String(callerId).slice(0, 20)} intent=${intentToken ? 'yes' : 'no'} intentTail=${intentToken ? String(intentToken).slice(-8) : 'none'} keys=${Object.keys(src).join(',')}`
@@ -183,7 +210,7 @@ const sdkAnswer = catchAsync(async (req, res) => {
  */
 const postBrowserCallIntent = catchAsync(async (req, res) => {
   const { toNumber, callerId } = req.body;
-  const result = await plivoService.registerBrowserCallIntent({ toNumber, callerId });
+  const result = await telephonyService.registerBrowserCallIntent({ toNumber, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_REQUEST, result.error || 'Invalid browser call intent');
   }

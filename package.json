@@ -101,6 +101,7 @@
     "socket.io": "^4.7.0",
     "swagger-jsdoc": "^6.0.8",
     "swagger-ui-express": "^4.1.6",
+    "twilio": "^6.0.2",
     "validator": "^13.0.0",
     "winston": "^3.2.1",
     "xlsx": "^0.18.5",

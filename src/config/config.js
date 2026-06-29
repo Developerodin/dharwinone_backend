@@ -115,6 +115,21 @@ const envVarsSchema = Joi.object()
     /** Public base URL Plivo fetches the call answer-XML from. Defaults to BACKEND_PUBLIC_URL. Must be publicly reachable (not localhost) — use an ngrok tunnel in dev. */
     PLIVO_ANSWER_BASE_URL: Joi.string().optional().description('Public base URL for Plivo answer_url webhook'),
 
+    // Telephony provider switch + Twilio Voice (see docs/TWILIO_INTEGRATION_PLAN.md)
+    TELEPHONY_PROVIDER: Joi.string().valid('plivo', 'twilio').optional().default('plivo'),
+    TWILIO_AUTH_ID: Joi.string().optional().description('Twilio Account SID'),
+    TWILIO_AUTH_TOKEN: Joi.string().optional().description('Twilio Auth Token'),
+    TWILIO_API_SID: Joi.string().optional().description('Twilio API Key SID for Access Tokens'),
+    TWILIO_API_SECRET: Joi.string().optional().description('Twilio API Key Secret'),
+    TWILIO_TWIML_APP_SID: Joi.string().optional().description('Twilio TwiML App SID for Voice SDK'),
+    TWILIO_PHONE_NUMBER: Joi.string().optional().description('Fallback outbound caller ID'),
+    TWILIO_WEBHOOK_BASE_URL: Joi.string().optional().description('Deployed backend origin for Twilio webhooks'),
+    TWILIO_VERIFY_WEBHOOKS: Joi.string().optional().description('true|false — validate X-Twilio-Signature'),
+    TWILIO_INTELLIGENCE_SERVICE_SID: Joi.string().optional().description('Optional Conversational Intelligence service SID'),
+    TWILIO_INBOUND_DEFAULT_USER: Joi.string().optional().description('Mongo user id that inbound PSTN calls ring (Voice SDK client)'),
+    TWILIO_PUSH_CREDENTIAL_SID_IOS: Joi.string().optional().description('Twilio Push Credential SID for iOS VoIP push'),
+    TWILIO_PUSH_CREDENTIAL_SID_ANDROID: Joi.string().optional().description('Twilio Push Credential SID for Android FCM push'),
+
     // Apollo.io — HR contact enrichment for External Jobs
     APOLLO_IO_API_KEY: Joi.string().optional().description('Apollo.io Master API key for people search and enrichment'),
     APOLLO_WEBHOOK_SECRET: Joi.string().optional().description('Random secret token in the Apollo webhook URL path to prevent spoofing'),
@@ -476,6 +491,28 @@ const config = {
     authToken: envVars.PLIVO_AUTH_TOKEN || '',
     /** Where Plivo fetches call answer-XML. Must be publicly reachable; falls back to the backend public URL. */
     answerBaseUrl: (envVars.PLIVO_ANSWER_BASE_URL || resolvedBackendPublicUrl).replace(/\/$/, ''),
+  },
+  telephony: {
+    provider: envVars.TELEPHONY_PROVIDER === 'twilio' ? 'twilio' : 'plivo',
+  },
+  twilio: {
+    accountSid: envVars.TWILIO_AUTH_ID || '',
+    authToken: envVars.TWILIO_AUTH_TOKEN || '',
+    apiKeySid: envVars.TWILIO_API_SID || '',
+    apiKeySecret: envVars.TWILIO_API_SECRET || '',
+    twimlAppSid: envVars.TWILIO_TWIML_APP_SID || '',
+    phoneNumber: envVars.TWILIO_PHONE_NUMBER || '',
+    webhookBaseUrl: (envVars.TWILIO_WEBHOOK_BASE_URL || resolvedBackendPublicUrl).replace(/\/$/, ''),
+    verifyWebhooks:
+      String(envVars.TWILIO_VERIFY_WEBHOOKS || '').toLowerCase() === 'true'
+        ? true
+        : String(envVars.TWILIO_VERIFY_WEBHOOKS || '').toLowerCase() === 'false'
+          ? false
+          : undefined,
+    intelligenceServiceSid: envVars.TWILIO_INTELLIGENCE_SERVICE_SID || '',
+    inboundDefaultUser: (envVars.TWILIO_INBOUND_DEFAULT_USER || '').trim(),
+    pushCredentialSidIos: envVars.TWILIO_PUSH_CREDENTIAL_SID_IOS || '',
+    pushCredentialSidAndroid: envVars.TWILIO_PUSH_CREDENTIAL_SID_ANDROID || '',
   },
   apollo: {
     apiKey: envVars.APOLLO_IO_API_KEY || '',

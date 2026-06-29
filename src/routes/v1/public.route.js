@@ -10,6 +10,8 @@ import * as meetingController from '../../controllers/meeting.controller.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
+import * as twilioVoiceController from '../../controllers/twilioVoice.controller.js';
+import { verifyTwilioWebhook } from '../../middlewares/verifyTwilioWebhook.js';
 import { uploadJobApplicationFiles } from '../../middlewares/upload.js';
 import { publicRegistrationLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
 
@@ -192,5 +194,15 @@ router.all('/plivo/sdk-answer/i/:intent', plivoController.sdkAnswer);
  * caller ID. A real call only reaches here from our token-authenticated endpoint.
  */
 router.all('/plivo/sdk-answer', plivoController.sdkAnswer);
+
+/**
+ * Twilio Voice webhooks (no auth — X-Twilio-Signature validated).
+ * Configure TwiML App Voice URL → {TWILIO_WEBHOOK_BASE_URL}/v1/public/twilio/voice
+ */
+router.post('/twilio/voice', verifyTwilioWebhook, twilioVoiceController.outboundVoice);
+router.post('/twilio/voice/inbound', verifyTwilioWebhook, twilioVoiceController.inboundVoice);
+router.post('/twilio/bridge-answer', verifyTwilioWebhook, twilioVoiceController.bridgeAnswer);
+router.post('/twilio/call-status', verifyTwilioWebhook, twilioVoiceController.callStatusWebhook);
+router.post('/twilio/recording', verifyTwilioWebhook, twilioVoiceController.recordingWebhook);
 
 export default router;

@@ -54,6 +54,7 @@ For local dev, tunnel your backend (e.g. ngrok) and substitute your tunnel host 
 | [BOLNA_CANDIDATE_AGENT_PROMPT.md](./BOLNA_CANDIDATE_AGENT_PROMPT.md) | System prompt for `BOLNA_CANDIDATE_AGENT_ID`. |
 | [SEPARATE_WEBHOOKS.md](./SEPARATE_WEBHOOKS.md) | Webhook URLs, testing, monitoring. |
 | [CANDIDATE_CALL_FROM_APPLICANTS.md](./CANDIDATE_CALL_FROM_APPLICANTS.md) | ATS UI: bulk candidate calls from applicants tab. |
+| [TELEPHONY_PLIVO_INVENTORY.md](./TELEPHONY_PLIVO_INVENTORY.md) | Plivo dialer, company numbers, Bolna dual-channel recordings, Twilio migration map. |
 
 ## Troubleshooting (short)
 

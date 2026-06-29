@@ -13,8 +13,16 @@ const searchAvailableNumbers = {
     /** Region name (e.g. Frankfurt) — fixed numbers only. */
     region: Joi.string().trim().allow(''),
     limit: Joi.number().integer().min(1).max(20),
-    /** Pagination offset (page * limit). */
+    /** Pagination offset (page * limit). Plivo only — Twilio uses pageToken. */
     offset: Joi.number().integer().min(0),
+    /** Twilio cursor pagination (load more). */
+    pageToken: Joi.string().trim().allow(''),
+    /** ZIP/postal code — Twilio inPostalCode. */
+    postalCode: Joi.string().trim().allow(''),
+    /** E.164 number for geo search — Twilio nearNumber. */
+    nearNumber: Joi.string().trim().allow(''),
+    /** Miles from nearNumber — Twilio distance (default 25 when nearNumber set). */
+    distance: Joi.number().integer().min(1).max(500),
   }),
 };
 
