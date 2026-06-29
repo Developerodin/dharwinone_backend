@@ -233,12 +233,17 @@ function buildOutboundTwiml({ to, callerId }) {
   return response.toString();
 }
 
+function addClientParameter(client, name, value) {
+  if (value == null || value === '') return;
+  client.parameter({ name, value: String(value) });
+}
+
 /**
  * Inbound TwiML — returned from a purchased number's Voice URL when a PSTN
  * caller dials it. Rings the resolved app user's Voice SDK client.
- * @param {{ identity: string }} params
+ * @param {{ identity: string, from?: string, to?: string, callSid?: string }} params
  */
-function buildInboundToClientTwiml({ identity }) {
+function buildInboundToClientTwiml({ identity, from = '', to = '', callSid = '' }) {
   const response = new VoiceResponse();
   if (!identity) {
     response.say('Sorry, this number is not available right now.');
@@ -264,7 +269,11 @@ function buildInboundToClientTwiml({ identity }) {
   }
 
   const dial = response.dial(dialAttrs);
-  dial.client(identity);
+  const client = dial.client();
+  client.identity(identity);
+  addClientParameter(client, 'From', toE164(from) || from);
+  addClientParameter(client, 'To', toE164(to) || to);
+  addClientParameter(client, 'CallSid', callSid);
 
   return response.toString();
 }

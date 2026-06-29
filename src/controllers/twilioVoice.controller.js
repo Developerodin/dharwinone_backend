@@ -64,6 +64,8 @@ const inboundVoice = catchAsync(async (req, res) => {
   try {
     const body = req.body || {};
     const calledNumber = body.To || body.Called || '';
+    const callerNumber = body.From || body.Caller || '';
+    const callSid = body.CallSid || '';
     const identity = twilioService.resolveInboundIdentity();
     if (!identity) {
       logger.info('[Twilio] voice inbound — TWILIO_INBOUND_DEFAULT_USER unset, not routed', { calledNumber });
@@ -72,8 +74,16 @@ const inboundVoice = catchAsync(async (req, res) => {
         twilioService.buildHangupTwiml('This number is not configured for inbound calls yet.'),
       );
     }
-    logger.info('[Twilio] voice inbound → client', { calledNumber, identity });
-    return sendTwiml(res, twilioService.buildInboundToClientTwiml({ identity }));
+    logger.info('[Twilio] voice inbound → client', { calledNumber, callerNumber, identity });
+    return sendTwiml(
+      res,
+      twilioService.buildInboundToClientTwiml({
+        identity,
+        from: callerNumber,
+        to: calledNumber,
+        callSid,
+      }),
+    );
   } catch (err) {
     logger.warn(`[Twilio] voice inbound error: ${err?.message}`);
     return sendTwiml(res, twilioService.buildHangupTwiml());

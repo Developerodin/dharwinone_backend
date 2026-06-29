@@ -81,8 +81,16 @@ test('resolveInboundIdentity returns empty when no default user configured', () 
 });
 
 test('buildInboundToClientTwiml rings the resolved client', () => {
-  const xml = twilioService.buildInboundToClientTwiml({ identity: 'user_507f1f77bcf86cd799439011' });
-  assert.match(xml, /<Client>user_507f1f77bcf86cd799439011<\/Client>/);
+  const xml = twilioService.buildInboundToClientTwiml({
+    identity: 'user_507f1f77bcf86cd799439011',
+    from: CALLER,
+    to: TO,
+    callSid: 'CA123',
+  });
+  assert.match(xml, /<Identity>user_507f1f77bcf86cd799439011<\/Identity>/);
+  assert.match(xml, /<Parameter name="From" value="\+14155550199"\/>/);
+  assert.match(xml, /<Parameter name="To" value="\+14155550100"\/>/);
+  assert.match(xml, /<Parameter name="CallSid" value="CA123"\/>/);
   assert.match(xml, /record="record-from-answer-dual"/);
 });
 
