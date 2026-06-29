@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import attendanceService from '../services/attendance.service.js';
+import * as onLeaveTodayService from '../services/onLeaveToday.service.js';
 import * as studentService from '../services/student.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import Student from '../models/student.model.js';
@@ -239,9 +240,16 @@ const getMyUpcomingHolidays = catchAsync(async (req, res) => {
   res.send({ success: true, data: result });
 });
 
+/** Dashboard widget: employees on leave today, permission-scoped (see onLeaveToday.service). */
+const getOnLeaveToday = catchAsync(async (req, res) => {
+  const { scope, results } = await onLeaveTodayService.getEmployeesOnLeaveToday(req.user);
+  res.send({ scope, results });
+});
+
 export default {
   getMyStudentForAttendance,
   getMyUpcomingHolidays,
+  getOnLeaveToday,
   punchIn,
   punchOut,
   punchInMe,

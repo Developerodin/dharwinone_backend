@@ -132,6 +132,14 @@ export const permissionAliases = {
     'ats.candidates:view,create,edit,delete',
   ],
   'employees.manage': ['employees.manage', 'ats.employees:view,create,edit,delete'],
+  // General dashboard (General → Dashboard row): general.dashboard:view -> dashboard.view;
+  // all four checked -> dashboard.manage (used to grade the "on leave today" widget visibility).
+  'dashboard.view': [
+    'dashboard.view',
+    'general.dashboard:view',
+    'general.dashboard:view,create,edit,delete',
+  ],
+  'dashboard.manage': ['dashboard.manage', 'general.dashboard:view,create,edit,delete'],
   'candidates.manageSalesAgentAttribution': [
     'candidates.manageSalesAgentAttribution',
     'candidates.manage',

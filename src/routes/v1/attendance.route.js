@@ -10,6 +10,9 @@ import attendanceController from '../../controllers/attendance.controller.js';
 
 const router = express.Router();
 
+// Dashboard widget: employees on leave today. Auth only; visibility is permission-graded in the service.
+router.get('/on-leave-today', auth(), attendanceController.getOnLeaveToday);
+
 // Get current user's attendance identity (Student or user for Agent). Admins get 404.
 router.get('/me', auth(), attendanceController.getMyStudentForAttendance);
 router.get(
