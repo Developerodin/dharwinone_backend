@@ -1,4 +1,5 @@
 import Attendance from '../models/attendance.model.js';
+import LeaveRequest from '../models/leaveRequest.model.js';
 import Student from '../models/student.model.js';
 import Employee from '../models/employee.model.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
@@ -14,7 +15,6 @@ import { hasApiPermission } from '../utils/permissionCheck.js';
  * code lives on Employee. Bridge: Attendance.student -> Student.user(User) <- Employee.owner.
  */
 
-const DAY = 86400000;
 const EMPTY = { _id: { $in: [] } };
 
 const toId = (v) => (v ? String(v._id || v.id || v) : '');
@@ -24,19 +24,18 @@ const utcMidnight = (d) => {
 };
 
 /**
- * Maximal run of consecutive UTC days that includes today.
- * @param {number[]} dayMsList UTC-midnight epoch ms of leave days (any order, dups ok)
- * @param {number} todayMs UTC-midnight epoch ms of today
+ * Overall span (min..max UTC-midnight ms) of a leave request's discrete dates.
+ * Leave is booked as discrete weekday dates (weekends skipped), so the request's
+ * true span is its earliest..latest date — NOT a calendar-contiguous run, which
+ * would break at every weekend gap.
+ * @param {(Date|number|string)[]} dates discrete leave dates (any order)
+ * @param {number} fallbackMs returned for an empty list (today)
  * @returns {{ startMs: number, endMs: number }}
  */
-export const contiguousRange = (dayMsList, todayMs) => {
-  const days = new Set(dayMsList.map(Number));
-  days.add(todayMs);
-  let start = todayMs;
-  let end = todayMs;
-  while (days.has(start - DAY)) start -= DAY;
-  while (days.has(end + DAY)) end += DAY;
-  return { startMs: start, endMs: end };
+export const spanFromDates = (dates, fallbackMs) => {
+  const ms = (dates || []).map((d) => utcMidnight(d).getTime());
+  if (!ms.length) return { startMs: fallbackMs, endMs: fallbackMs };
+  return { startMs: Math.min(...ms), endMs: Math.max(...ms) };
 };
 
 /** Employee filter + scope label for which employees this actor may see on leave. */
@@ -73,32 +72,33 @@ const getEmployeesOnLeaveToday = async (actor) => {
   if (!todayLeaves.length) return { scope, results: [] };
   const onLeaveStudentIds = [...new Set(todayLeaves.map((l) => toId(l.student)))];
 
-  // Contiguous leave block around today.
-  // ponytail: ±31d window caps the span; widen if HR ever books leave blocks longer than a month.
-  const windowStart = new Date(today);
-  windowStart.setUTCDate(windowStart.getUTCDate() - 31);
-  const windowEnd = new Date(today);
-  windowEnd.setUTCDate(windowEnd.getUTCDate() + 31);
-  const rangeRows = await Attendance.find(
-    { student: { $in: onLeaveStudentIds }, status: 'Leave', date: { $gte: windowStart, $lt: windowEnd } },
-    { student: 1, date: 1 }
+  // Real span = the approved LeaveRequest covering today (same data the request card shows).
+  // Leave is booked as discrete weekday dates, so reconstructing a range from per-day
+  // Attendance rows breaks at every weekend; use the request's own min..max instead.
+  const requests = await LeaveRequest.find(
+    { student: { $in: onLeaveStudentIds }, status: 'approved', dates: { $elemMatch: { $gte: today, $lt: tomorrow } } },
+    { student: 1, dates: 1 }
   ).lean();
 
-  const daysByStudent = new Map();
-  for (const r of rangeRows) {
-    const k = toId(r.student);
-    if (!daysByStudent.has(k)) daysByStudent.set(k, []);
-    daysByStudent.get(k).push(utcMidnight(r.date).getTime());
+  const todayMs = today.getTime();
+  const spanByStudent = new Map();
+  for (const req of requests) {
+    const { startMs, endMs } = spanFromDates(req.dates, todayMs);
+    const k = toId(req.student);
+    const prev = spanByStudent.get(k);
+    spanByStudent.set(
+      k,
+      prev ? { startMs: Math.min(prev.startMs, startMs), endMs: Math.max(prev.endMs, endMs) } : { startMs, endMs }
+    );
   }
 
   const ownerToEmployee = new Map(employees.map((e) => [toId(e.owner), e]));
-  const todayMs = today.getTime();
 
   const result = [];
   for (const sid of onLeaveStudentIds) {
     const emp = ownerToEmployee.get(studentToOwner.get(sid));
     if (!emp) continue;
-    const { startMs, endMs } = contiguousRange(daysByStudent.get(sid) || [todayMs], todayMs);
+    const { startMs, endMs } = spanByStudent.get(sid) || { startMs: todayMs, endMs: todayMs };
     result.push({
       employeeId: emp.employeeId || '',
       name: emp.fullName || emp.name || '',
@@ -111,4 +111,4 @@ const getEmployeesOnLeaveToday = async (actor) => {
 };
 
 export { getEmployeesOnLeaveToday };
-export default { getEmployeesOnLeaveToday, contiguousRange };
+export default { getEmployeesOnLeaveToday, spanFromDates };

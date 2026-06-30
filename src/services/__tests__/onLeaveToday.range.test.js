@@ -1,39 +1,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contiguousRange } from '../onLeaveToday.service.js';
+import { spanFromDates } from '../onLeaveToday.service.js';
 
 const DAY = 86400000;
-const TODAY = Date.UTC(2026, 5, 29); // 2026-06-29
+const TODAY = Date.UTC(2026, 5, 30); // 2026-06-30 (Tue)
 
-test('single day = today only', () => {
-  const { startMs, endMs } = contiguousRange([TODAY], TODAY);
+test('empty list = fallback (today) only', () => {
+  const { startMs, endMs } = spanFromDates([], TODAY);
   assert.equal(startMs, TODAY);
   assert.equal(endMs, TODAY);
 });
 
-test('today implicitly included even if absent from list', () => {
-  const { startMs, endMs } = contiguousRange([], TODAY);
-  assert.equal(startMs, TODAY);
-  assert.equal(endMs, TODAY);
+test('single date', () => {
+  const d = Date.UTC(2026, 5, 30);
+  const { startMs, endMs } = spanFromDates([new Date(d)], TODAY);
+  assert.equal(startMs, d);
+  assert.equal(endMs, d);
 });
 
-test('walks both directions over a contiguous block', () => {
-  const days = [TODAY - 2 * DAY, TODAY - DAY, TODAY, TODAY + DAY];
-  const { startMs, endMs } = contiguousRange(days, TODAY);
-  assert.equal(startMs, TODAY - 2 * DAY);
-  assert.equal(endMs, TODAY + DAY);
+test('min..max regardless of order or time component', () => {
+  const dates = [
+    new Date(Date.UTC(2026, 6, 8, 9, 30)), // Jul 8, with a stray time → normalized to midnight
+    new Date(Date.UTC(2026, 5, 1)), // Jun 1
+    new Date(Date.UTC(2026, 5, 15)), // Jun 15
+  ];
+  const { startMs, endMs } = spanFromDates(dates, TODAY);
+  assert.equal(startMs, Date.UTC(2026, 5, 1));
+  assert.equal(endMs, Date.UTC(2026, 6, 8));
 });
 
-test('a gap stops the run', () => {
-  const days = [TODAY - 3 * DAY, TODAY, TODAY + DAY]; // gap before today
-  const { startMs, endMs } = contiguousRange(days, TODAY);
-  assert.equal(startMs, TODAY);
-  assert.equal(endMs, TODAY + DAY);
-});
-
-test('unordered + duplicate days handled', () => {
-  const days = [TODAY + DAY, TODAY, TODAY, TODAY - DAY, TODAY + DAY];
-  const { startMs, endMs } = contiguousRange(days, TODAY);
-  assert.equal(startMs, TODAY - DAY);
-  assert.equal(endMs, TODAY + DAY);
+// Regression: weekday-only leave that skips weekends. The old contiguous-day walk
+// stopped at the first weekend gap (reported only ~Jun 29–Jul 3). The span must be
+// the full request range, ignoring the gaps.
+test('weekday-only span spanning weekends returns full min..max', () => {
+  const weekdays = [];
+  // Jun 1 (Mon) .. Jul 8 (Wed) 2026, weekdays only
+  for (let d = Date.UTC(2026, 5, 1); d <= Date.UTC(2026, 6, 8); d += DAY) {
+    const dow = new Date(d).getUTCDay();
+    if (dow !== 0 && dow !== 6) weekdays.push(new Date(d));
+  }
+  const { startMs, endMs } = spanFromDates(weekdays, TODAY);
+  assert.equal(startMs, Date.UTC(2026, 5, 1)); // Jun 1, not Jun 29
+  assert.equal(endMs, Date.UTC(2026, 6, 8)); // Jul 8, not Jul 3
 });
