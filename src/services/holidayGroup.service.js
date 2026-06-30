@@ -151,16 +151,32 @@ const updateHolidayGroupById = async (id, body) => {
 };
 
 /**
- * Delete a group. Member dates are ungrouped (group set to ''), holidays not deleted.
+ * Delete a group. Ungroups holiday dates (group set to '') and removes those dates from all
+ * members' assigned holidays so dashboards and attendance stay in sync.
  */
 const deleteHolidayGroupById = async (id) => {
   const group = await HolidayGroup.findById(id);
   if (!group) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Holiday group not found');
   }
+
+  const studentIds = (group.members || []).map((m) => String(m));
+  const holidays = await Holiday.find({ group: group.name }).select('_id').lean();
+  const holidayIds = holidays.map((h) => String(h._id));
+
+  let unassignResult = null;
+  if (studentIds.length > 0 && holidayIds.length > 0) {
+    unassignResult = await attendanceService.removeHolidaysFromStudents(studentIds, holidayIds, null);
+  }
+
   const res = await Holiday.updateMany({ group: group.name }, { $set: { group: '' } });
   await HolidayGroup.findByIdAndDelete(id);
-  return { group, holidaysUngrouped: res.modifiedCount ?? 0 };
+  return {
+    group,
+    holidaysUngrouped: res.modifiedCount ?? 0,
+    membersUnassigned: studentIds.length,
+    holidaysRemovedFromMembers: unassignResult?.data?.holidaysRemoved ?? 0,
+  };
 };
 
 /**

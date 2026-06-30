@@ -7,6 +7,7 @@ import TeamGroup from '../models/teamGroup.model.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
+import { getDirectoryHiddenUserIds, viewerSeesHiddenUsers } from '../utils/platformAccess.util.js';
 
 function tenantIdForUser(user) {
   return user?.tenantId || user?._id || user?.id;
@@ -239,19 +240,24 @@ export async function listActiveNumbersForUser(userId) {
     .lean();
 }
 
-function orgUsersFilter(adminUser) {
-  const adminId = adminUser.adminId || adminUser._id || adminUser.id;
-  return {
+async function buildAssignableUsersQuery(requester) {
+  const query = {
     status: { $in: ['active', 'pending'] },
     email: { $not: /\.noreply@dharwin\.offers\.local$/i },
-    $or: [{ adminId }, { _id: adminId }],
   };
+  if (requester && !viewerSeesHiddenUsers(requester)) {
+    const hiddenIds = await getDirectoryHiddenUserIds();
+    if (hiddenIds.length > 0) {
+      query._id = { $nin: hiddenIds };
+    }
+  }
+  return query;
 }
 
 /** Roster of org users with assigned company work number (Settings number tab). */
 export async function listUserPhoneAssignments(adminUser) {
   const tenantId = tenantIdForUser(adminUser);
-  const users = await User.find(orgUsersFilter(adminUser))
+  const users = await User.find(await buildAssignableUsersQuery(adminUser))
     .select('name email roleIds')
     .sort({ name: 1 })
     .limit(500)
@@ -303,7 +309,7 @@ export async function listUserPhoneAssignments(adminUser) {
 /** Assign one registry number to a user (clears any prior number on that user). */
 export async function assignPhoneNumberToUser(adminUser, { userId, companyPhoneNumberId }) {
   const tenantId = tenantIdForUser(adminUser);
-  const user = await User.findOne({ _id: userId, ...orgUsersFilter(adminUser) }).select('_id');
+  const user = await User.findOne({ _id: userId, ...(await buildAssignableUsersQuery(adminUser)) }).select('_id');
   if (!user) throw new ApiError(httpStatus.BAD_REQUEST, 'User not found');
 
   await CompanyPhoneNumber.updateMany({ tenantId, assignedTo: userId }, { $set: { assignedTo: null } });

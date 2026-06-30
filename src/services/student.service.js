@@ -70,9 +70,11 @@ const registerStudent = async (studentBody, isAdminRegistration = false) => {
  * @returns {Promise<QueryResult>}
  */
 const queryStudents = async (filter, options) => {
-  const { search, position, ...restFilter } = filter;
+  const { search, position, employeeRoleOnly, excludeResignedEmployed, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
   if (position) mongoFilter.position = position;
+
+  const truthy = (v) => v === true || v === 'true' || v === '1' || v === 1;
 
   if (!mongoFilter.status) {
     mongoFilter.status = 'active';
@@ -102,6 +104,47 @@ const queryStudents = async (filter, options) => {
       ...(userIdsArray.length > 0 ? [{ user: { $in: userIdsArray } }] : []),
     ];
   }
+
+  if (truthy(employeeRoleOnly)) {
+    const employeeRole = await getRoleByName('Employee');
+    if (!employeeRole) {
+      mongoFilter.user = { $in: [] };
+    } else {
+      const roleScopedUsers = await User.find({
+        roleIds: employeeRole._id,
+        status: { $in: ['active', 'pending'] },
+      })
+        .select('_id')
+        .lean();
+      const allowedUserIds = roleScopedUsers.map((u) => u._id);
+      mongoFilter.user = allowedUserIds.length ? { $in: allowedUserIds } : { $in: [] };
+    }
+  }
+
+  if (truthy(excludeResignedEmployed)) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const resignedRows = await Employee.find({
+      owner: { $exists: true, $ne: null },
+      $or: [
+        { referralPipelineStatus: 'resigned' },
+        { resignDate: { $exists: true, $ne: null, $lte: todayStart } },
+      ],
+    })
+      .select('owner')
+      .lean();
+    const resignedUserIds = resignedRows.map((r) => r.owner).filter(Boolean);
+    if (resignedUserIds.length) {
+      const blocked = new Set(resignedUserIds.map(String));
+      if (mongoFilter.user?.$in) {
+        const narrowed = mongoFilter.user.$in.filter((id) => !blocked.has(String(id)));
+        mongoFilter.user = narrowed.length ? { $in: narrowed } : { $in: [] };
+      } else {
+        mongoFilter.user = { ...(mongoFilter.user || {}), $nin: resignedUserIds };
+      }
+    }
+  }
+
   const students = await Student.paginate(mongoFilter, {
     ...options,
     populate: 'user,position,shift',

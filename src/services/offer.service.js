@@ -171,6 +171,28 @@ const syncJoiningDateFromAcceptedOfferToPlacementAndEmployee = async (offer) => 
   }
 };
 
+const OFFER_STATUSES_SYNC_COMPENSATION = new Set(['Accepted', 'Sent', 'Under Negotiation']);
+
+const resolveOfferCandidateId = (offer) => {
+  if (!offer?.candidate) return null;
+  return offer.candidate && typeof offer.candidate === 'object' && offer.candidate !== null
+    ? offer.candidate._id ?? offer.candidate.id
+    : offer.candidate;
+};
+
+const buildCompensationSnapshotFromOffer = (offer) => ({
+  compensationType: offer.compensationType || compensationTypeForJobType(offer.jobType),
+  compensationSource: offer.compensationSource || 'jobTypeDerived',
+});
+
+/** Mirror offer job-type compensation to Employee when the offer is active (not Draft/Rejected). */
+const syncCompensationFromOfferToEmployee = async (offer) => {
+  if (!offer?.jobType || !OFFER_STATUSES_SYNC_COMPENSATION.has(offer.status)) return;
+  const cand = resolveOfferCandidateId(offer);
+  if (!cand) return;
+  await Employee.findByIdAndUpdate(cand, buildCompensationSnapshotFromOffer(offer));
+};
+
 const applyLetterFieldsFromUpdate = (offer, updateBody) => {
   const take = (k) => {
     if (updateBody[k] === undefined) return;
@@ -180,8 +202,9 @@ const applyLetterFieldsFromUpdate = (offer, updateBody) => {
   take('letterFullName');
   take('letterAddress');
   take('positionTitle');
+  const jobTypeInPayload = updateBody.jobType !== undefined;
   take('jobType');
-  if (offer.isModified('jobType')) {
+  if (jobTypeInPayload || offer.isModified('jobType')) {
     offer.compensationType = compensationTypeForJobType(offer.jobType);
     offer.compensationSource = 'jobTypeDerived';
   }
@@ -219,6 +242,7 @@ const applyLetterFieldsFromUpdate = (offer, updateBody) => {
     offer.letterDate = updateBody.letterDate ? new Date(updateBody.letterDate) : null;
     delete updateBody.letterDate;
   }
+  return jobTypeInPayload;
 };
 
 const toLetterContext = (offer) => {
@@ -640,7 +664,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     updateBody = Object.fromEntries(keys.map((k) => [k, updateBody[k]]));
   }
 
-  applyLetterFieldsFromUpdate(offer, updateBody);
+  const jobTypeInPayload = applyLetterFieldsFromUpdate(offer, updateBody);
 
   if (updateBody.ctcBreakdown) {
     const cb = updateBody.ctcBreakdown;
@@ -890,6 +914,9 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
 
   await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
   await syncDesignationFromAcceptedOfferToEmployee(offer);
+  if (jobTypeInPayload || offer.isModified('compensationType')) {
+    await syncCompensationFromOfferToEmployee(offer);
+  }
 
   return getOfferById(offer._id);
 };
@@ -936,6 +963,8 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
 
   await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
   await syncDesignationFromAcceptedOfferToEmployee(offer);
+  // Letter save always sends jobType; mirror compensation for Sent/Accepted/Under Negotiation.
+  await syncCompensationFromOfferToEmployee(offer);
 };
 
 /**
@@ -1105,21 +1134,9 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   };
   await Offer.findByIdAndUpdate(id, updateOp);
 
-  const candidateIdForCompensation = fresh.candidate?._id ?? fresh.candidate;
-  const employeeSnapshot = {
-    compensationType: fresh.compensationType || compensationTypeForJobType(fresh.jobType),
-    compensationSource: fresh.compensationSource || 'jobTypeDerived',
-  };
+  const candidateIdForCompensation = resolveOfferCandidateId(fresh);
+  const employeeSnapshot = buildCompensationSnapshotFromOffer(fresh);
   if (fresh.joiningDate) employeeSnapshot.joiningDate = fresh.joiningDate;
-
-  const shouldRepairAcceptedEmployeeCompensation =
-    !transitionToAccepted && fresh.status === 'Accepted' && hasPayload && letterPayload?.jobType !== undefined;
-  if (shouldRepairAcceptedEmployeeCompensation && candidateIdForCompensation) {
-    const employee = await Employee.findById(candidateIdForCompensation).select('compensationSource').lean();
-    if (employee && employee.compensationSource !== 'manual') {
-      await Employee.findByIdAndUpdate(candidateIdForCompensation, employeeSnapshot);
-    }
-  }
 
   // When transitioning Draft → Accepted via letter save, create the Placement record
   // (same lifecycle as updateOfferById Accepted path) so Pre-boarding link appears.
@@ -1178,7 +1195,13 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     }
   }
 
-  return getOfferById(id, currentUser);
+  // Re-load after status flip so employee sync sees Accepted (not stale Draft).
+  const finalOffer = await getOfferById(id, currentUser);
+  if (candidateIdForCompensation && finalOffer?.jobType) {
+    await syncCompensationFromOfferToEmployee(finalOffer);
+  }
+
+  return finalOffer;
 };
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);

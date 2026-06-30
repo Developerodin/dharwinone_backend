@@ -9,6 +9,10 @@ const getStudents = {
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
     page: Joi.number().integer(),
+    /** When true, only users with the Employee RBAC role (excludes agents, candidates, attendance-only profiles). */
+    employeeRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
+    /** When true, exclude owners linked to a resigned/inactive employee record. */
+    excludeResignedEmployed: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
   }),
 };
 

@@ -46,7 +46,11 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send({
     success: true,
     message: 'Holiday group deleted successfully',
-    data: { holidaysUngrouped: result.holidaysUngrouped },
+    data: {
+      holidaysUngrouped: result.holidaysUngrouped,
+      membersUnassigned: result.membersUnassigned,
+      holidaysRemovedFromMembers: result.holidaysRemovedFromMembers,
+    },
   });
 });
 

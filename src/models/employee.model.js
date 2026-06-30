@@ -206,9 +206,8 @@ const employeeSchema = new mongoose.Schema(
     departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null, index: true },
     designation: { type: String, trim: true, index: true },
     /**
-     * Compensation snapshot — FROZEN at offer-acceptance time. Mirrored once from
-     * the accepted Offer (Task 8) and never re-synced, so a later edit to the offer
-     * cannot retroactively corrupt payroll history. Drives Employee List badges.
+     * Compensation snapshot from the accepted offer. Updated when job type changes
+     * on an offer letter (Accepted / Sent / Under Negotiation); drives Employee List Paid / Unpaid badges.
      */
     compensationType: {
       type: String,
