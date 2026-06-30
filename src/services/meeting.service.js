@@ -11,6 +11,7 @@ import EmployeeTransfer from '../models/employeeTransfer.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
+import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { isExistingEmployee, isResignedEmployee } from '../utils/employeeStatus.js';
 import { createActivityLog } from './activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -886,6 +887,9 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
   }
   if (newDesignation) {
     employee.designation = newDesignation;
+    // Keep the structured Position ref in sync with the designation string, mirroring the canonical
+    // employee-update path (employee.service.js) so the ATS Employee profile + org chart reflect the move.
+    employee.position = await resolvePositionIdFromDesignationTitle(newDesignation);
   }
   await employee.save();
 
