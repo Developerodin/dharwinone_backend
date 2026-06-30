@@ -63,4 +63,14 @@ router
     plivoController.postBrowserCallIntent
   );
 
+// Toggle live recording on an in-progress browser call (Twilio). Billable.
+router
+  .route('/recording')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.create'),
+    validate(plivoValidation.setRecording),
+    plivoController.setCallRecording
+  );
+
 export default router;

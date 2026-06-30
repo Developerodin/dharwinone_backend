@@ -19,6 +19,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import bolnaService from './bolna.service.js';
 import plivoService from './plivo.service.js';
+import twilioService from './twilio.service.js';
 import callRecordService from './callRecord.service.js';
 import CallRecord, { TERMINAL_STATUSES } from '../models/callRecord.model.js';
 
@@ -47,6 +48,12 @@ export function headersForRecordingUrl(url) {
   if (host === 'bolna.ai' || host.endsWith('.bolna.ai')) {
     const { apiKey } = bolnaService.getConfig();
     return { Authorization: `Bearer ${apiKey}` };
+  }
+  if (host === 'api.twilio.com' || host.endsWith('.twilio.com')) {
+    const { accountSid, authToken } = twilioService.getConfig();
+    if (!accountSid || !authToken) return {};
+    const basic = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+    return { Authorization: `Basic ${basic}` };
   }
   return {};
 }
@@ -234,6 +241,50 @@ export async function getArchivedPlaybackUrlByExecution(executionId, kind, expir
   const rec = await CallRecord.findOne({ executionId }).select('recordingArchive');
   if (!rec) return null;
   return getArchivePlaybackUrl(rec, kind, expiresIn);
+}
+
+/**
+ * Mirror a Twilio dialer call recording to S3 and persist it on the CallRecord
+ * (keyed by the Twilio CallSid used as executionId). Idempotent: skips if the
+ * twilio source is already archived. Twilio media needs Basic account auth,
+ * supplied by headersForRecordingUrl for api.twilio.com.
+ *
+ * @param {string} executionId  Twilio CallSid
+ * @param {string} recordingUrl Twilio media URL (.../Recordings/RE...)
+ */
+export async function archiveTwilioRecording(executionId, recordingUrl, { force = false } = {}) {
+  if (!executionId || !recordingUrl) return { status: 'no_source' };
+  const existing = await CallRecord.findOne({ executionId: String(executionId) })
+    .select('recordingArchive')
+    .lean();
+  if (!force && existing?.recordingArchive?.twilio?.key) {
+    return { status: 'already', entry: existing.recordingArchive.twilio };
+  }
+  const url =
+    recordingUrl.endsWith('.mp3') || recordingUrl.endsWith('.wav') ? recordingUrl : `${recordingUrl}.mp3`;
+  const { buffer, contentType } = await downloadToBuffer(url, headersForRecordingUrl(url));
+  const ext = extFor(contentType, url, 'mp3');
+  const key = `call-recordings/${executionId}/twilio.${ext}`;
+  const resolvedType = contentType || (ext === 'wav' ? 'audio/wav' : 'audio/mpeg');
+  await putRecordingObject(key, buffer, resolvedType, {
+    executionId: String(executionId),
+    kind: 'twilio',
+    archivedAt: new Date().toISOString(),
+  });
+  const entry = {
+    key,
+    bucket: config.aws.bucketName,
+    size: buffer.length,
+    contentType: resolvedType,
+    sourceUrl: url,
+    archivedAt: new Date(),
+  };
+  await callRecordService.updateCallRecordByExecutionId(
+    String(executionId),
+    { 'recordingArchive.twilio': entry, recordingArchivedAt: new Date() },
+    { upsert: true }
+  );
+  return { status: 'archived', entry };
 }
 
 /**

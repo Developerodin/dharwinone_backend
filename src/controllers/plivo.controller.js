@@ -5,6 +5,7 @@ import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import plivoService from '../services/plivo.service.js';
 import telephonyService from '../services/telephony.service.js';
+import callRecordService from '../services/callRecord.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import * as companyPhoneNumberService from '../services/companyPhoneNumber.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
@@ -111,6 +112,23 @@ const placeCall = catchAsync(async (req, res) => {
     { toNumber, callerId },
     req
   );
+
+  // Seed a dialer CallRecord (keyed by the provider call id) so the bridge call
+  // shows in CRM call records; on Twilio the recording webhook later attaches
+  // the audio to this same row by CallSid.
+  if (result.requestUuid) {
+    callRecordService
+      .upsertDialerCallRecord({
+        executionId: result.requestUuid,
+        createdBy: req.user.id,
+        toPhoneNumber: toNumber,
+        fromPhoneNumber: callerId,
+        status: 'initiated',
+        direction: 'outbound',
+        provider: telephonyService.getProviderName(),
+      })
+      .catch((e) => logger.warn(`[dialer] bridge record seed failed: ${e?.message}`));
+  }
 
   res.status(httpStatus.OK).send({
     success: true,
@@ -220,11 +238,29 @@ const postBrowserCallIntent = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send({ intent: result.intent });
 });
 
+/**
+ * POST /v1/plivo/recording — toggle live recording on an in-progress browser
+ * call. Body: { callSid, recording: boolean }. Twilio-only (active provider).
+ */
+const setCallRecording = catchAsync(async (req, res) => {
+  const { callSid, recording } = req.body;
+  const result = await telephonyService.setRecording({ callSid, recording });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to toggle recording');
+  }
+  res.status(httpStatus.OK).send({
+    success: true,
+    recording: Boolean(recording),
+    recordingSid: result.data?.sid,
+  });
+});
+
 export {
   getAvailableNumbers,
   buyNumber,
   getOwnedNumbers,
   placeCall,
+  setCallRecording,
   answerCall,
   getSdkToken,
   sdkAnswer,

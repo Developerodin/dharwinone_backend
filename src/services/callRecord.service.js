@@ -205,6 +205,9 @@ async function listCallRecords(options = {}) {
       $or: [
         { job: { $in: jobIds } },
         { candidate: { $in: candidateIds } },
+        // Dialer (Twilio) calls have no job/candidate link — scope by initiator
+        // so the agent who placed the call sees it in their records.
+        { createdBy: options.userId },
       ],
     });
   }
@@ -358,6 +361,22 @@ async function listCallRecords(options = {}) {
     }
     r.displayCategory = displayCategory;
     r.displayName = (r.businessName && r.businessName.trim()) || r.toPhoneNumber || r.recipientPhoneNumber || r.phone || null;
+  }
+
+  // Twilio dialer recordings live only in S3 (no public provider URL) — presign
+  // a fresh playback URL so the list's recording link works.
+  const twilioRecs = results.filter((r) => r.recordingArchive?.twilio?.key && !r.recordingUrl);
+  if (twilioRecs.length) {
+    const { generatePresignedDownloadUrl } = await import('../config/s3.js');
+    await Promise.all(
+      twilioRecs.map(async (r) => {
+        try {
+          r.recordingUrl = await generatePresignedDownloadUrl(r.recordingArchive.twilio.key);
+        } catch {
+          /* leave recordingUrl empty — UI shows "—" */
+        }
+      })
+    );
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -544,6 +563,67 @@ async function createRecord(body) {
     source: 'initiate',
     bolnaVerifiedAt: new Date(),
   });
+}
+
+/**
+ * Upsert a Twilio dialer CallRecord keyed by the Twilio CallSid (executionId).
+ * Used by the Twilio voice/status/recording webhooks. createdBy/source are set
+ * once on insert; status only moves forward (monotonic rank guard).
+ */
+async function upsertDialerCallRecord({
+  executionId,
+  createdBy,
+  toPhoneNumber,
+  fromPhoneNumber,
+  status,
+  duration,
+  provider = 'twilio',
+  direction,
+} = {}) {
+  if (!executionId) return null;
+  const set = {};
+  if (toPhoneNumber) {
+    const t = String(toPhoneNumber);
+    set.toPhoneNumber = t;
+    set.recipientPhoneNumber = t;
+    set.phone = t;
+  }
+  if (fromPhoneNumber) {
+    const f = String(fromPhoneNumber);
+    set.fromPhoneNumber = f;
+    set.userNumber = f;
+  }
+  if (duration != null && !Number.isNaN(Number(duration))) set.duration = Number(duration);
+  set['telephonyData.provider'] = provider;
+  if (direction) set['telephonyData.direction'] = direction;
+
+  if (status) {
+    const st = normalizeStatus(status);
+    const existing = await CallRecord.findOne({ executionId: String(executionId) })
+      .select('status statusRank')
+      .lean();
+    const incomingRank = rankOf(st);
+    const existingRank = existing ? existing.statusRank ?? rankOf(existing.status) : -1;
+    if (incomingRank >= existingRank) {
+      set.status = st;
+      set.statusRank = incomingRank;
+      set.statusUpdatedAt = new Date();
+      if (isTerminal(st)) set.completedAt = new Date();
+    }
+  }
+
+  return CallRecord.findOneAndUpdate(
+    { executionId: String(executionId) },
+    {
+      $set: set,
+      $setOnInsert: {
+        executionId: String(executionId),
+        source: 'initiate',
+        createdBy: createdBy || null,
+      },
+    },
+    { new: true, upsert: true }
+  ).lean();
 }
 
 async function updateCallRecordByExecutionId(executionId, updateData, options = {}) {
@@ -924,6 +1004,7 @@ export async function backfillVerification(limit = 200) {
 export default {
   createFromWebhook,
   createRecord,
+  upsertDialerCallRecord,
   listCallRecords,
   fillMissingBusinessNameFromJobs,
   normalizePayload,

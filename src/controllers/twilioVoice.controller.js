@@ -8,6 +8,8 @@ import catchAsync from '../utils/catchAsync.js';
 import logger from '../config/logger.js';
 import twilioService from '../services/twilio.service.js';
 import telephonyService from '../services/telephony.service.js';
+import callRecordService from '../services/callRecord.service.js';
+import { archiveTwilioRecording } from '../services/callRecordingArchive.service.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
@@ -52,6 +54,24 @@ const outboundVoice = catchAsync(async (req, res) => {
       to: destination,
       callerId,
     });
+
+    // Seed a dialer CallRecord keyed by the Twilio CallSid so the call (and its
+    // recording, persisted later by the recording webhook) shows in CRM call
+    // records. createdBy comes from the browser SDK identity (client:user_<id>).
+    const callSid = body.CallSid || '';
+    if (callSid) {
+      callRecordService
+        .upsertDialerCallRecord({
+          executionId: callSid,
+          createdBy: twilioService.userIdFromClient(fromClient) || null,
+          toPhoneNumber: destination,
+          fromPhoneNumber: callerId,
+          status: 'initiated',
+          direction: 'outbound',
+        })
+        .catch((e) => logger.warn(`[Twilio] dialer record seed failed: ${e?.message}`));
+    }
+
     return sendTwiml(res, twilioService.buildOutboundTwiml({ to: destination, callerId }));
   } catch (err) {
     logger.warn(`[Twilio] voice outbound error: ${err?.message}`);
@@ -122,6 +142,20 @@ const callStatusWebhook = catchAsync(async (req, res) => {
     status: body.CallStatus,
     direction: body.Direction,
   });
+  if (body.CallSid) {
+    // `From` is `client:user_<id>` for browser legs — don't overwrite the phone.
+    const fromIsPhone = body.From && !String(body.From).startsWith('client:');
+    callRecordService
+      .upsertDialerCallRecord({
+        executionId: body.CallSid,
+        status: body.CallStatus,
+        duration: body.CallDuration != null ? parseInt(body.CallDuration, 10) : undefined,
+        toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
+        fromPhoneNumber: fromIsPhone ? body.From : undefined,
+        direction: 'outbound',
+      })
+      .catch((e) => logger.warn(`[Twilio] call-status persist failed: ${e?.message}`));
+  }
   return sendTwiml(res, EMPTY_TWIML);
 });
 
@@ -133,6 +167,21 @@ const recordingWebhook = catchAsync(async (req, res) => {
     recordingSid: body.RecordingSid,
     status: body.RecordingStatus,
   });
+  const callSid = body.CallSid || '';
+  const recordingUrl = body.RecordingUrl || '';
+  if (callSid && String(body.RecordingStatus || '').toLowerCase() === 'completed' && recordingUrl) {
+    // Ensure a row exists, then mirror the Twilio media to S3 + link it. Both
+    // best-effort: a 200 must still go back to Twilio promptly.
+    callRecordService
+      .upsertDialerCallRecord({
+        executionId: callSid,
+        toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
+        duration: body.RecordingDuration != null ? parseInt(body.RecordingDuration, 10) : undefined,
+        direction: 'outbound',
+      })
+      .then(() => archiveTwilioRecording(callSid, recordingUrl))
+      .catch((e) => logger.warn(`[Twilio] recording archive failed: ${e?.message}`));
+  }
   return res.status(httpStatus.OK).json({ success: true });
 });
 

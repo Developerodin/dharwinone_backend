@@ -181,6 +181,15 @@ const callRecordSchema = mongoose.Schema(
         sourceUrl: { type: String, default: null },
         archivedAt: { type: Date, default: null },
       },
+      // Twilio browser/bridge dialer calls — single dual-channel recording.
+      twilio: {
+        key: { type: String, default: null },
+        bucket: { type: String, default: null },
+        size: { type: Number, default: null },
+        contentType: { type: String, default: null },
+        sourceUrl: { type: String, default: null },
+        archivedAt: { type: Date, default: null },
+      },
     },
     /** Set once at least one recording source has been mirrored to S3. */
     recordingArchivedAt: { type: Date, default: null },

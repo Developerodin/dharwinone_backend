@@ -196,6 +196,18 @@ async function placeBridgeCall(params = {}) {
   return plivoService.placeBridgeCall(params);
 }
 
+// Live recording toggle on an in-progress call (Twilio REST). Plivo browser
+// calls aren't on the connected account the same way, so it's Twilio-only.
+async function setRecording({ callSid, recording } = {}) {
+  if (isTwilio()) return twilioService.setRecording(callSid, Boolean(recording));
+  return { success: false, error: 'Live recording is only supported on Twilio.' };
+}
+
+async function endCall({ callSid } = {}) {
+  if (isTwilio()) return twilioService.endCall(callSid);
+  return { success: false, error: 'endCall is only supported on Twilio.' };
+}
+
 async function mintBrowserToken({ uid } = {}) {
   if (isTwilio()) {
     const result = twilioService.createAccessToken(String(uid || ''));
@@ -308,6 +320,8 @@ export default {
   buyNumber,
   listOwnedNumbers,
   placeBridgeCall,
+  setRecording,
+  endCall,
   mintBrowserToken,
   bridgeWebhookResponse,
   getCallRecordings,

@@ -67,4 +67,20 @@ const browserCallIntent = {
     .required(),
 };
 
-export { searchAvailableNumbers, buyNumber, listOwnedNumbers, placeCall, browserCallIntent };
+const setRecording = {
+  body: Joi.object()
+    .keys({
+      callSid: Joi.string().trim().required(),
+      recording: Joi.boolean().required(),
+    })
+    .required(),
+};
+
+export {
+  searchAvailableNumbers,
+  buyNumber,
+  listOwnedNumbers,
+  placeCall,
+  browserCallIntent,
+  setRecording,
+};
