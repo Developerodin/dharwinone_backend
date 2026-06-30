@@ -474,6 +474,27 @@ async function endCall(callSid) {
 }
 
 /**
+ * List recent account calls (for backfilling historical dialer call logs).
+ * @param {{ limit?: number, startTimeAfter?: Date|string }} [opts]
+ */
+async function listAccountCalls({ limit = 200, startTimeAfter } = {}) {
+  const listOpts = { limit: Math.min(Number(limit) || 200, 1000) };
+  if (startTimeAfter) listOpts.startTimeAfter = startTimeAfter;
+  const result = await runTwilio('GET Calls (list)', (client) => client.calls.list(listOpts));
+  if (!result.success) return result;
+  const calls = (result.data || []).map((c) => ({
+    sid: c.sid,
+    to: c.to,
+    from: c.from,
+    status: c.status,
+    duration: c.duration != null ? parseInt(c.duration, 10) : undefined,
+    direction: c.direction,
+    startTime: c.startTime || c.dateCreated || null,
+  }));
+  return { success: true, calls };
+}
+
+/**
  * Toggle live recording on an in-progress call.
  * @param {string} callSid
  * @param {boolean} recording
@@ -934,6 +955,7 @@ export default {
   releaseNumber,
   fetchCall,
   endCall,
+  listAccountCalls,
   setRecording,
   buildRecordingMediaUrl,
   proxyRecordingMedia,

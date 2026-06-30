@@ -73,4 +73,13 @@ router
     plivoController.setCallRecording
   );
 
+// Backfill historical Twilio call logs + recordings into CRM call records.
+router
+  .route('/backfill-twilio')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.create'),
+    plivoController.backfillTwilio
+  );
+
 export default router;

@@ -579,6 +579,8 @@ async function upsertDialerCallRecord({
   duration,
   provider = 'twilio',
   direction,
+  createdAt,
+  source = 'initiate',
 } = {}) {
   if (!executionId) return null;
   const set = {};
@@ -612,16 +614,19 @@ async function upsertDialerCallRecord({
     }
   }
 
+  const setOnInsert = {
+    executionId: String(executionId),
+    source,
+    createdBy: createdBy || null,
+  };
+  // Backfill: preserve the real call time instead of "now".
+  if (createdAt) {
+    const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+    if (!Number.isNaN(d.getTime())) setOnInsert.createdAt = d;
+  }
   return CallRecord.findOneAndUpdate(
     { executionId: String(executionId) },
-    {
-      $set: set,
-      $setOnInsert: {
-        executionId: String(executionId),
-        source: 'initiate',
-        createdBy: createdBy || null,
-      },
-    },
+    { $set: set, $setOnInsert: setOnInsert },
     { new: true, upsert: true }
   ).lean();
 }

@@ -255,12 +255,30 @@ const setCallRecording = catchAsync(async (req, res) => {
   });
 });
 
+/**
+ * POST /v1/plivo/backfill-twilio — pull historical Twilio call logs + recordings
+ * into CallRecords (source=backfill) and mirror audio to S3. Body: { limit?, force? }.
+ */
+const backfillTwilio = catchAsync(async (req, res) => {
+  const { limit, force } = req.body || {};
+  const { backfillTwilioDialerCalls } = await import('../services/callRecordingArchive.service.js');
+  const result = await backfillTwilioDialerCalls({
+    limit: Number(limit) || 200,
+    force: Boolean(force),
+  });
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Twilio backfill failed');
+  }
+  res.status(httpStatus.OK).send(result);
+});
+
 export {
   getAvailableNumbers,
   buyNumber,
   getOwnedNumbers,
   placeCall,
   setCallRecording,
+  backfillTwilio,
   answerCall,
   getSdkToken,
   sdkAnswer,

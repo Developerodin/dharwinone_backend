@@ -288,6 +288,50 @@ export async function archiveTwilioRecording(executionId, recordingUrl, { force 
 }
 
 /**
+ * Backfill historical Twilio dialer calls into CallRecords and mirror their
+ * recordings to S3 — for calls placed before the webhooks were wired (or any
+ * gaps). createdBy is unknown for historical calls, so they're admin-visible.
+ *
+ * @param {{ limit?: number, force?: boolean }} [opts]
+ */
+export async function backfillTwilioDialerCalls({ limit = 200, force = false } = {}) {
+  const listed = await twilioService.listAccountCalls({ limit });
+  if (!listed.success) return { success: false, error: listed.error };
+  const calls = listed.calls || [];
+  let upserted = 0;
+  let archived = 0;
+  let errors = 0;
+  for (const c of calls) {
+    if (!c.sid) continue;
+    // Only outbound dialer calls (skip inbound + client-leg noise).
+    if (c.direction && !String(c.direction).startsWith('outbound')) continue;
+    try {
+      await callRecordService.upsertDialerCallRecord({
+        executionId: c.sid,
+        toPhoneNumber: c.to && !String(c.to).startsWith('client:') ? c.to : undefined,
+        fromPhoneNumber: c.from && !String(c.from).startsWith('client:') ? c.from : undefined,
+        status: c.status,
+        duration: c.duration,
+        direction: 'outbound',
+        createdAt: c.startTime || undefined,
+        source: 'backfill',
+      });
+      upserted += 1;
+      const rec = await twilioService.getCallRecordings(c.sid);
+      const url = rec?.success ? rec.recordings?.find((x) => x.recordingUrl)?.recordingUrl : null;
+      if (url) {
+        const r = await archiveTwilioRecording(c.sid, url, { force });
+        if (r.status === 'archived') archived += 1;
+      }
+    } catch (e) {
+      errors += 1;
+      logger.warn(`[twilio backfill] ${c.sid} failed: ${e?.message}`);
+    }
+  }
+  return { success: true, scanned: calls.length, upserted, archived, errors };
+}
+
+/**
  * Mongo filter for calls that plausibly have a recording but haven't been
  * archived yet. "Not attempted" = `recordingArchivedAt` null. We key on the
  * attempt marker (not per-source keys) so calls that simply have no Plivo
