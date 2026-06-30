@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { password, objectId } from './custom.validation.js';
+import { password, objectId, notificationPreferencesSchema } from './custom.validation.js';
 
 
 const createUser = {
@@ -30,18 +30,6 @@ const getUser = {
     userId: Joi.string().custom(objectId),
   }),
 };
-
-const notificationPreferencesSchema = Joi.object({
-  leaveUpdates: Joi.boolean(),
-  taskAssignments: Joi.boolean(),
-  applicationUpdates: Joi.boolean(),
-  offerUpdates: Joi.boolean(),
-  meetingInvitations: Joi.boolean(),
-  meetingReminders: Joi.boolean(),
-  certificates: Joi.boolean(),
-  courseUpdates: Joi.boolean(),
-  recruiterUpdates: Joi.boolean(),
-});
 
 const updateUser = {
   params: Joi.object().keys({

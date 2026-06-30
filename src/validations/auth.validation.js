@@ -1,17 +1,5 @@
 import Joi from 'joi';
-import { password, objectId } from './custom.validation.js';
-
-const notificationPreferencesSchema = Joi.object({
-  leaveUpdates: Joi.boolean(),
-  taskAssignments: Joi.boolean(),
-  applicationUpdates: Joi.boolean(),
-  offerUpdates: Joi.boolean(),
-  meetingInvitations: Joi.boolean(),
-  meetingReminders: Joi.boolean(),
-  certificates: Joi.boolean(),
-  courseUpdates: Joi.boolean(),
-  recruiterUpdates: Joi.boolean(),
-});
+import { password, objectId, notificationPreferencesSchema } from './custom.validation.js';
 
 const register = {
   body: Joi.object().keys({
