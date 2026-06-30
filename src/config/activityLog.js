@@ -100,6 +100,8 @@ export const ActivityActions = {
   ORG_STRUCTURE_EXPORT: 'orgStructure.export',
   // Organization — employee department assignment
   EMPLOYEE_DEPARTMENT_ASSIGN: 'employee.departmentAssign',
+  // Internal mobility — existing employee transferred to a new role post-interview
+  EMPLOYEE_TRANSFER: 'employee.transfer',
   /** Denied org write/export attempt (allowlisted metadata only). */
   ORG_MUTATE_DENIED: 'org.mutate.denied',
   // Organization — scenario sandbox

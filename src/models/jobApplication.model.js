@@ -48,6 +48,14 @@ jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 jobApplicationSchema.index({ tenantId: 1, candidate: 1 });
 jobApplicationSchema.index({ tenantId: 1, appliedBy: 1 });
 
+// toJSON.plugin strips the raw `createdAt` from serialized output, so the UI never sees the
+// application date. Expose it via a virtual (read from createdAt) that survives the strip.
+// Set virtuals BEFORE plugin: the plugin Object.assign-merges its transform onto this option.
+jobApplicationSchema.virtual('appliedAt').get(function getAppliedAt() {
+  return this.createdAt;
+});
+jobApplicationSchema.set('toJSON', { virtuals: true });
+
 jobApplicationSchema.plugin(toJSON);
 jobApplicationSchema.plugin(paginate);
 

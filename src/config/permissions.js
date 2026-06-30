@@ -379,6 +379,11 @@ export const permissionAliases = {
   ],
   'placement.audit': ['placement.audit', 'candidates.manage'],
   'preboarding.override': ['preboarding.override', 'candidates.manage'],
+  // Internal employee transfer (post-interview mobility). DISTINCT capability — deliberately NOT
+  // bridged to candidates.manage, so recruiters with employee-manage do NOT inherit it. Granted only
+  // via the dedicated matrix row `ats.employees.transfer:*` (derives employees.transfer.read/manage)
+  // or platformSuperUser/Administrator bypass.
+  'employees.transfer': ['employees.transfer', 'employees.transfer.read', 'employees.transfer.manage'],
   // Impersonate "login as" action. Raw domain key `settings.users.impersonate:view,...`
   // derives to `users.impersonate.read` / `users.impersonate.manage` via the standard rule.
   // Administrator role and platformSuperUser bypass at the middleware layer; all other roles

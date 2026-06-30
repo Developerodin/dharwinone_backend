@@ -3,6 +3,7 @@ import Employee from '../models/employee.model.js';
 import Job from '../models/job.model.js';
 import User from '../models/user.model.js';
 import { applicationScope } from './visibilityScope.service.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
 
 const RELAY_EMAIL_RE = /(\.noreply@dharwin\.offers\.local$)|(\.(local|internal|invalid)$)/i;
 
@@ -135,14 +136,15 @@ const queryApplicants = async (filter = {}, options = {}, currentUser = {}) => {
   const finalQuery = await applyDedupeIfRequested(query, filter);
   if (finalQuery?._id?.$in && finalQuery._id.$in.length === 0) return emptyPaginated(options);
 
-  return JobApplication.paginate(finalQuery, {
+  const result = await JobApplication.paginate(finalQuery, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
     populate: [
       { path: 'job', select: 'title organisation status' },
       {
         path: 'candidate',
-        select: 'fullName email phoneNumber countryCode isActive address department designation documents profilePicture owner',
+        select:
+          'fullName email phoneNumber countryCode isActive address department designation documents profilePicture owner employeeId referralPipelineStatus',
         populate: { path: 'owner', select: 'name email' },
       },
       { path: 'applicantUser', select: 'name email' },
@@ -150,6 +152,29 @@ const queryApplicants = async (filter = {}, options = {}, currentUser = {}) => {
     ],
     _scopeDebug: scopeDebug,
   });
+
+  // Stored document `url`s are presigned at upload with a short TTL, so resumes opened days later
+  // 403 with "Request has expired". Re-sign each candidate document from its `key` (7-day TTL),
+  // mirroring employee.service.js. Best-effort: keep the stale url if presigning fails.
+  await Promise.all(
+    (result?.results || []).map(async (app) => {
+      const docs = app.candidate?.documents;
+      if (!Array.isArray(docs) || !docs.length) return;
+      await Promise.all(
+        docs.map(async (doc) => {
+          if (doc?.key) {
+            try {
+              doc.url = await generatePresignedDownloadUrl(doc.key, 7 * 24 * 3600);
+            } catch (_) {
+              /* keep stale url if presigning fails */
+            }
+          }
+        })
+      );
+    })
+  );
+
+  return result;
 };
 
 const countApplicants = async (filter = {}, currentUser = {}) => {

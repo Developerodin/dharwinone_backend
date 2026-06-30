@@ -2,6 +2,7 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
+import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
 import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
 import * as meetingExcelController from '../../controllers/meetingExcel.controller.js';
@@ -23,6 +24,19 @@ router
 router
   .route('/:id/move-to-preboarding')
   .post(auth(), requirePermissions('interviews.manage'), validate(meetingValidation.getMeeting), meetingController.moveToPreboarding);
+
+// Internal mobility — transfer an existing employee to a new role post-interview. Distinct
+// `employees.transfer` capability (restrictable to HR/managers separately from recruiters).
+// Administrator + platformSuperUser bypass; other roles need the `ats.employees.transfer:*` matrix row
+// (no migration needed) — mirrors the users.impersonate pattern.
+router
+  .route('/:id/internal-transfer')
+  .post(
+    auth(),
+    requireAdministratorOrPermission('employees.transfer', ['Administrator']),
+    validate(meetingValidation.internalTransfer),
+    meetingController.internalTransfer
+  );
 
 router
   .route('/:id/recordings')

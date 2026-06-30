@@ -69,4 +69,11 @@ const moveToPreboarding = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { create, list, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding };
+const internalTransfer = catchAsync(async (req, res) => {
+  const userId = req.user?._id?.toString() || req.user?.id;
+  const body = pick(req.body, ['designation', 'departmentId', 'effectiveDate']);
+  const result = await meetingService.transferEmployeeInternally(req.params.id, userId, body, req.user);
+  res.send(result);
+});
+
+export { create, list, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding, internalTransfer };

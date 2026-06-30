@@ -130,6 +130,18 @@ const deleteMeeting = {
   }),
 };
 
+// Internal employee transfer (post-interview). id = ObjectId or meeting_xxx; body optional overrides.
+const internalTransfer = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim().min(1),
+  }),
+  body: Joi.object().keys({
+    designation: Joi.string().trim().allow('', null),
+    departmentId: Joi.string().custom(objectId).allow(null),
+    effectiveDate: Joi.date().allow(null),
+  }),
+};
+
 const resendInvitations = {
   params: Joi.object().keys({
     id: Joi.string().required().custom(objectId),
@@ -164,4 +176,5 @@ export {
   deleteMeeting,
   resendInvitations,
   endMeetingByRoomPublic,
+  internalTransfer,
 };

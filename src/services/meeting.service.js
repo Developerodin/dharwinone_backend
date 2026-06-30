@@ -6,8 +6,14 @@ import Job from '../models/job.model.js';
 import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
 import User from '../models/user.model.js';
+import Employee from '../models/employee.model.js';
+import EmployeeTransfer from '../models/employeeTransfer.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
+import { setEmployeeDepartment } from './employeeDepartment.helper.js';
+import { isExistingEmployee, isResignedEmployee } from '../utils/employeeStatus.js';
+import { createActivityLog } from './activityLog.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
@@ -504,6 +510,19 @@ const createPlacementFromInterview = async (meeting, userId) => {
     );
   }
 
+  // Existing (active) employees must NOT enter the offer/placement hire flow — that would create a
+  // second hire and a new offer letter. They move via Internal transfer instead. Resigned employees
+  // self-applying ARE a rehire, so they fall through to the normal hire flow below.
+  const candidateForGuard = await Employee.findById(candidateObjId).select(
+    'employeeId referralPipelineStatus isActive'
+  );
+  if (isExistingEmployee(candidateForGuard) && !isResignedEmployee(candidateForGuard)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'This candidate is already an employee. Use Internal transfer instead of the offer/placement flow.'
+    );
+  }
+
   const existingOffer = await Offer.findOne({ jobApplication: application._id });
   if (existingOffer) {
     if (existingOffer.status === 'Accepted') {
@@ -794,6 +813,123 @@ const moveMeetingToPreboarding = async (id, userId, currentUser = null) => {
 
 /** @deprecated use createPlacementFromInterview */
 const moveCandidateToPreboarding = createPlacementFromInterview;
+
+/**
+ * Internal mobility: move a self-applied EXISTING employee into a new role after a selected interview.
+ * Updates the same Employee record in place (designation + department), writes an immutable
+ * EmployeeTransfer history row, marks the application Hired — NO new Offer, NO new Placement,
+ * reuses the existing employeeId. External candidates and resigned employees are rejected here
+ * (they use the offer/placement hire flow).
+ *
+ * @param {string} id - Meeting id (ObjectId or meetingId)
+ * @param {string} userId - User performing the transfer (approver)
+ * @param {{ designation?: string, departmentId?: string, effectiveDate?: string }} [body]
+ * @param {object|null} [currentUser]
+ * @returns {Promise<{ transferred: boolean, message: string, transferId: any }>}
+ */
+const transferEmployeeInternally = async (id, userId, body = {}, currentUser = null) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+  if (meeting.interviewResult !== 'selected') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Interview result must be "Selected" to transfer the employee');
+  }
+  if (!meeting.candidate?.id) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Meeting has no candidate linked');
+  }
+
+  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
+    createIfMissing: true,
+  });
+  if (!candidateObjId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'This interview has no valid candidate linked.');
+  }
+  if (!application) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'No job application found for this candidate.');
+  }
+
+  const employee = await Employee.findById(candidateObjId);
+  if (!employee) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Employee record not found.');
+  }
+  if (!isExistingEmployee(employee)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'This person is not an existing employee. Use the hire flow (Move to pre-boarding), not Internal transfer.'
+    );
+  }
+  if (isResignedEmployee(employee)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'This employee is resigned. Use the rehire (offer/placement) flow, not Internal transfer.'
+    );
+  }
+
+  // Resolve the new role: explicit body overrides win; otherwise default the title from the source job.
+  let newDesignation = (body.designation || '').trim() || null;
+  if (!newDesignation && jobId) {
+    const job = await Job.findById(jobId).select('title').lean();
+    if (job?.title) newDesignation = job.title;
+  }
+  const newDepartmentId = body.departmentId || null;
+
+  const oldDesignation = employee.designation || null;
+  const oldDepartmentId = employee.departmentId || null;
+  const oldDepartment = employee.department || null;
+
+  // Apply changes in place. setEmployeeDepartment dual-writes departmentId + name; designation is plain.
+  // A plain save never sets $locals.assignEmployeeIdNow, so the permanent employeeId is untouched.
+  if (newDepartmentId) {
+    await setEmployeeDepartment(employee, newDepartmentId);
+  }
+  if (newDesignation) {
+    employee.designation = newDesignation;
+  }
+  await employee.save();
+
+  // System action: mark the application Hired directly (the manual transition guard only applies to the
+  // recruiter dropdown; pipeline-driving system actions set status directly, like interview scheduling).
+  if (application.status !== 'Hired') {
+    application.status = 'Hired';
+    await application.save();
+  }
+  await syncReferralPipelineStatusForCandidate(candidateObjId);
+
+  const transfer = await EmployeeTransfer.create({
+    employee: employee._id,
+    oldDesignation,
+    newDesignation: employee.designation || null,
+    oldDepartmentId,
+    newDepartmentId: employee.departmentId || null,
+    oldDepartment,
+    newDepartment: employee.department || null,
+    sourceJobId: jobId || null,
+    sourceApplicationId: application._id,
+    sourceInterviewId: meeting._id,
+    transferType: 'internal_transfer',
+    effectiveDate: body.effectiveDate ? new Date(body.effectiveDate) : new Date(),
+    approvedBy: userId || null,
+    tenantId: application.tenantId || null,
+  });
+
+  // Fail-soft audit trail (entityType Candidate — the Employee collection is `candidates`).
+  try {
+    await createActivityLog(userId, ActivityActions.EMPLOYEE_TRANSFER, EntityTypes.CANDIDATE, employee._id, {
+      transferId: transfer._id,
+      from: { designation: oldDesignation, department: oldDepartment },
+      to: { designation: employee.designation, department: employee.department },
+      sourceJobId: jobId || null,
+      sourceApplicationId: application._id,
+      sourceInterviewId: meeting._id,
+    });
+  } catch (_) {
+    /* activity log is best-effort */
+  }
+
+  return { transferred: true, message: 'Employee transferred internally', transferId: transfer._id };
+};
 
 /**
  * End meeting by room name (public: host only by email)
@@ -1148,6 +1284,7 @@ export {
   deleteMeetingById,
   resendMeetingInvitations,
   moveMeetingToPreboarding,
+  transferEmployeeInternally,
   createPlacementFromInterview,
   moveCandidateToPreboarding,
   getPublicMeetingUrl,
