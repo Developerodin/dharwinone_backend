@@ -60,6 +60,136 @@ function normalizeStatus(status) {
   return statusMap[s] || s;
 }
 
+/** Twilio browser dialer rows — keyed by CallSid, not Bolna execution ids. */
+function isTwilioDialerRecord(record) {
+  if (!record) return false;
+  if (record.telephonyData?.provider === 'twilio') return true;
+  return /^CA[a-f0-9]{32}$/i.test(String(record.executionId || ''));
+}
+
+const TWILIO_DEDUPE_BUCKET_MS = 2 * 60 * 1000;
+
+function twilioDialerGroupKey(record) {
+  const to = normalizePhone(record.toPhoneNumber || record.recipientPhoneNumber || record.phone || '') || '';
+  const from = normalizePhone(record.fromPhoneNumber || record.userNumber || '') || '';
+  const createdBy = String(record.createdBy || '');
+  const t = record.createdAt ? new Date(record.createdAt).getTime() : 0;
+  const bucket = Number.isFinite(t) ? Math.floor(t / TWILIO_DEDUPE_BUCKET_MS) : 0;
+  return `${createdBy}|${to}|${from}|${bucket}`;
+}
+
+function scoreTwilioDialerRow(record) {
+  let s = 0;
+  if (record.status === 'completed') s += 200;
+  if (record.status === 'expired') s -= 100;
+  if (record.recordingArchive?.twilio?.key) s += 50;
+  if (record.duration != null && Number(record.duration) > 0) s += Math.min(Number(record.duration), 3600);
+  return s;
+}
+
+function mergeTwilioDialerRows(primary, secondary) {
+  const a = scoreTwilioDialerRow(primary) >= scoreTwilioDialerRow(secondary) ? primary : secondary;
+  const b = a === primary ? secondary : primary;
+  const merged = { ...a };
+  if (!merged.recordingArchive?.twilio?.key && b.recordingArchive?.twilio?.key) {
+    merged.recordingArchive = { ...(merged.recordingArchive || {}), twilio: b.recordingArchive.twilio };
+  }
+  if (merged.status === 'expired' && b.status === 'completed') {
+    merged.status = 'completed';
+    merged.statusRank = 10;
+  }
+  const durA = Number(merged.duration) || 0;
+  const durB = Number(b.duration) || 0;
+  if (durB > durA) merged.duration = b.duration;
+  if (!merged.recordingUrl && b.recordingUrl) merged.recordingUrl = b.recordingUrl;
+  if (!merged.recordingArchivedAt && b.recordingArchivedAt) merged.recordingArchivedAt = b.recordingArchivedAt;
+  return merged;
+}
+
+function dedupeTwilioDialerRows(rows) {
+  const twilio = [];
+  const other = [];
+  for (const r of rows) {
+    if (isTwilioDialerRecord(r)) twilio.push(r);
+    else other.push(r);
+  }
+  if (twilio.length <= 1) return rows;
+
+  const byKey = new Map();
+  for (const r of twilio) {
+    const key = twilioDialerGroupKey(r);
+    const prev = byKey.get(key);
+    byKey.set(key, prev ? mergeTwilioDialerRows(prev, r) : r);
+  }
+  const dedupedTwilio = [...byKey.values()];
+  const merged = [...other, ...dedupedTwilio];
+  merged.sort((x, y) => {
+    const tx = x.createdAt ? new Date(x.createdAt).getTime() : 0;
+    const ty = y.createdAt ? new Date(y.createdAt).getTime() : 0;
+    return ty - tx;
+  });
+  return merged;
+}
+
+/**
+ * Merge duplicate Twilio dialer rows in Mongo (parent leg + PSTN child leg).
+ * Keeps the best row per to/from/agent/time bucket; deletes orphans.
+ */
+async function consolidateTwilioDialerDuplicates({ limit = 100 } = {}) {
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await CallRecord.find({
+    createdAt: { $gte: since },
+    $or: [
+      { 'telephonyData.provider': 'twilio' },
+      { executionId: { $regex: '^CA[a-f0-9]{32}$', $options: 'i' } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .limit(Math.min(limit * 4, 400))
+    .lean();
+
+  const groups = new Map();
+  for (const r of rows) {
+    const key = twilioDialerGroupKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  let groupsMerged = 0;
+  let deleted = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    let keeper = group.reduce((best, cur) => (scoreTwilioDialerRow(cur) > scoreTwilioDialerRow(best) ? cur : best));
+    for (const row of group) {
+      if (String(row._id) === String(keeper._id)) continue;
+      const merged = mergeTwilioDialerRows(keeper, row);
+      const $set = {};
+      if (merged.recordingArchive?.twilio?.key && !keeper.recordingArchive?.twilio?.key) {
+        $set['recordingArchive.twilio'] = merged.recordingArchive.twilio;
+        $set.recordingArchivedAt = merged.recordingArchivedAt || new Date();
+      }
+      if (merged.status === 'completed' && keeper.status === 'expired') {
+        $set.status = 'completed';
+        $set.statusRank = 10;
+        $set.statusUpdatedAt = new Date();
+        $set.completedAt = keeper.completedAt || new Date();
+        $set.errorMessage = null;
+      }
+      if ((Number(merged.duration) || 0) > (Number(keeper.duration) || 0)) {
+        $set.duration = merged.duration;
+      }
+      if (Object.keys($set).length) {
+        await CallRecord.updateOne({ _id: keeper._id }, { $set });
+        keeper = { ...keeper, ...$set, recordingArchive: { ...keeper.recordingArchive, ...merged.recordingArchive } };
+      }
+      await CallRecord.deleteOne({ _id: row._id });
+      deleted += 1;
+    }
+    groupsMerged += 1;
+  }
+  return { groupsMerged, deleted };
+}
+
 function normalizePayload(payload) {
   const executionId = payload.id ?? payload.execution_id ?? payload.executionId;
   const data = payload.data || payload.execution || payload;
@@ -219,8 +349,10 @@ async function listCallRecords(options = {}) {
     CallRecord.countDocuments(filter),
   ]);
 
+  const dedupedResults = dedupeTwilioDialerRows(results);
+
   // executionId -> Job (job post verification) or JobApplication (candidate verification)
-  const executionIds = results.map((r) => String(r.executionId || '')).filter(Boolean);
+  const executionIds = dedupedResults.map((r) => String(r.executionId || '')).filter(Boolean);
   const executionIdVariants = [...new Set(executionIds.flatMap((id) => [id, id.trim()]).filter(Boolean))];
   const [jobsWithExecutionId, jobAppsWithExecutionId] = await Promise.all([
     executionIdVariants.length
@@ -263,7 +395,7 @@ async function listCallRecords(options = {}) {
   }
 
   const toPhoneMatchesJobOrg = new Set();
-  for (const r of results) {
+  for (const r of dedupedResults) {
     const execId = normalizeKey(r.executionId);
     if (executionIdToJob.has(execId)) {
       toPhoneMatchesJobOrg.add(r._id?.toString());
@@ -303,7 +435,7 @@ async function listCallRecords(options = {}) {
   }
 
   // Fetch candidate names for records with candidate ref but no businessName
-  const needCandidateName = results.filter((r) => r.candidate && !(r.businessName && r.businessName.trim()));
+  const needCandidateName = dedupedResults.filter((r) => r.candidate && !(r.businessName && r.businessName.trim()));
   if (needCandidateName.length > 0) {
     const candidateIds = [...new Set(needCandidateName.map((r) => r.candidate?.toString()).filter(Boolean))];
     const candidates = await Employee.find({ _id: { $in: candidateIds } })
@@ -323,7 +455,7 @@ async function listCallRecords(options = {}) {
   const useAgentRouting = Boolean(jobAgentId && candidateAgentId && jobAgentId !== candidateAgentId);
 
   // Add displayCategory and displayName for frontend - use agentId first (each call type has its own agent)
-  for (const r of results) {
+  for (const r of dedupedResults) {
     const purpose = (r.purpose || '').toLowerCase().trim();
     const execId = normalizeKey(r.executionId);
     const aid = normalizeKey(r.agentId || r.raw?.agent_id || r.raw?.agentId);
@@ -365,7 +497,7 @@ async function listCallRecords(options = {}) {
 
   // Twilio dialer recordings live only in S3 (no public provider URL) — presign
   // a fresh playback URL so the list's recording link works.
-  const twilioRecs = results.filter((r) => r.recordingArchive?.twilio?.key && !r.recordingUrl);
+  const twilioRecs = dedupedResults.filter((r) => r.recordingArchive?.twilio?.key && !r.recordingUrl);
   if (twilioRecs.length) {
     const { generatePresignedDownloadUrl } = await import('../config/s3.js');
     await Promise.all(
@@ -380,7 +512,7 @@ async function listCallRecords(options = {}) {
   }
 
   const totalPages = Math.ceil(total / limit);
-  return { results, total, totalPages, page, limit };
+  return { results: dedupedResults, total, totalPages, page, limit };
 }
 
 async function updateFromExecutionDetails(executionId, details, options = {}) {
@@ -619,6 +751,10 @@ async function upsertDialerCallRecord({
     source,
     createdBy: createdBy || null,
   };
+  if (provider === 'twilio') {
+    // Twilio CallSid rows are never Bolna executions — skip Bolna reconcilers.
+    setOnInsert.bolnaVerifiedAt = new Date();
+  }
   // Backfill: preserve the real call time instead of "now".
   if (createdAt) {
     const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
@@ -677,6 +813,7 @@ async function findRecordsNeedingSync(limit = 20) {
   const list = await CallRecord.find({
     executionId: { $exists: true, $nin: [null, ''] },
     status: { $nin: TERMINAL_STATUSES },
+    'telephonyData.provider': { $ne: 'twilio' },
     $or: [{ transcript: { $in: [null, ''] } }, { recordingUrl: { $in: [null, ''] } }],
   })
     .sort({ createdAt: -1 })
@@ -692,6 +829,7 @@ async function findCallRecordsToSyncForCron(options = {}) {
   const filter = {
     executionId: { $exists: true, $nin: [null, ''] },
     status: { $nin: ['expired'] },
+    'telephonyData.provider': { $ne: 'twilio' },
     createdAt: { $gte: thirtyDaysAgo },
     $or: [
       { status: { $in: ['in_progress', 'initiated', 'failed', 'error', 'unknown'] } },
@@ -1010,6 +1148,7 @@ export default {
   createFromWebhook,
   createRecord,
   upsertDialerCallRecord,
+  consolidateTwilioDialerDuplicates,
   listCallRecords,
   fillMissingBusinessNameFromJobs,
   normalizePayload,

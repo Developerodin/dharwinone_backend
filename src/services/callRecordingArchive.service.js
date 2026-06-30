@@ -282,7 +282,7 @@ export async function archiveTwilioRecording(executionId, recordingUrl, { force 
   await callRecordService.updateCallRecordByExecutionId(
     String(executionId),
     { 'recordingArchive.twilio': entry, recordingArchivedAt: new Date() },
-    { upsert: true }
+    { upsert: false }
   );
   return { status: 'archived', entry };
 }

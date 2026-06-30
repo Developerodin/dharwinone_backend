@@ -13,6 +13,13 @@ import { archiveTwilioRecording } from '../services/callRecordingArchive.service
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
+/** Parent browser leg CallSid — child PSTN legs also send ParentCallSid. */
+function resolveDialerExecutionId(body) {
+  const parent = body?.ParentCallSid || body?.parentCallSid || '';
+  const self = body?.CallSid || body?.callSid || '';
+  return String(parent || self).trim();
+}
+
 function sendTwiml(res, xml) {
   res.setHeader('Content-Type', 'text/xml');
   return res.status(httpStatus.OK).send(xml);
@@ -142,12 +149,13 @@ const callStatusWebhook = catchAsync(async (req, res) => {
     status: body.CallStatus,
     direction: body.Direction,
   });
-  if (body.CallSid) {
+  const executionId = resolveDialerExecutionId(body);
+  if (executionId) {
     // `From` is `client:user_<id>` for browser legs — don't overwrite the phone.
     const fromIsPhone = body.From && !String(body.From).startsWith('client:');
     callRecordService
       .upsertDialerCallRecord({
-        executionId: body.CallSid,
+        executionId,
         status: body.CallStatus,
         duration: body.CallDuration != null ? parseInt(body.CallDuration, 10) : undefined,
         toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
@@ -167,7 +175,7 @@ const recordingWebhook = catchAsync(async (req, res) => {
     recordingSid: body.RecordingSid,
     status: body.RecordingStatus,
   });
-  const callSid = body.CallSid || '';
+  const callSid = resolveDialerExecutionId(body);
   const recordingUrl = body.RecordingUrl || '';
   if (callSid && String(body.RecordingStatus || '').toLowerCase() === 'completed' && recordingUrl) {
     // Ensure a row exists, then mirror the Twilio media to S3 + link it. Both

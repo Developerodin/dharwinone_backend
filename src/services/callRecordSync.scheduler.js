@@ -17,6 +17,7 @@ import logger from '../config/logger.js';
 import bolnaService from './bolna.service.js';
 import callSyncService from './callSync.service.js';
 import CallRecord, { TERMINAL_STATUSES } from '../models/callRecord.model.js';
+import callRecordService from './callRecord.service.js';
 import config from '../config/config.js';
 import { expireStaleCalls } from './chatCall.service.js';
 
@@ -40,6 +41,8 @@ async function reconcileStuckRecords() {
     status: { $nin: [...TERMINAL_STATUSES] },
     statusUpdatedAt: { $lte: stuckCutoff },
     createdAt: { $gte: lookbackCutoff },
+    // Twilio browser/PSTN dialer rows use CallSid — not Bolna executions.
+    'telephonyData.provider': { $ne: 'twilio' },
   })
     .select('executionId status')
     .limit(RECONCILE_BATCH)
@@ -286,6 +289,7 @@ export async function runCallHistorySync() {
     const backfill = await backfillFromAgentList();
     const chat = await reconcileChatCalls();
     const ghosts = await cleanupGhostCalls();
+    const twilioDedupe = await callRecordService.consolidateTwilioDialerDuplicates();
     if (
       reconcile.reconciled ||
       backfill.applied ||
@@ -296,13 +300,16 @@ export async function runCallHistorySync() {
       ghosts.deletedNull ||
       ghosts.expiredStubs ||
       ghosts.expiredNotFound ||
-      ghosts.errors
+      ghosts.errors ||
+      twilioDedupe.groupsMerged ||
+      twilioDedupe.deleted
     ) {
       logger.info(
         `[callSync cron] reconcile=${reconcile.reconciled}/applied=${reconcile.applied}/err=${reconcile.errors} ` +
           `backfill=${backfill.scanned}/applied=${backfill.applied}/err=${backfill.errors} ` +
           `chat=ring${chat.ringExpired}/ongoing${chat.ongoingExpired} ` +
-          `ghost=del${ghosts.deletedNull}/expStub${ghosts.expiredStubs}/exp404${ghosts.expiredNotFound}/ver${ghosts.verifiedStubs}`
+          `ghost=del${ghosts.deletedNull}/expStub${ghosts.expiredStubs}/exp404${ghosts.expiredNotFound}/ver${ghosts.verifiedStubs} ` +
+          `twilioDedupe=groups${twilioDedupe.groupsMerged}/del${twilioDedupe.deleted}`
       );
     }
   } catch (err) {
