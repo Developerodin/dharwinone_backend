@@ -17,14 +17,16 @@ export function normalizePhones(phones) {
   return out;
 }
 
-export function buildContactFilter({ tenantId, ownerId, q }) {
+export function buildContactFilter({ tenantId, ownerId, q, favorite }) {
   const filter = { tenantId, ownerId, deletedAt: null };
+  if (favorite === true) filter.favorite = true;
   const term = String(q ?? '').trim();
   if (term) {
     const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     const digits = term.replace(/\D/g, '');
     filter.$or = [{ name: re }, { email: re }, { company: re }];
-    if (digits.length >= 4) filter.$or.push({ 'phones.normalizedNumber': { $regex: `^${digits}` } });
+    // >=6 digits: a meaningful phone prefix. Shorter widens the index range for little value.
+    if (digits.length >= 6) filter.$or.push({ 'phones.normalizedNumber': { $regex: `^${digits}` } });
   }
   return filter;
 }

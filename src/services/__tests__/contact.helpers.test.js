@@ -20,17 +20,26 @@ test('normalizePhones: no flag → first is primary; empty → 400', () => {
 });
 
 test('buildContactFilter: scopes to owner+tenant, excludes deleted, prefix phone', () => {
-  const f = buildContactFilter({ tenantId: 't1', ownerId: 'u1', q: '9876' });
+  const f = buildContactFilter({ tenantId: 't1', ownerId: 'u1', q: '987654' });
   assert.equal(f.tenantId, 't1'); assert.equal(f.ownerId, 'u1'); assert.equal(f.deletedAt, null);
   const phoneTerm = f.$or.find((t) => t['phones.normalizedNumber']);
-  assert.deepEqual(phoneTerm, { 'phones.normalizedNumber': { $regex: '^9876' } });
+  assert.deepEqual(phoneTerm, { 'phones.normalizedNumber': { $regex: '^987654' } });
 });
 
 test('buildContactFilter: short/no digit query omits phone term', () => {
   const f = buildContactFilter({ tenantId: 't1', ownerId: 'u1', q: 'ann' });
   assert.equal(f.$or.some((t) => t['phones.normalizedNumber']), false);
+  const short = buildContactFilter({ tenantId: 't1', ownerId: 'u1', q: '9876' }); // <6 digits: omitted
+  assert.equal(short.$or.some((t) => t['phones.normalizedNumber']), false);
   const noQ = buildContactFilter({ tenantId: 't1', ownerId: 'u1', q: '' });
   assert.equal('$or' in noQ, false);
+});
+
+test('buildContactFilter adds favorite:true only when favorite===true', () => {
+  const base = { tenantId: 't1', ownerId: 'o1' };
+  assert.equal(buildContactFilter({ ...base, favorite: true }).favorite, true);
+  assert.equal('favorite' in buildContactFilter({ ...base }), false);
+  assert.equal('favorite' in buildContactFilter({ ...base, favorite: false }), false);
 });
 
 test('pickSuggestedLink: employees before users, else null', () => {

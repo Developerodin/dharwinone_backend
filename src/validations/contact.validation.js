@@ -39,6 +39,7 @@ export const getContacts = {
   query: Joi.object().keys({
     q: Joi.string().allow(''), sortBy: Joi.string(),
     limit: Joi.number().integer().min(1).max(100), page: Joi.number().integer().min(1),
+    favorite: Joi.boolean(),
   }),
 };
 

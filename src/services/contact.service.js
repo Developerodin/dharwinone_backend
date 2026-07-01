@@ -35,7 +35,9 @@ export async function createContact(user, body) {
 }
 
 export async function queryContacts(user, query) {
-  const filter = buildContactFilter({ tenantId: tenantIdForUser(user), ownerId: uid(user), q: query.q });
+  const filter = buildContactFilter({
+    tenantId: tenantIdForUser(user), ownerId: uid(user), q: query.q, favorite: query.favorite,
+  });
   const options = { sortBy: query.sortBy || 'updatedAt:desc', limit: query.limit || 25, page: query.page || 1 };
   return Contact.paginate(filter, options);
 }

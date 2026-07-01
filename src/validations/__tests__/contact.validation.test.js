@@ -14,3 +14,8 @@ test('createContact: requires name + at least one phone', () => {
 test('getContacts: q/sortBy/limit/page optional', () => {
   assert.equal(getContacts.query.validate({ q: '98', limit: 20, page: 1 }).error, undefined);
 });
+
+test('getContacts accepts favorite as boolean, rejects non-boolean', () => {
+  assert.equal(getContacts.query.validate({ favorite: true }).error, undefined);
+  assert.ok(getContacts.query.validate({ favorite: 'yes' }).error);
+});
