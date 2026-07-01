@@ -238,6 +238,37 @@ export const permissionAliases = {
     'communication.calling:create,edit,delete',
     'communication.calling:view,create,edit,delete',
   ],
+  // Contacts (personal dialer phonebook). Personal-only — no contacts.manage.
+  'contacts.view': [
+    'contacts.view',
+    'contacts.read',
+    'communication.contacts:view',
+    'communication.contacts:view,create,edit,delete',
+  ],
+  'contacts.read': [
+    'contacts.read',
+    'contacts.view',
+    'communication.contacts:view',
+    'communication.contacts:view,create,edit,delete',
+  ],
+  'contacts.create': [
+    'contacts.create',
+    'communication.contacts:create',
+    'communication.contacts:create,edit,delete',
+    'communication.contacts:view,create,edit,delete',
+  ],
+  'contacts.edit': [
+    'contacts.edit',
+    'communication.contacts:edit',
+    'communication.contacts:create,edit,delete',
+    'communication.contacts:view,create,edit,delete',
+  ],
+  'contacts.delete': [
+    'contacts.delete',
+    'communication.contacts:delete',
+    'communication.contacts:create,edit,delete',
+    'communication.contacts:view,create,edit,delete',
+  ],
   // My Projects: narrow list; legacy project.projects:view still grants access (see route-permissions aliases)
   'my-projects.read': ['my-projects.read', 'projects.read'],
   'my-projects.manage': ['my-projects.manage', 'projects.manage'],
