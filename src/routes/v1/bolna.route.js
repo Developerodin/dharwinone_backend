@@ -26,9 +26,10 @@ router
     bolnaCandidateAgentSettingsController.patchBolnaCandidateAgentSettings
   );
 
+// AI verification extraction setup — gated by the Call AI Features role toggle.
 router
   .route('/candidate-agent/setup-extractions')
-  .post(auth(), requirePermissions('calls.create'), bolnaController.setupCandidateVerificationExtractions);
+  .post(auth(), requirePermissions('call-ai.manage'), bolnaController.setupCandidateVerificationExtractions);
 
 router
   .route('/diagnostics')
@@ -54,9 +55,10 @@ router
   .route('/call-records/sync')
   .post(auth(), requirePermissions('calls.create'), bolnaController.syncMissingCallRecords);
 
+// Refresh re-pulls AI extraction/verification for a record — Call AI Features toggle.
 router
   .route('/call-records/:executionId/refresh')
-  .post(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallStatus), bolnaController.refreshCallRecord);
+  .post(auth(), requirePermissions('call-ai.manage'), validate(bolnaValidation.getCallStatus), bolnaController.refreshCallRecord);
 
 // Both recordings for a call: Bolna (agent-only) + Plivo (full dual-channel).
 // Metadata first, then proxied audio streams (provider URLs need Bolna/Plivo auth).

@@ -241,13 +241,6 @@ export const permissionAliases = {
   // Contacts (personal dialer phonebook). Personal-only — no contacts.manage.
   'contacts.view': [
     'contacts.view',
-    'contacts.read',
-    'communication.contacts:view',
-    'communication.contacts:view,create,edit,delete',
-  ],
-  'contacts.read': [
-    'contacts.read',
-    'contacts.view',
     'communication.contacts:view',
     'communication.contacts:view,create,edit,delete',
   ],
@@ -268,6 +261,41 @@ export const permissionAliases = {
     'communication.contacts:delete',
     'communication.contacts:create,edit,delete',
     'communication.contacts:view,create,edit,delete',
+  ],
+  // Granular call sub-features (separate role toggles under Communication)
+  'call-recording.manage': [
+    'call-recording.manage',
+    'call-recording.create',
+    'call-recording.edit',
+    'communication.call-recording:create',
+    'communication.call-recording:edit',
+    'communication.call-recording:create,edit,delete',
+    'communication.call-recording:view,create,edit,delete',
+  ],
+  'call-ai.read': [
+    'call-ai.read',
+    'call-ai.view',
+    'call-ai.manage',
+    'communication.call-ai:view',
+    'communication.call-ai:view,create,edit,delete',
+  ],
+  'call-ai.manage': [
+    'call-ai.manage',
+    'call-ai.create',
+    'call-ai.edit',
+    'call-ai.delete',
+    'communication.call-ai:create',
+    'communication.call-ai:edit',
+    'communication.call-ai:delete',
+    'communication.call-ai:create,edit,delete',
+    'communication.call-ai:view,create,edit,delete',
+  ],
+  'call-transcripts.read': [
+    'call-transcripts.read',
+    'call-transcripts.view',
+    'call-transcripts.manage',
+    'communication.call-transcripts:view',
+    'communication.call-transcripts:view,create,edit,delete',
   ],
   // My Projects: narrow list; legacy project.projects:view still grants access (see route-permissions aliases)
   'my-projects.read': ['my-projects.read', 'projects.read'],

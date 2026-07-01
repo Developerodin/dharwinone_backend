@@ -16,6 +16,17 @@ function isTwilio() {
   return provider() === 'twilio';
 }
 
+// Twilio returns capability keys inconsistently cased (voice / SMS / MMS / fax).
+// Read case-insensitively so SMS/MMS aren't silently dropped.
+function hasCapability(caps, key) {
+  if (!caps) return false;
+  const k = key.toLowerCase();
+  for (const [name, val] of Object.entries(caps)) {
+    if (name.toLowerCase() === k) return Boolean(val);
+  }
+  return false;
+}
+
 function mapTwilioSearchNumber(n) {
   return {
     number: String(n.phoneNumber || '').replace(/^\+/, ''),
@@ -25,9 +36,9 @@ function mapTwilioSearchNumber(n) {
     country: n.isoCountry || '',
     monthlyRentalRate: null,
     setupRate: null,
-    voiceEnabled: Boolean(n.capabilities?.voice),
-    smsEnabled: Boolean(n.capabilities?.sms),
-    mmsEnabled: Boolean(n.capabilities?.mms),
+    voiceEnabled: hasCapability(n.capabilities, 'voice'),
+    smsEnabled: hasCapability(n.capabilities, 'sms'),
+    mmsEnabled: hasCapability(n.capabilities, 'mms'),
     voiceRate: null,
     smsRate: null,
     restriction: '',
@@ -59,9 +70,9 @@ function mapTwilioOwnedNumber(n) {
     addedOn: n.dateCreated ? new Date(n.dateCreated).toISOString() : '',
     application: n.voiceUrl || '',
     monthlyRentalRate: null,
-    voiceEnabled: n.capabilities?.voice !== false,
-    smsEnabled: Boolean(n.capabilities?.sms),
-    mmsEnabled: Boolean(n.capabilities?.mms),
+    voiceEnabled: n.capabilities ? hasCapability(n.capabilities, 'voice') : true,
+    smsEnabled: hasCapability(n.capabilities, 'sms'),
+    mmsEnabled: hasCapability(n.capabilities, 'mms'),
     carrier: 'twilio',
   };
 }
@@ -98,17 +109,26 @@ async function searchAvailableNumbers(params = {}) {
     const twilioType = typeMap[String(params.type || '').toLowerCase()] || 'local';
     const patternBits = resolveTwilioPattern(params.pattern);
     const caps = resolveTwilioCapabilities(params.services);
+    // Geographic filters (locality/region/postal/near/distance) only apply to Local
+    // numbers in Twilio; toll-free and mobile are non-geographic and silently ignore
+    // them — omit so the result set isn't misleading.
+    const geo =
+      twilioType === 'local'
+        ? {
+            inLocality: params.city?.trim() || undefined,
+            inRegion: params.region?.trim() || undefined,
+            inPostalCode: params.postalCode?.trim() || undefined,
+            nearNumber: params.nearNumber?.trim() || undefined,
+            distance: params.distance,
+          }
+        : {};
 
     const result = await twilioService.searchAvailableNumbers({
       country,
       type: twilioType,
       limit: params.limit,
       pageToken: params.pageToken,
-      inLocality: params.city?.trim() || undefined,
-      inRegion: params.region?.trim() || undefined,
-      inPostalCode: params.postalCode?.trim() || undefined,
-      nearNumber: params.nearNumber?.trim() || undefined,
-      distance: params.distance,
+      ...geo,
       ...patternBits,
       ...caps,
     });
@@ -121,6 +141,8 @@ async function searchAvailableNumbers(params = {}) {
 
     const numbers = (result.numbers || []).map((n) => {
       const mapped = mapTwilioSearchNumber(n);
+      // Twilio's search response carries no type; results are all the searched type.
+      mapped.type = typeKey;
       if (monthly != null) mapped.monthlyRentalRate = monthly;
       return mapped;
     });

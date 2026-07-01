@@ -64,11 +64,12 @@ router
   );
 
 // Toggle live recording on an in-progress browser call (Twilio). Billable.
+// Gated by the dedicated Call Recording role toggle, not general place-call.
 router
   .route('/recording')
   .post(
     auth(),
-    requirePermissionOrAdministrator('calls.create'),
+    requirePermissionOrAdministrator('call-recording.manage'),
     validate(plivoValidation.setRecording),
     plivoController.setCallRecording
   );
