@@ -48,6 +48,7 @@ const getCallRecords = {
     language: Joi.string().trim().allow(''),
     sortBy: Joi.string().valid('date', 'createdAt').default('createdAt'),
     order: Joi.string().valid('asc', 'desc').default('desc'),
+    channel: Joi.string().valid('dialer'), // dialer: only the caller's own dialer-placed calls
   }),
 };
 

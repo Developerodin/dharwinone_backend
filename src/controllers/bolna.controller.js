@@ -279,6 +279,7 @@ const getCallRecords = catchAsync(async (req, res) => {
     language: req.query.language,
     sortBy: req.query.sortBy,
     order: req.query.order,
+    channel: req.query.channel,
     userId,
     isAdmin,
   };

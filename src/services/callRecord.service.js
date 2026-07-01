@@ -326,7 +326,12 @@ async function listCallRecords(options = {}) {
     andConditions.push({ language: String(options.language).trim() });
   }
 
-  if (!options.isAdmin && options.userId) {
+  if (options.channel === 'dialer' && options.userId) {
+    // Dialer Recent: only calls this user placed from the dialer. Dialer calls
+    // are owned (createdBy) and carry no job/candidate link (see upsertDialerCallRecord).
+    // Forced even for admins — the dialer shows your own calls, not the whole tenant's.
+    andConditions.push({ createdBy: options.userId, candidate: null, job: null });
+  } else if (!options.isAdmin && options.userId) {
     const [jobIds, candidateIds] = await Promise.all([
       Job.distinct('_id', { createdBy: options.userId }),
       Employee.distinct('_id', { owner: options.userId }),
