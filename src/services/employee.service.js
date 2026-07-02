@@ -2133,22 +2133,14 @@ const shareCandidateProfile = async (candidateId, shareData, currentUser) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only share your own profile');
   }
   
-  // Generate a unique token for the public page
+  // Short opaque token (unvalidated) — kept small to keep the share URL short.
   const crypto = await import('crypto');
-  const token = crypto.randomBytes(32).toString('hex');
-  
-  // Store the sharing data temporarily (in a real app, you might want to store this in Redis or DB)
-  // For now, we'll encode the data in the URL
-  const shareDataEncoded = Buffer.from(JSON.stringify({
-    candidateId: candidate._id.toString(),
-    withDoc,
-    sharedBy: currentUser.name,
-    sharedAt: new Date().toISOString()
-  })).toString('base64');
-  
-  // Generate the public page URL (same backend that has the candidate data)
-  const baseUrl = config.backendPublicUrl || `http://localhost:${config.port}`;
-  const publicUrl = `${baseUrl.replace(/\/$/, '')}/v1/candidates/public/candidate/${candidate._id}?token=${token}&data=${shareDataEncoded}`;
+  const token = crypto.randomBytes(6).toString('hex');
+
+  // Point at the frontend shared-profile screen (falls back to backend host only if unset).
+  const baseUrl = config.frontendBaseUrl || config.backendPublicUrl || `http://localhost:${config.port}`;
+  const withDocFlag = withDoc ? '1' : '0';
+  const publicUrl = `${baseUrl.replace(/\/$/, '')}/public-employee/${candidate._id}?token=${token}&withDoc=${withDocFlag}`;
   
   return {
     candidateId: candidate._id,
@@ -2161,18 +2153,28 @@ const shareCandidateProfile = async (candidateId, shareData, currentUser) => {
   };
 };
 
-const getPublicCandidateProfile = async (candidateId, token, data) => {
-  // Verify the token and decode the data
-  let shareData;
+const parsePublicShareQuery = (data, withDocParam) => {
+  if (withDocParam !== undefined && withDocParam !== null && withDocParam !== '') {
+    const normalized = String(withDocParam).trim().toLowerCase();
+    return { withDoc: normalized === '1' || normalized === 'true' || normalized === 'yes' };
+  }
+  if (!data) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Missing share parameters');
+  }
   try {
     const decodedData = Buffer.from(data, 'base64').toString('utf-8');
-    shareData = JSON.parse(decodedData);
+    return JSON.parse(decodedData);
   } catch (error) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid share data');
   }
-  
-  // Verify the candidate ID matches
-  if (shareData.candidateId !== candidateId) {
+};
+
+const getPublicCandidateProfile = async (candidateId, token, query = {}) => {
+  const { data, withDoc: withDocParam } = query;
+  const shareData = parsePublicShareQuery(data, withDocParam);
+
+  // candidateId lives in the path; only cross-check when the (legacy) blob still carries one.
+  if (shareData.candidateId && shareData.candidateId !== candidateId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid candidate ID');
   }
   

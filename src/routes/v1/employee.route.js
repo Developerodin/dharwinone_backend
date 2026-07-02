@@ -381,6 +381,10 @@ router
   .route('/public/candidate/:candidateId')
   .get(employeeController.getPublicProfile);
 
+router
+  .route('/public/candidate/:candidateId/data')
+  .get(employeeController.getPublicProfileData);
+
 /** Job fit score: compare candidate skills against a job's skillRequirements */
 router.get(
   '/:candidateId/job-fit',

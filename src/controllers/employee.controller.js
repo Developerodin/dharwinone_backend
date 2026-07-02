@@ -915,7 +915,7 @@ const shareProfile = catchAsync(async (req, res) => {
   const { notifyByEmail } = await import('../services/notification.service.js');
   notifyByEmail(email, {
     type: 'general',
-    title: 'Candidate profile shared with you',
+    title: 'Employee profile shared with you',
     message: `${candidateData.candidateName} was shared by ${req.user.name}.`,
     link: shareResult.publicUrl,
   }).catch(() => {});
@@ -930,20 +930,34 @@ const shareProfile = catchAsync(async (req, res) => {
 // Public candidate profile controller
 const getPublicProfile = catchAsync(async (req, res) => {
   const { candidateId } = req.params;
-  const { token, data } = req.query;
-  
-  if (!token || !data) {
+  const { token, data, withDoc } = req.query;
+
+  if (!token || (data == null && withDoc == null)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Missing required parameters');
   }
-  
+
   // Get the public candidate profile data
-  const candidateData = await getPublicCandidateProfile(candidateId, token, data);
+  const candidateData = await getPublicCandidateProfile(candidateId, token, { data, withDoc });
   
   // Generate HTML page
   const html = generatePublicProfileHTML(candidateData);
   
   res.setHeader('Content-Type', 'text/html');
   res.send(html);
+});
+
+// Public candidate profile as JSON (consumed by the frontend /public-employee screen)
+const getPublicProfileData = catchAsync(async (req, res) => {
+  const { candidateId } = req.params;
+  const { token, data, withDoc } = req.query;
+
+  if (!token || (data == null && withDoc == null)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Missing required parameters');
+  }
+
+  const candidateData = await getPublicCandidateProfile(candidateId, token, { data, withDoc });
+
+  res.status(httpStatus.OK).send({ success: true, data: candidateData });
 });
 
 
@@ -1602,7 +1616,7 @@ const generatePublicProfileHTML = (candidateData) => {
   `;
 };
 
-export { shareProfile, getPublicProfile };
+export { shareProfile, getPublicProfile, getPublicProfileData };
 
 // Resend email verification controller
 const resendVerificationEmail = catchAsync(async (req, res) => {

@@ -593,24 +593,24 @@ const sendCandidateInvitationEmail = async (to, onboardUrl, options = {}) => {
  */
 const sendCandidateProfileShareEmail = async (to, candidateData, shareData) => {
   const { publicUrl, withDoc, sharedBy, roleTitle } = shareData;
-  const candidateName = candidateData.candidateName || 'Candidate';
-  const subject = `Candidate profile shared: ${candidateName}`;
+  const candidateName = candidateData.candidateName || 'Employee';
+  const subject = `Employee profile shared: ${candidateName}`;
   const introLines = [
-    `${sharedBy || 'A team member'} shared a candidate profile with you for review.`,
+    `${sharedBy || 'A team member'} shared an employee profile with you for review.`,
   ];
   const detailRows = [
-    { label: 'Candidate', value: candidateName },
+    { label: 'Employee', value: candidateName },
     { label: 'Email', value: candidateData.candidateEmail || 'Available inside the profile' },
     { label: 'Shared by', value: sharedBy || 'Dharwin team' },
     { label: 'Documents', value: withDoc ? 'Included' : 'Not included' },
     { label: 'Role', value: roleTitle || '' },
   ];
   const sections = withDoc
-    ? [{ title: 'Included in this share', tone: 'success', bodyLines: ['Supporting candidate documents are available in the shared view.'] }]
+    ? [{ title: 'Included in this share', tone: 'success', bodyLines: ['Supporting employee documents are available in the shared view.'] }]
     : [{ title: 'Included in this share', tone: 'warning', bodyLines: ['This shared view does not include supporting documents.'] }];
-  const primaryAction = { label: 'View candidate profile', href: publicUrl };
+  const primaryAction = { label: 'View employee profile', href: publicUrl };
   const text = buildPlainTextEmail({
-    title: 'Candidate profile shared with you',
+    title: 'Employee profile shared with you',
     greeting: 'there',
     introLines,
     detailRows,
@@ -618,8 +618,8 @@ const sendCandidateProfileShareEmail = async (to, candidateData, shareData) => {
     primaryAction,
   });
   const html = buildEmailHTML({
-    badgeText: 'Candidate share',
-    title: 'Candidate profile shared with you',
+    badgeText: 'Employee share',
+    title: 'Employee profile shared with you',
     greeting: 'there',
     introLines,
     detailRows,
