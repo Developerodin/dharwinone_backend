@@ -238,29 +238,37 @@ export const permissionAliases = {
     'communication.calling:create,edit,delete',
     'communication.calling:view,create,edit,delete',
   ],
-  // Contacts (personal dialer phonebook). Personal-only — no contacts.manage.
+  // Contacts (personal dialer phonebook). Governed by the Calling (dialer)
+  // permission — there is no separate Contacts toggle. Any dialer access grants
+  // contact view; dialer create/edit/delete grant the matching contact action.
   'contacts.view': [
     'contacts.view',
-    'communication.contacts:view',
-    'communication.contacts:view,create,edit,delete',
+    'calls.read', 'calling.read', 'calls.view', 'calling.view',
+    'calls.manage', 'calling.manage',
+    'communication.calling:view',
+    'communication.calling:create,edit,delete',
+    'communication.calling:view,create,edit,delete',
   ],
   'contacts.create': [
     'contacts.create',
-    'communication.contacts:create',
-    'communication.contacts:create,edit,delete',
-    'communication.contacts:view,create,edit,delete',
+    'calls.manage', 'calling.manage', 'calls.create', 'calling.create',
+    'communication.calling:create',
+    'communication.calling:create,edit,delete',
+    'communication.calling:view,create,edit,delete',
   ],
   'contacts.edit': [
     'contacts.edit',
-    'communication.contacts:edit',
-    'communication.contacts:create,edit,delete',
-    'communication.contacts:view,create,edit,delete',
+    'calls.manage', 'calling.manage', 'calls.edit', 'calling.edit',
+    'communication.calling:edit',
+    'communication.calling:create,edit,delete',
+    'communication.calling:view,create,edit,delete',
   ],
   'contacts.delete': [
     'contacts.delete',
-    'communication.contacts:delete',
-    'communication.contacts:create,edit,delete',
-    'communication.contacts:view,create,edit,delete',
+    'calls.manage', 'calling.manage', 'calls.delete', 'calling.delete',
+    'communication.calling:delete',
+    'communication.calling:create,edit,delete',
+    'communication.calling:view,create,edit,delete',
   ],
   // Granular call sub-features (separate role toggles under Communication)
   'call-recording.manage': [
