@@ -1,19 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyNewFilters } from '../referralLeadsQueryBuilder.js';
+import { quickFilterEffectiveStatusMatch, QUICK_APPLIED_EFFECTIVE_STATUSES } from '../referralLeads.service.js';
 
-test('applyNewFilters supports pendingReferrals filter', () => {
-  const match = applyNewFilters({ pendingReferrals: true });
-  assert.deepEqual(match.referralPipelineStatus.$in, [
-    'pending',
-    'profile_complete',
-    'applied',
-    'in_review',
-    'interview',
-    'offer',
-    'preboarding',
-    'deferred',
-  ]);
+test('appliedOnly quick filter uses effectiveStatus applied only', () => {
+  const match = applyNewFilters({ appliedOnly: true });
+  assert.equal(match.referralPipelineStatus, undefined);
+  const stages = quickFilterEffectiveStatusMatch({ appliedOnly: true });
+  assert.deepEqual(stages[0].$match.effectiveStatus.$in, QUICK_APPLIED_EFFECTIVE_STATUSES);
 });
 
 test('applyNewFilters supports convertedEmployees filter', () => {

@@ -821,6 +821,32 @@ export const effectiveStatusMatch = (query) => {
   return sel ? [{ $match: { effectiveStatus: sel } }] : [];
 };
 
+/** Hired-only chip: candidates still on the hired pipeline step (not preboarding/joined/employee). */
+export const QUICK_HIRED_EFFECTIVE_STATUSES = ['hired'];
+/** Applied chip: candidates on the applied pipeline step only. */
+export const QUICK_APPLIED_EFFECTIVE_STATUSES = ['applied'];
+
+/** Quick filters run on effectiveStatus (not raw referralPipelineStatus). */
+export const quickFilterEffectiveStatusMatch = (query = {}) => {
+  const q = query || {};
+  if (q.hiredOnly === true || q.hiredOnly === 'true') {
+    return [{ $match: { effectiveStatus: { $in: QUICK_HIRED_EFFECTIVE_STATUSES } } }];
+  }
+  if (q.appliedOnly === true || q.appliedOnly === 'true') {
+    return [{ $match: { effectiveStatus: { $in: QUICK_APPLIED_EFFECTIVE_STATUSES } } }];
+  }
+  if (q.employeeStatus === 'active') {
+    return [{ $match: { effectiveStatus: 'employee' } }];
+  }
+  if (q.employeeStatus === 'resigned') {
+    return [{ $match: { effectiveStatus: 'resigned' } }];
+  }
+  return [];
+};
+
+export const needsEffectiveStatusPipeline = (query = {}) =>
+  effectiveStatusMatch(query).length > 0 || quickFilterEffectiveStatusMatch(query).length > 0;
+
 export const listReferralLeads = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
@@ -834,15 +860,15 @@ export const listReferralLeads = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
   const statusMatch = effectiveStatusMatch(q);
-  // effectiveStatus is only needed to FILTER; the row badge comes from shapeLeadRow. Skip its two
-  // lookups entirely when no status is selected.
-  const effStages = statusMatch.length ? buildEffectiveStatusStages(new Date()) : [];
+  const quickMatch = quickFilterEffectiveStatusMatch(q);
+  const effStages = needsEffectiveStatusPipeline(q) ? buildEffectiveStatusStages(new Date()) : [];
   const pipeline = [
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
     ...ownerStages,
     ...effStages,
     ...statusMatch,
+    ...quickMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1, _id: -1 } },
     { $skip: (page - 1) * limit },
@@ -853,7 +879,7 @@ export const listReferralLeads = async (req) => {
   // don't change row count), so it matches the stats card total exactly.
   const [rows, totalArr] = await Promise.all([
     Employee.aggregate(pipeline),
-    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, { $count: 'c' }]),
+    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, ...quickMatch, { $count: 'c' }]),
   ]);
   const total = totalArr[0]?.c ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -873,12 +899,13 @@ export const listReferralLeads = async (req) => {
 const CONVERTED_STATUSES = CONVERTED_PIPELINE_STATUSES;
 const PENDING_STATUSES = PENDING_PIPELINE_STATUSES;
 
-async function computeSalesAgentStats(match, ownerStages, effStages, statusMatch, limit = 5) {
+async function computeSalesAgentStats(match, ownerStages, effStages, statusMatch, quickMatch, limit = 5) {
   const groups = await Employee.aggregate([
     { $match: { ...match, currentSalesAgentUserId: { $ne: null } } },
     ...ownerStages,
     ...effStages,
     ...statusMatch,
+    ...quickMatch,
     { $match: { effectiveStatus: { $in: SALES_AGENT_LEADERBOARD_HIRE_STATUSES } } },
     { $group: { _id: '$currentSalesAgentUserId', count: { $sum: 1 } } },
     { $sort: { count: -1 } },
@@ -909,11 +936,12 @@ export const getReferralLeadsStats = async (req) => {
 
   const ownerStages = referralLeadsRequireExistingOwnerStages();
   const now = new Date();
-  const effStages = buildEffectiveStatusStages(now);
   const statusMatch = effectiveStatusMatch(q);
+  const quickMatch = quickFilterEffectiveStatusMatch(q);
+  const effStages = buildEffectiveStatusStages(now);
 
   const [totalArr, statusGroups, topRef, unassignedArr, salesBoard, hireByType] = await Promise.all([
-    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, { $count: 'c' }]),
+    Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, ...quickMatch, { $count: 'c' }]),
     // Funnel/cards bucket by the SAME effectiveStatus the list filters + the badge shows (includes the
     // time-driven employee/resigned tail AND job_removed), so cards always agree with the rows.
     Employee.aggregate([
@@ -921,6 +949,7 @@ export const getReferralLeadsStats = async (req) => {
       ...ownerStages,
       ...effStages,
       ...statusMatch,
+      ...quickMatch,
       { $group: { _id: '$effectiveStatus', c: { $sum: 1 } } },
     ]),
     canSeeOrgReferrerLeaderboard
@@ -937,9 +966,10 @@ export const getReferralLeadsStats = async (req) => {
       ...ownerStages,
       ...effStages,
       ...statusMatch,
+      ...quickMatch,
       { $count: 'c' },
     ]),
-    computeSalesAgentStats(match, ownerStages, effStages, statusMatch),
+    computeSalesAgentStats(match, ownerStages, effStages, statusMatch, quickMatch),
     // Referred candidates who became employees (joiningDate set), split by their own
     // compensationType (paid/unpaid). Keys off joiningDate — NOT referralPipelineStatus
     // 'hired' — so backfilled employees who joined before the candidate/job flow still count.
@@ -949,6 +979,7 @@ export const getReferralLeadsStats = async (req) => {
       ...ownerStages,
       ...effStages,
       ...statusMatch,
+      ...quickMatch,
       {
         $group: {
           _id: { $ifNull: ['$compensationType', 'paid'] },
@@ -1047,13 +1078,15 @@ export const exportReferralLeadsCsv = async (req, res) => {
   const q = { ...req.query, search: undefined };
   const match = { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
   const exportStatusMatch = effectiveStatusMatch(q);
+  const exportQuickMatch = quickFilterEffectiveStatusMatch(q);
   const cap = 5000;
   const rows = await Employee.aggregate([
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
     ...referralLeadsRequireExistingOwnerStages(),
-    ...(exportStatusMatch.length ? buildEffectiveStatusStages(new Date()) : []),
+    ...(needsEffectiveStatusPipeline(q) ? buildEffectiveStatusStages(new Date()) : []),
     ...exportStatusMatch,
+    ...exportQuickMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1 } },
     { $limit: cap },

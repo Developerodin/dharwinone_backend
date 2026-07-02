@@ -12,33 +12,11 @@ export function buildLeadMatchStage(filters = {}, scope = {}) {
   if (filters.unassigned === true || filters.unassigned === 'true') {
     match.currentSalesAgentUserId = null;
   }
-  if (filters.hiredOnly === true || filters.hiredOnly === 'true') {
-    match.referralPipelineStatus = { $in: ['hired', 'joined', 'employee'] };
-  }
-  if (filters.pendingReferrals === true || filters.pendingReferrals === 'true') {
-    match.referralPipelineStatus = {
-      $in: [
-        'pending',
-        'profile_complete',
-        'applied',
-        'in_review',
-        'interview',
-        'offer',
-        'preboarding',
-        'deferred',
-      ],
-    };
-  }
+  // hiredOnly / appliedOnly / employeeStatus are applied on computed effectiveStatus
+  // in referralLeads.service (quickFilterEffectiveStatusMatch) so rows match the badge.
   if (filters.convertedEmployees === true || filters.convertedEmployees === 'true') {
     // Conversion is historical: include resigned employees (isActive=false) too.
     match.joiningDate = { $lte: new Date() };
-  }
-  if (filters.employeeStatus === 'active') {
-    match.joiningDate = { $lte: new Date() };
-    match.isActive = true;
-  } else if (filters.employeeStatus === 'resigned') {
-    match.joiningDate = { $lte: new Date() };
-    match.isActive = { $ne: true };
   }
   return match;
 }

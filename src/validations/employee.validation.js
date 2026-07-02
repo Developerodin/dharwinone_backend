@@ -628,7 +628,7 @@ const referralLeadsQueryKeys = {
   unassigned: Joi.boolean(),
   hiredOnly: Joi.boolean(),
   convertedEmployees: Joi.boolean(),
-  pendingReferrals: Joi.boolean(),
+  appliedOnly: Joi.boolean(),
   employeeStatus: Joi.string().valid('active', 'resigned').allow(''),
   candidateRoleOwnersOnly: Joi.boolean(),
 };

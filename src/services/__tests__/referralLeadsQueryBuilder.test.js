@@ -7,6 +7,11 @@ import {
   buildSalesAgentEnrichment,
   buildLifecycleStageProjection,
 } from '../referralLeadsQueryBuilder.js';
+import {
+  quickFilterEffectiveStatusMatch,
+  QUICK_HIRED_EFFECTIVE_STATUSES,
+  QUICK_APPLIED_EFFECTIVE_STATUSES,
+} from '../referralLeads.service.js';
 
 test('buildLeadMatchStage applies salesAgentUserId filter', () => {
   const id = new mongoose.Types.ObjectId();
@@ -19,9 +24,31 @@ test('buildLeadMatchStage handles unassigned=true', () => {
   assert.equal(match.currentSalesAgentUserId, null);
 });
 
-test('applyNewFilters handles hiredOnly', () => {
+test('applyNewFilters no longer maps hiredOnly to raw referralPipelineStatus', () => {
   const match = applyNewFilters({ hiredOnly: true });
-  assert.deepEqual(match.referralPipelineStatus, { $in: ['hired', 'joined', 'employee'] });
+  assert.equal(match.referralPipelineStatus, undefined);
+});
+
+test('quickFilterEffectiveStatusMatch handles hiredOnly on effectiveStatus', () => {
+  const stages = quickFilterEffectiveStatusMatch({ hiredOnly: true });
+  assert.deepEqual(stages[0].$match.effectiveStatus.$in, QUICK_HIRED_EFFECTIVE_STATUSES);
+  assert.deepEqual(stages[0].$match.effectiveStatus.$in, ['hired']);
+});
+
+test('quickFilterEffectiveStatusMatch handles appliedOnly on effectiveStatus', () => {
+  const stages = quickFilterEffectiveStatusMatch({ appliedOnly: true });
+  assert.deepEqual(stages[0].$match.effectiveStatus.$in, QUICK_APPLIED_EFFECTIVE_STATUSES);
+  assert.deepEqual(stages[0].$match.effectiveStatus.$in, ['applied']);
+});
+
+test('quickFilterEffectiveStatusMatch handles employeeStatus=active', () => {
+  const stages = quickFilterEffectiveStatusMatch({ employeeStatus: 'active' });
+  assert.equal(stages[0].$match.effectiveStatus, 'employee');
+});
+
+test('quickFilterEffectiveStatusMatch handles employeeStatus=resigned', () => {
+  const stages = quickFilterEffectiveStatusMatch({ employeeStatus: 'resigned' });
+  assert.equal(stages[0].$match.effectiveStatus, 'resigned');
 });
 
 test('buildSalesAgentEnrichment $lookup attaches current attribution', () => {
@@ -50,14 +77,7 @@ test('employeeConverted stays true regardless of isActive (historical fact)', ()
   assert.equal(JSON.stringify(cond).includes('isActive'), false);
 });
 
-test('applyNewFilters employeeStatus=active matches active joined employees', () => {
-  const match = applyNewFilters({ employeeStatus: 'active' });
-  assert.equal(match.isActive, true);
-  assert.ok(match.joiningDate.$lte instanceof Date);
-});
-
-test('applyNewFilters employeeStatus=resigned matches inactive joined employees', () => {
-  const match = applyNewFilters({ employeeStatus: 'resigned' });
-  assert.deepEqual(match.isActive, { $ne: true });
+test('applyNewFilters supports convertedEmployees filter', () => {
+  const match = applyNewFilters({ convertedEmployees: true });
   assert.ok(match.joiningDate.$lte instanceof Date);
 });
