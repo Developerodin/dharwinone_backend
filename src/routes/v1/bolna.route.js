@@ -75,6 +75,10 @@ router
   .get(auth(), requirePermissions('calls.view'), bolnaController.streamPlivoRecording);
 
 router
+  .route('/call-records/:executionId/recordings/twilio')
+  .get(auth(), requirePermissions('calls.view'), bolnaController.streamTwilioRecording);
+
+router
   .route('/call-records/:id')
   .patch(auth(), requirePermissions('calls.edit'), validate(bolnaValidation.patchCallRecord), bolnaController.patchCallRecord)
   .delete(auth(), requirePermissions('calls.delete'), validate(bolnaValidation.deleteCallRecord), bolnaController.deleteCallRecord);

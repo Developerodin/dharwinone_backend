@@ -91,7 +91,12 @@ export async function resolveCallRecordingSources(executionId) {
     if (r.success) plivo = (r.recordings || []).filter((x) => x.recordingUrl);
   }
 
-  return { bolnaUrl, providerCallId, plivo, provider, execError };
+  // Twilio browser/bridge dialer calls: the recording webhook mirrors the media to
+  // S3 and stores the live Twilio URL on recordingArchive.twilio. Bolna/Plivo lookups
+  // never find it (a Twilio CallSid is not a Bolna execution), so surface it directly.
+  const twilioUrl = stored?.recordingArchive?.twilio?.sourceUrl || null;
+
+  return { bolnaUrl, providerCallId, plivo, provider, execError, twilioUrl };
 }
 
 /** Download a remote (auth-protected) recording into a Buffer. */
@@ -411,6 +416,7 @@ export async function getArchivePresence(executionId) {
   return {
     bolna: Boolean(rec?.recordingArchive?.bolna?.key),
     plivo: Boolean(rec?.recordingArchive?.plivo?.key),
+    twilio: Boolean(rec?.recordingArchive?.twilio?.key),
   };
 }
 

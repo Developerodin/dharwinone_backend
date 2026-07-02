@@ -474,7 +474,7 @@ const setupCandidateVerificationExtractions = catchAsync(async (req, res) => {
 const getCallRecordingSources = catchAsync(async (req, res) => {
   const { executionId } = req.params;
   await assertCanAccessCall(req, executionId);
-  const { bolnaUrl, providerCallId, plivo, provider, execError } = await resolveCallRecordingSources(executionId);
+  const { bolnaUrl, providerCallId, plivo, provider, execError, twilioUrl } = await resolveCallRecordingSources(executionId);
   const base = `/v1/bolna/call-records/${encodeURIComponent(executionId)}/recordings`;
   // A saved S3 copy keeps a recording reviewable even after the live source expires.
   const archived = await getArchivePresence(executionId);
@@ -504,6 +504,10 @@ const getCallRecordingSources = catchAsync(async (req, res) => {
               available: false,
               reason: providerCallId ? 'no recording found on Plivo' : 'no provider_call_id on call',
             },
+      twilio:
+        twilioUrl || archived.twilio
+          ? { available: true, channel: 'dual', streamUrl: `${base}/twilio`, archived: archived.twilio }
+          : { available: false, reason: 'no Twilio recording on call' },
     },
   });
 });
@@ -547,6 +551,21 @@ const streamPlivoRecording = catchAsync(async (req, res) => {
   const archivedUrl = await getArchivedPlaybackUrlByExecution(executionId, 'plivo');
   if (archivedUrl) return res.redirect(archivedUrl);
   throw new ApiError(httpStatus.NOT_FOUND, 'No Plivo recording for this call');
+});
+
+/** GET /bolna/call-records/:executionId/recordings/twilio — browser/bridge dialer audio (Twilio). */
+const streamTwilioRecording = catchAsync(async (req, res) => {
+  const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
+  const { twilioUrl } = await resolveCallRecordingSources(executionId);
+  if (twilioUrl) {
+    await streamRemoteAudio(res, twilioUrl, headersForRecordingUrl(twilioUrl), 'audio/mpeg', `${executionId}-twilio.mp3`);
+    return;
+  }
+  // Live Twilio media expires (~13 months) — fall back to the durable S3 mirror.
+  const archivedUrl = await getArchivedPlaybackUrlByExecution(executionId, 'twilio');
+  if (archivedUrl) return res.redirect(archivedUrl);
+  throw new ApiError(httpStatus.NOT_FOUND, 'No Twilio recording for this call');
 });
 
 /**
@@ -662,6 +681,7 @@ export {
   getCallRecordingSources,
   streamBolnaRecording,
   streamPlivoRecording,
+  streamTwilioRecording,
   receiveWebhook,
   receiveCandidateWebhook,
   syncMissingCallRecords,

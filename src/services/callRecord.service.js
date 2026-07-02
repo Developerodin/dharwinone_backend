@@ -1105,7 +1105,7 @@ async function userCanAccessCallRecord(record, { userId, isAdmin } = {}) {
 /** Load persisted recording fields for an execution (webhook may have these before Bolna API catches up). */
 async function getCallRecordingFields(executionId) {
   return CallRecord.findOne({ executionId: String(executionId) })
-    .select('recordingUrl telephonyData')
+    .select('recordingUrl telephonyData recordingArchive')
     .lean();
 }
 
