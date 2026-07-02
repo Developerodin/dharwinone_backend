@@ -22,12 +22,14 @@ import { registerStudent as registerStudentService } from '../services/student.s
 import { registerMentor as registerMentorService } from '../services/mentor.service.js';
 import {
   createCandidate,
+  ensureCandidateProfileForUser,
   getCandidateByOwnerForMe,
   getResignStatusByOwnerId,
   updateUserAndCandidateForMe,
   applyInitialCandidateProfileFromAdmin,
 } from '../services/employee.service.js';
 import { getFeatureFlag } from '../utils/featureFlags.js';
+import { classifyInviteRegistration } from '../utils/inviteRegistration.util.js';
 import { FEATURE_FLAG_NAME } from '../constants/salesAgentAttribution.js';
 import {
   extractSkillsFromResumeBuffer,
@@ -126,9 +128,45 @@ const register = catchAsync(async (req, res) => {
     if (!candidateRole) {
       throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Candidate role not found. Please contact administrator.');
     }
-    const { name, email, password } = req.body;
+    const { name, password } = req.body;
+    const email = String(req.body.email || '').toLowerCase().trim();
     const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
     const cc = countryCode && String(countryCode).trim().toUpperCase();
+
+    const existingUser = await getUserByEmail(email);
+    const registrationKind = classifyInviteRegistration(existingUser);
+    if (registrationKind !== 'new') {
+      // Staff/internal accounts never resume through the public invite form (no password overwrite).
+      if (registrationKind === 'conflict' || (await userIsStaffForVerifyEmail(existingUser))) {
+        throw new ApiError(httpStatus.CONFLICT, 'An account with this email already exists. Please log in.', true, '', {
+          errorCode: 'ACCOUNT_EXISTS',
+        });
+      }
+      // Unfinished signup (pending + unverified): let them resume instead of dead-ending at login.
+      // Email ownership is unproven for the earlier attempt too, so accepting the latest submitted
+      // details/password is safe — activation still requires clicking the verification link.
+      existingUser.name = name;
+      existingUser.password = password;
+      if (phone !== '0000000000') existingUser.phoneNumber = phone;
+      if (cc) existingUser.countryCode = cc;
+      if (!existingUser.registrationSource) existingUser.registrationSource = 'public_candidate';
+      await existingUser.save();
+      await User.findByIdAndUpdate(existingUser._id, { $addToSet: { roleIds: candidateRole._id } });
+      await ensureCandidateProfileForUser(existingUser._id);
+      const resumeVerifyToken = await generateVerifyEmailToken(existingUser);
+      await sendVerificationEmail2(existingUser.email, resumeVerifyToken, {
+        req,
+        recipientName: existingUser.name || 'there',
+        accountContext: 'new candidate account',
+      });
+      res.status(httpStatus.OK).send({
+        user: existingUser,
+        resent: true,
+        message:
+          'You already started registration with this email. We re-sent the verification link — verify your address to finish signing up.',
+      });
+      return;
+    }
 
     const user = await createUser({
       name,
@@ -141,15 +179,22 @@ const register = catchAsync(async (req, res) => {
       ...(phone && phone !== '0000000000' && { phoneNumber: phone }),
       ...(cc && { countryCode: cc }),
     });
-    const completionPercentage = 30;
-    const candidate = await createCandidate(user._id, {
-      fullName: user.name,
-      email: user.email,
-      phoneNumber: phone,
-      ...(cc && { countryCode: cc }),
-      adminId,
-      isProfileCompleted: completionPercentage,
-    });
+    // createUser already created (or email-re-linked) the Candidate profile via its
+    // ensureCandidateProfileForUser role hook. Calling createCandidate here would find that
+    // row and throw a false "Candidate with email already exists" CONFLICT — reuse it instead.
+    const candidate = await ensureCandidateProfileForUser(user._id);
+    if (!candidate) {
+      // Hard delete (not soft) so the email is not permanently blocked by an orphan pending user.
+      await User.findByIdAndDelete(user._id).catch(() => {});
+      throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Could not create your profile. Please try again.');
+    }
+    candidate.adminId = adminId;
+    if (phone !== '0000000000' && (!candidate.phoneNumber || candidate.phoneNumber === '0000000000')) {
+      candidate.phoneNumber = phone;
+    }
+    if (cc && !candidate.countryCode) candidate.countryCode = cc;
+    if ((candidate.isProfileCompleted || 0) < 30) candidate.isProfileCompleted = 30;
+    await candidate.save();
     const inviterRef = await applyOnboardInviteReferral(candidate._id, user.email, adminId);
     if (inviterRef.applied) {
       try {
