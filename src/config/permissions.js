@@ -271,6 +271,14 @@ export const permissionAliases = {
     'communication.calling:view,create,edit,delete',
   ],
   // Granular call sub-features (separate role toggles under Communication)
+  // Listening to / fetching call recordings — the Recording role toggle's view action.
+  'call-recording.view': [
+    'call-recording.view',
+    'call-recording.read',
+    'call-recording.manage',
+    'communication.call-recording:view',
+    'communication.call-recording:view,create,edit,delete',
+  ],
   'call-recording.manage': [
     'call-recording.manage',
     'call-recording.create',

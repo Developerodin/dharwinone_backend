@@ -613,7 +613,10 @@ function isIntelligenceConfigured() {
 }
 
 function intelligenceWebhookUrl() {
-  return buildWebhookUrl('/webhooks/twilio-intelligence');
+  // Configure this URL as the Intelligence Service's webhook in the Twilio
+  // console (Intelligence → Services → webhook_url) — transcript creation does
+  // not accept a per-transcript callback.
+  return buildWebhookUrl('/public/twilio/intelligence');
 }
 
 /**
@@ -696,8 +699,11 @@ async function fetchTranscriptResults(transcriptSid) {
   if (!head.success) return head;
 
   const status = head.data?.status || 'unknown';
+  // customer_key carries our CallSid (set at creation) — lets the webhook map
+  // the transcript back to its CallRecord without a Recording→Call lookup.
+  const customerKey = head.data?.customerKey || head.data?.customer_key || '';
   if (status !== 'completed') {
-    return { success: true, status, summary: '', transcript: '', pending: status !== 'failed' };
+    return { success: true, status, customerKey, summary: '', transcript: '', pending: status !== 'failed' };
   }
 
   const [opResult, sentenceResult] = await Promise.all([
@@ -712,7 +718,7 @@ async function fetchTranscriptResults(transcriptSid) {
   const summary = opResult.success ? extractSummaryText(opResult.data || []) : '';
   const transcript = sentenceResult.success ? buildTranscriptText(sentenceResult.data || []) : '';
 
-  return { success: true, status, summary, transcript, pending: false };
+  return { success: true, status, customerKey, summary, transcript, pending: false };
 }
 
 /* --------------------------------------------------------------------------

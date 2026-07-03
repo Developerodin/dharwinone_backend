@@ -22,6 +22,15 @@ import { isTerminal } from '../models/callRecord.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhonePlausible, isPlaceholderPhone } from '../utils/phone.js';
+import { authHasPermission, sanitizeCallRecord, sanitizeCallRecords } from '../utils/callRecordAccess.util.js';
+
+/** Field-level access flags for the Call Transcripts / Call AI role toggles. */
+function callRecordAccessFlags(req) {
+  return {
+    canViewTranscripts: authHasPermission(req, 'call-transcripts.read'),
+    canViewAi: authHasPermission(req, 'call-ai.read'),
+  };
+}
 
 const initiateCall = catchAsync(async (req, res) => {
   const body = req.body;
@@ -286,7 +295,7 @@ const getCallRecords = catchAsync(async (req, res) => {
   const data = await callRecordService.listCallRecords(options);
   res.status(httpStatus.OK).send({
     success: true,
-    records: data.results,
+    records: sanitizeCallRecords(data.results, callRecordAccessFlags(req)),
     total: data.total,
     totalPages: data.totalPages,
     page: data.page,
@@ -331,7 +340,7 @@ const patchCallRecord = catchAsync(async (req, res) => {
   if (!record) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
   }
-  res.status(httpStatus.OK).send({ success: true, record });
+  res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
 });
 
 async function sendPostCallEmailAndNotification(record, application) {
@@ -452,7 +461,7 @@ const refreshCallRecord = catchAsync(async (req, res) => {
     setErrorMessage: true,
   });
   if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
-  res.status(httpStatus.OK).send({ success: true, record });
+  res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
 });
 
 /**

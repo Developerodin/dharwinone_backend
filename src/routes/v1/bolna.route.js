@@ -62,21 +62,23 @@ router
 
 // Both recordings for a call: Bolna (agent-only) + Plivo (full dual-channel).
 // Metadata first, then proxied audio streams (provider URLs need Bolna/Plivo auth).
+// Listening requires the Call Recording role toggle (view) on top of Calling view —
+// the Recording toggle governs who can hear audio, not just who can toggle recording.
 router
   .route('/call-records/:executionId/recordings')
-  .get(auth(), requirePermissions('calls.view'), bolnaController.getCallRecordingSources);
+  .get(auth(), requirePermissions('calls.view', 'call-recording.view'), bolnaController.getCallRecordingSources);
 
 router
   .route('/call-records/:executionId/recordings/bolna')
-  .get(auth(), requirePermissions('calls.view'), bolnaController.streamBolnaRecording);
+  .get(auth(), requirePermissions('calls.view', 'call-recording.view'), bolnaController.streamBolnaRecording);
 
 router
   .route('/call-records/:executionId/recordings/plivo')
-  .get(auth(), requirePermissions('calls.view'), bolnaController.streamPlivoRecording);
+  .get(auth(), requirePermissions('calls.view', 'call-recording.view'), bolnaController.streamPlivoRecording);
 
 router
   .route('/call-records/:executionId/recordings/twilio')
-  .get(auth(), requirePermissions('calls.view'), bolnaController.streamTwilioRecording);
+  .get(auth(), requirePermissions('calls.view', 'call-recording.view'), bolnaController.streamTwilioRecording);
 
 router
   .route('/call-records/:id')
