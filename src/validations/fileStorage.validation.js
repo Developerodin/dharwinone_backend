@@ -16,6 +16,8 @@ const list = {
       .messages({ 'string.pattern.invert.base': '"prefix" must not contain path traversal sequences' }),
     next: Joi.string().max(MAX_NEXT_LEN).allow('').optional(),
     maxKeys: Joi.number().integer().min(1).max(1000).optional(),
+    // Free-text filter on file/folder names. Not used as a path, so no traversal check needed.
+    search: Joi.string().max(200).allow('').optional(),
   }),
 };
 

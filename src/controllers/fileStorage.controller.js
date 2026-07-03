@@ -19,8 +19,8 @@ const list = catchAsync(async (req, res) => {
   if (!userId) {
     throw new ApiError(httpStatus.UNAUTHORIZED, 'User information missing');
   }
-  const { prefix, next: nextToken, maxKeys } = req.query;
-  const result = await fileStorageService.listObjects(userId, prefix || '', { next: nextToken, maxKeys });
+  const { prefix, next: nextToken, maxKeys, search } = req.query;
+  const result = await fileStorageService.listObjects(userId, prefix || '', { next: nextToken, maxKeys, search });
   res.status(httpStatus.OK).send({
     success: true,
     data: {

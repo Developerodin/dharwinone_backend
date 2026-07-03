@@ -173,6 +173,73 @@ const normalizeFolderPath = (folderPath) => {
   return segments.length ? `${segments.join('/')}/` : '';
 };
 
+// ponytail: S3 has no name search, so we scan and filter in memory. Bounded to
+// SEARCH_SCAN_CAP objects; if a user's tree grows past this, move to a DB/search index.
+const SEARCH_SCAN_CAP = 5000;
+
+/**
+ * Recursively scan under fullPrefix and return files/folders whose leaf name
+ * contains `term` (case-insensitive). No pagination token — isTruncated flags
+ * that the scan cap or S3 page limit was hit and more may exist.
+ */
+const searchObjects = async (bucket, fullPrefix, term, options = {}) => {
+  const needle = term.toLowerCase();
+  const maxResults = Math.min(Number(options.maxKeys) || DEFAULT_MAX_KEYS, 1000);
+  const files = [];
+  const folderMap = new Map();
+  let scanned = 0;
+  let truncated = false;
+  let token;
+
+  do {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await s3Client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: fullPrefix, MaxKeys: 1000, ContinuationToken: token })
+    );
+
+    for (const obj of response.Contents || []) {
+      scanned += 1;
+      const key = obj.Key || '';
+      const rel = key.slice(fullPrefix.length);
+      const segments = rel.split('/');
+      const isFolderPlaceholder = key.endsWith('/');
+      const leaf = segments[segments.length - 1];
+
+      if (!isFolderPlaceholder && leaf && leaf.toLowerCase().includes(needle) && files.length < maxResults) {
+        files.push({
+          key,
+          name: leaf,
+          size: obj.Size ?? 0,
+          lastModified: obj.LastModified ? obj.LastModified.toISOString() : null,
+        });
+      }
+
+      // Match on any ancestor folder segment; dedup by full prefix.
+      let acc = fullPrefix;
+      for (const seg of segments.slice(0, -1)) {
+        if (!seg) continue;
+        acc += `${seg}/`;
+        if (seg.toLowerCase().includes(needle) && !folderMap.has(acc)) {
+          folderMap.set(acc, { name: seg, prefix: acc });
+        }
+      }
+    }
+
+    token = response.NextContinuationToken;
+    if (files.length >= maxResults || scanned >= SEARCH_SCAN_CAP) {
+      truncated = truncated || !!token || response.IsTruncated === true;
+      break;
+    }
+  } while (token);
+
+  return {
+    folders: [...folderMap.values()],
+    files,
+    nextContinuationToken: null,
+    isTruncated: truncated,
+  };
+};
+
 /**
  * List objects (folders and files) under file-storage/{userId}/ with optional prefix.
  */
@@ -185,6 +252,12 @@ const listObjects = async (userId, prefix = '', options = {}) => {
   const base = userPrefix(userId);
   const pathPrefix = normalizeFolderPath(prefix);
   const fullPrefix = `${base}${pathPrefix}`;
+
+  const term = typeof options.search === 'string' ? options.search.trim() : '';
+  if (term) {
+    return searchObjects(bucket, fullPrefix, term, options);
+  }
+
   const maxKeys = Math.min(Number(options.maxKeys) || DEFAULT_MAX_KEYS, 1000);
   const continuationToken = options.next || undefined;
 
