@@ -45,3 +45,37 @@ export function assertOwner(contact, userId) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Not allowed');
   }
 }
+
+/** Fields on CallRecord that hold the dialed/answering phone number (raw strings). */
+export const CALL_PHONE_FIELDS = ['toPhoneNumber', 'recipientPhoneNumber', 'phone', 'fromPhoneNumber'];
+
+/**
+ * Trailing-≤10-digit match keys for a contact's phones. Numbers with fewer than
+ * 7 digits are skipped — too short to identify a line, and they would over-match.
+ */
+export function callPhoneKeys(phones) {
+  if (!Array.isArray(phones)) return [];
+  const keys = new Set();
+  for (const p of phones) {
+    const digits = String(p?.normalizedNumber ?? p?.number ?? '').replace(/\D/g, '');
+    if (digits.length < 7) continue;
+    keys.add(digits.slice(-10));
+  }
+  return [...keys];
+}
+
+/**
+ * Mongo filter matching any CallRecord whose to/from/recipient/phone field ends
+ * with one of `keys`. Keys are pure digits, so `new RegExp(key + '$')` carries no
+ * user-controlled metacharacters (ReDoS-safe). Returns null when there is nothing
+ * to match, so callers can short-circuit.
+ */
+export function buildCallPhoneFilter(keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return null;
+  const or = [];
+  for (const key of keys) {
+    const re = new RegExp(`${key}$`);
+    for (const field of CALL_PHONE_FIELDS) or.push({ [field]: re });
+  }
+  return { $or: or };
+}

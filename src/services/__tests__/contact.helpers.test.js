@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePhones, buildContactFilter, pickSuggestedLink, assertOwner } from '../contact.helpers.js';
+import {
+  normalizePhones,
+  buildContactFilter,
+  pickSuggestedLink,
+  assertOwner,
+  callPhoneKeys,
+  buildCallPhoneFilter,
+} from '../contact.helpers.js';
 
 test('normalizePhones: digits-only + single primary (first flagged wins)', () => {
   const out = normalizePhones([
@@ -58,4 +65,40 @@ test('assertOwner: 404 missing, 403 wrong owner, ok when match', () => {
   assert.throws(() => assertOwner(null, 'u1'), /not found/i);
   assert.throws(() => assertOwner({ ownerId: 'other' }, 'u1'), /allowed|forbidden|permission/i);
   assert.doesNotThrow(() => assertOwner({ ownerId: 'u1' }, 'u1'));
+});
+
+test('callPhoneKeys: trailing 10 digits, dedups, skips <7-digit numbers', () => {
+  const keys = callPhoneKeys([
+    { number: '+91 98765-43210' },        // 919876543210 -> last10 9876543210
+    { number: '098765 43210' },           // 09876543210  -> last10 9876543210 (dup)
+    { normalizedNumber: '2212345678' },   // 2212345678
+    { number: '12345' },                  // 5 digits -> skipped
+  ]);
+  assert.deepEqual([...keys].sort(), ['2212345678', '9876543210']);
+});
+
+test('callPhoneKeys: empty / all-short input -> []', () => {
+  assert.deepEqual(callPhoneKeys([]), []);
+  assert.deepEqual(callPhoneKeys([{ number: '123' }]), []);
+  assert.deepEqual(callPhoneKeys(undefined), []);
+});
+
+test('buildCallPhoneFilter: builds $or over 4 fields with anchored digit regex', () => {
+  const f = buildCallPhoneFilter(['9876543210']);
+  assert.equal(f.$or.length, 4);
+  const fields = f.$or.map((c) => Object.keys(c)[0]).sort();
+  assert.deepEqual(fields, ['fromPhoneNumber', 'phone', 'recipientPhoneNumber', 'toPhoneNumber']);
+  const re = f.$or.find((c) => c.toPhoneNumber).toPhoneNumber;
+  assert.ok(re instanceof RegExp && re.source === '9876543210$');
+  assert.ok(re.test('919876543210'));    // suffix match
+  assert.ok(!re.test('98765432109'));    // not a suffix
+});
+
+test('buildCallPhoneFilter: no keys -> null', () => {
+  assert.equal(buildCallPhoneFilter([]), null);
+});
+
+test('buildCallPhoneFilter: distinct 10-digit keys do not collide', () => {
+  const f = buildCallPhoneFilter(['9876543210', '9000000210']);
+  assert.equal(f.$or.length, 8); // 4 fields x 2 keys
 });
