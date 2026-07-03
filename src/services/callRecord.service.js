@@ -297,6 +297,25 @@ async function createFromWebhook(payload) {
   return record;
 }
 
+/**
+ * Records a non-admin may see: calls they placed (createdBy), calls on jobs they
+ * created, or calls on candidates they own. Shared by listCallRecords and the
+ * per-contact reverse lookup so scoping stays in one place.
+ */
+export async function nonAdminCallScope(userId) {
+  const [jobIds, candidateIds] = await Promise.all([
+    Job.distinct('_id', { createdBy: userId }),
+    Employee.distinct('_id', { owner: userId }),
+  ]);
+  return {
+    $or: [
+      { job: { $in: jobIds } },
+      { candidate: { $in: candidateIds } },
+      { createdBy: userId },
+    ],
+  };
+}
+
 async function listCallRecords(options = {}) {
   const limit = Math.min(Number(options.limit) || 25, 500);
   const page = Number(options.page) || 1;
@@ -332,19 +351,9 @@ async function listCallRecords(options = {}) {
     // Forced even for admins — the dialer shows your own calls, not the whole tenant's.
     andConditions.push({ createdBy: options.userId, candidate: null, job: null });
   } else if (!options.isAdmin && options.userId) {
-    const [jobIds, candidateIds] = await Promise.all([
-      Job.distinct('_id', { createdBy: options.userId }),
-      Employee.distinct('_id', { owner: options.userId }),
-    ]);
-    andConditions.push({
-      $or: [
-        { job: { $in: jobIds } },
-        { candidate: { $in: candidateIds } },
-        // Dialer (Twilio) calls have no job/candidate link — scope by initiator
-        // so the agent who placed the call sees it in their records.
-        { createdBy: options.userId },
-      ],
-    });
+    // Dialer (Twilio) calls have no job/candidate link — nonAdminCallScope also
+    // matches createdBy so the agent who placed the call sees it in their records.
+    andConditions.push(await nonAdminCallScope(options.userId));
   }
 
   const filter = andConditions.length === 0 ? {} : andConditions.length === 1 ? andConditions[0] : { $and: andConditions };

@@ -16,4 +16,7 @@ router.route('/:contactId')
   .patch(auth(), requirePermissions('contacts.edit'), validate(v.updateContact), ctrl.update)
   .delete(auth(), requirePermissions('contacts.delete'), validate(v.deleteContact), ctrl.remove);
 
+router.route('/:contactId/calls')
+  .get(auth(), requirePermissions('contacts.view'), validate(v.getContact), ctrl.getCalls);
+
 export default router;

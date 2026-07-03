@@ -1,7 +1,16 @@
 import Contact from '../models/contact.model.js';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
-import { normalizePhones, buildContactFilter, pickSuggestedLink, assertOwner } from './contact.helpers.js';
+import CallRecord from '../models/callRecord.model.js';
+import { nonAdminCallScope } from './callRecord.service.js';
+import {
+  normalizePhones,
+  buildContactFilter,
+  pickSuggestedLink,
+  assertOwner,
+  callPhoneKeys,
+  buildCallPhoneFilter,
+} from './contact.helpers.js';
 
 function tenantIdForUser(user) {
   return user?.tenantId || user?._id || user?.id;
@@ -62,4 +71,25 @@ export async function softDeleteContact(user, id) {
   contact.deletedAt = new Date();
   await contact.save();
   return contact;
+}
+
+/**
+ * Calls whose to/from number matches any of this contact's phone numbers.
+ * v1: phone-match only (no CallRecord.contact FK yet). Owner-scoped via
+ * getContactById; non-admins are further limited to their own/owned records.
+ * Returns lean docs; the controller strips transcript/AI fields by permission.
+ */
+export async function getContactCalls(user, contactId, { isAdmin } = {}) {
+  const contact = await getContactById(user, contactId); // 404/403 on miss/wrong owner
+  const phoneFilter = buildCallPhoneFilter(callPhoneKeys(contact.phones));
+  if (!phoneFilter) return { results: [] };
+
+  const and = [phoneFilter];
+  if (!isAdmin) and.push(await nonAdminCallScope(uid(user)));
+
+  const results = await CallRecord.find({ $and: and })
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .lean();
+  return { results };
 }
