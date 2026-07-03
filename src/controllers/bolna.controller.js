@@ -465,6 +465,20 @@ const refreshCallRecord = catchAsync(async (req, res) => {
 });
 
 /**
+ * GET /bolna/call-records/:executionId
+ * Lightweight single-record read (DB only, no upstream calls) — lets the dialer
+ * panel poll while Twilio Intelligence is still processing a summary/transcript.
+ */
+const getCallRecord = catchAsync(async (req, res) => {
+  const { executionId } = req.params;
+  await assertCanAccessCall(req, executionId);
+  const CallRecord = (await import('../models/callRecord.model.js')).default;
+  const record = await CallRecord.findOne({ executionId: String(executionId) }).lean();
+  if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
+  res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
+});
+
+/**
  * POST /bolna/candidate-agent/setup-extractions
  * Create the seven Candidate Verification dispositions on the Bolna candidate agent (idempotent).
  */
@@ -686,6 +700,7 @@ export {
   initiateCandidateCall,
   getCallStatus,
   getCallRecords,
+  getCallRecord,
   refreshCallRecord,
   getCallRecordingSources,
   streamBolnaRecording,

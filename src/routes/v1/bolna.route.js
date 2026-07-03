@@ -55,6 +55,12 @@ router
   .route('/call-records/sync')
   .post(auth(), requirePermissions('calls.create'), bolnaController.syncMissingCallRecords);
 
+// Single record read (DB only) — polled by the dialer panel while Twilio
+// Intelligence is processing. Transcript/AI fields are permission-stripped.
+router
+  .route('/call-records/:executionId')
+  .get(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallStatus), bolnaController.getCallRecord);
+
 // Refresh re-pulls AI extraction/verification for a record — Call AI Features toggle.
 router
   .route('/call-records/:executionId/refresh')

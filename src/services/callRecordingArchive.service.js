@@ -75,6 +75,21 @@ export async function resolveCallRecordingSources(executionId) {
   let provider = storedTel.provider || null;
   let execError = null;
 
+  // Twilio dialer calls: executionId is a Twilio CallSid, which Bolna/Plivo can
+  // never resolve — skip both remote lookups (pure latency + guaranteed upstream
+  // error) and answer from the stored record alone.
+  const isDialerCall = provider === 'twilio' || /^CA[0-9a-f]{32}$/i.test(String(executionId || ''));
+  if (isDialerCall) {
+    return {
+      bolnaUrl: null,
+      providerCallId: null,
+      plivo: [],
+      provider: provider || 'twilio',
+      execError: null,
+      twilioUrl: stored?.recordingArchive?.twilio?.sourceUrl || null,
+    };
+  }
+
   const exec = await bolnaService.getExecutionFull(executionId);
   if (exec.success && exec.details) {
     const tel = exec.details.telephony_data || {};
