@@ -67,6 +67,18 @@ function isTwilioDialerRecord(record) {
   return /^CA[a-f0-9]{32}$/i.test(String(record.executionId || ''));
 }
 
+/**
+ * Mongo filter for dialer-placed (Twilio browser) calls only. The contact
+ * "Recent calls" view uses this to exclude Bolna/Plivo verification calls and
+ * anything else on the master call-records page. Mirrors isTwilioDialerRecord.
+ */
+export const DIALER_CALL_FILTER = {
+  $or: [
+    { 'telephonyData.provider': 'twilio' },
+    { executionId: { $regex: '^CA[a-f0-9]{32}$', $options: 'i' } },
+  ],
+};
+
 const TWILIO_DEDUPE_BUCKET_MS = 2 * 60 * 1000;
 
 function twilioDialerGroupKey(record) {

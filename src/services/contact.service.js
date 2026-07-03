@@ -2,7 +2,7 @@ import Contact from '../models/contact.model.js';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import CallRecord from '../models/callRecord.model.js';
-import { nonAdminCallScope } from './callRecord.service.js';
+import { nonAdminCallScope, DIALER_CALL_FILTER } from './callRecord.service.js';
 import {
   normalizePhones,
   buildContactFilter,
@@ -84,7 +84,8 @@ export async function getContactCalls(user, contactId, { isAdmin } = {}) {
   const phoneFilter = buildCallPhoneFilter(callPhoneKeys(contact.phones));
   if (!phoneFilter) return { results: [] };
 
-  const and = [phoneFilter];
+  // Dialer-placed calls only — the master call-records page owns everything else.
+  const and = [phoneFilter, DIALER_CALL_FILTER];
   if (!isAdmin) and.push(await nonAdminCallScope(uid(user)));
 
   const results = await CallRecord.find({ $and: and })
