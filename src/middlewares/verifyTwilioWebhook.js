@@ -34,11 +34,13 @@ export function verifyTwilioWebhook(req, res, next) {
   }
 
   const url = buildPublicUrl(req);
-  // Twilio signs form-encoded webhooks over URL + sorted params, but JSON
-  // webhooks (e.g. Conversational Intelligence) over the URL alone.
+  // Twilio signs form-encoded webhooks over URL + sorted params. JSON webhooks
+  // (e.g. Conversational Intelligence) are signed over the URL, which carries a
+  // bodySHA256 query param binding the payload — validate both, never just the URL.
   const isJson = (req.get('content-type') || '').includes('application/json');
-  const params = !isJson && req.body && typeof req.body === 'object' ? req.body : {};
-  const valid = twilioService.validateSignature(signature, url, params);
+  const valid = isJson
+    ? twilioService.validateSignatureWithBody(signature, url, req.rawBody ? req.rawBody.toString('utf8') : '')
+    : twilioService.validateSignature(signature, url, req.body && typeof req.body === 'object' ? req.body : {});
 
   if (!valid) {
     logger.warn(`[Twilio] Webhook rejected: invalid signature for ${req.method} ${req.originalUrl}`);

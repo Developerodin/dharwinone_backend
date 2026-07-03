@@ -748,6 +748,25 @@ function validateSignature(signature, url, params = {}) {
   }
 }
 
+/**
+ * Validate a JSON webhook: signature over the URL (which carries a bodySHA256
+ * query param) plus a hash check of the raw body against that param. Fails
+ * closed when bodySHA256 is absent.
+ * @param {string} signature - X-Twilio-Signature header
+ * @param {string} url - the full public URL Twilio requested (incl. query)
+ * @param {string} rawBody - the unparsed request body
+ */
+function validateSignatureWithBody(signature, url, rawBody) {
+  const { authToken } = getConfig();
+  if (!authToken || !signature) return false;
+  try {
+    return twilio.validateRequestWithBody(authToken, signature, url, rawBody || '');
+  } catch (err) {
+    logger.warn(`[Twilio] Signature validation error: ${describeError(err)}`);
+    return false;
+  }
+}
+
 /* --------------------------------------------------------------------------
  * Bridge click-to-call + caller ID enforcement (ATS parity with Plivo)
  * ------------------------------------------------------------------------ */
@@ -972,6 +991,7 @@ export default {
   fetchTranscriptResults,
   shouldVerifyWebhooks,
   validateSignature,
+  validateSignatureWithBody,
   statusCallbackUrl,
   recordingCallbackUrl,
   getConfig,
