@@ -13,7 +13,7 @@ import { getGrantingPermissions } from '../config/permissions.js';
 export const TRANSCRIPT_FIELDS = ['transcript', 'conversationTranscript'];
 
 /** AI extraction/verification fields — gated by the Call AI Features toggle (call-ai.read). */
-export const AI_FIELDS = ['extractedData', 'verification', 'callQuality'];
+export const AI_FIELDS = ['extractedData', 'verification', 'callQuality', 'intelligence'];
 
 /**
  * Whether the authenticated request holds `required` (alias-resolved).

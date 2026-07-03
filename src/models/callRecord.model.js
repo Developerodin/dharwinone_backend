@@ -151,6 +151,18 @@ const callRecordSchema = mongoose.Schema(
       fieldsPresent: { type: Number, default: 0 },
       extractedAt: { type: Date, default: null },
     },
+    /**
+     * Twilio Conversational Intelligence results for dialer calls. Seeded by the
+     * recording webhook (transcriptSid), completed by the Intelligence webhook
+     * (summary + transcript text into the top-level `transcript` field).
+     */
+    intelligence: {
+      transcriptSid: { type: String, default: null, index: true },
+      status: { type: String, default: null },
+      summary: { type: String, default: null },
+      requestedAt: { type: Date, default: null },
+      completedAt: { type: Date, default: null },
+    },
     /** Derived call-quality flag — stops broken calls masquerading as completed. */
     callQuality: {
       status: { type: String, enum: ['ok', 'needs_review'], default: 'ok' },

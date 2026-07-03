@@ -16,6 +16,7 @@ const fullRecord = () => ({
   extractedData: { name: 'X' },
   verification: { verified: true },
   callQuality: { score: 9 },
+  intelligence: { transcriptSid: 'GT0', summary: 'ai summary' },
   notes: 'keep me',
 });
 

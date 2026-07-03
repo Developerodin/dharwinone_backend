@@ -189,8 +189,63 @@ const recordingWebhook = catchAsync(async (req, res) => {
       })
       .then(() => archiveTwilioRecording(callSid, recordingUrl))
       .catch((e) => logger.warn(`[Twilio] recording archive failed: ${e?.message}`));
+
+    // Kick off Conversational Intelligence on the finished recording. The
+    // Intelligence Service webhook (intelligenceWebhook) persists the results.
+    if (body.RecordingSid && twilioService.isIntelligenceConfigured()) {
+      twilioService
+        .createTranscript({ recordingSid: body.RecordingSid, callSid })
+        .then((r) => {
+          if (!r.success) {
+            logger.warn(`[Twilio] intelligence transcript create failed: ${r.error}`);
+            return null;
+          }
+          return callRecordService.updateCallRecordByExecutionId(callSid, {
+            'intelligence.transcriptSid': r.sid,
+            'intelligence.status': r.status || 'queued',
+            'intelligence.requestedAt': new Date(),
+          });
+        })
+        .catch((e) => logger.warn(`[Twilio] intelligence transcript create failed: ${e?.message}`));
+    }
   }
   return res.status(httpStatus.OK).json({ success: true });
 });
 
-export { outboundVoice, inboundVoice, bridgeAnswer, callStatusWebhook, recordingWebhook };
+/**
+ * POST /v1/public/twilio/intelligence — Intelligence Service webhook_url (JSON).
+ * Treats the payload as a ping: results are fetched from the Twilio API by
+ * transcriptSid, and the CallRecord is resolved via customerKey (our CallSid).
+ */
+const intelligenceWebhook = catchAsync(async (req, res) => {
+  const body = req.body || {};
+  const transcriptSid = String(body.transcript_sid || body.TranscriptSid || '').trim();
+  logger.info('[Twilio] intelligence webhook', { transcriptSid, event: body.event_type });
+  if (!/^GT[0-9a-f]{32}$/i.test(transcriptSid)) {
+    return res.status(httpStatus.OK).json({ success: true, ignored: true });
+  }
+
+  const results = await twilioService.fetchTranscriptResults(transcriptSid);
+  if (!results.success) {
+    // Non-2xx so Twilio retries transient API failures.
+    logger.warn(`[Twilio] intelligence fetch failed for ${transcriptSid}: ${results.error}`);
+    return res.status(httpStatus.BAD_GATEWAY).json({ success: false });
+  }
+
+  const executionId = String(results.customerKey || '').trim();
+  if (!executionId) {
+    logger.warn(`[Twilio] intelligence transcript ${transcriptSid} has no customerKey — cannot map to a call`);
+    return res.status(httpStatus.OK).json({ success: true, ignored: true });
+  }
+
+  const update = { 'intelligence.status': results.status };
+  if (results.status === 'completed') {
+    update['intelligence.summary'] = results.summary || null;
+    update['intelligence.completedAt'] = new Date();
+    if (results.transcript) update.transcript = results.transcript;
+  }
+  await callRecordService.updateCallRecordByExecutionId(executionId, update);
+  return res.status(httpStatus.OK).json({ success: true });
+});
+
+export { outboundVoice, inboundVoice, bridgeAnswer, callStatusWebhook, recordingWebhook, intelligenceWebhook };

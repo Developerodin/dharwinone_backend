@@ -204,5 +204,7 @@ router.post('/twilio/voice/inbound', verifyTwilioWebhook, twilioVoiceController.
 router.post('/twilio/bridge-answer', verifyTwilioWebhook, twilioVoiceController.bridgeAnswer);
 router.post('/twilio/call-status', verifyTwilioWebhook, twilioVoiceController.callStatusWebhook);
 router.post('/twilio/recording', verifyTwilioWebhook, twilioVoiceController.recordingWebhook);
+// Conversational Intelligence Service webhook_url (JSON payload; signed over URL only).
+router.post('/twilio/intelligence', verifyTwilioWebhook, twilioVoiceController.intelligenceWebhook);
 
 export default router;
