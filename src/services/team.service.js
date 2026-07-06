@@ -280,7 +280,22 @@ const createTeamMember = async (createdById, payload) => {
 const queryTeamMembers = async (filter, options) => {
   if (filter.search) {
     const searchRegex = new RegExp(whitespaceTolerantRegexSource(filter.search), 'i');
+    // name/email/position on TeamMember are DEPRECATED (A1-dropped) — empty on all
+    // migrated/new rows. Live data lives on the linked Employee, so resolve matching
+    // employeeIds first; orphan rows fall back to their own legacyName/legacyEmail.
+    const matchedEmployeeIds = await Employee.find({
+      $or: [
+        { fullName: searchRegex },
+        { email: searchRegex },
+        { companyAssignedEmail: searchRegex },
+        { designation: searchRegex },
+      ],
+    }).distinct('_id');
     filter.$or = [
+      { employeeId: { $in: matchedEmployeeIds } },
+      { legacyName: searchRegex },
+      { legacyEmail: searchRegex },
+      // Legacy denormalized fields (still populated on un-migrated rows only).
       { name: searchRegex },
       { email: searchRegex },
       { position: searchRegex },

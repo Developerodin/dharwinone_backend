@@ -842,7 +842,9 @@ export async function listMessages(account, { labelId, pageToken, pageSize = 20,
           .top(top)
           .select('id,conversationId,subject,bodyPreview,from,toRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments');
         if (query && String(query).trim()) {
-          request = request.search(`"${String(query).trim().replace(/"/g, '')}"`);
+          // Escape inner quotes (\") so KQL phrase syntax survives, e.g. from:"john doe".
+        // Stripping them collapsed phrases to first-word + free-text.
+        request = request.search(`"${String(query).trim().replace(/"/g, '\\"')}"`);
         } else if (folderId) {
           request = request.orderby('receivedDateTime desc');
         }
@@ -892,7 +894,9 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
         .top(Math.min(top * 2, 100))
         .select('id,conversationId,subject,bodyPreview,from,toRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments');
       if (query && String(query).trim()) {
-        request = request.search(`"${String(query).trim().replace(/"/g, '')}"`);
+        // Escape inner quotes (\") so KQL phrase syntax survives, e.g. from:"john doe".
+        // Stripping them collapsed phrases to first-word + free-text.
+        request = request.search(`"${String(query).trim().replace(/"/g, '\\"')}"`);
       } else if (folderId) {
         request = request.orderby('receivedDateTime desc');
       }
