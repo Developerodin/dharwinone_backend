@@ -11,6 +11,7 @@ import { hasApiPermission } from '../utils/permissionCheck.js';
 import { reserveTaskSeqRange, formatTaskCode } from './pmTaskCode.js';
 import Employee from '../models/employee.model.js';
 import { resignBucket } from '../utils/resignBucket.js';
+import { refreshTasksAssigneesProfilePictures } from '../utils/profilePicture.util.js';
 
 const TASK_LIST_LIMIT_MAX = 200;
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -360,6 +361,7 @@ const queryTasks = async (filter, options) => {
 
   const totalPages = Math.ceil(totalResults / limit);
   const enriched = await enrichWithOffboarding(results, new Date());
+  await refreshTasksAssigneesProfilePictures(enriched);
   return { results: enriched, page, limit, totalPages, totalResults, leavingTotal };
 };
 
@@ -373,6 +375,7 @@ const getTaskById = async (id) => {
     { path: 'sprintId', select: 'name status' },
     { path: 'comments.commentedBy', select: 'name email' },
   ]);
+  await refreshTasksAssigneesProfilePictures([task]);
   return task;
 };
 

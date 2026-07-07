@@ -11,10 +11,13 @@ import { buildSpecialistTaskSlugOrConditions } from '../constants/candidateProje
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { isKanbanViewOnlyScope } from '../utils/kanbanScope.js';
 import { hasApiPermission } from '../utils/permissionCheck.js';
+import { refreshAssigneesProfilePicturesInPlace } from '../utils/profilePicture.util.js';
 import { assignUniqueProjectKey, isProjectKeyDuplicateError } from './pmTaskCode.js';
 
 /** Safe substring search — user input is literal, not a RegExp pattern. */
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const PROJECT_ASSIGNEE_SELECT = 'name email phoneNumber location profilePicture';
 
 const isOwnerOrAdmin = async (user, resource) => {
   if (!resource) return false;
@@ -69,9 +72,10 @@ const createProject = async (createdById, payload) => {
   }
   await project.populate([
     { path: 'createdBy', select: 'name email' },
-    { path: 'assignedTo', select: 'name email' },
+    { path: 'assignedTo', select: PROJECT_ASSIGNEE_SELECT },
     { path: 'assignedTeams', select: 'name' },
   ]);
+  await refreshAssigneesProfilePicturesInPlace(project.assignedTo);
   const assigneeIds = [...new Set((project.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
   if (assigneeIds.length) {
     const { notify } = await import('./notification.service.js');
@@ -178,9 +182,12 @@ const queryProjects = async (filter, options) => {
   if (result.results && result.results.length > 0) {
     await Project.populate(result.results, [
       { path: 'createdBy', select: 'name email' },
-      { path: 'assignedTo', select: 'name email' },
+      { path: 'assignedTo', select: PROJECT_ASSIGNEE_SELECT },
       { path: 'assignedTeams', select: 'name' },
     ]);
+    await Promise.all(
+      result.results.map((project) => refreshAssigneesProfilePicturesInPlace(project.assignedTo))
+    );
   }
 
   return result;
@@ -192,9 +199,10 @@ const getProjectById = async (id) => {
 
   await project.populate([
     { path: 'createdBy', select: 'name email' },
-    { path: 'assignedTo', select: 'name email' },
+    { path: 'assignedTo', select: PROJECT_ASSIGNEE_SELECT },
     { path: 'assignedTeams', select: 'name' },
   ]);
+  await refreshAssigneesProfilePicturesInPlace(project.assignedTo);
 
   return project;
 };
@@ -230,9 +238,10 @@ const updateProjectById = async (id, updateBody, currentUser) => {
 
   await project.populate([
     { path: 'createdBy', select: 'name email' },
-    { path: 'assignedTo', select: 'name email' },
+    { path: 'assignedTo', select: PROJECT_ASSIGNEE_SELECT },
     { path: 'assignedTeams', select: 'name' },
   ]);
+  await refreshAssigneesProfilePicturesInPlace(project.assignedTo);
 
   const newAssigneeIds = [...new Set((project.assignedTo || []).map((u) => String(u._id || u)).filter(Boolean))];
   const addedIds = newAssigneeIds.filter((uid) => !oldAssigneeIds.has(uid));

@@ -1,7 +1,10 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import TeamMember, { buildRoleSnapshot } from '../models/team.model.js';
 import TeamGroup from '../models/teamGroup.model.js';
 import Employee from '../models/employee.model.js';
+import Task from '../models/task.model.js';
+import Project from '../models/project.model.js';
 import { normalizeEmail } from '../utils/normalizeEmail.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
@@ -19,6 +22,9 @@ const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 const whitespaceTolerantRegexSource = (value) =>
   escapeRegex(String(value ?? '').trim().replace(/\s+/g, ' ')).replace(/ /g, '\\s+');
 const TEAM_LIST_LIMIT_MAX = 200;
+
+const TEAM_ROSTER_EMPLOYEE_SELECT =
+  'employeeId fullName email companyAssignedEmail isActive profilePicture department position designation owner';
 
 /** Legacy TeamMember fields the new API must reject (writers must use FK / legacy* fields). */
 export const DROPPED_TEAMMEMBER_FIELDS = [
@@ -89,6 +95,62 @@ const enrichTeamMembersWithCandidateProfilePictureUrls = async (members, { inclu
     const u = key ? urlByEmail.get(key) : undefined;
     if (u) obj.candidateProfilePictureUrl = u;
     return obj;
+  });
+};
+
+/**
+ * Attach tasksAssignedCount for each roster row (User.owner from linked Employee).
+ * When teamId is set, counts only tasks on projects assigned to that team.
+ * @param {Record<string, unknown>[]} members
+ * @param {{ teamId?: string }} [options]
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+export const enrichTeamMembersWithAssignedTaskCounts = async (members, { teamId } = {}) => {
+  if (!members?.length) return members || [];
+
+  const ownerIds = [];
+  const ownerByIndex = members.map((obj) => {
+    const emp = obj.employeeId;
+    const owner = emp && typeof emp === 'object' ? emp.owner : null;
+    const ownerId = owner ? String(owner._id || owner) : '';
+    if (ownerId) ownerIds.push(ownerId);
+    return ownerId;
+  });
+
+  const uniqueOwnerIds = [...new Set(ownerIds.filter(Boolean))];
+  if (!uniqueOwnerIds.length) {
+    return members.map((obj) => ({ ...obj, tasksAssignedCount: 0 }));
+  }
+
+  let projectScope = null;
+  if (teamId) {
+    projectScope = await Project.find({ assignedTeams: teamId }).distinct('_id');
+    if (!projectScope.length) {
+      return members.map((obj) => ({ ...obj, tasksAssignedCount: 0 }));
+    }
+  }
+
+  const ownerObjectIds = uniqueOwnerIds.map((id) => new mongoose.Types.ObjectId(id));
+  const matchStage = {
+    assignedTo: { $in: ownerObjectIds },
+    ...(projectScope ? { projectId: { $in: projectScope } } : {}),
+  };
+
+  const counts = await Task.aggregate([
+    { $match: matchStage },
+    { $unwind: '$assignedTo' },
+    { $match: { assignedTo: { $in: ownerObjectIds } } },
+    { $group: { _id: '$assignedTo', count: { $sum: 1 } } },
+  ]);
+
+  const countByOwner = new Map(counts.map((row) => [String(row._id), row.count]));
+
+  return members.map((obj, index) => {
+    const ownerId = ownerByIndex[index];
+    return {
+      ...obj,
+      tasksAssignedCount: ownerId ? countByOwner.get(ownerId) ?? 0 : 0,
+    };
   });
 };
 
@@ -166,7 +228,7 @@ export const createTeamMemberRow = async (createdById, payload) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId fullName email isActive profilePicture department position designation companyAssignedEmail' },
+    { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
   ]);
   return member;
 };
@@ -179,7 +241,7 @@ export const getTeamMembersByTeam = async (teamId, { includeInactive = false } =
   // $ne:false (not =true) so pre-A1-migration rows lacking the isActive field still count as active.
   if (!includeInactive) filter.isActive = { $ne: false };
   return TeamMember.find(filter)
-    .populate('employeeId', 'fullName email companyAssignedEmail profilePicture position designation department')
+    .populate('employeeId', TEAM_ROSTER_EMPLOYEE_SELECT)
     .sort({ createdAt: -1 })
     .exec();
 };
@@ -200,7 +262,7 @@ export const moveTeamMemberToTeam = async (teamMemberId, teamId, currentUser) =>
     await member.populate([
       { path: 'createdBy', select: 'name email' },
       { path: 'teamId', select: 'name' },
-      { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+      { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
     ]);
     return member;
   }
@@ -222,7 +284,7 @@ export const moveTeamMemberToTeam = async (teamMemberId, teamId, currentUser) =>
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+    { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
   ]);
   return member;
 };
@@ -272,7 +334,7 @@ const createTeamMember = async (createdById, payload) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+    { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
   ]);
   return member;
 };
@@ -365,15 +427,21 @@ const queryTeamMembers = async (filter, options) => {
       .populate([
         { path: 'createdBy', select: 'name email' },
         { path: 'teamId', select: 'name' },
-        { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+        { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
       ])
       .exec(),
     TeamMember.countDocuments(finalFilter).exec(),
   ]);
 
   const totalPages = Math.ceil(totalResults / limit);
-  const enrichedResults = await enrichTeamMembersWithCandidateProfilePictureUrls(results, { includeCandidateMedia: canViewCandidateMedia });
-  return { results: enrichedResults, page, limit, totalPages, totalResults };
+  const scopedTeamId = filter.teamId ? String(filter.teamId) : undefined;
+  const enrichedResults = await enrichTeamMembersWithCandidateProfilePictureUrls(results, {
+    includeCandidateMedia: canViewCandidateMedia,
+  });
+  const withTaskCounts = await enrichTeamMembersWithAssignedTaskCounts(enrichedResults, {
+    teamId: scopedTeamId,
+  });
+  return { results: withTaskCounts, page, limit, totalPages, totalResults };
 };
 
 const getTeamMemberById = async (id) => {
@@ -382,7 +450,7 @@ const getTeamMemberById = async (id) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+    { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
   ]);
   return member;
 };
@@ -405,7 +473,7 @@ const updateTeamMemberById = async (id, updateBody, currentUser) => {
   await member.populate([
     { path: 'createdBy', select: 'name email' },
     { path: 'teamId', select: 'name' },
-    { path: 'employeeId', select: 'employeeId fullName email companyAssignedEmail isActive profilePicture department position' },
+    { path: 'employeeId', select: TEAM_ROSTER_EMPLOYEE_SELECT },
   ]);
   return member;
 };
