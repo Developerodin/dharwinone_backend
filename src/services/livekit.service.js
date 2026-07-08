@@ -201,6 +201,48 @@ const isParticipantHost = async (roomName, participantEmail) => {
 };
 
 /**
+ * Pure access-gate matrix for meeting tokens (extracted so it is unit-testable).
+ *
+ * Access model:
+ *  - requireApproval OFF + allowGuestJoin ON  = the meeting link is OPEN. Anyone with
+ *    the link joins directly. (Only the pre-start time gate still applies.)
+ *  - requireApproval OFF + allowGuestJoin OFF = invite-only. Invited emails join
+ *    directly; uninvited guests "knock" (blind lobby) and wait for the host to admit,
+ *    so a bare meeting URL alone cannot enter (see internalMeeting.model.js allowGuestJoin).
+ *  - requireApproval ON  = the admit/waiting gate is active. Invited + guests-allowed
+ *    AND uninvited guests all wait; uninvited guests "knock" into a BLIND lobby (no
+ *    publish, no subscribe) so they surface in the host's waiting list and must click
+ *    "Ask for permission". Host admits (→ admittedIdentities); on re-fetch isAdmitted flips.
+ *
+ * Force-full tokens (used by admitParticipant) and admitted participants bypass all gates.
+ * @returns {{openRoom: boolean, knocking: boolean, canPublish: boolean, canSubscribe: boolean}}
+ */
+const computeMeetingAccessGates = ({
+  hasMeeting,
+  approvalRequired,
+  guestAllowed,
+  isInvitedGuest,
+  hostByEmail,
+  isAdmitted,
+  forceFullPermissions,
+  preStartBlockPublish,
+}) => {
+  const openRoom = hasMeeting && !approvalRequired && guestAllowed;
+  // Invite-only shortcut: approval off, guest join off, but the email is on the list.
+  const invitedDirect = hasMeeting && !approvalRequired && !guestAllowed && isInvitedGuest && !hostByEmail;
+  const knocking =
+    hasMeeting && !hostByEmail && !openRoom && !isInvitedGuest && !guestAllowed && !isAdmitted;
+  const canPublish =
+    forceFullPermissions ||
+    hostByEmail ||
+    isAdmitted ||
+    ((openRoom || invitedDirect) && !preStartBlockPublish);
+  // Invited waiters keep subscribe (see/hear while waiting); knockers stay blind until admitted.
+  const canSubscribe = forceFullPermissions || isAdmitted || !knocking;
+  return { openRoom, knocking, canPublish, canSubscribe };
+};
+
+/**
  * Generate LiveKit access token for a participant
  * @param {Object} options - Token generation options
  * @param {string} options.roomName - Room name
@@ -321,29 +363,16 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
 
   const guestAllowed = Boolean(meeting?.allowGuestJoin);
 
-  // Access model:
-  //  - requireApproval OFF = the meeting link is OPEN. Anyone with the link joins
-  //    directly: no knock, no waiting, regardless of invite list or allowGuestJoin.
-  //    (Only the pre-start time gate still applies until the host opens the room.)
-  //  - requireApproval ON  = the admit/waiting gate is active. Invited + guests-allowed
-  //    AND uninvited guests all wait; uninvited guests "knock" into a BLIND lobby (no
-  //    publish, no subscribe) so they surface in the host's waiting list and must click
-  //    "Ask for permission". Host admits (→ admittedIdentities); on re-fetch isAdmitted flips.
-  const openRoom = Boolean(meeting) && !approvalRequired;
-  const knocking =
-    Boolean(meeting) && !hostByEmail && !openRoom && !isInvitedGuest && !guestAllowed && !isAdmitted;
-
-  // Force-full token (used by admitParticipant) must bypass waiting/pre-start gates.
-  // Also, once a host has admitted a participant, admission should override schedule/knock gates.
-  // Open meetings (approval off) grant publish to everyone with the link, subject only to
-  // the pre-start time gate.
-  const canPublish = forceFullPermissions ||
-    hostByEmail ||
-    isAdmitted ||
-    (openRoom && !preStartBlockPublish);
-  // Invited waiters keep subscribe (see/hear while waiting); knockers stay blind until admitted.
-  // Forced-full or admitted participants should always subscribe.
-  const canSubscribe = forceFullPermissions || isAdmitted || !knocking;
+  const { knocking, canPublish, canSubscribe } = computeMeetingAccessGates({
+    hasMeeting: Boolean(meeting),
+    approvalRequired,
+    guestAllowed,
+    isInvitedGuest,
+    hostByEmail,
+    isAdmitted,
+    forceFullPermissions,
+    preStartBlockPublish,
+  });
   const isHost = hostByEmail;
 
   // The client polls for a token while waiting instead of joining a blind lobby,
@@ -1230,6 +1259,7 @@ const deleteInterviewRoom = async (roomName) => {
 export const getEgressClient = () => egressClient;
 
 export {
+  computeMeetingAccessGates,
   generateAccessToken,
   generateSupportCameraToken,
   startRecording,

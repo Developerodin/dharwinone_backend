@@ -309,6 +309,13 @@ const smtpTransport = {
   host: envVars.SMTP_HOST,
   port: smtpPort,
   secure: smtpPort === 465,
+  // O365 rejects bursts of parallel SMTP connections with "432 4.3.2 Concurrent
+  // connections limit exceeded" (seen when a meeting invite fans out to 19 recipients
+  // at once — 5 of them never got the email). Pooling funnels all sends through a few
+  // persistent connections; nodemailer queues the rest internally.
+  pool: true,
+  maxConnections: Number(envVars.SMTP_MAX_CONNECTIONS) || 2,
+  maxMessages: 100,
   auth: {
     user: envVars.SMTP_USERNAME,
     pass: envVars.SMTP_PASSWORD,
