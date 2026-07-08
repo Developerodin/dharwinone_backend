@@ -515,12 +515,12 @@ export const listAssignableHeads = async (actor = null, departmentId = null) => 
     const empScope = await employeeScopeFilter();
     const employees = await loadActiveEmployeesPlain({ ...empScope, departmentId });
     return employees
-      .map((e) => ({ id: e.id, name: e.fullName }))
+      .map((e) => ({ id: e.id, name: e.fullName, email: e.email ?? '' }))
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
   const users = await User.find({ status: { $in: ['active', 'pending'] } }).select('name email').lean();
   return users
-    .map((u) => ({ id: String(u._id), name: u.name || u.email }))
+    .map((u) => ({ id: String(u._id), name: u.name || u.email, email: u.email ?? '' }))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 };
 
