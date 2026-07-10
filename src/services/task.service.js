@@ -259,11 +259,13 @@ const queryTasks = async (filter, options) => {
   const userRoleIds = filter.userRoleIds;
   const apiPermissions = filter.apiPermissions instanceof Set ? filter.apiPermissions : new Set();
   const assignedToMe = filter.assignedToMe === true || filter.assignedToMe === 'true';
+  const unassignedOnly = filter.unassigned === true || filter.unassigned === 'true';
   const leavingOnly = filter.leaving === true || filter.leaving === 'true';
   delete filter.userRoleIds;
   delete filter.userId;
   delete filter.apiPermissions;
   delete filter.assignedToMe;
+  delete filter.unassigned;
   delete filter.leaving;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
@@ -331,6 +333,17 @@ const queryTasks = async (filter, options) => {
   const baseFilter = finalFilter;
   if (leavingOnly) {
     finalFilter = { $and: [baseFilter, leavingConstraint] };
+  }
+
+  // "Unassigned" filter: server-side like leaving/assignedToMe so it works across
+  // pagination (client-side filtering only saw the loaded page).
+  if (unassignedOnly) {
+    finalFilter = {
+      $and: [
+        finalFilter,
+        { $or: [{ assignedTo: { $size: 0 } }, { assignedTo: { $exists: false } }, { assignedTo: null }] },
+      ],
+    };
   }
 
   const sort = options.sortBy || '-createdAt';

@@ -199,7 +199,8 @@ const assignGroupHolidays = async (id, user) => {
 };
 
 /**
- * Remove all of the group's holiday dates from all of its members.
+ * Remove all of the group's holiday dates from all of its members, then clear the member list
+ * so the group no longer claims people whose dates were just removed. Dates stay in the group.
  */
 const removeGroupHolidays = async (id, user) => {
   const group = await HolidayGroup.findById(id).select('name members').lean();
@@ -214,7 +215,12 @@ const removeGroupHolidays = async (id, user) => {
   if (holidayIds.length === 0) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Group has no active holiday dates.');
   }
-  return attendanceService.removeHolidaysFromStudents(studentIds, holidayIds, user);
+  const result = await attendanceService.removeHolidaysFromStudents(studentIds, holidayIds, user);
+  await HolidayGroup.findByIdAndUpdate(id, { $set: { members: [] } });
+  return {
+    ...result,
+    data: { ...result.data, membersRemovedFromGroup: studentIds.length },
+  };
 };
 
 export {

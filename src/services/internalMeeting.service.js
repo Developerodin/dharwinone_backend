@@ -159,6 +159,7 @@ const updateInternalMeetingById = async (id, updateBody) => {
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  const previousStatus = meeting.status;
   // Snapshot recipients before the edit so we email only newly-added invitees.
   const beforeInviteEmails = new Set(getInvitationEmails(meeting));
   const safeBody = { ...updateBody };
@@ -169,6 +170,11 @@ const updateInternalMeetingById = async (id, updateBody) => {
     delete safeBody.durationMinutes;
   }
   Object.assign(meeting, safeBody);
+  if (previousStatus !== 'ended' && meeting.status === 'ended') {
+    meeting.endedAt = new Date();
+  } else if (previousStatus === 'ended' && meeting.status !== 'ended') {
+    meeting.endedAt = null;
+  }
   await meeting.save();
 
   // Email ONLY the newly-added invitees/participants (no re-spam on edit).
@@ -249,6 +255,7 @@ const endInternalMeetingByRoomPublic = async (roomName, hostEmail) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only a host can end the meeting');
   }
   meeting.status = 'ended';
+  meeting.endedAt = new Date();
   await meeting.save();
   // Stop egress + wait for finalization, then evict participants + delete LiveKit room.
   // Without this, recording was orphaned in EGRESS_ACTIVE and S3 upload never finalized.
@@ -274,7 +281,7 @@ const autoEndExpiredInternalMeetings = async () => {
   let count = 0;
   for (const m of meetings) {
     try {
-      await InternalMeeting.updateOne({ _id: m._id }, { status: 'ended' });
+      await InternalMeeting.updateOne({ _id: m._id }, { status: 'ended', endedAt: now });
       // Mirror Meeting.autoEndExpiredMeetings: stop egress + wait for finalize before
       // deleting LiveKit room. Skipping this step is what kept recordings stuck in
       // EGRESS_ACTIVE for internal meetings until the 8h cron force-resolved them.

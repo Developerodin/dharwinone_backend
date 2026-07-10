@@ -970,6 +970,7 @@ const endMeetingByRoomPublic = async (roomName, hostEmail) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only a host can end the meeting');
   }
   internal.status = 'ended';
+  internal.endedAt = new Date();
   await internal.save();
   try {
     await deleteInterviewRoom(roomName);

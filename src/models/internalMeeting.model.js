@@ -90,6 +90,10 @@ const internalMeetingSchema = mongoose.Schema(
       enum: ['scheduled', 'ended', 'cancelled'],
       default: 'scheduled',
     },
+    endedAt: {
+      type: Date,
+      default: null,
+    },
     reminderSentAt: {
       type: Date,
       default: null,
