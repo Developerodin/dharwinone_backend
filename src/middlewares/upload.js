@@ -109,7 +109,14 @@ const imageVideoFileFilter = (req, file, cb) => {
     'video/x-msvideo',
     'video/x-matroska',
   ];
-  const allowedTypes = [...allowedImageTypes, ...allowedVideoTypes];
+  // Documents/logs advertised by the ticket UI (.pdf, .txt, .log).
+  // ponytail: .log usually arrives as text/plain; if a client sends it as
+  // application/octet-stream, add that here rather than allowing all binaries.
+  const allowedDocTypes = [
+    'application/pdf',
+    'text/plain',
+  ];
+  const allowedTypes = [...allowedImageTypes, ...allowedVideoTypes, ...allowedDocTypes];
 
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
@@ -117,7 +124,7 @@ const imageVideoFileFilter = (req, file, cb) => {
     cb(
       new ApiError(
         httpStatus.BAD_REQUEST,
-        `File type ${file.mimetype} is not allowed. Allowed: Images (JPEG, PNG, GIF, WEBP, BMP, SVG) and Videos (MP4, WEBM, MOV, AVI, MKV)`
+        `File type ${file.mimetype} is not allowed. Allowed: Images (JPEG, PNG, GIF, WEBP, BMP, SVG), Videos (MP4, WEBM, MOV, AVI, MKV), and Documents (PDF, TXT, LOG)`
       ),
       false
     );

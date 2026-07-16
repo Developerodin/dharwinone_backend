@@ -26,6 +26,7 @@ const notificationSchema = mongoose.Schema(
         'assignment',
         'sop',
         'support_ticket',
+        'dev_ticket',
         'general',
         'chat_message',
         'joining_reminder',

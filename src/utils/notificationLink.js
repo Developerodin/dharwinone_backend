@@ -73,6 +73,10 @@ const ROUTE_MAP = {
     const id = stripId(relatedEntity?.id) || stripId(metadata?.ticketId);
     return id ? `/support-tickets/${id}` : '/support-tickets';
   },
+  dev_ticket: ({ relatedEntity, metadata }) => {
+    const id = stripId(relatedEntity?.id) || stripId(metadata?.ticketId);
+    return id ? `/dev-tickets/${id}` : '/dev-tickets';
+  },
   system: () => '/notifications',
   general: () => '/notifications',
 };

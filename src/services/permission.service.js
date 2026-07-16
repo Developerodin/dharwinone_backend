@@ -18,6 +18,18 @@ const NAMESPACED_RESOURCE_KEYS = new Set([
 ]);
 
 /**
+ * Standalone permissions are stored in already-final API form (no `domain:actions` colon
+ * syntax) and are matched verbatim by BOTH the backend `requirePermissions` guard and the
+ * frontend `canAccessPath` (see frontend `STANDALONE_PATH_PERMISSIONS` in route-permissions.ts).
+ * deriveApiPermissions skips colon-less strings, so without this allowlist they would be
+ * dropped from authContext.permissions and their routes would always 403. Keep in sync with
+ * the frontend list.
+ */
+const STANDALONE_API_PERMISSIONS = new Set([
+  'devTickets.view', // "Help & Support access" role toggle
+]);
+
+/**
  * Derive API permissions from raw domain permissions using a single rule:
  * - Permission format: "category.resource:view,create,edit,delete" (e.g. "settings.users:view,create,edit,delete").
  * - Rule: use the part after the first dot as the API resource name, then add .read / .manage.
@@ -41,6 +53,12 @@ export const deriveApiPermissions = (rawPermissions) => {
   const apiPermissions = new Set();
 
   for (const raw of rawPermissions) {
+    // Standalone permissions are already in final API form — pass through verbatim.
+    if (STANDALONE_API_PERMISSIONS.has(raw)) {
+      apiPermissions.add(raw);
+      continue;
+    }
+
     const [key, actionsPart] = raw.split(':');
     if (!key || !actionsPart) continue;
 

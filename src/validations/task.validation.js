@@ -67,6 +67,7 @@ const getTasks = {
     assignedToMe: Joi.boolean().optional(),
     unassigned: Joi.boolean().optional(),
     leaving: Joi.boolean().optional(),
+    reassigned: Joi.boolean().optional(),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(200).optional(),
     page: Joi.number().integer().optional(),

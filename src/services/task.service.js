@@ -211,19 +211,41 @@ const enrichWithOffboarding = async (results, now) => {
   const plain = results.map((d) => (d?.toJSON ? d.toJSON() : d));
   const ids = new Set();
   for (const t of plain) {
-    if (t.status === 'completed') continue;
     for (const u of t.assignedTo || []) {
       const uid = String(u?.id || u?._id || u || '');
       if (uid) ids.add(uid);
     }
   }
   if (ids.size === 0) return plain;
-  const employees = await Employee.find({
-    owner: { $in: [...ids] },
-    resignDate: { $ne: null },
-  })
-    .select('owner fullName resignDate')
+  const employees = await Employee.find({ owner: { $in: [...ids] } })
+    .select('owner fullName employeeId resignDate')
     .lean();
+  const employeeByOwner = new Map(
+    employees
+      .filter((e) => e?.owner)
+      .map((e) => [
+        String(e.owner),
+        { employeeId: e.employeeId, fullName: e.fullName },
+      ])
+  );
+  for (const t of plain) {
+    const assigneeEmployeeIds = new Set();
+    const assigneeEmployeeNames = new Set();
+    for (const u of t.assignedTo || []) {
+      const uid = String(u?.id || u?._id || u || '');
+      if (!uid) continue;
+      const emp = employeeByOwner.get(uid);
+      if (!emp) continue;
+      if (emp.employeeId) assigneeEmployeeIds.add(String(emp.employeeId));
+      if (emp.fullName) assigneeEmployeeNames.add(String(emp.fullName));
+    }
+    if (assigneeEmployeeIds.size > 0) {
+      t.assigneeEmployeeIds = [...assigneeEmployeeIds];
+    }
+    if (assigneeEmployeeNames.size > 0) {
+      t.assigneeEmployeeNames = [...assigneeEmployeeNames];
+    }
+  }
   return applyOffboardingFlags(plain, buildOffboardingMap(employees, now));
 };
 
@@ -241,15 +263,27 @@ const queryTasks = async (filter, options) => {
       { taskCode: searchRegex },
       { tags: searchRegex },
     ];
-    // Also match tasks assigned to an employee whose name/email matches.
-    const matchedUsers = await User.find({
-      $or: [{ name: searchRegex }, { email: searchRegex }],
-    })
-      .select('_id')
-      .lean()
-      .exec();
-    if (matchedUsers.length) {
-      or.push({ assignedTo: { $in: matchedUsers.map((u) => u._id) } });
+    // Also match tasks assigned to an employee whose name/email/employeeId matches.
+    const [matchedUsers, matchedEmployees] = await Promise.all([
+      User.find({
+        $or: [{ name: searchRegex }, { email: searchRegex }],
+      })
+        .select('_id')
+        .lean()
+        .exec(),
+      Employee.find({
+        $or: [{ fullName: searchRegex }, { employeeId: searchRegex }],
+      })
+        .select('owner')
+        .lean()
+        .exec(),
+    ]);
+    const matchedAssigneeIds = [
+      ...matchedUsers.map((u) => u._id),
+      ...matchedEmployees.map((e) => e.owner).filter(Boolean),
+    ];
+    if (matchedAssigneeIds.length) {
+      or.push({ assignedTo: { $in: matchedAssigneeIds } });
     }
     filter.$or = or;
     delete filter.search;
@@ -261,12 +295,14 @@ const queryTasks = async (filter, options) => {
   const assignedToMe = filter.assignedToMe === true || filter.assignedToMe === 'true';
   const unassignedOnly = filter.unassigned === true || filter.unassigned === 'true';
   const leavingOnly = filter.leaving === true || filter.leaving === 'true';
+  const reassignedOnly = filter.reassigned === true || filter.reassigned === 'true';
   delete filter.userRoleIds;
   delete filter.userId;
   delete filter.apiPermissions;
   delete filter.assignedToMe;
   delete filter.unassigned;
   delete filter.leaving;
+  delete filter.reassigned;
 
   const isAdmin = await userIsAdmin({ roleIds: userRoleIds || [] });
   /** Org-wide list when admin OR role grants tasks.read / tasks.manage. */
@@ -343,6 +379,13 @@ const queryTasks = async (filter, options) => {
         finalFilter,
         { $or: [{ assignedTo: { $size: 0 } }, { assignedTo: { $exists: false } }, { assignedTo: null }] },
       ],
+    };
+  }
+
+  // Tasks that were reassigned at least once (tracked in formerAssignees history).
+  if (reassignedOnly) {
+    finalFilter = {
+      $and: [finalFilter, { 'formerAssignees.0': { $exists: true } }],
     };
   }
 

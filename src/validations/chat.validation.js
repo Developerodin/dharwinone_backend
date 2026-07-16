@@ -110,7 +110,7 @@ const reactToMessage = {
 const searchUsers = {
   query: Joi.object().keys({
     search: Joi.string().trim().min(1).max(100),
-    limit: Joi.number().integer().min(1).max(50),
+    limit: Joi.number().integer().min(1).max(250),
   }),
 };
 
