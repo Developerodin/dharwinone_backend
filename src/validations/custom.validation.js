@@ -38,6 +38,18 @@ const objectId = (value, helpers) => {
   return value;
 };
 
+/** Mongo ObjectId or human-readable dev ticket id (e.g. DEV-MRN8XTOF-19D0A8FC). */
+const devTicketRef = (value, helpers) => {
+  const trimmed = String(value).trim();
+  if (trimmed.match(/^[0-9a-fA-F]{24}$/)) {
+    return trimmed;
+  }
+  if (trimmed.match(/^DEV-[A-Z0-9]+-[A-F0-9]{8}$/i)) {
+    return trimmed.toUpperCase();
+  }
+  return helpers.message('"{{#label}}" must be a valid mongo id or DEV ticket id');
+};
+
 const password = (value, helpers) => {
   if (value.length < 8) {
     return helpers.message('password must be at least 8 characters');
@@ -48,5 +60,5 @@ const password = (value, helpers) => {
   return value;
 };
 
-export { objectId, password, notificationPreferencesSchema };
+export { objectId, devTicketRef, password, notificationPreferencesSchema };
 

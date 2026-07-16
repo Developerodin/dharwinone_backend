@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, devTicketRef } from './custom.validation.js';
 import { LABELS, LINK_RELS } from '../models/devTicket.model.js';
 
 const gitFields = {
@@ -185,7 +185,7 @@ const linkTicket = {
       rel: Joi.string()
         .valid(...LINK_RELS)
         .required(),
-      ticketId: Joi.string().custom(objectId).required(),
+      ticketId: Joi.string().custom(devTicketRef).required(),
     })
     .required(),
 };

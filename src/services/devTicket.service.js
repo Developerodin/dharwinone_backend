@@ -18,6 +18,14 @@ const REOPEN_FROM_STATUSES = ['Resolved', 'Closed'];
 const REOPEN_TO_STATUSES = ['Open', 'In Progress'];
 const CLOSED_STATUSES = ['Resolved', 'Closed'];
 
+const findDevTicketByRef = async (ref) => {
+  const trimmed = String(ref).trim();
+  if (/^[0-9a-fA-F]{24}$/.test(trimmed)) {
+    return DevTicket.findById(trimmed);
+  }
+  return DevTicket.findOne({ ticketId: trimmed.toUpperCase() });
+};
+
 const POPULATE_PATHS = [
   { path: 'createdBy', select: 'name email' },
   { path: 'assignedTo', select: 'name email' },
@@ -592,7 +600,7 @@ const linkTicket = async (ticketId, { rel, ticketId: linkedTicketId }, user) => 
 
   await assertCanEdit(ticket, user);
 
-  const linked = await DevTicket.findById(linkedTicketId);
+  const linked = await findDevTicketByRef(linkedTicketId);
   if (!linked) throw new ApiError(httpStatus.NOT_FOUND, 'Linked ticket not found');
   if (String(linked._id) === String(ticket._id)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot link a ticket to itself');
