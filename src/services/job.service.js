@@ -1413,7 +1413,7 @@ async function getJobStats(jobId, currentUser = {}) {
 
   const recent = recentPage?.results || [];
 
-  const statusOrder = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+  const statusOrder = ['Applied', 'Screening', 'Interview', 'Shortlisted', 'Offered', 'Hired', 'Rejected'];
   const counts = Object.fromEntries(statusOrder.map((s) => [s, 0]));
   for (const row of funnelAgg) {
     if (row.status && counts[row.status] != null) counts[row.status] = row.count;

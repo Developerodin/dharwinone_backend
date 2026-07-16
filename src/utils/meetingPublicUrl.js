@@ -1,4 +1,4 @@
-import config from '../config/config.js';
+import { getFrontendBaseUrl } from './emailLinks.js';
 
 /**
  * @param {string} meetingId
@@ -6,8 +6,11 @@ import config from '../config/config.js';
  * @returns {string} query string (no leading ?)
  */
 export const buildMeetingJoinQuery = (meetingId, invite = {}) => {
+  // No id → no room. Guard against URLSearchParams coercing undefined/null to
+  // the literal string "undefined" (produces a broken ?room=undefined link).
+  if (!meetingId) return '';
   const params = new URLSearchParams();
-  params.set('room', meetingId);
+  params.set('room', String(meetingId));
   const n = typeof invite.name === 'string' ? invite.name.trim() : '';
   const e = typeof invite.email === 'string' ? invite.email.trim() : '';
   if (n) params.set('name', n);
@@ -23,7 +26,7 @@ export const buildMeetingJoinQuery = (meetingId, invite = {}) => {
  */
 export const getInAppMeetingLink = (meetingId, invite = {}) => {
   const qs = buildMeetingJoinQuery(meetingId, invite);
-  return `/join/room?${qs}`;
+  return qs ? `/join/room?${qs}` : '';
 };
 
 /**
@@ -34,7 +37,8 @@ export const getInAppMeetingLink = (meetingId, invite = {}) => {
  * @returns {string}
  */
 export const getPublicMeetingUrl = (meetingId, invite = {}) => {
-  const base = (config.frontendBaseUrl || '').replace(/\/$/, '');
   const qs = buildMeetingJoinQuery(meetingId, invite);
-  return base ? `${base}/join/room?${qs}` : `/join/room?${qs}`;
+  if (!qs) return '';
+  const base = getFrontendBaseUrl().replace(/\/$/, '');
+  return `${base}/join/room?${qs}`;
 };

@@ -186,6 +186,8 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
         jobPosition: '',
         description: meeting.description,
         publicMeetingUrl: personalUrl,
+        allowGuestJoin: meeting.allowGuestJoin ?? series.allowGuestJoin,
+        requireApproval: meeting.requireApproval ?? series.requireApproval,
       });
       anyDelivered = true;
     } catch (err) {
@@ -394,11 +396,17 @@ export const createMeetingSeries = async (body, userId) => {
   });
 
   await materializeSeries(series, { now: createdAt });
-  await sendDueOccurrenceInvites({ now: createdAt });
 
   const firstOccurrence = await InternalMeeting.findOne({ seriesId: series._id })
     .sort({ occurrenceIndex: 1 })
     .lean();
+
+  // First occurrence: invite immediately. sendDueOccurrenceInvites applies a 12h/24h
+  // lead window that would skip invites for weekly/monthly meetings scheduled days ahead.
+  if (firstOccurrence) {
+    await sendOccurrenceInvites(series, firstOccurrence);
+  }
+  await sendDueOccurrenceInvites({ now: createdAt });
 
   const result = series.toJSON();
   result.recurrenceSummary = recurrenceLabel(series.recurrence);

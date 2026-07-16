@@ -22,4 +22,12 @@ const submitEssayAttempt = {
     .required(),
 };
 
-export { submitEssayAttempt };
+const getEssayResults = {
+  params: Joi.object().keys({
+    studentId: Joi.string().required().custom(objectId),
+    moduleId: Joi.string().required().custom(objectId),
+    playlistItemId: Joi.string().required(),
+  }),
+};
+
+export { submitEssayAttempt, getEssayResults };

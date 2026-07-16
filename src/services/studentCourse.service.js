@@ -6,6 +6,12 @@ import Student from '../models/student.model.js';
 import Employee from '../models/employee.model.js';
 import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
+import { refreshTrainingModuleCoverImages, refreshTrainingCoverImageUrl } from '../utils/trainingCoverImageUrl.js';
+import logger from '../config/logger.js';
+
+const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
 
 /**
  * Get or create student course progress
@@ -99,6 +105,12 @@ const queryStudentCourses = async (studentId, filter, options) => {
       totalResults: 0,
     };
   }
+
+  // Student courses API was returning stale presigned S3 URLs from MongoDB.
+  // Regenerate fresh URLs (cached) like trainingModule.service queryTrainingModules.
+  await refreshTrainingModuleCoverImages(modules, signedDownloadUrl, (error) => {
+    logger.error('Failed to regenerate cover image URL:', error);
+  });
 
   const moduleIds = modules.map((m) => m._id);
   const progressList = await StudentCourseProgress.find({
@@ -218,9 +230,16 @@ const getStudentCourse = async (studentId, moduleId) => {
   if (!isAssigned) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Student is not assigned to this module');
   }
+
+  try {
+    await refreshTrainingCoverImageUrl(module.coverImage, signedDownloadUrl);
+  } catch (error) {
+    logger.error('Failed to regenerate cover image URL:', error);
+  }
   
   // Get or create progress
   const progress = await getOrCreateProgress(studentId, moduleId);
+  await syncProgressTotals(progress, module);
   
   // Get quiz attempts for this course
   const quizAttempts = await StudentQuizAttempt.find({
@@ -295,6 +314,44 @@ const startCourse = async (studentId, moduleId) => {
 };
 
 /**
+ * Recompute progress percentage and status from completedItems vs playlist length.
+ * Persists when percentage or status changed.
+ * @returns {Promise<boolean>} true if document was saved
+ */
+const syncProgressTotals = async (progress, module) => {
+  const totalItems = module?.playlist?.length ?? 0;
+  const completedCount = progress.progress.completedItems.length;
+  const nextPercentage = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
+
+  let changed = progress.progress.percentage !== nextPercentage;
+  progress.progress.percentage = nextPercentage;
+
+  if (nextPercentage === 100) {
+    if (progress.status !== 'completed') {
+      progress.status = 'completed';
+      changed = true;
+    }
+    if (!progress.completedAt) {
+      progress.completedAt = new Date();
+      changed = true;
+    }
+  } else if (nextPercentage > 0 && progress.status === 'enrolled') {
+    progress.status = 'in-progress';
+    changed = true;
+  } else if (nextPercentage > 0 && nextPercentage < 100 && progress.status === 'completed') {
+    progress.status = 'in-progress';
+    progress.completedAt = undefined;
+    changed = true;
+  }
+
+  if (changed) {
+    await progress.save();
+  }
+
+  return changed;
+};
+
+/**
  * Mark playlist item as complete
  * @param {ObjectId} studentId
  * @param {ObjectId} moduleId
@@ -304,46 +361,35 @@ const startCourse = async (studentId, moduleId) => {
  */
 const markItemComplete = async (studentId, moduleId, playlistItemId, contentType) => {
   const progress = await getOrCreateProgress(studentId, moduleId);
-  
-  // Check if already completed
+  const module = await TrainingModule.findById(moduleId);
+  if (!module) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
+  }
+
   const alreadyCompleted = progress.progress.completedItems.some(
     (item) => item.playlistItemId === playlistItemId
   );
-  
+
   if (!alreadyCompleted) {
     progress.progress.completedItems.push({
       playlistItemId,
       completedAt: new Date(),
       contentType,
     });
-    
-    // Get module to calculate total items
-    const module = await TrainingModule.findById(moduleId);
-    const totalItems = module.playlist.length;
-    const completedCount = progress.progress.completedItems.length;
-    
-    // Calculate progress percentage
-    progress.progress.percentage = Math.round((completedCount / totalItems) * 100);
-    
-    // Update status
-    if (progress.progress.percentage === 100) {
-      progress.status = 'completed';
-      progress.completedAt = new Date();
-    } else if (progress.progress.percentage > 0) {
-      progress.status = 'in-progress';
-    }
-    
     progress.progress.lastAccessedAt = new Date();
     progress.progress.lastAccessedItem = { playlistItemId };
-    
-    await progress.save();
-    
-    // Auto-generate certificate if course is 100% complete
-    if (progress.progress.percentage === 100) {
-      await autoGenerateCertificateIfEligible(studentId, moduleId);
-    }
   }
-  
+
+  await syncProgressTotals(progress, module);
+  if (!alreadyCompleted) {
+    progress.markModified('progress');
+    await progress.save();
+  }
+
+  if (progress.progress.percentage === 100 && !alreadyCompleted) {
+    await autoGenerateCertificateIfEligible(studentId, moduleId);
+  }
+
   return progress;
 };
 

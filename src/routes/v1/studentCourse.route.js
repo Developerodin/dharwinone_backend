@@ -1,7 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as studentCourseValidation from '../../validations/studentCourse.validation.js';
 import * as studentCourseController from '../../controllers/studentCourse.controller.js';
 
@@ -32,7 +32,7 @@ router
   .route('/:studentId/courses/:moduleId/start')
   .post(
     auth(),
-    requirePermissions('students.courses.manage'),
+    requireAnyOfPermissions('students.courses.manage', 'students.quizzes.take'),
     validate(studentCourseValidation.startCourse),
     studentCourseController.startCourse
   );
@@ -42,7 +42,7 @@ router
   .route('/:studentId/courses/:moduleId/complete-item')
   .post(
     auth(),
-    requirePermissions('students.courses.manage'),
+    requireAnyOfPermissions('students.courses.manage', 'students.quizzes.take'),
     validate(studentCourseValidation.markItemComplete),
     studentCourseController.markItemComplete
   );

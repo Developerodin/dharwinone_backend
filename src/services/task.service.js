@@ -16,6 +16,8 @@ import { refreshTasksAssigneesProfilePictures } from '../utils/profilePicture.ut
 const TASK_LIST_LIMIT_MAX = 200;
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const isTruthyQueryFlag = (v) => v === true || v === 'true' || v === '1' || v === 1;
+
 const parseCommaList = (value) =>
   String(value || '')
     .split(',')
@@ -292,10 +294,10 @@ const queryTasks = async (filter, options) => {
   const userId = filter.userId;
   const userRoleIds = filter.userRoleIds;
   const apiPermissions = filter.apiPermissions instanceof Set ? filter.apiPermissions : new Set();
-  const assignedToMe = filter.assignedToMe === true || filter.assignedToMe === 'true';
-  const unassignedOnly = filter.unassigned === true || filter.unassigned === 'true';
-  const leavingOnly = filter.leaving === true || filter.leaving === 'true';
-  const reassignedOnly = filter.reassigned === true || filter.reassigned === 'true';
+  const assignedToMe = isTruthyQueryFlag(filter.assignedToMe);
+  const unassignedOnly = isTruthyQueryFlag(filter.unassigned);
+  const leavingOnly = isTruthyQueryFlag(filter.leaving);
+  const reassignedOnly = isTruthyQueryFlag(filter.reassigned);
   delete filter.userRoleIds;
   delete filter.userId;
   delete filter.apiPermissions;

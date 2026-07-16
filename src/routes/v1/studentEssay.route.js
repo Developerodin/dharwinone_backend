@@ -16,4 +16,13 @@ router
     studentEssayController.submitEssayAttempt
   );
 
+router
+  .route('/:studentId/courses/:moduleId/essays/:playlistItemId/results')
+  .get(
+    auth(),
+    requirePermissions('students.courses.read'),
+    validate(studentEssayValidation.getEssayResults),
+    studentEssayController.getEssayResults
+  );
+
 export default router;

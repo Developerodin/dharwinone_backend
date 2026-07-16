@@ -36,7 +36,7 @@ const markItemComplete = {
     .keys({
       playlistItemId: Joi.string().required(),
       contentType: Joi.string()
-        .valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test')
+        .valid('upload-video', 'youtube-link', 'pdf-document', 'blog', 'quiz', 'test', 'essay')
         .required(),
     })
     .required(),

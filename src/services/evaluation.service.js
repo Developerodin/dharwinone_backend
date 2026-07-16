@@ -3,11 +3,52 @@ import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
 import StudentEssayAttempt from '../models/studentEssayAttempt.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
+import Employee from '../models/employee.model.js';
 
 export const AT_RISK_STALE_DAYS = 14;
 
 const idStr = (v) => (v?._id?.toString?.() ?? v?.toString?.() ?? null);
 const pairKey = (sid, mid) => `${sid}\u001f${mid}`;
+
+const startOfToday = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+/** Same resigned rule as student.service excludeResignedEmployed and employee list "current". */
+export const isEmployeeResigned = (employee, todayStart = startOfToday()) => {
+  if (!employee) return false;
+  if (employee.referralPipelineStatus === 'resigned') return true;
+  if (!employee.resignDate) return false;
+  const rd = new Date(employee.resignDate);
+  rd.setHours(0, 0, 0, 0);
+  return rd <= todayStart;
+};
+
+/** Student.position first; fall back to Employee.position, designation, referralJobTitle. */
+export const resolveStudentPositionMeta = (student, employee) => {
+  const studentPositionId = idStr(student?.position);
+  const studentPositionName =
+    typeof student?.position === 'object' && student.position?.name ? student.position.name : null;
+  if (studentPositionName) {
+    return { positionId: studentPositionId, positionName: studentPositionName };
+  }
+
+  const employeePositionId = idStr(employee?.position);
+  const employeePositionName =
+    typeof employee?.position === 'object' && employee.position?.name ? employee.position.name : null;
+  if (employeePositionName) {
+    return { positionId: employeePositionId, positionName: employeePositionName };
+  }
+
+  for (const title of [employee?.designation, employee?.referralJobTitle]) {
+    const trimmed = String(title ?? '').trim();
+    if (trimmed) return { positionId: null, positionName: trimmed };
+  }
+
+  return { positionId: studentPositionId, positionName: null };
+};
 
 /**
  * Unified display status for a student–course evaluation row.
@@ -163,6 +204,7 @@ export const buildEvaluation = ({
     essayByKey.set(k, entry);
   }
 
+  // Assigned courses = module roster only (same source as My Courses / queryStudentCourses).
   const pairs = new Set();
   for (const m of modules) {
     const mid = idStr(m._id);
@@ -172,7 +214,6 @@ export const buildEvaluation = ({
       if (s) pairs.add(pairKey(s, mid));
     }
   }
-  for (const k of progressByKey.keys()) pairs.add(k);
 
   const resolveName = (sid, progress) => {
     const fromMap = studentMetaById.get(sid);
@@ -307,15 +348,35 @@ const getEvaluationData = async (query = {}) => {
       .lean(),
   ]);
 
-  const activeStudentIds = new Set(students.map((s) => s._id.toString()));
+  const ownerIds = students.map((s) => s.user?._id ?? s.user).filter(Boolean);
+  const employees = ownerIds.length
+    ? await Employee.find({ owner: { $in: ownerIds } })
+        .select('owner position designation referralJobTitle resignDate referralPipelineStatus')
+        .populate({ path: 'position', select: 'name' })
+        .lean()
+    : [];
+
+  const employeeByOwner = new Map(employees.map((e) => [String(e.owner), e]));
+  const todayStart = startOfToday();
+
+  const activeStudents = students.filter((s) => {
+    const ownerId = String(s.user?._id ?? s.user ?? '');
+    if (!ownerId) return true;
+    return !isEmployeeResigned(employeeByOwner.get(ownerId), todayStart);
+  });
+
+  const activeStudentIds = new Set(activeStudents.map((s) => s._id.toString()));
 
   const studentMetaById = new Map();
-  for (const s of students) {
+  for (const s of activeStudents) {
+    const ownerId = String(s.user?._id ?? s.user ?? '');
+    const employee = ownerId ? employeeByOwner.get(ownerId) : null;
+    const position = resolveStudentPositionMeta(s, employee);
     studentMetaById.set(s._id.toString(), {
       name: s.user?.name,
       email: s.user?.email,
-      positionId: idStr(s.position),
-      positionName: s.position?.name ?? null,
+      positionId: position.positionId,
+      positionName: position.positionName,
     });
   }
 
@@ -351,7 +412,7 @@ const getEvaluationData = async (query = {}) => {
 
 /**
  * Mutually exclusive status counts for all active student–module pairs.
- * Includes module roster assignments without a progress record (same as Evaluation).
+ * Includes module roster assignments without a progress record (same as My Courses).
  */
 export const computeEnrollmentStatusBreakdown = ({
   modules = [],
@@ -374,7 +435,6 @@ export const computeEnrollmentStatusBreakdown = ({
       if (s) pairs.add(pairKey(s, mid));
     }
   }
-  for (const k of progressByKey.keys()) pairs.add(k);
 
   const activeSet =
     activeStudentIds instanceof Set
@@ -413,5 +473,7 @@ export default {
   deriveCourseDisplayStatus,
   computeAtRisk,
   computeEnrollmentStatusBreakdown,
+  isEmployeeResigned,
+  resolveStudentPositionMeta,
   AT_RISK_STALE_DAYS,
 };

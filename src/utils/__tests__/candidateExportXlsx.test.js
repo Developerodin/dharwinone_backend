@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import XLSX from 'xlsx';
-import { generateCandidateExportXlsxBuffer } from '../candidateExportXlsx.js';
+import {
+  columnWidthsFromAoa,
+  EMPLOYEE_DETAILS_MIN_COL_WIDTHS,
+  generateCandidateExportXlsxBuffer,
+} from '../candidateExportXlsx.js';
 
 const exportData = {
   totalCandidates: 1,
@@ -56,6 +60,53 @@ test('Documents sheet lists name, type, and upload status only', () => {
   assert.equal(aoa[1][6], 'application/pdf');
   assert.equal(aoa[2][3], 'pan.pdf');
   assert.equal(aoa[2][5], 'Missing');
+});
+
+test('columnWidthsFromAoa sizes email and status columns from content, not short headers', () => {
+  const headers = [
+    'Employee ID', 'Full Name', 'Email', 'Owner Email', 'Profile Completion %', 'Status',
+  ];
+  const longEmail = 'very.long.employee.email.address@company.example.com';
+  const aoa = [
+    headers,
+    ['DBS101', 'Asha Rao', longEmail, 'owner.person@company.example.com', 85, 'Incomplete'],
+  ];
+  const widths = columnWidthsFromAoa(aoa, EMPLOYEE_DETAILS_MIN_COL_WIDTHS);
+  const byHeader = Object.fromEntries(headers.map((h, i) => [h, widths[i].wch]));
+
+  assert.ok(byHeader.Email >= 32, `Email width ${byHeader.Email} should be >= 32`);
+  assert.ok(byHeader['Owner Email'] >= 32, `Owner Email width ${byHeader['Owner Email']} should be >= 32`);
+  assert.ok(
+    byHeader['Profile Completion %'] >= 22,
+    `Profile Completion % width ${byHeader['Profile Completion %']} should be >= 22`
+  );
+  assert.ok(byHeader.Status >= 14, `Status width ${byHeader.Status} should fit Incomplete`);
+});
+
+test('Employee Details sheet has autofilter over header and data rows', () => {
+  const wb = XLSX.read(generateCandidateExportXlsxBuffer(exportData), { type: 'buffer' });
+  const ws = wb.Sheets['Employee Details'];
+
+  assert.equal(ws.A1.v, 'Employee ID');
+  assert.equal(ws.O1.v, 'Status');
+  assert.equal(ws['!autofilter'].ref, 'A1:AG2');
+});
+
+test('Employee Details Status column stores full Completed/Incomplete labels', () => {
+  const wb = XLSX.read(
+    generateCandidateExportXlsxBuffer({
+      ...exportData,
+      data: [
+        { ...exportData.data[0], isCompleted: true },
+        { ...exportData.data[0], employeeId: 'DBS102', isCompleted: false },
+      ],
+    }),
+    { type: 'buffer' }
+  );
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets['Employee Details'], { header: 1 });
+  const statusCol = aoa[0].indexOf('Status');
+  assert.equal(aoa[1][statusCol], 'Completed');
+  assert.equal(aoa[2][statusCol], 'Incomplete');
 });
 
 test('Salary Slips sheet omits original filename', () => {

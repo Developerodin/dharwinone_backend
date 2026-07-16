@@ -35,7 +35,8 @@ export function buildMeetingsExportBuffer(meetings = []) {
     'Scheduled At (UTC)', 'Duration (min)', 'Status', 'Result',
     'Created At (UTC)', 'Meeting Link',
   ];
-  const aoa = [[`Total Interviews: ${meetings.length}`], [], headers];
+  // Header on row 1 (no banner/blank offset) so sort, filter, and freeze work.
+  const aoa = [headers];
   for (const m of meetings) {
     const c = m.candidate || {};
     const r = m.recruiter || {};
@@ -60,6 +61,20 @@ export function buildMeetingsExportBuffer(meetings = []) {
   }
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Size each column to its longest value (clamped 10..60) so nothing truncates.
+  ws['!cols'] = headers.map((h, col) => {
+    const longest = aoa.reduce((max, row) => {
+      const len = String(row[col] ?? '').length;
+      return len > max ? len : max;
+    }, h.length);
+    return { wch: Math.min(Math.max(longest + 2, 10), 60) };
+  });
+  // Enable filter dropdowns on the header row. (Freeze panes aren't emitted by
+  // the community xlsx writer, so we don't set !freeze — it would be dead code.)
+  const lastCol = XLSX.utils.encode_col(headers.length - 1);
+  ws['!autofilter'] = { ref: `A1:${lastCol}${aoa.length}` };
+
   XLSX.utils.book_append_sheet(wb, ws, 'Interviews');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }

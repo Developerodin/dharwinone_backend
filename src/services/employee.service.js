@@ -551,6 +551,12 @@ const buildAdvancedFilter = (filter) => {
     );
   }
 
+  if (filter.createdFrom || filter.createdTo) {
+    mongoFilter.createdAt = {};
+    if (filter.createdFrom) mongoFilter.createdAt.$gte = new Date(filter.createdFrom);
+    if (filter.createdTo) mongoFilter.createdAt.$lte = new Date(filter.createdTo);
+  }
+
   // Employment status: current (no resign or resign in future), resigned (resign date on or in past), all (no filter)
   if (filter.employmentStatus === 'resigned') {
     const todayStart = new Date();

@@ -25,6 +25,84 @@ function docUploadStatus(d) {
   return d.url || d.key ? 'Uploaded' : 'Missing';
 }
 
+/** Shared minimum widths for employee identity columns repeated on nested sheets. */
+export const COMMON_SHEET_MIN_COL_WIDTHS = {
+  'Employee ID': 12,
+  'Full Name': 20,
+  Email: 32,
+};
+
+/** Minimum column widths for the Employee Details sheet (header row + data). */
+export const EMPLOYEE_DETAILS_MIN_COL_WIDTHS = {
+  ...COMMON_SHEET_MIN_COL_WIDTHS,
+  'Phone Number': 14,
+  'Country Code': 12,
+  Owner: 20,
+  'Owner Email': 32,
+  Admin: 20,
+  'Admin Email': 32,
+  'Assigned Agent Name': 22,
+  'Assigned Agent Email': 32,
+  Designation: 18,
+  'Position (catalog)': 22,
+  'Profile Completion %': 22,
+  Status: 14,
+  'Short Bio': 30,
+  'SEVIS ID': 14,
+  EAD: 14,
+  Degree: 16,
+  'Visa Type': 14,
+  'Custom Visa Type': 18,
+  'Supervisor Name': 20,
+  'Supervisor Contact': 14,
+  'Supervisor Country Code': 14,
+  'Salary Range': 16,
+  'Street Address': 24,
+  'Street Address 2': 20,
+  City: 16,
+  State: 12,
+  'Zip Code': 12,
+  Country: 14,
+  'Created At': 14,
+  'Updated At': 14,
+};
+
+/**
+ * Size each column to the longest header/data value, with optional per-header floors.
+ * Mirrors meetingExcel.service.js so long emails and status labels are not truncated.
+ *
+ * @param {Array<Array<unknown>>} aoa
+ * @param {Record<string, number>} [minByHeader]
+ * @returns {Array<{ wch: number }>}
+ */
+export function columnWidthsFromAoa(aoa, minByHeader = {}) {
+  const headers = aoa[0] || [];
+  return headers.map((header, col) => {
+    const headerText = String(header ?? '');
+    const longest = aoa.reduce((max, row) => {
+      const len = String(row[col] ?? '').length;
+      return len > max ? len : max;
+    }, headerText.length);
+    const min = minByHeader[headerText] ?? 10;
+    return { wch: Math.min(Math.max(longest + 2, min), 60) };
+  });
+}
+
+/**
+ * Apply column widths and header-row autofilter to a list sheet.
+ * Community xlsx does not emit freeze panes or cell styles (bold), so those are omitted.
+ *
+ * @param {import('xlsx').WorkSheet} ws
+ * @param {Array<Array<unknown>>} aoa
+ * @param {Record<string, number>} [minByHeader]
+ */
+export function applyExportSheetFormatting(ws, aoa, minByHeader = {}) {
+  ws['!cols'] = columnWidthsFromAoa(aoa, minByHeader);
+  if (!aoa.length) return;
+  const lastCol = XLSX.utils.encode_col((aoa[0]?.length ?? 1) - 1);
+  ws['!autofilter'] = { ref: `A1:${lastCol}${aoa.length}` };
+}
+
 /**
  * Multi-sheet workbook: summary + visa/supervisor + address + one row per nested item.
  * @param {{ totalCandidates: number, exportedAt: string, data: object[] }} exportData
@@ -59,8 +137,9 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       fmtDate(c.createdAt), fmtDate(c.updatedAt),
     ];
   });
-  const wsDetails = XLSX.utils.aoa_to_sheet([detailsHeader, ...detailsRows]);
-  wsDetails['!cols'] = detailsHeader.map((h) => ({ wch: Math.min(Math.max(h.length + 2, 12), 28) }));
+  const detailsAoa = [detailsHeader, ...detailsRows];
+  const wsDetails = XLSX.utils.aoa_to_sheet(detailsAoa);
+  applyExportSheetFormatting(wsDetails, detailsAoa, EMPLOYEE_DETAILS_MIN_COL_WIDTHS);
   XLSX.utils.book_append_sheet(wb, wsDetails, 'Employee Details');
 
   const qualHeader = [
@@ -88,11 +167,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       ]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(qualRows.length ? [qualHeader, ...qualRows] : [qualHeader]),
-    'Qualifications'
-  );
+  const qualAoa = qualRows.length ? [qualHeader, ...qualRows] : [qualHeader];
+  const wsQual = XLSX.utils.aoa_to_sheet(qualAoa);
+  applyExportSheetFormatting(wsQual, qualAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, Description: 30 });
+  XLSX.utils.book_append_sheet(wb, wsQual, 'Qualifications');
 
   const expHeader = [
     'Employee ID',
@@ -119,11 +197,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       ]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(expRows.length ? [expHeader, ...expRows] : [expHeader]),
-    'Experience'
-  );
+  const expAoa = expRows.length ? [expHeader, ...expRows] : [expHeader];
+  const wsExp = XLSX.utils.aoa_to_sheet(expAoa);
+  applyExportSheetFormatting(wsExp, expAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, Description: 30 });
+  XLSX.utils.book_append_sheet(wb, wsExp, 'Experience');
 
   const skillHeader = ['Employee ID', 'Full Name', 'Email', 'Skill Name', 'Level', 'Category'];
   const skillRows = [];
@@ -132,11 +209,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       skillRows.push([...idRow(c), s(sk.name), s(sk.level), s(sk.category)]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(skillRows.length ? [skillHeader, ...skillRows] : [skillHeader]),
-    'Skills'
-  );
+  const skillAoa = skillRows.length ? [skillHeader, ...skillRows] : [skillHeader];
+  const wsSkill = XLSX.utils.aoa_to_sheet(skillAoa);
+  applyExportSheetFormatting(wsSkill, skillAoa, COMMON_SHEET_MIN_COL_WIDTHS);
+  XLSX.utils.book_append_sheet(wb, wsSkill, 'Skills');
 
   const socialHeader = ['Employee ID', 'Full Name', 'Email', 'Platform', 'URL'];
   const socialRows = [];
@@ -145,11 +221,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       socialRows.push([...idRow(c), s(sl.platform), s(sl.url)]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(socialRows.length ? [socialHeader, ...socialRows] : [socialHeader]),
-    'Social Links'
-  );
+  const socialAoa = socialRows.length ? [socialHeader, ...socialRows] : [socialHeader];
+  const wsSocial = XLSX.utils.aoa_to_sheet(socialAoa);
+  applyExportSheetFormatting(wsSocial, socialAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, URL: 40 });
+  XLSX.utils.book_append_sheet(wb, wsSocial, 'Social Links');
 
   const docHeader = [
     'Employee ID', 'Full Name', 'Email',
@@ -167,11 +242,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       ]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(docRows.length ? [docHeader, ...docRows] : [docHeader]),
-    'Documents'
-  );
+  const docAoa = docRows.length ? [docHeader, ...docRows] : [docHeader];
+  const wsDoc = XLSX.utils.aoa_to_sheet(docAoa);
+  applyExportSheetFormatting(wsDoc, docAoa, COMMON_SHEET_MIN_COL_WIDTHS);
+  XLSX.utils.book_append_sheet(wb, wsDoc, 'Documents');
 
   const slipHeader = ['Employee ID', 'Full Name', 'Email', 'Month', 'Year'];
   const slipRows = [];
@@ -180,11 +254,10 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       slipRows.push([...idRow(c), s(ss.month), s(ss.year)]);
     }
   }
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(slipRows.length ? [slipHeader, ...slipRows] : [slipHeader]),
-    'Salary Slips'
-  );
+  const slipAoa = slipRows.length ? [slipHeader, ...slipRows] : [slipHeader];
+  const wsSlip = XLSX.utils.aoa_to_sheet(slipAoa);
+  applyExportSheetFormatting(wsSlip, slipAoa, COMMON_SHEET_MIN_COL_WIDTHS);
+  XLSX.utils.book_append_sheet(wb, wsSlip, 'Salary Slips');
 
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }

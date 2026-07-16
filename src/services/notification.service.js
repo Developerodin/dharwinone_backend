@@ -41,9 +41,19 @@ export const isChannelAllowed = (type, channel, prefs) => {
  */
 export const shouldSendNotificationEmailToAddress = async (toEmail, notificationType) => {
   if (!toEmail || !notificationType) return true;
-  const user = await User.findOne({ email: String(toEmail).trim().toLowerCase() })
-    .select('notificationPreferences')
-    .lean();
+  const normalized = String(toEmail).trim().toLowerCase();
+  let user = await User.findOne({ email: normalized }).select('notificationPreferences').lean();
+  if (!user) {
+    const Employee = (await import('../models/employee.model.js')).default;
+    const emp = await Employee.findOne({
+      $or: [{ email: normalized }, { companyAssignedEmail: normalized }],
+    })
+      .select('owner')
+      .lean();
+    if (emp?.owner) {
+      user = await User.findById(emp.owner).select('notificationPreferences').lean();
+    }
+  }
   if (!user) return true;
   return isChannelAllowed(notificationType, 'email', user.notificationPreferences);
 };

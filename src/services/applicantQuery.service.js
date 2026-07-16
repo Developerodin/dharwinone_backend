@@ -190,11 +190,17 @@ const aggregateApplicantsByStatus = async (filter = {}, currentUser = {}) => {
   if (query?._id?.$in && query._id.$in.length === 0) return [];
   const finalQuery = await applyDedupeIfRequested(query, filter);
   if (finalQuery?._id?.$in && finalQuery._id.$in.length === 0) return [];
-  return JobApplication.aggregate([
-    { $match: finalQuery },
-    { $group: { _id: '$status', count: { $sum: 1 } } },
-    { $project: { _id: 0, status: '$_id', count: 1 } },
-  ]);
+
+  // JS-side grouping (not aggregation): dedupe already relies on find() because Mongoose
+  // auto-casts string ObjectIds for find/countDocuments but aggregate $match does not,
+  // which left job analytics funnel/conversion stuck at 0 while totals/recent apps worked.
+  const docs = await JobApplication.find(finalQuery).select('status').lean();
+  const counts = {};
+  for (const doc of docs) {
+    const status = doc.status || 'Applied';
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return Object.entries(counts).map(([status, count]) => ({ status, count }));
 };
 
 export { buildApplicantQuery, queryApplicants, countApplicants, aggregateApplicantsByStatus };

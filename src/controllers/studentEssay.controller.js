@@ -13,4 +13,11 @@ const submitEssayAttempt = catchAsync(async (req, res) => {
   res.send(attempt);
 });
 
-export { submitEssayAttempt };
+const getEssayResults = catchAsync(async (req, res) => {
+  const { studentId, moduleId, playlistItemId } = req.params;
+
+  const results = await studentEssayService.getEssayResults(studentId, moduleId, playlistItemId);
+  res.send(results);
+});
+
+export { submitEssayAttempt, getEssayResults };

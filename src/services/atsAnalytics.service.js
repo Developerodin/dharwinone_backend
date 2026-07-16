@@ -99,6 +99,36 @@ function getDateRange(range) {
   return { start, end, previousStart, previousEnd, days };
 }
 
+function createdAtMatch(dateRange) {
+  if (!dateRange) return {};
+  return { createdAt: { $gte: dateRange.start, $lte: dateRange.end } };
+}
+
+async function countTotalCandidates(isRecruiter, user, candidateMatch, dateRange) {
+  if (isRecruiter) {
+    return Employee.countDocuments({ ...candidateMatch, ...createdAtMatch(dateRange) });
+  }
+  const filter = { employmentStatus: 'current' };
+  if (dateRange) {
+    filter.createdFrom = dateRange.start.toISOString();
+    filter.createdTo = dateRange.end.toISOString();
+  }
+  const listResult = await queryCandidates(filter, { page: 1, limit: 1, sortBy: 'createdAt:desc' });
+  return Number(listResult.totalResults ?? 0);
+}
+
+async function countTotalRecruiters(isRecruiter, dateRange, activitySummary) {
+  if (isRecruiter) return 1;
+  if (dateRange) {
+    const active = (activitySummary || []).filter((row) => Number(row.totalActivities) > 0);
+    if (active.length > 0) return active.length;
+    return 0;
+  }
+  const Role = (await import('../models/role.model.js')).default;
+  const recruiterRole = await Role.findOne({ name: 'Recruiter', status: 'active' }).select('_id').lean();
+  return recruiterRole ? User.countDocuments({ roleIds: recruiterRole._id }) : 0;
+}
+
 function timeSeriesPipeline(dateField, extraMatch = {}, dateRange = null) {
   const match = { [dateField]: { $exists: true, $ne: null } };
   if (dateRange) {
@@ -155,7 +185,8 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     ...(dateRange ? { dateFrom: dateRange.start.toISOString(), dateTo: dateRange.end.toISOString() } : {}),
   };
   const { query: appMatch } = await buildApplicantQuery(appFilter, user);
-  const appDateMatch = dateRange ? { createdAt: { $gte: dateRange.start, $lte: dateRange.end } } : {};
+  const jobDateMatch = createdAtMatch(dateRange);
+  const candidateProfileMatch = { ...candidateMatch, ...createdAtMatch(dateRange) };
 
   const [
     totalCandidates,
@@ -163,7 +194,6 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     activeJobs,
     totalApplications,
     hiredCount,
-    totalRecruiters,
     avgProfileAgg,
     applicationFunnelAgg,
     applicationsOverTime,
@@ -177,56 +207,39 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
     previousApplications,
     previousHired,
   ] = await Promise.all([
-    // Match GET /employees total: Candidate-role owners + default "current" employment (not resigned), not all active-user employee rows.
-    (async () => {
-      if (isRecruiter) {
-        return Employee.countDocuments(candidateMatch);
-      }
-      const listResult = await queryCandidates(
-        { employmentStatus: 'current' },
-        { page: 1, limit: 1, sortBy: 'createdAt:desc' }
-      );
-      return Number(listResult.totalResults ?? 0);
-    })(),
-    Job.countDocuments(jobMatch),
-    Job.countDocuments({ ...jobMatch, status: 'Active' }),
-    JobApplication.countDocuments({ ...appMatch, ...appDateMatch }),
-    JobApplication.countDocuments({ ...appMatch, ...appDateMatch, status: 'Hired' }),
-    isRecruiter
-      ? Promise.resolve(1)
-      : (async () => {
-          const Role = (await import('../models/role.model.js')).default;
-          const recruiterRole = await Role.findOne({ name: 'Recruiter', status: 'active' }).select('_id').lean();
-          return recruiterRole ? User.countDocuments({ roleIds: recruiterRole._id }) : 0;
-        })(),
+    countTotalCandidates(isRecruiter, user, candidateMatch, dateRange),
+    Job.countDocuments({ ...jobMatch, ...jobDateMatch }),
+    Job.countDocuments({ ...jobMatch, status: 'Active', ...jobDateMatch }),
+    JobApplication.countDocuments(appMatch),
+    JobApplication.countDocuments({ ...appMatch, status: 'Hired' }),
     Employee.aggregate([
-      { $match: candidateMatch },
+      { $match: candidateProfileMatch },
       { $group: { _id: null, avg: { $avg: '$isProfileCompleted' } } },
     ]),
     JobApplication.aggregate([
-      { $match: { ...appMatch, ...appDateMatch } },
+      { $match: appMatch },
       { $group: { _id: '$status', count: { $sum: 1 } } },
       { $project: { status: '$_id', count: 1, _id: 0 } },
     ]),
     JobApplication.aggregate(timeSeriesPipeline('createdAt', appMatch, dateRange)),
     Job.aggregate(timeSeriesPipeline('createdAt', jobMatch, dateRange)),
     Job.aggregate([
-      { $match: jobMatch },
+      { $match: { ...jobMatch, ...jobDateMatch } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
       { $project: { status: '$_id', count: 1, _id: 0 } },
     ]),
     Job.aggregate([
-      { $match: jobMatch },
+      { $match: { ...jobMatch, ...jobDateMatch } },
       { $group: { _id: '$jobType', count: { $sum: 1 } } },
       { $project: { jobType: '$_id', count: 1, _id: 0 } },
     ]),
     JobApplication.aggregate([
-      { $match: { ...appMatch, ...appDateMatch } },
+      { $match: appMatch },
       { $group: { _id: '$status', count: { $sum: 1 } } },
       { $project: { status: '$_id', count: 1, _id: 0 } },
     ]),
     JobApplication.aggregate([
-      { $match: { ...appMatch, ...appDateMatch } },
+      { $match: appMatch },
       { $group: { _id: '$job', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 10 },
@@ -280,6 +293,8 @@ const getAtsAnalytics = async (options = {}, user = {}) => {
         })()
       : Promise.resolve(null),
   ]);
+
+  const totalRecruiters = await countTotalRecruiters(isRecruiter, dateRange, recruiterActivitySummary);
 
   const avgProfileCompletion =
     avgProfileAgg?.[0]?.avg != null ? Math.round(Number(avgProfileAgg[0].avg)) : 0;
@@ -483,3 +498,5 @@ export default {
   getDrillDown,
   getApplicationsOverTimeByCandidates,
 };
+
+export { getDateRange, createdAtMatch, RANGE_DAYS };

@@ -17,8 +17,10 @@ const resolveDeliveryEmail = async (to) => {
   if (!to) return to;
   const normalized = String(to).trim().toLowerCase();
   try {
-    const emp = await Employee.findOne({ email: normalized })
-      .select('companyAssignedEmail')
+    const emp = await Employee.findOne({
+      $or: [{ email: normalized }, { companyAssignedEmail: normalized }],
+    })
+      .select('companyAssignedEmail email')
       .lean();
     const assigned = emp?.companyAssignedEmail?.trim();
     return assigned || to;
@@ -749,30 +751,54 @@ const buildSeriesIcs = async (series, location) => {
 };
 
 /**
- * Send meeting invitation email
- * @param {string} to - Recipient email
- * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl, icsContent? }
- * @returns {Promise}
+ * Joining-policy tips for invitation emails (2×2 matrix of allowGuestJoin × requireApproval).
+ * @param {{ allowGuestJoin?: boolean, requireApproval?: boolean }} opts
+ * @returns {string[]}
  */
-const sendMeetingInvitationEmail = async (to, payload) => {
-  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
-  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
-    logger.debug(`Skipping meeting invitation email to ${to} (notification preferences)`);
-    return;
+const buildMeetingJoiningPolicyTips = ({ allowGuestJoin = false, requireApproval = false } = {}) => {
+  if (requireApproval && !allowGuestJoin) {
+    return [
+      'If you were invited, you may need to wait in a waiting room until the host admits you.',
+      'If you were not invited, use the join link and ask for permission — the host must approve your entry.',
+    ];
   }
-  const {
-    title,
-    scheduledAt,
-    durationMinutes,
-    publicMeetingUrl,
-    inviteeName,
-    hostName,
-    timezone,
-    interviewType,
-    jobPosition,
-    description,
-    icsContent,
-  } = payload;
+  if (requireApproval && allowGuestJoin) {
+    return [
+      'All non-host participants enter a waiting room until the host admits them.',
+    ];
+  }
+  if (!requireApproval && allowGuestJoin) {
+    return [
+      'This is an open room — anyone with the join link can enter directly.',
+    ];
+  }
+  return [
+    'This meeting is invite-only. Invited participants can join with their personalised link.',
+    'If you were not invited, you must request access — the host must approve your entry.',
+  ];
+};
+
+/**
+ * Build meeting invitation email content (shared by send + tests).
+ * @param {Object} payload
+ * @returns {{ subject: string, text: string, html: string }}
+ */
+const buildMeetingInvitationEmail = ({
+  title,
+  scheduledAt,
+  durationMinutes,
+  publicMeetingUrl,
+  inviteeName,
+  hostName,
+  timezone,
+  interviewType,
+  jobPosition,
+  description,
+  allowGuestJoin,
+  requireApproval,
+}) => {
+  const joinUrl = typeof publicMeetingUrl === 'string' ? publicMeetingUrl.trim() : '';
+  const isVideoMeeting = !interviewType || /^video$/i.test(String(interviewType).trim());
   const subject = `Meeting invitation: ${title || 'Dharwin meeting'}`;
   const scheduled = formatDateTime(scheduledAt, timezone);
   const duration = durationMinutes ? `${durationMinutes} minutes` : '';
@@ -788,21 +814,25 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     { label: 'Host', value: hostName || '' },
     { label: 'Interview type', value: interviewType || '' },
     { label: 'Role / position', value: jobPosition || '' },
+    ...(isVideoMeeting && joinUrl ? [{ label: 'Join link', value: joinUrl }] : []),
   ];
   const sections = [
     description
       ? { title: 'Agenda', tone: 'info', bodyLines: [truncateText(description, 400)] }
       : null,
-    {
-      title: 'Joining tips',
-      tone: 'neutral',
-      bulletItems: [
-        'Use the personalised join link below for the best access experience.',
-        'Join a few minutes early to test your audio and video setup.',
-      ],
-    },
+    isVideoMeeting && joinUrl
+      ? {
+          title: 'Joining tips',
+          tone: 'neutral',
+          bulletItems: [
+            'Use the personalised join link below for the best access experience.',
+            'Join a few minutes early to test your audio and video setup.',
+            ...buildMeetingJoiningPolicyTips({ allowGuestJoin, requireApproval }),
+          ],
+        }
+      : null,
   ].filter(Boolean);
-  const primaryAction = { label: 'Join meeting', href: publicMeetingUrl };
+  const primaryAction = isVideoMeeting && joinUrl ? { label: 'Join meeting', href: joinUrl } : null;
   const text = buildPlainTextEmail({
     title: 'Meeting invitation',
     greeting: inviteeName || 'there',
@@ -821,6 +851,26 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     primaryAction,
     preheader: `Meeting scheduled for ${scheduled}.`,
   });
+  return { subject, text, html, isVideoMeeting, joinUrl };
+};
+
+/**
+ * Send meeting invitation email
+ * @param {string} to - Recipient email
+ * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl, icsContent? }
+ * @returns {Promise}
+ */
+const sendMeetingInvitationEmail = async (to, payload) => {
+  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    logger.debug(`Skipping meeting invitation email to ${to} (notification preferences)`);
+    return;
+  }
+  const { icsContent, ...contentPayload } = payload;
+  const { subject, text, html, isVideoMeeting, joinUrl } = buildMeetingInvitationEmail(contentPayload);
+  if (isVideoMeeting && !joinUrl) {
+    logger.warn(`Meeting invitation to ${to} missing join URL for "${contentPayload.title || 'Meeting'}"`);
+  }
   const extra = icsContent
     ? { icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: icsContent } }
     : {};
@@ -830,7 +880,14 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     text,
     html,
     'meetingInvitation',
-    compactMetadata({ title, scheduled, timezone, hostName, interviewType, jobPosition }),
+    compactMetadata({
+      title: contentPayload.title,
+      scheduled: formatDateTime(contentPayload.scheduledAt, contentPayload.timezone),
+      timezone: contentPayload.timezone,
+      hostName: contentPayload.hostName,
+      interviewType: contentPayload.interviewType,
+      jobPosition: contentPayload.jobPosition,
+    }),
     extra
   );
 };
@@ -1201,6 +1258,8 @@ export {
   sendCandidateProfileShareEmail,
   sendCandidateAccountActivationEmail,
   sendMeetingInvitationEmail,
+  buildMeetingInvitationEmail,
+  buildMeetingJoiningPolicyTips,
   buildIcsEvent,
   buildSeriesIcs,
   buildMeetingReminderEmail,

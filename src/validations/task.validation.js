@@ -27,6 +27,11 @@ const commaSeparatedPriorities = Joi.string().custom((value, helpers) => {
   return value;
 }, 'comma-separated priorities');
 
+/** Query flags: accept Joi booleans plus URL-style "1"/"0" (task board url-state). */
+const queryBooleanFlag = Joi.alternatives()
+  .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+  .optional();
+
 const createTask = {
   body: Joi.object()
     .keys({
@@ -64,10 +69,10 @@ const getTasks = {
     sprintId: commaSeparatedObjectIds.optional(),
     createdBy: commaSeparatedObjectIds.optional(),
     search: Joi.string().optional(),
-    assignedToMe: Joi.boolean().optional(),
-    unassigned: Joi.boolean().optional(),
-    leaving: Joi.boolean().optional(),
-    reassigned: Joi.boolean().optional(),
+    assignedToMe: queryBooleanFlag,
+    unassigned: queryBooleanFlag,
+    leaving: queryBooleanFlag,
+    reassigned: queryBooleanFlag,
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(200).optional(),
     page: Joi.number().integer().optional(),

@@ -77,6 +77,8 @@ const sendInvitationEmails = (meeting, emails) => {
       jobPosition: '',
       description: meeting.description,
       publicMeetingUrl: personalUrl,
+      allowGuestJoin: meeting.allowGuestJoin,
+      requireApproval: meeting.requireApproval,
     };
     sendMeetingInvitationEmail(to, payload).catch((err) => {
       logger.warn(`Failed to send internal meeting invitation to ${to}:`, err?.message || err);
@@ -219,6 +221,8 @@ const resendInternalMeetingInvitations = async (id) => {
         jobPosition: '',
         description: meeting.description,
         publicMeetingUrl: personalUrl,
+        allowGuestJoin: meeting.allowGuestJoin,
+        requireApproval: meeting.requireApproval,
       };
       return sendMeetingInvitationEmail(to, payload)
         .then(() => {

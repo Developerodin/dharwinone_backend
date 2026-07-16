@@ -225,6 +225,21 @@ const resolveInviteeDisplayName = (meeting, emailAddress) => {
   return local || 'Guest';
 };
 
+const OBJECT_ID_HEX_RE = /^[0-9a-fA-F]{24}$/;
+
+/**
+ * Human-readable job title for invitation emails — meeting.jobPosition may store a Job ObjectId.
+ * @param {string|undefined|null} jobPosition
+ * @returns {Promise<string>}
+ */
+async function resolveJobPositionDisplayTitle(jobPosition) {
+  const val = (jobPosition || '').trim();
+  if (!val) return '';
+  if (!OBJECT_ID_HEX_RE.test(val)) return val;
+  const job = await Job.findById(val).select('title').lean();
+  return job?.title?.trim() || '—';
+}
+
 /** In-app notification payload for interview meetings (relative join path + metadata for legacy fallback). */
 const interviewMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
   link: getInAppMeetingLink(meeting.meetingId, invite),
@@ -263,8 +278,9 @@ const getInvitationEmails = (meeting) => {
  * @param {Object} meeting - Meeting document
  * @param {string[]} emails - lowercased recipient emails
  */
-const sendInvitationEmails = (meeting, emails) => {
+const sendInvitationEmails = async (meeting, emails) => {
   const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
+  const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
   emails.forEach((to) => {
     const inviteName = resolveInviteeDisplayName(meeting, to);
     const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
@@ -276,9 +292,11 @@ const sendInvitationEmails = (meeting, emails) => {
       inviteeName: inviteName,
       hostName: meeting.recruiter?.name || meeting.hosts?.[0]?.nameOrRole || '',
       interviewType: meeting.interviewType,
-      jobPosition: meeting.jobPosition,
+      jobPosition: jobPositionDisplay,
       description: meeting.description,
       publicMeetingUrl: personalUrl,
+      allowGuestJoin: meeting.allowGuestJoin,
+      requireApproval: meeting.requireApproval,
     };
     sendMeetingInvitationEmail(to, payload).catch((err) => {
       logger.warn(`Failed to send meeting invitation to ${to}:`, err?.message || err);
@@ -374,7 +392,9 @@ const createMeeting = async (body, userId) => {
   }
 
   // Send invitation emails to everyone (fire-and-forget; log errors)
-  sendInvitationEmails(meeting, getInvitationEmails(meeting));
+  sendInvitationEmails(meeting, getInvitationEmails(meeting)).catch((err) => {
+    logger.warn('sendInvitationEmails failed:', err?.message || err);
+  });
 
   return meetingObj;
 };
@@ -646,7 +666,11 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
 
   // Email ONLY the newly-added invitees/participants (decision: no re-spam on edit).
   const newlyAddedEmails = getInvitationEmails(meeting).filter((e) => !beforeInviteEmails.has(e));
-  if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
+  if (newlyAddedEmails.length) {
+    sendInvitationEmails(meeting, newlyAddedEmails).catch((err) => {
+      logger.warn('sendInvitationEmails failed:', err?.message || err);
+    });
+  }
 
   // If admin flips status -> 'ended' via PATCH, mirror endMeetingByRoomPublic:
   // stop active egress + wait for finalize before deleting LiveKit room. Without
@@ -742,6 +766,7 @@ const resendMeetingInvitations = async (id, currentUser = null) => {
   await assertMeetingInScope(meeting, currentUser);
   const emails = getInvitationEmails(meeting);
   const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
+  const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
   let sent = 0;
   const { notifyByEmail } = await import('./notification.service.js');
   await Promise.all(
@@ -756,9 +781,11 @@ const resendMeetingInvitations = async (id, currentUser = null) => {
         inviteeName: inviteName,
         hostName: meeting.recruiter?.name || meeting.hosts?.[0]?.nameOrRole || '',
         interviewType: meeting.interviewType,
-        jobPosition: meeting.jobPosition,
+        jobPosition: jobPositionDisplay,
         description: meeting.description,
         publicMeetingUrl: personalUrl,
+        allowGuestJoin: meeting.allowGuestJoin,
+        requireApproval: meeting.requireApproval,
       };
       return sendMeetingInvitationEmail(to, payload)
         .then(() => {
@@ -1296,4 +1323,5 @@ export {
   endMeetingByRoomPublic,
   autoEndExpiredMeetings,
   getInvitationEmails,
+  resolveJobPositionDisplayTitle,
 };
