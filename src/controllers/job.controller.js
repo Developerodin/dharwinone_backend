@@ -138,14 +138,13 @@ const remove = catchAsync(async (req, res) => {
 
 // Excel Export
 const exportExcel = catchAsync(async (req, res) => {
-  const filter = pick(req.query, [
-    'title',
-    'jobType',
-    'location',
-    'status',
-    'experienceLevel',
-    'createdBy',
-  ]);
+  // ids = the rows visible on the client after its own filtering. Role scoping is
+  // still applied below, so naming ids can't widen access beyond what the user may see.
+  const filter = {};
+  const { ids } = req.body;
+  if (ids?.length) {
+    filter._id = { $in: ids };
+  }
 
   filter.userRoleIds = req.user.roleIds || [];
   filter.userId = req.user.id || req.user._id;

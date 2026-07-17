@@ -145,6 +145,14 @@ app.get('/health', (req, res) => {
   res.status(httpStatus.OK).json({ status: 'ok' });
 });
 
+// API responses are per-user and must never land in the browser HTTP cache —
+// a cached error response for a given URL otherwise keeps failing that request
+// until the user manually clears their cache.
+app.use('/v1', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // P3: resolve tenant from authenticated user before all v1 routes.
 app.use('/v1', tenantResolver);
 // v1 api routes

@@ -153,18 +153,13 @@ const shareJobEmail = {
   }).required(),
 };
 
+// The jobs list filters client-side (title/company/location arrays, salary and
+// experience ranges), so no server query reproduces what the user sees. The page
+// posts the visible row ids instead; omitting them exports every job in scope.
+// 500 matches the list's own fetch limit.
 const exportJobs = {
-  query: Joi.object().keys({
-    title: Joi.string().optional(),
-    jobType: Joi.string()
-      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
-      .optional(),
-    location: Joi.string().optional(),
-    status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
-    experienceLevel: Joi.string()
-      .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
-      .optional(),
-    createdBy: Joi.string().custom(objectId).optional(),
+  body: Joi.object().keys({
+    ids: Joi.array().items(Joi.string().custom(objectId)).min(1).max(500).optional(),
   }),
 };
 

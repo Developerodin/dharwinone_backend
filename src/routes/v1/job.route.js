@@ -17,7 +17,8 @@ router
 
 router
   .route('/export/excel')
-  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.exportJobs), jobController.exportExcel);
+  // POST, not GET: the body carries up to 500 visible row ids, too long for a URL.
+  .post(auth(), requirePermissions('jobs.read'), validate(jobValidation.exportJobs), jobController.exportExcel);
 
 router
   .route('/template/excel')

@@ -475,6 +475,30 @@ const deleteJobById = async (id, currentUser) => {
   return job;
 };
 
+/** A leading =, +, -, or @ is quoted so Excel treats the cell as text, not a formula. */
+const defangCell = (v) => {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /^[=+\-@]/.test(s) ? `'${s}` : s;
+};
+
+/** "YYYY-MM-DD HH:mm" UTC — readable in a cell, unlike a raw ISO string. */
+const fmtDateTime = (d) => {
+  if (!d) return '';
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 16).replace('T', ' ');
+};
+
+/** Size every column to its longest value (clamped 10..60) so nothing truncates. */
+const autoCols = (aoa, headers) =>
+  headers.map((h, col) => {
+    const longest = aoa.reduce((max, row) => {
+      const len = String(row[col] ?? '').length;
+      return len > max ? len : max;
+    }, h.length);
+    return { wch: Math.min(Math.max(longest + 2, 10), 60) };
+  });
+
 // Excel Export
 const exportJobsToExcel = async (filters = {}) => {
   const canSeeAllTenantJobs = await userCanViewAllJobsForListing({
@@ -494,44 +518,53 @@ const exportJobsToExcel = async (filters = {}) => {
     .populate('templateId', 'name')
     .sort({ createdAt: -1 });
 
-  const exportData = jobs.map((job) => ({
-    'Job Title': job.title,
-    'Organisation Name': job.organisation?.name || '',
-    'Organisation Website': job.organisation?.website || '',
-    'Organisation Email': job.organisation?.email || '',
-    'Organisation Phone': job.organisation?.phone || '',
-    'Organisation Address': job.organisation?.address || '',
-    'Job Type': job.jobType,
-    'Location': job.location,
-    'Skill Tags': job.skillTags?.join('; ') || '',
-    'Job Description': job.jobDescription || '',
-    'Salary Min': job.salaryRange?.min || '',
-    'Salary Max': job.salaryRange?.max || '',
-    'Salary Currency': job.salaryRange?.currency || '',
-    'Experience Level': job.experienceLevel || '',
-    'Status': job.status,
-    'Template Used': job.templateId?.name || '',
-    'Created By': job.createdBy?.name || '',
-    'Created At': job.createdAt ? new Date(job.createdAt).toISOString() : '',
-    'Updated At': job.updatedAt ? new Date(job.updatedAt).toISOString() : '',
-  }));
+  const headers = [
+    'Job Title', 'Organisation Name', 'Organisation Website', 'Organisation Email',
+    'Organisation Phone', 'Organisation Address', 'Job Type', 'Location',
+    'Skill Tags', 'Job Description', 'Salary Min', 'Salary Max', 'Salary Currency',
+    'Experience Level', 'Status', 'Template Used', 'Created By',
+    'Created At (UTC)', 'Updated At (UTC)',
+  ];
+  // Header on row 1 (no banner/blank offset) so sort, filter, and freeze work.
+  const aoa = [headers];
+  for (const job of jobs) {
+    const org = job.organisation || {};
+    aoa.push(
+      [
+        job.title || '',
+        org.name || '',
+        org.website || '',
+        org.email || '',
+        org.phone || '',
+        org.address || '',
+        job.jobType || '',
+        job.location || '',
+        job.skillTags?.join('; ') || '',
+        job.jobDescription || '',
+        job.salaryRange?.min ?? '',
+        job.salaryRange?.max ?? '',
+        job.salaryRange?.currency || '',
+        job.experienceLevel || '',
+        job.status || '',
+        job.templateId?.name || '',
+        job.createdBy?.name || '',
+        fmtDateTime(job.createdAt),
+        fmtDateTime(job.updatedAt),
+      ].map(defangCell)
+    );
+  }
 
   const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
-
-  const columnWidths = [
-    { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 20 },
-    { wch: 30 }, { wch: 15 }, { wch: 20 }, { wch: 30 }, { wch: 50 },
-    { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 12 },
-    { wch: 20 }, { wch: 20 }, { wch: 25 }, { wch: 25 },
-  ];
-  worksheet['!cols'] = columnWidths;
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+  worksheet['!cols'] = autoCols(aoa, headers);
+  // Filter dropdowns on the header row. (The community xlsx writer drops !freeze,
+  // so setting it would be dead code.)
+  const lastCol = XLSX.utils.encode_col(headers.length - 1);
+  worksheet['!autofilter'] = { ref: `A1:${lastCol}${aoa.length}` };
 
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Jobs');
 
-  const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-
-  return excelBuffer;
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 };
 
 // Excel Template (headers + sample row for import)
