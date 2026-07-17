@@ -443,6 +443,10 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
   const ticket = await DevTicket.findById(ticketId);
   if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Dev ticket not found');
 
+  // Everyone with devTickets.view can read a ticket, but only the reporter,
+  // the assignee, or an admin may comment or attach files to it.
+  await assertCanEdit(ticket, user);
+
   const actorId = getUserId(user);
   const admin = await isAdmin(user);
 
