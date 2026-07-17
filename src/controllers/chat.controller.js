@@ -196,9 +196,12 @@ const endCallByRoom = catchAsync(async (req, res) => {
 const searchUsers = catchAsync(async (req, res) => {
   const search = req.query.search?.trim();
   const limit = Math.min(250, parseInt(req.query.limit, 10) || 20);
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const result = await queryUsers(
     { search: search || undefined, status: 'active' },
-    { limit, page: 1, sortBy: 'name:asc' },
+    // `_id` tiebreak keeps skip-based paging stable: names are not unique, and Mongo gives
+    // no deterministic order within a tie, so page N and N+1 could repeat or drop a user.
+    { limit, page, sortBy: 'name:asc,_id:asc' },
     req.user
   );
   res.send(result);
