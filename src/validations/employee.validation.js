@@ -641,6 +641,15 @@ const getReferralLeadsStats = {
   query: Joi.object().keys(referralLeadsQueryKeys),
 };
 
+const exportReferralLeads = {
+  query: Joi.object().keys(
+    Object.fromEntries(
+      Object.entries(referralLeadsQueryKeys).filter(([key]) => !['page', 'limit'].includes(key))
+    )
+  ),
+  body: Joi.object().keys({}).optional(),
+};
+
 const postReferralLinkToken = {
   body: Joi.object()
     .keys({
@@ -744,6 +753,7 @@ export {
   getCandidate,
   getReferralLeads,
   getReferralLeadsStats,
+  exportReferralLeads,
   postReferralLinkToken,
   postReferralAttributionOverride,
   getReferralAttributionOverrideHistory,

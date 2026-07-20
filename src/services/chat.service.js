@@ -543,7 +543,7 @@ const listCallsForConversation = async (conversationId, userId, { limit = 50 } =
   });
 };
 
-const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
+const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search } = {}) => {
   // Reconcile stuck rings/ongoing before reading so the UI never shows a call
   // that's been "ringing" for an hour. Cheap bulk update; no-op when clean.
   // Lazy require to avoid the static cycle chat.service → chatCall.service → chat.service.
@@ -555,7 +555,28 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false }) => {
     logger.warn(`[listCalls] expireStaleCalls failed: ${err?.message}`);
   }
   const skip = (page - 1) * limit;
-  const filter = isAdmin ? {} : { $or: [{ caller: userId }, { participants: userId }] };
+  let filter = isAdmin ? {} : { $or: [{ caller: userId }, { participants: userId }] };
+
+  const searchTerm = typeof search === 'string' ? search.trim() : '';
+  if (searchTerm) {
+    const matchingUsers = await User.find({
+      status: 'active',
+      $or: [{ name: new RegExp(searchTerm, 'i') }, { email: new RegExp(searchTerm, 'i') }],
+    })
+      .select('_id')
+      .limit(100)
+      .lean();
+    const matchingIds = matchingUsers.map((u) => u._id);
+    if (matchingIds.length === 0) {
+      return { results: [], page, limit, total: 0, totalPages: 0 };
+    }
+    filter = {
+      $and: [
+        filter,
+        { $or: [{ caller: { $in: matchingIds } }, { participants: { $in: matchingIds } }] },
+      ],
+    };
+  }
   const calls = await ChatCall.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)

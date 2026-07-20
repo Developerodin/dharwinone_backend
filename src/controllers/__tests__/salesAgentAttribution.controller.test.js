@@ -19,7 +19,7 @@ mock.module('../../services/referralLeads.service.js', {
     getReferralLeadById: mockLead,
     listReferralLeads: mock.fn(),
     getReferralLeadsStats: mock.fn(),
-    exportReferralLeadsCsv: mock.fn(),
+    exportReferralLeadsExcel: mock.fn(),
     overrideReferralAttribution: mock.fn(),
     getReferralAttributionOverrideHistory: mock.fn(),
     syncReferralPipelineStatusForCandidate: mock.fn(async () => {}),

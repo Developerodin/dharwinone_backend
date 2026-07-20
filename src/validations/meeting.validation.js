@@ -78,14 +78,43 @@ const createMeeting = {
     .min(1),
 };
 
+const meetingFilterQueryKeys = {
+  title: Joi.string().trim().allow(''),
+  /** Comma-separated status values (matches Interviews filter panel). */
+  status: Joi.string().trim().allow(''),
+  /** Comma-separated candidate display names — substring match on candidate.name. */
+  candidate: Joi.string().trim().allow(''),
+  /** Comma-separated recruiter display names — substring match on recruiter.name. */
+  recruiter: Joi.string().trim().allow(''),
+  /** Comma-separated interview types (Video, In-Person, Phone). */
+  interviewType: Joi.string().trim().allow(''),
+  sortBy: Joi.string(),
+  limit: Joi.number().integer().min(1).max(100),
+  page: Joi.number().integer().min(1),
+};
+
 const getMeetings = {
   query: Joi.object().keys({
-    title: Joi.string().trim(),
-    status: Joi.string().valid(...INTERVIEW_STATUSES),
-    sortBy: Joi.string().default('-createdAt'),
-    limit: Joi.number().integer().min(1).max(100).default(10),
-    page: Joi.number().integer().min(1).default(1),
+    ...meetingFilterQueryKeys,
+    sortBy: meetingFilterQueryKeys.sortBy.default('-createdAt'),
+    limit: meetingFilterQueryKeys.limit.default(10),
+    page: meetingFilterQueryKeys.page.default(1),
   }),
+};
+
+const exportMeetings = {
+  query: Joi.object().keys(
+    Object.fromEntries(
+      Object.entries(meetingFilterQueryKeys).filter(([key]) => !['page', 'limit'].includes(key))
+    )
+  ),
+  body: Joi.object()
+    .keys({
+      ids: Joi.array()
+        .items(Joi.string().pattern(/^[0-9a-fA-F]{24}$/))
+        .optional(),
+    })
+    .optional(),
 };
 
 // id can be MongoDB ObjectId or meetingId string (e.g. meeting_xxx)
@@ -170,6 +199,7 @@ const endMeetingByRoomPublic = {
 export {
   createMeeting,
   getMeetings,
+  exportMeetings,
   getMeeting,
   getMeetingRecordings,
   updateMeeting,

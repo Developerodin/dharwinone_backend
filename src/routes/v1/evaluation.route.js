@@ -12,4 +12,11 @@ router.get(
   evaluationController.default.getEvaluation
 );
 
+router.get(
+  '/export',
+  auth(),
+  requirePermissions('evaluation.read'),
+  evaluationController.default.exportEvaluationExcel
+);
+
 export default router;

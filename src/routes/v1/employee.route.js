@@ -77,10 +77,10 @@ router.get(
   validate(employeeValidation.getReferralLeadsStats),
   employeeController.getReferralLeadsStatsHandler
 );
-router.get(
+router.post(
   '/referral-leads/export',
   ...canReadCandidatesOnly,
-  validate(employeeValidation.getReferralLeadsStats),
+  validate(employeeValidation.exportReferralLeads),
   employeeController.exportReferralLeadsHandler
 );
 router.post(

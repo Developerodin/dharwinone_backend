@@ -31,5 +31,7 @@ test('header is on row 1, data aligned to columns, autofilter over full range', 
   assert.equal(ws.N1.v, 'Meeting Link');
   assert.equal(ws.A2.v, 'M1');
   assert.equal(ws.B2.v, 'John Anderson');
+  assert.equal(ws.K2.v, 'Completed');
+  assert.equal(ws.L2.v, 'Pending');
   assert.equal(ws['!autofilter'].ref, 'A1:N2');
 });

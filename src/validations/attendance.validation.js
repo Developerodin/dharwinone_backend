@@ -112,6 +112,7 @@ const getStatistics = {
 const trackList = {
   query: Joi.object().keys({
     search: Joi.string().trim().allow('').optional(),
+    punchStatus: Joi.string().valid('all', 'in', 'out').optional(),
   }),
 };
 
@@ -120,6 +121,21 @@ const trackHistory = {
     startDate: Joi.date().iso(),
     endDate: Joi.date().iso(),
     limit: Joi.number().integer().min(1).max(1000),
+    search: Joi.string().trim().allow('').optional(),
+  }),
+};
+
+const trackExport = {
+  query: Joi.object().keys({
+    search: Joi.string().trim().allow('').optional(),
+    punchStatus: Joi.string().valid('all', 'in', 'out').optional(),
+  }),
+};
+
+const trackHistoryExport = {
+  query: Joi.object().keys({
+    startDate: Joi.date().iso(),
+    endDate: Joi.date().iso(),
     search: Joi.string().trim().allow('').optional(),
   }),
 };
@@ -236,6 +252,8 @@ export {
   getStatisticsMe,
   trackList,
   trackHistory,
+  trackExport,
+  trackHistoryExport,
   addHolidaysToStudents,
   removeHolidaysFromStudents,
   assignLeavesToStudents,

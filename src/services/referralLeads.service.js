@@ -25,6 +25,7 @@ import {
   isTerminalMetaStatus,
   pipelineStatusToLifecycleStage,
 } from '../utils/referralPipelineStatus.js';
+import { buildReferralLeadsExportBuffer } from '../utils/referralLeadsExcel.service.js';
 import {
   applyNewFilters,
   buildSalesAgentListEnrichmentStages,
@@ -1073,90 +1074,55 @@ export const getReferralLeadsStats = async (req) => {
   };
 };
 
-export const exportReferralLeadsCsv = async (req, res) => {
+const REFERRAL_LEADS_EXPORT_CAP = 5000;
+
+/**
+ * Fetch referral leads for export using the same filter pipeline as listReferralLeads
+ * (full filtered dataset, not paginated).
+ *
+ * @param {import('express').Request} req
+ * @returns {Promise<object[]>} aggregate rows before shapeLeadRow
+ */
+export const fetchReferralLeadsForExport = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
-  const q = { ...req.query, search: undefined };
+  const q = req.query || {};
   const match = { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
-  const exportStatusMatch = effectiveStatusMatch(q);
-  const exportQuickMatch = quickFilterEffectiveStatusMatch(q);
-  const cap = 5000;
-  const rows = await Employee.aggregate([
+  const ownerStages = referralLeadsRequireExistingOwnerStages();
+  const statusMatch = effectiveStatusMatch(q);
+  const quickMatch = quickFilterEffectiveStatusMatch(q);
+  const effStages = needsEffectiveStatusPipeline(q) ? buildEffectiveStatusStages(new Date()) : [];
+
+  return Employee.aggregate([
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
-    ...referralLeadsRequireExistingOwnerStages(),
-    ...(needsEffectiveStatusPipeline(q) ? buildEffectiveStatusStages(new Date()) : []),
-    ...exportStatusMatch,
-    ...exportQuickMatch,
+    ...ownerStages,
+    ...effStages,
+    ...statusMatch,
+    ...quickMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
-    { $sort: { referredAt: -1 } },
-    { $limit: cap },
+    { $sort: { referredAt: -1, _id: -1 } },
+    { $limit: REFERRAL_LEADS_EXPORT_CAP },
   ]);
+};
 
-  const orgId = config.referral?.defaultOrgId || 'default';
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="referral-leads.csv"');
-  const header = [
-    'candidate_id',
-    'candidate_name',
-    'candidate_email',
-    'referrer_id',
-    'referrer_name',
-    'referrer_role',
-    'referral_context',
-    'job_id',
-    'job_title',
-    'referral_jti',
-    'status',
-    'referred_at',
-    'attribution_locked_at',
-    'org_id',
-    'sales_agent_name',
-    'sales_agent_email',
-    'sales_agent_assigned_at',
-    'sales_agent_scope',
-    'lifecycle_stage',
-    'employee_converted',
-    'employee_status',
-    'joining_date',
-    'attribution_job_id',
-    'attribution_job_title',
-  ].join(',');
-  res.write(`${header}\n`);
-  for (const r of rows) {
-    const ref = r.referredByUserId;
-    const rid = ref?._id ? String(ref._id) : r.referredByUserId ? String(r.referredByUserId) : '';
-    const rname = (ref && ref.name) || '';
-    const salesAgentName = r.currentSalesAgent?.name || r.currentSalesAgent?.fullName || '';
-    const salesAgentEmail = r.currentSalesAgent?.email || '';
-    const line = [
-      r._id,
-      r.fullName,
-      r.email,
-      rid,
-      rname,
-      '',
-      r.referralContext || '',
-      r.referralJobId?._id || r.referralJobId || '',
-      r.referralJobId?.title || r.referralJobTitle || '',
-      r.referralJti || '',
-      r.referralPipelineStatus || '',
-      r.referredAt ? new Date(r.referredAt).toISOString() : '',
-      r.attributionLockedAt ? new Date(r.attributionLockedAt).toISOString() : '',
-      orgId,
-      salesAgentName,
-      salesAgentEmail,
-      r.currentSalesAgentAssignedAt ? new Date(r.currentSalesAgentAssignedAt).toISOString() : '',
-      r.currentSalesAgentJobId == null ? 'candidate' : 'job',
-      r.lifecycleStage || '',
-      r.employeeConverted === true ? 'true' : 'false',
-      r.employeeStatus || '',
-      r.joiningDate ? new Date(r.joiningDate).toISOString() : '',
-      r.attributionJobId || '',
-      r.referralJobId?.title || r.referralJobTitle || '',
-    ];
-    res.write(`${line.map((x) => csvCell(x)).join(',')}\n`);
-  }
-  res.end();
+/** POST /employees/referral-leads/export — same filters as list; returns .xlsx blob. */
+export const exportReferralLeadsExcel = async (req, res) => {
+  const q = req.query || {};
+  const rows = await fetchReferralLeadsForExport(req);
+  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(rows);
+  const shaped = await Promise.all(rows.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
+  const dateStamp = new Date().toISOString().split('T')[0];
+  const buf = buildReferralLeadsExportBuffer(shaped);
+
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="referral-leads-export-${dateStamp}.xlsx"`
+  );
+  res.send(buf);
 
   try {
     await activityLogService.createActivityLog(
@@ -1164,19 +1130,13 @@ export const exportReferralLeadsCsv = async (req, res) => {
       ActivityActions.REFERRAL_LEADS_EXPORT,
       EntityTypes.CANDIDATE,
       req.user.id,
-      { rowCount: rows.length, filters: { ...q } },
+      { rowCount: shaped.length, filters: { ...q } },
       req
     );
   } catch (e) {
     logger.warn('referral export activity log', e);
   }
 };
-
-function csvCell(v) {
-  const s = v === undefined || v === null ? '' : String(v);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
 
 export const getReferralLeadById = async (candidateId, { tenantId } = {}) => {
   if (!mongoose.Types.ObjectId.isValid(String(candidateId))) {

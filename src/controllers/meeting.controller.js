@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
+import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
 import recordingService from '../services/recording.service.js';
 
@@ -11,7 +12,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'status']);
+  const filter = buildMeetingsMongoFilter(req.query);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await meetingService.queryMeetings(filter, options, req.user);
   res.send(result);

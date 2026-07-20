@@ -7,6 +7,7 @@ import requireUserAttendanceView from '../../middlewares/requireUserAttendanceVi
 import { attendancePunchLimiter } from '../../middlewares/rateLimiter.js';
 import * as attendanceValidation from '../../validations/attendance.validation.js';
 import attendanceController from '../../controllers/attendance.controller.js';
+import * as attendanceExcelController from '../../controllers/attendanceExcel.controller.js';
 
 const router = express.Router();
 
@@ -44,11 +45,25 @@ router.get('/statistics/me', auth(), validate(attendanceValidation.getStatistics
 // Track list and history: admin only (students.manage) - agents see punch UI only
 router.get('/track', auth(), requirePermissions('students.manage'), validate(attendanceValidation.trackList), attendanceController.getTrackList);
 router.get(
+  '/track/export',
+  auth(),
+  requirePermissions('students.manage'),
+  validate(attendanceValidation.trackExport),
+  attendanceExcelController.exportTrackExcel
+);
+router.get(
   '/track/history',
   auth(),
   requirePermissions('students.manage'),
   validate(attendanceValidation.trackHistory),
   attendanceController.getTrackHistory
+);
+router.get(
+  '/track/history/export',
+  auth(),
+  requirePermissions('students.manage'),
+  validate(attendanceValidation.trackHistoryExport),
+  attendanceExcelController.exportHistoryExcel
 );
 
 // Assign/remove holidays to students (admin or agent with attendance.manage)

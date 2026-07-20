@@ -808,7 +808,7 @@ const getTrackList = async (options = {}) => {
     });
   });
 
-  const { search } = options;
+  const { search, punchStatus } = options;
   if (search && typeof search === 'string' && search.trim()) {
     const term = search.trim().toLowerCase();
     results = results.filter((r) => {
@@ -817,6 +817,12 @@ const getTrackList = async (options = {}) => {
       const empId = (r.employeeId || '').toLowerCase();
       return name.includes(term) || em.includes(term) || empId.includes(term);
     });
+  }
+
+  if (punchStatus === 'in') {
+    results = results.filter((r) => r.isPunchedIn);
+  } else if (punchStatus === 'out') {
+    results = results.filter((r) => !r.isPunchedIn);
   }
 
   return { results };

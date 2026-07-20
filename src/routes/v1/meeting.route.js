@@ -15,7 +15,13 @@ router
   .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeetings), meetingController.list);
 
 // Excel export of interviews (MUST be before /:id so "export" isn't captured as an id)
-router.get('/export', auth(), requirePermissions('interviews.read'), meetingExcelController.exportExcel);
+router.post(
+  '/export',
+  auth(),
+  requirePermissions('interviews.read'),
+  validate(meetingValidation.exportMeetings),
+  meetingExcelController.exportExcel
+);
 
 router
   .route('/:id/resend-invitations')
