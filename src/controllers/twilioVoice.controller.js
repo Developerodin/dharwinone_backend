@@ -144,9 +144,15 @@ const bridgeAnswer = catchAsync(async (req, res) => {
 /** POST /v1/public/twilio/call-status — status + Dial action callback. */
 const callStatusWebhook = catchAsync(async (req, res) => {
   const body = req.body || {};
+  // On a <Dial action> callback the parent CallStatus is still `in-progress`;
+  // the dialed leg's real outcome (busy / no-answer / completed / failed) is in
+  // DialCallStatus — prefer it so the CallRecord reflects the carrier result.
+  const status = body.DialCallStatus || body.CallStatus;
+  const durationRaw = body.CallDuration != null ? body.CallDuration : body.DialCallDuration;
   logger.info('[Twilio] call-status', {
     callSid: body.CallSid,
-    status: body.CallStatus,
+    status,
+    dialCallStatus: body.DialCallStatus,
     direction: body.Direction,
   });
   const executionId = resolveDialerExecutionId(body);
@@ -156,8 +162,8 @@ const callStatusWebhook = catchAsync(async (req, res) => {
     callRecordService
       .upsertDialerCallRecord({
         executionId,
-        status: body.CallStatus,
-        duration: body.CallDuration != null ? parseInt(body.CallDuration, 10) : undefined,
+        status,
+        duration: durationRaw != null ? parseInt(durationRaw, 10) : undefined,
         toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
         fromPhoneNumber: fromIsPhone ? body.From : undefined,
         direction: 'outbound',

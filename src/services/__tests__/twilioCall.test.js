@@ -38,6 +38,15 @@ test('buildOutboundTwiml dials destination with callerId and recording callback'
   assert.match(xml, /recordingStatusCallback/);
 });
 
+test('buildOutboundTwiml reports dial outcome immediately via action callback', () => {
+  const xml = twilioService.buildOutboundTwiml({ to: TO, callerId: CALLER });
+  // Dial action → DialCallStatus (busy/no-answer) fires the moment the PSTN
+  // leg ends, and its empty-TwiML response hangs up the SDK leg right away.
+  assert.match(xml, /<Dial[^>]*action="[^"]*\/v1\/public\/twilio\/call-status"/);
+  assert.match(xml, /<Dial[^>]*method="POST"/);
+  assert.match(xml, /<Dial[^>]*timeout="30"/);
+});
+
 test('verifyBridgeCallSignature accepts valid HMAC', () => {
   const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(`${TO}|${CALLER}`).digest('hex');
   assert.equal(twilioService.verifyBridgeCallSignature(TO, CALLER, sig), true);
