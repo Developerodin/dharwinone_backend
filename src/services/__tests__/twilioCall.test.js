@@ -76,6 +76,19 @@ test('createAccessToken returns identity for Voice SDK', () => {
   assert.equal(r.identity, `user_${uid}`);
 });
 
+test('createAccessToken with mobile platform still mints when push SIDs unset', () => {
+  const uid = '507f1f77bcf86cd799439011';
+  const web = twilioService.createAccessToken(uid);
+  const ios = twilioService.createAccessToken(uid, { platform: 'ios' });
+  const android = twilioService.createAccessToken(uid, { platform: 'android' });
+  assert.equal(web.success, true);
+  assert.equal(ios.success, true);
+  assert.equal(android.success, true);
+  assert.equal(ios.identity, web.identity);
+  assert.ok(ios.token);
+  assert.ok(android.token);
+});
+
 test('resolveInboundIdentity returns empty when no mapping or default user', async () => {
   assert.equal(await twilioService.resolveInboundIdentity('+15551234567'), '');
 });

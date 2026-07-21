@@ -230,9 +230,11 @@ async function endCall({ callSid } = {}) {
   return { success: false, error: 'endCall is only supported on Twilio.' };
 }
 
-async function mintBrowserToken({ uid } = {}) {
+async function mintBrowserToken({ uid, platform } = {}) {
   if (isTwilio()) {
-    const result = twilioService.createAccessToken(String(uid || ''));
+    const opts =
+      platform === 'ios' || platform === 'android' ? { platform } : {};
+    const result = twilioService.createAccessToken(String(uid || ''), opts);
     if (!result.success) return result;
     const identity = result.identity;
     return {
@@ -240,6 +242,8 @@ async function mintBrowserToken({ uid } = {}) {
       token: result.token,
       username: identity,
       identity,
+      ttl: result.ttl,
+      provider: 'twilio',
     };
   }
   const result = await plivoService.mintWebrtcToken({ uid });
