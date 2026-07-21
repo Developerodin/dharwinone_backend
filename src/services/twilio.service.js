@@ -212,6 +212,7 @@ function buildOutboundTwiml({ to, callerId }) {
     callerId: toE164(callerId) || getConfig().phoneNumber,
     record: 'record-from-answer-dual',
     answerOnBridge: true,
+    timeout: 30,
   };
   const recCb = recordingCallbackUrl();
   if (recCb) {
@@ -219,10 +220,18 @@ function buildOutboundTwiml({ to, callerId }) {
     dialAttrs.recordingStatusCallbackEvent = 'completed';
     dialAttrs.recordingStatusCallbackMethod = 'POST';
   }
+  const statusCb = statusCallbackUrl();
+  if (statusCb) {
+    // Dial `action` reports DialCallStatus (busy / no-answer / completed) the
+    // moment the PSTN leg ends, and the empty TwiML we return from it hangs up
+    // the SDK leg immediately — so the caller's app/browser gets its
+    // Disconnected event right away instead of ringing until the Dial timeout.
+    dialAttrs.action = statusCb;
+    dialAttrs.method = 'POST';
+  }
 
   const dial = response.dial(dialAttrs);
   const numberAttrs = {};
-  const statusCb = statusCallbackUrl();
   if (statusCb) {
     numberAttrs.statusCallback = statusCb;
     numberAttrs.statusCallbackEvent = 'initiated ringing answered completed';

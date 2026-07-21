@@ -38,6 +38,15 @@ test('buildOutboundTwiml dials destination with callerId and recording callback'
   assert.match(xml, /recordingStatusCallback/);
 });
 
+test('buildOutboundTwiml reports dial outcome immediately via action callback', () => {
+  const xml = twilioService.buildOutboundTwiml({ to: TO, callerId: CALLER });
+  // Dial action → DialCallStatus (busy/no-answer) fires the moment the PSTN
+  // leg ends, and its empty-TwiML response hangs up the SDK leg right away.
+  assert.match(xml, /<Dial[^>]*action="[^"]*\/v1\/public\/twilio\/call-status"/);
+  assert.match(xml, /<Dial[^>]*method="POST"/);
+  assert.match(xml, /<Dial[^>]*timeout="30"/);
+});
+
 test('verifyBridgeCallSignature accepts valid HMAC', () => {
   const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(`${TO}|${CALLER}`).digest('hex');
   assert.equal(twilioService.verifyBridgeCallSignature(TO, CALLER, sig), true);
@@ -74,6 +83,19 @@ test('createAccessToken returns identity for Voice SDK', () => {
   assert.equal(r.success, true);
   assert.ok(r.token);
   assert.equal(r.identity, `user_${uid}`);
+});
+
+test('createAccessToken with mobile platform still mints when push SIDs unset', () => {
+  const uid = '507f1f77bcf86cd799439011';
+  const web = twilioService.createAccessToken(uid);
+  const ios = twilioService.createAccessToken(uid, { platform: 'ios' });
+  const android = twilioService.createAccessToken(uid, { platform: 'android' });
+  assert.equal(web.success, true);
+  assert.equal(ios.success, true);
+  assert.equal(android.success, true);
+  assert.equal(ios.identity, web.identity);
+  assert.ok(ios.token);
+  assert.ok(android.token);
 });
 
 test('resolveInboundIdentity returns empty when no mapping or default user', async () => {

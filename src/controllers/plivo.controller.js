@@ -151,12 +151,19 @@ const answerCall = catchAsync(async (req, res) => {
 });
 
 /**
- * POST /v1/plivo/sdk-token — mint a short-lived, outbound-only WebRTC access
- * token for the browser softphone. Self-provisions the shared Plivo Application
- * + endpoint on first call.
+ * POST /v1/plivo/sdk-token — mint a short-lived Voice / WebRTC access token.
+ * When TELEPHONY_PROVIDER=twilio, signs a Twilio Access Token (VoiceGrant).
+ * Optional body `{ platform: "ios"|"android" }` attaches the matching push
+ * credential SID so the mobile Voice SDK can receive inbound CallInvites.
  */
 const getSdkToken = catchAsync(async (req, res) => {
-  const result = await telephonyService.mintBrowserToken({ uid: req.user.id });
+  const rawPlatform = req.body?.platform ?? req.query?.platform;
+  const platform =
+    rawPlatform === 'ios' || rawPlatform === 'android' ? rawPlatform : undefined;
+  const result = await telephonyService.mintBrowserToken({
+    uid: req.user.id,
+    platform,
+  });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to mint WebRTC token');
   }
@@ -165,6 +172,7 @@ const getSdkToken = catchAsync(async (req, res) => {
     token: result.token,
     username: result.username,
     identity: result.identity,
+    ...(typeof result.ttl === 'number' ? { ttl: result.ttl } : {}),
     provider: telephonyService.getProviderName(),
   });
 });
