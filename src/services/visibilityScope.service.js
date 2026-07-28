@@ -185,42 +185,17 @@ const meetingActorQuery = (actor = {}) => {
   return or.length ? { $or: or } : null;
 };
 
+/**
+ * Matrix row `communication.meetings` view + create → meetings.read + meetings.create.
+ * Users with both see every LiveKit recording; tenantId/adminId must not narrow the list.
+ */
+const RECORDING_FULL_LIST_ACCESS = ['meetings.read', 'meetings.create'];
+
 const recordingScope = async (actor = {}, action = 'read') => {
-  const admin = await userIsAdmin(actor);
-  if (admin) {
-    const rootId = tenantRootId(actor);
-    if (!rootId) return { filter: {}, scopeDebug: { scopeType: 'recording', action, role: 'admin' } };
-    const tenantUsers = await User.find(
-      { $or: [{ _id: rootId }, { adminId: rootId }] },
-      { _id: 1 }
-    ).lean();
-    const userIds = uniq(tenantUsers.map((u) => u._id));
-    const [mRows, iRows] = await Promise.all([
-      Meeting.find({ createdBy: { $in: userIds } }, { meetingId: 1 }).lean(),
-      InternalMeeting.find({ createdBy: { $in: userIds } }, { meetingId: 1 }).lean(),
-    ]);
-    const meetingIds = uniq([...mRows.map((m) => m.meetingId), ...iRows.map((m) => m.meetingId)]);
-    // Union of three clauses for admin visibility:
-    //   1. tenant-stamped rows (new path — recording creation sets tenantId)
-    //   2. meetingId matches a Meeting/InternalMeeting in this tenant (legacy)
-    //   3. orphan rows with no tenantId AND no parent Meeting row — surfaced to
-    //      every admin as ops-view. recordingDiscovery cron inserts rows with
-    //      `meetingId: info.roomName || 'unknown'` for egresses started outside
-    //      our app; older rows pre-date the tenantId field. Without clause 3
-    //      these recordings stayed permanently invisible despite the S3 file
-    //      existing. Multi-admin leak risk is none — orphan rows have no
-    //      tenant attribution by definition.
-    const orphanMeetingIdClause = meetingIds.length
-      ? { meetingId: { $nin: meetingIds } }
-      : {};
-    const filterClauses = [
-      { tenantId: rootId },
-      ...(meetingIds.length ? [{ meetingId: { $in: meetingIds } }] : []),
-      { tenantId: { $in: [null, undefined] }, ...orphanMeetingIdClause },
-    ];
+  if (await hasAllApiPermissions(actor, RECORDING_FULL_LIST_ACCESS)) {
     return {
-      filter: { $or: filterClauses },
-      scopeDebug: { scopeType: 'recording', action, role: 'admin', meetingCount: meetingIds.length, tenantRoot: String(rootId) },
+      filter: {},
+      scopeDebug: { scopeType: 'recording', action, role: 'meetings.read+create:all' },
     };
   }
 

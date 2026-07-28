@@ -7,6 +7,22 @@ let tenantUserRows = [];
 let isAdmin = false;
 let isRecruiter = false;
 let isSalesAgent = false;
+let hasAllApiPermissionsResult = false;
+
+mock.module('../../utils/permissionCheck.js', {
+  namedExports: {
+    hasApiPermission: async () => false,
+    hasAllApiPermissions: async (_actor, requiredList) => {
+      if (!hasAllApiPermissionsResult) return false;
+      // Mirror production gate: meetings.read + meetings.create
+      return (
+        Array.isArray(requiredList) &&
+        requiredList.includes('meetings.read') &&
+        requiredList.includes('meetings.create')
+      );
+    },
+  },
+});
 
 mock.module('../../models/meeting.model.js', {
   defaultExport: { find: () => ({ lean: async () => meetingRows }) },
@@ -33,17 +49,34 @@ mock.module('../../utils/roleHelpers.js', {
 
 const scopeServicePromise = import('../visibilityScope.service.js');
 
-test('visibilityScope recordingScope returns scoped meeting ids', async () => {
+test('visibilityScope recordingScope returns scoped meeting ids for view-only users', async () => {
   meetingRows = [];
   internalMeetingRows = [{ meetingId: 'mk-1' }];
   tenantUserRows = [];
   isAdmin = false;
   isRecruiter = false;
   isSalesAgent = false;
+  hasAllApiPermissionsResult = false;
 
   const scopeService = await scopeServicePromise;
   const { filter } = await scopeService.recordingScope({ id: 'u1', email: 'x@example.com' }, 'read');
   assert.deepEqual(filter, { meetingId: { $in: ['mk-1'] } });
+});
+
+test('visibilityScope recordingScope returns all recordings when user has meetings read and create', async () => {
+  meetingRows = [];
+  internalMeetingRows = [{ meetingId: 'mk-tenant-a' }];
+  tenantUserRows = [{ _id: 'other-root' }];
+  isAdmin = true;
+  hasAllApiPermissionsResult = true;
+
+  const scopeService = await scopeServicePromise;
+  const { filter, scopeDebug } = await scopeService.recordingScope(
+    { id: 'u1', adminId: 'tenant-a-root' },
+    'read'
+  );
+  assert.deepEqual(filter, {});
+  assert.equal(scopeDebug.role, 'meetings.read+create:all');
 });
 
 test('visibilityScope candidateScope supports sales-agent referral scope', async () => {
