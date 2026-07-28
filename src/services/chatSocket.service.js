@@ -486,9 +486,14 @@ const emitConversationDeleted = (conversationId, participantIds) => {
 const emitCallUpdate = (record) => {
   if (!io || !record) return;
   const id = record._id?.toString?.() || record.id || null;
+  const direction =
+    record.telephonyData?.direction ||
+    record.direction ||
+    undefined;
   const payload = {
     id,
     executionId: record.executionId,
+    callSid: record.executionId,
     status: record.status,
     statusRank: record.statusRank,
     statusUpdatedAt: record.statusUpdatedAt,
@@ -503,10 +508,21 @@ const emitCallUpdate = (record) => {
     purpose: record.purpose,
     agentId: record.agentId,
     errorMessage: record.errorMessage,
+    direction,
+    createdAt: record.createdAt,
+    telephonyData: record.telephonyData,
   };
   io.to('role:admin').emit('call:update', payload);
   if (record.candidate) io.to(`call:candidate:${record.candidate}`).emit('call:update', payload);
   if (record.job) io.to(`call:job:${record.job}`).emit('call:update', payload);
+
+  // Dialer Softphone history — push to the owning user so Calls / Contacts
+  // refresh without a manual pull-to-refresh.
+  const ownerId = record.createdBy?.toString?.() || record.createdBy || null;
+  if (ownerId) {
+    io.to(`user:${ownerId}`).emit('call:update', payload);
+    io.to(`user:${ownerId}`).emit('call-history-updated', payload);
+  }
 };
 
 export {

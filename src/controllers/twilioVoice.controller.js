@@ -10,6 +10,7 @@ import twilioService from '../services/twilio.service.js';
 import telephonyService from '../services/telephony.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import { archiveTwilioRecording } from '../services/callRecordingArchive.service.js';
+import { resolveInboundUserIdForCalledNumber } from '../services/companyPhoneNumber.service.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
@@ -18,6 +19,41 @@ function resolveDialerExecutionId(body) {
   const parent = body?.ParentCallSid || body?.parentCallSid || '';
   const self = body?.CallSid || body?.callSid || '';
   return String(parent || self).trim();
+}
+
+/**
+ * Map Twilio Direction / From+To hints → dialer direction.
+ * Returns undefined when unknown so we do not overwrite a seeded value.
+ */
+function resolveDialerDirection(body) {
+  const raw = String(body?.Direction || '').toLowerCase();
+  if (raw.startsWith('inbound')) return 'inbound';
+  if (raw.startsWith('outbound')) return 'outbound';
+  const from = String(body?.From || '');
+  const to = String(body?.To || '');
+  // Softphone outbound: From is client:user_…
+  if (from.startsWith('client:')) return 'outbound';
+  // Inbound Dial-to-client: To is client:user_…
+  if (to.startsWith('client:')) return 'inbound';
+  return undefined;
+}
+
+/** Best-effort owner for dialer CallRecords (list APIs filter by createdBy). */
+async function resolveDialerCreatedBy(body) {
+  const fromUser = twilioService.userIdFromClient(body?.From);
+  if (fromUser) return fromUser;
+  const toUser = twilioService.userIdFromClient(body?.To);
+  if (toUser) return toUser;
+
+  const called = body?.To || body?.Called || '';
+  if (called && !String(called).startsWith('client:')) {
+    try {
+      return (await resolveInboundUserIdForCalledNumber(called)) || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function sendTwiml(res, xml) {
@@ -101,7 +137,30 @@ const inboundVoice = catchAsync(async (req, res) => {
         twilioService.buildHangupTwiml('This number is not configured for inbound calls yet.'),
       );
     }
-    logger.info('[Twilio] voice inbound → client', { calledNumber, callerNumber, identity });
+
+    // Seed an owned dialer CallRecord so inbound shows in the user's call history.
+    // List APIs filter channel=dialer by createdBy — without this, status webhooks
+    // create orphan rows (createdBy: null) that never appear in the app.
+    const ownerUserId = twilioService.userIdFromClient(identity);
+    if (callSid && ownerUserId) {
+      callRecordService
+        .upsertDialerCallRecord({
+          executionId: callSid,
+          createdBy: ownerUserId,
+          fromPhoneNumber: twilioService.toE164(callerNumber) || callerNumber,
+          toPhoneNumber: twilioService.toE164(calledNumber) || calledNumber,
+          status: 'ringing',
+          direction: 'inbound',
+        })
+        .catch((e) => logger.warn(`[Twilio] inbound dialer record seed failed: ${e?.message}`));
+    }
+
+    logger.info('[Twilio] voice inbound → client', {
+      calledNumber,
+      callerNumber,
+      identity,
+      callSid,
+    });
     return sendTwiml(
       res,
       twilioService.buildInboundToClientTwiml({
@@ -148,7 +207,15 @@ const callStatusWebhook = catchAsync(async (req, res) => {
   // the dialed leg's real outcome (busy / no-answer / completed / failed) is in
   // DialCallStatus — prefer it so the CallRecord reflects the carrier result.
   const status = body.DialCallStatus || body.CallStatus;
-  const durationRaw = body.CallDuration != null ? body.CallDuration : body.DialCallDuration;
+  // Prefer DialCallDuration when this is a Dial action (talk time on the dialed
+  // leg). CallDuration on the parent includes ring time and would mis-label
+  // rejected/missed calls as having a conversation length.
+  const durationRaw =
+    body.DialCallStatus != null && body.DialCallDuration != null
+      ? body.DialCallDuration
+      : body.CallDuration != null
+        ? body.CallDuration
+        : body.DialCallDuration;
   logger.info('[Twilio] call-status', {
     callSid: body.CallSid,
     status,
@@ -159,14 +226,20 @@ const callStatusWebhook = catchAsync(async (req, res) => {
   if (executionId) {
     // `From` is `client:user_<id>` for browser legs — don't overwrite the phone.
     const fromIsPhone = body.From && !String(body.From).startsWith('client:');
+    const toIsPhone = body.To && !String(body.To).startsWith('client:');
+    const direction = resolveDialerDirection(body);
+    const createdBy = await resolveDialerCreatedBy(body);
+
     callRecordService
       .upsertDialerCallRecord({
         executionId,
+        createdBy: createdBy || undefined,
         status,
         duration: durationRaw != null ? parseInt(durationRaw, 10) : undefined,
-        toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
+        toPhoneNumber: toIsPhone ? body.To : undefined,
         fromPhoneNumber: fromIsPhone ? body.From : undefined,
-        direction: 'outbound',
+        // Omit when unknown so a correct inbound seed is never clobbered to outbound.
+        ...(direction ? { direction } : {}),
       })
       .catch((e) => logger.warn(`[Twilio] call-status persist failed: ${e?.message}`));
   }
@@ -186,12 +259,17 @@ const recordingWebhook = catchAsync(async (req, res) => {
   if (callSid && String(body.RecordingStatus || '').toLowerCase() === 'completed' && recordingUrl) {
     // Ensure a row exists, then mirror the Twilio media to S3 + link it. Both
     // best-effort: a 200 must still go back to Twilio promptly.
+    const direction = resolveDialerDirection(body);
+    const createdBy = await resolveDialerCreatedBy(body);
     callRecordService
       .upsertDialerCallRecord({
         executionId: callSid,
+        createdBy: createdBy || undefined,
         toPhoneNumber: body.To && !String(body.To).startsWith('client:') ? body.To : undefined,
+        fromPhoneNumber:
+          body.From && !String(body.From).startsWith('client:') ? body.From : undefined,
         duration: body.RecordingDuration != null ? parseInt(body.RecordingDuration, 10) : undefined,
-        direction: 'outbound',
+        ...(direction ? { direction } : {}),
       })
       .then(() => archiveTwilioRecording(callSid, recordingUrl))
       .catch((e) => logger.warn(`[Twilio] recording archive failed: ${e?.message}`));

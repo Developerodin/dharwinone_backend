@@ -55,6 +55,7 @@ import pmAssistantRoute from './pmAssistant.route.js';
 import bolnaRoute from './bolna.route.js';
 import plivoRoute from './plivo.route.js';
 import companyPhoneNumberRoute from './companyPhoneNumber.route.js';
+import numberPricingRoute from './numberPricing.route.js';
 import contactRoute from './contact.route.js';
 import webhookRoute from './webhook.route.js';
 import chatRoute from './chat.route.js';
@@ -285,6 +286,10 @@ const defaultRoutes = [
   {
     path: '/company-phone-numbers',
     route: companyPhoneNumberRoute,
+  },
+  {
+    path: '/number-pricing',
+    route: numberPricingRoute,
   },
   {
     path: '/contacts',

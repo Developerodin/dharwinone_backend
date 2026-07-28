@@ -30,8 +30,23 @@ const buyNumber = {
   body: Joi.object()
     .keys({
       number: Joi.string().trim().required(),
+      countryIso: Joi.string().length(2).uppercase().required(),
+      type: Joi.string().valid('local', 'tollfree', 'mobile', 'tollFree').default('local'),
+      friendlyName: Joi.string().trim().allow('').max(64),
     })
     .required(),
+};
+
+const listCountries = {
+  query: Joi.object().keys({}),
+};
+
+const listSubscriptions = {
+  query: Joi.object().keys({
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(100),
+    status: Joi.string().valid('active', 'canceled', 'past_due', 'incomplete'),
+  }),
 };
 
 const listOwnedNumbers = {
@@ -76,11 +91,29 @@ const setRecording = {
     .required(),
 };
 
+/** App-reported dialer outcome (reject / miss) so history updates even if Dial action is delayed. */
+const dialerOutcome = {
+  body: Joi.object()
+    .keys({
+      executionId: Joi.string().trim().required(),
+      status: Joi.string()
+        .valid('busy', 'no_answer', 'canceled', 'cancelled', 'completed', 'failed', 'declined', 'rejected')
+        .required(),
+      direction: Joi.string().valid('inbound', 'outbound').optional(),
+      fromPhoneNumber: Joi.string().trim().allow('').optional(),
+      toPhoneNumber: Joi.string().trim().allow('').optional(),
+    })
+    .required(),
+};
+
 export {
   searchAvailableNumbers,
   buyNumber,
   listOwnedNumbers,
+  listCountries,
+  listSubscriptions,
   placeCall,
   browserCallIntent,
   setRecording,
+  dialerOutcome,
 };

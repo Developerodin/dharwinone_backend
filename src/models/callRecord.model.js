@@ -12,6 +12,7 @@ export const TERMINAL_STATUSES = [
   'failed',
   'no_answer',
   'busy',
+  'declined',
   'call_disconnected',
   'expired',
 ];
@@ -25,6 +26,7 @@ export const STATUS_RANK = {
   failed: 10,
   no_answer: 10,
   busy: 10,
+  declined: 10,
   call_disconnected: 10,
   expired: 10,
 };

@@ -22,6 +22,12 @@ import twilio from 'twilio';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhone } from '../utils/phone.js';
+import {
+  computeRequiresVerification,
+  regulationRequiresVerification,
+  toTwilioRegulationNumberType,
+  toTwilioSearchNumberType,
+} from '../utils/numberRegulatory.util.js';
 
 const { AccessToken } = twilio.jwt;
 const { VoiceGrant } = AccessToken;
@@ -366,6 +372,9 @@ async function searchAvailableNumbers(params = {}) {
     region: n.region,
     isoCountry: n.isoCountry,
     capabilities: n.capabilities,
+    addressRequirements:
+      n.addressRequirements ?? n.address_requirements ?? null,
+    beta: Boolean(n.beta),
   }));
   const nextPageToken = extractPageToken(page?.nextPageUrl);
 
@@ -374,6 +383,234 @@ async function searchAvailableNumbers(params = {}) {
     numbers,
     nextPageToken,
     hasMore: Boolean(nextPageToken),
+  };
+}
+
+const COUNTRIES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+let countriesCache = { expiresAt: 0, countries: null };
+
+/**
+ * List countries where Twilio offers purchasable phone numbers.
+ * Cached ~24h — never hardcode the country list in the app.
+ * @returns {Promise<{ success: boolean, countries?: Array<{ countryCode: string, country: string, beta?: boolean }>, error?: string }>}
+ */
+async function listAvailableCountries({ forceRefresh = false } = {}) {
+  if (
+    !forceRefresh &&
+    countriesCache.countries &&
+    Date.now() < countriesCache.expiresAt
+  ) {
+    return { success: true, countries: countriesCache.countries, cached: true };
+  }
+
+  const result = await runTwilio('GET AvailablePhoneNumberCountry.list', (client) =>
+    client.availablePhoneNumbers.list(),
+  );
+  if (!result.success) return result;
+
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const countries = rows
+    .map((c) => {
+      const uris = c.subresourceUris || c.subresource_uris || {};
+      const numberTypes = [];
+      const uriKeys = Object.keys(uris || {}).map((k) => String(k).toLowerCase());
+      if (uriKeys.some((k) => k.includes('local'))) numberTypes.push('local');
+      if (uriKeys.some((k) => k.includes('mobile'))) numberTypes.push('mobile');
+      if (uriKeys.some((k) => k.includes('toll'))) numberTypes.push('tollfree');
+      return {
+        countryCode: String(c.countryCode || c.country_code || '').toUpperCase(),
+        country: String(c.country || ''),
+        beta: Boolean(c.beta),
+        subresourceUris: uris,
+        // Which Twilio AvailablePhoneNumbers subresources exist for this country.
+        numberTypes: numberTypes.length > 0 ? numberTypes : ['local'],
+      };
+    })
+    .filter((c) => c.countryCode)
+    .sort((a, b) => a.country.localeCompare(b.country) || a.countryCode.localeCompare(b.countryCode));
+
+  countriesCache = {
+    expiresAt: Date.now() + COUNTRIES_CACHE_TTL_MS,
+    countries,
+  };
+
+  return { success: true, countries, cached: false };
+}
+
+const REGULATIONS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** @type {Map<string, { expiresAt: number, regulations: object[] }>} */
+const regulationsCache = new Map();
+
+function mapRegulationRow(row) {
+  return {
+    sid: row.sid,
+    friendlyName: row.friendlyName || row.friendly_name || '',
+    isoCountry: row.isoCountry || row.iso_country || '',
+    numberType: row.numberType || row.number_type || '',
+    endUserType: row.endUserType || row.end_user_type || '',
+    requirements: row.requirements ?? null,
+  };
+}
+
+/**
+ * Fetch Twilio Regulatory Compliance regulations for a country + number type.
+ * Cached ~24h per (iso, type).
+ */
+async function fetchRegulationsForCountryType(countryIso, numberType = 'local') {
+  const iso = String(countryIso || '').trim().toUpperCase();
+  const regType = toTwilioRegulationNumberType(numberType);
+  const cacheKey = `${iso}|${regType}`;
+  const cached = regulationsCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { success: true, regulations: cached.regulations, cached: true };
+  }
+
+  const result = await runTwilio(`GET Regulations ${iso}/${regType}`, (client) =>
+    client.numbers.v2.regulatoryCompliance.regulations.list({
+      isoCountry: iso,
+      numberType: regType,
+      limit: 50,
+    }),
+  );
+
+  if (!result.success) {
+    return { success: false, regulations: [], error: result.error, cached: false };
+  }
+
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const regulations = rows.map(mapRegulationRow);
+  regulationsCache.set(cacheKey, {
+    expiresAt: Date.now() + REGULATIONS_CACHE_TTL_MS,
+    regulations,
+  });
+
+  return { success: true, regulations, cached: false };
+}
+
+/**
+ * Find a specific available number in Twilio's catalogue (for buy-time re-validation).
+ */
+async function findAvailableNumberInCatalogue({ countryIso, numberType, phoneNumber }) {
+  const iso = String(countryIso || '').trim().toUpperCase();
+  const searchType = toTwilioSearchNumberType(numberType);
+  const e164 = toE164(phoneNumber);
+  if (!iso || !e164) {
+    return { success: false, error: 'countryIso and phoneNumber are required.' };
+  }
+
+  const digits = e164.replace(/\D/g, '');
+  const contains =
+    digits.length > 10 ? digits.slice(-10) : digits.length >= 3 ? digits : undefined;
+
+  const search = await searchAvailableNumbers({
+    country: iso,
+    type: searchType,
+    limit: 30,
+    voiceEnabled: true,
+    ...(contains ? { contains } : {}),
+  });
+  if (!search.success) return search;
+
+  const match =
+    (search.numbers || []).find((n) => toE164(n.phoneNumber) === e164) || null;
+  return { success: true, number: match };
+}
+
+/**
+ * Resolve whether a number/country requires verification before purchase.
+ * Driven by Twilio addressRequirements + Regulations API (no hardcoded countries).
+ */
+async function resolveNumberCompliance({
+  countryIso,
+  numberType = 'local',
+  phoneNumber,
+  addressRequirements,
+} = {}) {
+  const iso = String(countryIso || '').trim().toUpperCase();
+  const regResult = await fetchRegulationsForCountryType(iso, numberType);
+  const regulations = regResult.regulations || [];
+
+  let addr = addressRequirements ?? null;
+  if (addr == null && phoneNumber) {
+    const lookup = await findAvailableNumberInCatalogue({
+      countryIso: iso,
+      numberType,
+      phoneNumber,
+    });
+    if (lookup.success && lookup.number) {
+      addr = lookup.number.addressRequirements ?? null;
+    }
+  }
+
+  const requiresVerification = computeRequiresVerification({
+    addressRequirements: addr,
+    regulations,
+  });
+
+  return {
+    success: true,
+    requiresVerification,
+    requiresBundle: requiresVerification,
+    addressRequirements: addr,
+    regulations,
+    source: {
+      addressRequirements: addr,
+      regulationCount: regulations.length,
+      regulationRequiresVerification: regulationRequiresVerification(regulations),
+    },
+  };
+}
+
+/**
+ * Country-level probe: regulations first, then a single catalogue sample if needed.
+ */
+async function probeCountryCompliance(countryIso, numberType = 'local') {
+  const iso = String(countryIso || '').trim().toUpperCase();
+  const regResult = await fetchRegulationsForCountryType(iso, numberType);
+  const regulations = regResult.regulations || [];
+
+  if (regulationRequiresVerification(regulations)) {
+    return {
+      success: true,
+      requiresVerification: true,
+      requiresBundle: true,
+      addressRequirements: null,
+      regulations,
+      probeSource: 'regulations',
+    };
+  }
+
+  const searchType = toTwilioSearchNumberType(numberType);
+  const sample = await searchAvailableNumbers({
+    country: iso,
+    type: searchType,
+    limit: 1,
+    voiceEnabled: true,
+  });
+
+  if (sample.success && sample.numbers?.length) {
+    const addr = sample.numbers[0].addressRequirements ?? null;
+    const requiresVerification = computeRequiresVerification({
+      addressRequirements: addr,
+      regulations,
+    });
+    return {
+      success: true,
+      requiresVerification,
+      requiresBundle: requiresVerification,
+      addressRequirements: addr,
+      regulations,
+      probeSource: 'catalogue_sample',
+    };
+  }
+
+  return {
+    success: true,
+    requiresVerification: false,
+    requiresBundle: false,
+    addressRequirements: null,
+    regulations,
+    probeSource: 'regulations_only',
   };
 }
 
@@ -416,12 +653,20 @@ async function purchaseNumber(params = {}) {
     return { success: false, error: 'A valid phoneNumber (E.164) is required.' };
   }
 
-  const createParams = { phoneNumber };
   const voiceUrl = buildWebhookUrl('/public/twilio/voice/inbound');
-  if (voiceUrl) {
-    createParams.voiceUrl = voiceUrl;
-    createParams.voiceMethod = 'POST';
+  if (!voiceUrl || !/^https:\/\//i.test(voiceUrl)) {
+    return {
+      success: false,
+      error:
+        'TWILIO_WEBHOOK_BASE_URL (or BACKEND_PUBLIC_URL) must be a public https URL before purchasing numbers so inbound Voice URL can be set.',
+    };
   }
+
+  const createParams = {
+    phoneNumber,
+    voiceUrl,
+    voiceMethod: 'POST',
+  };
   const statusCb = statusCallbackUrl();
   if (statusCb) {
     createParams.statusCallback = statusCb;
@@ -984,6 +1229,11 @@ export default {
   buildInboundToClientTwiml,
   buildHangupTwiml,
   searchAvailableNumbers,
+  listAvailableCountries,
+  fetchRegulationsForCountryType,
+  findAvailableNumberInCatalogue,
+  resolveNumberCompliance,
+  probeCountryCompliance,
   fetchPhoneNumberPricingByCountry,
   purchaseNumber,
   releaseNumber,

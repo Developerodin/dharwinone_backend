@@ -46,6 +46,23 @@ const companyPhoneNumberSchema = mongoose.Schema(
       voice: { type: Boolean, default: true },
       sms: { type: Boolean, default: false },
     },
+    /** ISO 3166-1 alpha-2 of the purchased number (e.g. US). */
+    isoCountry: { type: String, trim: true, uppercase: true, default: '', maxlength: 2 },
+    /** Twilio number type used at purchase. */
+    numberType: {
+      type: String,
+      enum: ['local', 'mobile', 'tollfree', ''],
+      default: '',
+    },
+    /** Retail monthly price charged to the user (USD). */
+    retailMonthlyPrice: { type: Number, default: null, min: 0 },
+    /** Link to the monthly NumberSubscription for this number. */
+    subscriptionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NumberSubscription',
+      default: null,
+      index: true,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

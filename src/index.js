@@ -59,6 +59,9 @@ mongoose
     logger.info('Connected to MongoDB');
     logBolnaAgentConfigHealth();
     seedVoiceAgentsFromEnv().catch((e) => logger.warn(`[VoiceAgent] seed skipped: ${e.message}`));
+    import('./services/numberPricing.service.js')
+      .then((m) => m.ensureDefaultPricing())
+      .catch((e) => logger.warn(`[NumberPricing] seed skipped: ${e.message}`));
     const httpServer = http.createServer(app);
     if (config.env !== 'test') initSocket(httpServer);
     server = httpServer.listen(port, '0.0.0.0', async () => {

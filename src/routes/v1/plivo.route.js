@@ -16,6 +16,15 @@ router
     plivoController.getAvailableNumbers
   );
 
+router
+  .route('/numbers/countries')
+  .get(
+    auth(),
+    requirePermissionOrAdministrator('calls.view'),
+    validate(plivoValidation.listCountries),
+    plivoController.getCountries
+  );
+
 // Numbers already rented/owned on the connected Plivo account.
 router
   .route('/numbers/owned')
@@ -24,6 +33,15 @@ router
     requirePermissionOrAdministrator('calls.view'),
     validate(plivoValidation.listOwnedNumbers),
     plivoController.getOwnedNumbers
+  );
+
+router
+  .route('/numbers/subscriptions')
+  .get(
+    auth(),
+    requirePermissionOrAdministrator('calls.view'),
+    validate(plivoValidation.listSubscriptions),
+    plivoController.getMySubscriptions
   );
 
 // Buying a number is a real, paid action — gate behind calls.create.
@@ -81,6 +99,16 @@ router
     auth(),
     requirePermissionOrAdministrator('calls.create'),
     plivoController.backfillTwilio
+  );
+
+// App-reported dialer call outcome (reject / miss) for call history.
+router
+  .route('/dialer-outcome')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.create'),
+    validate(plivoValidation.dialerOutcome),
+    plivoController.postDialerOutcome
   );
 
 export default router;

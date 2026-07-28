@@ -167,6 +167,7 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
   );
   if (!phoneNumber) return null;
 
+  const buyerId = user._id || user.id;
   const payload = {
     tenantId,
     provider,
@@ -175,8 +176,28 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
     twilioSid: purchasePayload.providerSid || purchasePayload.sid || '',
     capabilities: mapCapabilities(purchasePayload.capabilities),
     isActive: true,
-    createdBy: user._id || user.id,
+    createdBy: buyerId,
   };
+
+  // Direct buy assigns the number to the buyer so My Numbers + inbound work.
+  if (purchasePayload.assignedTo !== undefined) {
+    payload.assignedTo = purchasePayload.assignedTo || null;
+  } else {
+    payload.assignedTo = buyerId;
+  }
+
+  if (purchasePayload.isoCountry) {
+    payload.isoCountry = String(purchasePayload.isoCountry).toUpperCase();
+  }
+  if (purchasePayload.numberType) {
+    payload.numberType = String(purchasePayload.numberType).toLowerCase();
+  }
+  if (purchasePayload.retailMonthlyPrice != null) {
+    payload.retailMonthlyPrice = Number(purchasePayload.retailMonthlyPrice);
+  }
+  if (purchasePayload.subscriptionId) {
+    payload.subscriptionId = purchasePayload.subscriptionId;
+  }
 
   const existing = await CompanyPhoneNumber.findOne({ tenantId, phoneNumber });
   if (existing) {
@@ -235,9 +256,26 @@ export async function updateCompanyPhoneNumberById(user, id, patch) {
 
 /** Numbers assigned to a user for caller-id / inbound context. */
 export async function listActiveNumbersForUser(userId) {
-  return CompanyPhoneNumber.find({ assignedTo: userId, isActive: true })
+  const numbers = await CompanyPhoneNumber.find({ assignedTo: userId, isActive: true })
     .sort({ phoneNumber: 1 })
     .lean();
+
+  const { mapSubscriptionsByCompanyPhoneNumberIds } = await import('./numberSubscription.service.js');
+  const subMap = await mapSubscriptionsByCompanyPhoneNumberIds(numbers.map((n) => n._id));
+
+  return numbers.map((n) => {
+    const sub = subMap.get(String(n._id));
+    return {
+      ...n,
+      id: String(n._id),
+      subscriptionStatus: sub?.status || null,
+      paymentStatus: sub?.paymentStatus || null,
+      retailMonthlyPrice:
+        n.retailMonthlyPrice != null ? n.retailMonthlyPrice : sub?.retailMonthlyPrice ?? null,
+      subscriptionId: sub?._id ? String(sub._id) : n.subscriptionId ? String(n.subscriptionId) : null,
+      currentPeriodEnd: sub?.currentPeriodEnd || null,
+    };
+  });
 }
 
 async function buildAssignableUsersQuery(requester) {
@@ -330,3 +368,119 @@ export async function assignPhoneNumberToUser(adminUser, { userId, companyPhoneN
     companyPhoneNumber: doc.phoneNumber,
   };
 }
+
+/**
+ * Buy Number orchestration (payment skipped):
+ * regulatory gate → conflict check → Twilio purchase → assign buyer → create monthly subscription.
+ *
+ * @param {object} user
+ * @param {{ number: string, countryIso: string, type?: string, friendlyName?: string }} body
+ */
+export async function purchaseNumberForUser(user, body = {}) {
+  const { REQUIRES_VERIFICATION_MESSAGE } = await import('../utils/numberRegulatory.util.js');
+  const numberPricingService = (await import('./numberPricing.service.js')).default;
+  const numberSubscriptionService = await import('./numberSubscription.service.js');
+  const telephonyService = (await import('./telephony.service.js')).default;
+  const twilioService = (await import('./twilio.service.js')).default;
+
+  const countryIso = String(body.countryIso || '').trim().toUpperCase();
+  if (!countryIso || !/^[A-Z]{2}$/.test(countryIso)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'countryIso is required (ISO 3166-1 alpha-2).');
+  }
+
+  const rawType = String(body.type || 'local').toLowerCase().replace(/[\s_-]/g, '');
+  const numberType =
+    rawType === 'tollfree' || rawType === 'tollFree' ? 'tollfree' : rawType === 'mobile' ? 'mobile' : 'local';
+
+  const phoneNumber = normalizeCalledNumber(body.number || body.phoneNumber);
+  if (!phoneNumber) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'A valid number is required.');
+  }
+
+  const compliance = await twilioService.resolveNumberCompliance({
+    countryIso,
+    numberType,
+    phoneNumber,
+    addressRequirements: body.addressRequirements,
+  });
+  if (compliance.requiresVerification) {
+    throw new ApiError(httpStatus.BAD_REQUEST, REQUIRES_VERIFICATION_MESSAGE, true, '', {
+      errorCode: 'REQUIRES_VERIFICATION',
+      details: {
+        countryIso,
+        numberType,
+        phoneNumber,
+        requiresVerification: true,
+        addressRequirements: compliance.addressRequirements,
+        regulationCount: compliance.regulations?.length ?? 0,
+      },
+    });
+  }
+
+  const existingActive = await CompanyPhoneNumber.findOne({ phoneNumber, isActive: true }).lean();
+  if (existingActive) {
+    throw new ApiError(httpStatus.CONFLICT, 'That number is already provisioned.', true, '', {
+      errorCode: 'NUMBER_ALREADY_PROVISIONED',
+    });
+  }
+
+  const retail = await numberPricingService.resolveRetailPrice({ countryIso, numberType });
+
+  const result = await telephonyService.buyNumber(phoneNumber);
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to buy number');
+  }
+
+  const buyerId = user._id || user.id;
+  const companyNumber = await recordCompanyPhoneNumberPurchase(user, {
+    ...result,
+    assignedTo: buyerId,
+    isoCountry: countryIso,
+    numberType,
+    retailMonthlyPrice: retail.monthlyPriceUsd,
+  });
+
+  const subscription = await numberSubscriptionService.createWaivedSubscription({
+    tenantId: tenantIdForUser(user),
+    userId: buyerId,
+    companyPhoneNumberId: companyNumber?._id,
+    phoneNumber: companyNumber?.phoneNumber || result.phoneNumberE164 || phoneNumber,
+    twilioSid: result.providerSid || '',
+    retailMonthlyPrice: retail.monthlyPriceUsd,
+    currency: retail.currency,
+  });
+
+  if (companyNumber) {
+    companyNumber.subscriptionId = subscription._id;
+    await companyNumber.save();
+  }
+
+  logger.info('[BuyNumber] purchased', {
+    phoneNumber: companyNumber?.phoneNumber || phoneNumber,
+    userId: String(buyerId),
+    subscriptionId: String(subscription._id),
+    countryIso,
+  });
+
+  return {
+    success: true,
+    number: String(result.number || '').replace(/^\+/, ''),
+    phoneNumberE164: companyNumber?.phoneNumber || result.phoneNumberE164 || phoneNumber,
+    sid: result.providerSid || companyNumber?.twilioSid || '',
+    message: result.message || 'Number purchased successfully.',
+    retailMonthlyPrice: retail.monthlyPriceUsd,
+    currency: retail.currency,
+    companyPhoneNumberId: companyNumber ? String(companyNumber._id) : null,
+    subscription: {
+      id: String(subscription._id),
+      status: subscription.status,
+      paymentStatus: subscription.paymentStatus,
+      billingInterval: subscription.billingInterval,
+      retailMonthlyPrice: subscription.retailMonthlyPrice,
+      currency: subscription.currency,
+      currentPeriodStart: subscription.currentPeriodStart,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  };
+}
+

@@ -45,8 +45,6 @@ function normalizeStatus(status) {
     success: 'completed',
     error: 'failed',
     errored: 'failed',
-    cancelled: 'failed',
-    canceled: 'failed',
     stopped: 'failed',
     initiate: 'initiated',
     initiated: 'initiated',
@@ -55,7 +53,11 @@ function normalizeStatus(status) {
     'in-progress': 'in_progress',
     'balance-low': 'failed',
     queued: 'initiated',
-    ringing: 'in_progress',
+    // Keep ringing distinct so unanswered inbound dialer calls are not shown as live.
+    ringing: 'ringing',
+    // Twilio DialCallStatus / caller hang-up before answer.
+    canceled: 'no_answer',
+    cancelled: 'no_answer',
   };
   return statusMap[s] || s;
 }
@@ -351,17 +353,28 @@ async function listCallRecords(options = {}) {
     });
   }
   if (options.status && String(options.status).trim() && String(options.status).toLowerCase() !== 'all') {
-    andConditions.push({ status: String(options.status).trim() });
+    const statusNorm = String(options.status).trim().toLowerCase().replace(/-/g, '_');
+    if (statusNorm === 'missed') {
+      // Missed = unanswered only (not explicit declines).
+      andConditions.push({
+        status: { $in: ['missed', 'no_answer', 'canceled', 'cancelled'] },
+      });
+    } else if (statusNorm === 'declined') {
+      andConditions.push({ status: { $in: ['declined', 'rejected', 'busy'] } });
+    } else {
+      andConditions.push({ status: String(options.status).trim() });
+    }
   }
   if (options.language && String(options.language).trim() && String(options.language).toLowerCase() !== 'all') {
     andConditions.push({ language: String(options.language).trim() });
   }
 
   if (options.channel === 'dialer' && options.userId) {
-    // Dialer Recent: only calls this user placed from the dialer. Dialer calls
-    // are owned (createdBy) and carry no job/candidate link (see upsertDialerCallRecord).
-    // Forced even for admins — the dialer shows your own calls, not the whole tenant's.
+    // Dialer Recent: only this user's Twilio softphone/bridge CallRecords.
+    // Dialer rows are owned (createdBy), unlinked from job/candidate, and tagged
+    // via telephonyData.provider / CallSid-shaped executionId.
     andConditions.push({ createdBy: options.userId, candidate: null, job: null });
+    andConditions.push(DIALER_CALL_FILTER);
   } else if (!options.isAdmin && options.userId) {
     // Dialer (Twilio) calls have no job/candidate link — nonAdminCallScope also
     // matches createdBy so the agent who placed the call sees it in their records.
@@ -727,6 +740,8 @@ async function createRecord(body) {
  * Upsert a Twilio dialer CallRecord keyed by the Twilio CallSid (executionId).
  * Used by the Twilio voice/status/recording webhooks. createdBy/source are set
  * once on insert; status only moves forward (monotonic rank guard).
+ * If an orphan row already exists with createdBy: null, a later webhook that
+ * supplies createdBy will claim ownership so the call appears in history.
  */
 async function upsertDialerCallRecord({
   executionId,
@@ -741,30 +756,81 @@ async function upsertDialerCallRecord({
   source = 'initiate',
 } = {}) {
   if (!executionId) return null;
+
+  const existing = await CallRecord.findOne({ executionId: String(executionId) })
+    .select('status statusRank telephonyData.direction createdBy')
+    .lean();
+
+  const effectiveDirection =
+    direction ||
+    (existing?.telephonyData?.direction === 'inbound' || existing?.telephonyData?.direction === 'outbound'
+      ? existing.telephonyData.direction
+      : undefined);
+
   const set = {};
   if (toPhoneNumber) {
     const t = String(toPhoneNumber);
     set.toPhoneNumber = t;
-    set.recipientPhoneNumber = t;
-    set.phone = t;
+    // Outbound: other party is the destination. Inbound: other party is the caller.
+    if (effectiveDirection !== 'inbound') {
+      set.recipientPhoneNumber = t;
+      set.phone = t;
+    } else {
+      set.userNumber = t;
+    }
   }
   if (fromPhoneNumber) {
     const f = String(fromPhoneNumber);
     set.fromPhoneNumber = f;
-    set.userNumber = f;
+    if (effectiveDirection === 'inbound') {
+      set.recipientPhoneNumber = f;
+      set.phone = f;
+    } else {
+      set.userNumber = f;
+    }
   }
   if (duration != null && !Number.isNaN(Number(duration))) set.duration = Number(duration);
   set['telephonyData.provider'] = provider;
   if (direction) set['telephonyData.direction'] = direction;
 
+  // Claim orphan rows created by status/recording webhooks before the voice seed.
+  // Never put the same path in both $set and $setOnInsert (Mongo rejects that).
+  if (createdBy && existing && existing.createdBy == null) {
+    set.createdBy = createdBy;
+  }
+
   if (status) {
     const st = normalizeStatus(status);
-    const existing = await CallRecord.findOne({ executionId: String(executionId) })
-      .select('status statusRank')
-      .lean();
+    const existingStatus = existing?.status ? String(existing.status).toLowerCase() : '';
     const incomingRank = rankOf(st);
     const existingRank = existing ? existing.statusRank ?? rankOf(existing.status) : -1;
-    if (incomingRank >= existingRank) {
+
+    // Terminal dialer statuses share rank 10. Twilio still sends a parent-leg
+    // CallStatus=completed after Dial ends (reject / miss / hangup). Equal-rank
+    // events may enrich duration/phones but must not rewrite a saved outcome
+    // (e.g. Declined → Incoming). Only a strict rank increase moves status,
+    // plus a few unanswered refinements (busy/no_answer → declined).
+    let applyStatus = false;
+    if (!existingStatus) {
+      applyStatus = true;
+    } else if (incomingRank > existingRank) {
+      applyStatus = true;
+    } else if (incomingRank === existingRank) {
+      const unanswered = new Set(['declined', 'no_answer', 'busy']);
+      // Explicit reject wins over Twilio busy / timeout labels.
+      if (
+        st === 'declined' &&
+        (existingStatus === 'busy' || existingStatus === 'no_answer')
+      ) {
+        applyStatus = true;
+      } else if (unanswered.has(existingStatus)) {
+        // Keep Declined / Missed / busy — never clobber with completed etc.
+        applyStatus = false;
+      }
+      // else: leave equal-rank terminal as-is (enrichment-only)
+    }
+
+    if (applyStatus) {
       set.status = st;
       set.statusRank = incomingRank;
       set.statusUpdatedAt = new Date();
@@ -790,7 +856,24 @@ async function upsertDialerCallRecord({
     { executionId: String(executionId) },
     { $set: set, $setOnInsert: setOnInsert },
     { new: true, upsert: true }
-  ).lean();
+  )
+    .lean()
+    .then((record) => {
+      // Notify the owning user's call history in real time.
+      if (record) {
+        try {
+          // Lazy import avoids circular deps with chatSocket ↔ callRecord.
+          import('./chatSocket.service.js')
+            .then((mod) => {
+              if (typeof mod.emitCallUpdate === 'function') mod.emitCallUpdate(record);
+            })
+            .catch(() => undefined);
+        } catch {
+          // ignore
+        }
+      }
+      return record;
+    });
 }
 
 async function updateCallRecordByExecutionId(executionId, updateData, options = {}) {

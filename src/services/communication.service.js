@@ -79,6 +79,13 @@ async function listUnifiedCalls(options = {}) {
         u.source === 'telephony'
           ? (u.data.status || 'unknown').toLowerCase().replace(/-/g, '_')
           : (u.data.status || '').toLowerCase().replace(/-/g, '_');
+      if (statusNorm === 'missed') {
+        // Unanswered only — exclude explicit declines.
+        return ['missed', 'no_answer', 'canceled', 'cancelled'].includes(s);
+      }
+      if (statusNorm === 'declined') {
+        return ['declined', 'rejected', 'busy'].includes(s);
+      }
       return s === statusNorm;
     });
   }

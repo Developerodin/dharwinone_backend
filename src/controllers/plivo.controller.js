@@ -51,31 +51,71 @@ const getAvailableNumbers = catchAsync(async (req, res) => {
     total: result.total,
     nextPageToken: result.nextPageToken,
     provider: result.provider || telephonyService.getProviderName(),
+    requiresVerification: result.requiresVerification,
+    requiresBundle: result.requiresBundle,
+    retailMonthlyPrice: result.retailMonthlyPrice,
+    currency: result.currency,
+  });
+});
+
+/** GET /v1/plivo/numbers/countries — Twilio-driven country catalogue + retail/regulatory flags. */
+const getCountries = catchAsync(async (req, res) => {
+  const result = await telephonyService.listAvailableCountries();
+  if (!result.success) {
+    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to list countries');
+  }
+  res.status(httpStatus.OK).send({
+    success: true,
+    countries: result.countries,
+    cached: result.cached,
+    provider: result.provider || telephonyService.getProviderName(),
   });
 });
 
 const buyNumber = catchAsync(async (req, res) => {
-  const { number } = req.body;
-  const result = await telephonyService.buyNumber(number);
-  if (!result.success) {
-    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to buy Plivo number');
-  }
-
-  await companyPhoneNumberService.recordCompanyPhoneNumberPurchase(req.user, result);
+  const { number, countryIso, type, friendlyName } = req.body;
+  const purchase = await companyPhoneNumberService.purchaseNumberForUser(req.user, {
+    number,
+    countryIso,
+    type,
+    friendlyName,
+  });
 
   await activityLogService.createActivityLog(
     req.user.id,
     ActivityActions.PHONE_NUMBER_PURCHASE,
     EntityTypes.PHONE_NUMBER,
-    result.number,
-    { number: result.number },
+    purchase.number,
+    {
+      number: purchase.number,
+      countryIso,
+      type,
+      retailMonthlyPrice: purchase.retailMonthlyPrice,
+      subscriptionId: purchase.subscription?.id,
+    },
     req
   );
 
+  res.status(httpStatus.OK).send(purchase);
+});
+
+/** GET /v1/plivo/numbers/subscriptions — buyer's monthly number subscriptions. */
+const getMySubscriptions = catchAsync(async (req, res) => {
+  const numberSubscriptionService = await import('../services/numberSubscription.service.js');
+  const uid = req.user._id || req.user.id;
+  const { page, limit, status } = req.query;
+  const result = await numberSubscriptionService.listSubscriptionsForUser(uid, {
+    page,
+    limit,
+    status,
+  });
   res.status(httpStatus.OK).send({
     success: true,
-    number: result.number,
-    message: result.message,
+    results: result.results,
+    page: result.page,
+    limit: result.limit,
+    totalPages: result.totalPages,
+    totalResults: result.totalResults,
   });
 });
 
@@ -280,13 +320,53 @@ const backfillTwilio = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(result);
 });
 
+/**
+ * POST /v1/plivo/dialer-outcome — mark a dialer CallRecord terminal from the app
+ * (reject / miss / cancel). Ensures call history updates when the user acts on
+ * the native CallStyle notification before the Dial action webhook arrives.
+ */
+const postDialerOutcome = catchAsync(async (req, res) => {
+  const { executionId, status, direction, fromPhoneNumber, toPhoneNumber } = req.body || {};
+  const userId = req.user?.id || req.user?._id;
+  if (!executionId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'executionId is required');
+  }
+
+  const normalizedStatus =
+    status === 'cancelled' || status === 'canceled'
+      ? 'no_answer'
+      : status === 'rejected'
+        ? 'declined'
+        : status;
+
+  const record = await callRecordService.upsertDialerCallRecord({
+    executionId: String(executionId),
+    createdBy: userId || null,
+    status: normalizedStatus,
+    direction: direction || undefined,
+    fromPhoneNumber: fromPhoneNumber || undefined,
+    toPhoneNumber: toPhoneNumber || undefined,
+  });
+
+  logger.info('[dialer] outcome recorded', {
+    executionId,
+    status: normalizedStatus,
+    userId: userId ? String(userId) : null,
+  });
+
+  res.status(httpStatus.OK).send({ success: true, record });
+});
+
 export {
   getAvailableNumbers,
+  getCountries,
   buyNumber,
+  getMySubscriptions,
   getOwnedNumbers,
   placeCall,
   setCallRecording,
   backfillTwilio,
+  postDialerOutcome,
   answerCall,
   getSdkToken,
   sdkAnswer,

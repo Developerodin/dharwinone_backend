@@ -6,6 +6,8 @@
 import config from '../config/config.js';
 import plivoService from './plivo.service.js';
 import twilioService from './twilio.service.js';
+import numberPricingService from './numberPricing.service.js';
+import { computeRequiresVerification, regulationRequiresVerification } from '../utils/numberRegulatory.util.js';
 import crypto from 'crypto';
 
 function provider() {
@@ -30,11 +32,16 @@ function hasCapability(caps, key) {
 function mapTwilioSearchNumber(n) {
   return {
     number: String(n.phoneNumber || '').replace(/^\+/, ''),
+    phoneNumber: n.phoneNumber || '',
     type: 'local',
     region: n.region || '',
     city: n.locality || '',
     country: n.isoCountry || '',
     monthlyRentalRate: null,
+    twilioMonthlyRate: null,
+    retailMonthlyPrice: null,
+    retailPrice: null,
+    currency: 'USD',
     setupRate: null,
     voiceEnabled: hasCapability(n.capabilities, 'voice'),
     smsEnabled: hasCapability(n.capabilities, 'sms'),
@@ -43,6 +50,10 @@ function mapTwilioSearchNumber(n) {
     smsRate: null,
     restriction: '',
     restrictionText: '',
+    addressRequirements: n.addressRequirements ?? null,
+    requiresVerification: false,
+    requiresBundle: false,
+    beta: Boolean(n.beta),
   };
 }
 
@@ -139,13 +150,37 @@ async function searchAvailableNumbers(params = {}) {
     const typeKey = twilioType === 'tollFree' ? 'tollfree' : twilioType.toLowerCase();
     const monthly = rates[typeKey];
 
+    const regResult = await twilioService.fetchRegulationsForCountryType(country, typeKey);
+    const regulations = regResult.regulations || [];
+
+    const retail = await numberPricingService.resolveRetailPrice({
+      countryIso: country,
+      numberType: typeKey,
+    });
+
     const numbers = (result.numbers || []).map((n) => {
       const mapped = mapTwilioSearchNumber(n);
       // Twilio's search response carries no type; results are all the searched type.
       mapped.type = typeKey;
-      if (monthly != null) mapped.monthlyRentalRate = monthly;
+      if (monthly != null) {
+        mapped.monthlyRentalRate = monthly;
+        mapped.twilioMonthlyRate = monthly;
+      }
+      mapped.retailMonthlyPrice = retail.monthlyPriceUsd;
+      mapped.retailPrice = retail.monthlyPriceUsd;
+      mapped.currency = retail.currency;
+      const requiresVerification = computeRequiresVerification({
+        addressRequirements: mapped.addressRequirements,
+        regulations,
+      });
+      mapped.requiresVerification = requiresVerification;
+      mapped.requiresBundle = requiresVerification;
       return mapped;
     });
+
+    const countryRequiresVerification =
+      regulationRequiresVerification(regulations) ||
+      numbers.some((n) => n.requiresVerification);
 
     return {
       success: true,
@@ -156,6 +191,10 @@ async function searchAvailableNumbers(params = {}) {
       limit: Number(params.limit) || 20,
       total: undefined,
       provider: 'twilio',
+      requiresVerification: countryRequiresVerification,
+      requiresBundle: countryRequiresVerification,
+      retailMonthlyPrice: retail.monthlyPriceUsd,
+      currency: retail.currency,
     };
   }
   const plivoResult = await plivoService.searchAvailableNumbers(params);
@@ -163,6 +202,56 @@ async function searchAvailableNumbers(params = {}) {
     return { ...plivoResult, provider: 'plivo' };
   }
   return plivoResult;
+}
+
+/**
+ * Dynamic country list from Twilio + retail/regulatory metadata for the app picker.
+ */
+async function listAvailableCountries() {
+  if (!isTwilio()) {
+    return {
+      success: false,
+      error: 'Country catalogue is only available when TELEPHONY_PROVIDER=twilio.',
+    };
+  }
+
+  const result = await twilioService.listAvailableCountries();
+  if (!result.success) return result;
+
+  await numberPricingService.ensureDefaultPricing();
+  const pricingRows = await numberPricingService.listPricingConfigs({ includeInactive: false });
+
+  const countries = await Promise.all(
+    (result.countries || []).map(async (c) => {
+      const iso = c.countryCode;
+      const retail = numberPricingService.resolveRetailPriceFromRows(pricingRows, {
+        countryIso: iso,
+        numberType: 'local',
+      });
+      const regResult = await twilioService.fetchRegulationsForCountryType(iso, 'local');
+      const requiresVerification = regulationRequiresVerification(regResult.regulations || []);
+      return {
+        countryCode: iso,
+        country: c.country,
+        beta: Boolean(c.beta),
+        requiresVerification,
+        requiresBundle: requiresVerification,
+        retailMonthlyPrice: retail.monthlyPriceUsd,
+        currency: retail.currency,
+        // From Twilio AvailablePhoneNumbers country subresource_uris (local/mobile/tollFree).
+        numberTypes: Array.isArray(c.numberTypes) && c.numberTypes.length
+          ? c.numberTypes
+          : ['local', 'mobile', 'tollfree'],
+      };
+    }),
+  );
+
+  return {
+    success: true,
+    countries,
+    cached: Boolean(result.cached),
+    provider: 'twilio',
+  };
 }
 
 async function buyNumber(number) {
@@ -343,6 +432,7 @@ export default {
   isConfigured,
   isTwilio,
   searchAvailableNumbers,
+  listAvailableCountries,
   buyNumber,
   listOwnedNumbers,
   placeBridgeCall,
