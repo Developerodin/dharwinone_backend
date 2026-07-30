@@ -25,6 +25,11 @@ scripts/*
 tests/
 graphify-out/
 
+# tests stay local — never pushed
+**/__tests__/
+*.test.js
+*.test.mjs
+
 AGENTS.md
 postman/
 
