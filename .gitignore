@@ -30,6 +30,10 @@ graphify-out/
 *.test.js
 *.test.mjs
 
+# editor plans and CI config stay local — never pushed
+.cursor/
+.github/
+
 AGENTS.md
 postman/
 
