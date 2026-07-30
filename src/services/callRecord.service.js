@@ -860,16 +860,24 @@ async function upsertDialerCallRecord({
     .lean()
     .then((record) => {
       // Notify the owning user's call history in real time.
+      // Skip duplicate emits when this upsert only enriched phones/duration and
+      // did not change status (avoids triple "Call declined" local notifications).
       if (record) {
-        try {
-          // Lazy import avoids circular deps with chatSocket ↔ callRecord.
-          import('./chatSocket.service.js')
-            .then((mod) => {
-              if (typeof mod.emitCallUpdate === 'function') mod.emitCallUpdate(record);
-            })
-            .catch(() => undefined);
-        } catch {
-          // ignore
+        // Only push socket updates when status actually moved (or this is the
+        // first insert). Enrichment-only upserts were re-emitting the same
+        // "declined" row 2–3× and stacking local outcome notifications.
+        const statusChanged = Boolean(set.status);
+        if (statusChanged || !existing) {
+          try {
+            // Lazy import avoids circular deps with chatSocket ↔ callRecord.
+            import('./chatSocket.service.js')
+              .then((mod) => {
+                if (typeof mod.emitCallUpdate === 'function') mod.emitCallUpdate(record);
+              })
+              .catch(() => undefined);
+          } catch {
+            // ignore
+          }
         }
       }
       return record;
