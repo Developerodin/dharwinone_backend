@@ -1372,6 +1372,27 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
     }
   }
 
+  // Identity fields are canonical on User: route them through updateUserById,
+  // whose mirror writes them back onto this Employee doc. Never write them here.
+  const identityUserPayload = {};
+  if (sanitized.fullName !== undefined) identityUserPayload.name = sanitized.fullName;
+  if (sanitized.email !== undefined) identityUserPayload.email = sanitized.email;
+  if (sanitized.phoneNumber !== undefined) identityUserPayload.phoneNumber = sanitized.phoneNumber;
+  if (sanitized.countryCode !== undefined) identityUserPayload.countryCode = sanitized.countryCode;
+  if (sanitized.profilePicture !== undefined) identityUserPayload.profilePicture = sanitized.profilePicture;
+  delete sanitized.fullName;
+  delete sanitized.email;
+  delete sanitized.phoneNumber;
+  delete sanitized.countryCode;
+  delete sanitized.profilePicture;
+
+  const ownerIdForIdentity = normalizeMongoRefId(candidate.owner);
+  if (Object.keys(identityUserPayload).length > 0 && ownerIdForIdentity) {
+    // eslint-disable-next-line import/no-cycle -- user.service imports employee.service; runtime-only
+    const { updateUserById: updateOwnerUser } = await import('./user.service.js');
+    await updateOwnerUser(ownerIdForIdentity, identityUserPayload);
+  }
+
   if (sanitized.documents !== undefined) {
     sanitized.documents = mergeDocumentsPreserveKeys(candidate.documents || [], sanitized.documents);
   }
@@ -1482,54 +1503,12 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   const { queueSopReminderCheckForCandidate } = await import('./sopReminder.service.js');
   queueSopReminderCheckForCandidate(String(candidate._id));
 
-  // Sync critical fields to the linked User model
-  const ownerId = normalizeMongoRefId(candidate.owner);
-  if (ownerId) {
-    try {
-      const userUpdateData = {};
-      
-      // Sync name if fullName changed
-      if (updateBody.fullName) {
-        userUpdateData.name = updateBody.fullName;
-      }
-      
-      // Sync email if changed
-      if (updateBody.email) {
-        userUpdateData.email = updateBody.email;
-      }
-      
-      // Sync phone / country if changed (keep User and Candidate identical)
-      if (updateBody.phoneNumber !== undefined) {
-        userUpdateData.phoneNumber = candidate.phoneNumber;
-      }
-      if (updateBody.countryCode !== undefined) {
-        userUpdateData.countryCode = candidate.countryCode;
-      }
-
-      // Sync profile picture if changed (single image for both User and Candidate)
-      if (updateBody.profilePicture !== undefined) {
-        userUpdateData.profilePicture = updateBody.profilePicture;
-      }
-
-      // Only update if there are fields to sync
-      if (Object.keys(userUpdateData).length > 0) {
-        logger.debug('Syncing candidate data to user:', ownerId, userUpdateData);
-        await updateUserById(ownerId, userUpdateData);
-        logger.debug('User synced successfully');
-      }
-    } catch (error) {
-      // Log error but don't fail the candidate update
-      logger.error('Failed to sync candidate data to user:', error.message);
-      logger.error('Error stack:', error.stack);
-    }
-
-    // Sync position to Student if user has a Student profile (for training module assignment)
-    if ('position' in sanitized || (designationProvided && sanitized.position)) {
-      const student = await Student.findOne({ user: ownerId });
-      if (student) {
-        student.position = sanitized.position ?? null;
-        await student.save();
-      }
+  // Sync position to Student if user has a Student profile (for training module assignment)
+  if ('position' in sanitized || (designationProvided && sanitized.position)) {
+    const student = await Student.findOne({ user: ownerIdForIdentity });
+    if (student) {
+      student.position = sanitized.position ?? null;
+      await student.save();
     }
   }
 
