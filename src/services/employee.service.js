@@ -35,6 +35,7 @@ import {
   mergeDocumentsPreserveKeys,
   resetDocumentVerification,
 } from '../utils/documentVerificationMerge.js';
+import { buildEmployeeMirrorPatch } from '../utils/identityFields.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -3283,88 +3284,20 @@ const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
 };
 
 /**
- * Mirror User phone fields onto the linked Candidate (owner).
- * Called after User is updated (admin or PATCH /auth/me) so ATS and User stay aligned.
- * Does not call updateUserById (avoids loops). Employee.phoneNumber is required — if User clears phone, candidate keeps existing digits.
- * @param {import('mongoose').Types.ObjectId} ownerUserId
- * @param {{ phoneNumber?: string | null, countryCode?: string | null }} fields - omit key to skip that field
+ * Mirror changed User identity fields onto the linked Employee profile (owner).
+ * Single write door for User→Employee identity sync — called from updateUserById only.
+ * `changedUserValues` carries ONLY the user-side keys that changed this save.
  */
-const syncPhoneFromUserToCandidate = async (ownerUserId, fields) => {
-  const { phoneNumber, countryCode } = fields;
-  if (phoneNumber === undefined && countryCode === undefined) return;
-
+const syncIdentityFromUserToEmployee = async (ownerUserId, changedUserValues) => {
+  if (!changedUserValues || Object.keys(changedUserValues).length === 0) return;
   const candidate = await Employee.findOne({ owner: ownerUserId });
   if (!candidate) return;
 
-  if (phoneNumber !== undefined) {
-    const v = phoneNumber === null || phoneNumber === '' ? '' : String(phoneNumber).trim();
-    if (v === '') {
-      logger.debug('syncPhoneFromUserToCandidate: preserving candidate phone; user phone cleared');
-    } else {
-      candidate.phoneNumber = v;
-    }
-  }
-  if (countryCode !== undefined) {
-    const cc = countryCode === null || countryCode === '' ? undefined : String(countryCode).trim();
-    candidate.countryCode = cc;
-  }
-  await candidate.save();
-};
+  const patch = buildEmployeeMirrorPatch(changedUserValues, candidate);
+  if (Object.keys(patch).length === 0) return;
 
-/**
- * Mirror User.name onto the linked Employee profile (owner).
- * @param {import('mongoose').Types.ObjectId} ownerUserId
- * @param {string} name
- */
-const syncNameFromUserToCandidate = async (ownerUserId, name) => {
-  if (name === undefined || name === null) return;
-  const normalized = String(name).trim();
-  if (!normalized) return;
-
-  const candidate = await Employee.findOne({ owner: ownerUserId });
-  if (!candidate) return;
-  if (candidate.fullName === normalized) return;
-
-  candidate.fullName = normalized;
-  await candidate.save();
-};
-
-/**
- * Mirror User.profilePicture onto the linked Employee profile (owner).
- * @param {import('mongoose').Types.ObjectId} ownerUserId
- * @param {object|null|undefined} profilePicture
- */
-const syncProfilePictureFromUserToCandidate = async (ownerUserId, profilePicture) => {
-  if (profilePicture === undefined) return;
-
-  const candidate = await Employee.findOne({ owner: ownerUserId });
-  if (!candidate) return;
-
-  const next = profilePicture == null ? undefined : profilePicture;
-  const prevKey = candidate.profilePicture?.key || candidate.profilePicture?.url || '';
-  const nextKey = next?.key || next?.url || '';
-  if (prevKey === nextKey) return;
-
-  candidate.profilePicture = next;
-  await candidate.save();
-};
-
-/**
- * Mirror User login email onto the linked Employee profile (owner).
- * Called after User is updated (admin PATCH /users, etc.) so ATS employee views stay aligned.
- * @param {import('mongoose').Types.ObjectId} ownerUserId
- * @param {string} email - canonical User.email after save
- */
-const syncEmailFromUserToCandidate = async (ownerUserId, email) => {
-  if (email === undefined || email === null) return;
-  const normalized = String(email).trim().toLowerCase();
-  if (!normalized) return;
-
-  const candidate = await Employee.findOne({ owner: ownerUserId });
-  if (!candidate) return;
-  if (candidate.email === normalized) return;
-
-  candidate.email = normalized;
+  Object.assign(candidate, patch);
+  candidate.$locals.identityMirror = true;
   await candidate.save();
 };
 
@@ -3753,10 +3686,7 @@ export {
   ensureCandidateProfileForUser,
   applyInitialCandidateProfileFromAdmin,
   updateUserAndCandidateForMe,
-  syncPhoneFromUserToCandidate,
-  syncEmailFromUserToCandidate,
-  syncNameFromUserToCandidate,
-  syncProfilePictureFromUserToCandidate,
+  syncIdentityFromUserToEmployee,
   getCandidateByOwnerForMe,
   getResignStatusByOwnerId,
   getJobFit,

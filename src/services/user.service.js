@@ -198,53 +198,17 @@ const updateUserById = async (userId, updateBody) => {
   await user.save();
 
   // Keep linked Employee profile in sync with User (admin PATCH /users, PATCH /auth/me, etc.)
-  const identityFieldsChanged =
-    updateBody.email !== undefined ||
-    updateBody.name !== undefined ||
-    updateBody.phoneNumber !== undefined ||
-    updateBody.countryCode !== undefined ||
-    updateBody.profilePicture !== undefined;
-
-  if (identityFieldsChanged) {
+  const changedIdentity = {};
+  for (const f of ['name', 'email', 'phoneNumber', 'countryCode', 'profilePicture']) {
+    if (updateBody[f] !== undefined) changedIdentity[f] = user[f];
+  }
+  if (Object.keys(changedIdentity).length > 0) {
     // eslint-disable-next-line import/no-cycle -- employee.service imports user.service; sync is runtime-only
-    const employeeSync = await import('./employee.service.js');
-    const {
-      syncEmailFromUserToCandidate,
-      syncNameFromUserToCandidate,
-      syncPhoneFromUserToCandidate,
-      syncProfilePictureFromUserToCandidate,
-    } = employeeSync;
-
-    if (updateBody.email !== undefined) {
-      try {
-        await syncEmailFromUserToCandidate(userId, user.email);
-      } catch (err) {
-        logger.warn(
-          `syncEmailFromUserToCandidate failed for userId=${userId}: ${err?.message || err}`
-        );
-      }
-    }
-    if (updateBody.name !== undefined) {
-      try {
-        await syncNameFromUserToCandidate(userId, user.name);
-      } catch (err) {
-        logger.warn(`syncNameFromUserToCandidate failed for userId=${userId}: ${err?.message || err}`);
-      }
-    }
-    if (updateBody.phoneNumber !== undefined || updateBody.countryCode !== undefined) {
-      await syncPhoneFromUserToCandidate(userId, {
-        ...(updateBody.phoneNumber !== undefined && { phoneNumber: user.phoneNumber }),
-        ...(updateBody.countryCode !== undefined && { countryCode: user.countryCode }),
-      });
-    }
-    if (updateBody.profilePicture !== undefined) {
-      try {
-        await syncProfilePictureFromUserToCandidate(userId, user.profilePicture);
-      } catch (err) {
-        logger.warn(
-          `syncProfilePictureFromUserToCandidate failed for userId=${userId}: ${err?.message || err}`
-        );
-      }
+    const { syncIdentityFromUserToEmployee } = await import('./employee.service.js');
+    try {
+      await syncIdentityFromUserToEmployee(userId, changedIdentity);
+    } catch (err) {
+      logger.warn(`syncIdentityFromUserToEmployee failed for userId=${userId}: ${err?.message || err}`);
     }
   }
 
