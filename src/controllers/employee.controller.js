@@ -54,7 +54,7 @@ import {
 import {
   listReferralLeads,
   getReferralLeadsStats,
-  exportReferralLeadsCsv,
+  exportReferralLeadsExcel,
   overrideReferralAttribution,
   getReferralAttributionOverrideHistory,
   getReferralLeadById,
@@ -290,7 +290,7 @@ const getReferralLeadsStatsHandler = catchAsync(async (req, res) => {
 });
 
 const exportReferralLeadsHandler = catchAsync(async (req, res) => {
-  await exportReferralLeadsCsv(req, res);
+  await exportReferralLeadsExcel(req, res);
 });
 
 const postReferralLinkToken = catchAsync(async (req, res) => {

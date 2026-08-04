@@ -39,7 +39,12 @@ async function listUnifiedCalls(options = {}) {
         })
       : Promise.resolve({ results: [], total: 0 }),
     fetchChat
-      ? chatService.listCalls(userId, { page: 1, limit: mergeFetchLimit, isAdmin })
+      ? chatService.listCalls(userId, {
+          page: 1,
+          limit: mergeFetchLimit,
+          isAdmin,
+          search: options.search,
+        })
       : Promise.resolve({ results: [], totalPages: 0, total: 0 }),
   ]);
 

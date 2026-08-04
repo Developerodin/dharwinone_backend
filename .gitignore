@@ -19,9 +19,20 @@ recordings/
 
 # local / generated — do not commit
 docs/
-scripts/
+# scripts/* not scripts/: git cannot re-include a file whose parent dir is excluded
+scripts/*
+!scripts/mirror-cloud-to-local.js
 tests/
 graphify-out/
+
+# tests stay local — never pushed
+**/__tests__/
+*.test.js
+*.test.mjs
+
+# editor plans and CI config stay local — never pushed
+.cursor/
+.github/
 
 AGENTS.md
 postman/

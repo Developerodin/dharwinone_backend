@@ -187,8 +187,8 @@ const getStatistics = catchAsync(async (req, res) => {
 });
 
 const getTrackList = catchAsync(async (req, res) => {
-  const { search } = req.query;
-  const result = await attendanceService.getTrackList({ search });
+  const { search, punchStatus } = req.query;
+  const result = await attendanceService.getTrackList({ search, punchStatus });
   res.send(result);
 });
 

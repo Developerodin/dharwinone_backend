@@ -19,6 +19,30 @@ function fmtDateTime(d) {
   return Number.isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 16).replace('T', ' ');
 }
 
+const STATUS_LABELS = {
+  scheduled: 'Scheduled',
+  'in progress': 'In Progress',
+  inprogress: 'In Progress',
+  ended: 'Completed',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+  rescheduled: 'Rescheduled',
+};
+
+/** Human-readable status label aligned with the Interviews table UI. */
+function formatStatusLabel(status) {
+  const raw = String(status || '').toLowerCase();
+  if (!raw) return 'Scheduled';
+  return STATUS_LABELS[raw] || status;
+}
+
+/** Human-readable result label aligned with the Interviews table UI. */
+function formatResultLabel(result) {
+  if (result === 'selected') return 'Selected';
+  if (result === 'rejected') return 'Rejected';
+  return 'Pending';
+}
+
 /**
  * Build an in-memory .xlsx workbook of ATS interviews (Meeting docs).
  *
@@ -52,8 +76,8 @@ export function buildMeetingsExportBuffer(meetings = []) {
         r.email || '',
         fmtDateTime(m.scheduledAt),
         m.durationMinutes ?? '',
-        m.status || '',
-        m.interviewResult || '',
+        formatStatusLabel(m.status),
+        formatResultLabel(m.interviewResult),
         fmtDateTime(m.createdAt),
         m.publicMeetingUrl || '',
       ].map(defangCell)
