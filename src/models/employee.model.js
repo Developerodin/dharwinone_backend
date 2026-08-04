@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
 import { COMPENSATION_TYPES, COMPENSATION_SOURCES } from '../constants/atsPipeline.js';
+import logger from '../config/logger.js';
+import { detectDirectIdentityWrite } from '../utils/identityFields.js';
 
 const qualificationSchema = new mongoose.Schema(
   {
@@ -379,6 +381,18 @@ employeeSchema.pre('save', function captureFullNameRename(next) {
     if (prior && prior !== this.fullName) {
       this.previousNames = [...new Set([...(this.previousNames || []), prior])];
     }
+  }
+  next();
+});
+
+employeeSchema.pre('save', function warnDirectIdentityWrite(next) {
+  // Warn-only rollout: identity fields are canonical on User; direct Employee
+  // writes should route through updateUserById. Logged, not blocked — known
+  // side-door writers (excel import, registration phone backfill) still work,
+  // and the workforceReconciliation identity pass converges any drift.
+  const fields = detectDirectIdentityWrite(this.modifiedPaths(), this.isNew, this.$locals?.identityMirror);
+  if (fields.length) {
+    logger.warn(`[identity-guard] direct Employee identity write id=${this._id} fields=${fields.join(',')}`);
   }
   next();
 });
