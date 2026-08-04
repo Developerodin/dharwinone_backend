@@ -3302,8 +3302,6 @@ const syncIdentityFromUserToEmployee = async (ownerUserId, changedUserValues) =>
 };
 
 /** User fields allowed for self-update via PATCH /auth/me/with-candidate */
-const USER_ME_FIELDS = ['name', 'notificationPreferences', 'profilePicture'];
-
 /** Candidate fields (excludes User fields). Sync name→fullName and profilePicture to candidate. */
 const CANDIDATE_ME_FIELDS = [
   'fullName',
@@ -3340,82 +3338,55 @@ const updateUserAndCandidateForMe = async (userId, body) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
   }
 
+  // Identity fields route through User (single source of truth); the mirror in
+  // updateUserById copies them onto the Employee doc. Everything else stays here.
   const userPayload = {};
-  for (const key of USER_ME_FIELDS) {
-    if (body[key] !== undefined) userPayload[key] = body[key];
+  if (body.name !== undefined) userPayload.name = body.name;
+  if (body.fullName !== undefined) userPayload.name = body.fullName;
+  if (body.email !== undefined) userPayload.email = body.email;
+  if (body.phoneNumber !== undefined) userPayload.phoneNumber = body.phoneNumber;
+  if (body.countryCode !== undefined) userPayload.countryCode = body.countryCode;
+  if (body.profilePicture !== undefined) userPayload.profilePicture = body.profilePicture;
+  if (body.notificationPreferences !== undefined) userPayload.notificationPreferences = body.notificationPreferences;
+
+  if (Object.keys(userPayload).length > 0) {
+    // eslint-disable-next-line import/no-cycle -- user.service imports employee.service; runtime-only
+    const { updateUserById } = await import('./user.service.js');
+    await updateUserById(userId, userPayload);
+  }
+
+  const candidate = await Employee.findById(candidateDoc.id || candidateDoc._id);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   }
 
   const candidatePayload = {};
   for (const key of CANDIDATE_ME_FIELDS) {
     if (body[key] !== undefined) candidatePayload[key] = body[key];
   }
-  if (body.name !== undefined) candidatePayload.fullName = body.name;
-  if (body.profilePicture !== undefined) candidatePayload.profilePicture = body.profilePicture;
+  // Identity fields were written via User above and mirrored already.
+  delete candidatePayload.fullName;
+  delete candidatePayload.email;
+  delete candidatePayload.phoneNumber;
+  delete candidatePayload.countryCode;
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const user = await User.findById(userId).session(session);
-    if (!user) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  if (Object.keys(candidatePayload).length > 0) {
+    if (candidatePayload.documents !== undefined) {
+      candidatePayload.documents = mergeDocumentsPreserveKeys(candidate.documents || [], candidatePayload.documents);
     }
-    if (userPayload.email !== undefined && (await User.isEmailTaken(userPayload.email, userId))) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
+    if (candidatePayload.salarySlips !== undefined) {
+      candidatePayload.salarySlips = mergeSalarySlipsPreserveKeys(candidate.salarySlips || [], candidatePayload.salarySlips);
     }
-    if (candidatePayload.email !== undefined && (await User.isEmailTaken(candidatePayload.email, userId))) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
-    }
-    if (Object.keys(userPayload).length > 0) {
-      Object.assign(user, userPayload);
-      await user.save({ session });
-    }
-
-    const candidate = await Employee.findById(candidateDoc.id || candidateDoc._id).session(session);
-    if (!candidate) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
-    }
-    if (Object.keys(candidatePayload).length > 0) {
-      if (candidatePayload.documents !== undefined) {
-        candidatePayload.documents = mergeDocumentsPreserveKeys(
-          candidate.documents || [],
-          candidatePayload.documents
-        );
-      }
-      if (candidatePayload.salarySlips !== undefined) {
-        candidatePayload.salarySlips = mergeSalarySlipsPreserveKeys(
-          candidate.salarySlips || [],
-          candidatePayload.salarySlips
-        );
-      }
-      Object.assign(candidate, candidatePayload);
-      if (candidatePayload.documents !== undefined) candidate.markModified('documents');
-      if (candidatePayload.salarySlips !== undefined) candidate.markModified('salarySlips');
-      if (candidatePayload.skills !== undefined) candidate.markModified('skills');
-      candidate.isProfileCompleted = calculateProfileCompletion(candidate);
-      candidate.isCompleted = candidate.isProfileCompleted === 100;
-      await candidate.save({ session });
-      if (candidatePayload.fullName !== undefined) user.name = candidatePayload.fullName;
-      if (candidatePayload.email !== undefined) user.email = candidatePayload.email;
-      if (candidatePayload.phoneNumber !== undefined) user.phoneNumber = candidatePayload.phoneNumber;
-      if (candidatePayload.countryCode !== undefined) user.countryCode = candidatePayload.countryCode;
-      if (candidatePayload.profilePicture !== undefined) user.profilePicture = candidatePayload.profilePicture;
-      if (
-        Object.keys(candidatePayload).some((k) =>
-          ['fullName', 'email', 'phoneNumber', 'countryCode', 'profilePicture'].includes(k)
-        )
-      ) {
-        await user.save({ session });
-      }
-    }
-
-    await session.commitTransaction();
-    return { user: await User.findById(userId), candidate: await Employee.findById(candidate._id) };
-  } catch (err) {
-    await session.abortTransaction();
-    throw err;
-  } finally {
-    session.endSession();
+    Object.assign(candidate, candidatePayload);
+    if (candidatePayload.documents !== undefined) candidate.markModified('documents');
+    if (candidatePayload.salarySlips !== undefined) candidate.markModified('salarySlips');
+    if (candidatePayload.skills !== undefined) candidate.markModified('skills');
+    candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+    candidate.isCompleted = candidate.isProfileCompleted === 100;
+    await candidate.save();
   }
+
+  return { user: await User.findById(userId), candidate: await Employee.findById(candidate._id) };
 };
 
 // ===== Document Requests =====
