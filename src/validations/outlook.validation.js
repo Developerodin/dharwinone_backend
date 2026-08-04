@@ -9,6 +9,8 @@ export {
   getMessage,
   getAttachment,
   sendMessage,
+  saveDraft,
+  updateDraft,
   replyMessage,
   replyAllMessage,
   forwardMessage,
@@ -18,6 +20,7 @@ export {
   trashThreads,
   deleteMessage,
   listLabels,
+  getFolderCounts,
   createLabel,
 } from './email.validation.js';
 

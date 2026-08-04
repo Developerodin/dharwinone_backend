@@ -75,6 +75,8 @@ router.get(
   emailController.getAttachment
 );
 router.post('/drafts/generate', requirePermissions('emails.manage'), validate(emailValidation.generateDraft), emailController.generateDraft);
+router.post('/drafts', requirePermissions('emails.manage'), validate(emailValidation.saveDraft), emailController.saveDraft);
+router.put('/drafts/:id', requirePermissions('emails.manage'), validate(emailValidation.updateDraft), emailController.updateDraft);
 router.post('/messages/send', requirePermissions('emails.manage'), validate(emailValidation.sendMessage), emailController.sendMessage);
 router.post(
   '/messages/:id/reply-all',
@@ -88,6 +90,12 @@ router.patch('/messages/:id', requirePermissions('emails.manage'), validate(emai
 router.delete('/messages/:id', requirePermissions('emails.manage'), validate(emailValidation.deleteMessage), emailController.deleteMessage);
 
 router.get('/labels', requirePermissions('emails.read'), validate(emailValidation.listLabels), emailController.listLabels);
+router.get(
+  '/folder-counts',
+  requirePermissions('emails.read'),
+  validate(emailValidation.getFolderCounts),
+  emailController.getFolderCounts
+);
 router.post('/labels', requirePermissions('emails.manage'), validate(emailValidation.createLabel), emailController.createLabel);
 
 // Personal email templates & signature (Gmail + Outlook compose use same prefs)

@@ -640,7 +640,7 @@ export async function getNewInboxMessages(account, sinceDate) {
     createGraphClient(account.accessToken)
       .api('/me/mailFolders/inbox/messages')
       .top(10)
-      .select('subject,from,receivedDateTime')
+      .select('subject,from,receivedDateTime,conversationId')
       .orderby('receivedDateTime desc')
       .get()
   );
@@ -651,6 +651,7 @@ export async function getNewInboxMessages(account, sinceDate) {
     if (!internalMs || internalMs <= sinceMs) continue;
     out.push({
       id: m.id,
+      threadId: m.conversationId || m.id,
       from: m.from?.emailAddress?.address || m.from?.emailAddress?.name || '',
       subject: m.subject || '(No subject)',
       internalMs,
@@ -701,7 +702,38 @@ function normalizeFolder(folder) {
     id,
     name: folder.displayName || folder.wellKnownName || folder.id,
     type: wellKnown ? 'system' : 'user',
+    unread: Number(folder.unreadItemCount ?? 0) || 0,
+    total: Number(folder.totalItemCount ?? 0) || 0,
   };
+}
+
+/** App folder keys → Outlook well-known / normalized label ids from listLabels. */
+const OUTLOOK_FOLDER_KEYS = {
+  inbox: 'INBOX',
+  sent: 'SENT',
+  draft: 'DRAFT',
+  spam: 'JUNK',
+  trash: 'TRASH',
+  archive: 'ARCHIVE',
+};
+
+/**
+ * Authoritative folder counts from Microsoft Graph mailFolders unreadItemCount/totalItemCount.
+ */
+export async function getFolderCounts(account) {
+  const folders = await listLabels(account);
+  const byId = new Map(folders.map((f) => [String(f.id).toUpperCase(), f]));
+  const counts = {};
+  for (const [folder, labelId] of Object.entries(OUTLOOK_FOLDER_KEYS)) {
+    const match = byId.get(labelId) || folders.find((f) => String(f.id).toUpperCase() === labelId);
+    counts[folder] = {
+      unread: Number(match?.unread ?? 0) || 0,
+      total: Number(match?.total ?? 0) || 0,
+      messagesUnread: Number(match?.unread ?? 0) || 0,
+      messagesTotal: Number(match?.total ?? 0) || 0,
+    };
+  }
+  return counts;
 }
 
 /**
@@ -768,6 +800,7 @@ function synthesizeLabelIds(msg) {
   const ids = [];
   if (!msg.isRead) ids.push('UNREAD');
   if (msg.flag?.flagStatus === 'flagged') ids.push('STARRED');
+  if (String(msg.importance || '').toLowerCase() === 'high') ids.push('IMPORTANT');
   return ids;
 }
 
@@ -790,6 +823,7 @@ function formatOutlookMessage(msg) {
     from: msg.from?.emailAddress ? `${msg.from.emailAddress.name || ''} <${msg.from.emailAddress.address}>`.trim() : '',
     to: (msg.toRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
     cc: (msg.ccRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
+    bcc: (msg.bccRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
     subject: msg.subject || '(No subject)',
     date: msg.receivedDateTime || msg.sentDateTime || null,
     messageId: msg.internetMessageId || null,
@@ -840,7 +874,7 @@ export async function listMessages(account, { labelId, pageToken, pageSize = 20,
         let request = client
           .api(endpoint)
           .top(top)
-          .select('id,conversationId,subject,bodyPreview,from,toRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments');
+          .select('id,conversationId,subject,bodyPreview,from,toRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,flag,importance');
         if (query && String(query).trim()) {
           // Escape inner quotes (\") so KQL phrase syntax survives, e.g. from:"john doe".
         // Stripping them collapsed phrases to first-word + free-text.
@@ -892,7 +926,9 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
       let request = client
         .api(endpoint)
         .top(Math.min(top * 2, 100))
-        .select('id,conversationId,subject,bodyPreview,from,toRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments');
+        .select(
+          'id,conversationId,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,flag,importance'
+        );
       if (query && String(query).trim()) {
         // Escape inner quotes (\") so KQL phrase syntax survives, e.g. from:"john doe".
         // Stripping them collapsed phrases to first-word + free-text.
@@ -937,6 +973,8 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
       snippet: stripTags(latest.bodyPreview || '').slice(0, 200),
       from: latest.from?.emailAddress ? `${latest.from.emailAddress.name || ''} <${latest.from.emailAddress.address}>`.trim() : '',
       to: (latest.toRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
+      cc: (latest.ccRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
+      bcc: (latest.bccRecipients || []).map((r) => `${r.emailAddress?.name || ''} <${r.emailAddress?.address}>`).join(', '),
       subject: first.subject || '(No subject)',
       date: latest.receivedDateTime || latest.sentDateTime || null,
       messageCount: msgs.length,
@@ -966,7 +1004,7 @@ export async function getThread(account, threadId) {
             const full = await client
               .api(msgPath(id))
               .select(
-                'id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag'
+                'id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag,importance'
               )
               .expand('attachments')
               .get();
@@ -978,7 +1016,8 @@ export async function getThread(account, threadId) {
         })
       )
     ).filter(Boolean);
-    return { id: threadId, messages };
+    const labelIds = [...new Set(messages.flatMap((m) => m.labelIds || []))];
+    return { id: threadId, messages, labelIds };
   });
 }
 
@@ -990,7 +1029,7 @@ export async function getMessage(account, messageId) {
     const client = createGraphClient(account.accessToken);
     const msg = await client
       .api(msgPath(messageId))
-      .select('id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag')
+      .select('id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,internetMessageId,hasAttachments,flag,importance')
       .get();
     return formatOutlookMessage(msg);
   });
@@ -1008,21 +1047,32 @@ export async function getAttachment(account, messageId, attachmentId) {
 }
 
 /**
+ * Normalize `Name <a@b.com>` or bare address into Graph recipient objects.
+ */
+function toGraphRecipients(value) {
+  const list = Array.isArray(value) ? value : value ? [value] : [];
+  return list
+    .map((raw) => {
+      const s = String(raw || '').trim();
+      if (!s) return null;
+      const m = s.match(/<([^>]+)>/);
+      const address = (m ? m[1] : s).trim();
+      if (!address) return null;
+      return { emailAddress: { address } };
+    })
+    .filter(Boolean);
+}
+
+/**
  * Send a new email via Graph API.
  */
 export async function sendMessage(account, { to, cc, bcc, subject, html, attachments = [] } = {}) {
   await ensureValidToken(account);
   const client = createGraphClient(account.accessToken);
 
-  const toRecipients = (Array.isArray(to) ? to : [to].filter(Boolean)).map((addr) => ({
-    emailAddress: { address: addr },
-  }));
-  const ccRecipients = cc
-    ? (Array.isArray(cc) ? cc : [cc]).map((addr) => ({ emailAddress: { address: addr } }))
-    : [];
-  const bccRecipients = bcc
-    ? (Array.isArray(bcc) ? bcc : [bcc]).map((addr) => ({ emailAddress: { address: addr } }))
-    : [];
+  const toRecipients = toGraphRecipients(to);
+  const ccRecipients = toGraphRecipients(cc);
+  const bccRecipients = toGraphRecipients(bcc);
 
   const message = {
     subject: subject || '',
@@ -1046,6 +1096,88 @@ export async function sendMessage(account, { to, cc, bcc, subject, html, attachm
 
   await client.api('/me/sendMail').post({ message, saveToSentItems: true });
   return { id: null, threadId: null };
+}
+
+/**
+ * Create an Outlook draft message (saved in Drafts, synced across devices).
+ */
+export async function createDraft(account, { to, cc, bcc, subject, html, attachments = [] } = {}) {
+  await ensureValidToken(account);
+  const client = createGraphClient(account.accessToken);
+
+  const toRecipients = toGraphRecipients(to);
+  const ccRecipients = toGraphRecipients(cc);
+  const bccRecipients = toGraphRecipients(bcc);
+
+  const message = {
+    subject: subject || '',
+    body: {
+      contentType: 'HTML',
+      content: outlookSendHtmlBody(html || ''),
+    },
+    toRecipients,
+  };
+  if (ccRecipients.length) message.ccRecipients = ccRecipients;
+  if (bccRecipients.length) message.bccRecipients = bccRecipients;
+  if (attachments.length > 0) {
+    message.attachments = attachments.map((att) => ({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: att.filename || 'attachment',
+      contentType: att.mimeType || 'application/octet-stream',
+      contentBytes: typeof att.content === 'string' ? att.content : Buffer.from(att.content).toString('base64'),
+    }));
+  }
+
+  const created = await client.api('/me/messages').post(message);
+  return {
+    id: created.id,
+    draftId: created.id,
+    messageId: created.id,
+    threadId: created.conversationId || created.id,
+  };
+}
+
+/**
+ * Update an existing Outlook draft message.
+ */
+export async function updateDraft(account, draftId, { to, cc, bcc, subject, html, attachments = [] } = {}) {
+  await ensureValidToken(account);
+  const client = createGraphClient(account.accessToken);
+
+  const toRecipients = toGraphRecipients(to);
+  const ccRecipients = toGraphRecipients(cc);
+  const bccRecipients = toGraphRecipients(bcc);
+
+  const patch = {
+    subject: subject || '',
+    body: {
+      contentType: 'HTML',
+      content: outlookSendHtmlBody(html || ''),
+    },
+    toRecipients,
+    ccRecipients,
+    bccRecipients,
+  };
+
+  const updated = await client.api(msgPath(draftId)).patch(patch);
+
+  if (attachments.length > 0) {
+    for (const att of attachments) {
+      await client.api(`${msgPath(draftId)}/attachments`).post({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: att.filename || 'attachment',
+        contentType: att.mimeType || 'application/octet-stream',
+        contentBytes: typeof att.content === 'string' ? att.content : Buffer.from(att.content).toString('base64'),
+      });
+    }
+  }
+
+  return {
+    id: updated?.id || draftId,
+    draftId: updated?.id || draftId,
+    messageId: updated?.id || draftId,
+    threadId: updated?.conversationId || draftId,
+  };
 }
 
 /**
@@ -1142,6 +1274,10 @@ export async function modifyMessage(account, messageId, { addLabelIds = [], remo
   if (addLabelIds.includes('STARRED')) patch.flag = { flagStatus: 'flagged' };
   if (removeLabelIds.includes('STARRED')) patch.flag = { flagStatus: 'notFlagged' };
 
+  // Support IMPORTANT via Outlook importance
+  if (addLabelIds.includes('IMPORTANT')) patch.importance = 'high';
+  if (removeLabelIds.includes('IMPORTANT')) patch.importance = 'normal';
+
   if (Object.keys(patch).length > 0) {
     await client.api(msgPath(messageId)).patch(patch);
   }
@@ -1156,11 +1292,20 @@ export async function modifyMessage(account, messageId, { addLabelIds = [], remo
   }
 
   // Support INBOX removal → move to archive
-  if (removeLabelIds.includes('INBOX') && !addLabelIds.includes('SPAM')) {
+  if (removeLabelIds.includes('INBOX') && !addLabelIds.includes('SPAM') && !addLabelIds.includes('INBOX')) {
     try {
       await client.api(`${msgPath(messageId)}/move`).post({ destinationId: 'archive' });
     } catch (err) {
       logger.warn('[Outlook] Failed to archive message %s: %s', messageId, err.message);
+    }
+  }
+
+  // Support INBOX add → restore from archive (or other folders) to inbox
+  if (addLabelIds.includes('INBOX') && !addLabelIds.includes('SPAM')) {
+    try {
+      await client.api(`${msgPath(messageId)}/move`).post({ destinationId: 'inbox' });
+    } catch (err) {
+      logger.warn('[Outlook] Failed to move message %s to inbox: %s', messageId, err.message);
     }
   }
 
@@ -1230,7 +1375,8 @@ export async function trashThreads(account, threadIds) {
  * (do not call ensureValidToken again on retry — avoids double-refresh / stale reads).
  */
 export async function listLabels(account) {
-  const url = 'https://graph.microsoft.com/v1.0/me/mailFolders?$top=200';
+  const url =
+    'https://graph.microsoft.com/v1.0/me/mailFolders?$top=200&$select=id,displayName,wellKnownName,totalItemCount,unreadItemCount';
 
   const fetchFolders = async (token) => {
     const t = (token || '').trim();

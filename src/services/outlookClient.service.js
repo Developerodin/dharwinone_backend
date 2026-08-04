@@ -114,6 +114,16 @@ export async function sendMessage(accountId, userId, payload) {
   return outlookProvider.sendMessage(account, payload);
 }
 
+export async function createDraft(accountId, userId, payload) {
+  const account = await getOutlookAccountForUser(accountId, userId);
+  return outlookProvider.createDraft(account, payload);
+}
+
+export async function updateDraft(accountId, userId, draftId, payload) {
+  const account = await getOutlookAccountForUser(accountId, userId);
+  return outlookProvider.updateDraft(account, draftId, payload);
+}
+
 export async function replyMessage(accountId, userId, messageId, payload) {
   const account = await getOutlookAccountForUser(accountId, userId);
   return outlookProvider.replyMessage(account, messageId, payload);
@@ -142,6 +152,8 @@ export async function forwardMessage(accountId, userId, messageId, payload) {
   ].join('\n');
   return outlookProvider.sendMessage(account, {
     to: payload.to,
+    cc: payload.cc,
+    bcc: payload.bcc,
     subject: fwdSubject,
     html: fwdBody,
     attachments: payload.attachments || [],
@@ -179,6 +191,11 @@ export async function deleteMessage(accountId, userId, messageId) {
 export async function listLabels(accountId, userId) {
   const account = await getOutlookAccountForUser(accountId, userId);
   return outlookProvider.listLabels(account);
+}
+
+export async function getFolderCounts(accountId, userId) {
+  const account = await getOutlookAccountForUser(accountId, userId);
+  return outlookProvider.getFolderCounts(account);
 }
 
 export async function createLabel(accountId, userId, { name }) {

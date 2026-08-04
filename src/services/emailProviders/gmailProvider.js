@@ -347,7 +347,7 @@ export async function getNewInboxMessages(account, sinceDate) {
       acc[(h.name || '').toLowerCase()] = h.value;
       return acc;
     }, {});
-    out.push({ id, from: headers.from || '', subject: headers.subject || '(No subject)', internalMs });
+    out.push({ id, threadId: full.data.threadId || id, from: headers.from || '', subject: headers.subject || '(No subject)', internalMs });
   }
   return out.sort((a, b) => a.internalMs - b.internalMs);
 }
@@ -438,6 +438,8 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
         snippet: stripTags(t.snippet || ''),
         from: lastH.from || firstH.from || '',
         to: lastH.to || firstH.to || '',
+        cc: lastH.cc || firstH.cc || '',
+        bcc: lastH.bcc || firstH.bcc || '',
         subject: firstH.subject || '(No subject)',
         date: lastH.date || firstH.date || null,
         messageCount: msgs.length,
@@ -451,6 +453,199 @@ export async function listThreads(account, { labelId, pageToken, pageSize = 20, 
     threads: items,
     nextPageToken: listRes.data.nextPageToken || null,
     resultSizeEstimate: listRes.data.resultSizeEstimate ?? items.length,
+  };
+}
+
+/** Normalize Gmail part mimeType (drop "; charset=..." etc.). */
+function normalizeMimeType(mimeType) {
+  return (mimeType || 'text/plain').split(';')[0].trim().toLowerCase();
+}
+
+function partHeaderMap(part) {
+  return (part.headers || []).reduce((acc, h) => {
+    acc[(h.name || '').toLowerCase()] = h.value || '';
+    return acc;
+  }, {});
+}
+
+function isHtmlMime(mimeType) {
+  return mimeType === 'text/html' || mimeType === 'text/x-amp-html';
+}
+
+function isPlainMime(mimeType) {
+  return mimeType === 'text/plain';
+}
+
+/**
+ * True when this part should be treated as a downloadable file rather than the message body.
+ * Large text/html|text/plain bodies often only have attachmentId and must NOT be skipped.
+ */
+function isFileAttachmentPart(part, mimeType) {
+  const filename = (part.filename || '').trim();
+  const disposition = (partHeaderMap(part)['content-disposition'] || '').toLowerCase();
+  if (disposition.includes('attachment')) return true;
+  if ((isHtmlMime(mimeType) || isPlainMime(mimeType)) && !disposition.includes('attachment')) {
+    return false;
+  }
+  return Boolean(filename);
+}
+
+function decodePartData(data) {
+  if (!data) return '';
+  return Buffer.from(data, 'base64url').toString('utf8');
+}
+
+/**
+ * Walk a Gmail message payload tree and collect bodies + attachments.
+ * Body parts larger than ~2MB arrive as attachmentId only — those are listed in
+ * pendingBodyFetches for the caller to resolve via users.messages.attachments.get.
+ */
+function extractBodiesFromPayload(payload, messageId) {
+  let htmlBody = '';
+  let textBody = '';
+  let htmlDepth = Infinity;
+  let textDepth = Infinity;
+  const attachments = [];
+  const pendingBodyFetches = [];
+
+  function assignHtml(decoded, depth) {
+    if (!decoded) return;
+    // Prefer the outermost (shallowest) HTML part — nested message/rfc822 can overwrite otherwise.
+    if (!htmlBody || depth < htmlDepth) {
+      htmlBody = decoded;
+      htmlDepth = depth;
+    }
+  }
+
+  function assignText(decoded, depth) {
+    if (!decoded) return;
+    if (!textBody || depth < textDepth) {
+      textBody = decoded;
+      textDepth = depth;
+    }
+  }
+
+  function processPart(part, depth = 0) {
+    if (!part) return;
+    const mimeType = normalizeMimeType(part.mimeType);
+    const filename = (part.filename || '').trim();
+    const asFile = isFileAttachmentPart(part, mimeType);
+
+    if (isHtmlMime(mimeType) && !asFile) {
+      if (part.body?.data) {
+        assignHtml(decodePartData(part.body.data), depth);
+      } else if (part.body?.attachmentId) {
+        pendingBodyFetches.push({
+          attachmentId: part.body.attachmentId,
+          kind: 'html',
+          depth,
+        });
+      }
+    } else if (isPlainMime(mimeType) && !asFile) {
+      if (part.body?.data) {
+        assignText(decodePartData(part.body.data), depth);
+      } else if (part.body?.attachmentId) {
+        pendingBodyFetches.push({
+          attachmentId: part.body.attachmentId,
+          kind: 'plain',
+          depth,
+        });
+      }
+    } else if (part.body?.attachmentId && (asFile || filename || !mimeType.startsWith('multipart/'))) {
+      // Skip pure multipart containers; keep real files and inline cid images.
+      if (mimeType !== 'multipart/alternative' && mimeType !== 'multipart/related' && mimeType !== 'multipart/mixed') {
+        attachments.push({
+          filename: filename || 'attachment',
+          mimeType,
+          size: part.body.size || 0,
+          attachmentId: part.body.attachmentId,
+          messageId,
+        });
+      }
+    } else if (part.body?.data && asFile && filename) {
+      attachments.push({
+        filename,
+        mimeType,
+        size: part.body.size || 0,
+        attachmentId: part.body.attachmentId || null,
+        messageId,
+      });
+    }
+
+    (part.parts || []).forEach((p) => processPart(p, depth + 1));
+  }
+
+  processPart(payload);
+  return { htmlBody, textBody, attachments, pendingBodyFetches, htmlDepth, textDepth };
+}
+
+/** Fetch attachment-backed text/html|text/plain bodies from Gmail. */
+async function resolvePendingBodyFetches(gmail, messageId, extracted) {
+  let { htmlBody, textBody, htmlDepth, textDepth } = extracted;
+  const pending = [...(extracted.pendingBodyFetches || [])].sort((a, b) => a.depth - b.depth);
+
+  for (const item of pending) {
+    if (item.kind === 'html' && htmlBody && item.depth >= htmlDepth) continue;
+    if (item.kind === 'plain' && textBody && item.depth >= textDepth) continue;
+    try {
+      const res = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId,
+        id: item.attachmentId,
+      });
+      const decoded = decodePartData(res.data?.data);
+      if (!decoded) continue;
+      if (item.kind === 'html') {
+        if (!htmlBody || item.depth < htmlDepth) {
+          htmlBody = decoded;
+          htmlDepth = item.depth;
+        }
+      } else if (item.kind === 'plain') {
+        if (!textBody || item.depth < textDepth) {
+          textBody = decoded;
+          textDepth = item.depth;
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed to fetch Gmail body part ${item.attachmentId} for message ${messageId}: ${err.message}`);
+    }
+  }
+
+  return { htmlBody, textBody };
+}
+
+function formatFullMessage(msg, bodies, { stripSnippet = false } = {}) {
+  const headers = (msg.payload?.headers || []).reduce((acc, h) => {
+    acc[(h.name || '').toLowerCase()] = h.value;
+    return acc;
+  }, {});
+
+  let htmlBody = bodies.htmlBody || '';
+  let textBody = bodies.textBody || '';
+  // Mirror Outlook: if MIME walk found nothing, expose snippet so the app is never empty.
+  if (!htmlBody && !textBody && (msg.snippet || '').trim()) {
+    textBody = stripTags(msg.snippet.trim());
+  }
+
+  const rawSnippet = msg.snippet || '';
+  return {
+    id: msg.id,
+    threadId: msg.threadId,
+    labelIds: msg.labelIds || [],
+    snippet: stripSnippet ? stripTags(rawSnippet) : rawSnippet,
+    from: headers.from || '',
+    to: headers.to || '',
+    cc: headers.cc || '',
+    bcc: headers.bcc || '',
+    subject: headers.subject || '',
+    date: headers.date || null,
+    messageId: headers['message-id'] || null,
+    inReplyTo: headers['in-reply-to'] || null,
+    references: headers.references || null,
+    isUnread: (msg.labelIds || []).includes('UNREAD'),
+    htmlBody: htmlBody || null,
+    textBody: textBody || null,
+    attachments: bodies.attachments || [],
   };
 }
 
@@ -472,71 +667,19 @@ export async function getThread(account, threadId) {
   const msgs = thread.messages || [];
 
   const messages = await Promise.all(
-    msgs.map((m) => {
-      const fullMsg = m;
-      const headers = (fullMsg.payload?.headers || []).reduce((acc, h) => {
-        acc[(h.name || '').toLowerCase()] = h.value;
-        return acc;
-      }, {});
-
-      let htmlBody = '';
-      let textBody = '';
-      const attachments = [];
-
-      function processPart(part) {
-        if (!part) return;
-        const mimeType = (part.mimeType || 'text/plain').toLowerCase();
-        const filename = part.filename || null;
-        if (part.body?.attachmentId) {
-          attachments.push({
-            filename: filename || 'attachment',
-            mimeType,
-            size: part.body.size || 0,
-            attachmentId: part.body.attachmentId,
-            messageId: fullMsg.id,
-          });
-        } else if (part.body?.data) {
-          const decoded = Buffer.from(part.body.data, 'base64url').toString('utf8');
-          if (filename) {
-            attachments.push({
-              filename,
-              mimeType,
-              size: part.body.size || 0,
-              attachmentId: part.body.attachmentId,
-              messageId: fullMsg.id,
-            });
-          } else if (mimeType === 'text/html') {
-            htmlBody = decoded;
-          } else if (mimeType === 'text/plain' && !textBody) {
-            textBody = decoded;
-          }
-        }
-        (part.parts || []).forEach(processPart);
-      }
-      processPart(fullMsg.payload);
-
-      return {
-        id: fullMsg.id,
-        threadId: fullMsg.threadId,
-        labelIds: fullMsg.labelIds || [],
-        snippet: fullMsg.snippet || '',
-        from: headers.from || '',
-        to: headers.to || '',
-        cc: headers.cc || '',
-        subject: headers.subject || '',
-        date: headers.date || null,
-        messageId: headers['message-id'] || null,
-        inReplyTo: headers['in-reply-to'] || null,
-        references: headers.references || null,
-        isUnread: (fullMsg.labelIds || []).includes('UNREAD'),
-        htmlBody: htmlBody || null,
-        textBody: textBody || null,
-        attachments,
-      };
-    })
+    msgs.map(async (fullMsg) => {
+      const extracted = extractBodiesFromPayload(fullMsg.payload, fullMsg.id);
+      const resolved = await resolvePendingBodyFetches(gmail, fullMsg.id, extracted);
+      return formatFullMessage(fullMsg, {
+        htmlBody: resolved.htmlBody,
+        textBody: resolved.textBody,
+        attachments: extracted.attachments,
+      });
+    }),
   );
 
-  return { id: thread.id, messages };
+  const labelIds = [...new Set(messages.flatMap((m) => m.labelIds || []))];
+  return { id: thread.id, messages, labelIds };
 }
 
 function formatMessageListItem(msg) {
@@ -573,66 +716,17 @@ export async function getMessage(account, messageId) {
   });
   const msg = res.data;
 
-  const headers = (msg.payload?.headers || []).reduce((acc, h) => {
-    acc[h.name?.toLowerCase()] = h.value;
-    return acc;
-  }, {});
-
-  let htmlBody = '';
-  let textBody = '';
-  const attachments = [];
-
-  function processPart(part, depth = 0) {
-    if (!part) return;
-    const mimeType = (part.mimeType || 'text/plain').toLowerCase();
-    const filename = part.filename || null;
-
-    if (part.body?.attachmentId) {
-      attachments.push({
-        filename: filename || 'attachment',
-        mimeType,
-        size: part.body.size || 0,
-        attachmentId: part.body.attachmentId,
-        messageId: msg.id,
-      });
-    } else if (part.body?.data) {
-      const decoded = Buffer.from(part.body.data, 'base64url').toString('utf8');
-      if (filename) {
-        attachments.push({
-          filename,
-          mimeType,
-          size: part.body.size || 0,
-          attachmentId: part.body.attachmentId,
-          messageId: msg.id,
-        });
-      } else if (mimeType === 'text/html') {
-        htmlBody = decoded;
-      } else if (mimeType === 'text/plain' && !textBody) {
-        textBody = decoded;
-      }
-    }
-    (part.parts || []).forEach((p) => processPart(p, depth + 1));
-  }
-  processPart(msg.payload);
-
-  return {
-    id: msg.id,
-    threadId: msg.threadId,
-    labelIds: msg.labelIds || [],
-    snippet: stripTags(msg.snippet || ''),
-    from: headers.from || '',
-    to: headers.to || '',
-    cc: headers.cc || '',
-    subject: headers.subject || '',
-    date: headers.date || null,
-    messageId: headers['message-id'] || null,
-    inReplyTo: headers['in-reply-to'] || null,
-    references: headers.references || null,
-    isUnread: (msg.labelIds || []).includes('UNREAD'),
-    htmlBody: htmlBody || null,
-    textBody: textBody || null,
-    attachments,
-  };
+  const extracted = extractBodiesFromPayload(msg.payload, msg.id);
+  const resolved = await resolvePendingBodyFetches(gmail, msg.id, extracted);
+  return formatFullMessage(
+    msg,
+    {
+      htmlBody: resolved.htmlBody,
+      textBody: resolved.textBody,
+      attachments: extracted.attachments,
+    },
+    { stripSnippet: true },
+  );
 }
 
 /**
@@ -721,8 +815,9 @@ function buildRawMessage({ from, to, cc, bcc, subject, html, attachments }) {
 
   const headers = [
     `From: ${from}`,
-    `To: ${Array.isArray(to) ? to.join(', ') : to}`,
   ];
+  const toValue = Array.isArray(to) ? to.filter(Boolean).join(', ') : to;
+  if (toValue) headers.push(`To: ${toValue}`);
   if (cc) headers.push(`Cc: ${Array.isArray(cc) ? cc.join(', ') : cc}`);
   if (bcc) headers.push(`Bcc: ${Array.isArray(bcc) ? bcc.join(', ') : bcc}`);
   headers.push(`Subject: ${subject || ''}`);
@@ -780,6 +875,85 @@ export async function sendMessage(account, { to, cc, bcc, subject, html, attachm
     requestBody: { raw },
   });
   return { id: res.data.id, threadId: res.data.threadId };
+}
+
+/**
+ * Create a Gmail draft (synced across devices).
+ */
+export async function createDraft(account, { to, cc, bcc, subject, html, attachments = [] } = {}) {
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  const toList = Array.isArray(to) ? to : [to].filter(Boolean);
+  const raw = buildRawMessage({
+    from: account.email,
+    to: toList,
+    cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
+    bcc: bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : undefined,
+    subject: subject || '',
+    html: html || '',
+    attachments,
+  });
+
+  const res = await gmail.users.drafts.create({
+    userId: 'me',
+    requestBody: { message: { raw } },
+  });
+
+  return {
+    id: res.data.id,
+    draftId: res.data.id,
+    messageId: res.data.message?.id || null,
+    threadId: res.data.message?.threadId || null,
+  };
+}
+
+/**
+ * Update an existing Gmail draft. `draftId` may be a draft resource id or a message id.
+ */
+export async function updateDraft(account, draftId, { to, cc, bcc, subject, html, attachments = [] } = {}) {
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  let resolvedDraftId = draftId;
+  try {
+    await gmail.users.drafts.get({ userId: 'me', id: draftId });
+  } catch {
+    const list = await gmail.users.drafts.list({ userId: 'me', maxResults: 100 });
+    const match = (list.data.drafts || []).find((d) => d.message?.id === draftId);
+    if (!match?.id) {
+      throw new Error('Draft not found');
+    }
+    resolvedDraftId = match.id;
+  }
+
+  const toList = Array.isArray(to) ? to : [to].filter(Boolean);
+  const raw = buildRawMessage({
+    from: account.email,
+    to: toList,
+    cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
+    bcc: bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : undefined,
+    subject: subject || '',
+    html: html || '',
+    attachments,
+  });
+
+  const res = await gmail.users.drafts.update({
+    userId: 'me',
+    id: resolvedDraftId,
+    requestBody: { id: resolvedDraftId, message: { raw } },
+  });
+
+  return {
+    id: res.data.id,
+    draftId: res.data.id,
+    messageId: res.data.message?.id || null,
+    threadId: res.data.message?.threadId || null,
+  };
 }
 
 function extractEmailAddr(raw) {
@@ -1111,6 +1285,52 @@ export async function listLabels(account) {
     labelListVisibility: l.labelListVisibility,
   }));
   return labels;
+}
+
+/**
+ * Authoritative folder counts from Gmail `users.labels.get`.
+ * Uses threadsUnread/threadsTotal to match conversation (thread) view parity with Gmail.
+ *
+ * `users.labels.list` does not include counts — each label must be fetched individually.
+ */
+const GMAIL_FOLDER_LABELS = {
+  inbox: 'INBOX',
+  sent: 'SENT',
+  draft: 'DRAFT',
+  spam: 'SPAM',
+  trash: 'TRASH',
+  important: 'IMPORTANT',
+  starred: 'STARRED',
+};
+
+export async function getFolderCounts(account) {
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  const entries = await Promise.all(
+    Object.entries(GMAIL_FOLDER_LABELS).map(async ([folder, labelId]) => {
+      try {
+        const res = await gmail.users.labels.get({ userId: 'me', id: labelId });
+        const data = res.data || {};
+        return [
+          folder,
+          {
+            unread: Number(data.threadsUnread ?? data.messagesUnread ?? 0) || 0,
+            total: Number(data.threadsTotal ?? data.messagesTotal ?? 0) || 0,
+            messagesUnread: Number(data.messagesUnread ?? 0) || 0,
+            messagesTotal: Number(data.messagesTotal ?? 0) || 0,
+          },
+        ];
+      } catch (err) {
+        logger.warn('[Gmail] labels.get %s failed: %s', labelId, err?.message || err);
+        return [folder, { unread: 0, total: 0, messagesUnread: 0, messagesTotal: 0 }];
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
 }
 
 /**

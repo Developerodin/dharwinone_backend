@@ -66,6 +66,8 @@ router.get(
   validate(outlookValidation.getAttachment),
   outlookController.getAttachment
 );
+router.post('/drafts', requirePermissions('emails.manage'), validate(outlookValidation.saveDraft), outlookController.saveDraft);
+router.put('/drafts/:id', requirePermissions('emails.manage'), validate(outlookValidation.updateDraft), outlookController.updateDraft);
 router.post('/messages/send', requirePermissions('emails.manage'), validate(outlookValidation.sendMessage), outlookController.sendMessage);
 router.post(
   '/messages/:id/reply-all',
@@ -79,6 +81,12 @@ router.patch('/messages/:id', requirePermissions('emails.manage'), validate(outl
 router.delete('/messages/:id', requirePermissions('emails.manage'), validate(outlookValidation.deleteMessage), outlookController.deleteMessage);
 
 router.get('/labels', requirePermissions('emails.read'), validate(outlookValidation.listLabels), outlookController.listLabels);
+router.get(
+  '/folder-counts',
+  requirePermissions('emails.read'),
+  validate(outlookValidation.getFolderCounts),
+  outlookController.getFolderCounts
+);
 router.post('/labels', requirePermissions('emails.manage'), validate(outlookValidation.createLabel), outlookController.createLabel);
 
 export default router;

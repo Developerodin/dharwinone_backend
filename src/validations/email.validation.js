@@ -1,6 +1,20 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Accept bare emails or `Name <email>`; always return bare address. */
+const emailAddress = Joi.string().custom((value, helpers) => {
+  const raw = String(value || '').trim();
+  if (!raw) return helpers.error('string.email');
+  const match = raw.match(/<([^>]+)>/);
+  const email = (match ? match[1] : raw).trim();
+  if (!EMAIL_RE.test(email)) return helpers.error('string.email');
+  return email;
+}, 'email address');
+
+const emailAddressList = Joi.alternatives().try(emailAddress, Joi.array().items(emailAddress));
+
 const listGmailAccounts = {};
 
 /** GET /v1/email/connection-policy — no query/body */
@@ -87,9 +101,60 @@ const generateDraft = {
 const sendMessage = {
   body: Joi.object().keys({
     accountId: Joi.string().custom(objectId).required(),
-    to: Joi.alternatives().try(Joi.string().email(), Joi.array().items(Joi.string().email())).required(),
-    cc: Joi.alternatives().try(Joi.string().email(), Joi.array().items(Joi.string().email())).optional(),
-    bcc: Joi.alternatives().try(Joi.string().email(), Joi.array().items(Joi.string().email())).optional(),
+    to: emailAddressList.required(),
+    cc: emailAddressList.optional(),
+    bcc: emailAddressList.optional(),
+    subject: Joi.string().allow('').default(''),
+    html: Joi.string().allow('').default(''),
+    attachments: Joi.array()
+      .items(
+        Joi.object().keys({
+          filename: Joi.string().required(),
+          content: Joi.alternatives().try(Joi.string(), Joi.binary()).required(),
+          mimeType: Joi.string().optional(),
+        })
+      )
+      .optional()
+      .default([]),
+  }),
+};
+
+const saveDraft = {
+  body: Joi.object().keys({
+    accountId: Joi.string().custom(objectId).required(),
+    to: Joi.alternatives()
+      .try(emailAddress.allow(''), Joi.array().items(emailAddress))
+      .optional()
+      .default([]),
+    cc: emailAddressList.optional(),
+    bcc: emailAddressList.optional(),
+    subject: Joi.string().allow('').default(''),
+    html: Joi.string().allow('').default(''),
+    attachments: Joi.array()
+      .items(
+        Joi.object().keys({
+          filename: Joi.string().required(),
+          content: Joi.alternatives().try(Joi.string(), Joi.binary()).required(),
+          mimeType: Joi.string().optional(),
+        })
+      )
+      .optional()
+      .default([]),
+  }),
+};
+
+const updateDraft = {
+  params: Joi.object().keys({
+    id: Joi.string().required(),
+  }),
+  body: Joi.object().keys({
+    accountId: Joi.string().custom(objectId).required(),
+    to: Joi.alternatives()
+      .try(emailAddress.allow(''), Joi.array().items(emailAddress))
+      .optional()
+      .default([]),
+    cc: emailAddressList.optional(),
+    bcc: emailAddressList.optional(),
     subject: Joi.string().allow('').default(''),
     html: Joi.string().allow('').default(''),
     attachments: Joi.array()
@@ -134,7 +199,9 @@ const forwardMessage = {
   }),
   body: Joi.object().keys({
     accountId: Joi.string().custom(objectId).required(),
-    to: Joi.alternatives().try(Joi.string().email(), Joi.array().items(Joi.string().email())).required(),
+    to: emailAddressList.required(),
+    cc: emailAddressList.optional(),
+    bcc: emailAddressList.optional(),
     html: Joi.string().allow('').default(''),
     attachments: Joi.array().items(Joi.object()).optional().default([]),
   }),
@@ -188,6 +255,12 @@ const deleteMessage = {
 };
 
 const listLabels = {
+  query: Joi.object().keys({
+    accountId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const getFolderCounts = {
   query: Joi.object().keys({
     accountId: Joi.string().custom(objectId).required(),
   }),
@@ -315,6 +388,8 @@ export {
   getAttachment,
   generateDraft,
   sendMessage,
+  saveDraft,
+  updateDraft,
   replyMessage,
   replyAllMessage,
   forwardMessage,
@@ -324,6 +399,7 @@ export {
   trashThreads,
   deleteMessage,
   listLabels,
+  getFolderCounts,
   createLabel,
   listEmailTemplates,
   createEmailTemplate,

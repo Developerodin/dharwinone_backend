@@ -107,6 +107,32 @@ const sendMessage = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).json(result);
 });
 
+const saveDraft = catchAsync(async (req, res) => {
+  const { accountId, to, cc, bcc, subject, html, attachments } = req.body;
+  const result = await outlookClientService.createDraft(accountId, req.user.id, {
+    to: to || [],
+    cc,
+    bcc,
+    subject,
+    html,
+    attachments: attachments || [],
+  });
+  res.status(httpStatus.CREATED).json(result);
+});
+
+const updateDraft = catchAsync(async (req, res) => {
+  const { accountId, to, cc, bcc, subject, html, attachments } = req.body;
+  const result = await outlookClientService.updateDraft(accountId, req.user.id, req.params.id, {
+    to: to || [],
+    cc,
+    bcc,
+    subject,
+    html,
+    attachments: attachments || [],
+  });
+  res.json(result);
+});
+
 const replyMessage = catchAsync(async (req, res) => {
   const { accountId, html, attachments } = req.body;
   const result = await outlookClientService.replyMessage(accountId, req.user.id, req.params.id, {
@@ -182,6 +208,12 @@ const listLabels = catchAsync(async (req, res) => {
   res.json(labels);
 });
 
+const getFolderCounts = catchAsync(async (req, res) => {
+  const { accountId } = req.query;
+  const counts = await outlookClientService.getFolderCounts(accountId, req.user.id);
+  res.json(counts);
+});
+
 const createLabel = catchAsync(async (req, res) => {
   const { accountId } = req.query;
   const { name } = req.body;
@@ -201,6 +233,8 @@ export {
   getMessage,
   getAttachment,
   sendMessage,
+  saveDraft,
+  updateDraft,
   replyMessage,
   replyAllMessage,
   forwardMessage,
@@ -210,5 +244,6 @@ export {
   trashThreads,
   deleteMessage,
   listLabels,
+  getFolderCounts,
   createLabel,
 };

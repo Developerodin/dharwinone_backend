@@ -94,7 +94,8 @@ const getAttachment = catchAsync(async (req, res) => {
   const { accountId } = req.query;
   const { messageId, attachmentId } = req.params;
   const data = await emailClientService.getAttachment(accountId, req.user.id, messageId, attachmentId);
-  const buf = Buffer.from(data, 'base64');
+  // Gmail attachment payloads are base64url; Node accepts both encodings via base64url.
+  const buf = Buffer.from(data, 'base64url');
   res.set('Content-Disposition', `attachment`);
   res.send(buf);
 });
@@ -110,6 +111,32 @@ const sendMessage = catchAsync(async (req, res) => {
     attachments: attachments || [],
   });
   res.status(httpStatus.CREATED).json(result);
+});
+
+const saveDraft = catchAsync(async (req, res) => {
+  const { accountId, to, cc, bcc, subject, html, attachments } = req.body;
+  const result = await emailClientService.createDraft(accountId, req.user.id, {
+    to: to || [],
+    cc,
+    bcc,
+    subject,
+    html,
+    attachments: attachments || [],
+  });
+  res.status(httpStatus.CREATED).json(result);
+});
+
+const updateDraft = catchAsync(async (req, res) => {
+  const { accountId, to, cc, bcc, subject, html, attachments } = req.body;
+  const result = await emailClientService.updateDraft(accountId, req.user.id, req.params.id, {
+    to: to || [],
+    cc,
+    bcc,
+    subject,
+    html,
+    attachments: attachments || [],
+  });
+  res.json(result);
 });
 
 const generateDraft = catchAsync(async (req, res) => {
@@ -192,6 +219,12 @@ const listLabels = catchAsync(async (req, res) => {
   res.json(labels);
 });
 
+const getFolderCounts = catchAsync(async (req, res) => {
+  const { accountId } = req.query;
+  const counts = await emailClientService.getFolderCounts(accountId, req.user.id);
+  res.json(counts);
+});
+
 const createLabel = catchAsync(async (req, res) => {
   const { accountId } = req.query;
   const { name } = req.body;
@@ -213,6 +246,8 @@ export {
   getAttachment,
   generateDraft,
   sendMessage,
+  saveDraft,
+  updateDraft,
   replyMessage,
   replyAllMessage,
   forwardMessage,
@@ -222,5 +257,6 @@ export {
   trashThreads,
   deleteMessage,
   listLabels,
+  getFolderCounts,
   createLabel,
 };

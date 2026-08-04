@@ -45,7 +45,15 @@ async function pollAccount(account) {
       await sendPushToUser(account.user, {
         title: `New email · ${senderName(msg.from)}`,
         body: msg.subject,
-        data: { type: 'new_email', provider: account.provider, accountId: String(account._id), messageId: msg.id },
+        data: {
+          type: 'new_email',
+          provider: account.provider,
+          accountId: String(account._id),
+          messageId: msg.id,
+          ...(msg.threadId ? { threadId: msg.threadId } : {}),
+        },
+        channelId: 'mail',
+        categoryId: 'new_email',
       }).catch((e) => logger.warn('[emailPoller] push failed: %s', e?.message || e));
     }
   } else {
@@ -53,6 +61,7 @@ async function pollAccount(account) {
       title: `${messages.length} new emails`,
       body: `in ${account.email}`,
       data: { type: 'new_email', provider: account.provider, accountId: String(account._id) },
+      channelId: 'mail',
     }).catch((e) => logger.warn('[emailPoller] push failed: %s', e?.message || e));
   }
 }

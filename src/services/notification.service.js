@@ -152,10 +152,23 @@ export const createNotification = async (userId, options) => {
   // Mobile push (fire-and-forget). Reaches devices when the app is backgrounded/closed.
   // The inApp preference was already honored by callers (notify/notifyByEmail) before
   // reaching createNotification, so an in-app notification implies a push is wanted.
+  const relatedEntityId =
+    relatedEntity?.id != null ? String(relatedEntity.id) : undefined;
+  const isChat = type === 'chat_message';
   sendPushToUser(userId, {
     title: title || 'Notification',
     body: message || '',
-    data: { type: 'notification', notificationType: type, link: finalLink, notificationId: String(doc._id) },
+    data: {
+      // Mobile router keys off `type`. Keep `notification` for generic bell items,
+      // but chat pushes use `chat_message` so action handlers match category taps.
+      type: isChat ? 'chat_message' : 'notification',
+      notificationType: type,
+      link: finalLink,
+      notificationId: String(doc._id),
+      ...(relatedEntityId ? { relatedEntityId } : {}),
+      ...(isChat && relatedEntityId ? { conversationId: relatedEntityId } : {}),
+    },
+    ...(isChat ? { channelId: 'messages', categoryId: 'chat_message' } : {}),
   }).catch((e) => logger.warn('[push] notify push failed: %s', e?.message || e));
 
   return doc;
