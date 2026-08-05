@@ -3,7 +3,9 @@ import TeamMember, { buildRoleSnapshot } from '../models/team.model.js';
 import TeamGroup from '../models/teamGroup.model.js';
 import Employee from '../models/employee.model.js';
 import Position from '../models/position.model.js';
+import User from '../models/user.model.js';
 import { findUniqueEmployeeByEmail } from '../services/team.service.js';
+import { computeIdentityConvergence } from '../utils/identityFields.js';
 import logger from '../config/logger.js';
 
 const LOG_COLLECTION = 'reconciliation_log';
@@ -94,12 +96,44 @@ export const detectInactiveEmployeesInTeams = async () => {
   return { removed };
 };
 
+/** Converges User↔Employee identity mirror: User non-empty wins down, empty adopts up. */
+export const reconcileIdentityMirror = async () => {
+  let usersUpdated = 0;
+  let employeesUpdated = 0;
+  const cursor = Employee.find({ owner: { $ne: null } })
+    .select('owner fullName email phoneNumber countryCode profilePicture')
+    .lean()
+    .cursor();
+  for await (const emp of cursor) {
+    const user = await User.findById(emp.owner)
+      .select('name email phoneNumber countryCode profilePicture')
+      .lean();
+    if (!user) continue;
+    const { userSet, employeeSet } = computeIdentityConvergence(user, emp);
+    // Same defensive rule as the backfill script: never adopt email/name upward
+    // (updateOne bypasses isEmailTaken and schema validation).
+    delete userSet.email;
+    delete userSet.name;
+    if (Object.keys(userSet).length) {
+      await User.updateOne({ _id: user._id }, { $set: userSet });
+      usersUpdated += 1;
+    }
+    if (Object.keys(employeeSet).length) {
+      await Employee.updateOne({ _id: emp._id }, { $set: employeeSet });
+      employeesUpdated += 1;
+    }
+  }
+  await writeLog('reconcileIdentityMirror', { usersUpdated, employeesUpdated });
+  return { usersUpdated, employeesUpdated };
+};
+
 export const runAllReconciliation = async () => {
   for (const job of [
     reconcileDeletedEmployees,
     pruneDanglingRelatedPositions,
     detectInactiveEmployeesInTeams,
     retryOrphanMatch,
+    reconcileIdentityMirror,
   ]) {
     try {
       await job();
