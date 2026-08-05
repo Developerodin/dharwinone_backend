@@ -30,6 +30,9 @@ scripts/*
 # test runner + manifest must ship so the tracked tests are runnable on a clone
 !scripts/run-tests.mjs
 !scripts/test-manifest.json
+!scripts/backup-local-mongo.sh
+!scripts/push-ec2-to-newcloud.sh
+!scripts/diff-newcloud.sh
 tests/
 graphify-out/
 
