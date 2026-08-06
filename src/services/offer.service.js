@@ -15,6 +15,7 @@ import { recordPlacementAudit } from './placementAudit.service.js';
 import logger from '../config/logger.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
+import { SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 import * as emailService from './email.service.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
@@ -459,13 +460,10 @@ const createStandaloneApplicationForOfferLetter = async (payload, userId) => {
 };
 
 /**
- * Create an offer from a job application
+ * Create an offer for an existing job application.
  */
-const createOffer = async (jobApplicationId, payload, userId) => {
+const createOfferCore = async (applicationId, payload, userId) => {
   const offerCode = await Offer.generateOfferCode();
-  const applicationId = jobApplicationId
-    ? jobApplicationId
-    : await createStandaloneApplicationForOfferLetter(payload, userId);
 
   const application = await JobApplication.findById(applicationId)
     .populate('job')
@@ -538,6 +536,42 @@ const createOffer = async (jobApplicationId, payload, userId) => {
   await syncReferralPipelineStatusForCandidate(candRefId);
 
   return getOfferById(offer._id);
+};
+
+/**
+ * Roll back the synthetic candidate + application minted for a standalone offer letter.
+ * Without this, any failure between minting and Offer.create strands both docs forever:
+ * no Offer ever references them, so deleteOfferById's cleanup can never reach them, and
+ * the orphan sits under the drafting admin's `owner` id.
+ * Refuses to touch a real candidate, or one whose Offer did get created.
+ */
+const discardStandaloneOfferApplication = async (applicationId) => {
+  const app = await JobApplication.findById(applicationId).select('candidate').lean();
+  if (!app) return;
+  if (await Offer.exists({ jobApplication: applicationId })) return;
+  const cand = await Employee.findById(app.candidate).select('email').lean();
+  if (!SYNTHETIC_EMAIL_RE.test(cand?.email || '')) return;
+  await JobApplication.findByIdAndDelete(applicationId);
+  await Employee.findByIdAndDelete(app.candidate);
+};
+
+/**
+ * Create an offer from a job application. With no jobApplicationId this is a standalone
+ * offer letter: a synthetic candidate + application are minted first, then rolled back if
+ * offer creation fails.
+ */
+const createOffer = async (jobApplicationId, payload, userId) => {
+  if (jobApplicationId) return createOfferCore(jobApplicationId, payload, userId);
+
+  const applicationId = await createStandaloneApplicationForOfferLetter(payload, userId);
+  try {
+    return await createOfferCore(applicationId, payload, userId);
+  } catch (err) {
+    await discardStandaloneOfferApplication(applicationId).catch((cleanupErr) =>
+      logger.warn(`[offer] standalone rollback failed for application=${applicationId}: ${cleanupErr?.message}`)
+    );
+    throw err;
+  }
 };
 
 /**
@@ -1084,7 +1118,7 @@ const deleteOfferById = async (id, currentUser) => {
       const synthCandidate = await Employee.findById(app.candidate)
         .select('email')
         .lean();
-      if (synthCandidate?.email && /\.noreply@dharwin\.offers\.local$/.test(synthCandidate.email)) {
+      if (SYNTHETIC_EMAIL_RE.test(synthCandidate?.email || '')) {
         await JobApplication.findByIdAndDelete(offer.jobApplication);
         await Employee.findByIdAndDelete(app.candidate);
       }
