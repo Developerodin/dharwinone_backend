@@ -5,6 +5,12 @@ import EmailLog from '../models/emailLog.model.js';
 import Employee from '../models/employee.model.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { formatInZone } from '../utils/timezone.js';
+import {
+  buildAssignedIntroLines,
+  buildAttachmentSectionBody,
+  buildUpdatedIntroLines,
+  platformLabelFor,
+} from './devTicketEmail.helpers.js';
 
 /**
  * Resolve delivery address: if recipient (lookup by personal/login email) is an
@@ -164,10 +170,12 @@ const renderSectionCard = (section) => {
     bodyLines = [],
     detailRows = [],
     bulletItems = [],
+    linkItems = [],
     tone = 'neutral',
   } = section;
   const palette = SECTION_TONES[tone] || SECTION_TONES.neutral;
   const validBullets = bulletItems.filter((item) => String(item ?? '').trim());
+  const validLinks = (linkItems || []).filter((item) => item?.href && item?.label);
   const body = renderParagraphs(bodyLines, '14px', palette.text);
   const rows = renderDetailRows(detailRows);
   const bullets =
@@ -176,13 +184,25 @@ const renderSectionCard = (section) => {
           ${validBullets.map((item) => `<li style="margin:0 0 8px 0;">${escapeHtml(item)}</li>`).join('')}
         </ul>`
       : '';
-  if (!title && !body && !rows && !bullets) return '';
+  const links =
+    validLinks.length > 0
+      ? `<ul style="margin:0;padding-left:20px;color:${palette.text};font-size:14px;line-height:1.7;">
+          ${validLinks
+            .map((item) => {
+              const meta = item.meta ? ` <span style="color:#6b7280;">(${escapeHtml(item.meta)})</span>` : '';
+              return `<li style="margin:0 0 8px 0;"><a href="${escapeHtml(item.href)}" style="color:#2563eb;font-weight:600;text-decoration:underline;">${escapeHtml(item.label)}</a>${meta}</li>`;
+            })
+            .join('')}
+        </ul>`
+      : '';
+  if (!title && !body && !rows && !bullets && !links) return '';
   return `
     <div style="margin:20px 0;padding:18px 20px;border:1px solid ${palette.border};border-radius:14px;background-color:${palette.bg};">
       ${title ? `<p style="margin:0 0 10px 0;font-size:15px;font-weight:700;color:${palette.title};">${escapeHtml(title)}</p>` : ''}
       ${body}
       ${rows}
       ${bullets}
+      ${links}
     </div>
   `;
 };
@@ -298,6 +318,13 @@ const buildPlainTextEmail = ({
       }
       if (Array.isArray(section.bulletItems) && section.bulletItems.length) {
         lines.push(...section.bulletItems.filter(Boolean).map((item) => `- ${item}`));
+      }
+      if (Array.isArray(section.linkItems) && section.linkItems.length) {
+        lines.push(
+          ...section.linkItems
+            .filter((item) => item?.label && item?.href)
+            .map((item) => `- ${item.label}${item.meta ? ` (${item.meta})` : ''}: ${item.href}`)
+        );
       }
       if (lines.length) blocks.push(lines.join('\n'));
     });
@@ -1245,6 +1272,268 @@ const sendOfferShareEmail = async (to, { candidateName, roleTitle, offerLetterUr
   );
 };
 
+const EMAIL_ATTACHMENT_TTL_SEC = 7 * 24 * 3600;
+
+const formatBytes = (bytes) => {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatTicketAttachmentLabel = (att) => {
+  const name = att?.originalName || att?.key || 'file';
+  const size = formatBytes(att?.size);
+  return size ? `${name} (${size})` : name;
+};
+
+/**
+ * Build clickable download links + nodemailer attachments from ticket files.
+ * Returns mailAttachCount separately so copy does not falsely claim attach.
+ */
+const buildTicketAttachmentPayload = async (attachments = [], presignFn = null) => {
+  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  const linkItems = [];
+  const mailAttachments = [];
+
+  for (const att of list) {
+    let href = att.url || '';
+    if (att.key && typeof presignFn === 'function') {
+      try {
+        href = await presignFn(att.key, EMAIL_ATTACHMENT_TTL_SEC);
+      } catch {
+        /* keep existing url */
+      }
+    }
+    if (!href) continue;
+    linkItems.push({
+      label: formatTicketAttachmentLabel(att),
+      href,
+      meta: 'Download',
+    });
+    mailAttachments.push({
+      filename: att.originalName || 'attachment',
+      href,
+      contentType: att.mimeType || undefined,
+    });
+  }
+
+  return { linkItems, mailAttachments, mailAttachCount: mailAttachments.length };
+};
+
+const buildDevTicketDetailRows = (ticket = {}) => {
+  const reporter =
+    ticket.createdBy?.name || ticket.createdBy?.email
+      ? `${ticket.createdBy?.name || ''}${ticket.createdBy?.email ? ` (${ticket.createdBy.email})` : ''}`.trim()
+      : '';
+  const labels = Array.isArray(ticket.labels) ? ticket.labels.filter(Boolean).join(', ') : ticket.labels || '';
+  return [
+    { label: 'Ticket ID', value: ticket.ticketId || '' },
+    { label: 'Platform', value: platformLabelFor(ticket.platform) },
+    { label: 'Status', value: ticket.status || '' },
+    { label: 'Priority', value: ticket.priority || '' },
+    { label: 'Severity', value: ticket.severity || '' },
+    { label: 'Category', value: ticket.category || '' },
+    { label: 'Module', value: ticket.module || '' },
+    { label: 'Page', value: ticket.pageUrl || '' },
+    { label: 'Environment', value: ticket.environment || '' },
+    { label: 'Labels', value: labels },
+    { label: 'Reporter', value: reporter },
+    { label: 'Created', value: ticket.createdAt ? formatDateTime(ticket.createdAt) : '' },
+  ];
+};
+
+/**
+ * Email platform assignee when a ticket is created/assigned.
+ * Attachments are both linked (presigned download) and attached to the message.
+ */
+const sendDevTicketAssignedEmail = async (to, ticket, options = {}) => {
+  if (!to) return;
+  const {
+    actorName = 'Someone',
+    ticketUrl = '',
+    greeting = 'there',
+    presignFn = null,
+    role = 'developer',
+  } = options;
+  const platformLabel = platformLabelFor(ticket.platform);
+  const subject = `Dev ticket assigned: ${ticket.ticketId || ''} — ${ticket.title || 'Untitled'}`.trim();
+  const introLines = buildAssignedIntroLines({ role, platformLabel, actorName });
+  const detailRows = buildDevTicketDetailRows(ticket);
+  const { linkItems, mailAttachments, mailAttachCount } = await buildTicketAttachmentPayload(
+    ticket.attachments,
+    presignFn
+  );
+  const attachBody = buildAttachmentSectionBody({ linkCount: linkItems.length, mailAttachCount });
+  const sections = [
+    ticket.description
+      ? { title: 'Description', tone: 'neutral', bodyLines: [truncateText(ticket.description, 4000)] }
+      : null,
+    ticket.stepsToReproduce
+      ? { title: 'Steps to reproduce', tone: 'neutral', bodyLines: [truncateText(ticket.stepsToReproduce, 4000)] }
+      : null,
+    linkItems.length
+      ? {
+          title: `Attachments (${linkItems.length}) — click to download`,
+          tone: 'info',
+          bodyLines: attachBody,
+          linkItems,
+        }
+      : { title: 'Attachments', tone: 'neutral', bodyLines: attachBody },
+  ].filter(Boolean);
+  const badgeText = role === 'tester' ? 'Dev ticket — tester' : 'Dev ticket assigned';
+  const preheader =
+    role === 'tester'
+      ? `${ticket.ticketId || 'Ticket'} — tester notification (${platformLabel}).`
+      : `${ticket.ticketId || 'Ticket'} assigned to you (${platformLabel}).`;
+  const primaryAction = ticketUrl ? { label: 'Open ticket', href: ticketUrl } : null;
+  const text = buildPlainTextEmail({
+    title: ticket.title || 'Dev ticket assigned',
+    greeting,
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText,
+    title: ticket.title || 'Dev ticket assigned',
+    greeting,
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+    preheader,
+  });
+  await sendEmail(
+    to,
+    subject,
+    text,
+    html,
+    'devTicketAssigned',
+    compactMetadata({
+      ticketId: ticket.ticketId,
+      platform: ticket.platform,
+      role,
+      attachmentCount: linkItems.length,
+      mailAttachCount,
+    }),
+    mailAttachments.length ? { attachments: mailAttachments } : {}
+  );
+};
+
+/**
+ * Email platform assignee when a ticket is edited (field and/or attachment diffs).
+ */
+const sendDevTicketUpdatedEmail = async (to, ticket, options = {}) => {
+  if (!to) return;
+  const {
+    actorName = 'Someone',
+    ticketUrl = '',
+    greeting = 'there',
+    presignFn = null,
+    diffRows = [],
+    attachmentChanges = { added: [], removed: [], unchanged: [] },
+    role = 'developer',
+  } = options;
+  const platformLabel = platformLabelFor(ticket.platform);
+  const subject = `Dev ticket updated: ${ticket.ticketId || ''} — ${ticket.title || 'Untitled'}`.trim();
+  const introLines = buildUpdatedIntroLines({
+    role,
+    actorName,
+    ticketId: ticket.ticketId || '',
+    platformLabel,
+  });
+  const detailRows = [
+    { label: 'Ticket ID', value: ticket.ticketId || '' },
+    { label: 'Platform', value: platformLabel },
+    { label: 'Edited by', value: actorName },
+  ];
+
+  const changeDetailRows = (diffRows || [])
+    .filter((row) => row && String(row.from ?? '') !== String(row.to ?? ''))
+    .map((row) => ({
+      label: row.field,
+      value: `${row.from || '(empty)'} → ${row.to || '(empty)'}`,
+    }));
+
+  const added = attachmentChanges.added || [];
+  const removed = attachmentChanges.removed || [];
+  const unchanged = attachmentChanges.unchanged || [];
+  const attachmentBullets = [
+    ...added.map((a) => `Added: ${formatTicketAttachmentLabel(a)}`),
+    ...removed.map((a) => `Removed: ${formatTicketAttachmentLabel(a)}`),
+    ...unchanged.map((a) => `Unchanged: ${formatTicketAttachmentLabel(a)}`),
+  ];
+
+  const { linkItems, mailAttachments, mailAttachCount } = await buildTicketAttachmentPayload(
+    ticket.attachments,
+    presignFn
+  );
+  const attachBody = buildAttachmentSectionBody({ linkCount: linkItems.length, mailAttachCount });
+
+  const sections = [
+    changeDetailRows.length
+      ? { title: 'What changed', tone: 'warning', detailRows: changeDetailRows }
+      : null,
+    attachmentBullets.length
+      ? { title: 'Attachment changes', tone: 'info', bulletItems: attachmentBullets }
+      : null,
+    {
+      title: 'Current ticket snapshot',
+      tone: 'success',
+      detailRows: buildDevTicketDetailRows(ticket).filter((r) => r.label !== 'Created'),
+      bodyLines: ticket.description ? [truncateText(ticket.description, 1500)] : [],
+    },
+    linkItems.length
+      ? {
+          title: `Download current attachments (${linkItems.length})`,
+          tone: 'info',
+          bodyLines: attachBody,
+          linkItems,
+        }
+      : null,
+  ].filter(Boolean);
+
+  const badgeText = role === 'tester' ? 'Dev ticket updated — tester' : 'Dev ticket updated';
+  const primaryAction = ticketUrl ? { label: 'Open ticket', href: ticketUrl } : null;
+  const text = buildPlainTextEmail({
+    title: ticket.title || 'Dev ticket updated',
+    greeting,
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText,
+    title: ticket.title || 'Dev ticket updated',
+    greeting,
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+    preheader: `${ticket.ticketId || 'Ticket'} was updated by ${actorName}.`,
+  });
+  await sendEmail(
+    to,
+    subject,
+    text,
+    html,
+    'devTicketUpdated',
+    compactMetadata({
+      ticketId: ticket.ticketId,
+      platform: ticket.platform,
+      role,
+      changeCount: changeDetailRows.length,
+      attachmentCount: linkItems.length,
+      mailAttachCount,
+    }),
+    mailAttachments.length ? { attachments: mailAttachments } : {}
+  );
+};
+
 export {
   transport,
   sendEmail,
@@ -1270,5 +1559,7 @@ export {
   sendJobApplicationWelcomeEmail,
   sendPostCallThankYouEmail,
   sendOfferShareEmail,
+  sendDevTicketAssignedEmail,
+  sendDevTicketUpdatedEmail,
 };
 

@@ -40,6 +40,17 @@ postman/
 # local scratch / exports (do not commit)
 referral_hits.csv
 
+# One-off dev-ticket / local ops scripts (never push)
+src/scripts/backfillDevTicket*.js
+src/scripts/smokeDevTicketEmailFanout.js
+src/scripts/dev-ticket-email-preview.html
+src/scripts/.patchTwilioCallGaps.backup.json
+src/scripts/.removedEc2Notes.backup.json
+src/scripts/inspectRecruitmentData.js
+src/scripts/queryRafiqulOffers.js
+src/scripts/recoverDevTicketsFromPdf.js
+src/scripts/repairCandidateApplicantState.js
+
 
 # Local AI tool config (do not commit)
 .claude/

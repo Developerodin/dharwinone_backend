@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { objectId, devTicketRef } from './custom.validation.js';
-import { LABELS, LINK_RELS, CATEGORIES } from '../models/devTicket.model.js';
+import { LABELS, LINK_RELS, CATEGORIES, PLATFORMS } from '../models/devTicket.model.js';
 
 const gitFields = {
   git: Joi.object()
@@ -64,11 +64,17 @@ const createDevTicket = {
       priority: Joi.string().valid('Low', 'Medium', 'High', 'Urgent').default('Medium'),
       severity: Joi.string().valid('Minor', 'Major', 'Critical', 'Blocker').default('Major'),
       category: Joi.string().valid(...CATEGORIES).default('Bug'),
+      platform: Joi.string().valid(...PLATFORMS).default('web'),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production').default('Staging'),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
       pageUrl: Joi.string().trim().max(500).allow('', null),
       labels: labelsField,
+      testedBy: Joi.alternatives().try(
+        Joi.string().custom(objectId),
+        Joi.string().valid('', null).empty('').default(null)
+      ),
+      // Prefer `platform`; assignedTo is resolved server-side from platform email map.
       assignedTo: Joi.alternatives().try(
         Joi.string().custom(objectId),
         Joi.string().valid('', null).empty('').default(null)
@@ -119,11 +125,16 @@ const updateDevTicket = {
       priority: Joi.string().valid('Low', 'Medium', 'High', 'Urgent'),
       severity: Joi.string().valid('Minor', 'Major', 'Critical', 'Blocker'),
       category: Joi.string().valid(...CATEGORIES),
+      platform: Joi.string().valid(...PLATFORMS),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production'),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
       pageUrl: Joi.string().trim().max(500).allow('', null),
       labels: Joi.array().items(Joi.string().valid(...LABELS)).unique(),
+      testedBy: Joi.alternatives().try(
+        Joi.string().custom(objectId),
+        Joi.string().valid('', null).empty('').default(null)
+      ),
       assignedTo: Joi.alternatives().try(
         Joi.string().custom(objectId),
         Joi.string().valid('', null).empty('').default(null)
@@ -176,6 +187,7 @@ const bulkUpdate = {
       action: Joi.object()
         .keys({
           status: Joi.string().valid('Open', 'In Progress', 'Resolved', 'Closed'),
+          platform: Joi.string().valid(...PLATFORMS),
           assignedTo: Joi.alternatives().try(
             Joi.string().custom(objectId),
             Joi.string().valid('', null).empty('').default(null)

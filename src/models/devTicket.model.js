@@ -46,6 +46,14 @@ const commentSchema = new mongoose.Schema(
 
 const LABELS = ['regression', 'needs-repro', 'good-first-bug', 'performance', 'security', 'ui'];
 const CATEGORIES = ['Bug', 'New Feature', 'Improvement'];
+/** Product surface the ticket targets — UI picks this; backend maps it to assignedTo. */
+const PLATFORMS = ['web', 'mobile'];
+const PLATFORM_ASSIGNEE_EMAILS = {
+  web: 'prakhar@theodin.in',
+  mobile: 'vijay@theodin.in',
+};
+const DEFAULT_TESTER_EMAIL = 'harshbansal.it26@gmail.com';
+const PLATFORM_LABELS = { web: 'Web', mobile: 'Mobile App' };
 const LINK_RELS = ['blocks', 'blocked-by', 'duplicate-of', 'relates-to'];
 
 const devTicketSchema = new mongoose.Schema(
@@ -75,6 +83,12 @@ const devTicketSchema = new mongoose.Schema(
       enum: CATEGORIES,
       default: 'Bug',
     },
+    platform: {
+      type: String,
+      enum: PLATFORMS,
+      default: 'web',
+      index: true,
+    },
     module: { type: String, trim: true, default: '' },
     environment: {
       type: String,
@@ -88,6 +102,11 @@ const devTicketSchema = new mongoose.Schema(
       required: true,
     },
     assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    testedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       index: true,
@@ -164,6 +183,14 @@ devTicketSchema.methods.logActivity = function (action, performedBy, field, from
 devTicketSchema.plugin(toJSON);
 devTicketSchema.plugin(paginate);
 
-export { LABELS, LINK_RELS, CATEGORIES };
+export {
+  LABELS,
+  LINK_RELS,
+  CATEGORIES,
+  PLATFORMS,
+  PLATFORM_ASSIGNEE_EMAILS,
+  DEFAULT_TESTER_EMAIL,
+  PLATFORM_LABELS,
+};
 const DevTicket = mongoose.model('DevTicket', devTicketSchema);
 export default DevTicket;

@@ -1,12 +1,57 @@
 import httpStatus from 'http-status';
-import DevTicket from '../models/devTicket.model.js';
+import DevTicket, { PLATFORM_ASSIGNEE_EMAILS, PLATFORMS, DEFAULT_TESTER_EMAIL } from '../models/devTicket.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
 import { uploadMultipleFilesToS3, deleteFileFromS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { notify } from './notification.service.js';
+import { sendDevTicketAssignedEmail, sendDevTicketUpdatedEmail } from './email.service.js';
+import { getFrontendBaseUrl } from '../utils/emailLinks.js';
+import {
+  buildDevTicketEmailRecipients,
+  humanizeDiffRows,
+  resolvePlatformEmailFromTicket,
+} from './devTicketEmail.helpers.js';
 import logger from '../config/logger.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
+
+/**
+ * Map platform (web | mobile) → assignee user id from PLATFORM_ASSIGNEE_EMAILS.
+ * Throws if the mapped account does not exist.
+ */
+const resolveAssigneeForPlatform = async (platform) => {
+  if (!PLATFORMS.includes(platform)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `Invalid platform: ${platform}`);
+  }
+  const email = PLATFORM_ASSIGNEE_EMAILS[platform];
+  const assignee = await User.findOne({ email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).select('_id email');
+  if (!assignee) {
+    throw new ApiError(httpStatus.NOT_FOUND, `Platform assignee account not found: ${email}`);
+  }
+  return assignee._id.toString();
+};
+
+/** Apply platform → assignedTo on a mutable payload (create/update/bulk). */
+const applyPlatformAssignee = async (payload) => {
+  if (payload.platform == null || payload.platform === '') return payload;
+  const assignedTo = await resolveAssigneeForPlatform(payload.platform);
+  return { ...payload, assignedTo, platform: payload.platform };
+};
+
+const escapeRegexEmail = (email) => email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const findUserByEmail = async (email) =>
+  User.findOne({
+    email: new RegExp(`^${escapeRegexEmail(email)}$`, 'i'),
+  }).select('_id name email');
+
+const resolveDefaultTesterId = async () => {
+  const tester = await findUserByEmail(DEFAULT_TESTER_EMAIL);
+  if (!tester) {
+    throw new ApiError(httpStatus.NOT_FOUND, `Default tester account not found: ${DEFAULT_TESTER_EMAIL}`);
+  }
+  return tester._id.toString();
+};
 
 const ANALYTICS_TREND_TZ = 'Asia/Kolkata';
 
@@ -29,6 +74,7 @@ const findDevTicketByRef = async (ref) => {
 const POPULATE_PATHS = [
   { path: 'createdBy', select: 'name email' },
   { path: 'assignedTo', select: 'name email' },
+  { path: 'testedBy', select: 'name email' },
   { path: 'resolvedBy', select: 'name email' },
   { path: 'closedBy', select: 'name email' },
   { path: 'watchers', select: 'name email' },
@@ -117,6 +163,150 @@ const notifySafe = async (userId, opts) => {
   } catch (e) {
     logger.warn(`Dev ticket notification failed: ${e?.message}`);
   }
+};
+
+const TICKET_FIELD_LABELS = {
+  title: 'Title',
+  description: 'Description',
+  stepsToReproduce: 'Steps to reproduce',
+  status: 'Status',
+  priority: 'Priority',
+  severity: 'Severity',
+  category: 'Category',
+  module: 'Module',
+  pageUrl: 'Page',
+  environment: 'Environment',
+  platform: 'Platform',
+  labels: 'Labels',
+  assignedTo: 'Assignee',
+};
+
+const snapshotTicketFields = (ticket) => ({
+  title: ticket.title || '',
+  description: ticket.description || '',
+  stepsToReproduce: ticket.stepsToReproduce || '',
+  status: ticket.status || '',
+  priority: ticket.priority || '',
+  severity: ticket.severity || '',
+  category: ticket.category || '',
+  module: ticket.module || '',
+  pageUrl: ticket.pageUrl || '',
+  environment: ticket.environment || '',
+  platform: ticket.platform || '',
+  labels: [...(ticket.labels || [])].map(String).sort().join(', '),
+  assignedTo: String(ticket.assignedTo?._id || ticket.assignedTo || ''),
+});
+
+const diffTicketFields = (before, after) =>
+  Object.keys(TICKET_FIELD_LABELS)
+    .filter((key) => String(before[key] ?? '') !== String(after[key] ?? ''))
+    .map((key) => ({
+      field: TICKET_FIELD_LABELS[key],
+      from: before[key] || '(empty)',
+      to: after[key] || '(empty)',
+    }));
+
+const serializeAttachments = (attachments = []) =>
+  (attachments || []).map((a) => ({
+    key: a.key,
+    originalName: a.originalName,
+    size: a.size,
+    mimeType: a.mimeType,
+    url: a.url,
+  }));
+
+const diffAttachments = (beforeList = [], afterList = []) => {
+  const before = serializeAttachments(beforeList);
+  const after = serializeAttachments(afterList);
+  const beforeKeys = new Set(before.map((a) => a.key).filter(Boolean));
+  const afterKeys = new Set(after.map((a) => a.key).filter(Boolean));
+  return {
+    added: after.filter((a) => a.key && !beforeKeys.has(a.key)),
+    removed: before.filter((a) => a.key && !afterKeys.has(a.key)),
+    unchanged: after.filter((a) => a.key && beforeKeys.has(a.key)),
+  };
+};
+
+const buildTicketEmailUrl = (ticketObj) => {
+  const id = ticketObj?.id || ticketObj?._id || '';
+  const base = getFrontendBaseUrl();
+  if (!id) return `${base}${TICKET_LINK}`;
+  return `${base}${TICKET_LINK}?ticket=${encodeURIComponent(String(id))}`;
+};
+
+const resolveAssigneeEmail = async (ticketOrObj) => resolvePlatformEmailFromTicket(ticketOrObj);
+
+const greetingForRole = (ticketObj, role) => {
+  if (role === 'tester') {
+    return ticketObj.testedBy?.name || ticketObj.testedBy?.email?.split('@')[0] || 'there';
+  }
+  return ticketObj.assignedTo?.name || 'there';
+};
+
+const buildAssigneeUserMap = async (beforeFields, ticketObj) => {
+  const ids = new Set();
+  const collect = (val) => {
+    if (val && /^[0-9a-fA-F]{24}$/.test(String(val))) ids.add(String(val));
+  };
+  collect(beforeFields?.assignedTo);
+  collect(ticketObj.assignedTo?._id || ticketObj.assignedTo?.id || ticketObj.assignedTo);
+  if (!ids.size) return {};
+  const users = await User.find({ _id: { $in: [...ids] } }).select('name email').lean();
+  return Object.fromEntries(users.map((u) => [u._id.toString(), u]));
+};
+
+const emailTicketSafe = (label, promise) => {
+  Promise.resolve(promise).catch((e) => logger.warn(`Dev ticket ${label} email failed: ${e?.message || e}`));
+};
+
+const sendAssignedEmailForTicket = async (ticketObj, actorName) => {
+  const recipients = buildDevTicketEmailRecipients(ticketObj, {
+    platformEmail: await resolveAssigneeEmail(ticketObj),
+    testerEmail: DEFAULT_TESTER_EMAIL,
+  });
+  const ticketUrl = buildTicketEmailUrl(ticketObj);
+  await Promise.all(
+    recipients.map(({ email, role }) =>
+      sendDevTicketAssignedEmail(email, ticketObj, {
+        actorName,
+        role,
+        greeting: greetingForRole(ticketObj, role),
+        ticketUrl,
+        presignFn: generatePresignedDownloadUrl,
+      })
+    )
+  );
+};
+
+const sendUpdatedEmailForTicket = async (ticketObj, { actorName, beforeFields, beforeAttachments }) => {
+  const afterFields = snapshotTicketFields(ticketObj);
+  let diffRows = diffTicketFields(beforeFields, afterFields);
+  const userById = await buildAssigneeUserMap(beforeFields, ticketObj);
+  diffRows = humanizeDiffRows(diffRows, userById);
+  const attachmentChanges = diffAttachments(beforeAttachments, ticketObj.attachments || []);
+  const hasFieldChanges = diffRows.length > 0;
+  const hasAttachmentChanges =
+    attachmentChanges.added.length > 0 || attachmentChanges.removed.length > 0;
+  if (!hasFieldChanges && !hasAttachmentChanges) return;
+
+  const recipients = buildDevTicketEmailRecipients(ticketObj, {
+    platformEmail: await resolveAssigneeEmail(ticketObj),
+    testerEmail: DEFAULT_TESTER_EMAIL,
+  });
+  const ticketUrl = buildTicketEmailUrl(ticketObj);
+  await Promise.all(
+    recipients.map(({ email, role }) =>
+      sendDevTicketUpdatedEmail(email, ticketObj, {
+        actorName,
+        role,
+        greeting: greetingForRole(ticketObj, role),
+        ticketUrl,
+        presignFn: generatePresignedDownloadUrl,
+        diffRows,
+        attachmentChanges,
+      })
+    )
+  );
 };
 
 const uniqueRecipientIds = (ids, excludeUserId) => {
@@ -279,6 +469,14 @@ const collectWatcherIds = (ticket) => (ticket.watchers || []).map((w) => w?._id 
 const createDevTicket = async (ticketData, userId, files = [], user = null) => {
   const actorUserId = user?.id?.toString?.() || user?._id?.toString?.() || String(userId);
 
+  // Default platform to web; always resolve assignee from platform email map.
+  const withPlatform = await applyPlatformAssignee({
+    ...ticketData,
+    platform: ticketData.platform || 'web',
+  });
+  Object.assign(ticketData, withPlatform);
+  ticketData.testedBy = await resolveDefaultTesterId();
+
   let attachments = [];
   if (files?.length) {
     try {
@@ -300,6 +498,9 @@ const createDevTicket = async (ticketData, userId, files = [], user = null) => {
   if (ticketData.assignedTo && String(ticketData.assignedTo) !== actorUserId) {
     watchers.push(ticketData.assignedTo);
   }
+  if (ticketData.testedBy && String(ticketData.testedBy) !== actorUserId) {
+    watchers.push(ticketData.testedBy);
+  }
 
   const ticket = await DevTicket.create({
     ...ticketData,
@@ -318,7 +519,12 @@ const createDevTicket = async (ticketData, userId, files = [], user = null) => {
   }
 
   await ticket.populate(POPULATE_PATHS);
-  return toTicketObj(ticket);
+  const ticketObj = await toTicketObj(ticket);
+  emailTicketSafe(
+    'assigned',
+    sendAssignedEmailForTicket(ticketObj, user?.name || user?.email || 'Someone')
+  );
+  return ticketObj;
 };
 
 // ──────────────────────────── query ────────────────────────────
@@ -361,11 +567,17 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
 
   await assertCanEdit(ticket, user);
 
+  if (updateData.platform) {
+    Object.assign(updateData, await applyPlatformAssignee(updateData));
+  }
+
   if (updateData.assignedTo) {
     const assignedUser = await User.findById(updateData.assignedTo).select('name email');
     if (!assignedUser) throw new ApiError(httpStatus.NOT_FOUND, 'User to assign ticket to not found');
   }
 
+  const beforeFields = snapshotTicketFields(ticket);
+  const beforeAttachments = serializeAttachments(ticket.attachments);
   const changes = [];
   const actorId = getUserId(user);
   const actorName = user?.name || user?.email || 'Someone';
@@ -395,6 +607,10 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
 
   if (updateData.module != null && updateData.module !== ticket.module) {
     ticket.logActivity('module_changed', actorId, 'module', ticket.module || '', updateData.module || '');
+  }
+
+  if (updateData.platform && updateData.platform !== ticket.platform) {
+    ticket.logActivity('platform_changed', actorId, 'platform', ticket.platform || '', updateData.platform);
   }
 
   const oldAssignee = ticket.assignedTo?.toString() || '';
@@ -438,6 +654,11 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
     }
   }
 
+  emailTicketSafe(
+    'updated',
+    sendUpdatedEmailForTicket(ticketObj, { actorName, beforeFields, beforeAttachments })
+  );
+
   return ticketObj;
 };
 
@@ -453,6 +674,8 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
 
   const actorId = getUserId(user);
   const admin = await isAdmin(user);
+  const beforeFields = snapshotTicketFields(ticket);
+  const beforeAttachments = serializeAttachments(ticket.attachments);
 
   let attachments = [];
   if (files?.length) {
@@ -501,6 +724,17 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
     });
   }
 
+  if (attachments.length) {
+    emailTicketSafe(
+      'updated',
+      sendUpdatedEmailForTicket(ticketObj, {
+        actorName,
+        beforeFields,
+        beforeAttachments,
+      })
+    );
+  }
+
   return ticketObj;
 };
 
@@ -525,6 +759,8 @@ const addTicketAttachments = async (ticketId, files, user) => {
   }
 
   const actorId = getUserId(user);
+  const beforeFields = snapshotTicketFields(ticket);
+  const beforeAttachments = serializeAttachments(ticket.attachments);
   let results;
   try {
     results = await uploadMultipleFilesToS3(files, actorId, 'dev-tickets');
@@ -552,7 +788,16 @@ const addTicketAttachments = async (ticketId, files, user) => {
   await ticket.save();
 
   await ticket.populate(POPULATE_PATHS);
-  return toTicketObj(ticket);
+  const ticketObj = await toTicketObj(ticket);
+  emailTicketSafe(
+    'updated',
+    sendUpdatedEmailForTicket(ticketObj, {
+      actorName: user?.name || user?.email || 'Someone',
+      beforeFields,
+      beforeAttachments,
+    })
+  );
+  return ticketObj;
 };
 
 const removeTicketAttachment = async (ticketId, key, user) => {
@@ -562,6 +807,9 @@ const removeTicketAttachment = async (ticketId, key, user) => {
 
   const attachment = ticket.attachments.find((a) => a.key === key);
   if (!attachment) throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found on this ticket');
+
+  const beforeFields = snapshotTicketFields(ticket);
+  const beforeAttachments = serializeAttachments(ticket.attachments);
 
   ticket.attachments.pull(attachment._id);
   ticket.logActivity('attachment_removed', getUserId(user), 'attachments', attachment.originalName, '');
@@ -575,7 +823,16 @@ const removeTicketAttachment = async (ticketId, key, user) => {
   }
 
   await ticket.populate(POPULATE_PATHS);
-  return toTicketObj(ticket);
+  const ticketObj = await toTicketObj(ticket);
+  emailTicketSafe(
+    'updated',
+    sendUpdatedEmailForTicket(ticketObj, {
+      actorName: user?.name || user?.email || 'Someone',
+      beforeFields,
+      beforeAttachments,
+    })
+  );
+  return ticketObj;
 };
 
 const deleteDevTicketById = async (ticketId, user) => {
@@ -596,6 +853,10 @@ const bulkUpdate = async (ids, action, user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, `Cannot bulk update more than ${BULK_MAX_IDS} tickets`);
   }
 
+  if (action.platform) {
+    Object.assign(action, await applyPlatformAssignee(action));
+  }
+
   const updated = [];
   const skipped = [];
 
@@ -607,11 +868,20 @@ const bulkUpdate = async (ids, action, user) => {
     }
 
     const actorId = getUserId(user);
+    const actorName = user?.name || user?.email || 'Someone';
+    const beforeFields = snapshotTicketFields(ticket);
+    const beforeAttachments = serializeAttachments(ticket.attachments);
 
     if (action.status && action.status !== ticket.status) {
       handleReopen(ticket, action.status, actorId);
       ticket.logActivity('status_changed', actorId, 'status', ticket.status, action.status);
       await ticket.updateStatus(action.status, actorId);
+    }
+
+    if (action.platform && action.platform !== ticket.platform) {
+      const oldPlatform = ticket.platform || '';
+      ticket.platform = action.platform;
+      ticket.logActivity('platform_changed', actorId, 'platform', oldPlatform, action.platform);
     }
 
     if (action.assignedTo != null) {
@@ -635,6 +905,12 @@ const bulkUpdate = async (ids, action, user) => {
     }
 
     await ticket.save();
+    await ticket.populate(POPULATE_PATHS);
+    const ticketObj = await toTicketObj(ticket);
+    emailTicketSafe(
+      'updated',
+      sendUpdatedEmailForTicket(ticketObj, { actorName, beforeFields, beforeAttachments })
+    );
     updated.push(id);
   }
 
