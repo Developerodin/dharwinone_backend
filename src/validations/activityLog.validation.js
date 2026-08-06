@@ -1,5 +1,4 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
 
 const SORT_FIELD_ORDER = /^(createdAt|action|entityType):(asc|desc)$/i;
 
@@ -7,7 +6,7 @@ const IP_FILTER_PATTERN = /^[0-9a-fA-F:.]+$/;
 
 /** Shared filters for GET list and GET export (no pagination). */
 const activityLogFilterQuery = {
-  actor: Joi.string().custom(objectId),
+  actor: Joi.string().trim().max(100).allow(''),
   action: Joi.string(),
   entityType: Joi.string(),
   entityId: Joi.string(),

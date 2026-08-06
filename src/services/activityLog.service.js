@@ -46,6 +46,17 @@ const ACTOR_MATCH_CAP = 500;
 const Q_ACTOR_MIN_LEN = 3;
 const Q_ACTOR_LOOKUP_TIMEOUT_MS = 1500;
 
+/** entityType -> { Model, fields } for name-based Entity ID lookup. Types not listed here
+ *  keep the old raw-id exact-match behavior (no name resolver, e.g. Attendance, Certificate). */
+const ENTITY_NAME_RESOLVERS = {
+  Candidate: { Model: Employee, fields: ['fullName'] },
+  Employee: { Model: Employee, fields: ['fullName'] },
+  User: { Model: User, fields: ['name', 'email'] },
+  Role: { Model: Role, fields: ['name'] },
+  Department: { Model: Department, fields: ['name'] },
+  Job: { Model: Job, fields: ['title'] },
+};
+
 /**
  * Build the $or array for a free-text `q` search.
  * Pure: takes pre-resolved actor ids; never mutates the outer filter.
@@ -444,8 +455,46 @@ const sanitizeMetadata = (meta) => {
  * @returns {Promise<Object>}
  */
 const buildActivityLogMongoFilter = async (filter, viewer = null) => {
-  const { startDate, endDate, includeAttendance, ip, q, ...rest } = filter;
+  const { startDate, endDate, includeAttendance, ip, q, actor, entityId, ...rest } = filter;
   const mongoFilter = { ...rest };
+
+  if (entityId != null && String(entityId).trim()) {
+    const entityIdTrim = String(entityId).trim();
+    if (mongoose.Types.ObjectId.isValid(entityIdTrim)) {
+      mongoFilter.entityId = entityIdTrim;
+    } else {
+      const resolver = ENTITY_NAME_RESOLVERS[mongoFilter.entityType];
+      if (resolver) {
+        const entityRe = new RegExp(`^${escapeRegExp(entityIdTrim)}`, 'i');
+        const matchedEntities = await resolver.Model.find({
+          $or: resolver.fields.map((f) => ({ [f]: entityRe })),
+        })
+          .select('_id')
+          .limit(ACTOR_MATCH_CAP)
+          .maxTimeMS(Q_ACTOR_LOOKUP_TIMEOUT_MS)
+          .lean();
+        mongoFilter.entityId = { $in: matchedEntities.map((e) => String(e._id)) };
+      } else {
+        // No resolver for this entity type (or Entity type not selected) — unchanged raw-id match.
+        mongoFilter.entityId = entityIdTrim;
+      }
+    }
+  }
+
+  if (actor != null && String(actor).trim()) {
+    const actorTrim = String(actor).trim();
+    if (mongoose.Types.ObjectId.isValid(actorTrim)) {
+      mongoFilter.actor = actorTrim;
+    } else {
+      const actorRe = new RegExp(`^${escapeRegExp(actorTrim)}`, 'i');
+      const matchedActors = await User.find({ $or: [{ name: actorRe }, { email: actorRe }] })
+        .select('_id')
+        .limit(ACTOR_MATCH_CAP)
+        .maxTimeMS(Q_ACTOR_LOOKUP_TIMEOUT_MS)
+        .lean();
+      mongoFilter.actor = { $in: matchedActors.map((u) => u._id) };
+    }
+  }
 
   // A person record is stored as "Candidate" on rows written before the rename and "Employee" on
   // rows written after, so one dropdown entry has to match both. The filter accepts a
@@ -534,7 +583,9 @@ const buildActivityLogMongoFilter = async (filter, viewer = null) => {
     const hiddenIds = await getDirectoryHiddenUserIds();
     if (hiddenIds.length > 0) {
       const hiddenSet = new Set(hiddenIds.map((id) => id.toString()));
-      if (mongoFilter.actor) {
+      if (mongoFilter.actor && Array.isArray(mongoFilter.actor.$in)) {
+        mongoFilter.actor.$in = mongoFilter.actor.$in.filter((id) => !hiddenSet.has(id.toString()));
+      } else if (mongoFilter.actor) {
         let actorId = mongoFilter.actor;
         if (typeof actorId === 'string' && mongoose.Types.ObjectId.isValid(actorId)) {
           actorId = new mongoose.Types.ObjectId(actorId);
