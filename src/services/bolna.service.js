@@ -14,7 +14,7 @@ function getCallerId(params) {
 function getConfig() {
   return {
     apiKey: config.bolna.apiKey || '',
-    agentId: config.bolna.agentId || '6afbccea-0495-4892-937c-6a5c9af12440',
+    agentId: config.bolna.agentId || '',
     apiBase: config.bolna.apiBase || 'https://api.bolna.ai',
     maxCallDurationSeconds: config.bolna.maxCallDurationSeconds,
   };
@@ -29,6 +29,9 @@ async function initiateCall(params) {
   const { apiKey, agentId: defaultAgentId, apiBase, maxCallDurationSeconds } = getConfig();
   if (!apiKey) {
     return { success: false, error: 'BOLNA_API_KEY is not set. Add it to .env to use Bolna calling.' };
+  }
+  if (!defaultAgentId && !params.agentId) {
+    return { success: false, error: 'BOLNA_AGENT_ID is not set. Add it to .env to use Bolna calling.' };
   }
 
   const {

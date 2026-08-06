@@ -252,12 +252,8 @@ const getBolnaDiagnostics = catchAsync(async (req, res) => {
       apiKeyMasked: maskSecret(apiKey),
       apiKeyPresent: Boolean(apiKey),
       fromPhoneNumber: config.bolna.fromPhoneNumber || null,
-      agentIdSource: process.env.BOLNA_AGENT_ID ? 'env' : 'hardcoded-default',
-      candidateAgentIdSource: process.env.BOLNA_CANDIDATE_AGENT_ID
-        ? 'env'
-        : process.env.BOLNA_AGENT_ID
-          ? 'fallback-to-BOLNA_AGENT_ID'
-          : 'hardcoded-default',
+      agentIdSource: process.env.BOLNA_AGENT_ID ? 'env' : 'missing',
+      candidateAgentIdSource: process.env.BOLNA_CANDIDATE_AGENT_ID ? 'env' : 'missing',
       sameAgentIds: agentId === candidateAgentId,
     },
     agent: agentCheck,

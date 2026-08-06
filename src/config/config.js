@@ -473,12 +473,12 @@ const config = {
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',
     /** Job posting / recruiter verification calls (no prompt PATCH in app). */
-    agentId: envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
+    agentId: String(envVars.BOLNA_AGENT_ID || '').trim(),
     /**
      * Applicant verification only — receives PATCH system prompt before each call.
      * Must differ from agentId or flows overwrite each other’s behavior.
      */
-    candidateAgentId: envVars.BOLNA_CANDIDATE_AGENT_ID || envVars.BOLNA_AGENT_ID || '6afbccea-0495-4892-937c-6a5c9af12440',
+    candidateAgentId: String(envVars.BOLNA_CANDIDATE_AGENT_ID || '').trim(),
     /**
      * Extra agent IDs to ALSO pull executions/recordings from. Set when an agent
      * is retired/replaced (e.g. a new job-verification agent) but the old agent
@@ -683,6 +683,17 @@ if (config.env === 'production') {
   if (missingSmtp.length) {
     // eslint-disable-next-line no-console
     console.warn(`[Config] SMTP not fully configured for production mail: ${missingSmtp.join(', ')}`);
+  }
+  if (config.bolna.apiKey) {
+    const missingBolna = ['BOLNA_AGENT_ID', 'BOLNA_CANDIDATE_AGENT_ID'].filter(
+      (key) => !String(envVars[key] ?? '').trim()
+    );
+    if (missingBolna.length) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[Config] Bolna API key is set but agent IDs are missing: ${missingBolna.join(', ')}. Voice calls will fail until configured.`
+      );
+    }
   }
 }
 

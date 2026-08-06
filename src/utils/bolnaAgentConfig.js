@@ -14,6 +14,14 @@ export function bolnaJobAndCandidateAgentsCollide() {
 
 export function logBolnaAgentConfigHealth() {
   if (!config.bolna.apiKey) return;
+  const jobId = normalizeBolnaAgentId(config.bolna.agentId);
+  const candId = normalizeBolnaAgentId(config.bolna.candidateAgentId);
+  if (!jobId) {
+    logger.error('[Bolna] BOLNA_AGENT_ID is not set. Job posting verification calls will fail.');
+  }
+  if (!candId) {
+    logger.error('[Bolna] BOLNA_CANDIDATE_AGENT_ID is not set. Applicant verification calls will fail.');
+  }
   if (bolnaJobAndCandidateAgentsCollide()) {
     logger.error(
       '[Bolna] BOLNA_AGENT_ID and BOLNA_CANDIDATE_AGENT_ID are identical. ' +

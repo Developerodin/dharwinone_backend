@@ -15,6 +15,7 @@
     "mail:test": "node ./scripts/send-test-email.js",
     "db:mirror": "node ./scripts/mirror-cloud-to-local.js",
     "db:mirror:verify": "node ./scripts/mirror-cloud-to-local.js --verify-only",
+    "db:mirror:selftest": "node ./scripts/mirror-cloud-to-local.js --selftest",
     "db:mirror:upsert": "node ./scripts/mirror-cloud-to-local.js --upsert",
     "db:mirror:upsert:dry-run": "node ./scripts/mirror-cloud-to-local.js --upsert --dry-run",
     "backfill:identity": "node src/scripts/backfillIdentityFromUser.js",
