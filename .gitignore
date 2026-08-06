@@ -1,4 +1,4 @@
-# Dependencies
+﻿# Dependencies
 node_modules
 
 # yarn error logs
@@ -17,20 +17,19 @@ recordings/
 # agent / session context (local)
 .context/
 
-# local / generated — do not commit
+# local / generated â€” do not commit
 docs/
-# scripts/* not scripts/: git cannot re-include a file whose parent dir is excluded
+# Local ops scripts (never push)
 scripts/*
-!scripts/mirror-cloud-to-local.js
 tests/
 graphify-out/
 
-# tests stay local — never pushed
+# tests stay local â€” never pushed
 **/__tests__/
 *.test.js
 *.test.mjs
 
-# editor plans and CI config stay local — never pushed
+# editor plans and CI config stay local â€” never pushed
 .cursor/
 .github/
 
@@ -52,7 +51,7 @@ src/scripts/recoverDevTicketsFromPdf.js
 src/scripts/repairCandidateApplicantState.js
 src/scripts/cleanupMisownedCandidates.js
 
-# Deletion backups — contain real names/emails/phones, never commit
+# Deletion backups â€” contain real names/emails/phones, never commit
 backups/
 
 
