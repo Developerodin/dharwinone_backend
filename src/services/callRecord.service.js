@@ -107,6 +107,11 @@ const TWILIO_DEDUPE_BUCKET_MS = 2 * 60 * 1000;
 function twilioDialerGroupKey(record) {
   const to = normalizePhone(record.toPhoneNumber || record.recipientPhoneNumber || record.phone || '') || '';
   const from = normalizePhone(record.fromPhoneNumber || record.userNumber || '') || '';
+  // No destination number means the call never reached a PSTN leg, so this row
+  // cannot be half of a parent/child pair — the only thing this key exists to
+  // collapse. Grouping them all under the empty string merged unrelated client
+  // legs that merely shared a 2-minute bucket, and consolidate deleted them.
+  if (!to) return `solo|${record.executionId || record._id || ''}`;
   const t = record.createdAt ? new Date(record.createdAt).getTime() : 0;
   const bucket = Number.isFinite(t) ? Math.floor(t / TWILIO_DEDUPE_BUCKET_MS) : 0;
   // ponytail: no createdBy in the key — the orphaned PSTN child leg of a
