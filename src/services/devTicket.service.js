@@ -176,6 +176,7 @@ const TICKET_FIELD_LABELS = {
   module: 'Module',
   pageUrl: 'Page',
   environment: 'Environment',
+  deployedTo: 'Fix deployed to',
   platform: 'Platform',
   labels: 'Labels',
   assignedTo: 'Assignee',
@@ -192,6 +193,7 @@ const snapshotTicketFields = (ticket) => ({
   module: ticket.module || '',
   pageUrl: ticket.pageUrl || '',
   environment: ticket.environment || '',
+  deployedTo: ticket.deployedTo || 'Not Deployed',
   platform: ticket.platform || '',
   labels: [...(ticket.labels || [])].map(String).sort().join(', '),
   assignedTo: String(ticket.assignedTo?._id || ticket.assignedTo || ''),
@@ -327,14 +329,59 @@ const canEditTicket = async (ticket, user) => {
   const userId = getUserId(user);
   const createdBy = ticket.createdBy?._id?.toString() || ticket.createdBy?.toString();
   const assignedTo = ticket.assignedTo?._id?.toString() || ticket.assignedTo?.toString() || '';
-  if (createdBy === userId || assignedTo === userId) return true;
+  const testedBy = ticket.testedBy?._id?.toString() || ticket.testedBy?.toString() || '';
+  if (createdBy === userId || assignedTo === userId || testedBy === userId) return true;
   return isAdmin(user);
 };
 
 const assertCanEdit = async (ticket, user) => {
   if (!(await canEditTicket(ticket, user))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'You can only edit tickets you created, are assigned to, or as an admin');
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'You can only edit tickets you created, are assigned to, are testing, or as an admin'
+    );
   }
+};
+
+const FIELD_TO_ACTION = {
+  title: 'title_changed',
+  description: 'description_changed',
+  stepsToReproduce: 'steps_to_reproduce_changed',
+  status: 'status_changed',
+  priority: 'priority_changed',
+  severity: 'severity_changed',
+  category: 'category_changed',
+  module: 'module_changed',
+  pageUrl: 'page_changed',
+  environment: 'environment_changed',
+  deployedTo: 'deployed_to_changed',
+  platform: 'platform_changed',
+  labels: 'labels_changed',
+  assignedTo: 'assigned',
+};
+
+const buildCreateActivitySummary = (ticket) =>
+  [
+    `ID: ${ticket.ticketId}`,
+    `Title: ${ticket.title}`,
+    `Category: ${ticket.category}`,
+    `Environment: ${ticket.environment}`,
+    `Platform: ${ticket.platform || 'web'}`,
+    `Priority: ${ticket.priority}`,
+    `Severity: ${ticket.severity}`,
+    `Fix deployed to: ${ticket.deployedTo || 'Not Deployed'}`,
+  ].join(' · ');
+
+const logTicketFieldDiffs = (ticket, beforeFields, afterFields, actorId) => {
+  const changes = [];
+  for (const diff of diffTicketFields(beforeFields, afterFields)) {
+    const fieldKey = Object.keys(TICKET_FIELD_LABELS).find((k) => TICKET_FIELD_LABELS[k] === diff.field);
+    const action = FIELD_TO_ACTION[fieldKey] || 'field_changed';
+    ticket.logActivity(action, actorId, diff.field, diff.from, diff.to);
+    if (fieldKey === 'status') changes.push({ field: 'status', from: diff.from, to: diff.to });
+    if (fieldKey === 'assignedTo') changes.push({ field: 'assignedTo', from: diff.from, to: diff.to });
+  }
+  return changes;
 };
 
 const parseMentionsFromContent = async (content) => {
@@ -507,8 +554,14 @@ const createDevTicket = async (ticketData, userId, files = [], user = null) => {
     createdBy: userId,
     watchers,
     attachments,
-    activityLog: [{ action: 'created', performedBy: userId }],
+    activityLog: [{ action: 'created', performedBy: userId, field: 'Ticket', from: '', to: '' }],
   });
+
+  const createSummary = buildCreateActivitySummary(ticket);
+  if (ticket.activityLog?.[0]) {
+    ticket.activityLog[0].to = createSummary;
+    await ticket.save();
+  }
 
   if (ticketData.assignedTo && String(ticketData.assignedTo) !== actorUserId) {
     const actorName = user?.name || user?.email || 'Someone';
@@ -578,47 +631,18 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
 
   const beforeFields = snapshotTicketFields(ticket);
   const beforeAttachments = serializeAttachments(ticket.attachments);
-  const changes = [];
   const actorId = getUserId(user);
   const actorName = user?.name || user?.email || 'Someone';
 
   if (updateData.status && updateData.status !== ticket.status) {
-    const from = ticket.status;
-    const to = updateData.status;
-    handleReopen(ticket, to, actorId);
-    ticket.logActivity('status_changed', actorId, 'status', from, to);
-    changes.push({ field: 'status', from, to });
-    await ticket.updateStatus(to, actorId);
+    handleReopen(ticket, updateData.status, actorId);
+    await ticket.updateStatus(updateData.status, actorId);
     delete updateData.status;
-  }
-
-  if (updateData.priority && updateData.priority !== ticket.priority) {
-    ticket.logActivity('priority_changed', actorId, 'priority', ticket.priority, updateData.priority);
-    changes.push({ field: 'priority', from: ticket.priority, to: updateData.priority });
-  }
-
-  if (updateData.severity && updateData.severity !== ticket.severity) {
-    ticket.logActivity('severity_changed', actorId, 'severity', ticket.severity, updateData.severity);
-  }
-
-  if (updateData.category && updateData.category !== ticket.category) {
-    ticket.logActivity('category_changed', actorId, 'category', ticket.category, updateData.category);
-  }
-
-  if (updateData.module != null && updateData.module !== ticket.module) {
-    ticket.logActivity('module_changed', actorId, 'module', ticket.module || '', updateData.module || '');
-  }
-
-  if (updateData.platform && updateData.platform !== ticket.platform) {
-    ticket.logActivity('platform_changed', actorId, 'platform', ticket.platform || '', updateData.platform);
   }
 
   const oldAssignee = ticket.assignedTo?.toString() || '';
   const newAssignee = updateData.assignedTo ?? oldAssignee;
-  if (String(newAssignee) !== String(oldAssignee)) {
-    ticket.logActivity('assigned', actorId, 'assignedTo', oldAssignee || 'none', newAssignee || 'none');
-    changes.push({ field: 'assignedTo', from: oldAssignee, to: newAssignee });
-
+  if (updateData.assignedTo != null && String(newAssignee) !== String(oldAssignee)) {
     if (newAssignee && newAssignee !== 'none') {
       const watcherIds = ticket.watchers.map((w) => w?.toString?.() || String(w));
       if (!watcherIds.includes(String(newAssignee))) {
@@ -628,6 +652,10 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
   }
 
   Object.assign(ticket, updateData);
+
+  const afterFields = snapshotTicketFields(ticket);
+  const changes = logTicketFieldDiffs(ticket, beforeFields, afterFields, actorId);
+
   await ticket.save();
 
   await ticket.populate(POPULATE_PATHS);
@@ -700,7 +728,7 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
   }
   await ticket.addComment(content, actorId, admin, attachments, mentions);
 
-  ticket.logActivity('comment_added', actorId);
+  ticket.logActivity('comment_added', actorId, 'Comment', '', content.trim().slice(0, 200));
   await ticket.save();
 
   await ticket.populate(POPULATE_PATHS);
@@ -874,22 +902,17 @@ const bulkUpdate = async (ids, action, user) => {
 
     if (action.status && action.status !== ticket.status) {
       handleReopen(ticket, action.status, actorId);
-      ticket.logActivity('status_changed', actorId, 'status', ticket.status, action.status);
       await ticket.updateStatus(action.status, actorId);
     }
 
-    if (action.platform && action.platform !== ticket.platform) {
-      const oldPlatform = ticket.platform || '';
-      ticket.platform = action.platform;
-      ticket.logActivity('platform_changed', actorId, 'platform', oldPlatform, action.platform);
-    }
+    if (action.platform) ticket.platform = action.platform;
+    if (action.deployedTo) ticket.deployedTo = action.deployedTo;
 
     if (action.assignedTo != null) {
       const oldAssignee = ticket.assignedTo?.toString() || '';
       const newAssignee = action.assignedTo || '';
       if (String(newAssignee) !== String(oldAssignee)) {
         ticket.assignedTo = action.assignedTo || undefined;
-        ticket.logActivity('assigned', actorId, 'assignedTo', oldAssignee || 'none', newAssignee || 'none');
         if (newAssignee) {
           const watcherIds = ticket.watchers.map((w) => w?.toString?.() || String(w));
           if (!watcherIds.includes(String(newAssignee))) ticket.watchers.push(newAssignee);
@@ -897,13 +920,11 @@ const bulkUpdate = async (ids, action, user) => {
       }
     }
 
-    if (action.addLabel) {
-      if (!ticket.labels.includes(action.addLabel)) {
-        ticket.labels.push(action.addLabel);
-        ticket.logActivity('label_added', actorId, 'labels', '', action.addLabel);
-      }
+    if (action.addLabel && !ticket.labels.includes(action.addLabel)) {
+      ticket.labels.push(action.addLabel);
     }
 
+    logTicketFieldDiffs(ticket, beforeFields, snapshotTicketFields(ticket), actorId);
     await ticket.save();
     await ticket.populate(POPULATE_PATHS);
     const ticketObj = await toTicketObj(ticket);

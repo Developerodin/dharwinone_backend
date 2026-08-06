@@ -55,6 +55,7 @@ const PLATFORM_ASSIGNEE_EMAILS = {
 const DEFAULT_TESTER_EMAIL = 'harshbansal.it26@gmail.com';
 const PLATFORM_LABELS = { web: 'Web', mobile: 'Mobile App' };
 const LINK_RELS = ['blocks', 'blocked-by', 'duplicate-of', 'relates-to'];
+const DEPLOYED_TO = ['Not Deployed', 'Testing', 'Production'];
 
 const devTicketSchema = new mongoose.Schema(
   {
@@ -94,6 +95,13 @@ const devTicketSchema = new mongoose.Schema(
       type: String,
       enum: ['Staging', 'Production'],
       default: 'Staging',
+    },
+    /** Where the fix/feature has been deployed after development — separate from bug environment. */
+    deployedTo: {
+      type: String,
+      enum: DEPLOYED_TO,
+      default: 'Not Deployed',
+      index: true,
     },
     labels: [{ type: String, enum: LABELS }],
     createdBy: {
@@ -188,6 +196,7 @@ export {
   LINK_RELS,
   CATEGORIES,
   PLATFORMS,
+  DEPLOYED_TO,
   PLATFORM_ASSIGNEE_EMAILS,
   DEFAULT_TESTER_EMAIL,
   PLATFORM_LABELS,

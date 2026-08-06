@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { objectId, devTicketRef } from './custom.validation.js';
-import { LABELS, LINK_RELS, CATEGORIES, PLATFORMS } from '../models/devTicket.model.js';
+import { LABELS, LINK_RELS, CATEGORIES, PLATFORMS, DEPLOYED_TO } from '../models/devTicket.model.js';
 
 const gitFields = {
   git: Joi.object()
@@ -67,6 +67,7 @@ const createDevTicket = {
       platform: Joi.string().valid(...PLATFORMS).default('web'),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production').default('Staging'),
+      deployedTo: Joi.string().valid(...DEPLOYED_TO).default('Not Deployed'),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
       pageUrl: Joi.string().trim().max(500).allow('', null),
       labels: labelsField,
@@ -92,6 +93,7 @@ const getDevTickets = {
     category: Joi.string().valid(...CATEGORIES),
     module: Joi.string().trim(),
     environment: Joi.string().valid('Staging', 'Production'),
+    deployedTo: Joi.string().valid(...DEPLOYED_TO),
     label: Joi.string().valid(...LABELS),
     scope: Joi.string().valid('all', 'mine', 'reported', 'unassigned'),
     search: Joi.string().trim().max(200).allow(''),
@@ -128,6 +130,7 @@ const updateDevTicket = {
       platform: Joi.string().valid(...PLATFORMS),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production'),
+    deployedTo: Joi.string().valid(...DEPLOYED_TO),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
       pageUrl: Joi.string().trim().max(500).allow('', null),
       labels: Joi.array().items(Joi.string().valid(...LABELS)).unique(),
@@ -188,6 +191,7 @@ const bulkUpdate = {
         .keys({
           status: Joi.string().valid('Open', 'In Progress', 'Resolved', 'Closed'),
           platform: Joi.string().valid(...PLATFORMS),
+          deployedTo: Joi.string().valid(...DEPLOYED_TO),
           assignedTo: Joi.alternatives().try(
             Joi.string().custom(objectId),
             Joi.string().valid('', null).empty('').default(null)
