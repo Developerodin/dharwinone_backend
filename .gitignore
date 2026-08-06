@@ -50,6 +50,10 @@ src/scripts/inspectRecruitmentData.js
 src/scripts/queryRafiqulOffers.js
 src/scripts/recoverDevTicketsFromPdf.js
 src/scripts/repairCandidateApplicantState.js
+src/scripts/cleanupMisownedCandidates.js
+
+# Deletion backups — contain real names/emails/phones, never commit
+backups/
 
 
 # Local AI tool config (do not commit)

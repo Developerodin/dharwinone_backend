@@ -64,6 +64,29 @@ export const computeIdentityConvergence = (user, employee) => {
   return { userSet, employeeSet };
 };
 
+/**
+ * Synthetic offer-letter candidates carry a generated relay address (offer.service.js).
+ * They are placeholders, never a real person's identity mirror.
+ */
+export const SYNTHETIC_EMAIL_RE = /\.noreply@dharwin\.offers\.local$/i;
+
+/**
+ * Which Employee doc mirrors a User's identity. An owner can hold several profiles
+ * (recruiter-created candidate records, offer placeholders), and guessing wrong stamps
+ * someone else's name and email onto a real person. Returns null when undecidable —
+ * callers must skip, never fall back to "first match".
+ *
+ * `matchEmails` are addresses the User is known by (current and pre-update), used only
+ * to break a tie between multiple real profiles.
+ */
+export const pickMirrorEmployee = (matchEmails, employees) => {
+  const real = (employees || []).filter((e) => !SYNTHETIC_EMAIL_RE.test(e?.email || ''));
+  if (real.length <= 1) return real[0] || null;
+  const wanted = new Set((matchEmails || []).filter(Boolean).map((e) => String(e).trim().toLowerCase()));
+  const hits = real.filter((e) => wanted.has(String(e.email || '').toLowerCase()));
+  return hits.length === 1 ? hits[0] : null;
+};
+
 const EMPLOYEE_IDENTITY_FIELDS = IDENTITY_FIELD_MAP.map((p) => p.employee);
 
 /** Employee-side identity fields present in modifiedPaths, unless the doc is new or the mirror flagged the write. */

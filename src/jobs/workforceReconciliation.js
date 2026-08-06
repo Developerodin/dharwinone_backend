@@ -5,7 +5,7 @@ import Employee from '../models/employee.model.js';
 import Position from '../models/position.model.js';
 import User from '../models/user.model.js';
 import { findUniqueEmployeeByEmail } from '../services/team.service.js';
-import { computeIdentityConvergence } from '../utils/identityFields.js';
+import { computeIdentityConvergence, SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 import logger from '../config/logger.js';
 
 const LOG_COLLECTION = 'reconciliation_log';
@@ -100,15 +100,39 @@ export const detectInactiveEmployeesInTeams = async () => {
 export const reconcileIdentityMirror = async () => {
   let usersUpdated = 0;
   let employeesUpdated = 0;
+  let skipped = 0;
+  // Owners holding several real profiles have no decidable mirror target — converging them
+  // would stamp one User's identity onto every profile and break candidates.email uniqueness.
+  // Only the profile matching the User's own email converges; the rest are skipped.
+  const ambiguousOwners = new Set(
+    (
+      await Employee.aggregate([
+        { $match: { owner: { $ne: null }, email: { $not: SYNTHETIC_EMAIL_RE } } },
+        { $group: { _id: '$owner', n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } },
+      ])
+    ).map((g) => String(g._id))
+  );
   const cursor = Employee.find({ owner: { $ne: null } })
     .select('owner fullName email phoneNumber countryCode profilePicture')
     .lean()
     .cursor();
   for await (const emp of cursor) {
+    if (SYNTHETIC_EMAIL_RE.test(emp.email || '')) {
+      skipped += 1;
+      continue;
+    }
     const user = await User.findById(emp.owner)
       .select('name email phoneNumber countryCode profilePicture')
       .lean();
     if (!user) continue;
+    if (
+      ambiguousOwners.has(String(emp.owner)) &&
+      String(emp.email || '').toLowerCase() !== String(user.email || '').toLowerCase()
+    ) {
+      skipped += 1;
+      continue;
+    }
     const { userSet, employeeSet } = computeIdentityConvergence(user, emp);
     // Same defensive rule as the backfill script: never adopt email/name upward
     // (updateOne bypasses isEmailTaken and schema validation).
@@ -123,8 +147,8 @@ export const reconcileIdentityMirror = async () => {
       employeesUpdated += 1;
     }
   }
-  await writeLog('reconcileIdentityMirror', { usersUpdated, employeesUpdated });
-  return { usersUpdated, employeesUpdated };
+  await writeLog('reconcileIdentityMirror', { usersUpdated, employeesUpdated, skipped });
+  return { usersUpdated, employeesUpdated, skipped };
 };
 
 export const runAllReconciliation = async () => {

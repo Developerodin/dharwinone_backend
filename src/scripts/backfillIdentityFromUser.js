@@ -14,7 +14,7 @@ import mongoose from 'mongoose';
 import config from '../config/config.js';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
-import { computeIdentityConvergence } from '../utils/identityFields.js';
+import { computeIdentityConvergence, SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 
 const dryRun = process.argv.includes('--dry-run');
 
@@ -25,16 +25,42 @@ const main = async () => {
   let usersTouched = 0;
   let employeesTouched = 0;
 
+  // An owner holding several real profiles has no decidable mirror target: converging them
+  // would stamp one User's name+email onto every profile and break the candidates.email
+  // unique index. Only the profile matching the User's own email is converged; the rest skip.
+  const ambiguousOwners = new Set(
+    (
+      await Employee.aggregate([
+        { $match: { owner: { $ne: null }, email: { $not: SYNTHETIC_EMAIL_RE } } },
+        { $group: { _id: '$owner', n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } },
+      ])
+    ).map((g) => String(g._id))
+  );
+  let skippedSynthetic = 0;
+  let skippedAmbiguous = 0;
+
   const cursor = Employee.find({ owner: { $ne: null } })
     .select('owner fullName email phoneNumber countryCode profilePicture')
     .lean()
     .cursor();
 
   for await (const emp of cursor) {
+    if (SYNTHETIC_EMAIL_RE.test(emp.email || '')) {
+      skippedSynthetic += 1;
+      continue;
+    }
     const user = await User.findById(emp.owner)
       .select('name email phoneNumber countryCode profilePicture')
       .lean();
     if (!user) continue;
+    if (
+      ambiguousOwners.has(String(emp.owner)) &&
+      String(emp.email || '').toLowerCase() !== String(user.email || '').toLowerCase()
+    ) {
+      skippedAmbiguous += 1;
+      continue;
+    }
     pairs += 1;
 
     const { userSet, employeeSet } = computeIdentityConvergence(user, emp);
@@ -61,6 +87,7 @@ const main = async () => {
   }
 
   console.log(`\n${dryRun ? 'DRY RUN — ' : ''}pairs inspected: ${pairs}`);
+  console.log(`skipped: synthetic=${skippedSynthetic} ambiguousOwner=${skippedAmbiguous}`);
   console.log('field diff counts:', JSON.stringify(fieldCounts, null, 2));
   if (!dryRun) console.log(`users updated: ${usersTouched}, employees updated: ${employeesTouched}`);
   await mongoose.disconnect();

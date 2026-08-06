@@ -35,7 +35,7 @@ import {
   mergeDocumentsPreserveKeys,
   resetDocumentVerification,
 } from '../utils/documentVerificationMerge.js';
-import { buildEmployeeMirrorPatch } from '../utils/identityFields.js';
+import { buildEmployeeMirrorPatch, pickMirrorEmployee } from '../utils/identityFields.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
 const MAX_CANDIDATE_EXPORT = Number(process.env.MAX_CANDIDATE_EXPORT) || 10000;
@@ -3267,10 +3267,21 @@ const applyInitialCandidateProfileFromAdmin = async (userId, fields) => {
  * Single write door for User→Employee identity sync — called from updateUserById only.
  * `changedUserValues` carries ONLY the user-side keys that changed this save.
  */
-const syncIdentityFromUserToEmployee = async (ownerUserId, changedUserValues) => {
+const syncIdentityFromUserToEmployee = async (ownerUserId, changedUserValues, matchEmails = []) => {
   if (!changedUserValues || Object.keys(changedUserValues).length === 0) return;
-  const candidate = await Employee.findOne({ owner: ownerUserId });
-  if (!candidate) return;
+  const owned = await Employee.find({ owner: ownerUserId });
+  // An owner can hold several profiles (offer placeholders, recruiter-created candidates).
+  // Picking the wrong one stamps this User's name+email onto a different person and can
+  // collide with the candidates.email unique index — skip instead of guessing.
+  const candidate = pickMirrorEmployee(matchEmails, owned);
+  if (!candidate) {
+    if (owned.length > 1) {
+      logger.warn(
+        `[identity-mirror] ambiguous owner ${ownerUserId}: ${owned.length} Employee profiles, no unique match — skipped`
+      );
+    }
+    return;
+  }
 
   const patch = buildEmployeeMirrorPatch(changedUserValues, candidate);
   if (Object.keys(patch).length === 0) return;

@@ -194,6 +194,9 @@ const updateUserById = async (userId, updateBody) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
   const previousStatus = user.status;
+  // Captured pre-save: the Employee mirror is matched by email, and on an email change the
+  // linked profile still carries the old one.
+  const previousEmail = user.email;
   Object.assign(user, updateBody);
   await user.save();
 
@@ -206,7 +209,7 @@ const updateUserById = async (userId, updateBody) => {
     // eslint-disable-next-line import/no-cycle -- employee.service imports user.service; sync is runtime-only
     const { syncIdentityFromUserToEmployee } = await import('./employee.service.js');
     try {
-      await syncIdentityFromUserToEmployee(userId, changedIdentity);
+      await syncIdentityFromUserToEmployee(userId, changedIdentity, [previousEmail, user.email]);
     } catch (err) {
       logger.warn(`syncIdentityFromUserToEmployee failed for userId=${userId}: ${err?.message || err}`);
     }
