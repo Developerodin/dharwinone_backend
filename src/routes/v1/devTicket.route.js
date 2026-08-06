@@ -39,6 +39,16 @@ router
     devTicketController.addComment
   );
 
+router
+  .route('/:ticketId/attachments')
+  .post(
+    ...canView,
+    uploadImagesVideos('attachments', 10),
+    validate(devTicketValidation.addAttachments),
+    devTicketController.attachmentsAdd
+  )
+  .delete(...canView, validate(devTicketValidation.removeAttachment), devTicketController.attachmentRemove);
+
 router.post('/:ticketId/watch', ...canView, validate(devTicketValidation.watchTicket), devTicketController.watch);
 router.delete(
   '/:ticketId/watch',

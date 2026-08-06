@@ -129,7 +129,7 @@ const queryInternalMeetings = async (filter, options, currentUser = null) => {
   const result = await InternalMeeting.paginate(scopedFilter, {
     ...options,
     populate: 'createdBy',
-    sort: options.sortBy || '-createdAt',
+    sort: options.sortBy || '-scheduledAt',
   });
   result.results = (result.results || []).map((m) => {
     const doc = m.toJSON ? m.toJSON() : m;

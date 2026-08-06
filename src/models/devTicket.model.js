@@ -45,6 +45,7 @@ const commentSchema = new mongoose.Schema(
 );
 
 const LABELS = ['regression', 'needs-repro', 'good-first-bug', 'performance', 'security', 'ui'];
+const CATEGORIES = ['Bug', 'New Feature', 'Improvement'];
 const LINK_RELS = ['blocks', 'blocked-by', 'duplicate-of', 'relates-to'];
 
 const devTicketSchema = new mongoose.Schema(
@@ -68,6 +69,11 @@ const devTicketSchema = new mongoose.Schema(
       type: String,
       enum: ['Minor', 'Major', 'Critical', 'Blocker'],
       default: 'Major',
+    },
+    category: {
+      type: String,
+      enum: CATEGORIES,
+      default: 'Bug',
     },
     module: { type: String, trim: true, default: '' },
     environment: {
@@ -158,6 +164,6 @@ devTicketSchema.methods.logActivity = function (action, performedBy, field, from
 devTicketSchema.plugin(toJSON);
 devTicketSchema.plugin(paginate);
 
-export { LABELS, LINK_RELS };
+export { LABELS, LINK_RELS, CATEGORIES };
 const DevTicket = mongoose.model('DevTicket', devTicketSchema);
 export default DevTicket;

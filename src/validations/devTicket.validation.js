@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { objectId, devTicketRef } from './custom.validation.js';
-import { LABELS, LINK_RELS } from '../models/devTicket.model.js';
+import { LABELS, LINK_RELS, CATEGORIES } from '../models/devTicket.model.js';
 
 const gitFields = {
   git: Joi.object()
@@ -63,6 +63,7 @@ const createDevTicket = {
       }),
       priority: Joi.string().valid('Low', 'Medium', 'High', 'Urgent').default('Medium'),
       severity: Joi.string().valid('Minor', 'Major', 'Critical', 'Blocker').default('Major'),
+      category: Joi.string().valid(...CATEGORIES).default('Bug'),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production').default('Staging'),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
@@ -82,6 +83,7 @@ const getDevTickets = {
     status: Joi.string().valid('Open', 'In Progress', 'Resolved', 'Closed'),
     priority: Joi.string().valid('Low', 'Medium', 'High', 'Urgent'),
     severity: Joi.string().valid('Minor', 'Major', 'Critical', 'Blocker'),
+    category: Joi.string().valid(...CATEGORIES),
     module: Joi.string().trim(),
     environment: Joi.string().valid('Staging', 'Production'),
     label: Joi.string().valid(...LABELS),
@@ -116,6 +118,7 @@ const updateDevTicket = {
       status: Joi.string().valid('Open', 'In Progress', 'Resolved', 'Closed'),
       priority: Joi.string().valid('Low', 'Medium', 'High', 'Urgent'),
       severity: Joi.string().valid('Minor', 'Major', 'Critical', 'Blocker'),
+      category: Joi.string().valid(...CATEGORIES),
       module: Joi.string().trim().max(100).allow('', null),
       environment: Joi.string().valid('Staging', 'Production'),
       stepsToReproduce: Joi.string().trim().max(5000).allow('', null),
@@ -143,6 +146,21 @@ const addComment = {
       }),
     })
     .required(),
+};
+
+const addAttachments = {
+  params: Joi.object().keys({
+    ticketId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+const removeAttachment = {
+  params: Joi.object().keys({
+    ticketId: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    key: Joi.string().trim().max(1024).required(),
+  }),
 };
 
 const deleteDevTicket = {
@@ -227,6 +245,8 @@ export {
   getDevTicket,
   updateDevTicket,
   addComment,
+  addAttachments,
+  removeAttachment,
   deleteDevTicket,
   bulkUpdate,
   watchTicket,

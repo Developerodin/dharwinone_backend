@@ -2,7 +2,7 @@ import httpStatus from 'http-status';
 import DevTicket from '../models/devTicket.model.js';
 import User from '../models/user.model.js';
 import ApiError from '../utils/ApiError.js';
-import { uploadMultipleFilesToS3 } from './upload.service.js';
+import { uploadMultipleFilesToS3, deleteFileFromS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { notify } from './notification.service.js';
 import logger from '../config/logger.js';
@@ -389,6 +389,10 @@ const updateDevTicketById = async (ticketId, updateData, user) => {
     ticket.logActivity('severity_changed', actorId, 'severity', ticket.severity, updateData.severity);
   }
 
+  if (updateData.category && updateData.category !== ticket.category) {
+    ticket.logActivity('category_changed', actorId, 'category', ticket.category, updateData.category);
+  }
+
   if (updateData.module != null && updateData.module !== ticket.module) {
     ticket.logActivity('module_changed', actorId, 'module', ticket.module || '', updateData.module || '');
   }
@@ -501,6 +505,78 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
 };
 
 // ──────────────────────────── delete ────────────────────────────
+
+// ──────────────────────────── ticket attachments ────────────────────────────
+
+const MAX_TICKET_ATTACHMENTS = 10;
+
+const addTicketAttachments = async (ticketId, files, user) => {
+  if (!files?.length) throw new ApiError(httpStatus.BAD_REQUEST, 'No files uploaded');
+
+  const ticket = await DevTicket.findById(ticketId);
+  if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Dev ticket not found');
+  await assertCanEdit(ticket, user);
+
+  if (ticket.attachments.length + files.length > MAX_TICKET_ATTACHMENTS) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `A ticket can hold at most ${MAX_TICKET_ATTACHMENTS} attachments`
+    );
+  }
+
+  const actorId = getUserId(user);
+  let results;
+  try {
+    results = await uploadMultipleFilesToS3(files, actorId, 'dev-tickets');
+  } catch (error) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, `Failed to upload attachments: ${error.message}`);
+  }
+
+  results.forEach((r) => {
+    ticket.attachments.push({
+      key: r.key,
+      url: r.url,
+      originalName: r.originalName,
+      size: r.size,
+      mimeType: r.mimeType,
+      uploadedAt: new Date(),
+    });
+  });
+  ticket.logActivity(
+    'attachment_added',
+    actorId,
+    'attachments',
+    '',
+    results.map((r) => r.originalName).join(', ')
+  );
+  await ticket.save();
+
+  await ticket.populate(POPULATE_PATHS);
+  return toTicketObj(ticket);
+};
+
+const removeTicketAttachment = async (ticketId, key, user) => {
+  const ticket = await DevTicket.findById(ticketId);
+  if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Dev ticket not found');
+  await assertCanEdit(ticket, user);
+
+  const attachment = ticket.attachments.find((a) => a.key === key);
+  if (!attachment) throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found on this ticket');
+
+  ticket.attachments.pull(attachment._id);
+  ticket.logActivity('attachment_removed', getUserId(user), 'attachments', attachment.originalName, '');
+  await ticket.save();
+
+  // Ticket state is what users see; a stranded S3 object is not worth failing the request.
+  try {
+    await deleteFileFromS3(key);
+  } catch (e) {
+    logger.warn(`S3 delete fail (key=${key}): ${e?.message}`);
+  }
+
+  await ticket.populate(POPULATE_PATHS);
+  return toTicketObj(ticket);
+};
 
 const deleteDevTicketById = async (ticketId, user) => {
   const ticket = await DevTicket.findById(ticketId);
@@ -817,6 +893,8 @@ export {
   getDevTicketById,
   updateDevTicketById,
   addCommentToTicket,
+  addTicketAttachments,
+  removeTicketAttachment,
   deleteDevTicketById,
   bulkUpdate,
   addWatcher,

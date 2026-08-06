@@ -7,6 +7,8 @@ import {
   getDevTicketById,
   updateDevTicketById,
   addCommentToTicket,
+  addTicketAttachments,
+  removeTicketAttachment,
   deleteDevTicketById,
   bulkUpdate,
   addWatcher,
@@ -25,7 +27,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'priority', 'severity', 'module', 'environment', 'label', 'search', 'scope']);
+  const filter = pick(req.query, ['status', 'priority', 'severity', 'category', 'module', 'environment', 'label', 'search', 'scope']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryDevTickets(filter, options, req.user);
   res.send(result);
@@ -51,6 +53,17 @@ const addComment = catchAsync(async (req, res) => {
   const files = req.files || (req.file ? [req.file] : []);
   const ticket = await addCommentToTicket(req.params.ticketId, content, req.user, files);
   res.status(httpStatus.OK).send(ticket);
+});
+
+const attachmentsAdd = catchAsync(async (req, res) => {
+  const files = req.files || (req.file ? [req.file] : []);
+  const ticket = await addTicketAttachments(req.params.ticketId, files, req.user);
+  res.status(httpStatus.CREATED).send(ticket);
+});
+
+const attachmentRemove = catchAsync(async (req, res) => {
+  const ticket = await removeTicketAttachment(req.params.ticketId, req.query.key, req.user);
+  res.send(ticket);
 });
 
 const bulk = catchAsync(async (req, res) => {
@@ -103,6 +116,8 @@ export {
   update,
   remove,
   addComment,
+  attachmentsAdd,
+  attachmentRemove,
   bulk,
   watch,
   unwatch,
