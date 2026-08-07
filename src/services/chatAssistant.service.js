@@ -62,6 +62,8 @@ import {
   buildCourseProgressFilter,
   summarizeCourseProgressBreakdown,
 } from './chatAssistant/trainingAnalytics.js';
+import { hasOrgReadAccess, formatOrgCoverageFacts } from './chatAssistant/orgStructureAnalytics.js';
+import { getOrgCoverageSummary } from './orgStructure.service.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -576,6 +578,25 @@ const ROUTING_TOOLS = [
           status: { type: 'string', description: 'Filter: enrolled | in-progress | completed | dropped.' },
           limit:  { type: 'number', description: 'Max records to return (default 25, max 100).' },
         },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'org_structure_analytics',
+      description:
+        'Authoritative org-chart / org-structure coverage facts — sourced from orgStructure.service.js getOrgCoverageSummary, ' +
+        'the SAME computation backing the Org Chart page. Never invents its own department/supervisor/unassigned counts. ' +
+        'Covers: whether department nodes exist, departments missing a chart node, supervisor coverage, CEO/manager presence, ' +
+        'units missing a head, over-span units, open slots, and employees ASSIGNED vs UNASSIGNED to a department ' +
+        '(unassigned = active employee whose departmentId matches no active department-type org-unit — the same rule the tree view uses). ' +
+        'Use for: "how many employees are unassigned", "do we have a supervisor for every team", "which departments have no org chart node", ' +
+        '"org chart coverage / health check".',
+      parameters: {
+        type: 'object',
+        properties: {},
         required: [],
       },
     },
@@ -1889,6 +1910,19 @@ async function fetchModule(name, args, user) {
         authoritative: true,
         partialList: total > records.length,
       };
+    }
+
+    case 'org_structure_analytics': {
+      // Wraps getOrgCoverageSummary (the exact computation behind the Org Chart page)
+      // via orgStructureAnalytics.js formatOrgCoverageFacts — never recompute counts here.
+      if (!hasOrgReadAccess(user?.authContext?.permissions)) {
+        return {
+          forbidden: true,
+          reason: 'Missing chart.read / structure.read / structure.manage permission required to view org structure analytics.',
+        };
+      }
+      const summary = await getOrgCoverageSummary(user || null);
+      return formatOrgCoverageFacts(summary);
     }
 
     case 'fetch_people': {
@@ -3529,6 +3563,10 @@ function buildCountBanner(fetchedData) {
     if (key === 'training_analytics' && typeof data?.total === 'number') {
       lines.push(`  training_analytics.total = ${data.total}`);
     }
+    if (key === 'org_structure_analytics' && !data?.forbidden) {
+      lines.push(`  org_structure_analytics.employees.unassigned = ${data?.employees?.unassigned ?? 0}`);
+      lines.push(`  org_structure_analytics.employees.total = ${data?.employees?.total ?? 0}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -4446,6 +4484,32 @@ function summarizeData(fetchedData) {
       continue;
     }
 
+    if (key === 'org_structure_analytics') {
+      if (data?.forbidden) {
+        parts.push(
+          `--- org structure analytics ---\n` +
+          `FORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
+          `USER_FACING_REPLY: Tell the user they do not have permission to view org-structure analytics.`
+        );
+        continue;
+      }
+      const emp = data?.employees || {};
+      const dep = data?.departments || {};
+      const lead = data?.leadership || {};
+      const lines = [
+        `--- org structure analytics (AUTHORITATIVE — wraps getOrgCoverageSummary, matches the Org Chart page exactly) ---`,
+        `EMPLOYEES_TOTAL: ${emp.total ?? 0} | ASSIGNED: ${emp.assigned ?? 0} | UNASSIGNED: ${emp.unassigned ?? 0}`,
+        `UNASSIGNED_DEFINITION: ${emp.unassignedDefinition || 'active employee whose departmentId matches no active department-type org-unit'}`,
+        `DEPARTMENTS: hasDepartmentNodes=${dep.hasDepartmentNodes ?? false}, departmentsWithoutNode=${dep.departmentsWithoutNode ?? 0}, departmentNodesWithoutEmployees=${dep.departmentNodesWithoutEmployees ?? 0}, allDepartmentsLinked=${dep.allDepartmentsLinked ?? false}`,
+        `SUPERVISORS: hasSupervisors=${data?.supervisors?.hasSupervisors ?? false}`,
+        `LEADERSHIP: hasCeo=${lead.hasCeo ?? false}, hasManagers=${lead.hasManagers ?? false}, unitsMissingHead=${lead.unitsMissingHead ?? 0}, allLeadershipHeadsAssigned=${lead.allLeadershipHeadsAssigned ?? false}`,
+        `OVER_SPAN_UNITS: ${data?.overSpanUnits ?? 0} | OPEN_SLOTS: ${data?.openSlots ?? 0}`,
+        `Do NOT recompute these from raw Employee/Department counts — this mirrors the Org Chart tree logic exactly.`,
+      ];
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
     if (key === 'fetch_external_jobs') {
       // Now sourced from Job collection (jobOrigin='external'), not raw ExternalJob.
       // Fields shifted: company → organisation.name, source → externalRef.source,
@@ -4840,6 +4904,11 @@ const INTENT_PATTERNS = [
   { re: /\b(manager)\b/i,                                                          modules: ['fetch_employees'] },
   { re: /\b(developer|engineer|designer|analyst|intern)\b/i,                       modules: ['fetch_employees'] },
   { re: /\b(user roles?|role of|who has role|people with role)\b/i,                modules: ['fetch_employees'] },
+  // Org structure / chart coverage (Epic G) — must come BEFORE the generic
+  // "department" fetch_employees pattern below so coverage/health-check asks
+  // route to the authoritative org-chart summary instead of an employee list.
+  { re: /\b(unassigned employees?|org(anisation|anization)? chart coverage|org(anisation|anization)? structure (coverage|health|analytics)|department(s)? (without|missing) (a )?(node|chart)|supervisor coverage|do we have a supervisor)\b/i,
+                                                                                    modules: ['org_structure_analytics'] },
   { re: /\b(department|team (in|of|members)|people in)\b/i,                        modules: ['fetch_employees'] },
   // Hiring tunnel snapshot (Epic C) — must come BEFORE the generic candidates
   // pattern below so funnel/tunnel/pre-boarding asks route to the authoritative
