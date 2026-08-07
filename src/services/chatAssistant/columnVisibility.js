@@ -109,7 +109,10 @@ export function isColumnAllowedForRole(column, viewerRole) {
 // ROLE / DEPT columns from the agent + employee + candidate tables.
 
 export const TABLE_PROFILES = Object.freeze({
-  employees:  { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'] },
+  // `accountState` is whitelisted but blank on ordinary rows, so the
+  // empty-column prune drops it unless someone's access is actually
+  // disabled/archived — then it appears and explains the count.
+  employees:  { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status', 'accountState'] },
   agents:     { defaultColumns: ['name', 'email', 'role', 'status'] },
   recruiters: { defaultColumns: ['name', 'email', 'role', 'status'] },
   candidates: { defaultColumns: ['name', 'appliedRole', 'email', 'status'] },

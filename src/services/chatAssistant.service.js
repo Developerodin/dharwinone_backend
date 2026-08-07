@@ -39,6 +39,7 @@ import { extractTemporalContext } from './chatAssistant/temporalContext.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
+  employeeOwnerQuery,
   canUserBeVisible,
   overridesFromArgs,
 } from './chatAssistant/visibilityRules.js';
@@ -194,6 +195,23 @@ export const ROLE_GROUPS = {
 };
 
 const ADMIN_ROLE_NAMES = ROLE_GROUPS.admin;
+
+/**
+ * Which owner population a profile-backed query should scope to.
+ *
+ * fetch_employees serves both populations, but they are DISTINCT roles (see
+ * ROLE_GROUPS) and must never be merged. This used to be hardcoded to the
+ * Employee role, so asking for candidates scoped owners by the Employee role
+ * and silently answered with employees — resigned ones included — under a
+ * "Candidates" heading.
+ *
+ * @param {string|null} canonicalRole output of normalizeRole(), or null for a
+ *   plain headcount query with no role argument
+ * @returns {string[]} exact Role.name values to match
+ */
+export function profileRoleNamesFor(canonicalRole) {
+  return canonicalRole === 'Candidate' ? ROLE_GROUPS.candidate : ROLE_GROUPS.employee;
+}
 
 export function normalizeRole(input) {
   if (!input) return null;
@@ -966,9 +984,6 @@ async function fetchModule(name, args, user) {
       // Employee.adminId — keeping parity. Role-only paths (Agent / Recruiter
       // / Administrator) skip the Employee join because those roles don't
       // have Employee profiles.
-      const { ids: empRoleIds } = await resolveRoleIds('Employee');
-      const employeeRole = empRoleIds.length ? { _id: empRoleIds[0] } : null;
-
       const roleArg = args.role ? await resolveRoleDoc(args.role) : null;
       const canonicalRole = args.role ? normalizeRole(args.role) : null;
       // Employee path triggers when:
@@ -976,10 +991,10 @@ async function fetchModule(name, args, user) {
       //  • caller asked for "Employee" / "Candidate" (legacy alias) — even if
       //    the Role doc is missing (some seeds drop the role record).
       // canonicalRole here is from normalizeRole() which preserves 'Candidate'
-      // as a distinct token (matching the DB Role doc name). 'Employee' and
-      // 'Candidate' both belong to the Employee population — Task 6 dropped the
-      // legacy roleArg._id===employeeRole._id comparison because these two
-      // explicit checks already cover it.
+      // as a distinct token (matching the DB Role doc name). Both roles use the
+      // Employee *profile collection* path below, but owner scoping stays
+      // STRICTLY separate via profileRoleNamesFor — Candidate and Employee are
+      // never merged (see ROLE_GROUPS).
       const isEmployeeRoleQuery =
         !args.search && (
           !args.role ||
@@ -1007,26 +1022,60 @@ async function fetchModule(name, args, user) {
       // (status active|pending). Site does NOT use Employee.adminId — keeping
       // parity so the chatbot count matches the ATS Employees page (126 etc.).
       let empMongoFilter = null;
+      // Owners held back purely by account state — surfaced in the breakdown
+      // so the reply can disclose them rather than silently shrinking counts.
+      let hiddenAccountOwnerIds = [];
       if (isEmployeeRoleQuery) {
         const today = new Date();
-        // Include all non-deleted statuses so resigned/disabled users with the
-        // Employee role still surface when caller asks for "resigned" /
-        // "retired" employees. Site filters to active|pending for the live
-        // page; for chatbot we widen so historical employees are reachable.
-        const ownerStatusScope = empStatus === 'resigned' || empStatus === 'all'
-          ? { $ne: 'deleted' }
-          : visibleUserStatusClause(visOverride);
-        const ownerIdsWithEmployeeRole = empRoleIds.length
-          ? await User.find(
-              { roleIds: { $in: empRoleIds }, status: ownerStatusScope, platformSuperUser: { $ne: true } },
-              { _id: 1 }
-            ).distinct('_id')
-          : null;
+        // Account visibility is the SAME for every employment scope. This used
+        // to widen to `{ $ne: 'deleted' }` for resigned/all, contradicting the
+        // parity comment directly above and pulling disabled accounts into the
+        // answer: "how many resigned employees" replied 35 where the Employees
+        // page showed 34. Employment scope is expressed only through
+        // Employee.resignDate below. Widen deliberately via
+        // CHATBOT_INCLUDE_DISABLED or an explicit includeDisabled arg.
+        // Scope owners to the population the caller ACTUALLY asked for.
+        // Strict name-equality on Role.name, deliberately NOT resolveRoleIds:
+        // the registry resolves previousNames, and post Candidate→Employee
+        // rename history that pulls the Employee doc into a Candidate lookup —
+        // which is the very leak this fixes. Same guard as fetch_candidates.
+        const profileRoleNames = profileRoleNamesFor(canonicalRole);
+        const profileRoleDocs = await Role.find(
+          { name: { $in: profileRoleNames }, status: 'active' },
+          { _id: 1 }
+        ).lean();
+        const profileRoleIds = profileRoleDocs.map((d) => d._id);
 
-        empMongoFilter = {};
-        if (ownerIdsWithEmployeeRole !== null) {
-          empMongoFilter.owner = { $in: ownerIdsWithEmployeeRole };
+        // Fail CLOSED on a missing Role doc. This previously left ownerIds
+        // null, which dropped the owner clause entirely and returned every
+        // profile in the collection — reintroducing the cross-population leak
+        // by another route.
+        if (!profileRoleIds.length) {
+          logger.warn(`[ChatAssistant][fetch_employees] role_missing role=${profileRoleNames.join('|')}`);
+          return { total: 0, records: [], notFound: true, searchedFor: profileRoleNames[0] };
         }
+
+        const ownerIdsWithProfileRole = await User.find(
+          employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
+          { _id: 1 }
+        ).distinct('_id');
+
+        // Owners excluded ONLY because their account is disabled/archived.
+        // These are real resigned people; dropping them without a word is what
+        // made the chatbot say 36 while the Employees page said 35, with no
+        // explanation offered. Keep them out of the count (site parity) but
+        // report how many there are so the answer can say so out loud.
+        hiddenAccountOwnerIds = await User.find(
+          {
+            roleIds: { $in: profileRoleIds },
+            status: { $in: ['disabled', 'archived'] },
+            platformSuperUser: { $ne: true },
+            _id: { $nin: ownerIdsWithProfileRole },
+          },
+          { _id: 1 }
+        ).distinct('_id');
+
+        empMongoFilter = { owner: { $in: ownerIdsWithProfileRole } };
         if (empStatus === 'resigned') {
           empMongoFilter.resignDate = { $ne: null, $lte: today };
         } else if (empStatus === 'all') {
@@ -1245,6 +1294,9 @@ async function fetchModule(name, args, user) {
               domain: u?.domain || [],
               location: u?.location || '',
               status: u?.status || 'orphan',
+              // Account state kept on its own key so the renderer never has to
+              // guess whether `status` means "employed" or "can sign in".
+              accountState: u?.status || 'orphan',
               roleIds: u?.roleIds || [],
               employeeId: e.employeeId,
               designation: e.designation,
@@ -1321,14 +1373,35 @@ async function fetchModule(name, args, user) {
         const today = new Date();
         // Same owner scope as the records above so the breakdown reconciles.
         const baseEmpFilter = empMongoFilter && empMongoFilter.owner ? { owner: empMongoFilter.owner } : {};
-        const [activeCount, resignedCount] = await Promise.all([
+        const hiddenFilter = hiddenAccountOwnerIds.length ? { owner: { $in: hiddenAccountOwnerIds } } : null;
+        const [activeCount, resignedCount, hiddenActive, hiddenResigned] = await Promise.all([
           Employee.countDocuments({
             ...baseEmpFilter,
             $or: [{ resignDate: null }, { resignDate: { $exists: false } }, { resignDate: { $gt: today } }],
           }),
           Employee.countDocuments({ ...baseEmpFilter, resignDate: { $ne: null, $lte: today } }),
+          hiddenFilter
+            ? Employee.countDocuments({
+                ...hiddenFilter,
+                $or: [{ resignDate: null }, { resignDate: { $exists: false } }, { resignDate: { $gt: today } }],
+              })
+            : 0,
+          hiddenFilter
+            ? Employee.countDocuments({ ...hiddenFilter, resignDate: { $ne: null, $lte: today } })
+            : 0,
         ]);
-        employmentBreakdown = { active: activeCount, resigned: resignedCount, total: activeCount + resignedCount };
+        employmentBreakdown = {
+          active: activeCount,
+          resigned: resignedCount,
+          total: activeCount + resignedCount,
+          // Real people held back because their ACCOUNT is disabled/archived,
+          // not because of their employment state. Reported so the answer can
+          // name them instead of leaving the reader to wonder why the chatbot
+          // and the Employees page disagree.
+          hiddenDisabledActive: hiddenActive,
+          hiddenDisabledResigned: hiddenResigned,
+          hiddenDisabledTotal: hiddenActive + hiddenResigned,
+        };
       }
 
       logger.info(`[ChatAssistant][fetch_employees] isEmployeeRoleQuery=${isEmployeeRoleQuery} empStatus=${empStatus || 'default'} total=${safeTotal} fetched=${records.length} source=${source} empBreakdown=${JSON.stringify(employmentBreakdown)} filter=${JSON.stringify(empMongoFilter)}`);
@@ -3007,7 +3080,11 @@ function summarizeData(fetchedData) {
       const shown = records.length;
       const eb = data?.employmentBreakdown;
       const ebTag = eb
-        ? ` | EMPLOYMENT_TOTALS — active: ${eb.active}, resigned: ${eb.resigned}, total: ${eb.total}${data?.employmentFilter ? ` | FILTER: ${data.employmentFilter}` : ''}`
+        ? ` | EMPLOYMENT_TOTALS — active: ${eb.active}, resigned: ${eb.resigned}, total: ${eb.total}${
+            eb.hiddenDisabledTotal
+              ? ` | EXCLUDED_DISABLED_ACCOUNTS — ${eb.hiddenDisabledTotal} (resigned: ${eb.hiddenDisabledResigned}, active: ${eb.hiddenDisabledActive}) — these people are NOT in the totals above because their user account is disabled/archived; state this explicitly when listing or counting so the number matches the Employees page`
+              : ''
+          }${data?.employmentFilter ? ` | FILTER: ${data.employmentFilter}` : ''}`
         : '';
       // Always emit the AUTHORITATIVE_COUNT tag — even when shown == total —
       // so the LLM never miscounts by enumerating NAME lines. Verbose

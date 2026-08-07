@@ -110,6 +110,9 @@ const KIND_RENDERERS = {
             : (Array.isArray(r.roleIds) && r.roleIds.length
                 ? r.roleIds.map((x) => (typeof x === 'object' ? x.name : x)).filter(Boolean)
                 : ['Candidate']);
+          // Keep employment vs account on SEPARATE axes. Candidates are not
+          // employees — User.status must never become employmentState, or the
+          // employees renderer remaps account "active" → badge "Working".
           return {
             name: r.name,
             email: r.email,
@@ -117,7 +120,8 @@ const KIND_RENDERERS = {
             roleNames,
             role: roleNames,
             department: r.department || r.designation || null,
-            employmentState: r.status || 'active',
+            employmentState: r.employmentState || null,
+            accountState: r.accountState || r.status || null,
           };
         }),
         total: data.total ?? records.length,

@@ -61,8 +61,18 @@ export function renderDeterministicAnswer(userMsg, facts) {
   }
 
   const label = pluralise(pickLabelForRender(p), p.total);
+  // Working vs resigned is always stated. When people are held out purely
+  // because their account is disabled/archived, say so — an unexplained gap
+  // between this number and the Employees page is what caused the 36-vs-35
+  // confusion.
+  const hiddenTotal = p.breakdown?.hiddenDisabledTotal ?? 0;
+  const hidden = hiddenTotal
+    ? ` ${hiddenTotal} more (${p.breakdown.hiddenDisabledResigned ?? 0} resigned) ${
+        hiddenTotal === 1 ? 'is' : 'are'
+      } not counted above because their account is disabled.`
+    : '';
   const breakdown = p.breakdown
-    ? `\n\nBreakdown — active: **${p.breakdown.active ?? '?'}**, resigned: **${p.breakdown.resigned ?? '?'}**.`
+    ? `\n\nBreakdown — working: **${p.breakdown.active ?? '?'}**, resigned: **${p.breakdown.resigned ?? '?'}**.${hidden}`
     : '';
   return `We have **${p.total} ${label}** in total.${breakdown}`;
 }

@@ -56,6 +56,28 @@ export function visibleUserStatusClause(override) {
 }
 
 /**
+ * Owner-account query for Employee-role people. Use this everywhere the
+ * chatbot resolves "which User accounts own an Employee profile".
+ *
+ * Deliberately takes NO employment-scope argument. Employment scope
+ * (active / resigned / all) describes the EMPLOYMENT RECORD via
+ * Employee.resignDate; it must never widen ACCOUNT visibility. The legacy
+ * fetch_employees path used to branch to `{ $ne: 'deleted' }` for
+ * resigned/all, which surfaced disabled accounts that the Employees page
+ * hides — the chatbot reported 35 resigned employees where the site
+ * reported 34.
+ *
+ * @param {{ roleIds: any[], override?: { includeDisabled?: boolean, includeArchived?: boolean } }} args
+ */
+export function employeeOwnerQuery({ roleIds, override } = {}) {
+  return {
+    roleIds: { $in: roleIds },
+    status: visibleUserStatusClause(override),
+    platformSuperUser: { $ne: true },
+  };
+}
+
+/**
  * Predicate — returns true when a hydrated user record passes visibility rules.
  * Use after hydration when the source query couldn't apply the clause directly
  * (e.g. orphan join via Employee.fullName).

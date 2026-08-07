@@ -28,6 +28,10 @@ import {
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
+// Employment state — what the person's EMPLOYMENT is doing. Rendered as
+// "Working" rather than "Active" so it can never be misread as "account is
+// active"; those are two different axes and conflating them is what made the
+// counts confusing.
 const stateTone = (s) => {
   const v = String(s || '').toLowerCase();
   if (v === 'active') return 'success';
@@ -35,6 +39,30 @@ const stateTone = (s) => {
   if (v === 'probation') return 'info';
   if (v === 'on leave' || v === 'onleave') return 'warn';
   return 'neutral';
+};
+
+const stateLabel = (s) => {
+  const v = String(s || '').toLowerCase();
+  if (!v) return '';
+  if (v === 'active') return 'Working';
+  return v.charAt(0).toUpperCase() + v.slice(1);
+};
+
+// Account state — whether the person can still SIGN IN. A resigned employee
+// may keep an enabled account, and a working one may have theirs disabled.
+// Blank for the ordinary case so the column prunes itself away and appears
+// only when access has actually been revoked.
+const accountLabel = (s) => {
+  const v = String(s || '').toLowerCase();
+  if (v === 'disabled') return 'Disabled';
+  if (v === 'archived') return 'Archived';
+  if (v === 'orphan') return 'No account';
+  return '';
+};
+
+const accountTone = (s) => {
+  const v = String(s || '').toLowerCase();
+  return v === 'disabled' || v === 'archived' ? 'warn' : 'neutral';
 };
 
 const roleNamesOf = (r) => {
@@ -75,6 +103,7 @@ const CANDIDATE_COLUMNS = [
   { key: 'joinDate',    label: 'Join Date',    priority: 'secondary', format: 'date' },
   { key: 'resignDate',  label: 'Resign Date',  priority: 'secondary', format: 'date' },
   { key: 'status',      label: 'Status',       priority: 'primary',   format: 'badge' },
+  { key: 'accountState', label: 'Account',     priority: 'secondary', format: 'badge' },
 ];
 
 /**
@@ -107,7 +136,8 @@ export function renderEmployees(data, ctx = {}) {
     department:  cell(r.department || r.designation),
     joinDate:    cell(formatDate(pickJoinDate(r))),
     resignDate:  cell(formatDate(pickResignDate(r))),
-    status:      { v: cell(r.employmentState), tone: stateTone(r.employmentState) },
+    status:      { v: cell(stateLabel(r.employmentState)), tone: stateTone(r.employmentState) },
+    accountState: { v: cell(accountLabel(r.accountState ?? r.status)), tone: accountTone(r.accountState ?? r.status) },
   }));
 
   const { columns, rows } = applyColumnVisibility({

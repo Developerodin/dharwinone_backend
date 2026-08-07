@@ -59,7 +59,7 @@ export function buildKeysetCursorClause(cursor) {
 import { resolveIdentity } from './orphanResolver.js';
 import { resolveRoleIds, tagRoleNames } from './roleResolver.js';
 import { resolveRole as registryResolveRole } from './roleRegistry.js';
-import { visibleUserStatusClause } from './visibilityRules.js';
+import { employeeOwnerQuery, visibleUserStatusClause } from './visibilityRules.js';
 
 function emptyPage() {
   return { from: 0, to: 0, total: 0, hasMore: false, nextCursor: null };
@@ -124,16 +124,13 @@ async function fetchEmployees({ scope, cursor, size, search, today, Employee, Us
       hint: 'Employee Role document is not seeded; run seed:roles to restore.',
     };
   }
-  // Use the central visibilityRules clause so this filter ALWAYS matches the
-  // entity-resolver, attendance aggregator, and legacy fetch_employees paths.
+  // Same owner-account scope as legacy fetch_employees (employeeOwnerQuery).
   // Default = active+pending; widen via env CHATBOT_INCLUDE_DISABLED.
-  // Resignation is tracked separately via Employee.resignDate (controlled by
-  // employmentScope arg).
-  const ownerIds = await User.find({
-    roleIds: { $in: empRoleIds },
-    status: visibleUserStatusClause(),
-    platformSuperUser: { $ne: true },
-  }).distinct('_id');
+  // Resignation is tracked separately via Employee.resignDate (employmentScope).
+  // Deliberately does NOT widen for resigned/all — that was the 35-vs-34 bug.
+  const ownerIds = await User.find(
+    employeeOwnerQuery({ roleIds: empRoleIds }),
+  ).distinct('_id');
 
   const baseFilter = buildEmployeeFilter({ ownerIds, scope, today });
   const cursorClause = buildKeysetCursorClause(cursor);
@@ -186,7 +183,9 @@ async function fetchEmployees({ scope, cursor, size, search, today, Employee, Us
       department: e.department || null,
       joiningDate: e.joiningDate || null,
       resignDate: e.resignDate || null,
+      // Employment vs account are distinct axes — never derive one from the other.
       employmentState: e.resignDate && new Date(e.resignDate) <= today ? 'resigned' : 'active',
+      accountState: u?.status || 'orphan',
     };
   });
 
