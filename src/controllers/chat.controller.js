@@ -198,7 +198,9 @@ const searchUsers = catchAsync(async (req, res) => {
   const limit = Math.min(250, parseInt(req.query.limit, 10) || 20);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const result = await queryUsers(
-    { search: search || undefined, status: 'active' },
+    // Exclude the requester: you cannot chat with yourself, and picking yourself for a
+    // group put you in the participant list twice (duplicate member row / React key).
+    { search: search || undefined, status: 'active', _id: { $ne: getUserId(req) } },
     // `_id` tiebreak keeps skip-based paging stable: names are not unique, and Mongo gives
     // no deterministic order within a tie, so page N and N+1 could repeat or drop a user.
     { limit, page, sortBy: 'name:asc,_id:asc' },

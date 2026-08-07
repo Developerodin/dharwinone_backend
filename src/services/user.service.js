@@ -98,7 +98,9 @@ const queryUsers = async (filter, options, requester = null) => {
   if (requester && !viewerSeesHiddenUsers(requester)) {
     const hiddenIds = await getDirectoryHiddenUserIds();
     if (hiddenIds.length > 0) {
-      mongoFilter._id = { $nin: hiddenIds };
+      // Merge, don't replace: callers may already constrain `_id` (chat user search
+      // excludes the requester). Overwriting silently reinstated whoever they excluded.
+      mongoFilter._id = { ...(mongoFilter._id || {}), $nin: hiddenIds };
     }
   }
   const users = await User.paginate(mongoFilter, options);

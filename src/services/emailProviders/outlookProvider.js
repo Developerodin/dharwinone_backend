@@ -10,6 +10,11 @@ import {
   getAssignedMailboxPolicy,
   revokeAllOtherEmailAccounts,
 } from '../emailConnectionPolicy.service.js';
+import {
+  GRAPH_MAIL_FOLDERS_LIST_URL,
+  GRAPH_WELL_KNOWN_FOLDER_SELECT,
+  normalizeOutlookFolder,
+} from './outlookFolder.util.js';
 
 const SCOPES = [
   'openid',
@@ -693,18 +698,32 @@ async function with401Refresh(account, fn) {
   }
 }
 
-function normalizeFolder(folder) {
-  const wellKnown = (folder.wellKnownName || '').toLowerCase();
-  const mappedId = REVERSE_FOLDER_MAP[wellKnown];
-  // Use mapped ID (e.g. INBOX) → well-known name (e.g. conversationhistory) → GUID
-  const id = mappedId || wellKnown || folder.id;
-  return {
-    id,
-    name: folder.displayName || folder.wellKnownName || folder.id,
-    type: wellKnown ? 'system' : 'user',
-    unread: Number(folder.unreadItemCount ?? 0) || 0,
-    total: Number(folder.totalItemCount ?? 0) || 0,
-  };
+function normalizeFolder(folder, wellKnownIdToLabelId) {
+  return normalizeOutlookFolder(folder, wellKnownIdToLabelId);
+}
+
+/** Resolve Graph folder ids for well-known folders via /me/mailFolders/{name} (v1.0-safe). */
+async function fetchWellKnownFolderIdMap(token, fetchImpl = fetch) {
+  const t = (token || '').trim();
+  if (!t) return new Map();
+
+  const entries = await Promise.all(
+    Object.entries(REVERSE_FOLDER_MAP).map(async ([wellKnownName, labelId]) => {
+      const url = `https://graph.microsoft.com/v1.0/me/mailFolders/${wellKnownName}?$select=${GRAPH_WELL_KNOWN_FOLDER_SELECT}`;
+      try {
+        const r = await fetchImpl(url, {
+          headers: { Authorization: `Bearer ${t}`, Accept: 'application/json' },
+        });
+        if (!r.ok) return null;
+        const data = await r.json();
+        return data?.id ? [data.id, labelId] : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return new Map(entries.filter(Boolean));
 }
 
 /** App folder keys → Outlook well-known / normalized label ids from listLabels. */
@@ -1375,8 +1394,7 @@ export async function trashThreads(account, threadIds) {
  * (do not call ensureValidToken again on retry — avoids double-refresh / stale reads).
  */
 export async function listLabels(account) {
-  const url =
-    'https://graph.microsoft.com/v1.0/me/mailFolders?$top=200&$select=id,displayName,wellKnownName,totalItemCount,unreadItemCount';
+  const url = GRAPH_MAIL_FOLDERS_LIST_URL;
 
   const fetchFolders = async (token) => {
     const t = (token || '').trim();
@@ -1429,7 +1447,8 @@ export async function listLabels(account) {
     throw Object.assign(new Error(msg), { statusCode: r.status, body: data });
   }
   const folders = data.value || [];
-  return folders.map(normalizeFolder);
+  const wellKnownIdToLabelId = await fetchWellKnownFolderIdMap(account.accessToken, fetch);
+  return folders.map((folder) => normalizeFolder(folder, wellKnownIdToLabelId));
 }
 
 /**

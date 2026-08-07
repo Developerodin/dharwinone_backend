@@ -284,7 +284,12 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
 };
 
 const createConversation = async (userId, { type, participantIds, name }) => {
-  const ids = [...new Set(participantIds.map((id) => id.toString()))];
+  // The creator is prepended to the participant list below, so drop them from the
+  // invitee list first: the user picker does not exclude self, and a client that
+  // sends the creator's own id would otherwise store them as two participant rows.
+  const ids = [...new Set(participantIds.map((id) => id.toString()))].filter(
+    (id) => id !== userId.toString()
+  );
   if (type === 'direct' && ids.length !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Direct conversation requires exactly one other participant');
   }
