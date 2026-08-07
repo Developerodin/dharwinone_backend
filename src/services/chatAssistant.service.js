@@ -51,6 +51,11 @@ import {
 } from './chatAssistant/attendanceAnalytics.js';
 import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
 import { buildInterviewFilter, summarizeInterviewBreakdown } from './chatAssistant/interviewAnalytics.js';
+import {
+  buildInternalMeetingFilter,
+  countInternalMeetingsByStatus,
+  countInternalMeetings,
+} from './chatAssistant/meetingAnalytics.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -754,7 +759,11 @@ const ROUTING_TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_meetings',
-      description: 'Retrieve upcoming scheduled meetings the user is invited to or hosting',
+      description:
+        'Retrieve upcoming scheduled internal/general meetings (InternalMeeting collection — Communication module) that the ' +
+        'user is invited to or hosting. NEVER returns ATS interviews — those live in a separate collection, use fetch_interviews for those. ' +
+        'Returns an authoritative total + a status breakdown (scheduled/ended/cancelled) alongside the record list — ' +
+        'always use the total field for "how many meetings", never count the listed records yourself.',
       parameters: {
         type: 'object',
         properties: {
@@ -2322,6 +2331,9 @@ async function fetchModule(name, args, user) {
     }
 
     case 'fetch_meetings': {
+      // Internal/general meetings ONLY (InternalMeeting) — interviews live in the
+      // separate Meeting collection (see fetch_interviews / interviewAnalytics.js).
+      // This path must never query Meeting.
       const days = Math.min(args.days || 30, 90);
       const now = new Date();
       const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -2329,19 +2341,30 @@ async function fetchModule(name, args, user) {
       const companyUserIds = await User.find(
         { $or: [{ _id: adminId }, { adminId }] }
       ).distinct('_id');
-      const q = {
-        scheduledAt: { $gte: now, $lte: until },
-        status: 'scheduled',
-        createdBy: { $in: companyUserIds },
+      const baseFilter = buildInternalMeetingFilter({
+        from: now,
+        to: until,
+        participantEmail: user?.email || undefined,
+        createdBy: companyUserIds,
+      });
+      const scheduledFilter = { ...baseFilter, status: 'scheduled' };
+      const [breakdown, total, docs] = await Promise.all([
+        countInternalMeetingsByStatus(baseFilter),
+        countInternalMeetings(scheduledFilter),
+        InternalMeeting.find(scheduledFilter)
+          .select('title description scheduledAt durationMinutes meetingType status hosts emailInvites')
+          .sort({ scheduledAt: 1 })
+          .limit(10)
+          .lean(),
+      ]);
+      return {
+        total,
+        breakdown,
+        records: docs,
+        authoritative: true,
+        population: 'internal_meeting',
+        windowDays: days,
       };
-      if (user?.email) {
-        q.$or = [{ emailInvites: user.email }, { 'hosts.email': user.email }];
-      }
-      return InternalMeeting.find(q)
-        .select('title description scheduledAt durationMinutes meetingType status hosts emailInvites')
-        .sort({ scheduledAt: 1 })
-        .limit(10)
-        .lean();
     }
 
     case 'fetch_holidays': {
@@ -3395,6 +3418,9 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_interviews' && typeof data?.total === 'number') {
       lines.push(`  fetch_interviews.total = ${data.total}`);
     }
+    if (key === 'fetch_meetings' && typeof data?.total === 'number') {
+      lines.push(`  fetch_meetings.total = ${data.total}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -4257,6 +4283,25 @@ function summarizeData(fetchedData) {
           `CANDIDATE: ${c.name || 'N/A'} | ROLE: ${roles} | EMAIL: ${c.email || 'N/A'}` +
           ` | PHONE: ${c.phoneNumber || 'N/A'} | LOCATION: ${c.location || 'N/A'}` +
           ` | DOMAINS: ${domains} | STATUS: ${c.status || 'N/A'}`
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'fetch_meetings') {
+      // Internal/general meetings (InternalMeeting) — NEVER interviews (see fetch_interviews).
+      const b = data?.breakdown || { scheduled: 0, ended: 0, cancelled: 0 };
+      const total = data?.total ?? 0;
+      const lines = [
+        `--- meetings (InternalMeeting — internal/general, NOT ATS interviews | ` +
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY_UPCOMING: ${total} scheduled | ` +
+        `STATUS_BREAKDOWN_IN_WINDOW: scheduled=${b.scheduled ?? 0}, ended=${b.ended ?? 0}, cancelled=${b.cancelled ?? 0}) ---`,
+      ];
+      for (const m of data?.records ?? []) {
+        lines.push(
+          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT: ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
+          `TYPE: ${m.meetingType || 'N/A'} | STATUS: ${m.status || 'N/A'} | DURATION_MIN: ${m.durationMinutes ?? 'N/A'}`
         );
       }
       parts.push(lines.join('\n'));
