@@ -17,6 +17,7 @@ import InternalMeeting from '../models/internalMeeting.model.js';
 import Meeting from '../models/meeting.model.js';
 import Holiday from '../models/holiday.model.js';
 import Student from '../models/student.model.js';
+import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Employee from '../models/employee.model.js';
 import VoiceAgent from '../models/voiceAgent.model.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
@@ -56,6 +57,11 @@ import {
   countInternalMeetingsByStatus,
   countInternalMeetings,
 } from './chatAssistant/meetingAnalytics.js';
+import {
+  resolveStudentIdForUser,
+  buildCourseProgressFilter,
+  summarizeCourseProgressBreakdown,
+} from './chatAssistant/trainingAnalytics.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -547,6 +553,28 @@ const ROUTING_TOOLS = [
           status:          { type: 'string', description: 'Meeting lifecycle: scheduled | ended | cancelled.' },
           interviewResult: { type: 'string', description: 'Outcome: pending | selected | rejected.' },
           limit:           { type: 'number', description: 'Max records to return (default 25, max 100).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'training_analytics',
+      description:
+        'Authoritative training/course-progress analytics (aka fetch_student_courses) — sourced from StudentCourseProgress, ' +
+        'scoped to the STUDENT population only (Student.user references User; there is NO direct ATS Candidate/Employee foreign key on course progress). ' +
+        'A person must have a Student profile for this to return data — if they do not, the tool returns {noStudentProfile:true} rather than guessing zero courses. ' +
+        'Do NOT claim "courses for ATS candidate X" unless a Student profile is confirmed for that same person. ' +
+        'Omit person to get the LOGGED-IN USER\'s own courses. ' +
+        'Use for: "my courses", "<name>\'s training progress", "how many courses has <name> completed", "training status breakdown for <name>".',
+      parameters: {
+        type: 'object',
+        properties: {
+          person: { type: 'string', description: 'Name, email, or employeeId to look up. Omit for the logged-in user\'s own courses.' },
+          status: { type: 'string', description: 'Filter: enrolled | in-progress | completed | dropped.' },
+          limit:  { type: 'number', description: 'Max records to return (default 25, max 100).' },
         },
         required: [],
       },
@@ -1782,6 +1810,83 @@ async function fetchModule(name, args, user) {
         windowLabel: window.missing ? 'all time' : window.label,
         authoritative: true,
         population: 'interview',
+        partialList: total > records.length,
+      };
+    }
+
+    case 'training_analytics': {
+      // STUDENT population only — see trainingAnalytics.js header for the FK spike
+      // result. Never assume an ATS Candidate/Employee has course data.
+      let studentId = null;
+      let personLabel = null;
+      if (args.person && String(args.person).trim()) {
+        const resolvedPerson = await resolveEmployeeMatch(String(args.person).trim());
+        if (resolvedPerson.kind === 'notFound') {
+          return { notFound: true, searchedFor: args.person, authoritative: true };
+        }
+        if (resolvedPerson.kind === 'ambiguous') {
+          return { ambiguous: true, matches: resolvedPerson.matches, searchedFor: args.person };
+        }
+        studentId = resolvedPerson.studentProfile?._id ? String(resolvedPerson.studentProfile._id) : null;
+        personLabel =
+          resolvedPerson.employee?.fullName ||
+          resolvedPerson.ownerUser?.name ||
+          resolvedPerson.synthesisedEmployee?.fullName ||
+          args.person;
+        if (!studentId) {
+          return {
+            noStudentProfile: true,
+            person: personLabel,
+            reason:
+              'No Student profile exists for this person. Training/course data is tracked on Student ' +
+              'profiles only (StudentCourseProgress.student -> Student._id -> Student.user -> User) — ' +
+              'there is no direct link from an ATS Candidate/Employee profile.',
+            authoritative: true,
+          };
+        }
+      } else {
+        studentId = await resolveStudentIdForUser(userId);
+        personLabel = user?.name || 'you';
+        if (!studentId) {
+          return {
+            noStudentProfile: true,
+            person: personLabel,
+            reason: 'No Student profile exists for the logged-in user — no training/course data is tracked.',
+            authoritative: true,
+          };
+        }
+      }
+
+      const listFilter = buildCourseProgressFilter(studentId, { status: args.status });
+      const totalFilter = buildCourseProgressFilter(studentId);
+      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
+      const [statusAgg, docs, total] = await Promise.all([
+        StudentCourseProgress.aggregate([
+          { $match: totalFilter },
+          { $group: { _id: '$status', count: { $sum: 1 } } },
+        ]),
+        StudentCourseProgress.find(listFilter)
+          .populate({ path: 'module', select: 'title' })
+          .sort({ updatedAt: -1 })
+          .limit(limit)
+          .lean(),
+        StudentCourseProgress.countDocuments(listFilter),
+      ]);
+      const breakdown = summarizeCourseProgressBreakdown(statusAgg);
+      const records = docs.map((d) => ({
+        moduleTitle: d.module?.title || 'Unknown module',
+        status: d.status,
+        percentage: d.progress?.percentage ?? 0,
+        enrolledAt: d.enrolledAt,
+        completedAt: d.completedAt,
+      }));
+      return {
+        total,
+        breakdown,
+        records,
+        person: personLabel,
+        population: 'student',
+        authoritative: true,
         partialList: total > records.length,
       };
     }
@@ -3421,6 +3526,9 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_meetings' && typeof data?.total === 'number') {
       lines.push(`  fetch_meetings.total = ${data.total}`);
     }
+    if (key === 'training_analytics' && typeof data?.total === 'number') {
+      lines.push(`  training_analytics.total = ${data.total}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -4308,6 +4416,36 @@ function summarizeData(fetchedData) {
       continue;
     }
 
+    if (key === 'training_analytics') {
+      if (data?.noStudentProfile) {
+        parts.push(
+          `--- training / course progress ---\n` +
+          `NO_STUDENT_PROFILE: ${data.reason || 'This person has no Student profile.'}\n` +
+          `USER_FACING_REPLY: Tell the user this person is not tracked in the training system (Student profile required). Do not invent a course count of 0 as if they were enrolled.`
+        );
+        continue;
+      }
+      if (data?.notFound) {
+        parts.push(`--- training / course progress ---\nNO_PERSON_FOUND: No one matches "${data.searchedFor}". Do not guess.`);
+        continue;
+      }
+      const b = data?.breakdown || { total: 0, byStatus: {} };
+      const lines = [
+        `--- training / course progress (population=Student | person=${data?.person || 'N/A'} | ` +
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? b.total ?? 0} — ALWAYS use this number. ` +
+        `STATUS_BREAKDOWN: enrolled=${b.byStatus?.enrolled ?? 0}, in-progress=${b.byStatus?.['in-progress'] ?? 0}, completed=${b.byStatus?.completed ?? 0}, dropped=${b.byStatus?.dropped ?? 0}) ---`,
+      ];
+      for (const r of data?.records ?? []) {
+        lines.push(
+          `MODULE: ${r.moduleTitle || 'N/A'} | STATUS: ${r.status || 'N/A'} | PROGRESS: ${r.percentage ?? 0}% | ` +
+          `ENROLLED_AT: ${formatDateIST(r.enrolledAt)}` +
+          (r.completedAt ? ` | COMPLETED_AT: ${formatDateIST(r.completedAt)}` : '')
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
     if (key === 'fetch_external_jobs') {
       // Now sourced from Job collection (jobOrigin='external'), not raw ExternalJob.
       // Fields shifted: company → organisation.name, source → externalRef.source,
@@ -4693,6 +4831,11 @@ const INTENT_PATTERNS = [
   { re: /\bagents?\b/i,                                                            modules: ['fetch_employees'], args: { role: 'Agent' } },
   { re: /\b(administrators?|admins?)\b/i,                                          modules: ['fetch_employees'], args: { role: 'Administrator' } },
   { re: /\brecruiters?\b/i,                                                        modules: ['fetch_employees'], args: { role: 'Recruiter' } },
+  // Training / course progress (Epic F, Student population) — must come BEFORE
+  // the generic "students?" role pattern below so course-progress asks route to
+  // the analytics tool instead of an unscoped Student-role headcount list.
+  { re: /\b(my courses?|course progress|training progress|training status|courses? (completed|enrolled|in progress|dropped)|how many courses)\b/i,
+                                                                                    modules: ['training_analytics'] },
   { re: /\bstudents?\b/i,                                                          modules: ['fetch_employees'], args: { role: 'Student' } },
   { re: /\b(manager)\b/i,                                                          modules: ['fetch_employees'] },
   { re: /\b(developer|engineer|designer|analyst|intern)\b/i,                       modules: ['fetch_employees'] },
