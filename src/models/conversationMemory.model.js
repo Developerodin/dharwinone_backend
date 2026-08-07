@@ -40,6 +40,8 @@ const conversationMemorySchema = new mongoose.Schema(
       lastDateLabel:   { type: String, default: null, trim: true },
       lastFromDate:    { type: String, default: null, trim: true },
       lastToDate:      { type: String, default: null, trim: true },
+      /** Resolved calendar year from the last temporal window (for month-only follow-ups). */
+      lastYear:        { type: Number, default: null },
       lastTopic:       { type: String, default: null, trim: true },
       lastScope:       { type: String, default: null, trim: true },
       updatedAt:       { type: Date, default: null },

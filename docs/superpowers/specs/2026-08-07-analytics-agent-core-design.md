@@ -42,10 +42,25 @@ Epic A is the only required start. B–G are backlog epics with the same Approac
 ## 4. Approach C (all epics)
 
 - List tool vs analytics/count tool share filters  
-- `phraseToDateWindow` → existing `resolveDateWindow` (inclusive UTC EOD)  
-- Clarify before-vs-during month  
+- `phraseToDateWindow` / `temporalResolver` → existing `resolveDateWindow` (inclusive UTC EOD)  
+- Clarify before-vs-during month when the user asks that contrast; otherwise prefer temporal rules below  
 - RBAC: every new tool path must honor the same permissions as the HTTP API (`referralLeads.read`, org structure, training, etc.)  
 - No free Mongo, charts, RAG, workflows in this program  
+
+### Phase 0 — Temporal reasoning / date resolver
+
+Natural-language periods must not invent a distant year (e.g. Aug 2026 + “July” must not become July 2023).
+
+| Rule | Behavior |
+|------|----------|
+| **Month, no year** | Most recent occurrence of that month relative to `now` (Aug 2026 + “july” → July 2026; Jan 2026 + “december” → Dec 2025). |
+| **DB multi-year** | For resign/join “in July”, probe Employee `resignDate`/`joiningDate` by month (scoped via `employeeOwnerQuery`). If DISTINCT years with data > 1 → natural clarify with counts, most recent first (“I found resignation records in multiple Julys. Did you mean July 2026 (5) or July 2025 (6)?”). |
+| **Single data year** | Auto-resolve to that year (data wins). Zero years → calendar most-recent (empty result OK). |
+| **Memory** | After “resigned in 2026”, follow-up “only July” → July 2026 via `ConversationMemory` (`lastYear` / `lastFromDate`). |
+| **Vague (v1)** | “financial year”, “recent”, “old employees”, “new joiners” → `needsClarification` with natural options. “last quarter” → most recent completed calendar quarter. |
+| **Confidence** | ≥90% and no multi-year conflict → auto; multi-year data → ask regardless; &lt;70% ambiguous → ask. |
+
+Keep inclusive UTC EOD semantics from `resolveDateWindow`.  
 
 ## 5. Epic C — Candidate hiring tunnel (corrected)
 
@@ -103,8 +118,8 @@ User ask: detail by **date**, by **employee name**, by **interview status**.
 
 ## 12. Success criteria (MVP Epic A only)
 
-1. Before/during July resign: clarify or DB count; matches Employees visibility.  
-2. Paid vs unpaid employee counts exclude non-Employee roles.  
+1. Before/during July resign: clarify when asked that contrast; bare/in-July uses temporal resolver (calendar most-recent + DB multi-year clarify) and matches Employees visibility.
+2. Paid vs unpaid employee counts exclude non-Employee roles.
 3. No hiring-tunnel question answered from employee resign filters.
 
 Epic B–G each get their own success checklist at epic kickoff.

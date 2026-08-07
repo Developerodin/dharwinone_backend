@@ -39,6 +39,10 @@ import { fetchPeople } from './chatAssistant/peopleFetcher.js';
 import { renderListing } from './chatAssistant/listingRenderer.js';
 import { extractTemporalContext } from './chatAssistant/temporalContext.js';
 import { phraseToDateWindow, toResolveDateWindowArgs } from './chatAssistant/phraseToDateWindow.js';
+import {
+  resolveTemporalWindow,
+  probeEmployeeYearsByMonth,
+} from './chatAssistant/temporalResolver.js';
 import { buildEmployeeEmploymentFilter } from './chatAssistant/employeeEmploymentFilter.js';
 import {
   clarifyAmbiguousJoined,
@@ -157,14 +161,9 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx) {
     else if (/\bpaid\b/.test(t) && !/\bunpaid\b/.test(t) && out.metric !== 'paid_unpaid') {
       out.compensationType = 'paid';
     }
-    // Attach NL phrase so employee_analytics can resolve/clarify the window.
+    // Attach NL phrase only — temporalResolver (memory + DB year probe) runs
+    // inside employee_analytics. Pre-assigning month here would skip multi-year clarify.
     out.phrase = String(userMsg);
-    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
-      const parsed = phraseToDateWindow(userMsg);
-      if (parsed && !parsed.needsClarification) {
-        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
-      }
-    }
   }
   if (moduleName === 'fetch_jobs') {
     if (!out.status) {
@@ -1661,7 +1660,7 @@ async function fetchModule(name, args, user) {
       if (rawMetric === 'joined' || rawMetric === 'joining') metric = 'join';
       if (rawMetric === 'paid' || rawMetric === 'unpaid') metric = 'paid_unpaid';
 
-      // Prefer explicit tool args; fall back to NL phrase parsing when absent.
+      // Prefer explicit tool args; fall back to temporal resolver (NL + memory + DB years).
       let windowArgs = {
         date: args.date,
         month: args.month,
@@ -1670,16 +1669,45 @@ async function fetchModule(name, args, user) {
       };
       const hasExplicitWindow = !!(windowArgs.date || windowArgs.month || (windowArgs.fromDate && windowArgs.toDate));
       if (!hasExplicitWindow && args.phrase) {
-        const parsed = phraseToDateWindow(String(args.phrase), today);
-        if (parsed?.needsClarification) {
+        let memory = args.memory || null;
+        if (!memory && user?.id) {
+          try {
+            const memDoc = await ConversationMemory.findOne({
+              userId: user.id,
+              adminId: user.adminId ?? user.id,
+            }).lean();
+            memory = memDoc?.lastEntities || null;
+          } catch (e) {
+            logger.warn(`[ChatAssistant] temporal memory load failed: ${e.message}`);
+          }
+        }
+        const dateField = metric === 'resign' ? 'resignDate' : metric === 'join' ? 'joiningDate' : null;
+        const eventLabel = metric === 'resign' ? 'resignation' : metric === 'join' ? 'joining' : 'records';
+        const resolved = await resolveTemporalWindow({
+          text: String(args.phrase),
+          now: today,
+          memory,
+          dateField,
+          eventLabel,
+          probeYears: dateField
+            ? (monthNum) => probeEmployeeYearsByMonth({
+              Employee,
+              ownerIds,
+              dateField,
+              monthNum,
+            })
+            : null,
+        });
+        if (resolved?.needsClarification) {
           return {
             needsClarification: true,
-            clarifyingQuestion: parsed.clarifyingQuestion,
+            clarifyingQuestion: resolved.clarifyingQuestion,
+            options: resolved.options || null,
             metric,
             authoritative: true,
           };
         }
-        const mapped = toResolveDateWindowArgs(parsed);
+        const mapped = toResolveDateWindowArgs(resolved);
         if (mapped) windowArgs = mapped;
       }
 
@@ -1692,7 +1720,7 @@ async function fetchModule(name, args, user) {
         return {
           needsClarification: true,
           clarifyingQuestion:
-            'Which period should I use — a calendar month (during vs before), or an exact from/to date range (YYYY-MM-DD)?',
+            'Which period should I use — a calendar month (for example July 2026), or an exact from/to date range (YYYY-MM-DD)?',
           metric,
           authoritative: true,
         };
@@ -5199,6 +5227,7 @@ async function prepareContext(client, history, user) {
         const toIso = analytics.to instanceof Date
           ? analytics.to.toISOString().slice(0, 10)
           : null;
+        const yearHint = fromIso && /^\d{4}/.test(fromIso) ? Number(fromIso.slice(0, 4)) : null;
         ConversationMemory.findOneAndUpdate(
           { userId: user?.id, adminId },
           {
@@ -5206,6 +5235,7 @@ async function prepareContext(client, history, user) {
               'lastEntities.lastDateLabel': analytics.windowLabel || null,
               'lastEntities.lastFromDate': fromIso,
               'lastEntities.lastToDate': toIso,
+              ...(yearHint != null ? { 'lastEntities.lastYear': yearHint } : {}),
               'lastEntities.lastTopic': 'employee_analytics',
               'lastEntities.lastScope': analytics.metric || null,
               'lastEntities.updatedAt': new Date(),
@@ -5390,6 +5420,7 @@ async function rehydrateLastEntities(le) {
   if (le.lastDateLabel)  out.lastDateLabel = le.lastDateLabel;
   if (le.lastFromDate)   out.lastFromDate = le.lastFromDate;
   if (le.lastToDate)     out.lastToDate = le.lastToDate;
+  if (le.lastYear != null) out.lastYear = le.lastYear;
   if (le.lastTopic)      out.lastTopic = le.lastTopic;
   if (le.lastScope)      out.lastScope = le.lastScope;
 
@@ -5529,7 +5560,7 @@ function mergeEntities(prev, fresh) {
   const keys = [
     'personUserId', 'personEmpDocId', 'roleId', 'roleSlug',
     'person', 'email', 'employeeId', 'role', 'jobId', 'jobTitle',
-    'lastDate', 'lastDateLabel', 'lastFromDate', 'lastToDate',
+    'lastDate', 'lastDateLabel', 'lastFromDate', 'lastToDate', 'lastYear',
     'lastTopic', 'lastScope',
   ];
   for (const k of keys) {
