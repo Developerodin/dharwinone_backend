@@ -604,9 +604,12 @@ const ROUTING_TOOLS = [
       description:
         'Authoritative org-chart / organization STRUCTURE facts — sourced from orgStructure.service.js ' +
         '(getOrgCoverageSummary + OrgUnit tree), the SAME data backing /organization/structure and the Org Chart page. ' +
-        'Managers = OrgUnit.type "manager" nodes; supervisors = OrgUnit.type "supervisor" nodes — NEVER User role=Manager. ' +
-        'Named groups/departments (e.g. "Group A") are looked up by walking the structure tree. ' +
-        'Also covers: unassigned employees, departments under a supervisor, employees under a department, coverage health. ' +
+        'POSITIONS (ceo/manager/supervisor): each is an OrgUnit with an optional assigned HEAD (headEmployee) — ' +
+        '"how many managers" = count of manager POSITIONS (one Org Chart card each), NOT User role=Manager; ' +
+        'listing managers includes position name + head name. ' +
+        'DEPARTMENTS: last-level units with multiple employees (memberCount). ' +
+        'Named units (e.g. "Group A"): if department → list employees; if position → show head + reports/children. ' +
+        'Also covers: unassigned employees, coverage health. ' +
         'Use for: "how many managers", "how many supervisors", "Group A in org chart", "unassigned employees", ' +
         '"departments under supervisor X", "org chart / organization structure".',
       parameters: {
@@ -616,8 +619,9 @@ const ROUTING_TOOLS = [
             type: 'string',
             enum: ['coverage', 'managers', 'supervisors', 'departments', 'unassigned', 'unit_lookup'],
             description:
-              'managers/supervisors = OrgUnit.type counts; unassigned = coverage unassignedEmployees; ' +
-              'unit_lookup = named group/department/supervisor walk (requires unitName).',
+              'managers/supervisors = position counts (OrgUnit.type) with head names in records; ' +
+              'departments = department units + employee membership; unassigned = coverage unassignedEmployees; ' +
+              'unit_lookup = named group/department/position walk (requires unitName).',
           },
           unitName: {
             type: 'string',
@@ -1970,7 +1974,8 @@ async function fetchModule(name, args, user) {
 
     case 'org_structure_analytics': {
       // Wraps getOrgCoverageSummary + listOrgUnits + buildTree (Org Chart / Structure UI APIs).
-      // Managers/supervisors = OrgUnit.type counts — never User role=Manager.
+      // Managers/supervisors/ceo = POSITION counts (one card each) + head names — never User role=Manager.
+      // Departments = multi-employee last-level units (memberCount from tree).
       if (!hasOrgReadAccess(user?.authContext?.permissions)) {
         return {
           forbidden: true,
@@ -1980,7 +1985,12 @@ async function fetchModule(name, args, user) {
       const inferred = extractOrgStructureArgs(args.phrase || '');
       const metric = args.metric || inferred.metric || 'coverage';
       const unitName = args.unitName || args.query || inferred.unitName || null;
-      const needsTree = Boolean(unitName) || metric === 'unit_lookup';
+      // Tree needed for named lookup AND department membership counts on departments metric/coverage.
+      const needsTree =
+        Boolean(unitName) ||
+        metric === 'unit_lookup' ||
+        metric === 'departments' ||
+        metric === 'coverage';
       const [summary, units, tree] = await Promise.all([
         getOrgCoverageSummary(user || null),
         listOrgUnits(),
@@ -3634,8 +3644,9 @@ function buildCountBanner(fetchedData) {
     }
     if (key === 'org_structure_analytics' && !data?.forbidden) {
       lines.push(`  org_structure_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.employees?.unassigned ?? 0}`);
-      lines.push(`  org_structure_analytics.managers = ${data?.managers?.count ?? 0}`);
-      lines.push(`  org_structure_analytics.supervisors = ${data?.supervisors?.count ?? 0}`);
+      lines.push(`  org_structure_analytics.managers = ${data?.managers?.count ?? 0} (manager POSITIONS)`);
+      lines.push(`  org_structure_analytics.supervisors = ${data?.supervisors?.count ?? 0} (supervisor POSITIONS)`);
+      lines.push(`  org_structure_analytics.departments = ${data?.departments?.count ?? 0}`);
       lines.push(`  org_structure_analytics.employees.unassigned = ${data?.employees?.unassigned ?? 0}`);
       lines.push(`  org_structure_analytics.employees.total = ${data?.employees?.total ?? 0}`);
     }
@@ -4574,16 +4585,37 @@ function summarizeData(fetchedData) {
       const authLabel = data?.authoritativeLabel || 'org structure';
       const lines = [
         `--- org structure analytics (AUTHORITATIVE — wraps orgStructure.service getOrgCoverageSummary + OrgUnit tree; matches Org Chart / Structure UI) ---`,
+        `MODEL: POSITIONS (ceo/manager/supervisor) = one Org Chart card each with optional HEAD (headEmployee). DEPARTMENTS = last-level multi-employee units.`,
         `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${authCount} — ${authLabel} — ALWAYS use this number. Do not invent. Do NOT use fetch_employees role=Manager.`,
-        `MANAGERS: count=${mgr.count ?? 0} (OrgUnit.type=manager — NOT a User role) | hasManagers=${mgr.hasManagers ?? lead.hasManagers ?? false}`,
-        `SUPERVISORS: count=${sup.count ?? 0} (OrgUnit.type=supervisor) | hasSupervisors=${sup.hasSupervisors ?? false}`,
+        `MANAGERS: count=${mgr.count ?? 0} manager POSITIONS (OrgUnit.type=manager — NOT a User role) | hasManagers=${mgr.hasManagers ?? lead.hasManagers ?? false}`,
+        `SUPERVISORS: count=${sup.count ?? 0} supervisor POSITIONS (OrgUnit.type=supervisor) | hasSupervisors=${sup.hasSupervisors ?? false}`,
         `EMPLOYEES_TOTAL: ${emp.total ?? 0} | ASSIGNED: ${emp.assigned ?? 0} | UNASSIGNED: ${emp.unassigned ?? 0}`,
         `UNASSIGNED_DEFINITION: ${emp.unassignedDefinition || 'active employee whose departmentId matches no active department-type org-unit'}`,
-        `DEPARTMENTS: count=${dep.count ?? 0}, hasDepartmentNodes=${dep.hasDepartmentNodes ?? false}, departmentsWithoutNode=${dep.departmentsWithoutNode ?? 0}, departmentNodesWithoutEmployees=${dep.departmentNodesWithoutEmployees ?? 0}, allDepartmentsLinked=${dep.allDepartmentsLinked ?? false}`,
-        `LEADERSHIP: hasCeo=${lead.hasCeo ?? false}, unitsMissingHead=${lead.unitsMissingHead ?? 0}, allLeadershipHeadsAssigned=${lead.allLeadershipHeadsAssigned ?? false}`,
+        `DEPARTMENTS: count=${dep.count ?? 0} department units, hasDepartmentNodes=${dep.hasDepartmentNodes ?? false}, departmentsWithoutNode=${dep.departmentsWithoutNode ?? 0}, departmentNodesWithoutEmployees=${dep.departmentNodesWithoutEmployees ?? 0}, allDepartmentsLinked=${dep.allDepartmentsLinked ?? false}`,
+        `LEADERSHIP: hasCeo=${lead.hasCeo ?? false}, ceoCount=${lead.ceoCount ?? 0}, unitsMissingHead=${lead.unitsMissingHead ?? 0}, allLeadershipHeadsAssigned=${lead.allLeadershipHeadsAssigned ?? false}`,
         `OVER_SPAN_UNITS: ${data?.overSpanUnits ?? 0} | OPEN_SLOTS: ${data?.openSlots ?? 0}`,
         `METRIC: ${data?.metric || 'coverage'}`,
       ];
+      for (const p of mgr.records || mgr.positions || []) {
+        lines.push(
+          `  MANAGER_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
+        );
+      }
+      for (const p of sup.records || sup.positions || []) {
+        lines.push(
+          `  SUPERVISOR_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
+        );
+      }
+      for (const p of lead.ceoPositions || []) {
+        lines.push(
+          `  CEO_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
+        );
+      }
+      for (const d of dep.records || []) {
+        lines.push(
+          `  DEPARTMENT_UNIT: ${d.name || 'N/A'} | members=${d.memberCount ?? d.employeeCount ?? 'n/a'}`
+        );
+      }
       if (data?.lookup) {
         if (data.lookup.notFound) {
           lines.push(`UNIT_LOOKUP: notFound query="${data.lookup.query || ''}" — say that unit was not found on the org chart.`);
@@ -4591,19 +4623,27 @@ function summarizeData(fetchedData) {
           lines.push(`UNIT_LOOKUP: matchCount=${data.lookup.matchCount} query="${data.lookup.query || ''}"`);
           for (const m of data.lookup.matches || []) {
             lines.push(
-              `  UNIT: ${m.name} | type=${m.type} | head=${m.headName || 'N/A'} | memberCount=${m.memberCount ?? 0} | employeeCount=${m.employeeCount ?? 0}`
+              `  UNIT: ${m.name} | kind=${m.kind || m.type} | type=${m.type} | head=${m.headName || 'N/A'} | memberCount=${m.memberCount ?? 0} | employeeCount=${m.employeeCount ?? 0}`
             );
-            if (m.type === 'department' && Array.isArray(m.employees)) {
+            if ((m.kind === 'department' || m.type === 'department') && Array.isArray(m.employees)) {
               for (const e of m.employees.slice(0, 50)) {
                 lines.push(`    EMPLOYEE: ${e.fullName}${e.designation ? ` (${e.designation})` : ''}`);
               }
             }
-            if (m.childDepartments?.length) {
+            if (m.kind === 'position' || ['ceo', 'manager', 'supervisor'].includes(m.type)) {
+              lines.push(`    POSITION_HEAD: ${m.headName || 'unassigned'}`);
+              for (const r of (m.reports || m.childUnits || []).slice(0, 50)) {
+                lines.push(
+                  `    REPORT: ${r.name} | kind=${r.kind || r.type} | type=${r.type} | head=${r.headName || 'N/A'} | members=${r.memberCount ?? 0}`
+                );
+              }
+            }
+            if (m.childDepartments?.length && m.type !== 'supervisor') {
               for (const c of m.childDepartments) {
                 lines.push(`    CHILD_DEPARTMENT: ${c.name} | members=${c.memberCount ?? 0} | head=${c.headName || 'N/A'}`);
               }
             }
-            if (m.childSupervisors?.length) {
+            if (m.childSupervisors?.length && m.type !== 'manager') {
               for (const c of m.childSupervisors) {
                 lines.push(`    CHILD_SUPERVISOR: ${c.name} | head=${c.headName || 'N/A'}`);
               }

@@ -6,19 +6,31 @@
  * `/org-structure` unit list). Never answer "how many managers / supervisors /
  * Group A / unassigned" from Employee `role=Manager` filters.
  *
- * **Manager / supervisor (locked to Org Chart language):** an active OrgUnit with
- * `type === 'manager'` or `type === 'supervisor'`. These are structure nodes, not
- * User roles. Counting User.role=Manager will disagree with the chart and often
- * returns 0.
+ * ## Authoritative org model (matches Org Chart UI)
  *
- * **Unassigned (locked to the Org Chart UI):** an active employee whose
- * `departmentId` does not match any ACTIVE org-unit of type `department`
- * (`buildTreeFromData` in orgTree.pure.js). Surfaced by `getOrgCoverageSummary`
- * as `unassignedEmployees` — never recomputed from raw Employee counts.
+ * **Positions** (`ceo` | `manager` | `supervisor`): structure nodes that hold a
+ * single **head** (`headEmployeeId` → `headEmployee`). The UI draws one card per
+ * position; the card title is the position name and the head name is shown on it.
+ * "How many managers" = count of active OrgUnit rows with `type === 'manager'`
+ * (manager **positions**), NOT User.role=Manager and NOT a count of people who
+ * happen to have a Manager role. Listing managers includes each position’s
+ * assigned head name when present.
+ *
+ * **Departments** (`department`): last-level named units linked to a canonical
+ * `departmentId`. Multiple employees work in a department via
+ * `Employee.departmentId` → attached as `node.employees` / `memberCount` by
+ * `buildTreeFromData` in orgTree.pure.js.
+ *
+ * **Unassigned:** an active employee whose `departmentId` does not match any
+ * ACTIVE org-unit of type `department`. Surfaced by `getOrgCoverageSummary` as
+ * `unassignedEmployees` — never recomputed from raw Employee counts.
  */
 
 /** Permissions the org-structure HTTP routes require to read the chart/tree/units. */
 export const ORG_READ_PERMISSIONS = Object.freeze(['chart.read', 'structure.read', 'structure.manage']);
+
+/** OrgUnit.type values that are positions (single head), not multi-employee departments. */
+export const POSITION_TYPES = Object.freeze(['ceo', 'manager', 'supervisor']);
 
 /**
  * True when the permission Set grants access to at least one of ORG_READ_PERMISSIONS
@@ -34,9 +46,16 @@ export function hasOrgReadAccess(permissions) {
 
 const idStr = (v) => (v == null ? null : String(v));
 
+const headNameOf = (u) =>
+  u?.headEmployee?.fullName ||
+  u?.headEmployee?.name ||
+  u?.headName ||
+  '';
+
 /**
- * Count active org units by OrgUnit.type — the Org Chart definition of
- * managers / supervisors / departments / CEO.
+ * Count active org units by OrgUnit.type.
+ * For ceo/manager/supervisor this is the count of **positions** (one Org Chart
+ * card each). For department this is the count of department units.
  * @param {Array<{ type?: string, isActive?: boolean }>} units
  * @returns {{ ceo: number, manager: number, supervisor: number, department: number, total: number }}
  */
@@ -51,6 +70,74 @@ export function countOrgUnitsByType(units = []) {
     }
   }
   return counts;
+}
+
+/**
+ * List active position units of a given type with assigned head names.
+ * Matches Org Chart cards: one record per position, head shown when assigned.
+ * @param {Array} units - from listOrgUnits (includes headEmployee when populated)
+ * @param {'ceo'|'manager'|'supervisor'} type
+ * @returns {Array<{ id: string|null, name: string, type: string, kind: 'position', headEmployeeId: string|null, headName: string, hasHead: boolean }>}
+ */
+export function listPositionRecords(units = [], type) {
+  const t = String(type || '').toLowerCase();
+  if (!POSITION_TYPES.includes(t)) return [];
+  return (units || [])
+    .filter((u) => u?.isActive !== false && u?.type === t)
+    .map((u) => {
+      const headEmployeeId = idStr(u.headEmployeeId || u.headEmployee?.id || null);
+      const headName = headNameOf(u);
+      return {
+        id: idStr(u.id || u._id),
+        name: u.name || '',
+        type: t,
+        kind: 'position',
+        headEmployeeId,
+        headName,
+        hasHead: Boolean(headEmployeeId || headName),
+      };
+    });
+}
+
+/**
+ * List active department units. When a tree is provided, attach employee
+ * membership counts (and sample names) from the chart nodes.
+ * @param {Array} units
+ * @param {{ roots?: Array }|null} [tree]
+ * @returns {Array}
+ */
+export function listDepartmentRecords(units = [], tree = null) {
+  const byId = new Map();
+  if (tree) {
+    for (const n of findNodesInTree(tree.roots || (Array.isArray(tree) ? tree : []), () => true)) {
+      if (n?.type === 'department') byId.set(idStr(n.id), n);
+    }
+  }
+  return (units || [])
+    .filter((u) => u?.isActive !== false && u?.type === 'department')
+    .map((u) => {
+      const id = idStr(u.id || u._id);
+      const node = id ? byId.get(id) : null;
+      const employees = Array.isArray(node?.employees) ? node.employees : [];
+      const memberCount =
+        node != null
+          ? Number(node.memberCount ?? employees.length ?? 0)
+          : null;
+      return {
+        id,
+        name: u.name || '',
+        type: 'department',
+        kind: 'department',
+        departmentId: idStr(u.departmentId),
+        memberCount,
+        employeeCount: memberCount,
+        employees: employees.map((e) => ({
+          id: idStr(e.id),
+          fullName: e.fullName || '',
+          designation: e.designation || '',
+        })),
+      };
+    });
 }
 
 /**
@@ -103,7 +190,8 @@ export function findTreeNodesByName(treeOrRoots, nameQuery = '') {
 
 /**
  * Summarize a matched org-chart node for chatbot facts.
- * Departments → employees; supervisors → child departments; managers → child supervisors.
+ * - Department → kind=department, list employees / memberCount
+ * - Position (ceo/manager/supervisor) → kind=position, head + child reports
  * @param {object} node
  * @returns {object}
  */
@@ -111,18 +199,25 @@ export function summarizeOrgUnitNode(node) {
   if (!node) return null;
   const children = Array.isArray(node.children) ? node.children : [];
   const employees = Array.isArray(node.employees) ? node.employees : [];
+  const type = node.type || '';
+  const kind = POSITION_TYPES.includes(type) ? 'position' : type === 'department' ? 'department' : type || 'unit';
   const childSummary = (c) => ({
     id: idStr(c.id),
     name: c.name || '',
     type: c.type || '',
+    kind: POSITION_TYPES.includes(c.type) ? 'position' : c.type === 'department' ? 'department' : c.type || 'unit',
     memberCount: Number(c.memberCount || 0),
-    headName: c.headEmployee?.fullName || '',
+    headName: headNameOf(c),
   });
+  const childUnits = children.map(childSummary);
   return {
     id: idStr(node.id),
     name: node.name || '',
-    type: node.type || '',
-    headName: node.headEmployee?.fullName || '',
+    type,
+    kind,
+    headName: headNameOf(node),
+    headEmployeeId: idStr(node.headEmployeeId || node.headEmployee?.id || null),
+    hasHead: Boolean(node.headEmployeeId || headNameOf(node)),
     memberCount: Number(node.memberCount || 0),
     employeeCount: employees.length,
     employees: employees.map((e) => ({
@@ -130,7 +225,9 @@ export function summarizeOrgUnitNode(node) {
       fullName: e.fullName || '',
       designation: e.designation || '',
     })),
-    childUnits: children.map(childSummary),
+    childUnits,
+    /** Direct reports / child org units under a position (or children of any node). */
+    reports: childUnits,
     childDepartments: children.filter((c) => c.type === 'department').map(childSummary),
     childSupervisors: children.filter((c) => c.type === 'supervisor').map(childSummary),
     childManagers: children.filter((c) => c.type === 'manager').map(childSummary),
@@ -138,14 +235,15 @@ export function summarizeOrgUnitNode(node) {
 }
 
 /**
- * Format a `getOrgCoverageSummary` result (+ optional units list) into chatbot
+ * Format a `getOrgCoverageSummary` result (+ optional units/tree) into chatbot
  * AUTHORITATIVE facts. Pure — no DB access.
  *
  * @param {object} summary - result of orgStructure.service.js getOrgCoverageSummary
  * @param {Array} [units] - active OrgUnit rows (from listOrgUnits / loadUnitsPlain)
+ * @param {{ roots?: Array }|null} [tree] - optional chart tree for department membership
  * @returns {object}
  */
-export function formatOrgCoverageFacts(summary = {}, units) {
+export function formatOrgCoverageFacts(summary = {}, units, tree = null) {
   const checklist = summary?.checklist || {};
   const unitCounts = countOrgUnitsByType(units || []);
   // When units were not passed, fall back to boolean presence from checklist only.
@@ -155,9 +253,15 @@ export function formatOrgCoverageFacts(summary = {}, units) {
     units != null ? unitCounts.supervisor : checklist.hasSupervisors === true ? null : 0;
   const departments =
     units != null ? unitCounts.department : checklist.hasDepartmentNodes === true ? null : 0;
+  const ceoCount = units != null ? unitCounts.ceo : checklist.hasCeo === true ? null : 0;
 
   const unassigned = Number(summary?.unassignedEmployees || 0);
   const total = Number(summary?.totalActiveEmployees || 0);
+
+  const managerPositions = units != null ? listPositionRecords(units, 'manager') : [];
+  const supervisorPositions = units != null ? listPositionRecords(units, 'supervisor') : [];
+  const ceoPositions = units != null ? listPositionRecords(units, 'ceo') : [];
+  const departmentRecords = units != null ? listDepartmentRecords(units, tree) : [];
 
   return {
     departments: {
@@ -166,19 +270,31 @@ export function formatOrgCoverageFacts(summary = {}, units) {
       departmentsWithoutNode: Number(summary?.departmentsWithoutNode || 0),
       departmentNodesWithoutEmployees: Number(summary?.departmentNodesWithoutEmployees || 0),
       allDepartmentsLinked: checklist.allDepartmentsLinked === true,
+      definition:
+        'Active OrgUnit nodes with type="department" — last-level named units. ' +
+        'Each has a name and multiple employees (Employee.departmentId → memberCount). ' +
+        'Not a position; positions use a single head instead.',
+      records: departmentRecords,
     },
     supervisors: {
       count: supervisors,
       hasSupervisors: checklist.hasSupervisors === true,
       definition:
-        'Active OrgUnit nodes with type="supervisor" on the org chart — NOT a User role filter.',
+        'Count of active supervisor **positions** (OrgUnit.type="supervisor") — one Org Chart ' +
+        'card per position. Each may have an assigned head (headEmployee). NOT a User role filter.',
+      positions: supervisorPositions,
+      records: supervisorPositions,
     },
     managers: {
       count: managers,
       hasManagers: checklist.hasManagers === true,
       definition:
-        'Active OrgUnit nodes with type="manager" on the org chart — NOT User role=Manager. ' +
-        'Matches Org Chart / Structure UI language.',
+        'Count of active manager **positions** (OrgUnit.type="manager") — one Org Chart card ' +
+        'per position (AUTHORITATIVE for "how many managers"). Each may have an assigned head ' +
+        '(headEmployee / headName). NOT User role=Manager. Listing managers = these positions ' +
+        'with their head names when assigned.',
+      positions: managerPositions,
+      records: managerPositions,
     },
     employees: {
       total,
@@ -191,17 +307,22 @@ export function formatOrgCoverageFacts(summary = {}, units) {
     },
     leadership: {
       hasCeo: checklist.hasCeo === true,
-      ceoCount: units != null ? unitCounts.ceo : checklist.hasCeo === true ? null : 0,
+      ceoCount,
       hasManagers: checklist.hasManagers === true,
       hasSupervisors: checklist.hasSupervisors === true,
       unitsMissingHead: Number(summary?.unitsMissingHead || 0),
       allLeadershipHeadsAssigned: checklist.allLeadershipHeadsAssigned === true,
+      ceoPositions,
+      definition:
+        'CEO/manager/supervisor are positions with optional heads; departments are multi-employee units.',
     },
     unitCounts,
     overSpanUnits: Number(summary?.overSpanUnits || 0),
     openSlots: Number(summary?.openSlots || 0),
     authoritative: true,
-    source: 'orgStructure.service.js getOrgCoverageSummary + OrgUnit.type counts',
+    source:
+      'orgStructure.service.js getOrgCoverageSummary + OrgUnit position/department counts ' +
+      '(positions = type ceo|manager|supervisor with headEmployee; departments = type department with employees)',
   };
 }
 
@@ -222,19 +343,31 @@ export function resolveOrgAuthoritativeCount(facts = {}, opts = {}) {
     const nodes = lookup.matches || [];
     if (nodes.length === 1) {
       const n = nodes[0];
-      if (n.type === 'department') {
-        return { count: n.employeeCount ?? n.memberCount ?? 0, label: `employees in ${n.name}` };
+      if (n.kind === 'department' || n.type === 'department') {
+        return {
+          count: n.employeeCount ?? n.memberCount ?? 0,
+          label: `employees in department ${n.name}`,
+        };
       }
       if (n.type === 'supervisor') {
         return {
-          count: n.childDepartments?.length ?? 0,
-          label: `departments under supervisor ${n.name}`,
+          count: n.childDepartments?.length ?? n.reports?.length ?? 0,
+          label: `departments reporting to supervisor position ${n.name}` +
+            (n.headName ? ` (head: ${n.headName})` : ''),
         };
       }
       if (n.type === 'manager') {
         return {
-          count: n.childSupervisors?.length ?? 0,
-          label: `supervisors under manager ${n.name}`,
+          count: n.childSupervisors?.length ?? n.reports?.length ?? 0,
+          label: `supervisors reporting to manager position ${n.name}` +
+            (n.headName ? ` (head: ${n.headName})` : ''),
+        };
+      }
+      if (n.type === 'ceo') {
+        return {
+          count: n.childManagers?.length ?? n.reports?.length ?? 0,
+          label: `managers reporting to CEO position ${n.name}` +
+            (n.headName ? ` (head: ${n.headName})` : ''),
         };
       }
       return { count: n.childUnits?.length ?? 0, label: `child units under ${n.name}` };
@@ -243,18 +376,23 @@ export function resolveOrgAuthoritativeCount(facts = {}, opts = {}) {
   }
 
   if (metric === 'managers' || metric === 'manager') {
-    return { count: Number(facts.managers?.count ?? 0), label: 'org-chart managers (OrgUnit.type=manager)' };
+    return {
+      count: Number(facts.managers?.count ?? 0),
+      label:
+        'manager positions (OrgUnit.type=manager; one Org Chart card per position — not User role)',
+    };
   }
   if (metric === 'supervisors' || metric === 'supervisor') {
     return {
       count: Number(facts.supervisors?.count ?? 0),
-      label: 'org-chart supervisors (OrgUnit.type=supervisor)',
+      label:
+        'supervisor positions (OrgUnit.type=supervisor; one Org Chart card per position — not User role)',
     };
   }
   if (metric === 'departments' || metric === 'department') {
     return {
       count: Number(facts.departments?.count ?? 0),
-      label: 'org-chart department nodes (OrgUnit.type=department)',
+      label: 'department units (OrgUnit.type=department; multi-employee last-level nodes)',
     };
   }
   if (metric === 'unassigned') {
@@ -340,7 +478,8 @@ export function guardFetchEmployeesOrgRoute(text) {
     block: true,
     reason:
       'Org chart / manager / supervisor / group / unassigned questions must use org_structure_analytics ' +
-      '(OrgUnit.type + getOrgCoverageSummary) — never fetch_employees role=Manager.',
+      '(manager/supervisor **positions** + heads, department units + employees via getOrgCoverageSummary) — ' +
+      'never fetch_employees role=Manager.',
     preferModules: ['org_structure_analytics'],
   };
 }
@@ -405,7 +544,7 @@ export function extractOrgStructureArgs(text) {
 export function buildOrgStructureAnalyticsPayload({ summary, units, tree, args = {} } = {}) {
   const metric = String(args.metric || 'coverage').toLowerCase();
   const unitName = args.unitName || args.query || null;
-  const facts = formatOrgCoverageFacts(summary, units);
+  const facts = formatOrgCoverageFacts(summary, units, tree);
 
   let lookup = null;
   if (unitName || metric === 'unit_lookup') {
