@@ -36,6 +36,12 @@ import { resolveUserEntity } from './chatAssistant/entityResolver.js';
 import { fetchPeople } from './chatAssistant/peopleFetcher.js';
 import { renderListing } from './chatAssistant/listingRenderer.js';
 import { extractTemporalContext } from './chatAssistant/temporalContext.js';
+import { phraseToDateWindow, toResolveDateWindowArgs } from './chatAssistant/phraseToDateWindow.js';
+import { buildEmployeeEmploymentFilter } from './chatAssistant/employeeEmploymentFilter.js';
+import {
+  clarifyAmbiguousJoined,
+  guardEmployeeAnalyticsRoute,
+} from './chatAssistant/analyticsRouterGuards.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -115,6 +121,26 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx) {
         out.employmentStatus = 'all';
       } else if (/\b(currently[- ]?working|on[- ]?roll|on[- ]?the[- ]?rolls?|active employees?|current employees?)\b/.test(t)) {
         out.employmentStatus = 'active';
+      }
+    }
+  }
+  if (moduleName === 'employee_analytics') {
+    if (!out.metric) {
+      if (/\b(paid|unpaid)\b/.test(t)) out.metric = 'paid_unpaid';
+      else if (/\b(resign|resigned|resignations?|left the company|ex-?employees?)\b/.test(t)) out.metric = 'resign';
+      else if (/\b(joined|joining|joiners?)\b/.test(t)) out.metric = 'join';
+      else out.metric = 'headcount';
+    }
+    if (/\bunpaid\b/.test(t) && !/\bpaid\b/.test(t)) out.compensationType = 'unpaid';
+    else if (/\bpaid\b/.test(t) && !/\bunpaid\b/.test(t) && out.metric !== 'paid_unpaid') {
+      out.compensationType = 'paid';
+    }
+    // Attach NL phrase so employee_analytics can resolve/clarify the window.
+    out.phrase = String(userMsg);
+    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
+      const parsed = phraseToDateWindow(userMsg);
+      if (parsed && !parsed.needsClarification) {
+        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
       }
     }
   }
@@ -315,7 +341,7 @@ async function resolveEmployeeMatch(ident) {
            synthesisedEmployee: { fullName: m.name, employeeId: m.employeeId, owner: m.userId || null } };
 }
 
-function resolveDateWindow({ date, month, fromDate, toDate, defaultDays }) {
+export function resolveDateWindow({ date, month, fromDate, toDate, defaultDays }) {
   const parseISO = (s) => {
     if (!s || typeof s !== 'string') return null;
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -410,6 +436,37 @@ const ROUTING_TOOLS = [
           limit:            { type: 'number', description: 'Max records to return (default 200, max 500)' },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'employee_analytics',
+      description:
+        'Authoritative EMPLOYEE-role analytics only (not ATS candidates / referral leads / placements). ' +
+        'Counts resignations, joins, headcount, or paid/unpaid employees inside a date window. ' +
+        'Prefer over fetch_employees when the user asks "how many resigned/joined in July", "before July", "paid vs unpaid employees". ' +
+        'NEVER use for hiring funnel, referral leads, applicants, offers, or placement Joined — those are different populations. ' +
+        'If "joined" is ambiguous (employment vs placement vs Hired), ask the user instead of calling this tool.',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: {
+            type: 'string',
+            description: 'resign | join | headcount | paid_unpaid',
+          },
+          compensationType: {
+            type: 'string',
+            description: 'Optional paid | unpaid filter (Employee-role profiles only). For metric=paid_unpaid leave unset to get both buckets.',
+          },
+          month: { type: 'string', description: 'YYYY-MM calendar month (during that month).' },
+          date: { type: 'string', description: 'YYYY-MM-DD single day.' },
+          fromDate: { type: 'string', description: 'YYYY-MM-DD range start (inclusive).' },
+          toDate: { type: 'string', description: 'YYYY-MM-DD range end (inclusive).' },
+          limit: { type: 'number', description: 'Sample rows to return (default 25, max 100).' },
+        },
+        required: ['metric'],
       },
     },
   },
@@ -1075,18 +1132,11 @@ async function fetchModule(name, args, user) {
           { _id: 1 }
         ).distinct('_id');
 
-        empMongoFilter = { owner: { $in: ownerIdsWithProfileRole } };
-        if (empStatus === 'resigned') {
-          empMongoFilter.resignDate = { $ne: null, $lte: today };
-        } else if (empStatus === 'all') {
-          // no resign filter
-        } else {
-          empMongoFilter.$or = [
-            { resignDate: null },
-            { resignDate: { $exists: false } },
-            { resignDate: { $gt: today } },
-          ];
-        }
+        empMongoFilter = buildEmployeeEmploymentFilter({
+          ownerIds: ownerIdsWithProfileRole,
+          employmentStatus: empStatus === 'resigned' || empStatus === 'all' ? empStatus : 'active',
+          today,
+        });
         // Authoritative count: one row per Employee profile (matches site
         // /v1/employees behavior — does NOT collapse on owner duplicates).
         total = await Employee.countDocuments(empMongoFilter);
@@ -1431,6 +1481,147 @@ async function fetchModule(name, args, user) {
         partialList,
         requestedRole: requestedRoleName,
         requestedRoleSlug: requestedRoleName ? requestedRoleName.toLowerCase() : null,
+      };
+    }
+
+    case 'employee_analytics': {
+      // Employee-role population ONLY — never Candidate / referral / placement.
+      const visOverride = overridesFromArgs(args);
+      const today = new Date();
+      const profileRoleNames = profileRoleNamesFor('Employee');
+      const profileRoleDocs = await Role.find(
+        { name: { $in: profileRoleNames }, status: 'active' },
+        { _id: 1 }
+      ).lean();
+      const profileRoleIds = profileRoleDocs.map((d) => d._id);
+      if (!profileRoleIds.length) {
+        return {
+          total: 0,
+          records: [],
+          metric: args.metric || null,
+          notFound: true,
+          searchedFor: 'Employee',
+          authoritative: true,
+        };
+      }
+      const ownerIds = await User.find(
+        employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
+        { _id: 1 }
+      ).distinct('_id');
+
+      const rawMetric = String(args.metric || '').trim().toLowerCase();
+      let metric = rawMetric;
+      if (rawMetric === 'resignation' || rawMetric === 'resignations' || rawMetric === 'left') metric = 'resign';
+      if (rawMetric === 'joined' || rawMetric === 'joining') metric = 'join';
+      if (rawMetric === 'paid' || rawMetric === 'unpaid') metric = 'paid_unpaid';
+
+      // Prefer explicit tool args; fall back to NL phrase parsing when absent.
+      let windowArgs = {
+        date: args.date,
+        month: args.month,
+        fromDate: args.fromDate,
+        toDate: args.toDate,
+      };
+      const hasExplicitWindow = !!(windowArgs.date || windowArgs.month || (windowArgs.fromDate && windowArgs.toDate));
+      if (!hasExplicitWindow && args.phrase) {
+        const parsed = phraseToDateWindow(String(args.phrase), today);
+        if (parsed?.needsClarification) {
+          return {
+            needsClarification: true,
+            clarifyingQuestion: parsed.clarifyingQuestion,
+            metric,
+            authoritative: true,
+          };
+        }
+        const mapped = toResolveDateWindowArgs(parsed);
+        if (mapped) windowArgs = mapped;
+      }
+
+      const window = resolveDateWindow(windowArgs);
+      if (
+        (metric === 'resign' || metric === 'join') &&
+        window.missing &&
+        !args.compensationType
+      ) {
+        return {
+          needsClarification: true,
+          clarifyingQuestion:
+            'Which period should I use — a calendar month (during vs before), or an exact from/to date range (YYYY-MM-DD)?',
+          metric,
+          authoritative: true,
+        };
+      }
+
+      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
+      const compRaw = args.compensationType
+        ? String(args.compensationType).trim().toLowerCase()
+        : null;
+
+      if (metric === 'paid_unpaid') {
+        const paidFilter = buildEmployeeEmploymentFilter({
+          ownerIds,
+          employmentStatus: 'active',
+          compensationType: 'paid',
+          today,
+        });
+        const unpaidFilter = buildEmployeeEmploymentFilter({
+          ownerIds,
+          employmentStatus: 'active',
+          compensationType: 'unpaid',
+          today,
+        });
+        const [paid, unpaid] = await Promise.all([
+          Employee.countDocuments(paidFilter),
+          Employee.countDocuments(unpaidFilter),
+        ]);
+        return {
+          metric: 'paid_unpaid',
+          total: paid + unpaid,
+          breakdown: { paid, unpaid },
+          windowLabel: window.missing ? 'current active employees' : window.label,
+          records: [],
+          authoritative: true,
+          population: 'Employee',
+        };
+      }
+
+      const filterMetric = metric === 'headcount' ? 'headcount' : metric;
+      const filter = buildEmployeeEmploymentFilter({
+        ownerIds,
+        metric: filterMetric === 'resign' || filterMetric === 'join' || filterMetric === 'headcount'
+          ? filterMetric
+          : 'headcount',
+        window: { from: window.from, to: window.to },
+        compensationType: compRaw === 'paid' || compRaw === 'unpaid' ? compRaw : null,
+        today,
+      });
+      const total = await Employee.countDocuments(filter);
+      const docs = await Employee.find(filter)
+        .select('fullName employeeId joiningDate resignDate compensationType owner designation department')
+        .sort({ resignDate: -1, joiningDate: -1 })
+        .limit(limit)
+        .lean();
+      const records = docs.map((e) => ({
+        name: e.fullName,
+        employeeId: e.employeeId,
+        joiningDate: e.joiningDate,
+        resignDate: e.resignDate,
+        compensationType: e.compensationType || null,
+        designation: e.designation || null,
+        department: e.department || null,
+        owner: e.owner,
+      }));
+      return {
+        metric: filterMetric,
+        total,
+        records,
+        windowLabel: window.label,
+        from: window.from,
+        to: window.to,
+        compensationType: compRaw || null,
+        authoritative: true,
+        population: 'Employee',
+        partialList: total > records.length,
       };
     }
 
@@ -2994,6 +3185,13 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_employees' && typeof data?.total === 'number') {
       lines.push(`  fetch_employees.total = ${data.total}`);
     }
+    if (key === 'employee_analytics' && typeof data?.total === 'number') {
+      lines.push(`  employee_analytics.total = ${data.total}`);
+      if (data?.breakdown?.paid != null) {
+        lines.push(`  employee_analytics.paid = ${data.breakdown.paid}`);
+        lines.push(`  employee_analytics.unpaid = ${data.breakdown.unpaid}`);
+      }
+    }
     if (key === 'fetch_people' && typeof data?.page?.total === 'number') {
       lines.push(`  fetch_people.total = ${data.page.total}`);
     }
@@ -3136,6 +3334,44 @@ function summarizeData(fetchedData) {
           line += ` | EXPERIENCE: ${exps}`;
         }
         lines.push(line);
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'employee_analytics') {
+      if (data?.needsClarification) {
+        parts.push(
+          `--- employee analytics ---\n` +
+          `NEEDS_TIME_WINDOW: ${data.clarifyingQuestion || 'Please clarify the date window.'}\n` +
+          `USER_FACING_REPLY: Ask the user this question. Do not invent counts.`
+        );
+        continue;
+      }
+      const total = data?.total ?? 0;
+      const win = data?.windowLabel || 'unspecified';
+      const metric = data?.metric || 'headcount';
+      if (metric === 'paid_unpaid' && data?.breakdown) {
+        parts.push(
+          `--- employee analytics (paid/unpaid | population=Employee | window=${win} | ` +
+          `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — paid: ${data.breakdown.paid}, unpaid: ${data.breakdown.unpaid}) ---\n` +
+          `Always use these authoritative paid/unpaid totals. Do not count candidate or referral populations.`
+        );
+        continue;
+      }
+      const records = data?.records ?? [];
+      const lines = [
+        `--- employee analytics (metric=${metric} | population=Employee | window=${win} | ` +
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number. Do not invent.) ---`,
+      ];
+      for (const e of records) {
+        lines.push(
+          `NAME: ${e.name || 'N/A'}` +
+          (e.employeeId ? ` | EMPLOYEE_ID: ${e.employeeId}` : '') +
+          (e.joiningDate ? ` | JOINING_DATE: ${formatDateIST(e.joiningDate)}` : '') +
+          (e.resignDate ? ` | RESIGN_DATE: ${formatDateIST(e.resignDate)}` : '') +
+          (e.compensationType ? ` | COMPENSATION: ${e.compensationType}` : '')
+        );
       }
       parts.push(lines.join('\n'));
       continue;
@@ -4138,6 +4374,14 @@ const SPECIFIC_LOOKUP_RE = new RegExp(
 );
 
 const INTENT_PATTERNS = [
+  // Employee analytics (resign/join/paid) — before generic headcount so date-window
+  // asks hit employee_analytics instead of an unscoped fetch_employees list.
+  { re: /\b(how many|count|number of)\b.*\b(resign|resigned|resignations?|left the company|ex-?employees?|former employees?)\b/i,
+                                                                              modules: ['employee_analytics'], args: { metric: 'resign' } },
+  { re: /\b(resign|resigned|resignations?)\b.*\b(during|before|after|in|this month|last month|july|january|february|march|april|may|june|august|september|october|november|december|\d{4}-\d{2})\b/i,
+                                                                              modules: ['employee_analytics'], args: { metric: 'resign' } },
+  { re: /\b(paid|unpaid)\s+employees?\b/i,                                    modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
+  { re: /\b(how many|count)\b.*\b(paid|unpaid)\b.*\bemployees?\b/i,           modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
   // Staff / headcount — general list/count queries only (specific lookups bail out above)
   { re: /\b(employees?|headcount|staff|team members?|workforce)\b/i,               modules: ['fetch_employees'] },
   // Role-specific shortcuts — pass role arg so the legacy fetch_employees branch
@@ -4192,8 +4436,28 @@ const INTENT_PATTERNS = [
 function detectIntent(text) {
   // Specific entity lookups need LLM routing to extract search args — fast-path can't.
   if (SPECIFIC_LOOKUP_RE.test(text)) return null;
+
+  // Epic A guards: funnel language must not ride employee_analytics; ambiguous
+  // "joined" must clarify before any employment-join count.
+  const funnelGuard = guardEmployeeAnalyticsRoute(text);
+  const joinedClarify = clarifyAmbiguousJoined(text);
+  if (joinedClarify?.needsClarification && !funnelGuard) {
+    return {
+      modules: [],
+      args: {},
+      clarify: joinedClarify.clarifyingQuestion,
+    };
+  }
+
   for (const pattern of INTENT_PATTERNS) {
     if (pattern.re.test(text)) {
+      // Never let employee_analytics answer referral/funnel questions.
+      if (
+        pattern.modules.includes('employee_analytics') &&
+        funnelGuard?.block
+      ) {
+        continue;
+      }
       return { modules: pattern.modules, args: pattern.args || {} };
     }
   }
@@ -4207,10 +4471,20 @@ const TOOLS_REQUIRING_WINDOW = new Set([
   'fetch_attendance_summary',
   'fetch_employee_attendance',
   'fetch_employee_attendance_calendar',
+  'employee_analytics',
 ]);
 
 function fastPathNeedsArgs(modules, args) {
   if (!modules.some((m) => TOOLS_REQUIRING_WINDOW.has(m))) return false;
+  // paid/unpaid headcount does not require a calendar window.
+  if (
+    modules.includes('employee_analytics') &&
+    (args?.metric === 'paid_unpaid' || args?.compensationType)
+  ) {
+    return false;
+  }
+  // employee_analytics can resolve the window from the raw phrase inside the tool.
+  if (modules.includes('employee_analytics') && args?.phrase) return false;
   return !args.date && !args.month && !args.fromDate && !args.toDate;
 }
 
@@ -4364,6 +4638,15 @@ async function prepareContext(client, history, user) {
 
   // 1. Fast path — regex pre-routing: skip the LLM routing call for obvious intents.
   const intent = detectIntent(lastUserMsg);
+  if (intent?.clarify) {
+    return {
+      dataContext:
+        `--- clarification ---\nNEEDS_CLARIFICATION: ${intent.clarify}\n` +
+        `USER_FACING_REPLY: Ask the user this question verbatim. Do not invent counts.`,
+      moduleCount: 0,
+      fetched: { __clarify: { question: intent.clarify } },
+    };
+  }
   if (intent && !fastPathNeedsArgs(intent.modules, intent.args)) {
     // Per-module arg inference: scan the user message for modifiers the
     // pattern itself can't carry (resigned/active employment, status filter,
@@ -4376,6 +4659,30 @@ async function prepareContext(client, history, user) {
     });
     try {
       const fetched = await executeFetches(toolCalls, user);
+      // Persist resolved analytics window into conversation memory (Epic A2).
+      const analytics = fetched?.employee_analytics;
+      if (analytics && !analytics.needsClarification && (analytics.from || analytics.to || analytics.windowLabel)) {
+        const fromIso = analytics.from instanceof Date
+          ? analytics.from.toISOString().slice(0, 10)
+          : null;
+        const toIso = analytics.to instanceof Date
+          ? analytics.to.toISOString().slice(0, 10)
+          : null;
+        ConversationMemory.findOneAndUpdate(
+          { userId: user?.id, adminId },
+          {
+            $set: {
+              'lastEntities.lastDateLabel': analytics.windowLabel || null,
+              'lastEntities.lastFromDate': fromIso,
+              'lastEntities.lastToDate': toIso,
+              'lastEntities.lastTopic': 'employee_analytics',
+              'lastEntities.lastScope': analytics.metric || null,
+              'lastEntities.updatedAt': new Date(),
+            },
+          },
+          { upsert: true }
+        ).catch((e) => logger.warn(`[ChatAssistant] analytics window persist failed: ${e.message}`));
+      }
       const dataContext = summarizeData(fetched);
       logger.info(`[ChatAssistant] intent=fast modules=[${intent.modules}] argsByModule=${JSON.stringify(toolCalls.map((t) => t.function.arguments))} ctx=${dataContext.length}c user=${user?.id}`);
       return { dataContext, moduleCount: intent.modules.length, fetched };
