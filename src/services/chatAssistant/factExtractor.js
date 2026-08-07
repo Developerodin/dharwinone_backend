@@ -70,6 +70,7 @@ function readAttendanceSummary(fetched) {
       total: data.total,
       date: d.date,
       counts: d.counts,
+      avgDailyPresent: data.avgDailyPresent,
     };
   }
   return {
@@ -77,6 +78,8 @@ function readAttendanceSummary(fetched) {
     label: 'attendance summary',
     total: data.total,
     perDay: days,
+    avgDailyPresent: data.avgDailyPresent,
+    dayCount: data.dayCount,
   };
 }
 

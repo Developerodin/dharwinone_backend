@@ -60,6 +60,13 @@ export function renderDeterministicAnswer(userMsg, facts) {
     );
   }
 
+  if (p.kind === 'attendance_summary_range' && typeof p.avgDailyPresent === 'number') {
+    return (
+      `Across that period the **average daily Present** headcount was **${p.avgDailyPresent}** ` +
+      `(authoritative; over ${p.dayCount || 0} days). Do not recompute by summing per-day rows.`
+    );
+  }
+
   const label = pluralise(pickLabelForRender(p), p.total);
   // Working vs resigned is always stated. When people are held out purely
   // because their account is disabled/archived, say so — an unexplained gap
