@@ -109,22 +109,55 @@ const imageVideoFileFilter = (req, file, cb) => {
     'video/x-msvideo',
     'video/x-matroska',
   ];
-  // Documents/logs advertised by the ticket UI (.pdf, .txt, .log).
-  // ponytail: .log usually arrives as text/plain; if a client sends it as
-  // application/octet-stream, add that here rather than allowing all binaries.
+  // Documents/logs advertised by the ticket UI.
+  // .log usually arrives as text/plain; do not allow application/octet-stream
+  // (would open arbitrary binaries). Extension fallback covers mislabeled Office files.
   const allowedDocTypes = [
     'application/pdf',
     'text/plain',
+    'text/csv',
+    'application/rtf',
+    'text/rtf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.oasis.opendocument.text',
+    'application/vnd.oasis.opendocument.spreadsheet',
+    'application/vnd.oasis.opendocument.presentation',
+  ];
+  const allowedDocExtensions = [
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.ppt',
+    '.pptx',
+    '.csv',
+    '.rtf',
+    '.odt',
+    '.ods',
+    '.odp',
+    '.txt',
+    '.log',
   ];
   const allowedTypes = [...allowedImageTypes, ...allowedVideoTypes, ...allowedDocTypes];
+  const mime = file.mimetype || '';
+  const originalName = (file.originalname || '').toLowerCase();
+  const hasAllowedDocExt = allowedDocExtensions.some((ext) => originalName.endsWith(ext));
+  // Some clients send Office/OOXML as octet-stream or empty MIME; trust extension only then.
+  const unlabeledMime = !mime || mime === 'application/octet-stream';
 
-  if (allowedTypes.includes(file.mimetype)) {
+  if (allowedTypes.includes(mime) || (unlabeledMime && hasAllowedDocExt)) {
     cb(null, true);
   } else {
     cb(
       new ApiError(
         httpStatus.BAD_REQUEST,
-        `File type ${file.mimetype} is not allowed. Allowed: Images (JPEG, PNG, GIF, WEBP, BMP, SVG), Videos (MP4, WEBM, MOV, AVI, MKV), and Documents (PDF, TXT, LOG)`
+        `File type ${file.mimetype} is not allowed. Allowed: Images (JPEG, PNG, GIF, WEBP, BMP, SVG), Videos (MP4, WEBM, MOV, AVI, MKV), and Documents (PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, CSV, RTF, ODT, ODS, ODP, TXT, LOG)`
       ),
       false
     );
