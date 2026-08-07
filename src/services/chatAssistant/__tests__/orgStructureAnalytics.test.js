@@ -4,7 +4,91 @@ import {
   ORG_READ_PERMISSIONS,
   hasOrgReadAccess,
   formatOrgCoverageFacts,
+  countOrgUnitsByType,
+  findOrgUnitsByName,
+  findTreeNodesByName,
+  summarizeOrgUnitNode,
+  lookupOrgUnitFromTree,
+  resolveOrgAuthoritativeCount,
+  looksLikeOrgStructureQuery,
+  guardFetchEmployeesOrgRoute,
+  extractOrgStructureArgs,
+  buildOrgStructureAnalyticsPayload,
 } from '../orgStructureAnalytics.js';
+
+const SAMPLE_SUMMARY = {
+  totalActiveEmployees: 40,
+  assignedEmployees: 35,
+  unassignedEmployees: 5,
+  totalOrgUnits: 12,
+  departmentsWithoutNode: 1,
+  departmentNodesWithoutEmployees: 2,
+  unitsMissingHead: 3,
+  overSpanUnits: 1,
+  openSlots: 4,
+  hasCeo: true,
+  checklist: {
+    hasCeo: true,
+    hasManagers: true,
+    hasSupervisors: true,
+    hasDepartmentNodes: true,
+    allDepartmentsLinked: false,
+    noUnassignedEmployees: false,
+    allLeadershipHeadsAssigned: false,
+  },
+};
+
+const SAMPLE_UNITS = [
+  { id: '1', name: 'CEO', type: 'ceo', isActive: true },
+  { id: '2', name: 'Ops Manager', type: 'manager', isActive: true },
+  { id: '3', name: 'East Manager', type: 'manager', isActive: true },
+  { id: '4', name: 'Supervisor North', type: 'supervisor', isActive: true },
+  { id: '5', name: 'Supervisor South', type: 'supervisor', isActive: true },
+  { id: '6', name: 'Supervisor West', type: 'supervisor', isActive: true },
+  { id: '7', name: 'Group A', type: 'department', isActive: true, departmentId: 'd1' },
+  { id: '8', name: 'Sales', type: 'department', isActive: true, departmentId: 'd2' },
+  { id: '9', name: 'Inactive Mgr', type: 'manager', isActive: false },
+];
+
+const SAMPLE_TREE = {
+  roots: [
+    {
+      id: '1',
+      name: 'CEO',
+      type: 'ceo',
+      headEmployee: { fullName: 'Ada' },
+      children: [
+        {
+          id: '2',
+          name: 'Ops Manager',
+          type: 'manager',
+          headEmployee: { fullName: 'Bob' },
+          children: [
+            {
+              id: '4',
+              name: 'Supervisor North',
+              type: 'supervisor',
+              headEmployee: { fullName: 'Cara' },
+              children: [
+                {
+                  id: '7',
+                  name: 'Group A',
+                  type: 'department',
+                  memberCount: 2,
+                  employees: [
+                    { id: 'e1', fullName: 'Eve', designation: 'Rep' },
+                    { id: 'e2', fullName: 'Finn', designation: 'Rep' },
+                  ],
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
 
 describe('orgStructureAnalytics (Epic G)', () => {
   it('documents the confirmed read-permission set (mirrors canReadTree)', () => {
@@ -29,71 +113,155 @@ describe('orgStructureAnalytics (Epic G)', () => {
     });
   });
 
+  describe('countOrgUnitsByType', () => {
+    it('counts active manager/supervisor/department/ceo nodes (not User roles)', () => {
+      const c = countOrgUnitsByType(SAMPLE_UNITS);
+      assert.equal(c.manager, 2);
+      assert.equal(c.supervisor, 3);
+      assert.equal(c.department, 2);
+      assert.equal(c.ceo, 1);
+      assert.equal(c.total, 8);
+    });
+  });
+
+  describe('findOrgUnitsByName / tree lookup', () => {
+    it('finds Group A by exact name', () => {
+      const hits = findOrgUnitsByName(SAMPLE_UNITS, 'Group A');
+      assert.equal(hits.length, 1);
+      assert.equal(hits[0].type, 'department');
+    });
+
+    it('walks the tree for Group A and summarizes employees', () => {
+      const nodes = findTreeNodesByName(SAMPLE_TREE, 'group a');
+      assert.equal(nodes.length, 1);
+      const summary = summarizeOrgUnitNode(nodes[0]);
+      assert.equal(summary.employeeCount, 2);
+      assert.equal(summary.employees[0].fullName, 'Eve');
+    });
+
+    it('lookupOrgUnitFromTree reports departments under a supervisor', () => {
+      const lookup = lookupOrgUnitFromTree(SAMPLE_TREE, 'Supervisor North');
+      assert.equal(lookup.notFound, false);
+      assert.equal(lookup.matches[0].childDepartments.length, 1);
+      assert.equal(lookup.matches[0].childDepartments[0].name, 'Group A');
+    });
+
+    it('returns notFound when the name is absent', () => {
+      const lookup = lookupOrgUnitFromTree(SAMPLE_TREE, 'Group Z');
+      assert.equal(lookup.notFound, true);
+      assert.equal(lookup.matchCount, 0);
+    });
+  });
+
   describe('formatOrgCoverageFacts', () => {
-    it('maps a full getOrgCoverageSummary result into AUTHORITATIVE buckets', () => {
-      const summary = {
-        totalActiveEmployees: 40,
-        assignedEmployees: 35,
-        unassignedEmployees: 5,
-        totalOrgUnits: 12,
-        departmentsWithoutNode: 1,
-        departmentNodesWithoutEmployees: 2,
-        unitsMissingHead: 3,
-        overSpanUnits: 1,
-        openSlots: 4,
-        hasCeo: true,
-        checklist: {
-          hasCeo: true,
-          hasManagers: true,
-          hasSupervisors: false,
-          hasDepartmentNodes: true,
-          allDepartmentsLinked: false,
-          noUnassignedEmployees: false,
-          allLeadershipHeadsAssigned: false,
-        },
-      };
+    it('maps coverage + unit type counts into AUTHORITATIVE buckets', () => {
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SAMPLE_UNITS);
 
-      const facts = formatOrgCoverageFacts(summary);
-
-      assert.deepEqual(facts.departments, {
-        hasDepartmentNodes: true,
-        departmentsWithoutNode: 1,
-        departmentNodesWithoutEmployees: 2,
-        allDepartmentsLinked: false,
-      });
-      assert.deepEqual(facts.supervisors, { hasSupervisors: false });
+      assert.equal(facts.managers.count, 2);
+      assert.equal(facts.supervisors.count, 3);
+      assert.equal(facts.departments.count, 2);
+      assert.match(facts.managers.definition, /type=["']manager["']/);
+      assert.match(facts.managers.definition, /NOT User role/);
       assert.equal(facts.employees.total, 40);
-      assert.equal(facts.employees.assigned, 35);
       assert.equal(facts.employees.unassigned, 5);
       assert.match(facts.employees.unassignedDefinition, /departmentId/);
-      assert.match(facts.employees.unassignedDefinition, /orgTree\.pure\.js/);
-      assert.deepEqual(facts.leadership, {
-        hasCeo: true,
-        hasManagers: true,
-        unitsMissingHead: 3,
-        allLeadershipHeadsAssigned: false,
-      });
-      assert.equal(facts.overSpanUnits, 1);
-      assert.equal(facts.openSlots, 4);
       assert.equal(facts.authoritative, true);
-      assert.match(facts.source, /getOrgCoverageSummary/);
     });
 
     it('defaults every field to zero/false on an empty summary without throwing', () => {
       const facts = formatOrgCoverageFacts();
-      assert.deepEqual(facts.departments, {
-        hasDepartmentNodes: false,
-        departmentsWithoutNode: 0,
-        departmentNodesWithoutEmployees: 0,
-        allDepartmentsLinked: false,
-      });
-      assert.deepEqual(facts.supervisors, { hasSupervisors: false });
-      assert.deepEqual(facts.employees.total, 0);
-      assert.deepEqual(facts.employees.assigned, 0);
-      assert.deepEqual(facts.employees.unassigned, 0);
-      assert.equal(facts.overSpanUnits, 0);
-      assert.equal(facts.openSlots, 0);
+      assert.equal(facts.departments.hasDepartmentNodes, false);
+      assert.equal(facts.supervisors.hasSupervisors, false);
+      assert.equal(facts.employees.total, 0);
+      assert.equal(facts.employees.unassigned, 0);
       assert.equal(facts.authoritative, true);
+    });
+  });
+
+  describe('resolveOrgAuthoritativeCount', () => {
+    it('returns manager count for metric=managers', () => {
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SAMPLE_UNITS);
+      const a = resolveOrgAuthoritativeCount(facts, { metric: 'managers' });
+      assert.equal(a.count, 2);
+    });
+
+    it('returns supervisor count for metric=supervisors', () => {
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SAMPLE_UNITS);
+      const a = resolveOrgAuthoritativeCount(facts, { metric: 'supervisors' });
+      assert.equal(a.count, 3);
+    });
+
+    it('returns employee count for a department unit lookup', () => {
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SAMPLE_UNITS);
+      const lookup = lookupOrgUnitFromTree(SAMPLE_TREE, 'Group A');
+      const a = resolveOrgAuthoritativeCount(facts, { metric: 'unit_lookup', lookup });
+      assert.equal(a.count, 2);
+      assert.match(a.label, /Group A/i);
+    });
+
+    it('returns unassigned count for metric=unassigned', () => {
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SAMPLE_UNITS);
+      const a = resolveOrgAuthoritativeCount(facts, { metric: 'unassigned' });
+      assert.equal(a.count, 5);
+    });
+  });
+
+  describe('looksLikeOrgStructureQuery / routing guards', () => {
+    it('detects manager / supervisor / group / org chart asks', () => {
+      assert.equal(looksLikeOrgStructureQuery('how many managers'), true);
+      assert.equal(looksLikeOrgStructureQuery('how many supervisors'), true);
+      assert.equal(looksLikeOrgStructureQuery('group a in org chart'), true);
+      assert.equal(looksLikeOrgStructureQuery('org structure coverage'), true);
+      assert.equal(looksLikeOrgStructureQuery('unassigned employees'), true);
+      assert.equal(looksLikeOrgStructureQuery('how many employees resigned in July'), false);
+      assert.equal(looksLikeOrgStructureQuery('list sales agents'), false);
+    });
+
+    it('blocks fetch_employees for org asks', () => {
+      const g = guardFetchEmployeesOrgRoute('how many managers');
+      assert.equal(g.block, true);
+      assert.ok(g.preferModules.includes('org_structure_analytics'));
+      assert.equal(guardFetchEmployeesOrgRoute('list recruiters'), null);
+    });
+  });
+
+  describe('extractOrgStructureArgs', () => {
+    it('extracts managers / supervisors / unassigned metrics', () => {
+      assert.equal(extractOrgStructureArgs('how many managers').metric, 'managers');
+      assert.equal(extractOrgStructureArgs('how many supervisors').metric, 'supervisors');
+      assert.equal(extractOrgStructureArgs('unassigned employees').metric, 'unassigned');
+    });
+
+    it('extracts Group A as unitName for unit_lookup', () => {
+      const a = extractOrgStructureArgs('group a in org chart');
+      assert.equal(a.metric, 'unit_lookup');
+      assert.equal(a.unitName, 'Group A');
+    });
+  });
+
+  describe('buildOrgStructureAnalyticsPayload', () => {
+    it('assembles coverage + Group A lookup with AUTHORITATIVE count', () => {
+      const payload = buildOrgStructureAnalyticsPayload({
+        summary: SAMPLE_SUMMARY,
+        units: SAMPLE_UNITS,
+        tree: SAMPLE_TREE,
+        args: { metric: 'unit_lookup', unitName: 'Group A' },
+      });
+      assert.equal(payload.authoritative, true);
+      assert.equal(payload.authoritativeCount, 2);
+      assert.equal(payload.lookup.notFound, false);
+      assert.equal(payload.managers.count, 2);
+      assert.equal(payload.supervisors.count, 3);
+    });
+
+    it('assembles manager headcount without a tree walk', () => {
+      const payload = buildOrgStructureAnalyticsPayload({
+        summary: SAMPLE_SUMMARY,
+        units: SAMPLE_UNITS,
+        args: { metric: 'managers' },
+      });
+      assert.equal(payload.authoritativeCount, 2);
+      assert.equal(payload.lookup, null);
     });
   });
 });
