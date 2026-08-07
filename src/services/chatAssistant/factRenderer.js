@@ -67,6 +67,18 @@ export function renderDeterministicAnswer(userMsg, facts) {
     );
   }
 
+  if (p.kind === 'task_board_stage_count') {
+    const stageLabel = p.stageLabel || 'that stage';
+    const lines = [`There are **${p.total}** task(s) in **${stageLabel}** on the Task Board.`];
+    if (Array.isArray(p.rows) && p.rows.length) {
+      for (const r of p.rows.slice(0, 25)) {
+        const key = r.taskKey ? ` (${r.taskKey})` : '';
+        lines.push(`- ${r.title}${key}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
   const label = pluralise(pickLabelForRender(p), p.total);
   // Working vs resigned is always stated. When people are held out purely
   // because their account is disabled/archived, say so — an unexplained gap

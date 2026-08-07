@@ -30,7 +30,7 @@ import StudentGroup from '../models/studentGroup.model.js';
 import { embedQuery } from '../utils/embedding.util.js';
 import { pineconeQuery } from '../utils/pinecone.util.js';
 import { queryKb } from './kbQuery.service.js';
-import { userIsAdmin } from '../utils/roleHelpers.js';
+import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { resolveRoleIds, tagRoleNames } from './chatAssistant/roleResolver.js';
 import { resolveRole as registryResolveRole, listRoleSlugs, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
@@ -72,7 +72,75 @@ import {
   guardFetchEmployeesOrgRoute,
   extractOrgStructureArgs,
   buildOrgStructureAnalyticsPayload,
+  looksLikeOrgStructureContinuation,
+  extractOrgStructureMemoryHints,
 } from './chatAssistant/orgStructureAnalytics.js';
+import {
+  resolveReferences,
+  routeResolvedFollowUp,
+  looksLikeReferenceFollowUp,
+} from './chatAssistant/referenceResolver.js';
+import {
+  resolveConcept,
+  isAmbiguous,
+  pickManagerMeaning,
+  mentionsManagerConcept,
+  parseManagerConceptChoice,
+  buildManagerClarification,
+  buildManagerRoutingIntent,
+  parseManagerTopicFollowUp,
+  shouldProactivelyAnswerBoth,
+  formatProactiveManagerAnswer,
+  extractDesignationPhrase,
+  isBareManagerPositionQuery,
+  buildManagerPositionRoutingIntent,
+} from './chatAssistant/businessConcepts.js';
+import {
+  fetchManagerConceptCounts,
+  fetchOrgManagersAnalytics,
+  fetchDesignationManagersAnalytics,
+  designationRegexForPhrase,
+} from './chatAssistant/managerCounts.js';
+import {
+  fetchProjectAnalytics,
+  looksLikeProjectTeamQuery,
+  looksLikeProjectTeamContinuation,
+  extractProjectAnalyticsArgs,
+  extractProjectMemoryHints,
+} from './chatAssistant/projectAnalytics.js';
+import {
+  fetchTeamAnalytics,
+  looksLikeTeamQuery,
+  looksLikeTeamContinuation,
+  extractTeamAnalyticsArgs,
+  extractTeamMemoryHints,
+} from './chatAssistant/teamAnalytics.js';
+import {
+  fetchTaskBoardAnalytics,
+  looksLikeTaskBoardQuery,
+  looksLikeTaskBoardContinuation,
+  extractTaskBoardArgs,
+  extractTaskBoardMemoryHints,
+} from './chatAssistant/taskBoardAnalytics.js';
+import { isTaskStageCountQuery } from './chatAssistant/taskStageVocabulary.js';
+import {
+  fetchWorkloadAnalytics,
+  looksLikeWorkloadQuery,
+  looksLikeWorkloadContinuation,
+  extractWorkloadArgs,
+} from './chatAssistant/workloadAnalytics.js';
+import {
+  enrichProjectsWithTeams,
+  fetchAccessibleProjects,
+  hasProjectReadAccess,
+  resolveProjectByNameOrId,
+  resolveTeamByName,
+  projectIdsForTeam,
+  resolveSprintByNameOrId,
+  buildProjectQueryContext,
+} from './chatAssistant/projectGraph.resolvers.js';
+import { resolveAssigneeByName, overdueTaskClause, blockedTaskClause, buildAccessibleTaskFilter, buildTaskServiceFilter, hasTaskReadAccess, extractTaskMemoryHints } from './chatAssistant/taskAccess.js';
+import { queryTasks } from './task.service.js';
 import {
   getOrgCoverageSummary,
   listOrgUnits,
@@ -144,7 +212,7 @@ function isFutureDateISO(iso) {
 // the floor → bug 1 ("show resigned employees" returned only active people)
 // and bugs 9/10 (admin asking org-wide leaves/backdated got "scope=mine" empty
 // set). Re-scan the user message to inject the missing filter args.
-function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx) {
+function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext = null) {
   const out = { ...(baseArgs || {}) };
   if (!userMsg || !moduleName) return out;
   const t = String(userMsg).toLowerCase();
@@ -219,6 +287,37 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx) {
     const inferred = extractOrgStructureArgs(userMsg);
     if (!out.metric) out.metric = inferred.metric;
     if (!out.unitName && inferred.unitName) out.unitName = inferred.unitName;
+    out.phrase = String(userMsg);
+  }
+  if (moduleName === 'project_analytics') {
+    const inferred = extractProjectAnalyticsArgs(userMsg);
+    if (!out.metric) out.metric = inferred.metric;
+    if (!out.projectName && inferred.projectName) out.projectName = inferred.projectName;
+    if (!out.teamName && inferred.teamName) out.teamName = inferred.teamName;
+    out.phrase = String(userMsg);
+  }
+  if (moduleName === 'team_analytics') {
+    const inferred = extractTeamAnalyticsArgs(userMsg);
+    if (!out.metric) out.metric = inferred.metric;
+    if (!out.teamName && inferred.teamName) out.teamName = inferred.teamName;
+    out.phrase = String(userMsg);
+  }
+  if (moduleName === 'task_board_analytics') {
+    const inferred = extractTaskBoardArgs(userMsg, { uiContext });
+    if (!out.metric) out.metric = inferred.metric;
+    if (!out.projectName && inferred.projectName) out.projectName = inferred.projectName;
+    if (!out.teamName && inferred.teamName) out.teamName = inferred.teamName;
+    if (!out.assigneeName && inferred.assigneeName) out.assigneeName = inferred.assigneeName;
+    if (!out.sprintName && inferred.sprintName) out.sprintName = inferred.sprintName;
+    if (!out.status && inferred.status) out.status = inferred.status;
+    out.phrase = String(userMsg);
+  }
+  if (moduleName === 'workload_analytics') {
+    const inferred = extractWorkloadArgs(userMsg);
+    if (!out.metric) out.metric = inferred.metric;
+    if (!out.assigneeName && inferred.assigneeName) out.assigneeName = inferred.assigneeName;
+    if (!out.teamName && inferred.teamName) out.teamName = inferred.teamName;
+    if (!out.projectName && inferred.projectName) out.projectName = inferred.projectName;
     out.phrase = String(userMsg);
   }
   return out;
@@ -486,6 +585,7 @@ const ROUTING_TOOLS = [
           includeDisabled:  { type: 'boolean', description: 'When true, also count + list users with status=disabled. Default false. Use when the user asks for "hidden", "deactivated", "blocked", or explicitly "disabled" people.' },
           includeArchived:  { type: 'boolean', description: 'When true, also count + list archived users. Default false.' },
           employmentStatus: { type: 'string', description: 'Employment status: "active" (default — currently employed), "resigned" (past / retired / former / left employees — all collapse to "resigned"), "all" (both). When the user says "retired", "ex-employees", "former", "past", or "left", pass "resigned".' },
+          designation:      { type: 'string', description: 'Filter by job title/designation (e.g. "Manager", "HR Manager"). Use for designation-based headcount — NOT the User role field.' },
           limit:            { type: 'number', description: 'Max records to return (default 200, max 500)' },
         },
         required: [],
@@ -627,6 +727,138 @@ const ROUTING_TOOLS = [
             type: 'string',
             description: 'Org unit name to look up on the chart (e.g. "Group A", "Sales", "Supervisor North").',
           },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'org_manager_analytics',
+      description:
+        'Authoritative count/list of ORGANIZATIONAL managers — active employees with one or more direct reports ' +
+        '(via Employee.reportingManager). Use when the user means people managers in the org hierarchy, NOT job title ' +
+        'and NOT User role=Manager. Prefer org_structure_analytics for manager POSITIONS on the org chart.',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: { type: 'string', enum: ['org_managers'], description: 'Always org_managers.' },
+          limit:  { type: 'number', description: 'Max records to return (default 50, max 200).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'project_analytics',
+      description:
+        'Authoritative project ↔ workforce-team relationship analytics — sourced from Project.assignedTeams ' +
+        '(TeamGroup) with team lead + member counts. NEVER guess team assignments — always call this when the user ' +
+        'asks which team is on a project, wants a project+team table, or follows up after a project count with ' +
+        '"list them and which team". Returns AUTHORITATIVE_COUNT + assignment breakdown (assigned vs unassigned). ' +
+        'RBAC: mirrors project.service.js visibility (projects.read / projects.manage or scoped mine list).',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: {
+            type: 'string',
+            enum: ['list_with_teams', 'team_lookup', 'assignment_summary'],
+            description:
+              'list_with_teams = all accessible projects with assigned team info; ' +
+              'team_lookup = which team(s) are on a named project; ' +
+              'assignment_summary = total / assigned / unassigned counts.',
+          },
+          projectName: { type: 'string', description: 'Project name for team_lookup.' },
+          teamName: { type: 'string', description: 'Optional TeamGroup name filter.' },
+          status: { type: 'string', description: 'Optional project status filter: Inprogress, On hold, completed.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'team_analytics',
+      description:
+        'Authoritative PM workforce team (TeamGroup) analytics — count, list, roster members, idle teams ' +
+        '(teams with no active Inprogress/On hold projects). NEVER guess team counts — always call this when the user ' +
+        'asks "how many teams", "list teams", or "who is in team X". NOT org-chart departments — use org_structure_analytics for those. ' +
+        'RBAC: mirrors teamGroup.service.js (teams.read / teams.manage). Returns AUTHORITATIVE_COUNT + provenance.',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: {
+            type: 'string',
+            enum: ['list', 'count', 'members', 'idle_teams'],
+            description:
+              'count = total accessible TeamGroups; list = named table; members = roster for a named team; ' +
+              'idle_teams = teams with no active projects.',
+          },
+          teamName: { type: 'string', description: 'TeamGroup name for members lookup.' },
+          limit: { type: 'number', description: 'Max rows (default 200).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_board_analytics',
+      description:
+        'Authoritative task board / kanban analytics — stage counts, overdue, blocked (tags=blocked), ' +
+        'tasks by project/team/assignee, and sprint summaries. NEVER guess blocked/overdue counts — always call this. ' +
+        'RBAC: mirrors task.service.queryTasks visibility (tasks.read / tasks.manage or scoped mine list).',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: {
+            type: 'string',
+            enum: ['stage_counts', 'stage_count', 'overdue', 'blocked', 'by_project', 'by_assignee', 'by_team', 'sprint_summary'],
+            description:
+              'stage_counts = kanban stage breakdown; stage_count = count (+ optional list) for one stage; overdue = past-due open tasks; blocked = tags contains blocked; ' +
+              'by_project/by_assignee/by_team = filtered lists; sprint_summary = sprints on a project with task counts.',
+          },
+          projectName: { type: 'string', description: 'Project name filter or sprint_summary target.' },
+          teamName: { type: 'string', description: 'TeamGroup name filter.' },
+          assigneeName: { type: 'string', description: 'Employee/person name filter.' },
+          sprintName: { type: 'string', description: 'Sprint name filter.' },
+          status: { type: 'string', description: 'Kanban status: new, todo, on_going, in_review, completed.' },
+          limit: { type: 'number', description: 'Max task rows (default 50, max 100).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workload_analytics',
+      description:
+        'Authoritative per-person and per-team task workload analytics — who has the most tasks, overload detection, ' +
+        'team member task counts, cross-project team utilization. Uses enrichTeamMembersWithAssignedTaskCounts for roster rows. ' +
+        'RBAC: projects.read + teams.read where applicable.',
+      parameters: {
+        type: 'object',
+        properties: {
+          metric: {
+            type: 'string',
+            enum: [
+              'employee_tasks', 'employee_projects', 'team_member_workload', 'team_workload',
+              'overload', 'overdue_by_employee', 'most_tasks', 'team_utilization', 'cross_project_summary',
+            ],
+            description:
+              'most_tasks = rank by open task count; team_member_workload = per roster row; team_utilization = cross-project stats; ' +
+              'overload = users with 10+ open tasks; overdue_by_employee = overdue grouped by assignee.',
+          },
+          assigneeName: { type: 'string', description: 'Employee/person name.' },
+          teamName: { type: 'string', description: 'TeamGroup name (required for team_* metrics).' },
+          projectName: { type: 'string', description: 'Optional project scope.' },
+          limit: { type: 'number', description: 'Max rows (default 50).' },
         },
         required: [],
       },
@@ -806,7 +1038,10 @@ const ROUTING_TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_tasks',
-      description: 'Retrieve tasks assigned to or created by the user — status, due dates, progress',
+      description:
+        'Retrieve tasks with RBAC parity to task.service.queryTasks — supports project, team, assignee, sprint, overdue, and status filters. ' +
+        'When includeTeamContext=true, enriches each task\'s project with assigned workforce teams (TeamGroup). ' +
+        'For authoritative overdue/blocked counts or stage breakdowns, prefer task_board_analytics.',
       parameters: {
         type: 'object',
         properties: {
@@ -814,7 +1049,16 @@ const ROUTING_TOOLS = [
             type: 'string',
             description: 'Filter by status: new, todo, on_going, in_review, completed',
           },
-          limit: { type: 'number', description: 'Max records to return (default 10, max 50)' },
+          projectName: { type: 'string', description: 'Filter by project name (partial match within RBAC scope).' },
+          projectId: { type: 'string', description: 'Filter by project Mongo id.' },
+          teamName: { type: 'string', description: 'Filter tasks on projects assigned to this TeamGroup.' },
+          assigneeName: { type: 'string', description: 'Filter by assignee employee/person name.' },
+          sprintId: { type: 'string', description: 'Filter by sprint Mongo id.' },
+          sprintName: { type: 'string', description: 'Filter by sprint name.' },
+          overdue: { type: 'boolean', description: 'When true, only past-due open tasks.' },
+          blocked: { type: 'boolean', description: 'When true, only tasks tagged blocked.' },
+          includeTeamContext: { type: 'boolean', description: 'When true, attach enrichedTeams on each task project.' },
+          limit: { type: 'number', description: 'Max records to return (default 50, max 100)' },
         },
         required: [],
       },
@@ -824,12 +1068,13 @@ const ROUTING_TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_projects',
-      description: 'Retrieve projects the user is assigned to or created — status, priority, timelines',
+      description: 'Retrieve projects the user can access — status, priority, timelines. When includeTeams=true, also returns assigned workforce teams (TeamGroup). Use project_analytics for authoritative project↔team tables and assignment summaries.',
       parameters: {
         type: 'object',
         properties: {
           status: { type: 'string', description: 'Filter by status: Inprogress, On hold, completed' },
           limit: { type: 'number', description: 'Max records to return (default 10, max 50)' },
+          includeTeams: { type: 'boolean', description: 'When true, populate assignedTeams with team name (default false).' },
         },
         required: [],
       },
@@ -1173,7 +1418,7 @@ async function routeQuery(client, messages) {
 
 // ─── Phase 2: Execute data fetches in parallel ───────────────────────────────
 
-async function executeFetches(toolCalls, user) {
+async function executeFetches(toolCalls, user, uiContext = null) {
   const results = {};
   await Promise.all(
     toolCalls.map(async (tc) => {
@@ -1185,7 +1430,7 @@ async function executeFetches(toolCalls, user) {
         /* use empty args */
       }
       try {
-        results[name] = await fetchModule(name, args, user);
+        results[name] = await fetchModule(name, args, user, uiContext);
       } catch (err) {
         logger.warn(`[ChatAssistant] fetch failed for ${name}: ${err.message}`);
         results[name] = null;
@@ -1195,7 +1440,7 @@ async function executeFetches(toolCalls, user) {
   return results;
 }
 
-async function fetchModule(name, args, user) {
+async function fetchModule(name, args, user, uiContext = null) {
   const userId = user?.id;
   // adminId on the user record points to their company admin;
   // if absent, the user IS the admin — use their own id for employee scoping.
@@ -1204,6 +1449,18 @@ async function fetchModule(name, args, user) {
   switch (name) {
     case 'fetch_employees': {
       const limit = Math.min(args.limit || 500, 1000);
+      // Never treat User role=Manager as a population — manager is ambiguous (org vs designation).
+      if (args.role && /^managers?$/i.test(String(args.role).trim())) {
+        return {
+          needsClarification: true,
+          clarifyingQuestion:
+            '"Manager" can mean two things in Dharwin:\n' +
+            '• **Organizational managers** (people with direct reports)\n' +
+            '• **Employees whose designation is "Manager"**\n' +
+            'Which one did you mean?',
+          authoritative: true,
+        };
+      }
       // Per-query visibility override: caller can opt-in disabled / archived.
       // Default = active+pending (visibleUserStatusClause).
       const visOverride = overridesFromArgs(args);
@@ -1220,6 +1477,7 @@ async function fetchModule(name, args, user) {
       // have Employee profiles.
       const roleArg = args.role ? await resolveRoleDoc(args.role) : null;
       const canonicalRole = args.role ? normalizeRole(args.role) : null;
+      const designationFilter = args.designation ? designationRegexForPhrase(args.designation) : null;
       // Employee path triggers when:
       //  • caller passed no role + no search (default headcount), OR
       //  • caller asked for "Employee" / "Candidate" (legacy alias) — even if
@@ -1230,11 +1488,12 @@ async function fetchModule(name, args, user) {
       // STRICTLY separate via profileRoleNamesFor — Candidate and Employee are
       // never merged (see ROLE_GROUPS).
       const isEmployeeRoleQuery =
-        !args.search && (
+        designationFilter ||
+        (!args.search && (
           !args.role ||
           canonicalRole === 'Employee' ||
           canonicalRole === 'Candidate'
-        );
+        ));
 
       // Employment status — accepts "active" | "current" | "resigned" |
       // "retired" | "former" | "past" | "all". Synonyms collapse so LLM phrasing
@@ -1314,6 +1573,9 @@ async function fetchModule(name, args, user) {
           employmentStatus: empStatus === 'resigned' || empStatus === 'all' ? empStatus : 'active',
           today,
         });
+        if (designationFilter) {
+          empMongoFilter.designation = designationFilter;
+        }
         // Authoritative count: one row per Employee profile (matches site
         // /v1/employees behavior — does NOT collapse on owner duplicates).
         total = await Employee.countDocuments(empMongoFilter);
@@ -2004,6 +2266,23 @@ async function fetchModule(name, args, user) {
       });
     }
 
+    case 'org_manager_analytics': {
+      const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
+      return fetchOrgManagersAnalytics({ adminId, limit, user, args });
+    }
+
+    case 'designation_manager_analytics': {
+      const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
+      return fetchDesignationManagersAnalytics({
+        adminId,
+        limit,
+        user,
+        args,
+        text: args.phrase,
+        designationPhrase: args.designation,
+      });
+    }
+
     case 'fetch_people': {
       const resolved = await registryResolveRole(args.role);
       if (!resolved.canonical) {
@@ -2483,69 +2762,189 @@ async function fetchModule(name, args, user) {
     }
 
     case 'fetch_tasks': {
-      const limit = Math.min(args.limit || 50, 200);
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-
-      let scopeClause;
-      if (isAdmin) {
-        // Admin → every task in DB (matches site queryTasks: no per-user filter).
-        scopeClause = {};
-      } else {
-        scopeClause = { $or: [{ assignedTo: userId }, { createdBy: userId }] };
+      const limit = Math.min(args.limit || 50, 100);
+      const hasRead = await hasTaskReadAccess(user);
+      const ctx = buildProjectQueryContext(user);
+      const canSeeMine = Boolean(ctx.userId);
+      if (!hasRead && !canSeeMine) {
+        return {
+          forbidden: true,
+          reason: 'Missing tasks.read / tasks.manage permission required to view task counts.',
+          authoritative: true,
+        };
       }
 
-      // Orphan guard: only count tasks that belong to a live project. Excludes both
-      // (a) projectId pointing at a deleted Project (cascade gap / bulk import) and
-      // (b) projectId === null (unassigned task — invisible to project tiles, would
-      // make chatbot total disagree with the sum of per-project totals).
-      const liveProjectIds = await Project.distinct('_id', {});
-      const orphanGuard = { projectId: { $in: liveProjectIds } };
+      const filter = buildTaskServiceFilter(user, {});
 
-      const q = { $and: [scopeClause, orphanGuard, ...(args.status ? [{ status: args.status }] : [])] };
+      if (args.status) filter.status = args.status;
+      if (args.projectId) filter.projectId = args.projectId;
+      if (args.sprintId) filter.sprintId = args.sprintId;
 
-      const totalAll = await Task.countDocuments(q);
-      const records = await Task.find(q)
-        .select('title description status dueDate tags taskCode projectId assignedTo createdBy createdAt updatedAt')
-        .populate({ path: 'assignedTo', select: 'name email' })
-        .populate({ path: 'createdBy', select: 'name email' })
-        .populate({ path: 'projectId', select: 'name' })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
-      logger.info(`[ChatAssistant][fetch_tasks] isAdmin=${isAdmin} liveProjects=${liveProjectIds.length} total=${totalAll} returned=${records.length}`);
-      return { records, total: totalAll, scope: isAdmin ? 'all' : 'mine', label: 'task' };
+      if (args.projectName) {
+        const resolved = await resolveProjectByNameOrId(args.projectName, user);
+        if (resolved.kind === 'found') {
+          filter.projectId = resolved.project._id || resolved.project.id;
+        } else if (resolved.kind === 'ambiguous') {
+          return {
+            ambiguous: true,
+            searchedFor: args.projectName,
+            matches: (resolved.matches || []).map((p) => ({ id: String(p._id), name: p.name })),
+            label: 'task',
+          };
+        } else {
+          return { records: [], total: 0, scope: 'mine', label: 'task', notFound: args.projectName };
+        }
+      }
+
+      if (args.teamName) {
+        const teamRes = await resolveTeamByName(args.teamName, user);
+        if (teamRes.kind === 'found') {
+          const pids = await projectIdsForTeam(teamRes.team._id || teamRes.team.id);
+          filter.projectId = { $in: pids };
+        } else if (teamRes.kind === 'ambiguous') {
+          return {
+            ambiguous: true,
+            searchedFor: args.teamName,
+            matches: (teamRes.matches || []).map((t) => ({ id: String(t._id), name: t.name })),
+            label: 'task',
+          };
+        }
+      }
+
+      if (args.assigneeName) {
+        const assignee = await resolveAssigneeByName(args.assigneeName);
+        if (assignee.kind === 'found') {
+          filter.assignedTo = assignee.userIds[0];
+        } else if (assignee.kind === 'ambiguous') {
+          return {
+            ambiguous: true,
+            searchedFor: args.assigneeName,
+            matches: assignee.matches,
+            label: 'task',
+          };
+        }
+      }
+
+      if (args.sprintName) {
+        const resolved = await resolveSprintByNameOrId(args.sprintName, filter.projectId, user);
+        if (resolved.kind === 'found') {
+          filter.sprintId = resolved.sprint._id || resolved.sprint.id;
+        }
+      }
+
+      if (args.overdue) Object.assign(filter, overdueTaskClause());
+      if (args.blocked) Object.assign(filter, blockedTaskClause());
+
+      const result = await queryTasks(filter, { limit, sortBy: '-createdAt' });
+      let records = result.results || [];
+
+      if (args.includeTeamContext && records.length) {
+        const projectIds = [...new Set(records.map((t) => String(t.projectId?._id || t.projectId)).filter(Boolean))];
+        const { projects } = await fetchAccessibleProjects(user, { limit: 200 });
+        const projectMap = new Map(
+          (await enrichProjectsWithTeams(
+            projects.filter((p) => projectIds.includes(String(p._id))),
+            user,
+          )).map((p) => [String(p._id), p]),
+        );
+        records = records.map((t) => {
+          const pid = String(t.projectId?._id || t.projectId || '');
+          const enriched = projectMap.get(pid);
+          if (enriched && t.projectId && typeof t.projectId === 'object') {
+            return { ...t, projectId: { ...t.projectId, enrichedTeams: enriched.enrichedTeams || [] } };
+          }
+          return t;
+        });
+      }
+
+      const { scope } = await buildAccessibleTaskFilter(user, {});
+      const total = result.totalResults ?? records.length;
+      logger.info(`[ChatAssistant][fetch_tasks] scope=${scope} total=${total} returned=${records.length}`);
+      return {
+        records,
+        total,
+        scope,
+        label: 'task',
+        provenance: 'task.service.queryTasks',
+        authoritative: true,
+        authoritativeCount: total,
+        filters: {
+          projectName: args.projectName || null,
+          teamName: args.teamName || null,
+          assigneeName: args.assigneeName || null,
+          overdue: !!args.overdue,
+          blocked: !!args.blocked,
+        },
+      };
+    }
+
+    case 'task_board_analytics': {
+      return fetchTaskBoardAnalytics({
+        user,
+        uiContext,
+        args: { ...args, phrase: args.phrase || args.query || '' },
+      });
+    }
+
+    case 'workload_analytics': {
+      return fetchWorkloadAnalytics({
+        user,
+        args: { ...args, phrase: args.phrase || args.query || '' },
+      });
     }
 
     case 'fetch_projects': {
+      const hasRead = await hasProjectReadAccess(user);
+      const hasPersonProfile = await userHasPersonProfileRole(user);
+      if (!hasRead && !hasPersonProfile) {
+        return {
+          forbidden: true,
+          reason: 'Missing projects.read / projects.manage permission required to view project counts.',
+          authoritative: true,
+        };
+      }
+
       const limit = Math.min(args.limit || 50, 200);
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      let q;
-      if (isAdmin) {
-        // Match site /apps/projects/project-list exactly: when admin and not mineOnly,
-        // queryProjects applies NO per-user filter — admin sees every project document.
-        q = {};
-      } else {
-        q = { $or: [{ assignedTo: userId }, { createdBy: userId }] };
+      let status = args.status;
+      if (status) {
+        const s = String(status).trim();
+        status = /^active$/i.test(s) ? 'Inprogress' : s;
       }
-
-      // Project.status enum is { Inprogress, "On hold", completed }. LLM may pass "Active";
-      // map it to "Inprogress" so "list active projects" works as users expect.
-      if (args.status) {
-        const s = String(args.status).trim();
-        q.status = /^active$/i.test(s) ? 'Inprogress' : s;
+      const { projects, total, scope } = await fetchAccessibleProjects(user, { limit, status });
+      let records = projects;
+      if (args.includeTeams) {
+        records = await enrichProjectsWithTeams(projects, user);
       }
+      logger.info(`[ChatAssistant][fetch_projects] scope=${scope} totalDB=${total} returned=${records.length} status=${status || 'any'} limit=${limit} includeTeams=${!!args.includeTeams}`);
+      return {
+        records,
+        total,
+        scope,
+        label: 'project',
+        provenance: 'project.service.queryProjects',
+        authoritative: true,
+        authoritativeCount: total,
+      };
+    }
 
-      const totalAll = await Project.countDocuments(q);
-      const records = await Project.find(q)
-        .select('name description status priority startDate endDate completedTasks totalTasks projectManager assignedTo createdBy')
-        .populate({ path: 'assignedTo', select: 'name email' })
-        .populate({ path: 'createdBy', select: 'name email' })
-        .populate({ path: 'projectManager', select: 'name email' })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
-      logger.info(`[ChatAssistant][fetch_projects] isAdmin=${isAdmin} totalDB=${totalAll} returned=${records.length} status=${q.status || 'any'} limit=${limit}`);
-      return { records, total: totalAll, scope: isAdmin ? 'all' : 'mine', label: 'project' };
+    case 'project_analytics': {
+      return fetchProjectAnalytics({
+        user,
+        args: {
+          ...args,
+          phrase: args.phrase || args.query || '',
+        },
+      });
+    }
+
+    case 'team_analytics': {
+      return fetchTeamAnalytics({
+        user,
+        args: {
+          ...args,
+          phrase: args.phrase || args.query || '',
+        },
+      });
     }
 
     case 'fetch_meetings': {
@@ -3650,6 +4049,39 @@ function buildCountBanner(fetchedData) {
       lines.push(`  org_structure_analytics.employees.unassigned = ${data?.employees?.unassigned ?? 0}`);
       lines.push(`  org_structure_analytics.employees.total = ${data?.employees?.total ?? 0}`);
     }
+    if (key === 'org_manager_analytics' && typeof data?.total === 'number') {
+      lines.push(`  org_manager_analytics.total = ${data.total} (organizational managers with direct reports)`);
+    }
+    if (key === 'project_analytics' && !data?.forbidden) {
+      lines.push(`  project_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.stats?.total ?? 0}`);
+      if (data?.stats) {
+        lines.push(`  project_analytics.assigned = ${data.stats.assigned ?? 0}`);
+        lines.push(`  project_analytics.unassigned = ${data.stats.unassigned ?? 0}`);
+      }
+    }
+    if (key === 'team_analytics' && !data?.forbidden) {
+      lines.push(`  team_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.stats?.total ?? 0}`);
+      lines.push(`  team_analytics.metric = ${data?.metric || 'count'}`);
+      lines.push(`  team_analytics.scope = ${data?.scope || 'unknown'}`);
+    }
+    if (key === 'task_board_analytics' && !data?.forbidden) {
+      lines.push(`  task_board_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? 0}`);
+      lines.push(`  task_board_analytics.metric = ${data?.metric || 'unknown'}`);
+    }
+    if (key === 'workload_analytics' && !data?.forbidden) {
+      lines.push(`  workload_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? 0}`);
+      lines.push(`  workload_analytics.metric = ${data?.metric || 'unknown'}`);
+    }
+    if (key === 'fetch_projects' && !data?.forbidden && typeof data?.total === 'number') {
+      lines.push(`  fetch_projects.AUTHORITATIVE_COUNT = ${data.authoritativeCount ?? data.total}`);
+      lines.push(`  fetch_projects.total = ${data.total}`);
+      lines.push(`  fetch_projects.provenance = ${data.provenance || 'project.service.queryProjects'}`);
+    }
+    if (key === 'fetch_tasks' && !data?.forbidden && typeof data?.total === 'number') {
+      lines.push(`  fetch_tasks.AUTHORITATIVE_COUNT = ${data.authoritativeCount ?? data.total}`);
+      lines.push(`  fetch_tasks.total = ${data.total}`);
+      lines.push(`  fetch_tasks.provenance = ${data.provenance || 'task.service.queryTasks'}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -3725,6 +4157,14 @@ function summarizeData(fetchedData) {
     }
 
     if (key === 'fetch_employees') {
+      if (data?.needsClarification) {
+        parts.push(
+          `--- employees ---\n` +
+          `NEEDS_CLARIFICATION: ${data.clarifyingQuestion || 'Please clarify manager meaning.'}\n` +
+          `USER_FACING_REPLY: Ask the user this question. Do not invent counts.`
+        );
+        continue;
+      }
       if (data?.notFound) {
         const fb = buildFallback({ module: 'employees', queryArg: data.searchedFor });
         parts.push(
@@ -3957,11 +4397,19 @@ function summarizeData(fetchedData) {
     }
 
     if (key === 'fetch_tasks') {
+      if (data?.forbidden) {
+        parts.push(`--- fetch_tasks ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
       const scope = (data?.scope === 'all' || data?.scope === 'company') ? 'ALL tasks (admin scope)' : 'YOUR tasks only';
       const headerNum = total > records.length ? `${records.length} shown of ${total} total` : `${total} total`;
-      const lines = [`--- tasks (${headerNum} — SCOPE: ${scope}) ---`];
+      const lines = [
+        `--- tasks (${headerNum} — SCOPE: ${scope}) ---`,
+        `AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? total}`,
+        `provenance = ${data?.provenance || 'task.service.queryTasks'}`,
+      ];
       for (const t of records) {
         const assignees = Array.isArray(t.assignedTo) && t.assignedTo.length
           ? t.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean).join(', ')
@@ -3980,25 +4428,160 @@ function summarizeData(fetchedData) {
     }
 
     if (key === 'fetch_projects') {
+      if (data?.forbidden) {
+        parts.push(`--- fetch_projects ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
-      const scope = (data?.scope === 'all' || data?.scope === 'company') ? 'ALL projects (admin scope)' : 'YOUR projects only';
+      const scope = (data?.scope === 'all' || data?.scope === 'company') ? 'ALL projects (RBAC scope)' : 'YOUR projects only';
       const headerNum = total > records.length ? `${records.length} shown of ${total} total` : `${total} total`;
       const lines = [`--- projects (${headerNum} — SCOPE: ${scope}) ---`];
       for (const p of records) {
         const assignees = Array.isArray(p.assignedTo) && p.assignedTo.length
           ? p.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean).join(', ')
           : 'Unassigned';
-        const pm = typeof p.projectManager === 'object' ? p.projectManager?.name : (p.projectManager || 'N/A');
+        const pm = typeof p.projectManager === 'string' ? p.projectManager : (p.projectManager || 'N/A');
         const creator = typeof p.createdBy === 'object' ? p.createdBy?.name : (p.createdBy || 'N/A');
         const start = formatDateIST(p.startDate) || 'N/A';
         const end = formatDateIST(p.endDate) || 'N/A';
         const progress = `${p.completedTasks ?? 0}/${p.totalTasks ?? 0}`;
+        const teamNames = Array.isArray(p.enrichedTeams) && p.enrichedTeams.length
+          ? p.enrichedTeams.map((t) => t.name).join(', ')
+          : (Array.isArray(p.assignedTeams) && p.assignedTeams.length
+            ? p.assignedTeams.map((t) => (typeof t === 'object' ? t.name : t)).filter(Boolean).join(', ')
+            : 'None');
         lines.push(
           `PROJECT: ${p.name || 'N/A'} | STATUS: ${p.status || 'N/A'} | PRIORITY: ${p.priority || 'N/A'}` +
           ` | TASKS: ${progress} | START: ${start} | END: ${end} | MANAGER: ${pm || 'N/A'}` +
-          ` | ASSIGNED_TO: ${assignees} | CREATED_BY: ${creator || 'N/A'}`
+          ` | ASSIGNED_TEAMS: ${teamNames} | ASSIGNED_TO: ${assignees} | CREATED_BY: ${creator || 'N/A'}`
         );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'project_analytics') {
+      if (data?.forbidden) {
+        parts.push(`--- project_analytics ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
+      if (data?.ambiguous) {
+        parts.push(
+          `--- project_analytics ---\nAMBIGUOUS_MATCH for "${data.searchedFor || ''}": ` +
+          `${(data.matches || []).map((m) => m.name).join(', ')}`
+        );
+        continue;
+      }
+      const stats = data?.stats || {};
+      const lines = [
+        '--- project_analytics (AUTHORITATIVE — project ↔ TeamGroup assignments) ---',
+        `METRIC: ${data?.metric || 'list_with_teams'}`,
+        `AUTHORITATIVE_COUNT: ${data?.authoritativeCount ?? stats.total ?? 0}`,
+        `ASSIGNED: ${stats.assigned ?? 0} | UNASSIGNED: ${stats.unassigned ?? 0} | TOTAL: ${stats.total ?? 0}`,
+        `PROVENANCE: ${data?.provenance || 'project.service.queryProjects + TeamGroup.assignedTeams'}`,
+        `SCOPE: ${data?.scope || 'unknown'}`,
+      ];
+      if (data?.formattedTable) {
+        lines.push('USER_FACING_TEMPLATE (mirror this table/prose; do NOT say you lack team details):');
+        lines.push(data.formattedTable);
+      }
+      if (data?.lookup?.notFound) {
+        lines.push(`NO_PROJECT_FOUND: "${data.searchedFor || data.lookup.projectName || ''}"`);
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'team_analytics') {
+      if (data?.forbidden) {
+        parts.push(`--- team_analytics ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
+      if (data?.ambiguous) {
+        parts.push(
+          `--- team_analytics ---\nAMBIGUOUS_MATCH for "${data.searchedFor || ''}": ` +
+          `${(data.matches || []).map((m) => m.name).join(', ')}`
+        );
+        continue;
+      }
+      const stats = data?.stats || {};
+      const lines = [
+        '--- team_analytics (AUTHORITATIVE — PM workforce TeamGroup) ---',
+        `METRIC: ${data?.metric || 'count'}`,
+        `AUTHORITATIVE_COUNT: ${data?.authoritativeCount ?? stats.total ?? 0}`,
+        `PROVENANCE: ${data?.provenance || 'teamGroup.service.queryTeamGroups'}`,
+        `SCOPE: ${data?.scope || 'unknown'}`,
+      ];
+      if (data?.formattedSummary) {
+        lines.push('USER_FACING_TEMPLATE (mirror this prose/table; do NOT invent team counts):');
+        lines.push(data.formattedSummary);
+      }
+      if (data?.lookup?.notFound) {
+        lines.push(`NO_TEAM_FOUND: "${data.searchedFor || data.lookup.teamName || ''}"`);
+      }
+      if (data?.lookup?.members?.length) {
+        lines.push('MEMBERS:');
+        for (const m of data.lookup.members) {
+          lines.push(`- ${m.name}${m.email ? ` (${m.email})` : ''}`);
+        }
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'task_board_analytics') {
+      if (data?.forbidden) {
+        parts.push(`--- task_board_analytics ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
+      if (data?.ambiguous) {
+        parts.push(
+          `--- task_board_analytics ---\nAMBIGUOUS_MATCH for "${data.searchedFor || ''}": ` +
+          `${(data.matches || []).map((m) => m.name || m.userId).join(', ')}`
+        );
+        continue;
+      }
+      const lines = [
+        '--- task_board_analytics (AUTHORITATIVE — kanban / overdue / blocked) ---',
+        `METRIC: ${data?.metric || 'stage_counts'}`,
+        `AUTHORITATIVE_COUNT: ${data?.authoritativeCount ?? 0}`,
+        `PROVENANCE: ${data?.provenance || 'task.service.queryTasks + Task.aggregate'}`,
+        `SCOPE: ${data?.scope || 'unknown'}`,
+      ];
+      if (data?.breakdown?.byStage) {
+        lines.push(`STAGE_BREAKDOWN: ${JSON.stringify(data.breakdown.byStage)}`);
+      }
+      if (data?.formattedSummary) {
+        lines.push('USER_FACING_TEMPLATE (mirror this prose/table):');
+        lines.push(data.formattedSummary);
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'workload_analytics') {
+      if (data?.forbidden) {
+        parts.push(`--- workload_analytics ---\nFORBIDDEN: ${data.reason || 'Insufficient permissions.'}`);
+        continue;
+      }
+      if (data?.ambiguous) {
+        parts.push(
+          `--- workload_analytics ---\nAMBIGUOUS_MATCH for "${data.searchedFor || ''}": ` +
+          `${(data.matches || []).map((m) => m.name).join(', ')}`
+        );
+        continue;
+      }
+      const lines = [
+        '--- workload_analytics (AUTHORITATIVE — per-person / per-team workload) ---',
+        `METRIC: ${data?.metric || 'most_tasks'}`,
+        `AUTHORITATIVE_COUNT: ${data?.authoritativeCount ?? 0}`,
+        `PROVENANCE: ${data?.provenance || 'Task.aggregate + team.service.enrichTeamMembersWithAssignedTaskCounts'}`,
+        `SCOPE: ${data?.scope || 'unknown'}`,
+      ];
+      if (data?.formattedSummary) {
+        lines.push('USER_FACING_TEMPLATE (mirror this prose/table):');
+        lines.push(data.formattedSummary);
       }
       parts.push(lines.join('\n'));
       continue;
@@ -4656,6 +5239,41 @@ function summarizeData(fetchedData) {
       continue;
     }
 
+    if (key === 'org_manager_analytics') {
+      const lines = [
+        `--- org manager analytics (organizational managers = people with direct reports) ---`,
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? 0} — people with ≥1 direct report (reportingManager and/or org-chart span). NOT manager positions on org chart and NOT designation/title alone.`,
+        `DEFINITION: ${data?.definition || 'Employees with direct reports via org hierarchy.'}`,
+      ];
+      for (const r of data?.records ?? []) {
+        lines.push(
+          `MANAGER: ${r.name || 'N/A'} | directReports=${r.directReports ?? 0}` +
+          (r.designation ? ` | designation=${r.designation}` : '') +
+          (r.employeeId ? ` | employeeId=${r.employeeId}` : '')
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'designation_manager_analytics') {
+      const phrase = data?.designationPhrase || 'Manager';
+      const lines = [
+        `--- designation manager analytics (employees titled "${phrase}") ---`,
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? 0} — active employees whose designation matches "${phrase}". NOT organizational managers and NOT org-chart manager positions.`,
+        `DEFINITION: ${data?.definition || `Employees with designation "${phrase}".`}`,
+      ];
+      for (const r of data?.records ?? []) {
+        lines.push(
+          `EMPLOYEE: ${r.name || 'N/A'}` +
+          (r.designation ? ` | designation=${r.designation}` : '') +
+          (r.employeeId ? ` | employeeId=${r.employeeId}` : '')
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
     if (key === 'fetch_external_jobs') {
       // Now sourced from Job collection (jobOrigin='external'), not raw ExternalJob.
       // Fields shifted: company → organisation.name, source → externalRef.source,
@@ -5047,15 +5665,15 @@ const INTENT_PATTERNS = [
   { re: /\b(my courses?|course progress|training progress|training status|courses? (completed|enrolled|in progress|dropped)|how many courses)\b/i,
                                                                                     modules: ['training_analytics'] },
   { re: /\bstudents?\b/i,                                                          modules: ['fetch_employees'], args: { role: 'Student' } },
-  // Org structure / chart (Epic G) — MUST come BEFORE any "manager" → fetch_employees
-  // pattern. Managers/supervisors on the org chart are OrgUnit.type nodes, not User roles.
+  // Org structure / chart (Epic G) — manager/supervisor/group/chart asks.
+  // Bare "how many managers" → manager POSITIONS (org_structure_analytics).
   { re: /\b(how many|count|number of|total)\b.{0,40}\bmanagers?\b/i,
-                                                                                     modules: ['org_structure_analytics'], args: { metric: 'managers' } },
+                                                                                       modules: ['org_structure_analytics'], args: { metric: 'managers' } },
   { re: /\b(how many|count|number of|total)\b.{0,40}\bsupervisors?\b/i,
-                                                                                     modules: ['org_structure_analytics'], args: { metric: 'supervisors' } },
+                                                                                      modules: ['org_structure_analytics'], args: { metric: 'supervisors' } },
   { re: /\b(unassigned employees?|employees?\s+unassigned|org(anisation|anization)?\s*chart|org(anisation|anization)?\s*structure|structure coverage|chart coverage|supervisor coverage|do we have a supervisor|department(s)? (without|missing) (a )?(node|chart)|group\s+[a-z0-9])/i,
-                                                                                     modules: ['org_structure_analytics'] },
-  { re: /\b(supervisors?|managers?)\b/i,                                           modules: ['org_structure_analytics'] },
+                                                                                      modules: ['org_structure_analytics'] },
+  { re: /\b(supervisors?)\b/i,                                                      modules: ['org_structure_analytics'] },
   { re: /\b(developer|engineer|designer|analyst|intern)\b/i,                       modules: ['fetch_employees'] },
   { re: /\b(user roles?|role of|who has role|people with role)\b/i,                modules: ['fetch_employees'] },
   { re: /\b(department|team (in|of|members)|people in)\b/i,                        modules: ['fetch_employees'] },
@@ -5070,11 +5688,39 @@ const INTENT_PATTERNS = [
   { re: /\b(external jobs?|saved jobs?|linkedin jobs?|scraped jobs?|job board|external listing|aggregated jobs?)\b/i, modules: ['fetch_external_jobs'] },
   // Jobs (internal company postings)
   { re: /\b(open jobs?|active jobs?|closed jobs?|draft jobs?|archived jobs?|live jobs?|hiring|vacanc|job opening|position available|internal jobs?|how many jobs?|total jobs?|list( all)? jobs?)\b/i, modules: ['fetch_jobs'] },
-  // Tasks
+  // Tasks — overdue/blocked route to authoritative task_board_analytics
+  { re: /\b(blocked tasks?|tasks? blocked|which tasks? are blocked)\b/i, modules: ['task_board_analytics'], args: { metric: 'blocked' } },
+  { re: /\b(overdue|past due|missed deadline|late tasks?)\b/i, modules: ['task_board_analytics'], args: { metric: 'overdue' } },
+  { re: /\b(how many|count|which)\b.{0,30}\btasks?\b.{0,30}\b(in review|in_review|blocked|overdue|todo|on[\s_-]?go(?:a)?ing|ongoing|progress)\b/i, modules: ['task_board_analytics'] },
+  { re: /\b(how many|count|number of)\b.{0,40}\btasks?\b.{0,40}\b(task[\s_-]?board|kanban|board)\b/i, modules: ['task_board_analytics'], args: { metric: 'stage_counts' } },
+  { re: /\b(sprints?\s+on|sprints?\s+for)\b.{0,40}\bproject\b/i, modules: ['task_board_analytics'], args: { metric: 'sprint_summary' } },
+  { re: /\b(tasks?\s+in\s+sprint|sprint\s+tasks?)\b/i, modules: ['task_board_analytics'] },
+  { re: /\b(tasks?\s+for\s+project|project\s+tasks?)\b/i, modules: ['fetch_tasks'] },
+  { re: /\b(who has (the )?most tasks?|most tasks?|highest workload|which team has (the )?highest workload|team workload|team utilization|cross[\s-]?project)\b/i, modules: ['workload_analytics'] },
   { re: /\b(my tasks?|tasks? (of|for|assigned)|assigned to|task list)\b/i, modules: ['fetch_tasks'] },
-  { re: /\b(overdue|past due|missed deadline|late tasks?)\b/i,             modules: ['fetch_tasks'] },
-  // Projects
-  { re: /\b(projects? (of|by|for|status)|active projects?)\b/i,            modules: ['fetch_projects'] },
+  { re: /\bhow many tasks?\b/i, modules: ['fetch_tasks'] },
+  { re: /\b(how many|count|number of|total)\b.{0,60}\btasks?\b/i, modules: ['fetch_tasks'] },
+  { re: /\b(list|show|give|tell)\b.{0,50}\btasks?\b/i, modules: ['fetch_tasks'] },
+  // PM workforce teams (TeamGroup) — must come BEFORE fetch_employees department pattern.
+  { re: /\b(how many|count|number of|total)\b.{0,40}\bteams?\b/i,
+    modules: ['team_analytics'], args: { metric: 'count' } },
+  { re: /\b(list|show|give|tell)\b.{0,50}\b(teams?|team groups?|workforce teams?)\b/i,
+    modules: ['team_analytics'], args: { metric: 'list' } },
+  { re: /\bwho (is|are) (in|on)\b.{0,40}\bteam\b/i,
+    modules: ['team_analytics'], args: { metric: 'members' } },
+  { re: /\b(idle|inactive)\b.{0,30}\bteams?\b/i,
+    modules: ['team_analytics'], args: { metric: 'idle_teams' } },
+  { re: /\bteams?\b.{0,40}\b(no|without|missing)\b.{0,20}\b(active )?projects?\b/i,
+    modules: ['team_analytics'], args: { metric: 'idle_teams' } },
+  // Projects — team mapping must route to project_analytics (never bare fetch_projects).
+  { re: /\b(list|show|give|tell)\b.{0,50}\b(projects?|them)\b.{0,80}\b(team|teams)\b/i,
+    modules: ['project_analytics'], args: { metric: 'list_with_teams' } },
+  { re: /\b(which|what)\s+team\b.{0,60}\b(project|assigned|working)\b/i,
+    modules: ['project_analytics'], args: { metric: 'team_lookup' } },
+  { re: /\b(projects?\s*)?(assigned|unassigned)\b.{0,40}\b(team|teams)?\b/i,
+    modules: ['project_analytics'], args: { metric: 'assignment_summary' } },
+  { re: /\bhow many projects?\b/i, modules: ['fetch_projects'] },
+  { re: /\b(projects? (of|by|for|status)|active projects?|list projects?)\b/i, modules: ['fetch_projects'] },
   // Interviews (Meeting collection) — must come BEFORE the generic application
   // pattern below so "interviews on Monday" / "who interviewed X" don't fall
   // through to the job-application pipeline tool.
@@ -5107,7 +5753,7 @@ const INTENT_PATTERNS = [
   { re: /\b(backdated attendance|attendance correction|missed punch|late punch request|attendance request)\b/i, modules: ['fetch_backdated_attendance_requests'] },
 ];
 
-function detectIntent(text) {
+function detectIntent(text, uiContext = null) {
   // Specific entity lookups need LLM routing to extract search args — fast-path can't.
   if (SPECIFIC_LOOKUP_RE.test(text)) return null;
 
@@ -5117,12 +5763,44 @@ function detectIntent(text) {
     return null; // fall through to LLM → fetch_employee_overview
   }
 
-  // Epic G: org chart / managers / supervisors / Group A → org_structure_analytics
-  // (never fetch_employees role=Manager). Prefer early return so later patterns can't steal.
+  // Epic G: org chart / supervisors / Group A → org_structure_analytics
+  // (never fetch_employees role=Manager). Bare manager counts → Business Knowledge Layer.
   if (looksLikeOrgStructureQuery(text)) {
     return {
       modules: ['org_structure_analytics'],
       args: extractOrgStructureArgs(text),
+    };
+  }
+
+  // PM workforce teams (TeamGroup) — before project_analytics team-mapping patterns.
+  if (looksLikeTeamQuery(text)) {
+    return {
+      modules: ['team_analytics'],
+      args: extractTeamAnalyticsArgs(text),
+    };
+  }
+
+  // Project ↔ workforce team mapping — must use project_analytics (never invent team names).
+  if (looksLikeProjectTeamQuery(text)) {
+    return {
+      modules: ['project_analytics'],
+      args: extractProjectAnalyticsArgs(text),
+    };
+  }
+
+  // Task board / kanban analytics — overdue, blocked, sprint summaries.
+  if (looksLikeTaskBoardQuery(text)) {
+    return {
+      modules: ['task_board_analytics'],
+      args: extractTaskBoardArgs(text, { uiContext }),
+    };
+  }
+
+  // Workload — most tasks, team utilization, overload.
+  if (looksLikeWorkloadQuery(text)) {
+    return {
+      modules: ['workload_analytics'],
+      args: extractWorkloadArgs(text),
     };
   }
 
@@ -5140,6 +5818,12 @@ function detectIntent(text) {
 
   for (const pattern of INTENT_PATTERNS) {
     if (pattern.re.test(text)) {
+      if (pattern.modules.includes('fetch_tasks') && isTaskStageCountQuery(text)) {
+        return {
+          modules: ['task_board_analytics'],
+          args: extractTaskBoardArgs(text, { uiContext }),
+        };
+      }
       // Never let employee_analytics answer referral/funnel questions.
       if (
         pattern.modules.includes('employee_analytics') &&
@@ -5188,9 +5872,199 @@ function fastPathNeedsArgs(modules, args) {
   return !args.date && !args.month && !args.fromDate && !args.toDate;
 }
 
+// ─── Business Knowledge Layer — manager concept routing ───────────────────────
+
+async function persistManagerMemory(user, adminId, patch = {}) {
+  const $set = { 'lastEntities.updatedAt': new Date(), ...patch.$set };
+  const $unset = patch.$unset || {};
+  await ConversationMemory.findOneAndUpdate(
+    { userId: user?.id, adminId },
+    { $set, ...(Object.keys($unset).length ? { $unset } : {}) },
+    { upsert: true }
+  );
+}
+
+async function resolveManagerConceptRouting(lastUserMsg, user, memDoc) {
+  const adminId = user?.adminId ?? user?.id;
+  const pending = memDoc?.lastEntities?.pendingConceptClarification;
+  const topic = memDoc?.lastEntities?.conversationTopic;
+
+  // Clarification Manager — short replies like "2" must never fall through to employee search.
+  if (pending?.concept === 'manager') {
+    const choice = parseManagerConceptChoice(lastUserMsg);
+    if (choice) {
+      await persistManagerMemory(user, adminId, {
+        $unset: { 'lastEntities.pendingConceptClarification': 1 },
+        $set: {
+          'lastEntities.conversationTopic': {
+            concept: 'manager',
+            lastInterpretation: choice === 'OrgManager' ? 'org' : 'designation',
+            updatedAt: new Date(),
+          },
+        },
+      });
+      return buildManagerRoutingIntent(choice, pending.originalQuery || lastUserMsg);
+    }
+  }
+
+  const topicFollowUp = parseManagerTopicFollowUp(lastUserMsg, topic);
+  if (topicFollowUp) {
+    await persistManagerMemory(user, adminId, {
+      $set: {
+        'lastEntities.conversationTopic': {
+          concept: 'manager',
+          lastInterpretation: topicFollowUp === 'OrgManager' ? 'org' : 'designation',
+          updatedAt: new Date(),
+        },
+      },
+    });
+    return buildManagerRoutingIntent(topicFollowUp, lastUserMsg);
+  }
+
+  if (!mentionsManagerConcept(lastUserMsg)) return null;
+
+  if (isBareManagerPositionQuery(lastUserMsg)) {
+    return buildManagerPositionRoutingIntent(lastUserMsg);
+  }
+
+  const resolutions = resolveConcept('manager', { text: lastUserMsg });
+  if (!resolutions.length) return null;
+
+  const meaning = pickManagerMeaning(resolutions);
+  if (meaning) {
+    await persistManagerMemory(user, adminId, {
+      $set: {
+        'lastEntities.conversationTopic': {
+          concept: 'manager',
+          lastInterpretation: meaning === 'OrgManager' ? 'org' : 'designation',
+          updatedAt: new Date(),
+        },
+      },
+    });
+    return buildManagerRoutingIntent(meaning, lastUserMsg);
+  }
+
+  if (isAmbiguous(resolutions)) {
+    const designationPhrase = extractDesignationPhrase(lastUserMsg) || 'Manager';
+
+    if (shouldProactivelyAnswerBoth(lastUserMsg)) {
+      await persistManagerMemory(user, adminId, {
+        $unset: { 'lastEntities.pendingConceptClarification': 1 },
+        $set: {
+          'lastEntities.conversationTopic': {
+            concept: 'manager',
+            lastInterpretation: 'both',
+            updatedAt: new Date(),
+          },
+        },
+      });
+      return {
+        proactive: true,
+        modules: ['org_structure_analytics', 'org_manager_analytics', 'designation_manager_analytics'],
+        args: { designation: designationPhrase, phrase: lastUserMsg, limit: 50, metric: 'managers' },
+      };
+    }
+
+    const counts = await fetchManagerConceptCounts({
+      adminId,
+      user,
+      text: lastUserMsg,
+    });
+    const clarification = buildManagerClarification(counts);
+    await persistManagerMemory(user, adminId, {
+      $set: {
+        'lastEntities.pendingConceptClarification': {
+          concept: 'manager',
+          originalQuery: lastUserMsg,
+          options: clarification.options,
+          updatedAt: new Date(),
+        },
+      },
+    });
+    return {
+      clarify: clarification.clarifyingQuestion,
+      conceptClarify: clarification,
+    };
+  }
+
+  return null;
+}
+
+async function executeManagerConceptRoute(managerRoute, lastUserMsg, user) {
+  if (managerRoute?.clarify) {
+    return {
+      dataContext:
+        `--- clarification ---\nNEEDS_CLARIFICATION: ${managerRoute.clarify}\n` +
+        `USER_FACING_REPLY: Ask the user this question verbatim. Do not invent counts.\n` +
+        (managerRoute.conceptClarify?.options
+          ? `OPTIONS: ${JSON.stringify(managerRoute.conceptClarify.options)}`
+          : ''),
+      moduleCount: 0,
+      fetched: {
+        __clarify: {
+          question: managerRoute.clarify,
+          options: managerRoute.conceptClarify?.options || null,
+          concept: 'manager',
+        },
+      },
+    };
+  }
+
+  if (managerRoute?.proactive) {
+    const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
+    const toolCalls = managerRoute.modules.map((n) => {
+      const moduleArgs = extractFastPathArgs(lastUserMsg, n, managerRoute.args || {}, fastUserCtx);
+      return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
+    });
+    const fetched = await executeFetches(toolCalls, user);
+    const proactiveText = formatProactiveManagerAnswer({
+      positions: fetched.org_structure_analytics,
+      org: fetched.org_manager_analytics,
+      designation: fetched.designation_manager_analytics,
+      designationPhrase: managerRoute.args?.designation || 'Manager',
+    });
+    const dataContext =
+      `--- proactive manager answer ---\n` +
+      `USER_FACING_REPLY: Present BOTH interpretations using these exact labels (do not contradict them):\n` +
+      `${proactiveText}\n\n` +
+      summarizeData(fetched);
+    logger.info(`[ChatAssistant] intent=manager-proactive modules=[${managerRoute.modules}] user=${user?.id}`);
+    return { dataContext, moduleCount: managerRoute.modules.length, fetched };
+  }
+
+  if (managerRoute?.modules?.length) {
+    const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
+    const toolCalls = managerRoute.modules.map((n) => {
+      const moduleArgs = extractFastPathArgs(lastUserMsg, n, managerRoute.args || {}, fastUserCtx);
+      return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
+    });
+    const fetched = await executeFetches(toolCalls, user);
+    const dataContext = summarizeData(fetched);
+    logger.info(
+      `[ChatAssistant] intent=manager-concept modules=[${managerRoute.modules}] user=${user?.id}`
+    );
+    return { dataContext, moduleCount: managerRoute.modules.length, fetched };
+  }
+
+  return null;
+}
+
 // ─── Shared context preparation (routing + fetch) ────────────────────────────
 
-async function prepareContext(client, history, user) {
+async function prepareContext(client, history, user, uiContext = null) {
+  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
+  const adminId = user?.adminId ?? user?.id;
+
+  // 0. Clarification Manager — intercept BEFORE classifier, continuation, or employee search.
+  try {
+    const memForConcept = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
+    const managerRoute = await resolveManagerConceptRouting(lastUserMsg, user, memForConcept);
+    const managerCtx = await executeManagerConceptRoute(managerRoute, lastUserMsg, user);
+    if (managerCtx) return managerCtx;
+  } catch (err) {
+    logger.warn(`[ChatAssistant] manager concept routing failed: ${err.message}`);
+  }
+
   if (config.chatbot?.twoStage) {
     const lastTurn = [...history].reverse().find((m) => m.role === 'user')?.content || '';
     const memDoc = await ConversationMemory.findOne({ userId: user.id, adminId: user.adminId ?? user.id }).lean();
@@ -5262,17 +6136,52 @@ async function prepareContext(client, history, user) {
   }
 
   // Else: existing (legacy) prepareContext flow continues unchanged below.
-  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-  const adminId = user?.adminId ?? user?.id;
 
-  // 0. Continuation pre-routing — phrases like "list them", "yes", "give
+  // 0. Reference resolver — coreference resolution BEFORE continuation / LLM routing.
+  //    Rewrites "list them" → "list all departments" using lastEntityType from memory.
+  let effectiveUserMsg = lastUserMsg;
+  try {
+    const memForRef = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
+    const refResolution = resolveReferences(lastUserMsg, memForRef?.lastEntities);
+    if (refResolution.wasResolved) {
+      effectiveUserMsg = refResolution.resolvedText;
+      logger.info(
+        `[ChatAssistant] reference resolved: "${lastUserMsg}" → "${effectiveUserMsg}" ` +
+          `entity=${refResolution.entityType} confidence=${refResolution.confidence}`,
+      );
+      const forcedRoute = routeResolvedFollowUp(refResolution);
+      if (forcedRoute) {
+        const argsJson = JSON.stringify(forcedRoute.toolArgs || {});
+        const fetched = await executeFetches(
+          [{ function: { name: forcedRoute.toolName, arguments: argsJson } }],
+          user,
+          uiContext,
+        );
+        const dataContext = summarizeData(fetched);
+        logger.info(
+          `[ChatAssistant] intent=resolved-followup tool=${forcedRoute.toolName} args=${argsJson} ctx=${dataContext.length}c user=${user?.id}`,
+        );
+        return { dataContext, moduleCount: 1, fetched };
+      }
+    }
+  } catch (err) {
+    logger.warn(`[ChatAssistant] reference resolver failed: ${err.message}`);
+  }
+
+  // 0b. Continuation pre-routing — phrases like "list them", "yes", "give
   //    detail", "are you sure" carry NO topic of their own. If conversation
   //    memory has a locked role / topic / job / person, reuse it for the next
   //    fetch instead of letting the LLM widen the population. This is what
   //    stops "How many placements?" → "Give detail" drifting to a generic
   //    company snapshot (issue 6).
-  const CONTINUATION_RE = /^\s*(yes|yeah|yep|no|nope|sure\??|really\??|are you sure\??|are you certain\??|list them\.?|list all\.?|list( the)? names\??|show( me)? them\.?|show all\.?|show( me)? names\??|how many\??|more|next|continue|and\??|ok\.?|okay\.?|that'?s it\.?|right\??|correct\??|please|kindly|details?\.?|give (me )?(more )?(detail|details|info|information)\.?|more (detail|details|info|information)\.?|elaborate\.?|expand\.?|tell me more\.?|what about (it|them|those|these)\??|who are they\??|names please\.?)\s*$/i;
-  if (CONTINUATION_RE.test(lastUserMsg)) {
+  const CONTINUATION_RE = /^\s*(yes|yeah|yep|no|nope|sure\??|really\??|are you sure\??|are you certain\??|list them\.?|list all\.?|list( the)? names\??|show( me)? them\.?|show( me)? those\.?|list( those| these)\.?|show all\.?|show( me)? names\??|show( all)? of them\.?|how many\??|more|next|continue|and\??|ok\.?|okay\.?|that'?s it\.?|right\??|correct\??|please|kindly|details?\.?|give (me )?(more )?(detail|details|info|information)\.?|more (detail|details|info|information)\.?|elaborate\.?|expand\.?|tell me more\.?|what about (it|them|those|these)\??|who are they\??|names please\.?)\s*$/i;
+  const PROJECT_TEAM_FOLLOWUP_RE = /\b(list|show)\b.{0,40}\b(them|projects?|all|names?|details?)\b.{0,80}\b(team|teams)\b/i;
+  const continuationMsg = effectiveUserMsg;
+  if (
+    CONTINUATION_RE.test(continuationMsg)
+    || PROJECT_TEAM_FOLLOWUP_RE.test(continuationMsg)
+    || looksLikeReferenceFollowUp(continuationMsg)
+  ) {
     try {
       const memDoc = await ConversationMemory.findOne({
         userId: user?.id,
@@ -5297,17 +6206,71 @@ async function prepareContext(client, history, user) {
         jobs:       'fetch_jobs',
         task:       'fetch_tasks',
         tasks:      'fetch_tasks',
+        sprint:     'task_board_analytics',
+        sprints:    'task_board_analytics',
+        workload:   'workload_analytics',
         project:    'fetch_projects',
         projects:   'fetch_projects',
+        team:       'team_analytics',
+        teams:      'team_analytics',
         leave:      'fetch_leave_requests',
         leaves:     'fetch_leave_requests',
         attendance: 'fetch_attendance_summary',
         backdated:  'fetch_backdated_attendance_requests',
+        department: 'org_structure_analytics',
+        departments: 'org_structure_analytics',
+        manager:    'org_structure_analytics',
+        managers:   'org_structure_analytics',
+        supervisor: 'org_structure_analytics',
+        supervisors: 'org_structure_analytics',
+        unassigned: 'org_structure_analytics',
+        org_structure: 'org_structure_analytics',
       };
       let toolName = null;
       const toolArgs = {};
-      if (lastTopic && TOPIC_TOOL_MAP[lastTopic]) {
+      if (
+        looksLikeProjectTeamContinuation(continuationMsg, le)
+        || (PROJECT_TEAM_FOLLOWUP_RE.test(continuationMsg) && (lastTopic === 'project' || lastTopic === 'projects'))
+      ) {
+        toolName = 'project_analytics';
+        Object.assign(toolArgs, extractProjectAnalyticsArgs(continuationMsg));
+        if (!toolArgs.metric) toolArgs.metric = 'list_with_teams';
+        toolArgs.phrase = continuationMsg;
+      } else if (looksLikeOrgStructureContinuation(continuationMsg, le)) {
+        toolName = 'org_structure_analytics';
+        Object.assign(toolArgs, extractOrgStructureArgs(effectiveUserMsg));
+        if (!toolArgs.metric && le.lastMetric) toolArgs.metric = le.lastMetric;
+        if (!toolArgs.metric) toolArgs.metric = 'departments';
+        toolArgs.phrase = effectiveUserMsg;
+      } else if (looksLikeTaskBoardContinuation(continuationMsg, le)) {
+        toolName = 'task_board_analytics';
+        Object.assign(toolArgs, extractTaskBoardArgs(continuationMsg, { uiContext }));
+        if (le.lastTaskStage && !toolArgs.status) {
+          toolArgs.status = le.lastTaskStage;
+          toolArgs.metric = 'stage_count';
+        }
+        if (le.lastTaskFilter && !toolArgs.metric) toolArgs.metric = le.lastTaskFilter;
+        if (le.lastAssigneeName && !toolArgs.assigneeName) toolArgs.assigneeName = le.lastAssigneeName;
+        if (le.projectName && !toolArgs.projectName) toolArgs.projectName = le.projectName;
+        toolArgs.phrase = continuationMsg;
+      } else if (looksLikeWorkloadContinuation(continuationMsg, le)) {
+        toolName = 'workload_analytics';
+        Object.assign(toolArgs, extractWorkloadArgs(continuationMsg));
+        if (le.lastTeamName && !toolArgs.teamName) toolArgs.teamName = le.lastTeamName;
+        toolArgs.phrase = continuationMsg;
+      } else if (looksLikeTeamContinuation(continuationMsg, le)) {
+        toolName = 'team_analytics';
+        Object.assign(toolArgs, extractTeamAnalyticsArgs(continuationMsg));
+        if (!toolArgs.metric) toolArgs.metric = 'list';
+        if (le.lastTeamName && !toolArgs.teamName) toolArgs.teamName = le.lastTeamName;
+        toolArgs.phrase = continuationMsg;
+      } else if (lastTopic && TOPIC_TOOL_MAP[lastTopic]) {
         toolName = TOPIC_TOOL_MAP[lastTopic];
+        if (toolName === 'org_structure_analytics') {
+          toolArgs.metric = le.lastMetric || lastTopic;
+          if (le.unitName) toolArgs.unitName = le.unitName;
+          toolArgs.phrase = effectiveUserMsg;
+        }
         // Carry forward identity hints so the same record set is fetched.
         if (le.jobTitle && toolName === 'fetch_job_applications') toolArgs.jobTitle = le.jobTitle;
         if (le.jobId && toolName === 'fetch_job_applications')    toolArgs.jobId = le.jobId;
@@ -5324,6 +6287,7 @@ async function prepareContext(client, history, user) {
         const fetched = await executeFetches(
           [{ function: { name: toolName, arguments: argsJson } }],
           user,
+          uiContext,
         );
         const dataContext = summarizeData(fetched);
         logger.info(
@@ -5337,7 +6301,7 @@ async function prepareContext(client, history, user) {
   }
 
   // 1. Fast path — regex pre-routing: skip the LLM routing call for obvious intents.
-  const intent = detectIntent(lastUserMsg);
+  const intent = detectIntent(effectiveUserMsg, uiContext);
   if (intent?.clarify) {
     return {
       dataContext:
@@ -5354,11 +6318,11 @@ async function prepareContext(client, history, user) {
     // (issues 1, 2, 9, 10).
     const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
     const toolCalls = intent.modules.map((n) => {
-      const moduleArgs = extractFastPathArgs(lastUserMsg, n, intent.args || {}, fastUserCtx);
+      const moduleArgs = extractFastPathArgs(lastUserMsg, n, intent.args || {}, fastUserCtx, uiContext);
       return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
     });
     try {
-      const fetched = await executeFetches(toolCalls, user);
+      const fetched = await executeFetches(toolCalls, user, uiContext);
       // Persist resolved analytics window into conversation memory (Epic A2).
       const analytics = fetched?.employee_analytics;
       if (analytics && !analytics.needsClarification && (analytics.from || analytics.to || analytics.windowLabel)) {
@@ -5444,7 +6408,7 @@ async function prepareContext(client, history, user) {
       logger.warn(`[ChatAssistant] memory enrichment failed: ${err.message}`);
     }
     try {
-      const fetched = await executeFetches(toolCalls, user);
+      const fetched = await executeFetches(toolCalls, user, uiContext);
       const dataContext = summarizeData(fetched);
       logger.info(
         `[ChatAssistant] intent=llm modules=[${Object.keys(fetched).join(',')}] argsByModule=${JSON.stringify(toolCalls.map((t) => t.function.arguments))} ctx=${dataContext.length}c user=${user?.id}`
@@ -5564,6 +6528,13 @@ async function rehydrateLastEntities(le) {
   if (le.lastYear != null) out.lastYear = le.lastYear;
   if (le.lastTopic)      out.lastTopic = le.lastTopic;
   if (le.lastScope)      out.lastScope = le.lastScope;
+  if (le.lastEntityType) out.lastEntityType = le.lastEntityType;
+  if (le.lastIntent)     out.lastIntent = le.lastIntent;
+  if (le.lastMetric)     out.lastMetric = le.lastMetric;
+  if (le.lastOrgCount != null) out.lastOrgCount = le.lastOrgCount;
+  if (le.unitName)       out.unitName = le.unitName;
+  if (Array.isArray(le.lastResultList) && le.lastResultList.length) out.lastResultList = le.lastResultList;
+  if (Array.isArray(le.focusStack) && le.focusStack.length) out.focusStack = le.focusStack;
 
   out.updatedAt = le.updatedAt || null;
   return Object.values(out).some((v) => v !== null && v !== undefined) ? out : null;
@@ -5634,6 +6605,23 @@ function extractEntities(turnText, fetched) {
     lastDateLabel: null,
     lastTopic: null,
     lastScope: null,
+    lastProjectCount: null,
+    lastProjectNames: null,
+    lastProjectId: null,
+    projectName: null,
+    lastTeamName: null,
+    teamId: null,
+    lastSprintId: null,
+    lastSprintName: null,
+    lastAssigneeName: null,
+    lastTaskFilter: null,
+    lastTaskCount: null,
+    lastEntityType: null,
+    lastIntent: null,
+    lastMetric: null,
+    lastOrgCount: null,
+    lastResultList: null,
+    unitName: null,
   };
   if (!turnText) return out;
   // Carry temporal + topic hints forward (e.g. "yesterday" → 2026-05-06).
@@ -5643,7 +6631,7 @@ function extractEntities(turnText, fetched) {
   // bucket (placements, applications, jobs, …). Lets the continuation
   // pre-router re-dispatch follow-ups ("give detail", "more info") to the
   // same tool instead of falling back to the generic snapshot (issue 6).
-  const TOPIC_RE = /\b(placements?|offers?|applications?|applicants?|jobs?|tasks?|projects?|leaves?|leave\s+requests?|backdated|attendance|interviews?|candidates?|employees?|recruiters?|agents?|admins?|administrators?|students?)\b/i;
+  const TOPIC_RE = /\b(placements?|offers?|applications?|applicants?|jobs?|tasks?|projects?|leaves?|leave\s+requests?|backdated|attendance|interviews?|candidates?|employees?|recruiters?|agents?|admins?|administrators?|students?|departments?|managers?|supervisors?|unassigned)\b/i;
   const topicMatch = turnText.match(TOPIC_RE);
   if (topicMatch) {
     const t = topicMatch[1].toLowerCase().replace(/\s+requests?$/, '').replace(/s$/, '');
@@ -5690,6 +6678,12 @@ function extractEntities(turnText, fetched) {
     if (overview.user?._id)           out.personUserId = overview.user._id;
   }
 
+  Object.assign(out, extractProjectMemoryHints(fetched));
+  Object.assign(out, extractTaskMemoryHints(fetched));
+  Object.assign(out, extractTeamMemoryHints(fetched));
+  Object.assign(out, extractTaskBoardMemoryHints(fetched));
+  Object.assign(out, extractOrgStructureMemoryHints(fetched));
+
   return out;
 }
 
@@ -5703,11 +6697,24 @@ function mergeEntities(prev, fresh) {
     'person', 'email', 'employeeId', 'role', 'jobId', 'jobTitle',
     'lastDate', 'lastDateLabel', 'lastFromDate', 'lastToDate', 'lastYear',
     'lastTopic', 'lastScope',
+    'lastProjectCount', 'lastProjectNames', 'lastProjectId', 'projectName', 'lastTeamName', 'teamId',
+    'lastTeamCount', 'lastTeamNames',
+    'lastTaskCount',
+    'lastSprintId', 'lastSprintName', 'lastAssigneeName', 'lastTaskFilter',
+    'lastTaskStage', 'lastTaskStageLabel', 'lastTaskIds', 'lastTaskBoardFilter',
+    'lastEntityType', 'lastIntent', 'lastMetric', 'lastOrgCount', 'lastResultList', 'unitName', 'focusStack',
   ];
   for (const k of keys) {
     if (fresh[k] !== null && fresh[k] !== undefined && fresh[k] !== '') {
       merged[k] = fresh[k];
     }
+  }
+  // Orchestration state is owned by Clarification Manager — never drop on entity merge.
+  if (prev?.pendingConceptClarification && !fresh?.pendingConceptClarification) {
+    merged.pendingConceptClarification = prev.pendingConceptClarification;
+  }
+  if (prev?.conversationTopic && !fresh?.conversationTopic) {
+    merged.conversationTopic = prev.conversationTopic;
   }
   merged.updatedAt = new Date();
   return merged;
@@ -5745,6 +6752,14 @@ async function saveMemoryAsync(client, userId, adminId, history, reply, fetched)
     const fresh = extractEntities(`${userLast}\n${reply}`, fetched);
     await enrichEntitiesWithRoleId(fresh);
     const mergedEntities = mergeEntities(prevEntities, fresh);
+    // Re-read orchestration fields in case Clarification Manager wrote after our load.
+    const latest = await ConversationMemory.findOne({ userId, adminId }, { lastEntities: 1 }).lean();
+    if (latest?.lastEntities?.pendingConceptClarification && !mergedEntities.pendingConceptClarification) {
+      mergedEntities.pendingConceptClarification = latest.lastEntities.pendingConceptClarification;
+    }
+    if (latest?.lastEntities?.conversationTopic && !mergedEntities.conversationTopic) {
+      mergedEntities.conversationTopic = latest.lastEntities.conversationTopic;
+    }
 
     const compression = await client.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -5789,7 +6804,7 @@ async function saveMemoryAsync(client, userId, adminId, history, reply, fetched)
  * Non-streaming response.
  * @param {{ messages: {role: string, content: string}[], user: object }} opts
  */
-export async function sendMessage({ messages, user }) {
+export async function sendMessage({ messages, user, uiContext = null }) {
   const apiKey = config.openai.apiKey;
   if (!apiKey) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'AI service is not configured');
@@ -5805,7 +6820,7 @@ export async function sendMessage({ messages, user }) {
   const adminId = user?.adminId ?? userId;
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user),
+    prepareContext(client, history, user, uiContext),
     loadMemory(userId, adminId),
   ]);
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;
@@ -5899,7 +6914,7 @@ export async function sendMessage({ messages, user }) {
  * Runs Phase 1 (routing) + Phase 2 (fetch) before first token, then streams.
  * @param {{ messages: {role: string, content: string}[], user: object, onToken: (t: string) => void, onDone: () => void }} opts
  */
-export async function streamMessage({ messages, user, onToken, onDone }) {
+export async function streamMessage({ messages, user, onToken, onDone, uiContext = null }) {
   const apiKey = config.openai.apiKey;
   if (!apiKey) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'AI service is not configured');
@@ -5915,7 +6930,7 @@ export async function streamMessage({ messages, user, onToken, onDone }) {
   const adminId = user?.adminId ?? userId;
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user),
+    prepareContext(client, history, user, uiContext),
     loadMemory(userId, adminId),
   ]);
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;

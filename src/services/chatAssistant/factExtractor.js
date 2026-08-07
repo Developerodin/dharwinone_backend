@@ -142,6 +142,89 @@ function readOffers(fetched) {
   return { kind: 'fetch_offers', label: 'offers', total };
 }
 
+function readProjects(fetched) {
+  const data = fetched?.fetch_projects;
+  if (!data || data.forbidden) return null;
+  const total = Number(data.total ?? data.records?.length ?? 0);
+  return {
+    kind: 'fetch_projects',
+    label: 'projects',
+    total,
+    scope: data.scope || null,
+    provenance: data.provenance || 'project.service.queryProjects',
+    authoritative: data.authoritative !== false,
+  };
+}
+
+function readTasks(fetched) {
+  const data = fetched?.fetch_tasks;
+  if (!data || data.forbidden) return null;
+  const total = Number(data.total ?? data.records?.length ?? 0);
+  return {
+    kind: 'fetch_tasks',
+    label: 'tasks',
+    total,
+    scope: data.scope || null,
+    provenance: data.provenance || 'task.service.queryTasks',
+    authoritative: data.authoritative !== false,
+  };
+}
+
+function readTaskBoardAnalytics(fetched) {
+  const data = fetched?.task_board_analytics;
+  if (!data || data.forbidden) return null;
+  const metric = data.metric || 'stage_counts';
+  if (metric === 'stage_count') {
+    const stage = data.lookup?.stage || null;
+    const stageLabel = data.lookup?.stageLabel || stage || 'stage';
+    return {
+      kind: 'task_board_stage_count',
+      label: `${stageLabel} tasks`,
+      total: Number(data.authoritativeCount ?? 0),
+      stage,
+      stageLabel,
+      rows: data.rows || [],
+      scope: data.scope || null,
+      provenance: data.provenance || 'task_board_analytics',
+      authoritative: true,
+    };
+  }
+  if (metric === 'stage_counts') {
+    return {
+      kind: 'task_board_stage_counts',
+      label: 'task board stages',
+      total: Number(data.authoritativeCount ?? 0),
+      breakdown: data.breakdown?.byStage || null,
+      scope: data.scope || null,
+      provenance: data.provenance || 'Task.aggregate',
+      authoritative: true,
+    };
+  }
+  return {
+    kind: 'task_board_analytics',
+    label: metric.replace(/_/g, ' '),
+    total: Number(data.authoritativeCount ?? 0),
+    metric,
+    scope: data.scope || null,
+    provenance: data.provenance || 'task_board_analytics',
+    authoritative: true,
+  };
+}
+
+function readProjectAnalytics(fetched) {
+  const data = fetched?.project_analytics;
+  if (!data || data.forbidden) return null;
+  const total = Number(data.stats?.total ?? data.authoritativeCount ?? 0);
+  return {
+    kind: 'project_analytics',
+    label: 'projects',
+    total,
+    scope: data.scope || null,
+    provenance: data.provenance || 'project.service.queryProjects + TeamGroup.assignedTeams',
+    authoritative: true,
+  };
+}
+
 /**
  * @param {object} fetched - output of executeFetches
  * @param {string} [lastUserMsg] - last user message, used to bias the
@@ -160,13 +243,19 @@ export function extractFacts(fetched, lastUserMsg = '') {
   push(readRoles(fetched));
   push(readPlacements(fetched));
   push(readOffers(fetched));
+  push(readProjects(fetched));
+  push(readTasks(fetched));
+  push(readTaskBoardAnalytics(fetched));
+  push(readProjectAnalytics(fetched));
 
   let primary = null;
   if (lastUserMsg && counts.length) {
     const txt = lastUserMsg.toLowerCase();
     primary =
+      counts.find((c) => c.kind === 'task_board_stage_count') ||
       counts.find((c) => c.role && txt.includes(String(c.role).toLowerCase())) ||
       counts.find((c) => c.label && txt.includes(c.label.toLowerCase())) ||
+      counts.find((c) => c.kind !== 'fetch_tasks') ||
       counts[0];
   } else {
     primary = counts[0] || null;

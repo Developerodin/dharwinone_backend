@@ -172,6 +172,7 @@ const queryProjects = async (filter, options) => {
 
   delete filter.userRoleIds;
   delete filter.userId;
+  delete filter.userEmail;
 
   const limitRaw = parseInt(options?.limit, 10);
   const safeLimit = Number.isFinite(limitRaw)

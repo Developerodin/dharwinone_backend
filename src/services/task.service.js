@@ -300,6 +300,7 @@ const queryTasks = async (filter, options) => {
   const reassignedOnly = isTruthyQueryFlag(filter.reassigned);
   delete filter.userRoleIds;
   delete filter.userId;
+  delete filter.userEmail;
   delete filter.apiPermissions;
   delete filter.assignedToMe;
   delete filter.unassigned;

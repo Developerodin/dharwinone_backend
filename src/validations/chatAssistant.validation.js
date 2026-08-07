@@ -22,5 +22,22 @@ const chatMessage = Joi.alternatives().try(
 export const sendMessage = {
   body: Joi.object().keys({
     messages: Joi.array().items(chatMessage).min(1).max(MESSAGES_MAX).required(),
+    uiContext: Joi.object().keys({
+      currentModule: Joi.string().max(64),
+      currentProject: Joi.string().max(200).allow(null),
+      activeFilters: Joi.object().keys({
+        assignee: Joi.string().max(200).allow(null),
+        stage: Joi.string().max(64).allow(null),
+        search: Joi.string().max(500).allow(null),
+      }).unknown(false),
+      visibleCounts: Joi.object().keys({
+        total: Joi.number().integer().min(0),
+        new: Joi.number().integer().min(0),
+        todo: Joi.number().integer().min(0),
+        ongoing: Joi.number().integer().min(0),
+        review: Joi.number().integer().min(0),
+        completed: Joi.number().integer().min(0),
+      }).unknown(false),
+    }).unknown(false),
   }),
 };

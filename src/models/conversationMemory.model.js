@@ -44,6 +44,41 @@ const conversationMemorySchema = new mongoose.Schema(
       lastYear:        { type: Number, default: null },
       lastTopic:       { type: String, default: null, trim: true },
       lastScope:       { type: String, default: null, trim: true },
+      /** Project graph memory — follow-ups after project count / team mapping. */
+      lastProjectCount: { type: Number, default: null },
+      lastProjectNames: { type: [String], default: undefined },
+      lastProjectId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
+      projectName:      { type: String, default: null, trim: true },
+      lastTeamName:     { type: String, default: null, trim: true },
+      teamId:           { type: mongoose.Schema.Types.ObjectId, ref: 'TeamGroup', default: null },
+      /** Task / sprint graph memory — follow-ups after task board or workload analytics. */
+      lastSprintId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Sprint', default: null },
+      lastSprintName:   { type: String, default: null, trim: true },
+      lastAssigneeName: { type: String, default: null, trim: true },
+      lastTaskFilter:   { type: String, default: null, trim: true },
+      /** Reference resolver — entity type / intent from last authoritative fetch. */
+      lastEntityType:   { type: String, default: null, trim: true },
+      lastIntent:       { type: String, default: null, trim: true },
+      lastMetric:       { type: String, default: null, trim: true },
+      /** Org structure count memory (departments, managers, supervisors). */
+      lastOrgCount:     { type: Number, default: null },
+      /** Last listing snapshot for ordinal resolution ("the second one"). */
+      lastResultList:   { type: [mongoose.Schema.Types.Mixed], default: undefined },
+      /** Hierarchical focus stack for multi-hop org drill-down (future). */
+      focusStack:       { type: [mongoose.Schema.Types.Mixed], default: undefined },
+      /** Pending business-concept clarification (e.g. manager ambiguity). */
+      pendingConceptClarification: {
+        concept:       { type: String, default: null, trim: true },
+        originalQuery: { type: String, default: null, trim: true },
+        options:       { type: [mongoose.Schema.Types.Mixed], default: undefined },
+        updatedAt:     { type: Date, default: null },
+      },
+      /** Topic memory for manager follow-ups ("what about org chart"). */
+      conversationTopic: {
+        concept:            { type: String, default: null, trim: true },
+        lastInterpretation: { type: String, default: null, trim: true },
+        updatedAt:          { type: Date, default: null },
+      },
       updatedAt:       { type: Date, default: null },
     },
     /**

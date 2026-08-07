@@ -418,7 +418,8 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
     roomJoin: true,
     canPublish, // Hosts, admitted users, or meetings with requireApproval=false
     canSubscribe, // Knockers (uninvited, not yet admitted) are blind until the host admits
-    canPublishData: canPublish,
+    // In-room chat uses data packets; any subscriber can read/write even when publish is blocked.
+    canPublishData: canSubscribe,
     canUpdateOwnMetadata: true,
   });
 

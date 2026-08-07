@@ -434,6 +434,12 @@ export function lookupOrgUnitFromTree(tree, unitName) {
 /** Detect org-chart / structure asks that must NOT use fetch_employees role filters. */
 export function looksLikeOrgStructureQuery(text) {
   if (!text) return false;
+  // Bare "how many managers" → manager POSITIONS (Org Chart), same as supervisors.
+  if (/\b(how many|count|number of|total)\b.{0,40}\bmanagers?\b/i.test(text)) {
+    if (!/\b(designation|job title|title|reports?\s+to|direct reports?|organizational? managers?|people with)\b/i.test(text)) {
+      return true;
+    }
+  }
   const t = String(text);
   // Explicit org chart / structure / coverage language
   if (
@@ -560,4 +566,78 @@ export function buildOrgStructureAnalyticsPayload({ summary, units, tree, args =
     authoritativeLabel: auth.label,
     authoritative: true,
   };
+}
+
+const ORG_METRIC_TOPIC = {
+  departments: 'departments',
+  managers: 'managers',
+  supervisors: 'supervisors',
+  unassigned: 'unassigned',
+  coverage: 'org_structure',
+};
+
+/**
+ * Follow-up after org structure count: "list them", "show those", etc.
+ * @param {string} text
+ * @param {object|null} memory lastEntities snapshot
+ */
+export function looksLikeOrgStructureContinuation(text, memory = null) {
+  const t = String(text || '');
+  const entityType = String(memory?.lastEntityType || memory?.lastMetric || memory?.lastTopic || '').toLowerCase();
+  const orgTopics = new Set(['departments', 'department', 'managers', 'manager', 'supervisors', 'supervisor', 'unassigned', 'org_structure']);
+  if (!orgTopics.has(entityType)) return false;
+  if (/\b(list|show)\b.{0,20}\b(them|all|those|these|names?|details?)\b/i.test(t)) return true;
+  return false;
+}
+
+/** Entity hints for conversation memory after org_structure_analytics. */
+export function extractOrgStructureMemoryHints(fetched = {}) {
+  const out = {};
+  const data = fetched.org_structure_analytics;
+  if (!data || data.forbidden) return out;
+
+  const metric = String(data.metric || 'coverage').toLowerCase();
+  const topic = ORG_METRIC_TOPIC[metric] || metric;
+  out.lastMetric = metric;
+  out.lastTopic = topic;
+  out.lastEntityType = topic === 'org_structure' ? 'departments' : topic;
+
+  out.lastIntent = metric === 'unit_lookup' ? 'unit_lookup' : `${metric}_query`;
+
+  if (metric === 'departments' && data.departments) {
+    if (typeof data.departments.count === 'number') out.lastOrgCount = data.departments.count;
+    const records = data.departments.records || [];
+    if (records.length) {
+      out.lastResultList = records.slice(0, 50).map((r) => ({ id: r.id, name: r.name }));
+    }
+  } else if (metric === 'managers' && data.managers) {
+    if (typeof data.managers.count === 'number') out.lastOrgCount = data.managers.count;
+    const records = data.managers.records || data.managers.positions || [];
+    if (records.length) {
+      out.lastResultList = records.slice(0, 50).map((r) => ({
+        id: r.id,
+        name: r.name || r.headName || '',
+      }));
+    }
+  } else if (metric === 'supervisors' && data.supervisors) {
+    if (typeof data.supervisors.count === 'number') out.lastOrgCount = data.supervisors.count;
+    const records = data.supervisors.records || data.supervisors.positions || [];
+    if (records.length) {
+      out.lastResultList = records.slice(0, 50).map((r) => ({
+        id: r.id,
+        name: r.name || r.headName || '',
+      }));
+    }
+  } else if (metric === 'unit_lookup' && data.lookup?.matches?.length) {
+    out.lastIntent = 'unit_lookup';
+    out.lastResultList = data.lookup.matches.slice(0, 50).map((m) => ({
+      id: m.id,
+      name: m.name,
+    }));
+    if (data.lookup.matches.length === 1 && data.lookup.matches[0]?.name) {
+      out.unitName = data.lookup.matches[0].name;
+    }
+  }
+
+  return out;
 }

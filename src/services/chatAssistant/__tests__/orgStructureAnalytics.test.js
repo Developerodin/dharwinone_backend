@@ -17,7 +17,33 @@ import {
   guardFetchEmployeesOrgRoute,
   extractOrgStructureArgs,
   buildOrgStructureAnalyticsPayload,
+  looksLikeOrgStructureContinuation,
+  extractOrgStructureMemoryHints,
 } from '../orgStructureAnalytics.js';
+import { computeSpanMetrics } from '../../orgTree.pure.js';
+import { isOrgChartLeaderUnit } from '../managerCounts.js';
+
+/** Screenshot org chart: CEO → 1 manager → 2 supervisors → 5 departments */
+const SCREENSHOT_UNITS = [
+  { id: 'ceo1', name: 'CEO', type: 'ceo', isActive: true, parentId: null, headEmployeeId: 'e-ceo', headEmployee: { fullName: 'Harvinder Singh' } },
+  { id: 'mgr1', name: 'Manager', type: 'manager', isActive: true, parentId: 'ceo1', headEmployeeId: 'e-jasen', headEmployee: { fullName: 'Jasen Mendonca' } },
+  { id: 'sup1', name: 'Supervisor Sami', type: 'supervisor', isActive: true, parentId: 'mgr1', headEmployeeId: 'e-sami', headEmployee: { fullName: 'Sami Shaikh' } },
+  { id: 'sup2', name: 'Supervisor Himanshu', type: 'supervisor', isActive: true, parentId: 'mgr1', headEmployeeId: 'e-him', headEmployee: { fullName: 'Himanshu Dave' } },
+  { id: 'd-a', name: 'Group A', type: 'department', isActive: true, parentId: 'sup2', departmentId: 'dept-a', headEmployeeId: 'e-mirza', headEmployee: { fullName: 'Mirza' } },
+  { id: 'd-c', name: 'Group C', type: 'department', isActive: true, parentId: 'sup2', departmentId: 'dept-c', headEmployeeId: 'e-theo', headEmployee: { fullName: 'Theodore' } },
+  { id: 'd-d', name: 'Group D', type: 'department', isActive: true, parentId: 'sup1', departmentId: 'dept-d', headEmployeeId: 'e-akshay', headEmployee: { fullName: 'Akshay Khan' } },
+  { id: 'd-e', name: 'Group E', type: 'department', isActive: true, parentId: 'sup1', departmentId: 'dept-e', headEmployeeId: 'e-rohith', headEmployee: { fullName: 'Rohith' } },
+  { id: 'd-f', name: 'Group F', type: 'department', isActive: true, parentId: 'sup1', departmentId: 'dept-f', headEmployeeId: 'e-dinesh', headEmployee: { fullName: 'Dinesh' } },
+];
+
+const SCREENSHOT_EMPLOYEES = [
+  { id: 'm-a', departmentId: 'dept-a', isActive: true },
+  { id: 'm-c', departmentId: 'dept-c', isActive: true },
+  { id: 'm-d1', departmentId: 'dept-d', isActive: true },
+  { id: 'm-d2', departmentId: 'dept-d', isActive: true },
+  { id: 'm-e1', departmentId: 'dept-e', isActive: true },
+  { id: 'm-f1', departmentId: 'dept-f', isActive: true },
+];
 
 const SAMPLE_SUMMARY = {
   totalActiveEmployees: 40,
@@ -284,8 +310,9 @@ describe('orgStructureAnalytics (Epic G)', () => {
   });
 
   describe('looksLikeOrgStructureQuery / routing guards', () => {
-    it('detects manager / supervisor / group / org chart asks', () => {
+    it('detects supervisor / group / org chart asks; routes bare manager counts to org structure', () => {
       assert.equal(looksLikeOrgStructureQuery('how many managers'), true);
+      assert.equal(looksLikeOrgStructureQuery('how many managers in org chart'), true);
       assert.equal(looksLikeOrgStructureQuery('how many supervisors'), true);
       assert.equal(looksLikeOrgStructureQuery('group a in org chart'), true);
       assert.equal(looksLikeOrgStructureQuery('org structure coverage'), true);
@@ -294,10 +321,13 @@ describe('orgStructureAnalytics (Epic G)', () => {
       assert.equal(looksLikeOrgStructureQuery('list sales agents'), false);
     });
 
-    it('blocks fetch_employees for org asks', () => {
-      const g = guardFetchEmployeesOrgRoute('how many managers');
+    it('blocks fetch_employees for org manager/chart asks including bare manager counts', () => {
+      const g = guardFetchEmployeesOrgRoute('how many managers in org chart');
       assert.equal(g.block, true);
       assert.ok(g.preferModules.includes('org_structure_analytics'));
+      const gBare = guardFetchEmployeesOrgRoute('how many managers');
+      assert.equal(gBare?.block, true);
+      assert.ok(gBare?.preferModules.includes('org_structure_analytics'));
       assert.equal(guardFetchEmployeesOrgRoute('list recruiters'), null);
     });
   });
@@ -344,6 +374,81 @@ describe('orgStructureAnalytics (Epic G)', () => {
       assert.equal(payload.lookup, null);
       assert.equal(payload.managers.records[0].headName, 'Jason');
       assert.equal(payload.managers.records[1].headName, 'Priya');
+    });
+  });
+
+  describe('screenshot org chart — manager vs supervisor vs department', () => {
+    it('counts manager/supervisor/department positions separately (not conflated)', () => {
+      const counts = countOrgUnitsByType(SCREENSHOT_UNITS);
+      assert.equal(counts.manager, 1);
+      assert.equal(counts.supervisor, 2);
+      assert.equal(counts.department, 5);
+      assert.equal(counts.ceo, 1);
+
+      const facts = formatOrgCoverageFacts(SAMPLE_SUMMARY, SCREENSHOT_UNITS);
+      assert.equal(resolveOrgAuthoritativeCount(facts, { metric: 'managers' }).count, 1);
+      assert.equal(resolveOrgAuthoritativeCount(facts, { metric: 'supervisors' }).count, 2);
+      assert.equal(resolveOrgAuthoritativeCount(facts, { metric: 'departments' }).count, 5);
+
+      const mgrHead = listPositionRecords(SCREENSHOT_UNITS, 'manager')[0];
+      assert.equal(mgrHead.headName, 'Jasen Mendonca');
+    });
+
+    it('does not treat department unit heads as org-chart leadership for span enrichment', () => {
+      const span = computeSpanMetrics(SCREENSHOT_UNITS, SCREENSHOT_EMPLOYEES);
+      const deptHeadUnits = SCREENSHOT_UNITS.filter((u) => u.type === 'department');
+      for (const u of deptHeadUnits) {
+        assert.equal(isOrgChartLeaderUnit(u), false, `${u.name} must not be a leadership unit`);
+        assert.ok((span.get(u.id)?.directReports ?? 0) > 0, `${u.name} has members but is not a manager`);
+      }
+      const leadershipUnits = SCREENSHOT_UNITS.filter((u) => isOrgChartLeaderUnit(u));
+      assert.equal(leadershipUnits.length, 4);
+      assert.deepEqual(
+        leadershipUnits.map((u) => u.type),
+        ['ceo', 'manager', 'supervisor', 'supervisor']
+      );
+    });
+  });
+
+  describe('extractOrgStructureMemoryHints', () => {
+    it('stores department entity memory after org_structure_analytics count', () => {
+      const hints = extractOrgStructureMemoryHints({
+        org_structure_analytics: {
+          metric: 'departments',
+          authoritativeCount: 6,
+          departments: {
+            count: 6,
+            records: [
+              { id: '1', name: 'Group A' },
+              { id: '2', name: 'Group B' },
+            ],
+          },
+        },
+      });
+      assert.equal(hints.lastTopic, 'departments');
+      assert.equal(hints.lastEntityType, 'departments');
+      assert.equal(hints.lastMetric, 'departments');
+      assert.equal(hints.lastOrgCount, 6);
+      assert.equal(hints.lastResultList.length, 2);
+    });
+  });
+
+  describe('looksLikeOrgStructureContinuation', () => {
+    it('detects list them after department topic', () => {
+      assert.equal(
+        looksLikeOrgStructureContinuation('list them', {
+          lastEntityType: 'departments',
+          lastMetric: 'departments',
+        }),
+        true,
+      );
+    });
+
+    it('ignores when prior topic was unrelated', () => {
+      assert.equal(
+        looksLikeOrgStructureContinuation('list them', { lastTopic: 'jobs' }),
+        false,
+      );
     });
   });
 });

@@ -41,6 +41,7 @@ export const sendMessage = catchAsync(async (req, res) => {
   const result = await chatAssistantService.sendMessage({
     messages,
     user: req.user,
+    uiContext: req.body.uiContext || null,
   });
 
   res.status(httpStatus.OK).json({ success: true, data: result });
@@ -83,6 +84,7 @@ export const streamMessage = async (req, res) => {
     await chatAssistantService.streamMessage({
       messages,
       user: req.user,
+      uiContext: req.body.uiContext || null,
       onToken: (token) => send({ token }),
       onDone: (envelopePayload) => {
         const payload = { done: true };
