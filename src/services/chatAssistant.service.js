@@ -14,6 +14,7 @@ import User from '../models/user.model.js';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
+import Meeting from '../models/meeting.model.js';
 import Holiday from '../models/holiday.model.js';
 import Student from '../models/student.model.js';
 import Employee from '../models/employee.model.js';
@@ -49,6 +50,7 @@ import {
   looksLikeWeekOffOrGroupsQuery,
 } from './chatAssistant/attendanceAnalytics.js';
 import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
+import { buildInterviewFilter, summarizeInterviewBreakdown } from './chatAssistant/interviewAnalytics.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -511,6 +513,35 @@ const ROUTING_TOOLS = [
         properties: {
           from: { type: 'string', description: 'YYYY-MM-DD inclusive start (referredAt window).' },
           to:   { type: 'string', description: 'YYYY-MM-DD inclusive end (referredAt window).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_interviews',
+      description:
+        'Authoritative interview analytics/list (aka interview_analytics) — sourced from the `Meeting` collection ' +
+        '(ATS Schedule Interview), NEVER the InternalMeeting collection (that is general/internal meetings — use fetch_meetings for those). ' +
+        '"interviewer" / employee name filters recruiter.name OR any assigned agents[].name — the STAFF running the interview. ' +
+        '"candidate" is a SEPARATE filter for the person being interviewed — never conflate the two. ' +
+        'status = Meeting lifecycle (scheduled | ended | cancelled); interviewResult = outcome (pending | selected | rejected). ' +
+        'Date window applies to scheduledAt (the actual interview slot), not createdAt. ' +
+        'Use for: "interviews on <date>", "interviews by <interviewer>", "<candidate>\'s interview status", "how many interviews were selected/rejected this month".',
+      parameters: {
+        type: 'object',
+        properties: {
+          from:            { type: 'string', description: 'YYYY-MM-DD inclusive start (scheduledAt window).' },
+          to:              { type: 'string', description: 'YYYY-MM-DD inclusive end (scheduledAt window).' },
+          date:            { type: 'string', description: 'YYYY-MM-DD single day (scheduledAt).' },
+          month:           { type: 'string', description: 'YYYY-MM calendar month (scheduledAt).' },
+          interviewerName: { type: 'string', description: 'Interviewer / employee name — matches recruiter.name or any agents[].name. NOT the candidate.' },
+          candidateName:   { type: 'string', description: 'Candidate (interviewee) name — separate from interviewerName.' },
+          status:          { type: 'string', description: 'Meeting lifecycle: scheduled | ended | cancelled.' },
+          interviewResult: { type: 'string', description: 'Outcome: pending | selected | rejected.' },
+          limit:           { type: 'number', description: 'Max records to return (default 25, max 100).' },
         },
         required: [],
       },
@@ -1693,6 +1724,57 @@ async function fetchModule(name, args, user) {
         query,
         permissions: user?.authContext?.permissions,
       });
+    }
+
+    case 'fetch_interviews': {
+      // Meeting collection (ATS interviews) ONLY — see interviewAnalytics.js header.
+      // Never mix with fetch_meetings (InternalMeeting — general/non-interview).
+      const window = resolveDateWindow({
+        date: args.date,
+        month: args.month,
+        fromDate: args.from,
+        toDate: args.to,
+      });
+      const filter = buildInterviewFilter({
+        from: window.from,
+        to: window.to,
+        interviewerName: args.interviewerName,
+        candidateName: args.candidateName,
+        status: args.status,
+        interviewResult: args.interviewResult,
+      });
+      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
+      const [total, statusAgg, resultAgg, docs] = await Promise.all([
+        Meeting.countDocuments(filter),
+        Meeting.aggregate([{ $match: filter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Meeting.aggregate([{ $match: filter }, { $group: { _id: '$interviewResult', count: { $sum: 1 } } }]),
+        Meeting.find(filter)
+          .select('title scheduledAt status interviewResult interviewType candidate recruiter agents jobPosition')
+          .sort({ scheduledAt: -1 })
+          .limit(limit)
+          .lean(),
+      ]);
+      const breakdown = summarizeInterviewBreakdown(statusAgg, resultAgg);
+      const records = docs.map((m) => ({
+        title: m.title,
+        scheduledAt: m.scheduledAt,
+        status: m.status,
+        interviewResult: m.interviewResult,
+        interviewType: m.interviewType,
+        jobPosition: m.jobPosition || null,
+        candidateName: m.candidate?.name || null,
+        interviewerName:
+          m.recruiter?.name || (Array.isArray(m.agents) ? m.agents.map((a) => a.name).filter(Boolean).join(', ') : '') || null,
+      }));
+      return {
+        total,
+        breakdown,
+        records,
+        windowLabel: window.missing ? 'all time' : window.label,
+        authoritative: true,
+        population: 'interview',
+        partialList: total > records.length,
+      };
     }
 
     case 'fetch_people': {
@@ -3310,6 +3392,9 @@ function buildCountBanner(fetchedData) {
       lines.push(`  referral_leads_analytics.refer_leads = ${data.buckets.refer_leads?.count ?? 0}`);
       lines.push(`  referral_leads_analytics.pre_boarding = ${data.buckets.pre_boarding?.count ?? 0}`);
     }
+    if (key === 'fetch_interviews' && typeof data?.total === 'number') {
+      lines.push(`  fetch_interviews.total = ${data.total}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -3519,6 +3604,27 @@ function summarizeData(fetchedData) {
         `ONBOARDED (${b.onboarded?.count ?? 0}) — User granted the Employee role; a SEPARATE hand-off event from Placement Joined.`,
         `Do NOT mix these counts with employee_analytics — different populations.`,
       ];
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'fetch_interviews') {
+      const b = data?.breakdown || { total: 0, byStatus: {}, byResult: {} };
+      const win = data?.windowLabel || 'unspecified';
+      const lines = [
+        `--- interviews (Meeting collection — ATS interviews, NOT internal meetings | window=${win} | ` +
+        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? b.total ?? 0} — ALWAYS use this number for "how many interviews". ` +
+        `STATUS_BREAKDOWN: scheduled=${b.byStatus?.scheduled ?? 0}, ended=${b.byStatus?.ended ?? 0}, cancelled=${b.byStatus?.cancelled ?? 0} | ` +
+        `RESULT_BREAKDOWN: pending=${b.byResult?.pending ?? 0}, selected=${b.byResult?.selected ?? 0}, rejected=${b.byResult?.rejected ?? 0}) ---`,
+      ];
+      for (const m of data?.records ?? []) {
+        lines.push(
+          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT: ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
+          `STATUS: ${m.status || 'N/A'} | RESULT: ${m.interviewResult || 'N/A'} | ` +
+          `INTERVIEWER: ${m.interviewerName || 'N/A'} | CANDIDATE: ${m.candidateName || 'N/A'}` +
+          (m.jobPosition ? ` | JOB: ${m.jobPosition}` : '')
+        );
+      }
       parts.push(lines.join('\n'));
       continue;
     }
@@ -4563,6 +4669,10 @@ const INTENT_PATTERNS = [
   { re: /\b(overdue|past due|missed deadline|late tasks?)\b/i,             modules: ['fetch_tasks'] },
   // Projects
   { re: /\b(projects? (of|by|for|status)|active projects?)\b/i,            modules: ['fetch_projects'] },
+  // Interviews (Meeting collection) — must come BEFORE the generic application
+  // pattern below so "interviews on Monday" / "who interviewed X" don't fall
+  // through to the job-application pipeline tool.
+  { re: /\b(interviews?|interviewed|interviewer|interview schedule|interview result|interview status)\b/i, modules: ['fetch_interviews'] },
   // Applications
   { re: /\b(application|candidate pipeline|hiring pipeline)\b/i,           modules: ['fetch_job_applications'] },
   // HR ops — fast-path only when no specific person mentioned (SPECIFIC_LOOKUP_RE
