@@ -21,6 +21,7 @@ recordings/
 docs/
 # Local ops scripts (never push)
 scripts/*
+!scripts/mirror-cloud-to-local.js
 tests/
 graphify-out/
 
