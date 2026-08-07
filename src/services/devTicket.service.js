@@ -766,6 +766,75 @@ const addCommentToTicket = async (ticketId, content, user, files = []) => {
   return ticketObj;
 };
 
+// ──────────────────────────── edit / delete comment ────────────────────────────
+
+// A comment is the author's own words: only the author may edit or delete it.
+// ponytail: no admin moderation override — add one when moderation is actually asked for.
+const loadCommentForActor = async (ticketId, commentId, user) => {
+  const ticket = await DevTicket.findById(ticketId);
+  if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Dev ticket not found');
+
+  const comment = ticket.comments.id(commentId);
+  if (!comment) throw new ApiError(httpStatus.NOT_FOUND, 'Comment not found');
+
+  const actorId = getUserId(user);
+  if (String(comment.commentedBy) !== String(actorId)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You can only modify your own comments');
+  }
+
+  return { ticket, comment, actorId };
+};
+
+const updateTicketComment = async (ticketId, commentId, content, user) => {
+  const { ticket, comment, actorId } = await loadCommentForActor(ticketId, commentId, user);
+
+  const next = content.trim();
+  if (next === comment.content) {
+    await ticket.populate(POPULATE_PATHS);
+    return toTicketObj(ticket);
+  }
+
+  const previous = comment.content;
+  comment.content = next;
+  comment.mentions = await parseMentionsFromContent(next);
+  comment.editedAt = new Date();
+
+  ticket.logActivity('comment_edited', actorId, 'Comment', previous.slice(0, 200), next.slice(0, 200));
+  await ticket.save();
+
+  await ticket.populate(POPULATE_PATHS);
+  return toTicketObj(ticket);
+};
+
+const deleteTicketComment = async (ticketId, commentId, user) => {
+  const { ticket, comment, actorId } = await loadCommentForActor(ticketId, commentId, user);
+
+  // Comment attachments are mirrored onto the ticket so they show in the Files list;
+  // dropping the comment has to drop both copies or the ticket keeps orphan files.
+  const keys = (comment.attachments ?? []).map((a) => a.key).filter(Boolean);
+  keys.forEach((key) => {
+    const mirrored = ticket.attachments.find((a) => a.key === key);
+    if (mirrored) ticket.attachments.pull(mirrored._id);
+  });
+
+  const preview = comment.content.trim().slice(0, 200);
+  comment.deleteOne();
+  ticket.logActivity('comment_deleted', actorId, 'Comment', preview, '');
+  await ticket.save();
+
+  // Ticket state is what users see; a stranded S3 object is not worth failing the request.
+  for (const key of keys) {
+    try {
+      await deleteFileFromS3(key);
+    } catch (e) {
+      logger.warn(`S3 delete fail (key=${key}): ${e?.message}`);
+    }
+  }
+
+  await ticket.populate(POPULATE_PATHS);
+  return toTicketObj(ticket);
+};
+
 // ──────────────────────────── delete ────────────────────────────
 
 // ──────────────────────────── ticket attachments ────────────────────────────
@@ -1190,6 +1259,8 @@ export {
   getDevTicketById,
   updateDevTicketById,
   addCommentToTicket,
+  updateTicketComment,
+  deleteTicketComment,
   addTicketAttachments,
   removeTicketAttachment,
   deleteDevTicketById,

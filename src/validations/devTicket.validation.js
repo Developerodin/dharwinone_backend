@@ -162,6 +162,28 @@ const addComment = {
     .required(),
 };
 
+const updateComment = {
+  params: Joi.object().keys({
+    ticketId: Joi.string().custom(objectId).required(),
+    commentId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      content: Joi.string().required().trim().min(1).max(2000).messages({
+        'string.max': 'Comment must not exceed 2000 characters',
+        'any.required': 'Comment content is required',
+      }),
+    })
+    .required(),
+};
+
+const deleteComment = {
+  params: Joi.object().keys({
+    ticketId: Joi.string().custom(objectId).required(),
+    commentId: Joi.string().custom(objectId).required(),
+  }),
+};
+
 const addAttachments = {
   params: Joi.object().keys({
     ticketId: Joi.string().custom(objectId).required(),
@@ -261,6 +283,8 @@ export {
   getDevTicket,
   updateDevTicket,
   addComment,
+  updateComment,
+  deleteComment,
   addAttachments,
   removeAttachment,
   deleteDevTicket,

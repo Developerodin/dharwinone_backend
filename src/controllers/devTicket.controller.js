@@ -7,6 +7,8 @@ import {
   getDevTicketById,
   updateDevTicketById,
   addCommentToTicket,
+  updateTicketComment,
+  deleteTicketComment,
   addTicketAttachments,
   removeTicketAttachment,
   deleteDevTicketById,
@@ -53,6 +55,21 @@ const addComment = catchAsync(async (req, res) => {
   const files = req.files || (req.file ? [req.file] : []);
   const ticket = await addCommentToTicket(req.params.ticketId, content, req.user, files);
   res.status(httpStatus.OK).send(ticket);
+});
+
+const commentUpdate = catchAsync(async (req, res) => {
+  const ticket = await updateTicketComment(
+    req.params.ticketId,
+    req.params.commentId,
+    req.body.content,
+    req.user
+  );
+  res.send(ticket);
+});
+
+const commentRemove = catchAsync(async (req, res) => {
+  const ticket = await deleteTicketComment(req.params.ticketId, req.params.commentId, req.user);
+  res.send(ticket);
 });
 
 const attachmentsAdd = catchAsync(async (req, res) => {
@@ -116,6 +133,8 @@ export {
   update,
   remove,
   addComment,
+  commentUpdate,
+  commentRemove,
   attachmentsAdd,
   attachmentRemove,
   bulk,

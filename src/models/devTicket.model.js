@@ -40,6 +40,7 @@ const commentSchema = new mongoose.Schema(
         users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
       },
     ],
+    editedAt: { type: Date },
   },
   { timestamps: true }
 );

@@ -40,6 +40,11 @@ router
   );
 
 router
+  .route('/:ticketId/comments/:commentId')
+  .patch(...canView, validate(devTicketValidation.updateComment), devTicketController.commentUpdate)
+  .delete(...canView, validate(devTicketValidation.deleteComment), devTicketController.commentRemove);
+
+router
   .route('/:ticketId/attachments')
   .post(
     ...canView,
