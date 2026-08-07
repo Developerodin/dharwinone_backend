@@ -48,6 +48,7 @@ import {
   backdatedEntriesWindowClause,
   looksLikeWeekOffOrGroupsQuery,
 } from './chatAssistant/attendanceAnalytics.js';
+import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   visibleUserStatusClause,
@@ -489,6 +490,29 @@ const ROUTING_TOOLS = [
           limit: { type: 'number', description: 'Sample rows to return (default 25, max 100).' },
         },
         required: ['metric'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'referral_leads_analytics',
+      description:
+        'Authoritative candidate hiring-tunnel snapshot (referral leads / ATS candidates) — wraps the Refer Leads ' +
+        'page stats (getReferralLeadsStats), never a separately-invented funnel. ' +
+        'Buckets: refer_leads (total referred), applications, interviews, offers, ' +
+        'placements (Placement Onboarding/Joined/Deferred), pre_boarding (CONCURRENT with placements — Placement.preBoardingStatus, ' +
+        'NOT a linear application-status step), onboarded (User granted the Employee role — a SEPARATE hand-off event, not the same as Placement Joined). ' +
+        'NEVER use for Employee-role headcount/resign/join/paid-unpaid — use employee_analytics for that population instead. ' +
+        'RBAC: requires the same candidates.read permission as the Refer Leads page; returns {forbidden:true} if the caller lacks it. ' +
+        'Use for: "hiring tunnel", "referral funnel", "candidate pipeline snapshot", "how many in pre-boarding", "how many placements this month".',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: 'YYYY-MM-DD inclusive start (referredAt window).' },
+          to:   { type: 'string', description: 'YYYY-MM-DD inclusive end (referredAt window).' },
+        },
+        required: [],
       },
     },
   },
@@ -1656,6 +1680,19 @@ async function fetchModule(name, args, user) {
         population: 'Employee',
         partialList: total > records.length,
       };
+    }
+
+    case 'referral_leads_analytics': {
+      // Referral-lead / ATS-candidate population ONLY — see referralLeadsAnalytics.js
+      // header for the hand-off note (Employee-role tools only after User has Employee role).
+      const query = {};
+      if (args.from) query.from = args.from;
+      if (args.to) query.to = args.to;
+      return fetchHiringTunnelSnapshot({
+        user,
+        query,
+        permissions: user?.authContext?.permissions,
+      });
     }
 
     case 'fetch_people': {
@@ -3269,6 +3306,10 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_leave_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_leave_requests.total = ${data.total}`);
     }
+    if (key === 'referral_leads_analytics' && data?.buckets && !data.forbidden) {
+      lines.push(`  referral_leads_analytics.refer_leads = ${data.buckets.refer_leads?.count ?? 0}`);
+      lines.push(`  referral_leads_analytics.pre_boarding = ${data.buckets.pre_boarding?.count ?? 0}`);
+    }
     if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
@@ -3453,6 +3494,31 @@ function summarizeData(fetchedData) {
           (e.compensationType ? ` | COMPENSATION: ${e.compensationType}` : '')
         );
       }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'referral_leads_analytics') {
+      if (data?.forbidden) {
+        parts.push(
+          `--- referral leads / hiring tunnel ---\n` +
+          `FORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
+          `USER_FACING_REPLY: Tell the user they do not have permission to view referral-lead / candidate hiring-tunnel data.`
+        );
+        continue;
+      }
+      const b = data?.buckets || {};
+      const lines = [
+        `--- referral leads / hiring tunnel (population=referral_lead | AUTHORITATIVE — wraps getReferralLeadsStats, matches the Refer Leads page exactly) ---`,
+        `REFER_LEADS (total referred): ${b.refer_leads?.count ?? 0}`,
+        `APPLICATIONS: ${b.applications?.count ?? 0}`,
+        `INTERVIEWS: ${b.interviews?.count ?? 0}`,
+        `OFFERS: ${b.offers?.count ?? 0}`,
+        `PLACEMENTS (Onboarding/Joined/Deferred): ${b.placements?.count ?? 0}`,
+        `PRE_BOARDING (${b.pre_boarding?.count ?? 0}) — CONCURRENT with placements, NOT a linear application-status step (Placement.preBoardingStatus).`,
+        `ONBOARDED (${b.onboarded?.count ?? 0}) — User granted the Employee role; a SEPARATE hand-off event from Placement Joined.`,
+        `Do NOT mix these counts with employee_analytics — different populations.`,
+      ];
       parts.push(lines.join('\n'));
       continue;
     }
@@ -4481,6 +4547,11 @@ const INTENT_PATTERNS = [
   { re: /\b(developer|engineer|designer|analyst|intern)\b/i,                       modules: ['fetch_employees'] },
   { re: /\b(user roles?|role of|who has role|people with role)\b/i,                modules: ['fetch_employees'] },
   { re: /\b(department|team (in|of|members)|people in)\b/i,                        modules: ['fetch_employees'] },
+  // Hiring tunnel snapshot (Epic C) — must come BEFORE the generic candidates
+  // pattern below so funnel/tunnel/pre-boarding asks route to the authoritative
+  // bucket snapshot instead of an unscoped candidate list.
+  { re: /\b(hiring tunnel|hiring funnel|referral funnel|referral tunnel|candidate (hiring )?(pipeline|funnel|tunnel) snapshot|pre-?boarding (count|status|candidates?))\b/i,
+                                                                            modules: ['referral_leads_analytics'] },
   // Candidates (User+Candidate role — pre-employees)
   { re: /\b(candidates?|referral leads?|applicants?|prospective hires?|new joiners?)\b/i, modules: ['fetch_candidates'] },
   // External jobs (saved from job boards)
