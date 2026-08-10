@@ -118,10 +118,12 @@ const trackList = {
 
 const trackHistory = {
   query: Joi.object().keys({
-    startDate: Joi.date().iso(),
-    endDate: Joi.date().iso(),
-    limit: Joi.number().integer().min(1).max(1000),
+    year: Joi.number().integer().min(2000).max(2100).required(),
+    month: Joi.number().integer().min(1).max(12).required(),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(100).default(20),
     search: Joi.string().trim().allow('').optional(),
+    studentId: Joi.string().custom(objectId).optional(),
   }),
 };
 
@@ -134,9 +136,10 @@ const trackExport = {
 
 const trackHistoryExport = {
   query: Joi.object().keys({
-    startDate: Joi.date().iso(),
-    endDate: Joi.date().iso(),
+    year: Joi.number().integer().min(2000).max(2100).required(),
+    month: Joi.number().integer().min(1).max(12).required(),
     search: Joi.string().trim().allow('').optional(),
+    studentId: Joi.string().custom(objectId).optional(),
   }),
 };
 

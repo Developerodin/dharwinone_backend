@@ -67,10 +67,21 @@ const getEmployeesOnLeaveToday = async (actor) => {
   // Who is on leave TODAY.
   const todayLeaves = await Attendance.find(
     { student: { $in: studentIds }, status: 'Leave', date: { $gte: today, $lt: tomorrow } },
-    { student: 1 }
+    { student: 1, leaveType: 1 }
   ).lean();
   if (!todayLeaves.length) return { scope, results: [] };
   const onLeaveStudentIds = [...new Set(todayLeaves.map((l) => toId(l.student)))];
+
+  // casual | sick | unpaid, straight off the Attendance row. A student can in
+  // principle hold more than one Leave row for the day, so keep the types
+  // distinct instead of letting the last row win.
+  const leaveTypesByStudent = new Map();
+  for (const l of todayLeaves) {
+    if (!l.leaveType) continue;
+    const k = toId(l.student);
+    if (!leaveTypesByStudent.has(k)) leaveTypesByStudent.set(k, new Set());
+    leaveTypesByStudent.get(k).add(l.leaveType);
+  }
 
   // Real span = the approved LeaveRequest covering today (same data the request card shows).
   // Leave is booked as discrete weekday dates, so reconstructing a range from per-day
@@ -99,11 +110,13 @@ const getEmployeesOnLeaveToday = async (actor) => {
     const emp = ownerToEmployee.get(studentToOwner.get(sid));
     if (!emp) continue;
     const { startMs, endMs } = spanByStudent.get(sid) || { startMs: todayMs, endMs: todayMs };
+    const types = [...(leaveTypesByStudent.get(sid) || [])].sort();
     result.push({
       employeeId: emp.employeeId || '',
       name: emp.fullName || emp.name || '',
       startDate: new Date(startMs).toISOString(),
       endDate: new Date(endMs).toISOString(),
+      leaveType: types.length ? types.join(', ') : null,
     });
   }
   result.sort((a, b) => a.name.localeCompare(b.name));

@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import Attendance from '../models/attendance.model.js';
 import Student from '../models/student.model.js';
@@ -28,6 +29,29 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const getUtcMidnight = (d) => {
   const date = new Date(d);
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+};
+
+/** UTC-midnight bounds for a calendar month (matches stored attendance `date` convention). */
+const getMonthUtcDateRange = (year, month) => {
+  const y = Number(year);
+  const m = Number(month);
+  const startDate = getUtcMidnight(new Date(Date.UTC(y, m - 1, 1)));
+  const endDate = getUtcMidnight(new Date(Date.UTC(y, m, 0)));
+  return { startDate, endDate };
+};
+
+/** Calendar year/month (1–12) for an instant in an IANA timezone (defaults to UTC). */
+const getCalendarMonthYearInTimezone = (instant, timezone = 'UTC') => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date(instant));
+  const getPart = (name) => parts.find((p) => p.type === name)?.value;
+  return {
+    year: Number(getPart('year')),
+    month: Number(getPart('month')),
+  };
 };
 
 const getDayName = (date) => DAY_NAMES[date.getUTCDay()];
@@ -831,22 +855,86 @@ const getTrackList = async (options = {}) => {
 /** Escape special regex chars in a string for safe $regex use */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const trackHistoryProjectStage = {
+  $project: {
+    id: { $toString: '$_id' },
+    studentId: { $ifNull: [{ $toString: '$student' }, ''] },
+    studentExists: { $ne: ['$studentDoc', null] },
+    studentName: {
+      $switch: {
+        branches: [
+          { case: { $and: [{ $ne: ['$userDoc.name', null] }, { $ne: ['$userDoc.name', ''] }] }, then: '$userDoc.name' },
+          { case: { $and: [{ $ne: ['$userByEmail.name', null] }, { $ne: ['$userByEmail.name', ''] }] }, then: '$userByEmail.name' },
+          { case: { $and: [{ $ne: ['$studentName', null] }, { $ne: ['$studentName', ''] }] }, then: '$studentName' },
+        ],
+        default: '—',
+      },
+    },
+    email: {
+      $switch: {
+        branches: [
+          { case: { $and: [{ $ne: ['$userDoc.email', null] }, { $ne: ['$userDoc.email', ''] }] }, then: '$userDoc.email' },
+          { case: { $and: [{ $ne: ['$userByEmail.email', null] }, { $ne: ['$userByEmail.email', ''] }] }, then: '$userByEmail.email' },
+          { case: { $and: [{ $ne: ['$studentEmail', null] }, { $ne: ['$studentEmail', ''] }] }, then: '$studentEmail' },
+        ],
+        default: '—',
+      },
+    },
+    employeeId: { $ifNull: ['$candidateDoc.employeeId', ''] },
+    date: 1,
+    day: 1,
+    punchIn: 1,
+    punchOut: 1,
+    duration: 1,
+    timezone: { $ifNull: ['$timezone', 'UTC'] },
+  },
+};
+
+const mapTrackHistoryRow = (r) => {
+  const durationMs = effectiveSessionDurationMs({
+    punchIn: r.punchIn,
+    punchOut: r.punchOut,
+    duration: r.duration,
+  });
+  return {
+    id: r.id,
+    studentId: r.studentId || null,
+    studentExists: !!r.studentExists,
+    studentName: r.studentName || '—',
+    email: r.email || '—',
+    employeeId: r.employeeId || undefined,
+    date: r.date,
+    day: r.day,
+    punchIn: r.punchIn,
+    punchOut: r.punchOut,
+    durationMs,
+    timezone: r.timezone || 'UTC',
+  };
+};
+
 /**
- * Get full attendance history: one row per completed attendance record (student has punched out).
- * Only shows records after the student has timed out; in-progress sessions are excluded.
- * Uses aggregation to preserve studentId even when Student is deleted, and resolve name/email from
- * User, or fall back to stored studentName/studentEmail on the record.
- * @param {Object} options - { startDate?, endDate?, limit?, search? }
+ * Get attendance history for a calendar month: one row per completed session (punchOut set).
+ * Uses stored `date` (employee-TZ calendar day as UTC midnight) for month boundaries.
+ * @param {Object} options - { year, month, page?, limit?, search?, studentId? }
  */
 const getTrackHistory = async (options = {}) => {
-  const { startDate, endDate, limit = 500, search } = options;
-  const match = { isActive: true, punchOut: { $ne: null }, status: { $nin: ['Holiday', 'Leave'] }, student: { $ne: null } };
-  if (startDate || endDate) {
-    match.date = {};
-    if (startDate) match.date.$gte = getUtcMidnight(startDate);
-    if (endDate) match.date.$lte = getUtcMidnight(endDate);
+  const { year, month, page = 1, limit = 20, search, studentId } = options;
+  const { startDate, endDate } = getMonthUtcDateRange(year, month);
+  const pageNum = Math.max(1, Number(page) || 1);
+  const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
+  const skip = (pageNum - 1) * limitNum;
+
+  const match = {
+    isActive: true,
+    punchOut: { $ne: null },
+    status: { $nin: ['Holiday', 'Leave'] },
+    student: { $ne: null },
+    date: { $gte: startDate, $lte: endDate },
+  };
+  if (studentId) {
+    match.student = new mongoose.Types.ObjectId(studentId);
   }
-  const limitNum = Math.min(1000, Math.max(1, Number(limit) || 500));
+
   const studentsColl = Student.collection?.name || 'students';
   const usersColl = User.collection?.name || 'users';
   const candidatesColl = Employee.collection?.name || 'candidates';
@@ -854,16 +942,12 @@ const getTrackHistory = async (options = {}) => {
   const pipeline = [
     { $match: match },
     { $sort: { date: -1, punchIn: -1 } },
-    { $limit: limitNum },
-    // Primary path: Attendance → Student → User
     { $lookup: { from: studentsColl, localField: 'student', foreignField: '_id', as: 'studentDoc' } },
     { $unwind: { path: '$studentDoc', preserveNullAndEmptyArrays: true } },
     { $lookup: { from: usersColl, localField: 'studentDoc.user', foreignField: '_id', as: 'userDoc' } },
     { $unwind: { path: '$userDoc', preserveNullAndEmptyArrays: true } },
-    // Fallback path: look up User by stored studentEmail (for deleted students)
     { $lookup: { from: usersColl, localField: 'studentEmail', foreignField: 'email', as: 'userByEmail' } },
     { $unwind: { path: '$userByEmail', preserveNullAndEmptyArrays: true } },
-    // Candidate lookup for employeeId (preserveNullAndEmptyArrays - many students have no Candidate)
     { $lookup: { from: candidatesColl, localField: 'studentDoc.user', foreignField: 'owner', as: 'candidateDoc' } },
     { $unwind: { path: '$candidateDoc', preserveNullAndEmptyArrays: true } },
   ];
@@ -885,62 +969,27 @@ const getTrackHistory = async (options = {}) => {
   }
 
   pipeline.push({
-    $project: {
-        id: { $toString: '$_id' },
-        studentId: { $ifNull: [{ $toString: '$student' }, ''] },
-        studentExists: { $ne: ['$studentDoc', null] },
-        studentName: {
-          $switch: {
-            branches: [
-              { case: { $and: [{ $ne: ['$userDoc.name', null] }, { $ne: ['$userDoc.name', ''] }] }, then: '$userDoc.name' },
-              { case: { $and: [{ $ne: ['$userByEmail.name', null] }, { $ne: ['$userByEmail.name', ''] }] }, then: '$userByEmail.name' },
-              { case: { $and: [{ $ne: ['$studentName', null] }, { $ne: ['$studentName', ''] }] }, then: '$studentName' },
-            ],
-            default: '—',
-          },
-        },
-        email: {
-          $switch: {
-            branches: [
-              { case: { $and: [{ $ne: ['$userDoc.email', null] }, { $ne: ['$userDoc.email', ''] }] }, then: '$userDoc.email' },
-              { case: { $and: [{ $ne: ['$userByEmail.email', null] }, { $ne: ['$userByEmail.email', ''] }] }, then: '$userByEmail.email' },
-              { case: { $and: [{ $ne: ['$studentEmail', null] }, { $ne: ['$studentEmail', ''] }] }, then: '$studentEmail' },
-            ],
-            default: '—',
-          },
-        },
-        employeeId: { $ifNull: ['$candidateDoc.employeeId', ''] },
-        date: 1,
-        day: 1,
-        punchIn: 1,
-        punchOut: 1,
-        duration: 1,
-        timezone: { $ifNull: ['$timezone', 'UTC'] },
-    }
+    $facet: {
+      total: [{ $count: 'total' }],
+      data: [{ $skip: skip }, { $limit: limitNum }, trackHistoryProjectStage],
+    },
   });
-  const records = await Attendance.aggregate(pipeline);
-  const results = records.map((r) => {
-    const durationMs = effectiveSessionDurationMs({
-      punchIn: r.punchIn,
-      punchOut: r.punchOut,
-      duration: r.duration,
-    });
-    return {
-      id: r.id,
-      studentId: r.studentId || null,
-      studentExists: !!r.studentExists,
-      studentName: r.studentName || '—',
-      email: r.email || '—',
-      employeeId: r.employeeId || undefined,
-      date: r.date,
-      day: r.day,
-      punchIn: r.punchIn,
-      punchOut: r.punchOut,
-      durationMs,
-      timezone: r.timezone || 'UTC',
-    };
-  });
-  return { results };
+
+  const [facetResult] = await Attendance.aggregate(pipeline);
+  const total = facetResult?.total?.[0]?.total ?? 0;
+  const records = facetResult?.data ?? [];
+  const data = records.map(mapTrackHistoryRow);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / limitNum);
+
+  return {
+    data,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages,
+    },
+  };
 };
 
 /**
@@ -1506,6 +1555,8 @@ export default {
   getStatistics,
   getTrackList,
   getTrackHistory,
+  getMonthUtcDateRange,
+  getCalendarMonthYearInTimezone,
   findAllActivePunchIns,
   autoPunchOut,
   getUtcMidnight,

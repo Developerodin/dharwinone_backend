@@ -46,8 +46,15 @@ export function enrichAttendanceSummary(result, opts = {}) {
 }
 
 /**
- * LeaveRequest window clause — matches requests whose `dates` array overlaps
- * the inclusive resolveDateWindow range (any leave day inside the window).
+ * LeaveRequest window clause — matches requests with at least one leave day
+ * inside the inclusive resolveDateWindow range.
+ *
+ * Uses `$elemMatch` so both bounds bind to the SAME element of the `dates`
+ * array. A bare `{ dates: { $gte, $lte } }` lets Mongo satisfy each operator
+ * with a *different* element, so a request running 2026-07-23 → 2026-08-31
+ * matched any single-day window in between (some date >= from, some other
+ * date <= to) even when no leave day was actually booked on that day.
+ *
  * @param {{ from: Date|null, to: Date|null }|null} window
  * @returns {object|null} mongo clause fragment, or null when no window
  */
@@ -56,7 +63,7 @@ export function leaveDatesWindowClause(window) {
   const range = {};
   if (window.from) range.$gte = window.from;
   if (window.to) range.$lte = window.to;
-  return { dates: range };
+  return { dates: { $elemMatch: range } };
 }
 
 /**
@@ -72,6 +79,36 @@ export function backdatedEntriesWindowClause(window) {
   if (window.from) range.$gte = window.from;
   if (window.to) range.$lte = window.to;
   return { 'attendanceEntries.date': range };
+}
+
+/** Being absent on leave, however the user phrases it. */
+const OFF_TODAY_SUBJECT_RE = /\b(on\s+leave|leaves?|time\s*off|off|away|absent|out\s+of\s+office|ooo)\b/i;
+/** Anchored to now — the whole point of the on_leave_today tool. */
+const TODAY_CUE_RE = /\b(today|todays|today's|today’s|right\s+now|currently|at\s+the\s+moment|as\s+of\s+now)\b/i;
+
+/**
+ * True when the ask is "who is on leave today".
+ *
+ * Routes to on_leave_today, which reads the Attendance ledger. Checked in
+ * detectIntent BEFORE both SPECIFIC_LOOKUP_RE and the generic INTENT_PATTERNS
+ * list: "today's leaves" otherwise trips the "<name>'s leaves" possessive rule,
+ * and every other phrasing gets swallowed by the catch-all leave rule and
+ * answered from the leave-REQUEST queue — a filing with an approval status,
+ * which is not the same thing as being absent today.
+ *
+ * Requires BOTH a leave/off subject and a now-anchor, so "pending leaves" and
+ * "who joined today" are left alone.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function looksLikeOnLeaveTodayQuery(text) {
+  if (!text || typeof text !== 'string') return false;
+  if (!TODAY_CUE_RE.test(text) || !OFF_TODAY_SUBJECT_RE.test(text)) return false;
+  // "most leaves today" is a ranking question that happens to be scoped to
+  // today — leaveRanking.looksLikeLeaveRankingQuery owns it.
+  if (/\b(most|highest|top|fewest|least|rank(ed|ing)?)\b/i.test(text)) return false;
+  return true;
 }
 
 /**

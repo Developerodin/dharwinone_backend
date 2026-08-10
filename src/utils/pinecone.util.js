@@ -1,6 +1,32 @@
+// uat.dharwin.backend/src/utils/pinecone.util.js
+//
+// Vector-store façade. Despite the filename — kept so the existing import sites
+// and, critically, the module mocks that reference this exact specifier stay
+// valid — this module serves BOTH backends:
+//
+//   VECTOR_DB=pinecone (default) -> the Pinecone implementation in this file
+//   VECTOR_DB=qdrant             -> delegated to ./qdrant.util.js
+//
+// The five exported functions are the entire contract. Callers never branch on
+// the provider, and the Qdrant SDK loads lazily so a Pinecone deployment never
+// pulls it in.
+//
+// Switching providers is an env change plus one embedding-sync run to populate
+// the newly selected store; the two stores are not replicated to each other.
+
 import { Pinecone } from '@pinecone-database/pinecone';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+
+/**
+ * True when this process is configured to talk to Qdrant.
+ * Optional-chained with a 'pinecone' fallback so a partially-stubbed config
+ * (as in pinecone.util.test.js) still resolves to the Pinecone path.
+ */
+const useQdrant = () => (config?.vectorDb?.provider ?? 'pinecone') === 'qdrant';
+
+/** Lazy import — @qdrant/js-client-rest is only loaded when actually selected. */
+const qdrant = () => import('./qdrant.util.js');
 
 let _client = null;
 let _index = null;
@@ -32,6 +58,7 @@ async function ensureIndexOnce() {
 }
 
 export async function ensureIndex() {
+  if (useQdrant()) return (await qdrant()).ensureIndex();
   const client = getClient();
   const indexName = config.pinecone.indexName;
   try {
@@ -71,6 +98,7 @@ const PINECONE_UPSERT_BATCH = Number(process.env.PINECONE_UPSERT_BATCH || 100);
  * @param {{ id: string, values: number[], metadata: Record<string,string|boolean> }[]} vectors
  */
 export async function pineconeUpsert(namespace, vectors) {
+  if (useQdrant()) return (await qdrant()).upsert(namespace, vectors);
   if (!vectors?.length) return;
   const valid = vectors.filter((v) => v?.id && Array.isArray(v.values) && v.values.length > 0);
   if (!valid.length) {
@@ -103,6 +131,7 @@ export async function pineconeUpsert(namespace, vectors) {
  * @returns {import('@pinecone-database/pinecone').ScoredPineconeRecord[]}
  */
 export async function pineconeQuery(namespace, queryEmbedding, topK, filter) {
+  if (useQdrant()) return (await qdrant()).query(namespace, queryEmbedding, topK, filter);
   const index = getIndex();
   const queryOptions = {
     vector: queryEmbedding,
@@ -119,12 +148,14 @@ export async function pineconeQuery(namespace, queryEmbedding, topK, filter) {
  * @param {string[]} ids
  */
 export async function pineconeDelete(namespace, ids) {
+  if (useQdrant()) return (await qdrant()).remove(namespace, ids);
   if (!ids?.length) return;
   const index = getIndex();
   await index.namespace(namespace).deleteMany(ids);
 }
 
 export async function pineconeHealthCheck() {
+  if (useQdrant()) return (await qdrant()).healthCheck();
   try {
     const index = getIndex();
     await index.describeIndexStats();

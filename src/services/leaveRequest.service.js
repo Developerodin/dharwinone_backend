@@ -86,23 +86,53 @@ const createLeaveRequest = async (studentId, dates, leaveType, notes, user) => {
 };
 
 /**
+ * Company scope for every LeaveRequest read — the ONE definition shared by
+ * Settings → Leave Requests (queryLeaveRequests) and the chat assistant's
+ * fetch_leave_requests / rank_leaves_by_employee tools.
+ *
+ * Deliberately keyed off role, not `User.adminId`. `adminId` records who
+ * onboarded a user and is only ever one level deep: internal staff are
+ * themselves root users (adminId undefined) while employees point at whichever
+ * staff member created them. Filtering leave by an adminId subtree therefore
+ * hides colleagues onboarded by a different admin — the chatbot returned 0
+ * leaves while the Settings page (which never had that filter) showed all of
+ * them. Anything reading LeaveRequest must call this so the two surfaces
+ * cannot drift apart again.
+ *
+ * @param {Object} user actor (needs id + roleIds)
+ * @param {{ forceSelf?: boolean }} [opts] forceSelf pins the scope to the
+ *   actor's own Student profile(s) even for an admin — used when the caller
+ *   explicitly asked for "my leaves" rather than the company queue.
+ * @returns {Promise<{ scope: 'all'|'mine', filter: object|null }>}
+ *   filter === null means "actor owns no Student profile" → caller must return
+ *   an empty result, never an unfiltered query.
+ */
+const buildLeaveRequestScopeFilter = async (user, { forceSelf = false } = {}) => {
+  if (!forceSelf && (await isAdminUser(user))) return { scope: 'all', filter: {} };
+
+  const actorId = user?.id ?? user?._id ?? null;
+  if (!actorId) return { scope: 'mine', filter: null };
+
+  const students = await Student.find({ user: actorId }).select('_id').lean();
+  if (!students.length) return { scope: 'mine', filter: null };
+  return { scope: 'mine', filter: { student: { $in: students.map((s) => s._id) } } };
+};
+
+/**
  * Query leave requests (non-admin: only students owned by user)
  */
 const queryLeaveRequests = async (filter, options, user) => {
-  if (!(await isAdminUser(user))) {
-    const students = await Student.find({ user: user.id }).select('_id');
-    const studentIds = students.map((s) => s._id);
-    if (studentIds.length === 0) {
-      return {
-        results: [],
-        page: options.page || 1,
-        limit: options.limit || 10,
-        totalPages: 0,
-        totalResults: 0,
-      };
-    }
-    filter.student = { $in: studentIds };
+  const { filter: scopeFilter } = await buildLeaveRequestScopeFilter(user);
+  if (scopeFilter === null) {
+    return {
+      results: [],
+      page: options.page || 1,
+      limit: options.limit || 10,
+      totalPages: 0,
+      totalResults: 0,
+    };
   }
+  Object.assign(filter, scopeFilter);
 
   const leaveRequests = await LeaveRequest.paginate(filter, {
     ...options,
@@ -316,6 +346,7 @@ const getLeaveRequestsByStudentId = async (studentId, options = {}, user) => {
 
 export {
   createLeaveRequest,
+  buildLeaveRequestScopeFilter,
   queryLeaveRequests,
   getLeaveRequestById,
   approveLeaveRequest,

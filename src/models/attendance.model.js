@@ -2,6 +2,14 @@ import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import { clampSessionDurationMs } from '../utils/attendanceDuration.js';
 
+/**
+ * The only statuses an Attendance row may carry. Exported so analytics can tell
+ * a valid state from a row that predates the field: rows written before `status`
+ * existed have NO status key at all, and must not be silently counted as
+ * Present. See scripts/backfill-attendance-status.js for the cleanup path.
+ */
+export const ATTENDANCE_STATUSES = ['Present', 'Absent', 'Holiday', 'Leave'];
+
 const attendanceSchema = mongoose.Schema(
   {
     student: {
@@ -59,7 +67,7 @@ const attendanceSchema = mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Present', 'Absent', 'Holiday', 'Leave'],
+      enum: ATTENDANCE_STATUSES,
       default: 'Present',
     },
     /** When status is 'Leave', type of leave: casual, sick, or unpaid */
@@ -82,6 +90,7 @@ attendanceSchema.index({ student: 1, date: 1 });
 attendanceSchema.index({ student: 1, punchOut: 1 });
 attendanceSchema.index({ user: 1, date: 1 });
 attendanceSchema.index({ user: 1, punchOut: 1 });
+attendanceSchema.index({ isActive: 1, date: -1, punchOut: 1 });
 
 attendanceSchema.pre('save', function (next) {
   const hasStudent = this.student != null;

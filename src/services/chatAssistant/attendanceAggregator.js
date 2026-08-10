@@ -9,8 +9,9 @@
 //   Holiday > Leave > Absent > Incomplete > Present > WeekOff > Future
 //   > BeforeJoining > AfterResign
 
-import Attendance from '../../models/attendance.model.js';
+import Attendance, { ATTENDANCE_STATUSES } from '../../models/attendance.model.js';
 import Employee from '../../models/employee.model.js';
+import Student from '../../models/student.model.js';
 import User from '../../models/user.model.js';
 import Role from '../../models/role.model.js';
 import { visibleUserStatusClause } from './visibilityRules.js';
@@ -49,14 +50,21 @@ function synthesizeStatus({ recs, isWeekOff, holidayName, isFuture, beforeJoin, 
 /**
  * Compute org-wide attendance for a date window.
  *
- * @param {{ adminId: string, from: Date, to: Date, statusFilter?: string }} args
+ * Population is the Employee role, not a `User.adminId` subtree — `adminId` is
+ * accepted for call-site symmetry with the other analytics helpers but is
+ * deliberately not a filter here (see buildLeaveRequestScopeFilter for why an
+ * adminId subtree is the wrong company boundary).
+ *
+ * @param {{ adminId?: string, from: Date, to: Date, statusFilter?: string }} args
  * @returns {Promise<{
  *   total: number,
  *   perDay: Array<{ date: string, counts: object }>,
  *   employees: Array<object>,
- *   window: { from: string, to: string }
+ *   window: { from: string, to: string },
+ *   ignoredUnknownStatusRecords: number
  * }>}
  */
+// eslint-disable-next-line no-unused-vars
 export async function aggregateOrgAttendance({ adminId, from, to, statusFilter }) {
   const isSingleDay =
     from.getUTCFullYear() === to.getUTCFullYear() &&
@@ -81,17 +89,39 @@ export async function aggregateOrgAttendance({ adminId, from, to, statusFilter }
   const users = await User.find({ _id: { $in: ownerIds } }, { name: 1, email: 1 }).lean();
   const userById = new Map(users.map((u) => [String(u._id), u]));
 
+  // Attendance rows carry EITHER `student` (punch-in, admin-assigned leave,
+  // regularize) OR `user` (employee punch-in, backdated-request approval) —
+  // never both. Reading only `user` made this aggregate blind to the
+  // overwhelming majority of rows, including every admin-assigned Leave day.
+  // Bridge Attendance.student -> Student.user -> Employee.owner, the same hop
+  // onLeaveToday.service.js and fetch_employee_attendance_calendar already use.
+  const studentDocs = await Student.find({ user: { $in: ownerIds } }, { user: 1 }).lean();
+  const ownerByStudentId = new Map(studentDocs.map((s) => [String(s._id), String(s.user)]));
+  const studentIds = studentDocs.map((s) => s._id);
+
   const attRows = await Attendance.find({
-    user: { $in: ownerIds },
     date: { $gte: from, $lte: to },
+    $or: [{ user: { $in: ownerIds } }, { student: { $in: studentIds } }],
   })
-    .select('user date status punchIn punchOut duration leaveType')
+    .select('user student date status punchIn punchOut duration leaveType')
     .lean();
 
   const attByUserDate = new Map();
+  let ignoredUnknownStatusRecords = 0;
   for (const r of attRows) {
-    if (!r.user || !r.date) continue;
-    const k = `${String(r.user)}|${new Date(r.date).toISOString().slice(0, 10)}`;
+    if (!r.date) continue;
+    // Rows written before `status` existed carry no status key. That is not a
+    // valid attendance state, so it must not be counted as one — the day falls
+    // through to the synthesized status instead. Reported on the payload rather
+    // than dropped silently; scripts/backfill-attendance-status.js is the
+    // scoped cleanup path.
+    if (!ATTENDANCE_STATUSES.includes(r.status)) {
+      ignoredUnknownStatusRecords += 1;
+      continue;
+    }
+    const ownerKey = r.user ? String(r.user) : ownerByStudentId.get(String(r.student));
+    if (!ownerKey) continue;
+    const k = `${ownerKey}|${new Date(r.date).toISOString().slice(0, 10)}`;
     if (!attByUserDate.has(k)) attByUserDate.set(k, []);
     attByUserDate.get(k).push(r);
   }
@@ -173,5 +203,6 @@ export async function aggregateOrgAttendance({ adminId, from, to, statusFilter }
     perDay: Object.entries(perDay).map(([date, counts]) => ({ date, counts })),
     employees: employeeRows.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     window: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    ignoredUnknownStatusRecords,
   };
 }

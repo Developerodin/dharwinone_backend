@@ -29,8 +29,9 @@ export const exportHistoryExcel = catchAsync(async (req, res) => {
     ...rest,
     search,
     limit: HISTORY_EXPORT_LIMIT,
+    page: 1,
   });
-  const buf = buildHistoryExportBuffer(result.results || []);
+  const buf = buildHistoryExportBuffer(result.data || []);
   const date = new Date().toISOString().slice(0, 10);
   res.setHeader(
     'Content-Type',
