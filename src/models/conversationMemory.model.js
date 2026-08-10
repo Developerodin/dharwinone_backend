@@ -60,6 +60,11 @@ const conversationMemorySchema = new mongoose.Schema(
       lastEntityType:   { type: String, default: null, trim: true },
       lastIntent:       { type: String, default: null, trim: true },
       lastMetric:       { type: String, default: null, trim: true },
+      /**
+       * Canonical employee entityQuery context — filters/operations from the last
+       * deterministic employee query. Used for "list them" replay without LLM.
+       */
+      lastContext:      { type: mongoose.Schema.Types.Mixed, default: null },
       /** Org structure count memory (departments, managers, supervisors). */
       lastOrgCount:     { type: Number, default: null },
       /** Last listing snapshot for ordinal resolution ("the second one"). */

@@ -30,6 +30,14 @@ import StudentGroup from '../models/studentGroup.model.js';
 import { embedQuery } from '../utils/embedding.util.js';
 import { pineconeQuery } from '../utils/pinecone.util.js';
 import { queryKb } from './kbQuery.service.js';
+import { buildLeaveRequestScopeFilter } from './leaveRequest.service.js';
+import { getEmployeesOnLeaveToday } from './onLeaveToday.service.js';
+import {
+  normalizeRankingArgs,
+  buildLeaveRankingPipeline,
+  decorateRankedRows,
+  looksLikeLeaveRankingQuery,
+} from './chatAssistant/leaveRanking.js';
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { resolveRoleIds, tagRoleNames } from './chatAssistant/roleResolver.js';
@@ -53,6 +61,7 @@ import {
   leaveDatesWindowClause,
   backdatedEntriesWindowClause,
   looksLikeWeekOffOrGroupsQuery,
+  looksLikeOnLeaveTodayQuery,
 } from './chatAssistant/attendanceAnalytics.js';
 import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
 import { buildInterviewFilter, summarizeInterviewBreakdown } from './chatAssistant/interviewAnalytics.js';
@@ -160,12 +169,14 @@ import { blocksFromFacts } from './chatAssistant/renderers/index.js';
 import { envelope } from './chatAssistant/renderers/types.js';
 import { resolveViewerRole } from './chatAssistant/columnVisibility.js';
 import { buildFallback } from './chatAssistant/fallbackGenerator.js';
+import { runEmployeeEntityQuery, useEmployeeEntityQuery, resolveEntity } from './chatAssistant/entityQuery/index.js';
+import { guardLegacyReply } from './chatAssistant/entityQuery/recordValidator.js';
 
 const FALLBACK_ANSWER =
   "I don't have that information in the system right now. " +
   "I can help you with: employee details & headcount, candidates & offers, " +
   "placements & joining tracking, shifts & my shift, my attendance, any specific employee's full overview — shift, week off, assigned holidays, past leaves, future leaves, backdated attendance requests, candidate / student group memberships (admin only, by name, email, or employee ID), " +
-  "leave records, open job positions, job applications, projects, tasks, " +
+  "leave records, who is on leave today, who took the most leave in a period, open job positions, job applications, projects, tasks, " +
   "meetings, company holidays, students, and company knowledge base articles.";
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -267,6 +278,26 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
       else if (/\bunpaid\s+leaves?\b/.test(t)) out.leaveType = 'unpaid';
     }
     // Epic B: attach NL date window when the user named a month/range.
+    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
+      const parsed = phraseToDateWindow(userMsg);
+      if (parsed && !parsed.needsClarification) {
+        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
+      }
+    }
+  }
+  if (moduleName === 'rank_leaves_by_employee') {
+    if (!out.status) {
+      if (/\b(pending|awaiting|unreviewed)\b/.test(t)) out.status = 'pending';
+      else if (/\b(rejected|denied|declined)\b/.test(t)) out.status = 'rejected';
+      else if (/\b(cancelled|canceled|withdrawn)\b/.test(t)) out.status = 'cancelled';
+      // else: leave unset so the tool's default (approved = leave actually
+      // granted) applies — that is what "took the most leave" means.
+    }
+    if (!out.leaveType) {
+      if (/\bsick\s+leaves?\b/.test(t)) out.leaveType = 'sick';
+      else if (/\bcasual\s+leaves?\b/.test(t)) out.leaveType = 'casual';
+      else if (/\bunpaid\s+leaves?\b/.test(t)) out.leaveType = 'unpaid';
+    }
     if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
       const parsed = phraseToDateWindow(userMsg);
       if (parsed && !parsed.needsClarification) {
@@ -1017,6 +1048,42 @@ const ROUTING_TOOLS = [
           fromDate:  { type: 'string', description: 'YYYY-MM-DD inclusive start for leave-day window' },
           toDate:    { type: 'string', description: 'YYYY-MM-DD inclusive end for leave-day window' },
           limit:     { type: 'number', description: 'Max records (default 50, max 200)' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'on_leave_today',
+      description:
+        'WHO IS ACTUALLY ON LEAVE TODAY. Reads the Attendance ledger (status=Leave for today) — the same source as the dashboard "On leave today" widget — NOT the leave-request queue. ' +
+        'Returns one row per person: name, employeeId, leaveType (casual|sick|unpaid), and the full start..end span of the leave they are in the middle of. ' +
+        'Visibility is graded server-side by the General → Dashboard permission (all employees / only referrals / only yourself); no scope argument exists and none is needed. ' +
+        'ALWAYS prefer this over fetch_leave_requests for "who is on leave today", "who is off today", "how many people are on leave today", "is anyone on leave right now" — a leave REQUEST is a filing with an approval status, which is a different question from who is absent on leave today.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'rank_leaves_by_employee',
+      description:
+        'RANK PEOPLE BY HOW MUCH LEAVE THEY TOOK. Aggregates approved LeaveRequest leave-DAYS per person inside a date window and returns them ordered, most first. ' +
+        'Use ONLY when the question asks who tops/leads a leave comparison: "who has taken the most leave this month", "which employee has the most leaves", "rank employees by leave taken", "who will be on leave most this month". ' +
+        'For a plain count or a list of requests use fetch_leave_requests instead — do not call this tool just because the word "leave" appears. ' +
+        'Admin-only (same company scope as the Settings → Leave Requests page). Defaults to status=approved; pass status explicitly to rank pending or rejected filings.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status:    { type: 'string', description: 'pending | approved | rejected | cancelled | all. Default approved — leave actually granted.' },
+          leaveType: { type: 'string', description: 'Restrict the ranking to casual | sick | unpaid.' },
+          date:      { type: 'string', description: 'YYYY-MM-DD — rank leave days falling on this day' },
+          month:     { type: 'string', description: 'YYYY-MM — rank leave days inside this month' },
+          fromDate:  { type: 'string', description: 'YYYY-MM-DD inclusive start of the ranking window' },
+          toDate:    { type: 'string', description: 'YYYY-MM-DD inclusive end of the ranking window' },
+          limit:     { type: 'number', description: 'How many people to return (default 10, max 50)' },
         },
         required: [],
       },
@@ -2693,13 +2760,37 @@ async function fetchModule(name, args, user, uiContext = null) {
           email: match.ownerUser?.email,
         };
       } else if (scope === 'mine') {
-        q.requestedBy = userId;
+        // Same definition of "my leave" the Settings page uses: requests filed
+        // against my Student profile — not merely the ones I clicked Submit on,
+        // which for an admin would include other people's leave.
+        const { filter: selfFilter } = await buildLeaveRequestScopeFilter(user, { forceSelf: true });
+        if (selfFilter === null) {
+          return {
+            total: 0,
+            breakdown: { pending: 0, approved: 0, rejected: 0, cancelled: 0 },
+            typeBreakdown: { casual: 0, sick: 0, unpaid: 0 },
+            statusFilter: normalizedStatus,
+            leaveTypeFilter: normalizedType,
+            records: [],
+            scope: 'mine',
+            employee: null,
+            windowLabel: hasExplicitWindow ? explicitWindow.label : null,
+            authoritative: true,
+            label: 'leave request',
+          };
+        }
+        Object.assign(q, selfFilter);
       } else {
         if (!callerIsAdmin) {
           return { notFound: true, reason: 'Only administrators can list company-wide leave requests.', label: 'leave request' };
         }
-        const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        q.requestedBy = { $in: companyUserIds };
+        // Company scope comes from leaveRequest.service — byte-for-byte the same
+        // scope Settings → Leave Requests uses. The previous
+        // `{ $or: [{ _id: adminId }, { adminId }] }` subtree walked only ONE level
+        // of User.adminId, so an admin saw just the people they personally
+        // onboarded and got 0 for every colleague onboarded by another admin.
+        const { filter: companyFilter } = await buildLeaveRequestScopeFilter(user);
+        Object.assign(q, companyFilter);
       }
 
       // Compute breakdown over status-agnostic version of the query.
@@ -2752,6 +2843,67 @@ async function fetchModule(name, args, user, uiContext = null) {
         windowLabel: hasExplicitWindow ? explicitWindow.label : null,
         authoritative: true,
         label: 'leave request',
+      };
+    }
+
+    // "Who is on leave today" is an ATTENDANCE question, not a leave-request
+    // question. Delegate wholesale to onLeaveToday.service — the same service
+    // behind GET /training/attendance/on-leave-today — so the chatbot, the
+    // dashboard widget and the attendance ledger can never disagree. No leave
+    // maths is reimplemented here, and the service applies its own
+    // dashboard.manage / dashboard.view / self permission grading.
+    case 'on_leave_today': {
+      const { scope, results } = await getEmployeesOnLeaveToday(user);
+      logger.info(`[ChatAssistant][on_leave_today] scope=${scope} count=${results.length}`);
+      return {
+        total: results.length,
+        scope,
+        records: results,
+        authoritative: true,
+        label: 'employees on leave today',
+      };
+    }
+
+    // "Who took the most leave" — per-person LeaveRequest aggregation. Kept in
+    // its own module (chatAssistant/leaveRanking.js) so ranking never leaks into
+    // the plain leave-request path, and reusing the SAME company scope as
+    // Settings → Leave Requests.
+    case 'rank_leaves_by_employee': {
+      if (!(await userIsAdmin({ roleIds: user?.roleIds || [] }))) {
+        return { notFound: true, reason: 'Only administrators can rank company-wide leave.', label: 'leave ranking' };
+      }
+
+      const window = resolveDateWindow({
+        date: args.date,
+        month: args.month,
+        fromDate: args.fromDate,
+        toDate: args.toDate,
+        defaultDays: 0,
+      });
+      if (window.missing) return { needsTimeWindow: true, label: 'leave ranking' };
+
+      const { status, leaveType, limit } = normalizeRankingArgs(args);
+      const { filter: companyFilter } = await buildLeaveRequestScopeFilter(user);
+      const records = decorateRankedRows(
+        await LeaveRequest.aggregate(
+          buildLeaveRankingPipeline({ companyFilter, window, status, leaveType, limit })
+        )
+      );
+
+      logger.info(
+        `[ChatAssistant][rank_leaves_by_employee] window=${window.label} status=${status || 'all'} ` +
+        `type=${leaveType || 'none'} people=${records.length} top=${records[0]?.leaveDays ?? 0}d`
+      );
+
+      return {
+        total: records.length,
+        records,
+        statusFilter: status,
+        leaveTypeFilter: leaveType,
+        windowLabel: window.label,
+        metric: 'leave_days',
+        authoritative: true,
+        label: 'leave ranking',
       };
     }
 
@@ -5021,6 +5173,68 @@ function summarizeData(fetchedData) {
       continue;
     }
 
+    if (key === 'on_leave_today') {
+      const records = data?.records ?? [];
+      const scopeNote = data?.scope === 'all'
+        ? 'every employee'
+        : data?.scope === 'referrals' ? 'only employees you referred' : 'only yourself';
+      if (!records.length) {
+        parts.push(
+          `--- employees on leave today (AUTHORITATIVE_COUNT_FOR_HOW_MANY: 0 | visibility=${data?.scope || 'self'} — ${scopeNote}) ---\n` +
+          `NOBODY_ON_LEAVE: No one within your visibility is on leave today. ` +
+          `This is the Attendance ledger, so it is a definitive answer — do NOT re-check the leave-request queue and do not present pending requests as people being on leave.`
+        );
+        continue;
+      }
+      const lines = [
+        `--- employees on leave today (${records.length} | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${records.length} | visibility=${data?.scope || 'self'} — ${scopeNote} | SOURCE: Attendance status=Leave, same as the dashboard widget — ENTITY_TYPE: employee) ---`,
+      ];
+      for (const r of records) {
+        const from = formatDateIST(r.startDate) || 'N/A';
+        const to = formatDateIST(r.endDate) || 'N/A';
+        const span = from === to ? `today only (${from})` : `${from} to ${to}`;
+        lines.push(
+          `ON_LEAVE: ${r.name || 'N/A'}${r.employeeId ? ` (${r.employeeId})` : ''} | type=${r.leaveType || 'N/A'} | leave_span=${span}`
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
+    if (key === 'rank_leaves_by_employee') {
+      if (data?.notFound) {
+        parts.push(`--- leave ranking ---\nNO_ACCESS: ${data.reason || 'Not permitted.'}`);
+        continue;
+      }
+      if (data?.needsTimeWindow) {
+        parts.push(
+          `--- leave ranking ---\nNEEDS_TIME_WINDOW: Ask which period to rank over (this month, last month, a date range) before answering.`
+        );
+        continue;
+      }
+      const records = data?.records ?? [];
+      const filterTag = data?.statusFilter ? ` | STATUS: ${data.statusFilter}` : ' | STATUS: all';
+      const typeTag = data?.leaveTypeFilter ? ` | TYPE: ${data.leaveTypeFilter}` : '';
+      if (!records.length) {
+        parts.push(
+          `--- leave ranking (0 people | WINDOW: ${data?.windowLabel || 'n/a'}${filterTag}${typeTag}) ---\n` +
+          `NO_LEAVE_IN_WINDOW: Nobody took leave in that period, so there is nothing to rank.`
+        );
+        continue;
+      }
+      const lines = [
+        `--- leave ranking (${records.length} people | WINDOW: ${data?.windowLabel || 'n/a'}${filterTag}${typeTag} | METRIC: leave DAYS inside the window, most first | AUTHORITATIVE — ENTITY_TYPE: employee) ---`,
+      ];
+      for (const r of records) {
+        lines.push(
+          `RANK ${r.rank}: ${r.name || 'N/A'}${r.employeeId ? ` (${r.employeeId})` : ''} | leave_days=${r.leaveDays} | requests=${r.requestCount}` +
+          `${r.leaveTypes?.length ? ` | types=${r.leaveTypes.join(', ')}` : ''}`
+        );
+      }
+      parts.push(lines.join('\n'));
+      continue;
+    }
+
     if (key === 'fetch_backdated_attendance_requests') {
       if (data?.notFound) {
         const reason = data.reason || `No employee matched "${data.searchedFor || ''}".`;
@@ -5438,6 +5652,11 @@ function buildSystemPrompt(user, dataContext, memorySummary, lastEntities) {
     `9aa. If the header carries an "AUTHORITATIVE_COUNT_FOR_HOW_MANY: M" tag OR an "EMPLOYMENT_TOTALS" line, those numbers are absolute. NEVER answer a "how many" / "total" / "number of" question by counting the records below — always quote the authoritative number M. If a prior assistant turn in this conversation stated a different count, OVERRIDE it with M; the tool result is the source of truth. ONLY add a "Showing the first N of M — ask for more if you need the rest" footer when records shown N is strictly less than M; when N == M, do NOT add that footer.\n` +
     `9y. fetch_employee_attendance_calendar is the PREFERRED tool for ANY attendance question about a specific employee — single day, month, or arbitrary range. ALWAYS use it instead of fetch_employee_attendance whenever you have a {date}, {month}, or {fromDate, toDate}. The calendar computes status per day (Present / Absent / Leave / Holiday / WeekOff / Future / Incomplete / BeforeJoining / AfterResign) using shift, week-off, holiday assignments, and joining/resign dates — so non-working days read meaningfully even with zero Attendance rows. fetch_employee_attendance returns raw rows only and will look empty for non-working days.\n` +
     `9y1. When showing the calendar list, INCLUDE the STATUS column for every row in your reply (Markdown table or labeled rows). Never list attendance dates without their status.\n` +
+    `9u. THREE DIFFERENT LEAVE QUESTIONS, THREE DIFFERENT TOOLS — never answer one with another's data:\n` +
+    `    • "who is on leave today / off today / away right now", "how many people are on leave today" → on_leave_today. It reads the Attendance ledger (status=Leave for today), the same source as the dashboard "On leave today" widget. A zero from this tool is a real answer: say nobody is on leave, and do NOT go looking in the leave-request queue for pending filings to present instead.\n` +
+    `    • "who took the most leave", "rank employees by leave", "which employee has the most leaves" → rank_leaves_by_employee. It ranks by leave DAYS inside the asked period. If no period was given, ask which period first.\n` +
+    `    • everything else about leave — pending/approved/rejected filings, a person's leave history, the company leave queue → fetch_leave_requests.\n` +
+    `    A leave REQUEST is a filing with an approval status. Being on leave today is an attendance fact. Approved requests for future dates do NOT mean the person is on leave today, and a pending request never means someone is absent.\n` +
     `9v. For backdated attendance request AND leave request queries, status is one of: pending | approved | rejected | cancelled (lowercase). Map natural-language asks: "accepted/approved/granted" → approved, "denied/rejected/declined" → rejected, "withdrawn/cancelled/canceled" → cancelled, "pending/awaiting/open" → pending. Leave requests also have leaveType: casual | sick | unpaid. The summary header always carries breakdowns ("pending: N, approved: N, …" and for leaves "casual: N, sick: N, unpaid: N") — quote those numbers verbatim when the user asks "how many approved/sick/etc".\n` +
     `9u. WHENEVER the user names a specific person (name, email, or employeeId like DBS10) alongside "leaves", "leave requests", "backdated attendance", "attendance corrections", or "missed punch requests", you MUST call the relevant tool with the {employee} argument set to that name/id. Never fall back to {scope: "mine"} unless the user is clearly asking about themselves. Examples: "MOHAMMAD's leaves" → fetch_leave_requests({employee: "MOHAMMAD"}); "DBS10 missed punch" → fetch_backdated_attendance_requests({employee: "DBS10"}); "approved leaves for Saad" → fetch_leave_requests({employee: "Saad", status: "approved"}).\n` +
     `9t. For backdated and leave queries, ALWAYS report the status breakdown header verbatim — even when the records list is empty. Example reply when 0 records: "Saad has 0 backdated attendance requests on file (pending: 0, approved: 0, rejected: 0, cancelled: 0)." Never just say "no records found" without showing the per-status counts.\n` +
@@ -5727,9 +5946,13 @@ const INTENT_PATTERNS = [
   { re: /\b(interviews?|interviewed|interviewer|interview schedule|interview result|interview status)\b/i, modules: ['fetch_interviews'] },
   // Applications
   { re: /\b(application|candidate pipeline|hiring pipeline)\b/i,           modules: ['fetch_job_applications'] },
-  // HR ops — fast-path only when no specific person mentioned (SPECIFIC_LOOKUP_RE
-  // catches "<name>'s leaves" upstream and routes to LLM so {employee} arg is set).
-  { re: /\b(leave|time off|absent)\b/i,                                    modules: ['fetch_leave_requests'] },
+  // Leave-request queue. The "on leave today" and leave-ranking intents are
+  // resolved by guards at the top of detectIntent, so anything reaching this
+  // rule is genuinely a question about filings. Fast-path only when no specific
+  // person is named (SPECIFIC_LOOKUP_RE catches "<name>'s leaves" upstream and
+  // routes to the LLM so the {employee} arg is set).
+  // `leaves?` — the singular-only \bleave\b never matched "approved leaves".
+  { re: /\b(leaves?|time off|absent)\b/i,                                  modules: ['fetch_leave_requests'] },
   // Org-wide attendance aggregate — must come BEFORE the personal fast-path so
   // "how many were present yesterday" routes to the summary tool, not the
   // logged-in user's row dump.
@@ -5753,7 +5976,34 @@ const INTENT_PATTERNS = [
   { re: /\b(backdated attendance|attendance correction|missed punch|late punch request|attendance request)\b/i, modules: ['fetch_backdated_attendance_requests'] },
 ];
 
-function detectIntent(text, uiContext = null) {
+// Exported for chatAssistant/__tests__/leaveIntentRouting.test.js — the ORDER of
+// INTENT_PATTERNS is load-bearing (the catch-all leave rule must lose to the
+// on-leave-today and ranking rules), and that is only testable from outside.
+export function detectIntent(text, uiContext = null) {
+  // The three leave intents are resolved FIRST — ahead of SPECIFIC_LOOKUP_RE and
+  // ahead of INTENT_PATTERNS — because both would otherwise misroute them:
+  //   • "today's leaves"             -> trips the "<name>'s leaves" possessive rule
+  //   • "rank employees by leave"    -> matches an employees rule
+  //   • everything else with "leave" -> swallowed by the catch-all leave rule
+  // All three used to land on fetch_leave_requests, which answers a question
+  // about FILINGS, not about who is absent or who took the most time off.
+  // Both predicates are narrow (each needs a leave subject plus its own cue),
+  // so a plain "<name>'s leaves" still falls through to the LLM below.
+  if (looksLikeLeaveRankingQuery(text)) {
+    // Resolve status / leaveType / date window here rather than leaving args
+    // empty: fastPathNeedsArgs runs BEFORE extractFastPathArgs, so an empty
+    // args object would bounce "most leave this month" to the LLM even though
+    // the period is right there in the sentence. With no period named, args
+    // stay windowless and the fast path correctly defers.
+    return {
+      modules: ['rank_leaves_by_employee'],
+      args: extractFastPathArgs(text, 'rank_leaves_by_employee', {}, null, uiContext),
+    };
+  }
+  if (looksLikeOnLeaveTodayQuery(text)) {
+    return { modules: ['on_leave_today'], args: {} };
+  }
+
   // Specific entity lookups need LLM routing to extract search args — fast-path can't.
   if (SPECIFIC_LOOKUP_RE.test(text)) return null;
 
@@ -5856,6 +6106,10 @@ const TOOLS_REQUIRING_WINDOW = new Set([
   'fetch_employee_attendance',
   'fetch_employee_attendance_calendar',
   'employee_analytics',
+  // "who took the most leave" is meaningless without a period — if the phrase
+  // carried no month/range, fall through to LLM routing rather than silently
+  // ranking over an arbitrary default window.
+  'rank_leaves_by_employee',
 ]);
 
 function fastPathNeedsArgs(modules, args) {
@@ -6142,8 +6396,10 @@ async function prepareContext(client, history, user, uiContext = null) {
   let effectiveUserMsg = lastUserMsg;
   try {
     const memForRef = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
-    const refResolution = resolveReferences(lastUserMsg, memForRef?.lastEntities);
-    if (refResolution.wasResolved) {
+    const refResolution = resolveReferences(lastUserMsg, memForRef?.lastEntities, {
+      entityQueryEnabled: useEmployeeEntityQuery(user),
+    });
+    if (refResolution.wasResolved && !refResolution.useEntityQuery) {
       effectiveUserMsg = refResolution.resolvedText;
       logger.info(
         `[ChatAssistant] reference resolved: "${lastUserMsg}" → "${effectiveUserMsg}" ` +
@@ -6802,9 +7058,9 @@ async function saveMemoryAsync(client, userId, adminId, history, reply, fetched)
 
 /**
  * Non-streaming response.
- * @param {{ messages: {role: string, content: string}[], user: object }} opts
+ * @param {{ messages: {role: string, content: string}[], user: object, uiContext?: object|null, requestId?: string|null }} opts
  */
-export async function sendMessage({ messages, user, uiContext = null }) {
+export async function sendMessage({ messages, user, uiContext = null, requestId = null }) {
   const apiKey = config.openai.apiKey;
   if (!apiKey) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'AI service is not configured');
@@ -6818,6 +7074,38 @@ export async function sendMessage({ messages, user, uiContext = null }) {
 
   const userId = user?.id;
   const adminId = user?.adminId ?? userId;
+
+  // Early gate — employee entityQuery before prepareContext (skips INTENT_PATTERNS / LLM / saveMemoryAsync).
+  if (useEmployeeEntityQuery(user)) {
+    const memDoc = await ConversationMemory.findOne({ userId, adminId }).lean();
+    const lastContext = memDoc?.lastEntities?.lastContext ?? null;
+    const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
+    const entity = resolveEntity(lastUserMsg, lastContext);
+    if (entity === 'employees') {
+      const entityResult = await runEmployeeEntityQuery({
+        userMessage: lastUserMsg,
+        user,
+        uiContext,
+        lastContext,
+        requestId,
+      });
+      if (entityResult?.deterministic) {
+        logger.info(
+          `[ChatAssistant] user=${user?.id} mode=entityQuery deterministic=true requestId=${requestId ?? 'none'}`
+        );
+        return envelope({
+          reply: entityResult.reply,
+          blocks: entityResult.blocks,
+          meta: {
+            kind: 'employees',
+            total: typeof entityResult.total === 'number' ? entityResult.total : null,
+            deterministic: true,
+            tookMs: entityResult.tookMs ?? null,
+          },
+        });
+      }
+    }
+  }
 
   const [ctx, memory] = await Promise.all([
     prepareContext(client, history, user, uiContext),
@@ -6885,6 +7173,18 @@ export async function sendMessage({ messages, user, uiContext = null }) {
     );
   }
 
+  // Defense-in-depth on the legacy LLM path (entityQuery deterministic replies
+  // never reach here). Scrubs employee identifiers retrieval never returned —
+  // e.g. an "Employee A … Employee K" roster invented to satisfy a count the
+  // model had but could not enumerate.
+  const guarded = guardLegacyReply(reply, fetched);
+  if (!guarded.valid) {
+    reply = guarded.reply;
+    logger.warn(
+      `[ChatAssistant] fabricatedRecords user=${user?.id} violations=${JSON.stringify(guarded.violations)}`
+    );
+  }
+
   logger.info(
     `[ChatAssistant] user=${user?.id} tokens=${completion.usage?.total_tokens ?? '?'} modules=${moduleCount} ` +
     `resolvedRole=${facts.primary?.role || 'none'} entityRecall=${memory.lastEntities ? Object.keys(memory.lastEntities).filter((k) => memory.lastEntities[k]).join(',') : 'none'} ` +
@@ -6912,9 +7212,9 @@ export async function sendMessage({ messages, user, uiContext = null }) {
 /**
  * Streaming response via SSE callbacks.
  * Runs Phase 1 (routing) + Phase 2 (fetch) before first token, then streams.
- * @param {{ messages: {role: string, content: string}[], user: object, onToken: (t: string) => void, onDone: () => void }} opts
+ * @param {{ messages: {role: string, content: string}[], user: object, onToken: (t: string) => void, onDone: () => void, uiContext?: object|null, requestId?: string|null }} opts
  */
-export async function streamMessage({ messages, user, onToken, onDone, uiContext = null }) {
+export async function streamMessage({ messages, user, onToken, onDone, uiContext = null, requestId = null }) {
   const apiKey = config.openai.apiKey;
   if (!apiKey) {
     throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'AI service is not configured');
@@ -6928,6 +7228,42 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
 
   const userId = user?.id;
   const adminId = user?.adminId ?? userId;
+
+  // Early gate — mirrors sendMessage; streams deterministic entityQuery in one chunk.
+  if (useEmployeeEntityQuery(user)) {
+    const memDoc = await ConversationMemory.findOne({ userId, adminId }).lean();
+    const lastContext = memDoc?.lastEntities?.lastContext ?? null;
+    const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
+    const entity = resolveEntity(lastUserMsg, lastContext);
+    if (entity === 'employees') {
+      const entityResult = await runEmployeeEntityQuery({
+        userMessage: lastUserMsg,
+        user,
+        uiContext,
+        lastContext,
+        requestId,
+      });
+      if (entityResult?.deterministic) {
+        logger.info(
+          `[ChatAssistant:stream] user=${user?.id} mode=entityQuery deterministic=true requestId=${requestId ?? 'none'}`
+        );
+        onToken(entityResult.reply);
+        onDone(
+          envelope({
+            reply: entityResult.reply,
+            blocks: entityResult.blocks,
+            meta: {
+              kind: 'employees',
+              total: typeof entityResult.total === 'number' ? entityResult.total : null,
+              deterministic: true,
+              tookMs: entityResult.tookMs ?? null,
+            },
+          })
+        );
+        return;
+      }
+    }
+  }
 
   const [ctx, memory] = await Promise.all([
     prepareContext(client, history, user, uiContext),
@@ -7019,6 +7355,17 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
         finalReply += append;
         logger.warn(
           `[ChatAssistant:stream] entityTypeDrift user=${user?.id} expected=${drift.expected} found=${drift.found}`
+        );
+      }
+      // Defense-in-depth (mirrors sendMessage). Tokens already streamed cannot be
+      // recalled, so the scrubbed text goes into the envelope + memory and the
+      // client gets an explicit retraction delta for what it already rendered.
+      const guarded = guardLegacyReply(finalReply, fetched);
+      if (!guarded.valid) {
+        onToken(guarded.notice);
+        finalReply = guarded.reply;
+        logger.warn(
+          `[ChatAssistant:stream] fabricatedRecords user=${user?.id} violations=${JSON.stringify(guarded.violations)}`
         );
       }
     } catch (validatorErr) {

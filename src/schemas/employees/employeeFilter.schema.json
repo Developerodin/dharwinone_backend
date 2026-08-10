@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dharwin.com/schemas/employees/employeeFilter.schema.json",
+  "title": "EmployeeStructuredQuery",
+  "type": "object",
+  "required": ["entity", "operations"],
+  "properties": {
+    "entity": { "const": "employees" },
+    "operations": {
+      "type": "array",
+      "items": { "enum": ["count", "list", "get"] },
+      "minItems": 1
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "employmentStatus": { "enum": ["current", "resigned", "all"] },
+        "compensationType": { "enum": ["paid", "unpaid"] },
+        "search": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "id": { "type": "string", "description": "Mongo Employee._id for get/ordinal" },
+        "agent": { "type": "string" },
+        "agentIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Canonical StructuredQuery form; executor adapter converts to comma-separated string for queryCandidates API"
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity", "relation"],
+        "properties": {
+          "entity": { "type": "string" },
+          "relation": { "type": "string" },
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "module": { "type": "string" },
+        "projectId": { "type": "string" },
+        "teamId": { "type": "string" }
+      }
+    },
+    "pagination": {
+      "type": "object",
+      "properties": {
+        "page": { "type": "integer", "minimum": 1, "default": 1 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+      }
+    },
+    "getAll": { "type": "boolean", "default": false }
+  }
+}

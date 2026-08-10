@@ -18,6 +18,7 @@ import { generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
+import { resignationCutoff } from './chatAssistant/employeeEmploymentFilter.js';
 import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
@@ -560,18 +561,16 @@ const buildAdvancedFilter = (filter) => {
 
   // Employment status: current (no resign or resign in future), resigned (resign date on or in past), all (no filter)
   if (filter.employmentStatus === 'resigned') {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    mongoFilter.resignDate = { $exists: true, $ne: null, $lte: todayStart };
+    const cutoff = resignationCutoff();
+    mongoFilter.resignDate = { $exists: true, $ne: null, $lte: cutoff };
   } else if (filter.employmentStatus === 'current') {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const cutoff = resignationCutoff();
     mongoFilter.$and = mongoFilter.$and || [];
     mongoFilter.$and.push({
       $or: [
         { resignDate: null },
         { resignDate: { $exists: false } },
-        { resignDate: { $gt: todayStart } },
+        { resignDate: { $gt: cutoff } },
       ],
     });
   }
@@ -703,11 +702,13 @@ const computeCompensationCounts = async (mongoFilter) => {
   };
 };
 
-const queryCandidates = async (filter, options) => {
-  const wantOpenSop =
-    filter.includeOpenSopCount === true ||
-    filter.includeOpenSopCount === 'true' ||
-    filter.includeOpenSopCount === '1';
+/**
+ * Shared list/count Mongo filter — all post-`buildAdvancedFilter` steps used by queryCandidates and countDocuments.
+ * @param {object} filterInput - API filter shape (post applyEmployeeListScope / toApiFilter)
+ * @returns {Promise<{ mongoFilter: object, baseMongoFilterForCompensation: object, filter: object }>}
+ */
+const buildEmployeeListMongoFilter = async (filterInput) => {
+  const filter = { ...filterInput };
 
   // Match UI default: when param omitted, treat as "current" employment (exclude past resignDate), not "all".
   if (
@@ -718,7 +719,6 @@ const queryCandidates = async (filter, options) => {
     filter.employmentStatus = 'current';
   }
 
-  // Build base MongoDB filter
   const mongoFilter = buildAdvancedFilter(filter);
 
   if (filter.ids) {
@@ -738,7 +738,6 @@ const queryCandidates = async (filter, options) => {
   }
 
   // Sales-agent scope: employees they referred OR are the assigned sales agent for.
-  // Mirrors referral-leads $or. Server-set only.
   if (filter.salesAgentScopeUserId && mongoose.Types.ObjectId.isValid(filter.salesAgentScopeUserId)) {
     const uid = new mongoose.Types.ObjectId(filter.salesAgentScopeUserId);
     mongoFilter.$and = [
@@ -747,19 +746,20 @@ const queryCandidates = async (filter, options) => {
     ];
   }
 
-  // Employment status drives isActive: current = active only, resigned = show resigned (isActive false), all = both
   if (filter.employmentStatus === 'resigned') {
     // Resigned: show candidates with resign date on or in past (do not filter by isActive)
   } else if (filter.employmentStatus === 'all') {
     // All: show current and resigned (do not filter by isActive)
-  } else if (filter.isActive === undefined) {
-    // current or undefined employment: only show active (current) candidates
-    mongoFilter.isActive = { $ne: false };
-  } else {
+  }
+
+  // isActive is a derived mirror of resignDate (employee.model.js pre-save hook +
+  // employee.scheduler.js). Applying it to only ONE status bucket made an
+  // isActive:false employee with no past resignDate fall into neither bucket and
+  // vanish from the total. An explicit caller-supplied isActive is still honoured.
+  if (filter.isActive !== undefined) {
     mongoFilter.isActive = filter.isActive;
   }
 
-  // Owner role scope: Employees tab lists Employee-role users only; explicit owner lookups keep job-seeker scope.
   const ownerUserRole =
     filter.ownerUserRole === 'jobSeeker' || filter.ownerUserRole === 'employee'
       ? filter.ownerUserRole
@@ -780,7 +780,6 @@ const queryCandidates = async (filter, options) => {
 
   const { getRoleByName } = await import('./role.service.js');
 
-  // Filter by assigned training agent: explicit IDs (from checklist) or name/email substring `filter.agent`
   if (filter.agentIds?.trim()) {
     const raw = filter.agentIds.split(',').map((s) => s.trim()).filter(Boolean);
     const agentRole = await getRoleByName('Agent');
@@ -820,6 +819,24 @@ const queryCandidates = async (filter, options) => {
   if (filter.compensationType === 'paid' || filter.compensationType === 'unpaid') {
     mongoFilter.compensationType = filter.compensationType;
   }
+
+  return { mongoFilter, baseMongoFilterForCompensation, filter };
+};
+
+/** Count-only path — no list enrichment, presigned URLs, or compensation breakdown. */
+const countEmployeeCandidates = async (mongoFilter) => Employee.countDocuments(mongoFilter);
+
+const queryCandidates = async (filter, options = {}) => {
+  const wantOpenSop =
+    filter.includeOpenSopCount === true ||
+    filter.includeOpenSopCount === 'true' ||
+    filter.includeOpenSopCount === '1';
+  const skipPresign = options.skipProfilePicturePresign === true;
+  const includeCompensationCounts = options.includeCompensationCounts !== false;
+
+  const { mongoFilter, baseMongoFilterForCompensation, filter: scopedFilter } =
+    await buildEmployeeListMongoFilter(filter);
+  filter = scopedFilter;
 
   // Check if we need aggregation pipeline for experience-based filtering
   const needsAggregation = filter.experienceLevel || 
@@ -1031,15 +1048,17 @@ const queryCandidates = async (filter, options) => {
     });
 
     // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
-    await Promise.all(candidatesWithEmailStatus.map(async (c) => {
-      if (c.profilePicture?.key) {
-        try {
-          c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
-        } catch (e) {
-          logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+    if (!skipPresign) {
+      await Promise.all(candidatesWithEmailStatus.map(async (c) => {
+        if (c.profilePicture?.key) {
+          try {
+            c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
+          } catch (e) {
+            logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+          }
         }
-      }
-    }));
+      }));
+    }
 
     if (wantOpenSop && candidatesWithEmailStatus.length > 0) {
       const { countOpenSopSteps } = await import('./sopChecklist.service.js');
@@ -1057,7 +1076,9 @@ const queryCandidates = async (filter, options) => {
       limit,
       totalPages: Math.ceil(total / limit),
       totalResults: total,
-      compensationCounts: await computeCompensationCounts(baseMongoFilterForCompensation),
+      ...(includeCompensationCounts
+        ? { compensationCounts: await computeCompensationCounts(baseMongoFilterForCompensation) }
+        : {}),
     };
   }
   // Use simple pagination for non-experience-based filters (lean + select for faster load)
@@ -1143,15 +1164,17 @@ const queryCandidates = async (filter, options) => {
       });
 
       // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
-      await Promise.all(result.results.map(async (c) => {
-        if (c.profilePicture?.key) {
-          try {
-            c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
-          } catch (e) {
-            logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+      if (!skipPresign) {
+        await Promise.all(result.results.map(async (c) => {
+          if (c.profilePicture?.key) {
+            try {
+              c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
+            } catch (e) {
+              logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
+            }
           }
-        }
-      }));
+        }));
+      }
 
       if (wantOpenSop && result.results.length > 0) {
         const { countOpenSopSteps } = await import('./sopChecklist.service.js');
@@ -1164,7 +1187,9 @@ const queryCandidates = async (filter, options) => {
       }
     }
 
-    result.compensationCounts = await computeCompensationCounts(baseMongoFilterForCompensation);
+    if (includeCompensationCounts) {
+      result.compensationCounts = await computeCompensationCounts(baseMongoFilterForCompensation);
+    }
     return result;
 };
 
@@ -3589,6 +3614,8 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
 export {
   createCandidate,
   queryCandidates,
+  buildEmployeeListMongoFilter,
+  countEmployeeCandidates,
   getCandidateById,
   updateCandidateById,
   deleteCandidateById,

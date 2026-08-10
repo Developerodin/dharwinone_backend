@@ -42,6 +42,7 @@ export const sendMessage = catchAsync(async (req, res) => {
     messages,
     user: req.user,
     uiContext: req.body.uiContext || null,
+    requestId: req.id,
   });
 
   res.status(httpStatus.OK).json({ success: true, data: result });
@@ -85,6 +86,7 @@ export const streamMessage = async (req, res) => {
       messages,
       user: req.user,
       uiContext: req.body.uiContext || null,
+      requestId: req.id,
       onToken: (token) => send({ token }),
       onDone: (envelopePayload) => {
         const payload = { done: true };

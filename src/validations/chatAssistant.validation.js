@@ -26,8 +26,12 @@ export const sendMessage = {
       currentModule: Joi.string().max(64),
       currentProject: Joi.string().max(200).allow(null),
       activeFilters: Joi.object().keys({
+        /** Task Board */
         assignee: Joi.string().max(200).allow(null),
         stage: Joi.string().max(64).allow(null),
+        /** Employees (Advanced Search) — mirrors employeeFilter.schema.json */
+        employmentStatus: Joi.string().valid('current', 'resigned', 'all'),
+        compensationType: Joi.string().valid('paid', 'unpaid').allow(''),
         search: Joi.string().max(500).allow(null),
       }).unknown(false),
       visibleCounts: Joi.object().keys({

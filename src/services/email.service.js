@@ -57,17 +57,24 @@ const logSmtpFailure = (context, err) => {
   logger.warn(`[SMTP] ${context} failed: ${err?.message || err}`, payload);
 };
 
-const transport = nodemailer.createTransport(config.email.smtp);
-/* istanbul ignore next */
-if (config.env !== 'test') {
-  transport
-    .verify()
-    .then(() => logger.info('[SMTP] Connected to email server'))
-    .catch((err) => {
-      logSmtpFailure('verify', err);
-      logger.warn('[SMTP] Unable to connect. Check SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, and EMAIL_FROM in .env');
-    });
-}
+let _transport = null;
+/** ponytail: lazy so importing this module in a test does not open a socket. */
+const getTransport = () => {
+  if (!_transport) {
+    _transport = nodemailer.createTransport(config.email.smtp);
+    /* istanbul ignore next */
+    if (config.env !== 'test') {
+      _transport
+        .verify()
+        .then(() => logger.info('[SMTP] Connected to email server'))
+        .catch((err) => {
+          logSmtpFailure('verify', err);
+          logger.warn('[SMTP] Unable to connect. Check SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, and EMAIL_FROM in .env');
+        });
+    }
+  }
+  return _transport;
+};
 
 const BRAND_NAME = 'Dharwin Business Solutions';
 const DEFAULT_FOOTER_NOTE =
@@ -390,7 +397,7 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
   let lastErr;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      await transport.sendMail(msg);
+      await getTransport().sendMail(msg);
       if (logEntry) {
         await EmailLog.findByIdAndUpdate(logEntry._id, {
           status: 'sent',
@@ -1535,7 +1542,7 @@ const sendDevTicketUpdatedEmail = async (to, ticket, options = {}) => {
 };
 
 export {
-  transport,
+  getTransport,
   sendEmail,
   queueEmail,
   /** Shared branded wrapper — same layout as reset password / verification emails */

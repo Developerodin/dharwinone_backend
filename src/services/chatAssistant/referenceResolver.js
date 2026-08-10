@@ -6,7 +6,7 @@
 
 /** Pronoun / deictic follow-up patterns with no topic of their own. */
 export const RESOLVED_FOLLOWUP_RE =
-  /^\s*(list|show)(\s+(me|all|of))?\s+(them|those|these)\.?\s*$|^\s*show\s+(all\s+)?of\s+them\.?\s*$|^\s*(list|show)\s+(all\s+)?(of\s+)?(them|those|these)\.?\s*$/i;
+  /^\s*(list|show)(\s+(me|all|of))?\s+(them|those|these)\.?\s*$|^\s*show\s+(all\s+)?of\s+them\.?\s*$|^\s*(list|show)\s+(all\s+)?(of\s+)?(them|those|these)\.?\s*$|^\s*show\s+me\s+their\s+names?\.?\s*$|^\s*(what are|give me)\s+their\s+names?\.?\s*$/i;
 
 const ORDINAL_RE =
   /^\s*(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+(one|item|department|project|team|task|employee|manager|supervisor)\.?\s*$/i;
@@ -162,6 +162,7 @@ export function looksLikeReferenceFollowUp(text) {
  *
  * @param {string} text - raw user message
  * @param {object|null} memory - lastEntities snapshot
+ * @param {{ entityQueryEnabled?: boolean }} [opts]
  * @returns {{
  *   resolvedText: string,
  *   entityType: string|null,
@@ -170,9 +171,10 @@ export function looksLikeReferenceFollowUp(text) {
  *   wasResolved: boolean,
  *   toolName: string|null,
  *   toolArgs: object|null,
+ *   useEntityQuery?: boolean,
  * }}
  */
-export function resolveReferences(text, memory = null) {
+export function resolveReferences(text, memory = null, { entityQueryEnabled = false } = {}) {
   const original = String(text || '').trim();
   const base = {
     resolvedText: original,
@@ -191,6 +193,25 @@ export function resolveReferences(text, memory = null) {
 
   const route = ENTITY_ROUTE[entityType];
   if (!route) return base;
+
+  // Employee entityQuery follow-up — replay lastContext filters; do not fetch unfiltered list.
+  if (
+    entityQueryEnabled &&
+    entityType === 'employees' &&
+    memory?.lastContext?.entity === 'employees' &&
+    RESOLVED_FOLLOWUP_RE.test(original)
+  ) {
+    return {
+      resolvedText: original,
+      entityType: 'employees',
+      intent: 'list',
+      confidence: 0.95,
+      wasResolved: true,
+      toolName: null,
+      toolArgs: null,
+      useEntityQuery: true,
+    };
+  }
 
   // Pronoun list follow-ups: "list them", "show those", etc.
   if (RESOLVED_FOLLOWUP_RE.test(original)) {
@@ -263,6 +284,7 @@ export function resolveReferences(text, memory = null) {
  */
 export function routeResolvedFollowUp(resolution) {
   if (!resolution?.wasResolved || !resolution.toolName) return null;
+  if (resolution.useEntityQuery) return null;
   if (resolution.confidence < 0.8) return null;
   return {
     toolName: resolution.toolName,

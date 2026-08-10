@@ -188,6 +188,152 @@ function tableTypeFor(role) {
   return 'employees';
 }
 
+function deriveEmploymentState(record) {
+  if (record.employmentState) return record.employmentState;
+  if (record.resignDate) {
+    const resign = new Date(record.resignDate);
+    if (!Number.isNaN(resign.getTime()) && resign <= new Date()) {
+      return 'resigned';
+    }
+  }
+  if (record.isActive === false) return 'inactive';
+  return 'active';
+}
+
+/**
+ * Map entityQuery executor records into the fetch_employees renderer shape.
+ *
+ * @param {object} record
+ * @returns {object}
+ */
+export function mapEntityQueryEmployeeRecord(record) {
+  const positionName =
+    typeof record.position === 'object' && record.position?.name
+      ? record.position.name
+      : record.position || record.designation || null;
+
+  return {
+    name: record.fullName || record.name || record.email || '—',
+    employeeId: record.employeeId || record.empId || '',
+    email: record.email || '',
+    role: ['Employee'],
+    roleNames: ['Employee'],
+    department: positionName,
+    designation: record.designation || positionName,
+    employmentState: deriveEmploymentState(record),
+    compensationType: record.compensationType,
+    joiningDate: record.joiningDate || record.joinDate,
+    resignDate: record.resignDate || record.resignationDate,
+    accountState: record.ownerStatus || record.accountState || record.status,
+  };
+}
+
+function isRecordResigned(record) {
+  const state = deriveEmploymentState(record);
+  return String(state).toLowerCase() === 'resigned';
+}
+
+function partitionRecords(records) {
+  const active = [];
+  const resigned = [];
+  for (const record of records) {
+    if (isRecordResigned(record)) resigned.push(record);
+    else active.push(record);
+  }
+  return { active, resigned };
+}
+
+function renderGroupedSectionMarkdown(title, rendered) {
+  if (!rendered?.markdown) return '';
+  return `### ${title}\n\n${rendered.markdown}`;
+}
+
+/**
+ * Render a deterministic employee table from entityQuery ToolResultContract.
+ *
+ * @param {object} toolResult
+ * @param {{ viewerRole?: string }} [ctx]
+ * @returns {{ block?: object, blocks?: object[], markdown?: string, sectionMarkdown?: string } | null}
+ */
+export function renderDeterministicEmployeeList(toolResult, ctx = {}) {
+  const records = Array.isArray(toolResult?.records) ? toolResult.records : [];
+  if (!records.length) return null;
+
+  const mapped = records.map(mapEntityQueryEmployeeRecord);
+  const total = Number(toolResult.total ?? mapped.length);
+  const statusIsAll = toolResult.query?.filters?.employmentStatus === 'all';
+  const limit = Number(toolResult.limit ?? mapped.length);
+  const pageNum = Number(toolResult.page ?? 1);
+  const from = total === 0 ? 0 : (pageNum - 1) * limit + 1;
+  const to = Math.min(pageNum * limit, total);
+
+  const page =
+    toolResult.getAll || toolResult.truncated
+      ? {
+          from: 1,
+          to: toolResult.returned ?? mapped.length,
+          total,
+          hasMore: !!toolResult.truncated,
+        }
+      : {
+          from,
+          to,
+          total,
+          hasMore: !!toolResult.hasNextPage,
+        };
+
+  if (statusIsAll) {
+    const { active, resigned } = partitionRecords(mapped);
+    const blocks = [];
+    const sectionParts = [];
+
+    // Section counts come from the DB breakdown, never from the page slice — a
+    // 50-row page of 176 matches must not render as "Active (33) … 1–33 of 33".
+    const breakdown = toolResult.employmentBreakdown;
+    const sections = [
+      { key: 'Active', records: active, total: Number(breakdown?.active ?? active.length) },
+      { key: 'Resigned', records: resigned, total: Number(breakdown?.resigned ?? resigned.length) },
+    ];
+
+    for (const section of sections) {
+      if (!section.records.length) continue;
+      const shown = section.records.length;
+      const sectionTotal = Math.max(section.total, shown);
+      const out = renderEmployees(
+        {
+          records: section.records,
+          total: sectionTotal,
+          page: { from: 1, to: shown, total: sectionTotal, hasMore: shown < sectionTotal },
+          requestedRole: 'Employee',
+        },
+        { role: 'Employee', ...ctx }
+      );
+      if (!out?.block) continue;
+      out.block.title = `${section.key} (${sectionTotal})`;
+      blocks.push(out.block);
+      sectionParts.push(renderGroupedSectionMarkdown(`${section.key} — ${sectionTotal}`, out));
+    }
+
+    if (!blocks.length) return null;
+
+    return {
+      blocks,
+      sectionMarkdown: sectionParts.filter(Boolean).join('\n\n'),
+      markdown: sectionParts.filter(Boolean).join('\n\n'),
+    };
+  }
+
+  return renderEmployees(
+    {
+      records: mapped,
+      total,
+      page,
+      requestedRole: 'Employee',
+    },
+    { role: 'Employee', ...ctx }
+  );
+}
+
 function buildMarkdownTwin({ columns, rows, total, page }) {
   const labels = columns.map((c) => c.label);
   const header = `| ${labels.join(' | ')} |`;

@@ -12,9 +12,10 @@ const FROM = new Date(Date.UTC(2026, 6, 1)); // July 1
 const TO = new Date(Date.UTC(2026, 6, 31, 23, 59, 59, 999)); // July 31 EOD
 
 describe('employeeEmploymentFilter', () => {
-  it('scopes resigned employment status by resignDate <= today', () => {
+  it('scopes resigned employment status by resignDate <= resignationCutoff', () => {
+    const cutoff = new Date(Date.UTC(2026, 7, 7, 23, 59, 59, 999));
     assert.deepEqual(employmentStatusClause('resigned', TODAY), {
-      resignDate: { $ne: null, $lte: TODAY },
+      resignDate: { $ne: null, $lte: cutoff },
     });
   });
 

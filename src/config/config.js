@@ -1,7 +1,14 @@
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Joi from 'joi';
+
+/** Stable 0–99 bucket for percent rollout gates (CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT). */
+export function stableHashUserId(userId) {
+  const hash = crypto.createHash('sha256').update(String(userId)).digest();
+  return hash.readUInt32BE(0) % 100;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load backend root .env (always relative to this file, not process.cwd())
@@ -237,8 +244,32 @@ const envVarsSchema = Joi.object()
     PINECONE_API_KEY: Joi.string().optional().allow('').description('Pinecone API key for vector search'),
     PINECONE_INDEX: Joi.string().optional().default('dharwin-hr').description('Pinecone index name'),
 
+    // Vector store selection. Both backends implement the same contract
+    // (utils/pinecone.util.js dispatches), so switching is an env change plus a
+    // re-run of the embedding sync to populate the newly selected store.
+    VECTOR_DB: Joi.string().valid('pinecone', 'qdrant').default('pinecone')
+      .description('Which vector database to use: pinecone | qdrant'),
+    QDRANT_URL: Joi.string().uri().optional().allow('').default('http://127.0.0.1:6333')
+      .description('Qdrant REST endpoint (docker-compose.qdrant.yml serves this for local dev)'),
+    QDRANT_API_KEY: Joi.string().optional().allow('')
+      .description('Qdrant API key — required for Qdrant Cloud, blank for a local container'),
+    QDRANT_COLLECTION_PREFIX: Joi.string().optional().allow('')
+      .description('Qdrant collection prefix; defaults to PINECONE_INDEX so both backends share one naming scheme'),
+
     // Chatbot — two-stage pipeline (classifier + scoped fetcher)
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
+    CHATBOT_ENTITY_QUERY_EMPLOYEES: Joi.boolean()
+      .default(false)
+      .description('Route chatbot employee queries through canonical entityQuery pipeline'),
+    CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT: Joi.number()
+      .integer()
+      .min(0)
+      .max(100)
+      .default(100)
+      .description('Percent of users (stable hash) enrolled in entityQuery when flag is on; 100 = all'),
+    CHATBOT_QUERY_AUDIT_DEBUG: Joi.boolean()
+      .default(false)
+      .description('Include raw mongo filter in employee query audit logs (incident response only)'),
 
     // === AI Meeting Summary (Phase 1 — see docs/superpowers/specs/2026-05-11-...) ===
     OPENAI_MODEL_SUMMARY: Joi.string().default('gpt-4o-mini'),
@@ -614,8 +645,22 @@ const config = {
     apiKey: envVars.PINECONE_API_KEY || '',
     indexName: envVars.PINECONE_INDEX || 'dharwin-hr',
   },
+  vectorDb: {
+    /** 'pinecone' | 'qdrant' — read by utils/pinecone.util.js, which dispatches. */
+    provider: envVars.VECTOR_DB || 'pinecone',
+    qdrant: {
+      url: envVars.QDRANT_URL || 'http://127.0.0.1:6333',
+      apiKey: envVars.QDRANT_API_KEY || '',
+      // Same logical index name as Pinecone so the two stores stay comparable.
+      collectionPrefix: envVars.QDRANT_COLLECTION_PREFIX || envVars.PINECONE_INDEX || 'dharwin-hr',
+    },
+  },
   chatbot: {
+    /** When true, classifier+fetchPeople runs in prepareContext. entityQuery early gate still wins for employee queries when entityQueryEmployees is on. */
     twoStage: envVars.CHATBOT_TWO_STAGE,
+    entityQueryEmployees: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES,
+    entityQueryEmployeesPercent: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT,
+    queryAuditDebug: envVars.CHATBOT_QUERY_AUDIT_DEBUG,
   },
   ai: {
     summaryModel: envVars.OPENAI_MODEL_SUMMARY,
