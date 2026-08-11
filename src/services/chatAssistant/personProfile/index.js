@@ -8,8 +8,14 @@ import { projectFields } from './fieldProjector.js';
 import { writePending as realWritePending,
          writeCurrentPerson as realWriteCurrent } from './pendingPerson.js';
 import { hasApiPermissionFromContext } from '../../../utils/permissionCheck.js';
+import User from '../../../models/user.model.js';
 
 const READ_NAMESPACES = ['employees', 'candidates', 'students', 'mentors', 'recruiters', 'agents'];
+
+/** Minimal identity + roles for a caller-supplied userId. */
+function realLoadUserById(id) {
+  return User.findById(id).select('name email roleIds').lean();
+}
 
 /**
  * @param {object} a
@@ -31,11 +37,24 @@ export async function resolvePersonProfile({
   const pickProviders = deps.selectProviders ?? realSelect;
   const savePending   = deps.writePending ?? realWritePending;
   const saveCurrent   = deps.writeCurrentPerson ?? realWriteCurrent;
+  const loadUser      = deps.loadUserById ?? realLoadUserById;
   const viewerId      = viewer?.id ?? viewer?._id;
 
   let target;
   if (userId) {
-    target = { userId };
+    // Callers that already know who they mean (pending-disambiguation
+    // selection, conversational entity route, person conversation state) pass
+    // only an id. Load the row: without roleIds, tagRoleSlugs() below returns
+    // an empty Map and every one of those turns answered kind:'unavailable'
+    // ("I couldn't reach the directory just now") for every person.
+    const row = await loadUser(userId);
+    if (!row) return { kind: 'notFound' };
+    target = {
+      userId: row._id ?? userId,
+      name: row.name ?? null,
+      email: row.email ?? null,
+      roleIds: row.roleIds || [],
+    };
   } else {
     const res = await resolveEntity(person, { viewer });
     if (res.kind === 'notFound') return { kind: 'notFound' };
