@@ -9,6 +9,12 @@ import * as livekitService from './livekit.service.js';
 import Recording from '../models/recording.model.js';
 import { generatePresignedDownloadUrl, generatePresignedRecordingPlaybackUrl } from '../config/s3.js';
 import logger from '../config/logger.js';
+import {
+  buildChatMessagePreview,
+  defaultAttachmentContent,
+  isGenericAttachmentPlaceholder,
+} from '../utils/chatMessagePreview.js';
+import { userHasReceipt } from '../utils/chatReceipts.js';
 
 /** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
 const PROFILE_PICTURE_PRESIGN_TTL_SEC = 7 * 24 * 3600;
@@ -65,7 +71,7 @@ const ensureAdmin = async (conversationId, userId) => {
   return conv;
 };
 
-const isCreator = (conv, userId) => conv.createdBy?.toString() === userId;
+const isCreator = (conv, userId) => String(conv.createdBy?._id || conv.createdBy || '') === String(userId);
 
 const userIsPrivilegedChatParticipant = (u) => u && (u.hideFromDirectory || u.platformSuperUser);
 
@@ -197,16 +203,13 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   const convIds = dedupedConvs.map((c) => c._id);
   const lastMsgPreview = (lastMsg) => {
     if (!lastMsg) return null;
-    let content = lastMsg.content;
-    if (lastMsg.type !== 'text') {
-      if (lastMsg.type === 'image') content = '📷 Image';
-      else if (lastMsg.type === 'audio') content = '🎤 Voice note';
-      else content = '📎 File';
-    }
+    const preview = buildChatMessagePreview(lastMsg);
     return {
-      content,
+      content: preview.text,
       sender: lastMsg.sender?.name,
       createdAt: lastMsg.createdAt,
+      type: lastMsg.type,
+      attachments: lastMsg.attachments,
     };
   };
 
@@ -222,6 +225,7 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
               type: { $first: '$type' },
               sender: { $first: '$sender' },
               createdAt: { $first: '$createdAt' },
+              attachments: { $first: '$attachments' },
             },
           },
         ])
@@ -245,6 +249,7 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
         content: m.content,
         type: m.type,
         createdAt: m.createdAt,
+        attachments: m.attachments,
         sender: { name: senderNameById.get(m.sender?.toString()) },
       }),
     ])
@@ -283,8 +288,16 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   return { results: enrichedResults, page, limit, total, totalPages: Math.ceil(total / limit) || 1 };
 };
 
-const createConversation = async (userId, { type, participantIds, name }) => {
-  const ids = [...new Set(participantIds.map((id) => id.toString()))];
+const createConversation = async (userId, { type, participantIds, name, description }) => {
+  const creatorId = String(userId);
+  // Never include the creator twice — they are always prepended as owner/admin.
+  const ids = [
+    ...new Set(
+      (participantIds || [])
+        .map((id) => String(id))
+        .filter((id) => id && id !== creatorId)
+    ),
+  ];
   if (type === 'direct' && ids.length !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Direct conversation requires exactly one other participant');
   }
@@ -292,7 +305,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Group requires at least one other participant');
   }
 
-  const allParticipantIds = [userId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
+  const allParticipantIds = [creatorId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
   const caller = await User.findById(userId).select('platformSuperUser').lean();
   const callerIsSuper = !!caller?.platformSuperUser;
   const flagMap = await loadUserFlagsMapByIds(allParticipantIds);
@@ -369,6 +382,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     type,
     participants,
     name: type === 'group' ? name || 'Group' : undefined,
+    description: type === 'group' ? String(description || '').trim().slice(0, 500) : undefined,
     createdBy: userId,
   });
   const populated = await conv.populate(['participants.user', 'createdBy']);
@@ -378,11 +392,44 @@ const createConversation = async (userId, { type, participantIds, name }) => {
 
 const getConversation = async (conversationId, userId) => {
   await ensureParticipant(conversationId, userId);
-  const conv = await Conversation.findById(conversationId)
+  let conv = await Conversation.findById(conversationId)
     .populate('participants.user', 'name email')
     .populate('createdBy', 'name email')
     .lean();
   if (!conv) throw new ApiError(httpStatus.NOT_FOUND, 'Conversation not found');
+
+  // Repair legacy groups that accidentally stored the creator twice.
+  if (conv.type === 'group' && Array.isArray(conv.participants)) {
+    const seen = new Set();
+    const deduped = [];
+    let changed = false;
+    for (const p of conv.participants) {
+      const uid = participantRowUserId(p);
+      if (!uid) continue;
+      if (seen.has(uid)) {
+        changed = true;
+        continue;
+      }
+      seen.add(uid);
+      deduped.push(p);
+    }
+    if (changed) {
+      await Conversation.findByIdAndUpdate(conversationId, {
+        $set: {
+          participants: deduped.map((p) => ({
+            user: p.user?._id || p.user,
+            lastReadAt: p.lastReadAt ?? null,
+            role: p.role || 'member',
+          })),
+        },
+      });
+      conv = await Conversation.findById(conversationId)
+        .populate('participants.user', 'name email')
+        .populate('createdBy', 'name email')
+        .lean();
+    }
+  }
+
   return formatConversationForClient({ ...conv, id: conv._id?.toString() });
 };
 
@@ -433,10 +480,15 @@ const createMessage = async (conversationId, userId, { content, type, attachment
   await ensureParticipant(conversationId, userId);
 
   const msgType = type || (attachments?.length ? 'file' : 'text');
+  let trimmed = (content || '').trim();
+  if (attachments?.length && isGenericAttachmentPlaceholder(trimmed)) {
+    trimmed = '';
+  }
+
   const msgData = {
     conversation: conversationId,
     sender: userId,
-    content: (content || '').trim() || (msgType !== 'text' ? '' : ''),
+    content: trimmed,
     type: msgType,
   };
 
@@ -452,14 +504,17 @@ const createMessage = async (conversationId, userId, { content, type, attachment
       size: a.size || 0,
       mimeType: a.mimeType || '',
     }));
-    if (!msgData.content && msgType === 'image') msgData.content = '📷 Image';
-    if (!msgData.content && msgType === 'file') msgData.content = '📎 File';
-    if (!msgData.content && msgType === 'audio') msgData.content = '🎤 Voice note';
+    if (!msgData.content) {
+      msgData.content = defaultAttachmentContent(msgType, msgData.attachments);
+    }
   }
 
   const msg = await Message.create(msgData);
   await Conversation.findByIdAndUpdate(conversationId, { lastMessageAt: new Date() });
-  const populated = await msg.populate('sender', 'name email');
+  const populated = await msg.populate([
+    { path: 'sender', select: 'name email' },
+    { path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } },
+  ]);
   const result = populated.toObject();
   result.id = result._id?.toString();
   return result;
@@ -469,11 +524,24 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
   await ensureParticipant(conversationId, userId);
   const msg = await Message.findOne({ _id: messageId, conversation: conversationId }).lean();
   if (!msg) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
-  const isSender = msg.sender.toString() === userId;
-  if (!isSender) throw new ApiError(httpStatus.FORBIDDEN, 'Only the sender can delete a message');
+
+  const isSender = msg.sender.toString() === userId.toString();
+  const mode = deleteFor === 'everyone' ? 'everyone' : 'me';
+
+  // WhatsApp-style: anyone can delete for themselves; only the sender can delete for everyone.
+  if (mode === 'everyone' && !isSender) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Only the sender can delete this message for everyone');
+  }
+
+  // Already deleted for everyone — nothing more to do.
+  if (msg.deletedAt && msg.deletedFor === 'everyone') {
+    const result = { ...msg, id: msg._id?.toString() };
+    return result;
+  }
+
   const update = {
     deletedAt: new Date(),
-    deletedFor: deleteFor || 'me',
+    deletedFor: mode,
     deletedBy: userId,
   };
   await Message.findByIdAndUpdate(messageId, { $set: update });
@@ -483,6 +551,83 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     .lean();
   const result = { ...updated, id: updated._id?.toString() };
   return result;
+};
+
+/**
+ * Forward a message (and its attachments) to one or more conversations.
+ * @param {{ targetConversationId?: string, targetConversationIds?: string[] }} options
+ */
+const forwardMessage = async (conversationId, messageId, userId, options = {}) => {
+  const rawTargets = Array.isArray(options.targetConversationIds)
+    ? options.targetConversationIds
+    : options.targetConversationId
+      ? [options.targetConversationId]
+      : [];
+  const targetIds = [...new Set(rawTargets.map((id) => String(id)).filter(Boolean))];
+
+  if (!targetIds.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Select at least one chat to forward to');
+  }
+  if (targetIds.some((id) => id === String(conversationId))) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Choose a different chat to forward to');
+  }
+
+  await ensureParticipant(conversationId, userId);
+  for (const targetId of targetIds) {
+    // eslint-disable-next-line no-await-in-loop
+    await ensureParticipant(targetId, userId);
+  }
+
+  const source = await Message.findOne({ _id: messageId, conversation: conversationId }).lean();
+  if (!source) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  if (source.deletedAt && source.deletedFor === 'everyone') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot forward a deleted message');
+  }
+
+  const attachments = [];
+  for (const a of source.attachments || []) {
+    let url = a.url;
+    if (a.key) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        url = await generatePresignedDownloadUrl(a.key, 3600);
+      } catch {
+        /* keep existing url */
+      }
+    }
+    if (!url) continue;
+    attachments.push({
+      url,
+      key: a.key || '',
+      originalName: a.originalName || 'attachment',
+      size: a.size || 0,
+      mimeType: a.mimeType || '',
+    });
+  }
+
+  const hasMedia = attachments.length > 0;
+  const caption = (source.content || '').trim();
+  const msgType = hasMedia
+    ? source.type && source.type !== 'text'
+      ? source.type
+      : 'file'
+    : 'text';
+
+  if (!hasMedia && !caption) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Nothing to forward');
+  }
+
+  const created = [];
+  for (const targetId of targetIds) {
+    // eslint-disable-next-line no-await-in-loop
+    const msg = await createMessage(targetId, userId, {
+      content: caption,
+      type: msgType,
+      attachments: hasMedia ? attachments : undefined,
+    });
+    created.push({ conversationId: targetId, message: msg });
+  }
+  return created;
 };
 
 const reactToMessage = async (conversationId, messageId, userId, { emoji }) => {
@@ -511,16 +656,98 @@ const markAsRead = async (conversationId, userId) => {
     { _id: conversationId, 'participants.user': userId },
     { $set: { 'participants.$.lastReadAt': now } }
   );
-  // Also add userId to readBy for recent unread messages
-  await Message.updateMany(
-    {
-      conversation: conversationId,
-      sender: { $ne: userId },
-      readBy: { $ne: userId },
-    },
-    { $addToSet: { readBy: userId } }
+
+  const unread = await Message.find({
+    conversation: conversationId,
+    sender: { $ne: userId },
+  })
+    .select('_id readBy deliveredTo')
+    .lean();
+
+  const bulk = [];
+  for (const msg of unread) {
+    const update = {};
+    const push = {};
+    if (!userHasReceipt(msg.readBy, userId)) {
+      push.readBy = { user: userId, at: now };
+    }
+    if (!userHasReceipt(msg.deliveredTo, userId)) {
+      push.deliveredTo = { user: userId, at: now };
+    }
+    if (Object.keys(push).length) {
+      update.$push = push;
+      bulk.push({ updateOne: { filter: { _id: msg._id }, update } });
+    }
+  }
+  if (bulk.length) {
+    await Message.bulkWrite(bulk, { ordered: false });
+  }
+  return { success: true, readAt: now.toISOString() };
+};
+
+/**
+ * Mark a single message as delivered to a recipient (socket ACK).
+ */
+const markMessageDelivered = async (conversationId, messageId, userId) => {
+  await ensureParticipant(conversationId, userId);
+  const msg = await Message.findOne({ _id: messageId, conversation: conversationId })
+    .select('sender deliveredTo')
+    .lean();
+  if (!msg) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  if (String(msg.sender) === String(userId)) {
+    return { already: true, messageId: String(messageId), userId: String(userId) };
+  }
+  if (userHasReceipt(msg.deliveredTo, userId)) {
+    return { already: true, messageId: String(messageId), userId: String(userId) };
+  }
+  const at = new Date();
+  await Message.updateOne(
+    { _id: messageId },
+    { $push: { deliveredTo: { user: userId, at } } }
   );
-  return { success: true };
+  return {
+    messageId: String(messageId),
+    conversationId: String(conversationId),
+    userId: String(userId),
+    senderId: String(msg.sender),
+    deliveredAt: at.toISOString(),
+  };
+};
+
+/**
+ * Mark all messages in a conversation as delivered for this user (on join / fetch).
+ */
+const markConversationDelivered = async (conversationId, userId) => {
+  await ensureParticipant(conversationId, userId);
+  const pending = await Message.find({
+    conversation: conversationId,
+    sender: { $ne: userId },
+  })
+    .select('_id deliveredTo')
+    .lean();
+
+  const at = new Date();
+  const bulk = [];
+  const markedIds = [];
+  for (const msg of pending) {
+    if (userHasReceipt(msg.deliveredTo, userId)) continue;
+    bulk.push({
+      updateOne: {
+        filter: { _id: msg._id },
+        update: { $push: { deliveredTo: { user: userId, at } } },
+      },
+    });
+    markedIds.push(String(msg._id));
+  }
+  if (bulk.length) {
+    await Message.bulkWrite(bulk, { ordered: false });
+  }
+  return {
+    conversationId: String(conversationId),
+    userId: String(userId),
+    deliveredAt: at.toISOString(),
+    messageIds: markedIds,
+  };
 };
 
 const listCallsForConversation = async (conversationId, userId, { limit = 50 } = {}) => {
@@ -838,10 +1065,19 @@ const setParticipantRole = async (conversationId, userId, targetUserId, { role }
   return getConversation(conversationId, userId);
 };
 
-const updateGroupName = async (conversationId, userId, { name }) => {
+const updateGroupName = async (conversationId, userId, { name, description } = {}) => {
   await ensureAdmin(conversationId, userId);
-  const trimmed = (name || '').trim() || 'Group';
-  await Conversation.findByIdAndUpdate(conversationId, { $set: { name: trimmed } });
+  const $set = {};
+  if (name !== undefined) {
+    $set.name = String(name || '').trim() || 'Group';
+  }
+  if (description !== undefined) {
+    $set.description = String(description || '').trim().slice(0, 500);
+  }
+  if (!Object.keys($set).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Nothing to update');
+  }
+  await Conversation.findByIdAndUpdate(conversationId, { $set });
   return getConversation(conversationId, userId);
 };
 
@@ -885,8 +1121,11 @@ export {
   getMessages,
   createMessage,
   deleteMessage,
+  forwardMessage,
   reactToMessage,
   markAsRead,
+  markMessageDelivered,
+  markConversationDelivered,
   listCalls,
   listCallsForUser,
   listCallsForConversation,

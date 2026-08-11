@@ -12,6 +12,8 @@ import { getUserIdsWithApiPermission } from './permission.service.js';
 import { sendPushToUser } from './push.service.js';
 import * as chatCallService from './chatCall.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
+import { buildChatMessagePreview } from '../utils/chatMessagePreview.js';
+import { generatePresignedDownloadUrl } from '../config/s3.js';
 
 let io = null;
 
@@ -102,6 +104,26 @@ const initSocket = (httpServer) => {
         await chatService.ensureParticipant(conversationId, userId);
         socket.join(`conversation:${conversationId}`);
         cb?.({ success: true });
+        try {
+          const result = await chatService.markConversationDelivered(conversationId, userId);
+          if (result.messageIds?.length) {
+            const payload = {
+              conversationId: result.conversationId,
+              userId: result.userId,
+              deliveredAt: result.deliveredAt,
+              messageIds: result.messageIds,
+            };
+            io.to(`conversation:${conversationId}`).emit('conversation_delivered', payload);
+            const participantIds = await chatService.getConversationParticipantIds(conversationId);
+            for (const pid of participantIds || []) {
+              const pidStr = String(pid);
+              if (pidStr === String(userId)) continue;
+              io.to(`user:${pidStr}`).emit('conversation_delivered', payload);
+            }
+          }
+        } catch (deliverErr) {
+          logger.warn(`join deliver failed: ${deliverErr.message}`);
+        }
       } catch (err) {
         cb?.({ error: err.message || 'Failed to join' });
       }
@@ -141,15 +163,78 @@ const initSocket = (httpServer) => {
       const { conversationId } = data || {};
       if (conversationId) {
         try {
-          await chatService.markAsRead(conversationId, userId);
-          socket.to(`conversation:${conversationId}`).emit('messages_read', {
+          const result = await chatService.markAsRead(conversationId, userId);
+          const payload = {
             conversationId,
             userId,
-            readAt: new Date().toISOString(),
-          });
+            readAt: result.readAt || new Date().toISOString(),
+          };
+          // Conversation room (open threads) + each other participant's user room
+          // so senders get realtime blue ticks even if they left the thread.
+          socket.to(`conversation:${conversationId}`).emit('messages_read', payload);
+          try {
+            const participantIds = await chatService.getConversationParticipantIds(conversationId);
+            for (const pid of participantIds || []) {
+              const pidStr = String(pid);
+              if (pidStr === String(userId)) continue;
+              io.to(`user:${pidStr}`).emit('messages_read', payload);
+            }
+          } catch (notifyErr) {
+            logger.warn(`messages_read user notify failed: ${notifyErr.message}`);
+          }
         } catch (err) {
           logger.warn(`message_read failed for ${conversationId}: ${err.message}`);
         }
+      }
+    });
+
+    socket.on('message_delivered', async (data) => {
+      const { conversationId, messageId } = data || {};
+      if (!conversationId || !messageId) return;
+      try {
+        const result = await chatService.markMessageDelivered(conversationId, messageId, userId);
+        if (result?.already) return;
+        const payload = {
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          userId: result.userId,
+          deliveredAt: result.deliveredAt,
+        };
+        io.to(`conversation:${conversationId}`).emit('message_delivered', payload);
+        // Notify the original sender directly (critical for 1:1 realtime grey ticks).
+        if (result.senderId) {
+          io.to(`user:${result.senderId}`).emit('message_delivered', payload);
+        }
+      } catch (err) {
+        logger.warn(`message_delivered failed: ${err.message}`);
+      }
+    });
+
+    socket.on('conversation_delivered', async (data) => {
+      const { conversationId } = data || {};
+      if (!conversationId) return;
+      try {
+        const result = await chatService.markConversationDelivered(conversationId, userId);
+        if (!result.messageIds?.length) return;
+        const payload = {
+          conversationId: result.conversationId,
+          userId: result.userId,
+          deliveredAt: result.deliveredAt,
+          messageIds: result.messageIds,
+        };
+        io.to(`conversation:${conversationId}`).emit('conversation_delivered', payload);
+        try {
+          const participantIds = await chatService.getConversationParticipantIds(conversationId);
+          for (const pid of participantIds || []) {
+            const pidStr = String(pid);
+            if (pidStr === String(userId)) continue;
+            io.to(`user:${pidStr}`).emit('conversation_delivered', payload);
+          }
+        } catch (notifyErr) {
+          logger.warn(`conversation_delivered user notify failed: ${notifyErr.message}`);
+        }
+      } catch (err) {
+        logger.warn(`conversation_delivered failed: ${err.message}`);
       }
     });
 
@@ -353,12 +438,28 @@ const emitNewMessage = async (conversationId, message) => {
       // route guard blocks (e.g. employees added to a conversation without chat access).
       // ponytail: per-message role scan (2 queries); add a short TTL cache if chat volume makes this hot.
       const chatPermittedIds = new Set(await getUserIdsWithApiPermission('chats.read'));
-      participantIds.forEach((uid) => {
+      const preview = buildChatMessagePreview(payload);
+      const firstAttachment = Array.isArray(payload.attachments) ? payload.attachments[0] : null;
+      let imageUrl = preview.imageUrl;
+      if (preview.kind === 'image' && firstAttachment?.key) {
+        try {
+          imageUrl = await generatePresignedDownloadUrl(firstAttachment.key, 3600);
+        } catch (err) {
+          logger.warn(`chat notify image URL failed: ${err.message}`);
+        }
+      }
+
+      for (const uid of participantIds) {
         const uidStr = String(uid);
         // conversation_updated to all participants (sidebar badge/preview)
         io.to(`user:${uidStr}`).emit('conversation_updated', {
           conversationId,
-          lastMessage: { content: payload.content, sender: payload.sender?.name || '', createdAt: payload.createdAt },
+          lastMessage: {
+            content: preview.text,
+            sender: payload.sender?.name || '',
+            createdAt: payload.createdAt,
+            type: payload.type,
+          },
         });
         // new_message to non-sender user rooms — fires toast even when recipient not on chat page
         if (uidStr !== senderStr) {
@@ -372,14 +473,21 @@ const emitNewMessage = async (conversationId, message) => {
             notify(uid, {
               type: 'chat_message',
               title: payload.sender?.name || 'New message',
-              message: String(payload.content || '').slice(0, 120),
+              message: preview.text.slice(0, 120),
               link: `/communication/chats?conv=${conversationId}`,
               triggeredBy: payload.sender?._id || payload.sender?.id,
               relatedEntity: { type: 'conversation', id: conversationId },
+              metadata: {
+                messageType: preview.kind,
+                ...(preview.attachmentName ? { attachmentName: preview.attachmentName } : {}),
+                ...(preview.documentType ? { documentType: preview.documentType } : {}),
+                ...(imageUrl ? { imageUrl } : {}),
+              },
+              ...(imageUrl ? { richContent: { image: imageUrl } } : {}),
             }).catch((err) => logger.warn(`chat notify failed: ${err.message}`));
           }
         }
-      });
+      }
     }
   } catch (err) {
     logger.warn(`conversation_updated emit failed: ${err.message}`);
@@ -404,10 +512,30 @@ const emitIncomingCall = async (conversationId, callData) => {
   try {
     const ids = await chatService.getConversationParticipantIds(conversationId);
     const callerStr = callData.caller?.id != null ? String(callData.caller.id) : '';
+    const callerName = callData.caller?.name || 'Someone';
+    const callType = callData.callType || 'audio';
     if (ids?.length) {
       ids.forEach((uid) => {
-        if (callerStr && String(uid) === callerStr) return;
-        io.to(`user:${uid}`).emit('incoming_call', callData);
+        const uidStr = String(uid);
+        if (callerStr && uidStr === callerStr) return;
+        io.to(`user:${uidStr}`).emit('incoming_call', callData);
+        // Mobile push so callees are alerted when the app is backgrounded/closed
+        // (REST initiateCall path — socket call:initiate already pushes separately).
+        sendPushToUser(uidStr, {
+          title: `Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
+          body: `${callerName} is calling`,
+          data: {
+            type: 'incoming_call',
+            callId: String(callData.callId || ''),
+            conversationId: String(conversationId || ''),
+            callType,
+            callerName,
+            ...(callData.conversationType ? { conversationType: callData.conversationType } : {}),
+            ...(callData.groupName ? { groupName: callData.groupName } : {}),
+            ...(callData.roomName ? { roomName: callData.roomName } : {}),
+          },
+          channelId: 'incoming-calls',
+        }).catch((e) => logger.warn('[push] incoming_call push failed: %s', e?.message || e));
       });
     }
   } catch (err) {
@@ -443,9 +571,14 @@ const isUserOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(user
 
 const getIO = () => io;
 
-const emitMessageDeleted = (conversationId, messageId, deleteFor) => {
+const emitMessageDeleted = (conversationId, messageId, deleteFor, deletedBy) => {
   if (!io) return;
-  io.to(`conversation:${conversationId}`).emit('message_deleted', { conversationId, messageId, deleteFor });
+  io.to(`conversation:${conversationId}`).emit('message_deleted', {
+    conversationId,
+    messageId,
+    deleteFor,
+    deletedBy: deletedBy != null ? String(deletedBy) : undefined,
+  });
 };
 
 const emitMessageReacted = (conversationId, message) => {

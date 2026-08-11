@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import config from '../config/config.js';
+import ApiError from '../utils/ApiError.js';
 import * as outlookClientService from '../services/outlookClient.service.js';
 
 const listOutlookAccounts = catchAsync(async (req, res) => {
@@ -88,9 +89,19 @@ const getMessage = catchAsync(async (req, res) => {
 const getAttachment = catchAsync(async (req, res) => {
   const { accountId } = req.query;
   const { messageId, attachmentId } = req.params;
-  const data = await outlookClientService.getAttachment(accountId, req.user.id, messageId, attachmentId);
-  const buf = Buffer.from(data, 'base64');
-  res.set('Content-Disposition', `attachment`);
+  const result = await outlookClientService.getAttachment(accountId, req.user.id, messageId, attachmentId);
+  const data = typeof result === 'string' ? result : result?.contentBytes || '';
+  const contentType =
+    (typeof result === 'object' && result?.contentType) || 'application/octet-stream';
+  const filename =
+    (typeof result === 'object' && result?.name) || 'attachment';
+  const buf = Buffer.from(data || '', 'base64');
+  if (!buf.length) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment content is empty or unavailable');
+  }
+  res.set('Content-Type', contentType);
+  res.set('Content-Disposition', `attachment; filename="${String(filename).replace(/"/g, '')}"`);
+  res.set('Content-Length', String(buf.length));
   res.send(buf);
 });
 

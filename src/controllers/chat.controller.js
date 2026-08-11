@@ -1,9 +1,19 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import * as chatService from '../services/chat.service.js';
-import { emitNewMessage, emitIncomingCall, emitCallEnded, emitMessageDeleted, emitMessageReacted, emitConversationUpdated, emitConversationDeleted } from '../services/chatSocket.service.js';
+import {
+  emitNewMessage,
+  emitIncomingCall,
+  emitCallEnded,
+  emitMessageDeleted,
+  emitMessageReacted,
+  emitConversationUpdated,
+  emitConversationDeleted,
+  getIO,
+} from '../services/chatSocket.service.js';
 import { queryUsers } from '../services/user.service.js';
 import { uploadFileToS3 } from '../services/upload.service.js';
+import logger from '../config/logger.js';
 
 const getUserId = (req) => req.user?.id || req.user?._id?.toString();
 
@@ -84,12 +94,13 @@ const uploadAndSendMessage = catchAsync(async (req, res) => {
 
   const isImage = files.every((f) => f.mimetype?.startsWith('image/'));
   const isAudio = files.every((f) => f.mimetype?.startsWith('audio/'));
-  const msgType = isImage ? 'image' : isAudio ? 'audio' : 'file';
+  const isVideo = files.every((f) => f.mimetype?.startsWith('video/'));
+  const msgType = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio' : 'file';
   const content = req.body?.content || req.body?.text || '';
   const replyTo = req.body?.replyTo || undefined;
 
   const msg = await chatService.createMessage(req.params.id, userId, {
-    content: msgType === 'audio' ? '🎤 Voice note' : content,
+    content,
     type: msgType,
     attachments,
     replyTo,
@@ -102,8 +113,25 @@ const deleteMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const deleteFor = req.body?.deleteFor || 'me';
   const msg = await chatService.deleteMessage(req.params.id, req.params.msgId, userId, { deleteFor });
-  emitMessageDeleted(req.params.id, req.params.msgId, deleteFor);
+  emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
   res.send(msg);
+});
+
+const forwardMessage = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const { targetConversationId, targetConversationIds } = req.body;
+  const results = await chatService.forwardMessage(req.params.id, req.params.msgId, userId, {
+    targetConversationId,
+    targetConversationIds,
+  });
+  for (const item of results) {
+    // eslint-disable-next-line no-await-in-loop
+    await emitNewMessage(item.conversationId, item.message);
+  }
+  res.status(httpStatus.CREATED).send({
+    count: results.length,
+    messages: results.map((r) => r.message),
+  });
 });
 
 const reactToMessage = catchAsync(async (req, res) => {
@@ -118,8 +146,32 @@ const reactToMessage = catchAsync(async (req, res) => {
 
 const markAsRead = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  await chatService.markAsRead(req.params.id, userId);
-  res.send({ success: true });
+  const conversationId = req.params.id;
+  const result = await chatService.markAsRead(conversationId, userId);
+
+  // Broadcast even when the client only hit REST (socket may be down).
+  // Socket `message_read` may also emit — clients treat receipts as idempotent.
+  try {
+    const io = getIO();
+    if (io) {
+      const payload = {
+        conversationId,
+        userId: String(userId),
+        readAt: result.readAt || new Date().toISOString(),
+      };
+      io.to(`conversation:${conversationId}`).emit('messages_read', payload);
+      const participantIds = await chatService.getConversationParticipantIds(conversationId);
+      for (const pid of participantIds || []) {
+        const pidStr = String(pid);
+        if (pidStr === String(userId)) continue;
+        io.to(`user:${pidStr}`).emit('messages_read', payload);
+      }
+    }
+  } catch (err) {
+    logger.warn(`markAsRead notify failed: ${err.message}`);
+  }
+
+  res.send({ success: true, readAt: result.readAt });
 });
 
 const listCalls = catchAsync(async (req, res) => {
@@ -261,6 +313,7 @@ export {
   sendMessage,
   uploadAndSendMessage,
   deleteMessage,
+  forwardMessage,
   reactToMessage,
   markAsRead,
   listCalls,
