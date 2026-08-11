@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import config from '../config/config.js';
+import ApiError from '../utils/ApiError.js';
 import * as emailClientService from '../services/emailClient.service.js';
 import * as emailDraftOpenAIService from '../services/emailDraftOpenAI.service.js';
 import { getAssignedMailboxPolicy, toConnectionPolicyResponse } from '../services/emailConnectionPolicy.service.js';
@@ -95,8 +96,13 @@ const getAttachment = catchAsync(async (req, res) => {
   const { messageId, attachmentId } = req.params;
   const data = await emailClientService.getAttachment(accountId, req.user.id, messageId, attachmentId);
   // Gmail attachment payloads are base64url; Node accepts both encodings via base64url.
-  const buf = Buffer.from(data, 'base64url');
-  res.set('Content-Disposition', `attachment`);
+  const buf = Buffer.from(data || '', 'base64url');
+  if (!buf.length) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment content is empty or unavailable');
+  }
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Content-Disposition', 'attachment');
+  res.set('Content-Length', String(buf.length));
   res.send(buf);
 });
 

@@ -71,9 +71,13 @@ function stringifyDataFields(data = {}) {
  *
  * @param {string} token
  * @param {'ios'|'android'|'web'|undefined} platform
- * @param {{ title: string, body: string, data?: object, channelId?: string, categoryId?: string }} message
+ * @param {{ title: string, body: string, data?: object, channelId?: string, categoryId?: string, richContent?: { image?: string }, mutableContent?: boolean }} message
  */
-function buildExpoPushMessage(token, _platform, { title, body, data = {}, channelId, categoryId }) {
+function buildExpoPushMessage(
+  token,
+  _platform,
+  { title, body, data = {}, channelId, categoryId, richContent, mutableContent },
+) {
   const appData = stringifyDataFields(data);
 
   return {
@@ -90,6 +94,9 @@ function buildExpoPushMessage(token, _platform, { title, body, data = {}, channe
     },
     ...(channelId ? { channelId } : {}),
     ...(categoryId ? { categoryId } : {}),
+    // Android shows image out of the box; iOS needs a Notification Service Extension.
+    ...(richContent?.image ? { richContent: { image: richContent.image } } : {}),
+    ...(mutableContent ? { mutableContent: true } : {}),
   };
 }
 
@@ -97,12 +104,15 @@ function buildExpoPushMessage(token, _platform, { title, body, data = {}, channe
  * Send a push to every device registered for a user. Fire-and-forget at call sites
  * (wrap in .catch) so notification delivery never blocks the triggering request.
  * @param {string} userId
- * @param {{ title: string, body: string, data?: object, channelId?: string, categoryId?: string }} message
+ * @param {{ title: string, body: string, data?: object, channelId?: string, categoryId?: string, richContent?: { image?: string }, mutableContent?: boolean }} message
  */
-export async function sendPushToUser(userId, { title, body, data = {}, channelId, categoryId } = {}) {
+export async function sendPushToUser(
+  userId,
+  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+) {
   const rows = await PushToken.find({ user: userId }).select('token platform').lean();
   if (!rows.length) return { sent: 0 };
-  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId });
+  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId, richContent, mutableContent });
 }
 
 /**
@@ -110,19 +120,33 @@ export async function sendPushToUser(userId, { title, body, data = {}, channelId
  * Expo reports as DeviceNotRegistered.
  * @param {string[]} tokens
  */
-export async function sendPushToTokens(tokens, { title, body, data = {}, channelId, categoryId } = {}) {
+export async function sendPushToTokens(
+  tokens,
+  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+) {
   const rows = tokens.map((token) => ({ token, platform: undefined }));
-  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId });
+  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId, richContent, mutableContent });
 }
 
-async function sendPushToTokenRows(rows, { title, body, data = {}, channelId, categoryId } = {}) {
+async function sendPushToTokenRows(
+  rows,
+  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+) {
   const messages = [];
   for (const row of rows) {
     const token = row.token;
     if (!Expo.isExpoPushToken(token)) continue;
     // Unknown platform is fine — all platforms now receive the same visible alert path.
     messages.push(
-      buildExpoPushMessage(token, row.platform, { title, body, data, channelId, categoryId })
+      buildExpoPushMessage(token, row.platform, {
+        title,
+        body,
+        data,
+        channelId,
+        categoryId,
+        richContent,
+        mutableContent,
+      }),
     );
   }
   if (!messages.length) return { sent: 0 };

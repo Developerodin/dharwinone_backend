@@ -75,6 +75,11 @@ router.delete(
   chatController.deleteMessage
 );
 router.post(
+  '/conversations/:id/messages/:msgId/forward',
+  validate(chatValidation.forwardMessage),
+  chatController.forwardMessage
+);
+router.post(
   '/conversations/:id/messages/:msgId/react',
   validate(chatValidation.reactToMessage),
   chatController.reactToMessage

@@ -129,6 +129,7 @@ export const createNotification = async (userId, options) => {
     triggeredBy = null,
     relatedEntity = null,
     metadata = null,
+    richContent = null,
   } = options;
   // Auto-fill link from resolver when emitter omits it, so every stored
   // notification carries a navigable destination for the frontend.
@@ -155,6 +156,10 @@ export const createNotification = async (userId, options) => {
   const relatedEntityId =
     relatedEntity?.id != null ? String(relatedEntity.id) : undefined;
   const isChat = type === 'chat_message';
+  const imageUrl =
+    richContent?.image ||
+    metadata?.imageUrl ||
+    null;
   sendPushToUser(userId, {
     title: title || 'Notification',
     body: message || '',
@@ -167,8 +172,13 @@ export const createNotification = async (userId, options) => {
       notificationId: String(doc._id),
       ...(relatedEntityId ? { relatedEntityId } : {}),
       ...(isChat && relatedEntityId ? { conversationId: relatedEntityId } : {}),
+      ...(metadata?.messageType ? { messageType: String(metadata.messageType) } : {}),
+      ...(metadata?.attachmentName ? { attachmentName: String(metadata.attachmentName) } : {}),
+      ...(metadata?.documentType ? { documentType: String(metadata.documentType) } : {}),
+      ...(imageUrl ? { imageUrl: String(imageUrl) } : {}),
     },
     ...(isChat ? { channelId: 'messages', categoryId: 'chat_message' } : {}),
+    ...(imageUrl ? { richContent: { image: String(imageUrl) }, mutableContent: true } : {}),
   }).catch((e) => logger.warn('[push] notify push failed: %s', e?.message || e));
 
   return doc;
@@ -297,12 +307,31 @@ export const notifyByEmail = async (email, options) => {
  * @returns {Promise<Notification>}
  */
 export const notify = async (userId, options) => {
-  const { type, title, message, link, relatedEntity, metadata, triggeredBy, email: emailOptions } = options;
+  const {
+    type,
+    title,
+    message,
+    link,
+    relatedEntity,
+    metadata,
+    triggeredBy,
+    richContent,
+    email: emailOptions,
+  } = options;
   const user = await User.findById(userId).select('email notificationPreferences').lean();
 
   let doc = null;
   if (!user || isChannelAllowed(type, 'inApp', user?.notificationPreferences)) {
-    doc = await createNotification(userId, { type, title, message, link, relatedEntity, metadata, triggeredBy });
+    doc = await createNotification(userId, {
+      type,
+      title,
+      message,
+      link,
+      relatedEntity,
+      metadata,
+      triggeredBy,
+      richContent,
+    });
   }
 
   if (emailOptions?.subject && (emailOptions.text || emailOptions.html) && user?.email) {

@@ -17,11 +17,18 @@ const messageSchema = new mongoose.Schema(
     conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true },
     sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     content: { type: String, default: '' },
-    type: { type: String, enum: ['text', 'image', 'file', 'audio'], default: 'text' },
+    type: { type: String, enum: ['text', 'image', 'file', 'audio', 'video'], default: 'text' },
     attachments: [attachmentSchema],
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' },
     reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, emoji: { type: String, trim: true } }],
-    readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    /** Legacy ObjectId[] and newer { user, at } entries are both supported at runtime. */
+    readBy: [{ type: mongoose.Schema.Types.Mixed }],
+    deliveredTo: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        at: { type: Date, default: Date.now },
+      },
+    ],
     deletedAt: { type: Date, default: null },
     deletedFor: { type: String, enum: ['me', 'everyone'], default: null },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

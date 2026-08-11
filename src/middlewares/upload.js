@@ -207,11 +207,17 @@ const chatAttachmentFileFilter = (req, file, cb) => {
   const ok =
     mime.startsWith('image/') ||
     mime.startsWith('audio/') ||
+    mime.startsWith('video/') ||
     [
       'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'text/plain',
+      'text/csv',
     ].includes(mime);
   cb(
     ok ? null : new ApiError(httpStatus.BAD_REQUEST, `File type ${mime || 'unknown'} is not allowed for chat uploads`),
@@ -219,7 +225,7 @@ const chatAttachmentFileFilter = (req, file, cb) => {
   );
 };
 
-/** Chat message attachments: images, audio, PDF/DOC/DOCX/txt; 25MB per file */
+/** Chat message attachments: images, audio, video, office/PDF/txt; 25MB per file */
 const chatAttachmentsUpload = multer({
   storage,
   fileFilter: chatAttachmentFileFilter,

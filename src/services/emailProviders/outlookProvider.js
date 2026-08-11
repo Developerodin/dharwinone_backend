@@ -1055,13 +1055,21 @@ export async function getMessage(account, messageId) {
 }
 
 /**
- * Get attachment content (base64).
+ * Get attachment content (base64) plus optional metadata for response headers.
  */
 export async function getAttachment(account, messageId, attachmentId) {
   return with401Refresh(account, async () => {
     const client = createGraphClient(account.accessToken);
     const att = await client.api(`${msgPath(messageId)}/attachments/${encodeURIComponent(attachmentId)}`).get();
-    return att.contentBytes || '';
+    if (!att?.contentBytes) {
+      // ItemAttachment / referenceAttachment have no file bytes
+      return { contentBytes: '', contentType: att?.contentType || '', name: att?.name || 'attachment' };
+    }
+    return {
+      contentBytes: att.contentBytes,
+      contentType: att.contentType || 'application/octet-stream',
+      name: att.name || 'attachment',
+    };
   });
 }
 
@@ -1358,12 +1366,15 @@ export async function batchModifyThreads(account, threadIds, { addLabelIds = [],
 }
 
 /**
- * Trash a message (move to DeletedItems).
+ * Permanently delete a message (cannot be undone).
+ * Use trashThreads to move to Deleted Items instead.
+ * Graph DELETE on a message in Deleted Items removes it permanently;
+ * DELETE elsewhere moves to Deleted Items — callers should only use this for trash.
  */
 export async function deleteMessage(account, messageId) {
   await ensureValidToken(account);
   const client = createGraphClient(account.accessToken);
-  await client.api(`${msgPath(messageId)}/move`).post({ destinationId: 'deleteditems' });
+  await client.api(msgPath(messageId)).delete();
   return { success: true };
 }
 

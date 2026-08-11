@@ -569,6 +569,8 @@ function extractBodiesFromPayload(payload, messageId) {
         size: part.body.size || 0,
         attachmentId: part.body.attachmentId || null,
         messageId,
+        // Small Gmail parts ship inline; expose so clients can preview without attachmentId.
+        content: part.body.attachmentId ? undefined : part.body.data,
       });
     }
 
@@ -1233,14 +1235,15 @@ export async function batchModifyThreads(account, threadIds, { addLabelIds = [],
 }
 
 /**
- * Trash a message.
+ * Permanently delete a message (cannot be undone).
+ * Use trashThreads / messages.trash to move to Trash instead.
  */
 export async function deleteMessage(account, messageId) {
   await ensureValidToken(account);
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({ access_token: account.accessToken });
   const gmail = getGmailClient(oauth2Client);
-  await gmail.users.messages.trash({ userId: 'me', id: messageId });
+  await gmail.users.messages.delete({ userId: 'me', id: messageId });
   return { success: true };
 }
 
