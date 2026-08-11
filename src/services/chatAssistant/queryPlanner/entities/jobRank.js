@@ -4,7 +4,6 @@ import {
   JOB_SALARY_SORT_FIELD,
 } from '../../../../schemas/queryOperations.js';
 import {
-  clampRankLimit,
   parseRankFollowUp,
   resolveRankDirection,
   resolveRankLimit,
@@ -353,9 +352,6 @@ export function planJobRankQuery({ userMessage, jobQueryContext = null }) {
   };
 }
 
-/** @deprecated use planJobRankQuery */
-export const planJobQuery = planJobRankQuery;
-
 /**
  * @param {object} plan
  * @param {{ Job?: import('mongoose').Model }} deps
@@ -392,5 +388,3 @@ export async function executeJobRank(plan, deps = {}) {
   };
 }
 
-/** @deprecated use executeJobRank */
-export const executeJobQuery = executeJobRank;

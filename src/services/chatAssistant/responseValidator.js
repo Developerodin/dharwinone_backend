@@ -98,31 +98,3 @@ export function enforceCounts(reply, facts) {
   return out;
 }
 
-/**
- * Compare attendance-summary day counts against any per-day numbers the LLM
- * surfaced. Lighter pass than enforceCounts (status names aren't unique).
- *
- * @param {string} reply
- * @param {{ counts: object[] }} facts
- * @returns {{ issues: string[] }}
- */
-export function detectAttendanceMismatch(reply, facts) {
-  const issues = [];
-  const att = facts?.counts?.find((c) => c.kind === 'attendance_summary_day');
-  if (!att?.counts) return { issues };
-  const text = String(reply || '').toLowerCase();
-  for (const [statusName, expected] of Object.entries(att.counts)) {
-    const re = new RegExp(`(\\d+)\\s+${statusName.toLowerCase()}\\b`, 'g');
-    let m;
-    // eslint-disable-next-line no-cond-assign
-    while ((m = re.exec(text)) !== null) {
-      const found = Number(m[1]);
-      if (found !== expected) {
-        issues.push(
-          `attendance ${att.date}: ${statusName} says ${found} in reply, retrieval says ${expected}`,
-        );
-      }
-    }
-  }
-  return { issues };
-}

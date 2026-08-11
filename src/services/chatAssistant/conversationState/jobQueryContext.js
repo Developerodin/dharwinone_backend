@@ -47,11 +47,6 @@ export function buildJobQueryContextFromResult(plan, result) {
   };
 }
 
-/** @param {object} plan @param {object} result */
-export function buildJobFilterContextFromResult(plan, result) {
-  return buildJobQueryContextFromResult(plan, result);
-}
-
 /**
  * @param {{ userId:any, adminId:any, queryContext:object, ConversationMemory?:typeof ConversationMemory }} opts
  */

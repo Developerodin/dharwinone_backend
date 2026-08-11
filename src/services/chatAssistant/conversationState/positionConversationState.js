@@ -47,17 +47,6 @@ export async function writePositionConversationState({
 }
 
 /**
- * @param {{ userId:any, adminId:any, ConversationMemory?:typeof ConversationMemoryModel }} opts
- */
-export async function clearPositionConversationState({
-  userId,
-  adminId,
-  ConversationMemory = ConversationMemoryModel,
-}) {
-  await ConversationMemory.findOneAndUpdate({ userId, adminId }, { $unset: { [PATH]: 1 } });
-}
-
-/**
  * Build lastContext shell for designation-scoped employee queries.
  * @param {string} designation
  * @param {{ operation?: 'count'|'list' }} [opts]

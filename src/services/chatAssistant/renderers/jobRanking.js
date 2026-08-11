@@ -1,4 +1,4 @@
-import { formatJobSalary } from '../queryPlanner/executeJobQuery.js';
+import { formatJobSalary } from '../queryPlanner/entities/jobRank.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
