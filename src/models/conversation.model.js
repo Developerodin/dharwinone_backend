@@ -26,6 +26,7 @@ const conversationSchema = new mongoose.Schema(
       size: { type: Number },
       mimeType: { type: String, trim: true },
     },
+    description: { type: String, trim: true, default: '', maxlength: 500 },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     lastMessageAt: { type: Date, default: null },
   },

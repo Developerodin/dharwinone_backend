@@ -19,6 +19,7 @@ const createConversation = {
     type: Joi.string().valid('direct', 'group').required(),
     participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
     name: Joi.string().trim().allow(''),
+    description: Joi.string().trim().max(500).allow(''),
   }),
 };
 
@@ -47,7 +48,7 @@ const sendMessage = {
   body: Joi.object()
     .keys({
       content: Joi.string().trim().max(10000).allow(''),
-      type: Joi.string().valid('text', 'image', 'file', 'audio'),
+      type: Joi.string().valid('text', 'image', 'file', 'audio', 'video'),
       attachments: Joi.array().items(attachmentItem).min(1).max(10),
       replyTo: Joi.string().custom(objectId),
     })
@@ -95,6 +96,19 @@ const deleteMessage = {
   body: Joi.object().keys({
     deleteFor: Joi.string().valid('me', 'everyone').default('me'),
   }),
+};
+
+const forwardMessage = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+    msgId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      targetConversationId: Joi.string().custom(objectId),
+      targetConversationIds: Joi.array().items(Joi.string().custom(objectId)).min(1).max(25),
+    })
+    .or('targetConversationId', 'targetConversationIds'),
 };
 
 const reactToMessage = {
@@ -145,9 +159,12 @@ const updateGroupName = {
   params: Joi.object().keys({
     id: Joi.string().custom(objectId).required(),
   }),
-  body: Joi.object().keys({
-    name: Joi.string().trim().max(100).allow(''),
-  }),
+  body: Joi.object()
+    .keys({
+      name: Joi.string().trim().max(100).allow(''),
+      description: Joi.string().trim().max(500).allow(''),
+    })
+    .min(1),
 };
 
 const startChatCallRecording = {
@@ -158,6 +175,7 @@ export {
   conversationIdParam,
   callIdParam,
   deleteMessage,
+  forwardMessage,
   reactToMessage,
   listConversations,
   createConversation,
