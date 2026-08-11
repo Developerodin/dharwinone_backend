@@ -11,8 +11,15 @@ const tokenize = (s) => String(s || '').toLowerCase().split(/[\s,._-]+/).filter(
 const AGENT_EMPLOYEE_BLOCK_RE =
   /\b(?:employees?|staff)\b.*\b(?:assigned|under|with)\b.*\b(?:agent|agents?)\b/i;
 
+// "referred" gets misspelled often enough to matter: reffered, refered,
+// refferred. A miss here declines the deterministic gate, and the turn falls
+// through to the LLM, which then reports a recorded referrer as unknown.
+// ref{1,2}er{1,2}ed covers the doubled-letter slips; plain `refer` stays for
+// "who refer X".
+const REFERRED_WORD = String.raw`ref{1,2}er{1,2}ed|refer`;
+
 const REFERRED_BY_RE =
-  /\bwho\s+(?:referred|refer(?:red)?)\s+(.+?)\??\s*$/i;
+  new RegExp(String.raw`\bwho\s+(?:${REFERRED_WORD})\s+(.+?)\??\s*$`, 'i');
 
 const SALES_AGENT_POSSESSIVE_RE =
   /\b(.+?)['']s\s+sales\s+agent\b/i;
@@ -38,8 +45,10 @@ const REFERRER_LIST_RE =
 const REFERRER_COUNT_RE =
   /\bhow many\s+candidates?\s+did\s+(.+?)\s+refer\b/i;
 
-const REFERRAL_SIGNAL_RE =
-  /\b(referral(?:\s|-)?leads?|referred\s+by|sales\s+agent|refer(?:red|rer)?)\b/i;
+const REFERRAL_SIGNAL_RE = new RegExp(
+  String.raw`\b(referral(?:\s|-)?leads?|(?:${REFERRED_WORD})\s+by|sales\s+agent|${REFERRED_WORD}|referrer)\b`,
+  'i'
+);
 
 /**
  * @typedef {'referred_by_lookup'|'sales_agent_lookup'|'referred_job_lookup'|'claimed_at_lookup'|'sales_agent_count'|'sales_agent_list'|'referrer_list'|'referrer_count'} ReferralLeadIntent
