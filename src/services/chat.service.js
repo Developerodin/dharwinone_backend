@@ -109,6 +109,42 @@ const getConversationParticipantIds = async (conversationId) => {
   return (conv.participants || []).map((p) => p.user.toString());
 };
 
+/** Same visibility rules as getMessages — per-user deleted-for-me hides from deleter only. */
+const messageVisibilityFilter = (userId) => ({
+  $or: [
+    { deletedAt: null },
+    { deletedFor: 'everyone' },
+    { deletedFor: 'me', deletedBy: { $ne: new mongoose.Types.ObjectId(userId) } },
+  ],
+});
+
+const formatLastMessagePreview = (lastMsg) => {
+  if (!lastMsg) return null;
+  const preview = buildChatMessagePreview(lastMsg);
+  return {
+    content: preview.text,
+    sender: lastMsg.sender?.name,
+    createdAt: lastMsg.createdAt,
+    type: lastMsg.type,
+    attachments: lastMsg.attachments,
+  };
+};
+
+const getLastMessagePreview = async (conversationId, userId) => {
+  const msg = await Message.findOne({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    ...messageVisibilityFilter(userId),
+  })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name')
+    .lean();
+  if (!msg) return null;
+  return formatLastMessagePreview({
+    ...msg,
+    sender: msg.sender ? { name: msg.sender.name } : undefined,
+  });
+};
+
 /** Normalize Mongo id / populated user / string for comparisons */
 const toIdString = (x) => {
   if (x == null || x === '') return '';
@@ -201,22 +237,11 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   }
 
   const convIds = dedupedConvs.map((c) => c._id);
-  const lastMsgPreview = (lastMsg) => {
-    if (!lastMsg) return null;
-    const preview = buildChatMessagePreview(lastMsg);
-    return {
-      content: preview.text,
-      sender: lastMsg.sender?.name,
-      createdAt: lastMsg.createdAt,
-      type: lastMsg.type,
-      attachments: lastMsg.attachments,
-    };
-  };
 
   const [lastMsgAgg, total] = await Promise.all([
     convIds.length
       ? Message.aggregate([
-          { $match: { conversation: { $in: convIds } } },
+          { $match: { conversation: { $in: convIds }, ...messageVisibilityFilter(userId) } },
           { $sort: { createdAt: -1 } },
           {
             $group: {
@@ -226,6 +251,8 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
               sender: { $first: '$sender' },
               createdAt: { $first: '$createdAt' },
               attachments: { $first: '$attachments' },
+              deletedAt: { $first: '$deletedAt' },
+              deletedFor: { $first: '$deletedFor' },
             },
           },
         ])
@@ -245,11 +272,13 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   const lastMsgMap = new Map(
     lastMsgAgg.map((m) => [
       m._id.toString(),
-      lastMsgPreview({
+      formatLastMessagePreview({
         content: m.content,
         type: m.type,
         createdAt: m.createdAt,
         attachments: m.attachments,
+        deletedAt: m.deletedAt,
+        deletedFor: m.deletedFor,
         sender: { name: senderNameById.get(m.sender?.toString()) },
       }),
     ])
@@ -288,7 +317,7 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   return { results: enrichedResults, page, limit, total, totalPages: Math.ceil(total / limit) || 1 };
 };
 
-const createConversation = async (userId, { type, participantIds, name }) => {
+const createConversation = async (userId, { type, participantIds, name, description }) => {
   // The creator is prepended to the participant list below, so drop them from the
   // invitee list first: the user picker does not exclude self, and a client that
   // sends the creator's own id would otherwise store them as two participant rows.
@@ -302,7 +331,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Group requires at least one other participant');
   }
 
-  const allParticipantIds = [creatorId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
+  const allParticipantIds = [userId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
   const caller = await User.findById(userId).select('platformSuperUser').lean();
   const callerIsSuper = !!caller?.platformSuperUser;
   const flagMap = await loadUserFlagsMapByIds(allParticipantIds);
@@ -1115,6 +1144,7 @@ export {
   createConversation,
   getConversation,
   getConversationParticipantIds,
+  getLastMessagePreview,
   getMessages,
   createMessage,
   deleteMessage,

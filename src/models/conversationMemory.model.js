@@ -65,6 +65,11 @@ const conversationMemorySchema = new mongoose.Schema(
        * deterministic employee query. Used for "list them" replay without LLM.
        */
       lastContext:      { type: mongoose.Schema.Types.Mixed, default: null },
+      /**
+       * Multi-group query context for compound filter composition (OR groups).
+       * Persists filterGroups, active group, page, and intent across turns.
+       */
+      currentQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
       /** Org structure count memory (departments, managers, supervisors). */
       lastOrgCount:     { type: Number, default: null },
       /** Last listing snapshot for ordinal resolution ("the second one"). */
@@ -78,12 +83,53 @@ const conversationMemorySchema = new mongoose.Schema(
         options:       { type: [mongoose.Schema.Types.Mixed], default: undefined },
         updatedAt:     { type: Date, default: null },
       },
+      /**
+       * Pending person disambiguation. A sibling of pendingConceptClarification,
+       * NOT a key inside lastContext — saveEmployeeQueryContext.js:42 replaces
+       * lastContext wholesale on every deterministic employee turn.
+       */
+      pendingPersonDisambiguation: {
+        query:     { type: String, default: null, trim: true },
+        matches:   { type: [mongoose.Schema.Types.Mixed], default: undefined },
+        createdAt: { type: Date, default: null },
+      },
+      /** Person-profile conversation state — communicated field keys per subject. */
+      personConversationState: {
+        entityId:            { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        entityType:          { type: String, default: 'user', trim: true },
+        name:                { type: String, default: null, trim: true },
+        communicatedFields:  { type: [String], default: undefined },
+        updatedAt:           { type: Date, default: null },
+      },
+      /** Title-ambiguity position context — job posting vs employee designation follow-ups. */
+      positionConversationState: {
+        entity:        { type: String, default: 'employee', trim: true },
+        designation:   { type: String, default: null, trim: true },
+        source:        { type: String, default: null, trim: true },
+        updatedAt:     { type: Date, default: null },
+      },
+      /** Conversation entity subject — who we are talking about (persists across intents). */
+      currentEntitySubject: {
+        entityType:  { type: String, default: 'employee', trim: true },
+        entityId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        employeeId:  { type: String, default: null, trim: true },
+        empDocId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+        name:        { type: String, default: null, trim: true },
+        updatedAt:   { type: Date, default: null },
+      },
       /** Topic memory for manager follow-ups ("what about org chart"). */
       conversationTopic: {
         concept:            { type: String, default: null, trim: true },
         lastInterpretation: { type: String, default: null, trim: true },
         updatedAt:          { type: Date, default: null },
       },
+      /** Person-scoped job application thread — applicant, operation, domain. */
+      applicationQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
+      /** Referral-lead query thread — candidate, referrer, sales-agent context. */
+      referralLeadQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
+      /** Last deterministic query domain (e.g. applications) for what-about switches. */
+      lastQueryDomain: { type: String, default: null, trim: true },
       updatedAt:       { type: Date, default: null },
     },
     /**

@@ -14,6 +14,7 @@ const employeeFilterSchema = Joi.object().keys({
   employeeId: Joi.string(),
   id: Joi.string(),
   agent: Joi.string(),
+  designation: Joi.string(),
   agentIds: Joi.array().items(Joi.string()),
 });
 

@@ -3,7 +3,7 @@ import multer from 'multer';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
-import { chatAttachmentsUpload } from '../../middlewares/upload.js';
+import { uploadChatAttachments } from '../../middlewares/upload.js';
 import * as chatValidation from '../../validations/chat.validation.js';
 import * as chatController from '../../controllers/chat.controller.js';
 
@@ -87,10 +87,7 @@ router.post(
 router.post(
   '/conversations/:id/messages/upload',
   validate(chatValidation.conversationIdParam),
-  chatAttachmentsUpload.fields([
-    { name: 'files', maxCount: 10 },
-    { name: 'file', maxCount: 10 },
-  ]),
+  uploadChatAttachments,
   chatController.uploadAndSendMessage
 );
 router.patch(

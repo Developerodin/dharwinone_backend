@@ -102,6 +102,8 @@ export function envelope(input = {}) {
     blocks: Array.isArray(blocks) ? blocks : [],
     meta: {
       kind: meta.kind ?? null,
+      entityType: meta.entityType ?? meta.kind ?? null,
+      queryId: meta.queryId ?? null,
       total: typeof meta.total === 'number' ? meta.total : null,
       deterministic: !!meta.deterministic,
       tookMs: typeof meta.tookMs === 'number' ? meta.tookMs : null,

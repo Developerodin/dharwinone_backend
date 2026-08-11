@@ -20,10 +20,10 @@ describe('renderDeterministicAnswer employment breakdown', () => {
       },
       counts: [],
     });
-    assert.match(out, /working:\s*\*\*1\*\*/i);
-    assert.match(out, /resigned:\s*\*\*34\*\*/i);
+    assert.match(out, /\*\*35\*\* employees/);
+    assert.match(out, /\*\*1\*\* currently working/);
+    assert.match(out, /\*\*34\*\* resigned/);
     assert.match(out, /disabled/i);
-    assert.match(out, /not counted/i);
   });
 
   it('omits the disabled sentence when none were excluded', () => {
@@ -36,7 +36,8 @@ describe('renderDeterministicAnswer employment breakdown', () => {
       },
       counts: [],
     });
-    assert.match(out, /working:/i);
+    assert.match(out, /\*\*35\*\* employees/);
+    assert.match(out, /currently working/i);
     assert.doesNotMatch(out, /disabled/i);
   });
 });

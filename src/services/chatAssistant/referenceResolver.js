@@ -56,14 +56,14 @@ const ENTITY_ROUTE = {
     toolArgs: { metric: 'list_with_teams' },
   },
   task: {
-    listPhrase: 'list all tasks',
-    toolName: 'fetch_tasks',
-    toolArgs: {},
+    listPhrase: 'list tasks from last query',
+    toolName: 'task_board_analytics',
+    toolArgs: { metric: 'stage_count' },
   },
   tasks: {
-    listPhrase: 'list all tasks',
-    toolName: 'fetch_tasks',
-    toolArgs: {},
+    listPhrase: 'list tasks from last query',
+    toolName: 'task_board_analytics',
+    toolArgs: { metric: 'stage_count' },
   },
   team: {
     listPhrase: 'list all teams',
@@ -220,7 +220,15 @@ export function resolveReferences(text, memory = null, { entityQueryEnabled = fa
       toolArgs.role = memory.role;
     }
     if (entityType === 'tasks' && memory?.lastTaskFilter) {
-      toolArgs.status = memory.lastTaskFilter;
+      toolArgs.metric = memory.lastTaskFilter;
+    }
+    if ((entityType === 'tasks' || entityType === 'task') && memory?.lastTaskStage) {
+      toolArgs.status = memory.lastTaskStage;
+      toolArgs.metric = 'stage_count';
+    }
+    if ((entityType === 'tasks' || entityType === 'task') && memory?.currentTaskQueryContext?.filters) {
+      Object.assign(toolArgs, memory.currentTaskQueryContext.filters);
+      toolArgs.metric = toolArgs.status ? 'stage_count' : (toolArgs.metric || 'stage_count');
     }
     if (entityType === 'teams' && memory?.lastTeamName) {
       toolArgs.teamName = memory.lastTeamName;

@@ -14,7 +14,10 @@ import { renderEmployees }    from './employees.js';
 import { renderPeople }       from './people.js';
 import { renderAttendance }   from './attendance.js';
 import { renderGenericCount } from './genericCount.js';
-import { renderJobs }         from './jobs.js';
+import { renderJobs, renderJobResult } from './jobs.js';
+import { renderTasks }        from './tasks.js';
+import { resolveTaskPayload } from '../taskResult.js';
+import { resolveJobPayload } from '../jobResult.js';
 import { buildFallback, isEmptyResult, moduleForKind } from '../fallbackGenerator.js';
 
 // User-intent detector — distinguishes "how many jobs?" (wants a count card)
@@ -64,6 +67,8 @@ const COUNT_ONLY_KINDS = new Set([
 const REQUIRES_PAYLOAD = new Set([
   'fetch_employees',
   'fetch_people',
+  'fetch_tasks',
+  'task_board_stage_count',
   'attendance_summary_day',
   'attendance_summary_range',
 ]);
@@ -82,20 +87,44 @@ const KIND_TO_FETCHED_KEY = {
   fetch_roles:                         'fetch_roles',
   fetch_placements:                    'fetch_placements',
   fetch_offers:                        'fetch_offers',
+  fetch_tasks:                         'fetch_tasks',
+  task_board_stage_count:              'task_board_analytics',
+  task_board_stage_counts:             'task_board_analytics',
 };
+
+// Task kinds share one canonical payload (task_result) — render once.
+const TASK_FACT_KINDS = new Set(['fetch_tasks', 'task_board_stage_count', 'task_board_stage_counts']);
+const JOB_FACT_KINDS = new Set(['fetch_jobs', 'job_result']);
+
+function taskSourceKey(fact) {
+  if (fact?.kind && TASK_FACT_KINDS.has(fact.kind)) return 'task_result';
+  if (fact?.kind && JOB_FACT_KINDS.has(fact.kind)) return 'job_result';
+  return KIND_TO_FETCHED_KEY[fact.kind] || fact.kind;
+}
 
 const KIND_RENDERERS = {
   fetch_employees: (fact, fetched, ctx) =>
-    renderEmployees(fetched?.fetch_employees, { role: fact.role, ...ctx }),
+    renderEmployees(fetched?.fetch_employees, {
+      role: fact.role,
+      entityType: fetched?.fetch_employees?.entityType ?? fact.entityType ?? null,
+      ...ctx,
+    }),
   fetch_people: (_fact, fetched, ctx) =>
-    renderPeople(fetched?.fetch_people, ctx),
+    renderPeople(fetched?.fetch_people, {
+      entityType: fetched?.fetch_people?.entityType ?? 'user',
+      ...ctx,
+    }),
   attendance_summary_day: (_fact, fetched, ctx) =>
     renderAttendance(fetched?.fetch_attendance_summary, ctx),
   attendance_summary_range: (_fact, fetched, ctx) =>
     renderAttendance(fetched?.fetch_attendance_summary, ctx),
   fetch_leave_requests:                (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_backdated_attendance_requests: (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
-  fetch_jobs:                          (fact, fetched, ctx)  => renderJobs(fetched?.fetch_jobs, ctx, fact),
+  fetch_jobs:                          (fact, fetched, ctx)  => {
+    const payload = resolveJobPayload(fetched);
+    if (payload?.type === 'job_result') return renderJobResult(payload, ctx);
+    return renderJobs(fetched?.fetch_jobs, ctx, fact);
+  },
   // fetch_candidates carries record rows (name/email/phone/status). Render as
   // a TableBlock when records are present so "list them" shows actual people;
   // fall back to count-only group block when no records were fetched.
@@ -139,6 +168,19 @@ const KIND_RENDERERS = {
   fetch_roles:                         (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_placements:                    (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_offers:                        (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
+  fetch_tasks: (fact, fetched, ctx) => {
+    const payload = resolveTaskPayload(fetched);
+    return renderTasks(payload, ctx, fact);
+  },
+  task_board_stage_count: (fact, fetched, ctx) => {
+    const payload = resolveTaskPayload(fetched);
+    return renderTasks(payload, ctx, fact);
+  },
+  task_board_stage_counts: (fact, fetched, ctx) => {
+    const payload = resolveTaskPayload(fetched);
+    if (payload?.result?.tasks?.length) return renderTasks(payload, ctx, fact);
+    return renderGenericCount(fact, ctx);
+  },
 };
 
 /**
@@ -189,7 +231,7 @@ export function blocksFromFacts(facts, fetched, ctx = {}) {
 
   for (const fact of order) {
     if (!fact?.kind) continue;
-    const sourceKey = KIND_TO_FETCHED_KEY[fact.kind] || fact.kind;
+    const sourceKey = taskSourceKey(fact);
     if (usedSourceKeys.has(sourceKey)) continue;
 
     // List intent + count-only kind → suppress the count card so the LLM's
@@ -200,7 +242,13 @@ export function blocksFromFacts(facts, fetched, ctx = {}) {
       continue;
     }
 
-    const sourcePayload = fetched ? fetched[sourceKey] : null;
+    const sourcePayload = fetched
+      ? (sourceKey === 'task_result'
+        ? resolveTaskPayload(fetched)
+        : sourceKey === 'job_result'
+          ? resolveJobPayload(fetched)
+          : fetched[sourceKey])
+      : null;
 
     // Empty / notFound — emit a contextual FallbackBlock instead of a
     // structured block. Markdown twin is also produced so old clients +

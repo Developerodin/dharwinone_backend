@@ -116,8 +116,9 @@ export const TABLE_PROFILES = Object.freeze({
   agents:     { defaultColumns: ['name', 'email', 'role', 'status'] },
   recruiters: { defaultColumns: ['name', 'email', 'role', 'status'] },
   candidates: { defaultColumns: ['name', 'appliedRole', 'email', 'status'] },
-  students:   { defaultColumns: ['name', 'email', 'role', 'status'] },
-  people:     { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'] },
+  students:       { defaultColumns: ['name', 'email', 'role', 'status'] },
+  administrators: { defaultColumns: ['name', 'email', 'role', 'status'] },
+  people:         { defaultColumns: ['name', 'email', 'role', 'employeeId', 'joinDate', 'resignDate', 'status'] },
 });
 
 const ROLE_TO_PROFILE = {
@@ -129,10 +130,13 @@ const ROLE_TO_PROFILE = {
   recruiters:   TABLE_PROFILES.recruiters,
   candidate:    TABLE_PROFILES.candidates,
   candidates:   TABLE_PROFILES.candidates,
-  student:      TABLE_PROFILES.students,
-  students:     TABLE_PROFILES.students,
-  employee:     TABLE_PROFILES.employees,
-  employees:    TABLE_PROFILES.employees,
+  student:        TABLE_PROFILES.students,
+  students:       TABLE_PROFILES.students,
+  administrator:  TABLE_PROFILES.administrators,
+  administrators: TABLE_PROFILES.administrators,
+  admin:          TABLE_PROFILES.administrators,
+  employee:       TABLE_PROFILES.employees,
+  employees:      TABLE_PROFILES.employees,
 };
 
 /**

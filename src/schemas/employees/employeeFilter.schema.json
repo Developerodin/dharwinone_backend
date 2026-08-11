@@ -23,6 +23,7 @@
         "employeeId": { "type": "string" },
         "id": { "type": "string", "description": "Mongo Employee._id for get/ordinal" },
         "agent": { "type": "string" },
+        "designation": { "type": "string", "description": "Job title / designation phrase (matches Employee.designation or Position.name)" },
         "agentIds": {
           "type": "array",
           "items": { "type": "string" },

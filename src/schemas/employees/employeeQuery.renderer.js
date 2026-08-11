@@ -6,10 +6,13 @@ function filterDescriptor(filters = {}) {
   if (filters.compensationType && COMPENSATION_LABELS[filters.compensationType]) {
     parts.push(COMPENSATION_LABELS[filters.compensationType]);
   }
+  // "active" belongs to the account axis (Active/Disabled/Pending). Employment
+  // is Current/Resigned; borrowing the other axis's word is what turned a
+  // compensation answer into an apparent claim about sign-in status.
   if (filters.employmentStatus === 'resigned') {
     parts.push('resigned');
   } else if (filters.employmentStatus === 'current') {
-    parts.push('active');
+    parts.push('current');
   }
   return parts.join(' ').trim();
 }
@@ -46,7 +49,8 @@ function renderAllStatusCountProse(toolResult) {
   }
 
   const resignedPhrase = resigned === 1 ? '1 has resigned' : `${resigned} have resigned`;
-  const activePhrase = active === 1 ? '1 is currently active' : `${active} are currently active`;
+  // "currently working" matches the per-row status label the table already uses.
+  const activePhrase = active === 1 ? '1 is currently working' : `${active} are currently working`;
 
   return (
     `There ${total === 1 ? 'is' : 'are'} **${total}** ${label} in total — ` +

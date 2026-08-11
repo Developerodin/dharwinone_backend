@@ -95,12 +95,6 @@ export function enforceCounts(reply, facts) {
     });
   }
 
-  if (out.patched) {
-    const lines = out.mismatches
-      .map((m) => `**${m.label}**: ${m.expected} (replaced LLM's "${m.found}")`)
-      .join(', ');
-    out.reply += `\n\n> _Auto-correction: authoritative counts from retrieval — ${lines}._`;
-  }
   return out;
 }
 

@@ -76,6 +76,7 @@ export async function resolveUserEntity(query, opts = {}) {
     minScore = 0.5,
     uniqueGap = 0.25,
     includeOrphans = true,
+    viewer = null,
     visibility: visibilityOverride = {},
     User: UserModel = User,
     Employee: EmployeeModel = Employee,
@@ -113,7 +114,7 @@ export async function resolveUserEntity(query, opts = {}) {
     // every chatbot User query. Default: active+pending. Caller can opt-in
     // disabled / archived via opts.visibility.{includeDisabled,includeArchived}.
     UserModel.find({ status: visibleUserStatusClause(visibilityOverride), $or: userOr })
-      .select('_id name email phoneNumber roleIds status platformSuperUser previousNames aliases location')
+      .select('_id name email phoneNumber roleIds status platformSuperUser previousNames aliases location hideFromDirectory')
       .limit(50)
       .lean(),
     EmployeeModel.find({ $or: empOr })
@@ -141,6 +142,8 @@ export async function resolveUserEntity(query, opts = {}) {
       orphan: false,
       hidden: !canUserBeVisible(u, visibilityOverride),
       platformSuperUser: !!u.platformSuperUser,
+      roleIds: u.roleIds || [],
+      hideFromDirectory: !!u.hideFromDirectory,
     };
   });
 
@@ -161,7 +164,7 @@ export async function resolveUserEntity(query, opts = {}) {
     if (missingOwnerIds.length) {
       const rows = await UserModel.find(
         { _id: { $in: [...new Set(missingOwnerIds)] } },
-        { _id: 1, status: 1, platformSuperUser: 1, name: 1, email: 1, phoneNumber: 1 }
+        { _id: 1, status: 1, platformSuperUser: 1, name: 1, email: 1, phoneNumber: 1, hideFromDirectory: 1, roleIds: 1 }
       ).lean();
       hiddenOwners = new Map(rows.map((u) => [String(u._id), u]));
     }
@@ -190,14 +193,27 @@ export async function resolveUserEntity(query, opts = {}) {
         orphan: !hiddenUser,
         hidden: false,
         platformSuperUser: !!hiddenUser?.platformSuperUser,
+        roleIds: hiddenUser?.roleIds || [],
+        hideFromDirectory: !!hiddenUser?.hideFromDirectory,
       });
     }
   }
 
-  for (const m of merged) m.score = scoreMatch(trimmed, m);
-  merged.sort((a, b) => b.score - a.score);
+  // Directory suppression, mirroring controllers/user.controller.js:52-60.
+  // This runs BEFORE the unique/ambiguous verdict on purpose: filtering after
+  // the verdict leaves a one-option disambiguation prompt, which announces that
+  // a hidden second person with that name exists.
+  const viewerIsSuper = !!viewer?.platformSuperUser;
+  const visibleToViewer = merged.filter((m) => {
+    if (viewer && String(viewer._id) === String(m.userId)) return true;
+    if (viewerIsSuper) return true;
+    return !m.hideFromDirectory && !m.platformSuperUser;
+  });
 
-  const filtered = merged.filter((m) => m.score >= minScore);
+  for (const m of visibleToViewer) m.score = scoreMatch(trimmed, m);
+  visibleToViewer.sort((a, b) => b.score - a.score);
+
+  const filtered = visibleToViewer.filter((m) => m.score >= minScore);
   if (filtered.length === 0) return { kind: 'notFound' };
 
   const top = filtered[0];

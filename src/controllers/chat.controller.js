@@ -113,7 +113,7 @@ const deleteMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const deleteFor = req.body?.deleteFor || 'me';
   const msg = await chatService.deleteMessage(req.params.id, req.params.msgId, userId, { deleteFor });
-  emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
+  await emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
   res.send(msg);
 });
 
@@ -209,13 +209,19 @@ const initiateCall = catchAsync(async (req, res) => {
       ? String(conv.name || 'Group').trim() || 'Group'
       : undefined;
 
+  const participantIds = (result.call?.participants || []).map((p) =>
+    String(p?.id || p?._id || p)
+  );
   emitIncomingCall(req.params.id, {
     conversationId: req.params.id,
     callId: result.call?.id || result.call?._id?.toString(),
     roomName: result.roomName,
     callType: callType || 'audio',
+    callScope: conversationType,
     caller: { id: userId, name: req.user?.name, email: req.user?.email },
     conversationType,
+    participantIds,
+    participantCount: participantIds.length,
     ...(groupName !== undefined && { groupName }),
   });
 

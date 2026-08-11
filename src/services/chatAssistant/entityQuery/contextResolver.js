@@ -13,6 +13,7 @@ const FILTER_KEYS = [
   'id',
   'agent',
   'agentIds',
+  'designation',
 ];
 
 function isPresent(value) {
@@ -35,6 +36,10 @@ function copyFilterSource(source, target) {
 function isVagueEmployeeQuery(userMessage) {
   const text = String(userMessage || '').trim();
   return /^\s*how many\?\s*$/i.test(text) || /^\s*list them\s*$/i.test(text);
+}
+
+function filtersEqual(a = {}, b = {}) {
+  return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
 }
 
 /**
@@ -68,6 +73,11 @@ export function mergeEmployeeFilters(
 
   copyFilterSource(lastContext?.filters, merged);
   copyFilterSource(nlFilters, merged);
+
+  const positionState = lastContext?.positionConversationState;
+  if (positionState?.entity === 'employee' && positionState.designation && !merged.designation) {
+    merged.designation = positionState.designation;
+  }
 
   return merged;
 }
@@ -125,9 +135,15 @@ export function resolveEmployeeStructuredQuery({ userMessage, uiContext = null, 
   const priorContext = startsFreshScope(message) ? null : sameEntityContext;
   const inheritsScope = !followUp && !!priorContext;
 
+  const positionState = lastContext?.positionConversationState;
+  const hasPositionDesignation =
+    positionState?.entity === 'employee' &&
+    positionState.designation &&
+    !/\b(jobs?|openings?|vacanc(?:y|ies)|postings?)\b/i.test(message);
+
   const nlFilters = followUp
     ? {}
-    : parseFiltersFromMessage(message, { applyStatusDefault: !inheritsScope });
+    : parseFiltersFromMessage(message, { applyStatusDefault: !inheritsScope && !hasPositionDesignation });
   const filters = followUp
     ? ensureEmploymentStatusDefault(copyFilterSource(priorContext?.filters, {}), message)
     : ensureEmploymentStatusDefault(
@@ -155,9 +171,12 @@ export function resolveEmployeeStructuredQuery({ userMessage, uiContext = null, 
     entity: ENTITY_EMPLOYEES,
     operations,
     relations: [],
-    pagination: priorContext?.pagination
-      ? { ...priorContext.pagination }
-      : { ...DEFAULT_PAGINATION },
+    pagination:
+      followUp || (inheritsScope && filtersEqual(filters, priorContext?.filters ?? {}))
+        ? priorContext?.pagination
+          ? { ...priorContext.pagination }
+          : { ...DEFAULT_PAGINATION }
+        : { ...DEFAULT_PAGINATION },
   };
 
   if (Object.keys(filters).length > 0) {

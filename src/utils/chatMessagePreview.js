@@ -97,6 +97,10 @@ function inferKind(type, attachments = []) {
  * @returns {{ text: string, kind: string, imageUrl?: string, attachmentName?: string, documentType?: string }}
  */
 export function buildChatMessagePreview(message = {}) {
+  if (message.deletedAt && message.deletedFor === 'everyone') {
+    return { text: 'This message was deleted', kind: 'text' };
+  }
+
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   const kind = inferKind(message.type, attachments);
   const rawContent = String(message.content || '').trim();

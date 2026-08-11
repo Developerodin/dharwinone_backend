@@ -40,7 +40,7 @@ export const sendMessage = catchAsync(async (req, res) => {
 
   const result = await chatAssistantService.sendMessage({
     messages,
-    user: req.user,
+    user: req.impersonation ? { ...req.user, __impersonating: true } : req.user,
     uiContext: req.body.uiContext || null,
     requestId: req.id,
   });
@@ -84,7 +84,7 @@ export const streamMessage = async (req, res) => {
   try {
     await chatAssistantService.streamMessage({
       messages,
-      user: req.user,
+      user: req.impersonation ? { ...req.user, __impersonating: true } : req.user,
       uiContext: req.body.uiContext || null,
       requestId: req.id,
       onToken: (token) => send({ token }),

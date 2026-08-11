@@ -9,16 +9,15 @@
 // request AND the primary fact is a single number. Anything richer (lists,
 // breakdowns, profiles, mixed queries) returns null so the LLM can format.
 
+import { renderSageCount } from './sage/renderCounts.js';
+
 const COUNT_QUESTION_RE =
   /^\s*(how\s+many|number\s+of|count\s+of|total\s+(number\s+of|of)|what(?:'s| is)\s+the\s+(?:number|count|total)\s+of)\b/i;
 
+const ACTIVE_COUNT_RE = /\b(active|currently working|working)\b/i;
+
 // Phrases that need richer formatting — never short-circuit.
 const NEEDS_LLM_RE = /\b(list|show|tell me about|details|profile|breakdown|who(\s+are|'s)|names?|email|phone|salary)\b/i;
-
-function pluralise(label, n) {
-  if (n === 1 && label.endsWith('s')) return label.slice(0, -1);
-  return label;
-}
 
 // Lowercase a role name for natural sentence rendering ("agent" not "Agent").
 // Keeps multi-word roles intact ("sales agent").
@@ -69,9 +68,10 @@ export function renderDeterministicAnswer(userMsg, facts) {
 
   if (p.kind === 'task_board_stage_count') {
     const stageLabel = p.stageLabel || 'that stage';
+    const rows = Array.isArray(p.rows) ? p.rows.slice(0, p.total) : [];
     const lines = [`There are **${p.total}** task(s) in **${stageLabel}** on the Task Board.`];
-    if (Array.isArray(p.rows) && p.rows.length) {
-      for (const r of p.rows.slice(0, 25)) {
+    if (rows.length) {
+      for (const r of rows.slice(0, 25)) {
         const key = r.taskKey ? ` (${r.taskKey})` : '';
         lines.push(`- ${r.title}${key}`);
       }
@@ -79,19 +79,7 @@ export function renderDeterministicAnswer(userMsg, facts) {
     return lines.join('\n');
   }
 
-  const label = pluralise(pickLabelForRender(p), p.total);
-  // Working vs resigned is always stated. When people are held out purely
-  // because their account is disabled/archived, say so — an unexplained gap
-  // between this number and the Employees page is what caused the 36-vs-35
-  // confusion.
-  const hiddenTotal = p.breakdown?.hiddenDisabledTotal ?? 0;
-  const hidden = hiddenTotal
-    ? ` ${hiddenTotal} more (${p.breakdown.hiddenDisabledResigned ?? 0} resigned) ${
-        hiddenTotal === 1 ? 'is' : 'are'
-      } not counted above because their account is disabled.`
-    : '';
-  const breakdown = p.breakdown
-    ? `\n\nBreakdown — working: **${p.breakdown.active ?? '?'}**, resigned: **${p.breakdown.resigned ?? '?'}**.${hidden}`
-    : '';
-  return `We have **${p.total} ${label}** in total.${breakdown}`;
+  const label = pickLabelForRender(p);
+  const statusHint = ACTIVE_COUNT_RE.test(userMsg) ? 'active' : null;
+  return renderSageCount(label, p.total, p.breakdown, { statusHint });
 }
