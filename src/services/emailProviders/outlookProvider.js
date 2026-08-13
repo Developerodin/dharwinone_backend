@@ -65,11 +65,12 @@ function msgPath(messageId) {
 /**
  * List message ids in a conversation. Graph rejects filter+orderby on conversationId
  * ("restriction or sort order is too complex"); omit $orderby and sort client-side.
+ * Trashed conversations are excluded from `/me/messages`, so fall back to Deleted Items.
  * @see https://learn.microsoft.com/en-us/graph/api/user-list-messages
  */
-async function listMessageIdsByConversationId(client, convEscaped) {
+async function listMessageIdsFromEndpoint(client, endpoint, convEscaped) {
   const res = await client
-    .api('/me/messages')
+    .api(endpoint)
     .filter(`conversationId eq '${convEscaped}'`)
     .select('id,receivedDateTime')
     .top(50)
@@ -81,6 +82,26 @@ async function listMessageIdsByConversationId(client, convEscaped) {
     return ta - tb;
   });
   return rows.map((m) => m.id).filter(Boolean);
+}
+
+async function listMessageIdsByConversationId(client, convEscaped) {
+  try {
+    const activeIds = await listMessageIdsFromEndpoint(client, '/me/messages', convEscaped);
+    if (activeIds.length > 0) return activeIds;
+  } catch (err) {
+    logger.warn('[Outlook] listMessageIds /me/messages failed: %s', err.message);
+  }
+
+  try {
+    return await listMessageIdsFromEndpoint(
+      client,
+      '/me/mailFolders/deleteditems/messages',
+      convEscaped
+    );
+  } catch (err) {
+    logger.warn('[Outlook] listMessageIds deleteditems failed: %s', err.message);
+    return [];
+  }
 }
 
 /**
@@ -1376,6 +1397,31 @@ export async function deleteMessage(account, messageId) {
   const client = createGraphClient(account.accessToken);
   await client.api(msgPath(messageId)).delete();
   return { success: true };
+}
+
+/**
+ * Permanently delete all messages in the given threads (e.g. empty from Trash).
+ * Resolves ids from mailbox + Deleted Items so trashed conversations are found.
+ */
+export async function deleteThreads(account, threadIds) {
+  if (!threadIds?.length) return { success: true, deleted: 0 };
+  await ensureValidToken(account);
+  const client = createGraphClient(account.accessToken);
+
+  let deleted = 0;
+  for (const tid of threadIds) {
+    const ids = await resolveMessageIdsForThread(client, tid);
+    for (const id of ids) {
+      try {
+        await client.api(msgPath(id)).delete();
+        deleted += 1;
+      } catch (err) {
+        logger.warn('[Outlook] deleteThreads failed for %s: %s', id, err.message);
+        throw err;
+      }
+    }
+  }
+  return { success: true, deleted };
 }
 
 /**

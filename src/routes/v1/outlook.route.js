@@ -59,6 +59,12 @@ router.post(
   outlookController.batchModifyThreads
 );
 router.post('/threads/trash', requirePermissions('emails.manage'), validate(outlookValidation.trashThreads), outlookController.trashThreads);
+router.post(
+  '/threads/delete',
+  requirePermissions('emails.manage'),
+  validate(outlookValidation.deleteThreads),
+  outlookController.deleteThreads
+);
 router.get('/messages/:id', requirePermissions('emails.read'), validate(outlookValidation.getMessage), outlookController.getMessage);
 router.get(
   '/messages/:messageId/attachments/:attachmentId',

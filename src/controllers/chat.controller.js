@@ -113,7 +113,7 @@ const deleteMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const deleteFor = req.body?.deleteFor || 'me';
   const msg = await chatService.deleteMessage(req.params.id, req.params.msgId, userId, { deleteFor });
-  emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
+  await emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
   res.send(msg);
 });
 

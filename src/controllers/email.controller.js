@@ -213,6 +213,12 @@ const trashThreads = catchAsync(async (req, res) => {
   res.json({ success: true });
 });
 
+const deleteThreads = catchAsync(async (req, res) => {
+  const { accountId, threadIds } = req.body;
+  const result = await emailClientService.deleteThreads(accountId, req.user.id, threadIds || []);
+  res.json(result);
+});
+
 const deleteMessage = catchAsync(async (req, res) => {
   const { accountId } = req.query;
   await emailClientService.deleteMessage(accountId, req.user.id, req.params.id);
@@ -261,6 +267,7 @@ export {
   batchModifyMessages,
   batchModifyThreads,
   trashThreads,
+  deleteThreads,
   deleteMessage,
   listLabels,
   getFolderCounts,

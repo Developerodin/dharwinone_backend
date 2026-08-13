@@ -1248,6 +1248,39 @@ export async function deleteMessage(account, messageId) {
 }
 
 /**
+ * Permanently delete all messages in the given threads (e.g. empty from Trash).
+ */
+export async function deleteThreads(account, threadIds) {
+  if (!threadIds?.length) return { success: true, deleted: 0 };
+  await ensureValidToken(account);
+  const oauth2Client = createOAuth2Client();
+  oauth2Client.setCredentials({ access_token: account.accessToken });
+  const gmail = getGmailClient(oauth2Client);
+
+  let deleted = 0;
+  for (const tid of threadIds) {
+    try {
+      const res = await gmail.users.threads.get({ userId: 'me', id: tid, format: 'minimal' });
+      const msgs = res.data.messages || [];
+      for (const m of msgs) {
+        if (!m?.id) continue;
+        await gmail.users.messages.delete({ userId: 'me', id: m.id });
+        deleted += 1;
+      }
+    } catch (err) {
+      // Fall back to treating the id as a single message id (rare list edge cases).
+      try {
+        await gmail.users.messages.delete({ userId: 'me', id: tid });
+        deleted += 1;
+      } catch {
+        throw err;
+      }
+    }
+  }
+  return { success: true, deleted };
+}
+
+/**
  * Trash all messages in the given threads.
  */
 export async function trashThreads(account, threadIds) {
