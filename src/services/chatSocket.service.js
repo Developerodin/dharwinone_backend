@@ -571,7 +571,7 @@ const isUserOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(user
 
 const getIO = () => io;
 
-const emitMessageDeleted = (conversationId, messageId, deleteFor, deletedBy) => {
+const emitMessageDeleted = async (conversationId, messageId, deleteFor, deletedBy) => {
   if (!io) return;
   io.to(`conversation:${conversationId}`).emit('message_deleted', {
     conversationId,
@@ -579,6 +579,37 @@ const emitMessageDeleted = (conversationId, messageId, deleteFor, deletedBy) => 
     deleteFor,
     deletedBy: deletedBy != null ? String(deletedBy) : undefined,
   });
+
+  // Refresh chat-list previews so a deleted last message does not linger under the name.
+  try {
+    const participantIds = await chatService.getConversationParticipantIds(conversationId);
+    if (!participantIds?.length) return;
+
+    const targets =
+      deleteFor === 'everyone'
+        ? participantIds
+        : participantIds.filter((uid) => String(uid) === String(deletedBy));
+
+    await Promise.all(
+      targets.map(async (uid) => {
+        const uidStr = String(uid);
+        const lastMessage = await chatService.getLastVisibleMessageForUser(conversationId, uidStr);
+        io.to(`user:${uidStr}`).emit('conversation_updated', {
+          conversationId,
+          lastMessage: lastMessage
+            ? {
+                content: lastMessage.content,
+                sender: lastMessage.sender || '',
+                createdAt: lastMessage.createdAt,
+                type: lastMessage.type,
+              }
+            : null,
+        });
+      })
+    );
+  } catch (err) {
+    logger.warn(`message_deleted conversation_updated emit failed: ${err.message}`);
+  }
 };
 
 const emitMessageReacted = (conversationId, message) => {

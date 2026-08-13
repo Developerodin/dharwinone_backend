@@ -188,6 +188,12 @@ export async function deleteMessage(accountId, userId, messageId) {
   return outlookProvider.deleteMessage(account, messageId);
 }
 
+export async function deleteThreads(accountId, userId, threadIds) {
+  if (!threadIds?.length) return { success: true, deleted: 0 };
+  const account = await getOutlookAccountForUser(accountId, userId);
+  return outlookProvider.deleteThreads(account, threadIds);
+}
+
 export async function listLabels(accountId, userId) {
   const account = await getOutlookAccountForUser(accountId, userId);
   return outlookProvider.listLabels(account);

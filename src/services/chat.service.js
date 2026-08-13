@@ -213,10 +213,20 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     };
   };
 
+  // Skip messages this user deleted for themselves, and skip "delete for everyone"
+  // tombstones so the chat list never shows deleted content as the latest preview.
+  const visibleLastMessageMatch = {
+    conversation: { $in: convIds },
+    $or: [
+      { deletedAt: null },
+      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+    ],
+  };
+
   const [lastMsgAgg, total] = await Promise.all([
     convIds.length
       ? Message.aggregate([
-          { $match: { conversation: { $in: convIds } } },
+          { $match: visibleLastMessageMatch },
           { $sort: { createdAt: -1 } },
           {
             $group: {
@@ -520,6 +530,33 @@ const createMessage = async (conversationId, userId, { content, type, attachment
   return result;
 };
 
+/**
+ * Latest message still visible to a user (excludes their "delete for me" and all
+ * "delete for everyone" tombstones). Used for chat-list previews after deletion.
+ */
+const getLastVisibleMessageForUser = async (conversationId, userId) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const msg = await Message.findOne({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    $or: [
+      { deletedAt: null },
+      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name')
+    .lean();
+  if (!msg) return null;
+  const preview = buildChatMessagePreview(msg);
+  return {
+    content: preview.text,
+    sender: msg.sender?.name || '',
+    createdAt: msg.createdAt,
+    type: msg.type,
+    attachments: msg.attachments,
+  };
+};
+
 const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) => {
   await ensureParticipant(conversationId, userId);
   const msg = await Message.findOne({ _id: messageId, conversation: conversationId }).lean();
@@ -545,6 +582,21 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     deletedBy: userId,
   };
   await Message.findByIdAndUpdate(messageId, { $set: update });
+
+  // Keep conversation sort key in sync when the chronologically latest message is removed for everyone.
+  if (mode === 'everyone') {
+    const latestVisible = await Message.findOne({
+      conversation: conversationId,
+      $or: [{ deletedAt: null }, { deletedFor: 'me' }],
+    })
+      .sort({ createdAt: -1 })
+      .select('createdAt')
+      .lean();
+    await Conversation.findByIdAndUpdate(conversationId, {
+      lastMessageAt: latestVisible?.createdAt || null,
+    });
+  }
+
   const updated = await Message.findById(messageId)
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
@@ -1121,6 +1173,7 @@ export {
   getMessages,
   createMessage,
   deleteMessage,
+  getLastVisibleMessageForUser,
   forwardMessage,
   reactToMessage,
   markAsRead,
