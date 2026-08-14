@@ -167,6 +167,18 @@ const updateGroupName = {
     .min(1),
 };
 
+const setConversationPreferences = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object()
+    .keys({
+      muted: Joi.boolean(),
+      pinned: Joi.boolean(),
+    })
+    .or('muted', 'pinned'),
+};
+
 const startChatCallRecording = {
   params: callIdParam.params,
 };
@@ -189,5 +201,6 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  setConversationPreferences,
   startChatCallRecording,
 };

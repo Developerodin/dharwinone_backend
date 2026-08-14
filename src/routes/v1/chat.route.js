@@ -24,9 +24,15 @@ router.get('/socket-token', chatController.getSocketToken);
 router.get('/users/search', validate(chatValidation.searchUsers), chatController.searchUsers);
 
 router.get('/conversations', validate(chatValidation.listConversations), chatController.listConversations);
+router.get('/conversations/preferences', chatController.listConversationPreferences);
 router.post('/conversations', validate(chatValidation.createConversation), chatController.createConversation);
 
 router.get('/conversations/:id', validate(chatValidation.conversationIdParam), chatController.getConversation);
+router.patch(
+  '/conversations/:id/preferences',
+  validate(chatValidation.setConversationPreferences),
+  chatController.setConversationPreferences
+);
 router.delete('/conversations/:id', validate(chatValidation.conversationIdParam), chatController.deleteConversation);
 router.patch(
   '/conversations/:id',

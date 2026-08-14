@@ -35,6 +35,12 @@ const listConversations = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const listConversationPreferences = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const result = await chatService.listConversationPreferences(userId);
+  res.send(result);
+});
+
 const createConversation = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const conv = await chatService.createConversation(userId, req.body);
@@ -288,6 +294,25 @@ const updateGroupName = catchAsync(async (req, res) => {
   res.send(conv);
 });
 
+const setConversationPreferences = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const conv = await chatService.setConversationPreferences(req.params.id, userId, req.body);
+  try {
+    const io = getIO();
+    if (io) {
+      io.to(`user:${String(userId)}`).emit('conversation_updated', {
+        conversationId: String(req.params.id),
+        userId: String(userId),
+        muted: conv.muted,
+        pinned: conv.pinned,
+      });
+    }
+  } catch (err) {
+    logger.warn(`conversation preferences notify failed: ${err.message}`);
+  }
+  res.send(conv);
+});
+
 const GROUP_AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 const uploadGroupAvatar = catchAsync(async (req, res) => {
@@ -307,6 +332,7 @@ const uploadGroupAvatar = catchAsync(async (req, res) => {
 
 export {
   listConversations,
+  listConversationPreferences,
   createConversation,
   getConversation,
   getMessages,
@@ -329,6 +355,7 @@ export {
   removeParticipant,
   setParticipantRole,
   updateGroupName,
+  setConversationPreferences,
   uploadGroupAvatar,
   deleteConversation,
 };

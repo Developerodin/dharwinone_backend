@@ -11,8 +11,15 @@ const errorConverter = (err, req, res, next) => {
   if (!(error instanceof ApiError)) {
     const statusCode =
       error.statusCode ??
+      error.response?.status ??
+      (typeof error.code === 'number' && error.code >= 400 && error.code < 600
+        ? error.code
+        : undefined) ??
       (error instanceof mongoose.Error ? httpStatus.BAD_REQUEST : httpStatus.INTERNAL_SERVER_ERROR);
-    const message = error.message || httpStatus[statusCode];
+    const message =
+      error.response?.data?.error?.message ||
+      error.message ||
+      httpStatus[statusCode];
     const isOperational =
       error.isOperational ?? (statusCode >= 400 && statusCode < 500);
     error = new ApiError(statusCode, message, isOperational, err.stack, {

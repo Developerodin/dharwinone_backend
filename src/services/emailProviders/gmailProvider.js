@@ -11,11 +11,42 @@ import {
 } from '../emailConnectionPolicy.service.js';
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.modify',
+  // Full mailbox access — required for permanent delete (threads/messages.delete).
+  // Narrower gmail.modify explicitly excludes permanent deletion.
+  'https://mail.google.com/',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
+
+/** Map Gmail/Gaxios errors to ApiError so clients see real status instead of opaque 500. */
+function throwGmailApiError(err, fallbackMessage = 'Gmail request failed') {
+  const status =
+    err?.response?.status ??
+    (typeof err?.code === 'number' ? err.code : undefined) ??
+    err?.statusCode;
+  const apiMessage =
+    err?.response?.data?.error?.message ||
+    err?.errors?.[0]?.message ||
+    err?.message ||
+    fallbackMessage;
+  const lower = String(apiMessage).toLowerCase();
+  const needsReconnect =
+    status === 403 &&
+    (lower.includes('insufficient') ||
+      lower.includes('permission') ||
+      lower.includes('access not granted') ||
+      lower.includes('request had insufficient'));
+  if (needsReconnect) {
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'Gmail needs to be reconnected to permanently delete emails. Disconnect and connect your Gmail account again.',
+      true
+    );
+  }
+  if (status && status >= 400 && status < 600) {
+    throw new ApiError(status, apiMessage, status < 500, err?.stack);
+  }
+  throw err;
+}
 
 function createOAuth2Client() {
   const { clientId, clientSecret, redirectUri } = config.google;
@@ -1237,18 +1268,24 @@ export async function batchModifyThreads(account, threadIds, { addLabelIds = [],
 /**
  * Permanently delete a message (cannot be undone).
  * Use trashThreads / messages.trash to move to Trash instead.
+ * Requires https://mail.google.com/ OAuth scope.
  */
 export async function deleteMessage(account, messageId) {
   await ensureValidToken(account);
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({ access_token: account.accessToken });
   const gmail = getGmailClient(oauth2Client);
-  await gmail.users.messages.delete({ userId: 'me', id: messageId });
+  try {
+    await gmail.users.messages.delete({ userId: 'me', id: messageId });
+  } catch (err) {
+    throwGmailApiError(err, 'Failed to permanently delete message');
+  }
   return { success: true };
 }
 
 /**
  * Permanently delete all messages in the given threads (e.g. empty from Trash).
+ * Prefer threads.delete (one call per thread); fall back to per-message delete.
  */
 export async function deleteThreads(account, threadIds) {
   if (!threadIds?.length) return { success: true, deleted: 0 };
@@ -1260,20 +1297,26 @@ export async function deleteThreads(account, threadIds) {
   let deleted = 0;
   for (const tid of threadIds) {
     try {
-      const res = await gmail.users.threads.get({ userId: 'me', id: tid, format: 'minimal' });
-      const msgs = res.data.messages || [];
-      for (const m of msgs) {
-        if (!m?.id) continue;
-        await gmail.users.messages.delete({ userId: 'me', id: m.id });
-        deleted += 1;
-      }
-    } catch (err) {
-      // Fall back to treating the id as a single message id (rare list edge cases).
+      await gmail.users.threads.delete({ userId: 'me', id: tid });
+      deleted += 1;
+      continue;
+    } catch (threadErr) {
+      // Fall back: expand thread → delete each message, or treat tid as a message id.
       try {
-        await gmail.users.messages.delete({ userId: 'me', id: tid });
-        deleted += 1;
-      } catch {
-        throw err;
+        const res = await gmail.users.threads.get({ userId: 'me', id: tid, format: 'minimal' });
+        const msgs = res.data.messages || [];
+        if (msgs.length === 0) {
+          await gmail.users.messages.delete({ userId: 'me', id: tid });
+          deleted += 1;
+          continue;
+        }
+        for (const m of msgs) {
+          if (!m?.id) continue;
+          await gmail.users.messages.delete({ userId: 'me', id: m.id });
+          deleted += 1;
+        }
+      } catch (msgErr) {
+        throwGmailApiError(msgErr || threadErr, 'Failed to permanently delete conversation');
       }
     }
   }
