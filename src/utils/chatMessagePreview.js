@@ -2,6 +2,8 @@
  * WhatsApp-style preview copy for chat attachment messages (push, list, in-app).
  */
 
+import { decodeUploadedFilename } from './decodeUploadedFilename.js';
+
 const GENERIC_PLACEHOLDERS = new Set([
   'attaching file',
   '📷 image',
@@ -102,7 +104,7 @@ export function buildChatMessagePreview(message = {}) {
   const rawContent = String(message.content || '').trim();
   const hasRealCaption = rawContent && !isGenericAttachmentPlaceholder(rawContent);
   const first = attachments[0] || {};
-  const filename = first.originalName || first.name || 'document';
+  const filename = decodeUploadedFilename(first.originalName || first.name || 'document');
   const mimeType = first.mimeType || '';
   const count = attachments.length || 1;
 

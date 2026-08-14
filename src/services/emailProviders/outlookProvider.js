@@ -1389,13 +1389,26 @@ export async function batchModifyThreads(account, threadIds, { addLabelIds = [],
 /**
  * Permanently delete a message (cannot be undone).
  * Use trashThreads to move to Deleted Items instead.
- * Graph DELETE on a message in Deleted Items removes it permanently;
- * DELETE elsewhere moves to Deleted Items — callers should only use this for trash.
+ * Graph permanentDelete removes the item even when not already in Deleted Items.
  */
 export async function deleteMessage(account, messageId) {
   await ensureValidToken(account);
   const client = createGraphClient(account.accessToken);
-  await client.api(msgPath(messageId)).delete();
+  try {
+    await client.api(`${msgPath(messageId)}/permanentDelete`).post({});
+  } catch (permanentErr) {
+    // Older Graph tenants may lack permanentDelete; DELETE in Deleted Items is permanent.
+    try {
+      await client.api(msgPath(messageId)).delete();
+    } catch (deleteErr) {
+      logger.warn(
+        '[Outlook] deleteMessage failed for %s: %s',
+        messageId,
+        deleteErr.message || permanentErr.message
+      );
+      throw deleteErr;
+    }
+  }
   return { success: true };
 }
 
@@ -1411,13 +1424,22 @@ export async function deleteThreads(account, threadIds) {
   let deleted = 0;
   for (const tid of threadIds) {
     const ids = await resolveMessageIdsForThread(client, tid);
+    if (ids.length === 0) {
+      logger.warn('[Outlook] deleteThreads: no messages found for thread key %s', tid);
+      continue;
+    }
     for (const id of ids) {
       try {
-        await client.api(msgPath(id)).delete();
+        await client.api(`${msgPath(id)}/permanentDelete`).post({});
         deleted += 1;
-      } catch (err) {
-        logger.warn('[Outlook] deleteThreads failed for %s: %s', id, err.message);
-        throw err;
+      } catch (permanentErr) {
+        try {
+          await client.api(msgPath(id)).delete();
+          deleted += 1;
+        } catch (err) {
+          logger.warn('[Outlook] deleteThreads failed for %s: %s', id, err.message);
+          throw err;
+        }
       }
     }
   }
