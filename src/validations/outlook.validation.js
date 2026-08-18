@@ -18,6 +18,7 @@ export {
   batchModifyMessages,
   batchModifyThreads,
   trashThreads,
+  deleteThreads,
   deleteMessage,
   listLabels,
   getFolderCounts,

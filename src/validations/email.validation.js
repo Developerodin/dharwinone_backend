@@ -245,6 +245,13 @@ const trashThreads = {
   }),
 };
 
+const deleteThreads = {
+  body: Joi.object().keys({
+    accountId: Joi.string().custom(objectId).required(),
+    threadIds: Joi.array().items(Joi.string()).required().min(1),
+  }),
+};
+
 const deleteMessage = {
   query: Joi.object().keys({
     accountId: Joi.string().custom(objectId).required(),
@@ -397,6 +404,7 @@ export {
   batchModifyMessages,
   batchModifyThreads,
   trashThreads,
+  deleteThreads,
   deleteMessage,
   listLabels,
   getFolderCounts,

@@ -189,6 +189,12 @@ export async function deleteMessage(accountId, userId, messageId) {
   return gmailProvider.deleteMessage(account, messageId);
 }
 
+export async function deleteThreads(accountId, userId, threadIds) {
+  if (!threadIds?.length) return { success: true, deleted: 0 };
+  const account = await getGmailAccountForUser(accountId, userId);
+  return gmailProvider.deleteThreads(account, threadIds);
+}
+
 export async function listLabels(accountId, userId) {
   const account = await getGmailAccountForUser(accountId, userId);
   return gmailProvider.listLabels(account);

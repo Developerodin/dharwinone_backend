@@ -6,6 +6,10 @@ const participantSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     lastReadAt: { type: Date, default: null },
     role: { type: String, enum: ['member', 'admin'], default: 'member' },
+    /** Per-user: suppress in-app + push notifications until manually unmuted. */
+    muted: { type: Boolean, default: false },
+    /** Per-user: when set, conversation stays at the top of that user's chat list. */
+    pinnedAt: { type: Date, default: null },
   },
   { _id: false }
 );

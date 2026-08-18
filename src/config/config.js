@@ -482,10 +482,10 @@ const config = {
     })(),
   },
   aws: {
-    accessKeyId: envVars.AWS_ACCESS_KEY_ID,
-    secretAccessKey: envVars.AWS_SECRET_ACCESS_KEY,
-    region: envVars.AWS_REGION,
-    bucketName: envVars.AWS_S3_BUCKET_NAME,
+    accessKeyId: envVars.AWS_ACCESS_KEY_ID ? String(envVars.AWS_ACCESS_KEY_ID).trim() : undefined,
+    secretAccessKey: envVars.AWS_SECRET_ACCESS_KEY ? String(envVars.AWS_SECRET_ACCESS_KEY).trim() : undefined,
+    region: String(envVars.AWS_REGION || 'us-east-1').trim(),
+    bucketName: envVars.AWS_S3_BUCKET_NAME ? String(envVars.AWS_S3_BUCKET_NAME).trim() : undefined,
   },
   livekit: {
     url: (envVars.LIVEKIT_URL || 'ws://localhost:7880').trim(),
