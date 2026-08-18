@@ -8,8 +8,13 @@ import { resolveEmployeeStructuredQuery, resolveEmployeeLastContextFollowUp } fr
 import { looksLikeEmployeeFilterQuery } from './nlResolver.js';
 import { resolveEntity, hasHrSignals } from './resolveEntity.js';
 import { saveEmployeeQueryContext } from './saveEmployeeQueryContext.js';
+import { planEmployeeQuery } from '../queryPlanner/planEmployeeQuery.js';
+import { executeCompoundEmployeeQuery } from '../queryPlanner/executeCompoundQuery.js';
+import { detectActivityIntent } from '../intent/activityIntents.js';
+import logger from '../../../config/logger.js';
 
 export { resolveEntity, hasHrSignals } from './resolveEntity.js';
+export { runAgentEmployeeQuery, looksLikeAgentEmployeeQuery } from './runAgentEmployeeQuery.js';
 
 /**
  * Feature flag gate with optional percent rollout via stableHashUserId.
@@ -32,6 +37,8 @@ export function useEmployeeEntityQuery(user) {
 }
 
 function shouldHandleEmployeeEntityQuery(userMessage, lastContext) {
+  if (detectActivityIntent(userMessage)) return false;
+
   const entity = resolveEntity(userMessage, lastContext);
   if (entity === 'employees') return true;
   if (entity === 'users') return false;
@@ -62,11 +69,45 @@ export async function runEmployeeEntityQuery({
     return null;
   }
 
+  const queryContext = lastContext?.currentQueryContext ?? null;
+
+  const plan =
+    deps.planEmployeeQuery?.({ userMessage, queryContext, lastContext }) ??
+    planEmployeeQuery({ userMessage, queryContext, lastContext });
+
+  if (plan) {
+    return (
+      deps.executeCompoundEmployeeQuery?.({
+        plan,
+        userMessage,
+        user,
+        requestId,
+        deps,
+      }) ??
+      executeCompoundEmployeeQuery({
+        plan,
+        userMessage,
+        user,
+        requestId,
+        deps,
+      })
+    );
+  }
+
   const started = deps.now?.() ?? Date.now();
 
   const structuredQuery =
     deps.resolveEmployeeStructuredQuery?.({ userMessage, uiContext, lastContext }) ??
     resolveEmployeeStructuredQuery({ userMessage, uiContext, lastContext });
+
+  if (process.env.NODE_ENV !== 'production') {
+    logger.debug('[entityQuery] plan', {
+      entity: structuredQuery.entity,
+      operations: structuredQuery.operations,
+      filters: structuredQuery.filters ?? {},
+      contextSource: lastContext?.positionConversationState?.source ?? lastContext?.entity ?? 'none',
+    });
+  }
 
   const validation =
     deps.validateEmployeeQuery?.(structuredQuery) ?? validateEmployeeQuery(structuredQuery);
@@ -149,5 +190,13 @@ export async function runEmployeeEntityQuery({
     records: toolResult.records ?? [],
     total: toolResult.total ?? null,
     tookMs,
+    meta: {
+      kind: 'employees',
+      entityType: 'employees',
+      queryId: validatedQuery.queryId ?? null,
+      total: toolResult.total ?? null,
+      deterministic: true,
+      tookMs,
+    },
   };
 }

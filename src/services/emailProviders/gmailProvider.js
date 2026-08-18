@@ -653,7 +653,7 @@ function formatFullMessage(msg, bodies, { stripSnippet = false } = {}) {
     return acc;
   }, {});
 
-  let htmlBody = bodies.htmlBody || '';
+  const htmlBody = bodies.htmlBody || '';
   let textBody = bodies.textBody || '';
   // Mirror Outlook: if MIME walk found nothing, expose snippet so the app is never empty.
   if (!htmlBody && !textBody && (msg.snippet || '').trim()) {

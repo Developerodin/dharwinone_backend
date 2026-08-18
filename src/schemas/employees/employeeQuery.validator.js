@@ -83,7 +83,13 @@ function normalizeQuery(value) {
 }
 
 function stripEmptyFilterKeys(filters) {
+  // Empty strings go too, not just null/undefined. `filters.id: ''` used to survive
+  // here, and toApiFilter's `if (apiFilter.id)` then left it unmapped — so a query
+  // narrowed to one employee silently returned the whole scoped roster. Same
+  // fail-open shape T10 closed, one layer up.
   return Object.fromEntries(
-    Object.entries(filters).filter(([, filterValue]) => filterValue !== undefined && filterValue !== null)
+    Object.entries(filters).filter(
+      ([, filterValue]) => filterValue !== undefined && filterValue !== null && filterValue !== ''
+    )
   );
 }

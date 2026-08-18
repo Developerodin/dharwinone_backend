@@ -1,11 +1,14 @@
 // uat.dharwin.backend/src/services/chatAssistant/renderers/jobs.js
 //
 // Render `fetch_jobs` retrieval as a TableBlock when records are present.
-// Frontend `TableBlockView` paginates at >TABLE_PAGE_SIZE (10) rows, so
-// emitting structured rows here is what makes "list all jobs" paginate.
-// Falls back to genericCount when no records (e.g. only counts known).
+// Also renders atomic `job_result` envelopes — count + rows from one query.
 
 import { renderGenericCount } from './genericCount.js';
+import {
+  originLabelFromFilters,
+  buildJobCountPhrase,
+  jobMatchesOrigin,
+} from '../jobResult.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -139,5 +142,93 @@ export function renderJobs(data, ctx = {}, fact) {
   };
 
   const markdown = `Showing ${rows.length} of ${totalKnown} jobs — table below.`;
+  return { block, markdown };
+}
+
+/**
+ * Render atomic job_result — rows always match authoritative total + origin filters.
+ *
+ * @param {object|null} payload
+ * @param {{ listIntent?: boolean }} ctx
+ */
+export function renderJobResult(payload, ctx = {}) {
+  if (!payload) return { block: null, markdown: '' };
+
+  const total = Number(
+    payload?.result?.total
+    ?? payload?.authoritativeCount
+    ?? payload?.total
+    ?? 0,
+  );
+  const jobs = payload?.result?.jobs ?? payload?.rows ?? [];
+  const filters = payload?.query?.filters ?? payload?.filters ?? {};
+  const queryId = payload?.query?.queryId ?? payload?.queryId ?? null;
+  const listIntent = ctx?.listIntent ?? payload?.intent === 'list';
+  const originLabel = originLabelFromFilters(filters);
+  const countNoun = buildJobCountPhrase(filters, total);
+
+  if (!listIntent) {
+    const markdown = total === 1
+      ? `There is **1** ${countNoun}.`
+      : `There are **${total}** ${countNoun}.`;
+    return { block: null, markdown };
+  }
+
+  if (!jobs.length) {
+    const markdown = `No ${countNoun} matched your filters.`;
+    return { block: null, markdown };
+  }
+
+  if (filters.jobOrigin) {
+    for (const j of jobs) {
+      if (!jobMatchesOrigin(j, filters.jobOrigin)) {
+        return { block: null, markdown: `No matching ${countNoun}.` };
+      }
+    }
+  }
+
+  const rows = jobs.slice(0, Math.min(jobs.length, total)).map((r) => ({
+    title: cell(r.title),
+    organisation: cell(formatOrg(r)),
+    jobType: cell(r.jobType),
+    location: cell(r.location),
+    experienceLevel: cell(r.experienceLevel),
+    salary: cell(formatSalary(r)),
+    origin: {
+      v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')),
+      tone: originTone(r.jobOrigin),
+    },
+    status: { v: cell(r.status || 'Active'), tone: statusTone(r.status) },
+  }));
+
+  const columns = JOB_COLUMNS.filter((col) =>
+    rows.some((row) => {
+      const v = row[col.key];
+      const text = v && typeof v === 'object' ? v.v : v;
+      return text && text !== '—' && text !== '';
+    }),
+  );
+
+  if (!columns.length) {
+    return { block: null, markdown: `Found **${total}** ${countNoun}.` };
+  }
+
+  const title = originLabel
+    ? `${originLabel} Jobs (${total})`
+    : `Jobs (${total})`;
+
+  const block = {
+    type: 'table',
+    id: 'jobs',
+    tableType: 'jobs',
+    title,
+    columns,
+    rows,
+    layout: 'auto',
+    queryId,
+    pagination: { total },
+  };
+
+  const markdown = `Showing ${rows.length} of ${total} ${countNoun} — table below.`;
   return { block, markdown };
 }

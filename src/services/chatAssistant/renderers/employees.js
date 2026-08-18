@@ -25,6 +25,17 @@ import {
   profileForRole,
   VIEWER_ROLES,
 } from '../columnVisibility.js';
+import { resignationCutoff } from '../employeeEmploymentFilter.js';
+import {
+  pickEmployeeId,
+  roleNamesOf,
+  shouldShowEmployeeId,
+} from '../employeeRole.js';
+import {
+  buildEntityTableTitle,
+  entityTypeFromFetchPayload,
+  tableTypeForEntity,
+} from './entityLabels.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -65,19 +76,13 @@ const accountTone = (s) => {
   return v === 'disabled' || v === 'archived' ? 'warn' : 'neutral';
 };
 
-const roleNamesOf = (r) => {
-  if (Array.isArray(r.roleNames) && r.roleNames.length) return r.roleNames;
-  if (Array.isArray(r.role) && r.role.length) return r.role;
-  if (r.role) return [r.role];
-  return [];
-};
-
 const roleOf = (r) => {
   const names = roleNamesOf(r);
   return names.length ? names.join(', ') : '—';
 };
 
-const isEmployeeRecord = (r) => roleNamesOf(r).some((n) => /employee/i.test(String(n)));
+const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
+const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
 
 const formatDate = (d) => {
   if (!d) return '';
@@ -85,11 +90,6 @@ const formatDate = (d) => {
   if (Number.isNaN(t.getTime())) return '';
   return t.toISOString().slice(0, 10);
 };
-
-// Accept legacy/alternate backend field names for employee ID + resign date.
-const pickEmployeeId = (r) => r.employeeId || r.empId || r.employee_code || '';
-const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
-const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
 
 // Full set of keys this renderer KNOWS how to populate. The visibility
 // layer picks the subset that the viewer + query actually deserve.
@@ -118,7 +118,15 @@ export function renderEmployees(data, ctx = {}) {
 
   const role = data.requestedRole || ctx.role || null;
   const total = Number(data.total ?? records.length);
-  const titleNoun = role ? `${role}s` : 'Employees';
+  const entityType = ctx.entityType || entityTypeFromFetchPayload(data);
+  const personName = total === 1 ? records[0]?.name : null;
+  const title = buildEntityTableTitle({
+    entityType,
+    role,
+    total,
+    personName,
+    isPersonSearch: !!data.isPersonSearch,
+  });
   const viewerRole = ctx.viewerRole || VIEWER_ROLES.OTHER;
 
   // Build full-fat rows. Employee ID is gated PER ROW — only records whose
@@ -127,18 +135,25 @@ export function renderEmployees(data, ctx = {}) {
   // the table is blank, e.g. an agents-only table).
   // Resign date is blanked when unset OR still in the future (filed but not
   // yet effective). Join date is shown whenever present.
-  const rawRows = records.map((r) => ({
-    name:        cell(r.name),
-    employeeId:  cell(isEmployeeRecord(r) ? pickEmployeeId(r) : ''),
-    appliedRole: cell(r.appliedRole || r.designation),
-    email:       cell(r.email),
-    role:        roleOf(r),
-    department:  cell(r.department || r.designation),
-    joinDate:    cell(formatDate(pickJoinDate(r))),
-    resignDate:  cell(formatDate(pickResignDate(r))),
-    status:      { v: cell(stateLabel(r.employmentState)), tone: stateTone(r.employmentState) },
-    accountState: { v: cell(accountLabel(r.accountState ?? r.status)), tone: accountTone(r.accountState ?? r.status) },
-  }));
+  const rawRows = records.map((r) => {
+    const showId = shouldShowEmployeeId(r, role);
+    return {
+      name:        cell(r.name),
+      employeeId:  cell(showId ? pickEmployeeId(r) : ''),
+      appliedRole: cell(r.appliedRole || r.designation),
+      email:       cell(r.email),
+      role:        roleOf(r),
+      department:  cell(r.department || r.designation),
+      joinDate:    cell(formatDate(pickJoinDate(r))),
+      resignDate:  cell(formatDate(pickResignDate(r))),
+      status:      { v: cell(stateLabel(r.employmentState)), tone: stateTone(r.employmentState) },
+      accountState: { v: cell(accountLabel(r.accountState ?? r.status)), tone: accountTone(r.accountState ?? r.status) },
+    };
+  });
+
+  const forceInclude = rawRows.some((row) => row.employeeId !== '—')
+    ? ['employeeId']
+    : [];
 
   const { columns, rows } = applyColumnVisibility({
     candidateColumns: CANDIDATE_COLUMNS,
@@ -146,6 +161,7 @@ export function renderEmployees(data, ctx = {}) {
     viewerRole,
     profile: profileForRole(role),
     queryArg: ctx.queryArg || '',
+    forceInclude,
   });
 
   // Pathological case — every column got stripped. Bail rather than emit
@@ -156,8 +172,8 @@ export function renderEmployees(data, ctx = {}) {
   const block = {
     type: 'table',
     id: 'employees',
-    tableType: tableTypeFor(role),
-    title: `${titleNoun} (${total})`,
+    tableType: tableTypeForEntity(role, entityType),
+    title,
     columns,
     rows,
     layout: 'auto',
@@ -192,7 +208,10 @@ function deriveEmploymentState(record) {
   if (record.employmentState) return record.employmentState;
   if (record.resignDate) {
     const resign = new Date(record.resignDate);
-    if (!Number.isNaN(resign.getTime()) && resign <= new Date()) {
+    // Same cutoff the DB breakdown uses. With a bare `new Date()` here, a resignDate
+    // carrying an intraday time counted as resigned in the section header and active
+    // in the rows beneath it — "Resigned (36)" above 35 people.
+    if (!Number.isNaN(resign.getTime()) && resign <= resignationCutoff()) {
       return 'resigned';
     }
   }
@@ -290,8 +309,10 @@ export function renderDeterministicEmployeeList(toolResult, ctx = {}) {
     // Section counts come from the DB breakdown, never from the page slice — a
     // 50-row page of 176 matches must not render as "Active (33) … 1–33 of 33".
     const breakdown = toolResult.employmentBreakdown;
+    // "Current", not "Active" — the rows below each header already say "Working"
+    // for the same axis, and "Active" is the account status's word.
     const sections = [
-      { key: 'Active', records: active, total: Number(breakdown?.active ?? active.length) },
+      { key: 'Current', records: active, total: Number(breakdown?.active ?? active.length) },
       { key: 'Resigned', records: resigned, total: Number(breakdown?.resigned ?? resigned.length) },
     ];
 

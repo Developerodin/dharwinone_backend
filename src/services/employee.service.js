@@ -19,6 +19,7 @@ import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { resignationCutoff } from './chatAssistant/employeeEmploymentFilter.js';
+import { designationRegexForPhrase } from './chatAssistant/managerCounts.js';
 import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
@@ -721,6 +722,15 @@ const buildEmployeeListMongoFilter = async (filterInput) => {
 
   const mongoFilter = buildAdvancedFilter(filter);
 
+  if (filter.designation?.trim()) {
+    const desigFilter = designationRegexForPhrase(filter.designation);
+    const positions = await Position.find({ name: desigFilter }).select('_id').lean();
+    const posIds = positions.map((p) => p._id);
+    const titleClause = [{ designation: desigFilter }];
+    if (posIds.length) titleClause.push({ position: { $in: posIds } });
+    mongoFilter.$and = [...(mongoFilter.$and || []), { $or: titleClause }];
+  }
+
   if (filter.ids) {
     const idList = normalizeIdList(filter.ids);
     mongoFilter._id = { $in: idList };
@@ -744,12 +754,6 @@ const buildEmployeeListMongoFilter = async (filterInput) => {
       ...(mongoFilter.$and || []),
       { $or: [{ referredByUserId: uid }, { currentSalesAgentUserId: uid }] },
     ];
-  }
-
-  if (filter.employmentStatus === 'resigned') {
-    // Resigned: show candidates with resign date on or in past (do not filter by isActive)
-  } else if (filter.employmentStatus === 'all') {
-    // All: show current and resigned (do not filter by isActive)
   }
 
   // isActive is a derived mirror of resignDate (employee.model.js pre-save hook +
@@ -1585,15 +1589,10 @@ const getAgentAssignmentSummary = async (scope = {}) => {
   }
   const mongoFilter = buildAdvancedFilter(filter);
 
-  if (filter.employmentStatus === 'resigned') {
-    // Resigned: do not filter by isActive (matches queryCandidates)
-  } else if (filter.employmentStatus === 'all') {
-    // All: do not filter by isActive
-  } else if (filter.isActive === undefined) {
-    mongoFilter.isActive = { $ne: false };
-  } else {
-    mongoFilter.isActive = filter.isActive;
-  }
+  // No isActive clause, for the same reason as buildEmployeeListMongoFilter: isActive
+  // is a derived mirror of resignDate, so applying it to the 'current' bucket only
+  // made this report disagree with the employee list it summarises. `filter` is built
+  // locally two lines up and never carries isActive, so the old else-branch was dead.
 
   const { getRoleByName } = await import('./role.service.js');
   const ownerIdsWithCandidateRole = await ensureCandidateProfilesForActiveCandidateUsers();

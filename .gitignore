@@ -59,3 +59,6 @@ backups/
 # Local AI tool config (do not commit)
 .claude/
 .codex/
+
+# Backfill script run journals (carry --undo paths, not source)
+attendance-status-backfill.*.journal.json

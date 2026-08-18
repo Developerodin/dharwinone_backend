@@ -48,9 +48,14 @@ export function buildJobPayloadFromExternal(ext) {
     location = ext.isRemote ? 'Remote' : 'Location not specified';
   }
   const jobType = JOB_TYPES.includes(ext.jobType) ? ext.jobType : mapJobType(ext.jobType);
-  const experienceLevel = EXP_LEVELS.includes(ext.experienceLevel)
-    ? ext.experienceLevel
-    : mapExperienceLevel(ext.experienceLevel);
+  // Feeds without a seniority field (every active-jobs-db row) previously landed on
+  // "Mid Level"; leave it unset instead — Job.experienceLevel is optional and the UI hides it.
+  let experienceLevel;
+  if (ext.experienceLevel) {
+    experienceLevel = EXP_LEVELS.includes(ext.experienceLevel)
+      ? ext.experienceLevel
+      : mapExperienceLevel(ext.experienceLevel);
+  }
 
   let salaryRange;
   const minOk = ext.salaryMin != null && !Number.isNaN(Number(ext.salaryMin));

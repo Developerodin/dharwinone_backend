@@ -23,6 +23,24 @@ import logger from '../config/logger.js';
 const VECTOR_SIZE = 1536;
 const DISTANCE = 'Cosine';
 
+/**
+ * Payload fields to index, per namespace. Qdrant needs a payload index on a
+ * filtered field to estimate its cardinality; without one a filtered search
+ * cannot plan against the HNSW graph and degrades toward a scan whose cost grows
+ * with total vectors rather than with the matching slice.
+ *
+ * Only `jobs` is queried with a filter today — chatAssistant.service.js:2671 and
+ * :2756. The employees/students queries pass null, so indexing those collections
+ * would cost memory and buy nothing; add entries here if a filter is added there.
+ *
+ * These must stay in step with the payload written by embeddingSync.scheduler.js
+ * (`upsertJobs` and the Job post-save hook). An index on a field the payload never
+ * writes is inert — it cannot make a clause match.
+ */
+const INDEXED_PAYLOAD_FIELDS = {
+  jobs: ['status', 'jobOrigin', 'jobType', 'location', 'experienceLevel'],
+};
+
 let _client = null;
 const _ensuredCollections = new Map();
 
@@ -103,9 +121,18 @@ async function ensureCollection(namespace) {
   const promise = (async () => {
     const client = getClient();
     const { collections } = await client.getCollections();
-    if (collections?.some((c) => c.name === name)) return name;
-    logger.info(`[Qdrant] creating collection "${name}" (${VECTOR_SIZE} dims, ${DISTANCE})`);
-    await client.createCollection(name, { vectors: { size: VECTOR_SIZE, distance: DISTANCE } });
+    if (!collections?.some((c) => c.name === name)) {
+      logger.info(`[Qdrant] creating collection "${name}" (${VECTOR_SIZE} dims, ${DISTANCE})`);
+      await client.createCollection(name, { vectors: { size: VECTOR_SIZE, distance: DISTANCE } });
+    }
+    // Runs for pre-existing collections too, not just freshly created ones —
+    // deployments predating this code have the collection but no index.
+    // createPayloadIndex is idempotent, and this whole block is memoised in
+    // _ensuredCollections, so it costs one call per namespace per process.
+    for (const field of INDEXED_PAYLOAD_FIELDS[namespace] || []) {
+      // eslint-disable-next-line no-await-in-loop -- one-time startup path, four fields at most
+      await client.createPayloadIndex(name, { field_name: field, field_schema: 'keyword', wait: true });
+    }
     return name;
   })().catch((err) => {
     _ensuredCollections.delete(name);
@@ -116,7 +143,10 @@ async function ensureCollection(namespace) {
 }
 
 /** Namespaces mirrored from Pinecone; created up front so the first query never 404s. */
-const KNOWN_NAMESPACES = ['students', 'jobs', 'external_jobs', 'employees', 'attendance', 'kb_chunks'];
+// `external_jobs` was dropped: every ExternalJob is mirrored into a Job row and
+// already embedded in `jobs`, so the namespace held a duplicate nothing queried.
+// An existing collection is left in place — delete it by hand once confirmed.
+const KNOWN_NAMESPACES = ['students', 'jobs', 'employees', 'attendance', 'kb_chunks'];
 
 /** Parity with pinecone.util#ensureIndex — called once by the embedding sync scheduler. */
 export async function ensureIndex() {

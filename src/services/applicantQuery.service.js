@@ -27,6 +27,9 @@ const buildApplicantQuery = async (filter = {}, currentUser = {}) => {
   const { filter: scopeFilter, scopeDebug } = await applicationScope(currentUser, 'read');
 
   if (filter.jobId) query.job = filter.jobId;
+  else if (Array.isArray(filter.jobIds) && filter.jobIds.length) {
+    query.job = { $in: filter.jobIds };
+  }
   if (filter.candidateId) query.candidate = filter.candidateId;
   if (filter.status) query.status = filter.status;
   if (filter.recruiterId) query.appliedBy = filter.recruiterId;
@@ -203,11 +206,115 @@ const aggregateApplicantsByStatus = async (filter = {}, currentUser = {}) => {
   return Object.entries(counts).map(([status, count]) => ({ status, count }));
 };
 
-export { buildApplicantQuery, queryApplicants, countApplicants, aggregateApplicantsByStatus };
+const STATUS_BREAKDOWN_KEYS = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+
+const emptyStatusBreakdown = () =>
+  Object.fromEntries(STATUS_BREAKDOWN_KEYS.map((key) => [key, 0]));
+
+/**
+ * Resolve q for candidate search — name preferred, then email, then User lookup.
+ * Enhances q search; does not narrow to owner-only Employee rows.
+ *
+ * @param {{ q?: string|null, userId?: string|null, email?: string|null }} input
+ * @returns {Promise<string|null>}
+ */
+const resolveApplicantSearchQ = async ({ q = null, userId = null, email = null } = {}) => {
+  if (q?.trim()) return q.trim();
+  if (email?.trim()) return email.trim();
+  if (userId) {
+    const user = await User.findById(userId).select('name email').lean();
+    if (user?.name?.trim()) return user.name.trim();
+    if (user?.email?.trim()) return user.email.trim();
+  }
+  return null;
+};
+
+/**
+ * Canonical application search for Sage chatbot and UI parity.
+ * Uses same queryApplicants as GET /job-applications.
+ *
+ * @param {{
+ *   q?: string|null,
+ *   userId?: string|null,
+ *   email?: string|null,
+ *   status?: string|null,
+ *   jobId?: string|null,
+ *   jobIds?: string[]|null,
+ *   user: object,
+ *   limit?: number,
+ *   requireApplicantQ?: boolean,
+ * }} opts
+ */
+const searchApplications = async ({
+  q = null,
+  userId = null,
+  email = null,
+  status = null,
+  jobId = null,
+  jobIds = null,
+  user,
+  limit = 50,
+  requireApplicantQ = false,
+} = {}) => {
+  const searchQ = await resolveApplicantSearchQ({ q, userId, email });
+  if (requireApplicantQ && !searchQ) {
+    return {
+      total: 0,
+      baseTotal: 0,
+      breakdown: emptyStatusBreakdown(),
+      records: [],
+      statusFilter: status || null,
+      notFound: true,
+      label: 'job application',
+    };
+  }
+
+  const filter = { excludeInternal: true };
+  if (searchQ) filter.q = searchQ;
+  if (status) filter.status = status;
+  if (jobId) filter.jobId = jobId;
+  if (Array.isArray(jobIds) && jobIds.length) filter.jobIds = jobIds;
+
+  const baseFilter = { excludeInternal: true };
+  if (searchQ) baseFilter.q = searchQ;
+  if (jobId) baseFilter.jobId = jobId;
+  if (Array.isArray(jobIds) && jobIds.length) baseFilter.jobIds = jobIds;
+
+  const [result, statusRows] = await Promise.all([
+    queryApplicants(filter, { limit, page: 1, sortBy: 'createdAt:desc' }, user),
+    aggregateApplicantsByStatus(baseFilter, user),
+  ]);
+
+  const breakdown = emptyStatusBreakdown();
+  for (const row of statusRows) {
+    if (row?.status && row.status in breakdown) breakdown[row.status] = row.count;
+  }
+  const baseTotal = Object.values(breakdown).reduce((sum, count) => sum + count, 0);
+
+  return {
+    total: result.totalResults,
+    baseTotal,
+    breakdown,
+    records: result.results,
+    statusFilter: status || null,
+    label: 'job application',
+  };
+};
+
+export {
+  buildApplicantQuery,
+  queryApplicants,
+  countApplicants,
+  aggregateApplicantsByStatus,
+  resolveApplicantSearchQ,
+  searchApplications,
+};
 
 export default {
   buildApplicantQuery,
   queryApplicants,
   countApplicants,
   aggregateApplicantsByStatus,
+  resolveApplicantSearchQ,
+  searchApplications,
 };

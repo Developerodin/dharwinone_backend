@@ -21,7 +21,7 @@
 
 import { getUserPermissionContext } from '../permission.service.js';
 import { getGrantingPermissions } from '../../config/permissions.js';
-import { getReferralLeadsStats } from '../referralLeads.service.js';
+import { getReferralLeadsStats, listReferralLeads } from '../referralLeads.service.js';
 import Placement from '../../models/placement.model.js';
 
 /** Same permission the referral-leads HTTP routes require (canReadCandidatesOnly). */
@@ -182,6 +182,25 @@ export function labelHiringTunnelBuckets(stats = {}) {
  * @param {Set<string>} [opts.permissions]
  * @returns {Promise<{ forbidden: true, reason: string } | object>}
  */
+/**
+ * Canonical referral-leads search for Sage — delegates to listReferralLeads (same as Referral Leads UI).
+ *
+ * @param {object} user
+ * @param {object} [query] - ReferralLeadsQueryParams-shaped filters
+ * @param {Set<string>} [permissions]
+ * @returns {Promise<object>}
+ */
+export async function searchReferralLeads(user, query = {}, permissions) {
+  if (!user) {
+    return { forbidden: true, reason: 'No authenticated user' };
+  }
+  const req = await buildSyntheticReferralReq(user, query, permissions);
+  if (user.platformSuperUser !== true && !hasReferralLeadsReadAccess(req.authContext.permissions)) {
+    return { forbidden: true, reason: 'Missing candidates.read permission (referral leads)' };
+  }
+  return listReferralLeads(req);
+}
+
 export async function fetchHiringTunnelSnapshot({ user, query, permissions } = {}) {
   if (!user) {
     return { forbidden: true, reason: 'No authenticated user' };

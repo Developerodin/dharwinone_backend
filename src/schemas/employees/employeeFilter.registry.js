@@ -28,4 +28,5 @@ export const PHASE1_FILTER_KEYS = Object.freeze([
   'agent',
   'agentIds',
   'id',
+  'designation',
 ]);

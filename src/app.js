@@ -74,6 +74,8 @@ function shouldSkipGlobalXss(req) {
   if (/^\/v1\/outlook\/messages\/[^/]+\/reply(\/|$)/.test(path)) return true;
   /** Jobs + job templates: Tiptap HTML in `jobDescription` (otherwise xss encodes `<` and templates load as literal tags text). */
   if (/^\/v1\/jobs(\/|$)/.test(path)) return true;
+  /** External jobs: `description` carries the source posting's own HTML, round-tripped from /search to /save. */
+  if (/^\/v1\/external-jobs(\/|$)/.test(path)) return true;
   return false;
 }
 app.use((req, res, next) => {

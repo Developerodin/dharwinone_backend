@@ -1,4 +1,5 @@
 import { EMPLOYEE_FILTER_ALIASES } from '../../../schemas/employees/employeeFilter.registry.js';
+import { parseDesignationFromMessage } from '../conversationalEntity/resolveTitleAmbiguity.js';
 
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -61,6 +62,11 @@ export function parseFiltersFromMessage(userMessage, { applyStatusDefault = true
     }
   }
 
+  const designation = parseDesignationFromMessage(userMessage);
+  if (designation && !filters.designation) {
+    filters.designation = designation;
+  }
+
   if (!filters.employmentStatus) {
     if (
       /\b(resigned|retired|former|past employees?|left|ex[\s-]?employees?|ex[\s-]?staff)\b/.test(text)
@@ -68,7 +74,8 @@ export function parseFiltersFromMessage(userMessage, { applyStatusDefault = true
       filters.employmentStatus = 'resigned';
     } else if (
       /\ball (employees?|staff|people)\b/.test(text) ||
-      /\bboth (active and resigned|current and resigned)\b/.test(text)
+      /\bboth (active and resigned|current and resigned)\b/.test(text) ||
+      /\b(all statuses?|every status|everyone assigned|everyone)\b/.test(text)
     ) {
       filters.employmentStatus = 'all';
     } else if (
@@ -76,13 +83,27 @@ export function parseFiltersFromMessage(userMessage, { applyStatusDefault = true
         text
       ) ||
       /\b(active|current)\s+(unpaid|paid|salaried)?\s*(employees?|staff|people)\b/.test(text) ||
-      /\b(unpaid|paid|salaried)\s+(active|current)\s+(employees?|staff|people)\b/.test(text)
+      /\b(unpaid|paid|salaried)\s+(active|current)\s+(employees?|staff|people)\b/.test(text) ||
+      // Bare status word — "how many are active?" continues an employee scope and
+      // must narrow it, not silently answer the inherited 'all' total. Bare
+      // "current" is excluded here for the same reason it is in resolveEntity.
+      /\bactive\b/.test(text)
     ) {
       filters.employmentStatus = 'current';
     } else if (applyStatusDefault && looksLikeEmployeeFilterQuery(userMessage)) {
       // Absence of status filter means ALL — not current. Inferred, not stated:
       // callers with conversation context disable this and inherit instead.
       filters.employmentStatus = 'all';
+    }
+  }
+
+  if (!filters.accountStatusScope) {
+    if (/\b(disabled|deactivated)\b/.test(text)) {
+      filters.accountStatusScope = 'disabled';
+    } else if (/\b(pending)\b/.test(text)) {
+      filters.accountStatusScope = 'pending';
+    } else if (/\b(deleted)\b/.test(text)) {
+      filters.accountStatusScope = 'deleted';
     }
   }
 
@@ -100,8 +121,11 @@ export function looksLikeEmployeeFilterQuery(userMessage) {
   const text = String(userMessage || '').toLowerCase();
   if (!text) return false;
 
+  if (/\b(?:still|currently)\s+applied\b/i.test(text)) return false;
+
   return (
     /\b(employees?|staff|workforce|team members?|headcount|people)\b/.test(text) ||
+    !!parseDesignationFromMessage(userMessage) ||
     Object.values(EMPLOYEE_FILTER_ALIASES).some((canonicalMap) =>
       Object.values(canonicalMap).some((aliases) =>
         aliases.some((alias) => new RegExp(`\\b${escapeRegex(alias)}\\b`, 'i').test(text))

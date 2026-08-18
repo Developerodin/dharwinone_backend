@@ -14,6 +14,12 @@ import {
   profileForRole,
   VIEWER_ROLES,
 } from '../columnVisibility.js';
+import { pickEmployeeId, roleNamesOf, shouldShowEmployeeId } from '../employeeRole.js';
+import {
+  buildEntityTableTitle,
+  entityTypeFromFetchPayload,
+  tableTypeForEntity,
+} from './entityLabels.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -26,14 +32,8 @@ const stateTone = (s) => {
   return 'neutral';
 };
 
-const roleNamesOf = (r) => {
-  if (Array.isArray(r.roleNames) && r.roleNames.length) return r.roleNames;
-  if (Array.isArray(r.role) && r.role.length) return r.role;
-  if (r.role) return [r.role];
-  return [];
-};
-
-const isEmployeeRecord = (r) => roleNamesOf(r).some((n) => /employee/i.test(String(n)));
+const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
+const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
 
 const formatDate = (d) => {
   if (!d) return '';
@@ -41,10 +41,6 @@ const formatDate = (d) => {
   if (Number.isNaN(t.getTime())) return '';
   return t.toISOString().slice(0, 10);
 };
-
-const pickEmployeeId = (r) => r.employeeId || r.empId || r.employee_code || '';
-const pickResignDate = (r) => r.resignDate || r.resignationDate || r.exitDate || '';
-const pickJoinDate   = (r) => r.joiningDate || r.joinDate || r.dateOfJoining || '';
 
 const CANDIDATE_COLUMNS = [
   { key: 'name',        label: 'Name',         priority: 'primary' },
@@ -91,17 +87,25 @@ export function renderPeople(data, ctx = {}) {
 
   const viewerRole = ctx.viewerRole || VIEWER_ROLES.OTHER;
 
-  const rawRows = records.map((r) => ({
-    name:        cell(r.name),
-    employeeId:  cell(isEmployeeRecord(r) ? pickEmployeeId(r) : ''),
-    appliedRole: cell(r.appliedRole || r.designation),
-    email:       cell(r.email),
-    role:        Array.isArray(r.role) ? r.role.join(', ') : cell(r.role),
-    department:  cell(r.department || r.designation),
-    joinDate:    cell(formatDate(pickJoinDate(r))),
-    resignDate:  cell(formatDate(pickResignDate(r))),
-    status:      { v: cell(r.employmentState), tone: stateTone(r.employmentState) },
-  }));
+  const rawRows = records.map((r) => {
+    const roles = roleNamesOf(r);
+    const showId = shouldShowEmployeeId(r, role);
+    return {
+      name:        cell(r.name),
+      employeeId:  cell(showId ? pickEmployeeId(r) : ''),
+      appliedRole: cell(r.appliedRole || r.designation),
+      email:       cell(r.email),
+      role:        roles.length ? roles.join(', ') : '—',
+      department:  cell(r.department || r.designation),
+      joinDate:    cell(formatDate(pickJoinDate(r))),
+      resignDate:  cell(formatDate(pickResignDate(r))),
+      status:      { v: cell(r.employmentState), tone: stateTone(r.employmentState) },
+    };
+  });
+
+  const forceInclude = rawRows.some((row) => row.employeeId !== '—')
+    ? ['employeeId']
+    : [];
 
   const { columns, rows } = applyColumnVisibility({
     candidateColumns: CANDIDATE_COLUMNS,
@@ -109,6 +113,7 @@ export function renderPeople(data, ctx = {}) {
     viewerRole,
     profile: profileForRole(role),
     queryArg: ctx.queryArg || '',
+    forceInclude,
   });
 
   if (!columns.length) {
@@ -122,12 +127,23 @@ export function renderPeople(data, ctx = {}) {
     return { block: null, markdown };
   }
 
+  const entityType = ctx.entityType || entityTypeFromFetchPayload(data);
+  const total = data.page?.total ?? records.length;
+  const personName = total === 1 ? records[0]?.name : null;
+  const title = buildEntityTableTitle({
+    entityType: entityType || 'user',
+    role,
+    total,
+    personName,
+    isPersonSearch: !!data.isPersonSearch,
+  });
+
   /** @type {object} */
   const block = {
     type: 'table',
     id: 'people',
-    tableType: tableTypeFor(role),
-    title: `${role}s (${data.page?.total ?? records.length})`,
+    tableType: tableTypeForEntity(role, entityType || 'user'),
+    title,
     columns,
     rows,
     layout: 'auto',

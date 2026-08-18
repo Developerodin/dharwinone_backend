@@ -2,8 +2,16 @@
 
 export const ENTITY_EMPLOYEES = 'employees';
 
-/** Only operations an executor actually implements. Adding one here without an
- *  executor branch produces a validated query that dies with an internal string. */
+/**
+ * Only operations an executor actually implements.
+ *
+ * Documentation, NOT enforcement — nothing imports this. The enum that actually
+ * rejects a query lives in employees/employeeFilter.schema.json and is compiled
+ * into employeeFilter.joi.generated.js. Widening this constant alone enables
+ * nothing; widening the JSON schema without adding an executor branch produces a
+ * validated query that dies on employeeQuery.executor.js's trailing
+ * "No supported operations requested." Change both, or neither.
+ */
 export const OPERATIONS = Object.freeze(['count', 'list', 'get']);
 
 export const ERROR_CODES = Object.freeze({

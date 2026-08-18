@@ -57,7 +57,7 @@ function extractLinkedInJobId(url) {
   }
 }
 
-function mapRowToJob(row, sourceKey) {
+export function mapRowToJob(row, sourceKey) {
   const id = row.id != null ? String(row.id) : '';
   const url = row.url || '';
   const jobId = url ? extractLinkedInJobId(url) : null;
@@ -76,7 +76,8 @@ function mapRowToJob(row, sourceKey) {
         return '';
       })
       .filter(Boolean);
-    location = parts.join('; ');
+    // Feeds list every site of one posting; source sites render "City +N more".
+    location = parts.length > 1 ? `${parts[0]} +${parts.length - 1} more` : parts[0] || '';
   }
   if (!location && row.location_type) location = row.location_type;
 
@@ -87,7 +88,8 @@ function mapRowToJob(row, sourceKey) {
   const postedAt = row.date_posted ? new Date(row.date_posted) : null;
   let timePosted = row.date_posted || null;
   if (postedAt && !Number.isNaN(postedAt.getTime())) {
-    const diff = Math.floor((Date.now() - postedAt.getTime()) / (24 * 60 * 60 * 1000));
+    // Feeds routinely carry a date_posted a few hours ahead of us; clamp so it never reads "-1 days ago".
+    const diff = Math.max(0, Math.floor((Date.now() - postedAt.getTime()) / (24 * 60 * 60 * 1000)));
     if (diff === 0) timePosted = 'Today';
     else if (diff === 1) timePosted = '1 day ago';
     else if (diff < 7) timePosted = `${diff} days ago`;
@@ -105,8 +107,12 @@ function mapRowToJob(row, sourceKey) {
   const raw = row.salary_raw;
   if (raw && typeof raw === 'object') {
     if (raw.currency) salaryCurrency = raw.currency;
-    const min = raw.minValue ?? raw.value;
-    const max = raw.maxValue ?? raw.value;
+    // schema.org MonetaryAmount nests the range under `value` (QuantitativeValue);
+    // some rows are flat instead. `value` may also be a bare number.
+    const qv = raw.value && typeof raw.value === 'object' ? raw.value : {};
+    const flatValue = typeof raw.value === 'number' ? raw.value : undefined;
+    const min = raw.minValue ?? qv.minValue ?? qv.value ?? flatValue;
+    const max = raw.maxValue ?? qv.maxValue ?? qv.value ?? flatValue;
     if (typeof min === 'number' && !Number.isNaN(min)) salaryMin = min;
     if (typeof max === 'number' && !Number.isNaN(max)) salaryMax = max;
   }
@@ -120,7 +126,8 @@ function mapRowToJob(row, sourceKey) {
     title: row.title || null,
     company: row.organization || null,
     location: location || null,
-    description: row.description_text || null,
+    // Prefer the source posting's own HTML (headings/lists/bold) over the flattened text dump.
+    description: row.description_html || row.description_text || null,
     jobType,
     experienceLevel: row.seniority || null,
     isRemote,
@@ -133,14 +140,15 @@ function mapRowToJob(row, sourceKey) {
   };
 }
 
-function buildParams(filters) {
+export function buildParams(filters) {
   const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, remote } = filters;
   const limit = 10;
   const off = Math.max(0, Math.floor((Number(offset) || 0) / limit) * limit);
   const params = {
     limit: String(limit),
     offset: String(off),
-    description_type: 'text',
+    // `html` returns the posting's original markup; `text` flattens it to a wall of prose.
+    description_type: 'html',
   };
   if (jobTitle && jobTitle.trim()) params.title_filter = jobTitle.trim();
   if (jobLocation && jobLocation.trim()) params.location_filter = jobLocation.trim();

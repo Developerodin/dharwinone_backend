@@ -15,6 +15,8 @@
 //     primary: { ...one of the counts above } | null
 //   }
 
+import { stageLabelForStatus } from './taskStageVocabulary.js';
+
 function readEmployees(fetched) {
   const data = fetched?.fetch_employees;
   if (!data || data.notFound) return null;
@@ -48,6 +50,7 @@ function readEmployees(fetched) {
     total,
     breakdown: data.employmentBreakdown || null,
     requestedRole: data.requestedRole || null,
+    entityType: data.entityType || null,
   };
 }
 
@@ -108,10 +111,32 @@ function readBackdated(fetched) {
 }
 
 function readJobs(fetched) {
-  const data = fetched?.fetch_jobs;
+  const data = fetched?.job_result ?? fetched?.fetch_jobs;
   if (!data) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-  return { kind: 'fetch_jobs', label: 'jobs', total };
+  const total = Number(
+    data.result?.total
+    ?? data.authoritativeCount
+    ?? data.counts?.total
+    ?? data.total
+    ?? data.records?.length
+    ?? 0,
+  );
+  const filters = data.query?.filters ?? data.filters ?? null;
+  const queryId = data.query?.queryId ?? data.queryId ?? null;
+  const originLabel = filters?.jobOrigin === 'external'
+    ? 'external jobs'
+    : filters?.jobOrigin === 'internal'
+      ? 'internal jobs'
+      : 'jobs';
+  return {
+    kind: 'fetch_jobs',
+    label: originLabel,
+    total,
+    filters,
+    queryId,
+    provenance: data.provenance || 'Job.countDocuments+find',
+    authoritative: data.authoritative !== false,
+  };
 }
 
 function readCandidates(fetched) {
@@ -157,33 +182,45 @@ function readProjects(fetched) {
 }
 
 function readTasks(fetched) {
-  const data = fetched?.fetch_tasks;
+  const data = fetched?.task_result ?? fetched?.fetch_tasks;
   if (!data || data.forbidden) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
+  const total = Number(data.result?.total ?? data.total ?? data.records?.length ?? 0);
+  const tasks = data.result?.tasks ?? data.rows ?? [];
   return {
     kind: 'fetch_tasks',
     label: 'tasks',
     total,
+    rows: tasks.slice(0, total),
     scope: data.scope || null,
+    filters: data.query?.filters ?? data.filters ?? null,
+    queryId: data.query?.queryId ?? data.queryId ?? null,
     provenance: data.provenance || 'task.service.queryTasks',
     authoritative: data.authoritative !== false,
   };
 }
 
 function readTaskBoardAnalytics(fetched) {
-  const data = fetched?.task_board_analytics;
+  const data = fetched?.task_result ?? fetched?.task_board_analytics;
   if (!data || data.forbidden) return null;
-  const metric = data.metric || 'stage_counts';
+  let metric = data.metric || 'stage_counts';
+  if (!data.metric && (data.query?.filters?.status || data.lookup?.stage)) {
+    metric = 'stage_count';
+  }
+  const total = Number(data.result?.total ?? data.authoritativeCount ?? 0);
+  const tasks = data.result?.tasks ?? data.rows ?? [];
+  const filters = data.query?.filters ?? (data.lookup?.stage ? { status: data.lookup.stage } : null);
   if (metric === 'stage_count') {
-    const stage = data.lookup?.stage || null;
-    const stageLabel = data.lookup?.stageLabel || stage || 'stage';
+    const stage = data.lookup?.stage || filters?.status || null;
+    const stageLabel = data.lookup?.stageLabel || stageLabelForStatus(stage) || stage || 'stage';
     return {
       kind: 'task_board_stage_count',
       label: `${stageLabel} tasks`,
-      total: Number(data.authoritativeCount ?? 0),
+      total,
       stage,
       stageLabel,
-      rows: data.rows || [],
+      rows: tasks.slice(0, total),
+      filters,
+      queryId: data.query?.queryId ?? data.queryId ?? null,
       scope: data.scope || null,
       provenance: data.provenance || 'task_board_analytics',
       authoritative: true,

@@ -54,12 +54,14 @@ export async function loadRoleRegistry({ force = false, RoleModel = Role } = {})
   if (!force && cache && Date.now() < cacheExpiry) return cache;
   if (inflight) return inflight;
   // When mongoose isn't connected (boot, tests with no DB), don't block on a
-  // hanging find() — return an empty registry. The cache TTL still applies
-  // so a real connect-then-query happens within 60s once the DB comes up.
+  // hanging find() — return an empty registry. Do NOT cache it: a request
+  // landing in the ~2s window between process start and connect used to poison
+  // the cache for the full TTL. An empty registry makes tagRoleSlugs return
+  // nothing, so every person lookup answered kind:'unavailable'
+  // ("I couldn't reach the directory just now") for 60s after every restart.
+  // The readyState check is in-process, so re-checking per call costs nothing.
   if (RoleModel === Role && !isMongooseReady()) {
-    cache = buildIndex([]);
-    cacheExpiry = Date.now() + TTL_MS;
-    return cache;
+    return buildIndex([]);
   }
   inflight = (async () => {
     const docs = await RoleModel.find(

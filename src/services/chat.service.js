@@ -135,6 +135,42 @@ const getConversationParticipantIds = async (conversationId) => {
   return (conv.participants || []).map((p) => p.user.toString());
 };
 
+/** Same visibility rules as getMessages — per-user deleted-for-me hides from deleter only. */
+const messageVisibilityFilter = (userId) => ({
+  $or: [
+    { deletedAt: null },
+    { deletedFor: 'everyone' },
+    { deletedFor: 'me', deletedBy: { $ne: new mongoose.Types.ObjectId(userId) } },
+  ],
+});
+
+const formatLastMessagePreview = (lastMsg) => {
+  if (!lastMsg) return null;
+  const preview = buildChatMessagePreview(lastMsg);
+  return {
+    content: preview.text,
+    sender: lastMsg.sender?.name,
+    createdAt: lastMsg.createdAt,
+    type: lastMsg.type,
+    attachments: lastMsg.attachments,
+  };
+};
+
+const getLastMessagePreview = async (conversationId, userId) => {
+  const msg = await Message.findOne({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    ...messageVisibilityFilter(userId),
+  })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name')
+    .lean();
+  if (!msg) return null;
+  return formatLastMessagePreview({
+    ...msg,
+    sender: msg.sender ? { name: msg.sender.name } : undefined,
+  });
+};
+
 /** Participant ids plus per-user mute, used when deciding whether to notify. */
 const getConversationParticipantNotifyStates = async (conversationId) => {
   const conv = await Conversation.findById(conversationId).select('participants').lean();
@@ -275,17 +311,6 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   }
 
   const convIds = dedupedConvs.map((c) => c._id);
-  const lastMsgPreview = (lastMsg) => {
-    if (!lastMsg) return null;
-    const preview = buildChatMessagePreview(lastMsg);
-    return {
-      content: preview.text,
-      sender: lastMsg.sender?.name,
-      createdAt: lastMsg.createdAt,
-      type: lastMsg.type,
-      attachments: lastMsg.attachments,
-    };
-  };
 
   // Skip messages this user deleted for themselves, and skip "delete for everyone"
   // tombstones so the chat list never shows deleted content as the latest preview.
@@ -309,6 +334,8 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
             sender: { $first: '$sender' },
             createdAt: { $first: '$createdAt' },
             attachments: { $first: '$attachments' },
+            deletedAt: { $first: '$deletedAt' },
+            deletedFor: { $first: '$deletedFor' },
           },
         },
       ])
@@ -326,11 +353,13 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
   const lastMsgMap = new Map(
     lastMsgAgg.map((m) => [
       m._id.toString(),
-      lastMsgPreview({
+      formatLastMessagePreview({
         content: m.content,
         type: m.type,
         createdAt: m.createdAt,
         attachments: m.attachments,
+        deletedAt: m.deletedAt,
+        deletedFor: m.deletedFor,
         sender: { name: senderNameById.get(m.sender?.toString()) },
       }),
     ])
@@ -406,7 +435,7 @@ const createConversation = async (userId, { type, participantIds, name, descript
     throw new ApiError(httpStatus.BAD_REQUEST, 'Group requires at least one other participant');
   }
 
-  const allParticipantIds = [creatorId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
+  const allParticipantIds = [userId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
   const caller = await User.findById(userId).select('platformSuperUser').lean();
   const callerIsSuper = !!caller?.platformSuperUser;
   const flagMap = await loadUserFlagsMapByIds(allParticipantIds);
@@ -1280,6 +1309,7 @@ export {
   createConversation,
   getConversation,
   getConversationParticipantIds,
+  getLastMessagePreview,
   getConversationParticipantNotifyStates,
   getMessages,
   createMessage,

@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import Task from '../../models/task.model.js';
 import Sprint from '../../models/sprint.model.js';
-import { queryTasks } from '../task.service.js';
 import {
   hasProjectReadAccess,
   hasTeamReadAccess,
@@ -20,10 +19,14 @@ import {
   resolveAssigneeByName,
 } from './taskAccess.js';
 import {
+  executeAtomicTaskQuery,
+  mapTaskRow,
+  buildTaskResultEnvelope,
+} from './taskResult.js';
+import {
   isTaskStageCountQuery,
   resolveTaskStage,
   stageLabelForStatus,
-  visibleCountKeyForStatus,
 } from './taskStageVocabulary.js';
 
 export const TASK_BOARD_METRICS = [
@@ -229,49 +232,23 @@ async function aggregateStageCounts(filter) {
   return { byStage, total };
 }
 
-function mapTaskRow(t) {
-  const assignees = Array.isArray(t.assignedTo)
-    ? t.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean)
-    : [];
+async function queryTaskRows(user, filter, limit = 50, uiContext = null) {
+  const atomic = await executeAtomicTaskQuery(user, {
+    filters: filter,
+    limit,
+    sortBy: '-dueDate',
+    uiContext,
+  });
   return {
-    taskId: String(t._id || t.id),
-    title: t.title,
-    taskKey: t.taskKey || t.key || null,
-    status: t.status,
-    dueDate: t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : null,
-    projectName: typeof t.projectId === 'object' ? t.projectId?.name : null,
-    projectId: t.projectId ? String(t.projectId?._id || t.projectId) : null,
-    assigneeLabel: assignees.length ? assignees.join(', ') : 'Unassigned',
-    tags: t.tags || [],
-    sprintName: typeof t.sprintId === 'object' ? t.sprintId?.name : null,
-  };
-}
-
-async function queryTaskRows(user, filter, limit = 50) {
-  const { ctx } = await buildAccessibleTaskFilter(user, {});
-  const result = await queryTasks(
-    {
-      ...ctx,
-      ...filter,
-    },
-    { limit, sortBy: '-dueDate' },
-  );
-  return {
-    rows: (result.results || []).map(mapTaskRow),
-    total: result.totalResults ?? 0,
+    rows: atomic.result.tasks,
+    total: atomic.result.total,
+    taskResult: atomic,
   };
 }
 
 /**
  * Execute task_board_analytics tool.
  */
-function uiContextCountForStage(uiContext, status) {
-  const key = visibleCountKeyForStatus(status);
-  if (!key || !uiContext?.visibleCounts) return null;
-  const n = Number(uiContext.visibleCounts[key]);
-  return Number.isFinite(n) ? n : null;
-}
-
 export async function fetchTaskBoardAnalytics({ user, args = {}, uiContext = null } = {}) {
   if (!(await hasProjectReadAccess(user))) {
     return {
@@ -394,41 +371,57 @@ export async function fetchTaskBoardAnalytics({ user, args = {}, uiContext = nul
   }
 
   if (metric === 'stage_count' && status) {
-    const uiCount = uiContext?.currentModule === 'TaskBoard'
-      ? uiContextCountForStage(uiContext, status)
-      : null;
-    const { rows, total } = await queryTaskRows(user, extra, args.limit || 50);
-    const authoritativeCount = uiCount != null ? uiCount : total;
-    return buildTaskBoardPayload({
+    const atomic = await executeAtomicTaskQuery(user, {
+      filters: { ...extra, status },
+      limit: args.limit || 50,
+      sortBy: '-dueDate',
+      uiContext,
+    });
+    const payload = buildTaskBoardPayload({
       metric,
-      rows,
+      rows: atomic.result.tasks,
       scope,
-      authoritativeCount,
+      authoritativeCount: atomic.result.total,
       lookup: {
         stage: status,
         stageLabel: stageLabelForStatus(status),
-        uiContextApplied: uiCount != null,
       },
-      provenance: uiCount != null
-        ? 'uiContext.visibleCounts (Task Board filtered view)'
-        : 'task.service.queryTasks (status filter)',
+      provenance: atomic.provenance,
     });
+    return {
+      ...payload,
+      ...atomic,
+      metric,
+      lookup: payload.lookup,
+      formattedSummary: payload.formattedSummary,
+    };
   }
 
   if (metric === 'stage_counts') {
     const { byStage, total } = await aggregateStageCounts(extra);
     if (status && byStage[status] != null) {
-      const stageTotal = byStage[status];
-      const { rows } = await queryTaskRows(user, extra, args.limit || 25);
-      return buildTaskBoardPayload({
-        metric: 'stage_count',
-        rows,
-        scope,
-        breakdown: { byStage: { [status]: stageTotal } },
-        authoritativeCount: stageTotal,
-        lookup: { stage: status, stageLabel: stageLabelForStatus(status) },
-        provenance: 'Task.aggregate $group by status',
+      const atomic = await executeAtomicTaskQuery(user, {
+        filters: { ...extra, status },
+        limit: args.limit || 25,
+        sortBy: '-dueDate',
+        uiContext,
       });
+      const payload = buildTaskBoardPayload({
+        metric: 'stage_count',
+        rows: atomic.result.tasks,
+        scope,
+        breakdown: { byStage: { [status]: atomic.result.total } },
+        authoritativeCount: atomic.result.total,
+        lookup: { stage: status, stageLabel: stageLabelForStatus(status) },
+        provenance: atomic.provenance,
+      });
+      return {
+        ...payload,
+        ...atomic,
+        metric: 'stage_count',
+        lookup: payload.lookup,
+        formattedSummary: payload.formattedSummary,
+      };
     }
     return buildTaskBoardPayload({
       metric,
@@ -439,14 +432,18 @@ export async function fetchTaskBoardAnalytics({ user, args = {}, uiContext = nul
     });
   }
 
-  const { rows, total } = await queryTaskRows(user, extra, args.limit || 50);
-  return buildTaskBoardPayload({
+  const { rows, total, taskResult } = await queryTaskRows(user, extra, args.limit || 50, uiContext);
+  const payload = buildTaskBoardPayload({
     metric,
     rows,
     scope,
     authoritativeCount: total,
     searchedFor: projectName || teamName || assigneeName || sprintName || null,
   });
+  if (taskResult) {
+    return { ...payload, ...taskResult, metric, formattedSummary: payload.formattedSummary };
+  }
+  return payload;
 }
 
 /** Entity hints for conversation memory after task board analytics. */

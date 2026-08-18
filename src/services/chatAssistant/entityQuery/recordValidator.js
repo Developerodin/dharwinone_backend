@@ -160,7 +160,7 @@ export function guardLegacyReply(reply, fetched) {
 
   return {
     valid: false,
-    reply: result.reply + notice,
+    reply: result.reply,
     notice,
     violations: result.violations,
   };

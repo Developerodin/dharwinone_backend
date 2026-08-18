@@ -6,7 +6,6 @@ import User from '../../models/user.model.js';
 import { userIsAdmin } from '../../utils/roleHelpers.js';
 import { isKanbanViewOnlyScope } from '../../utils/kanbanScope.js';
 import { hasApiPermissionFromContext } from '../../utils/permissionCheck.js';
-import { queryTasks } from '../task.service.js';
 import { buildProjectQueryContext } from './projectGraph.resolvers.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -15,12 +14,6 @@ export const OPEN_TASK_STATUSES = ['new', 'todo', 'on_going', 'in_review'];
 export const OVERLOAD_TASK_THRESHOLD = 10;
 
 /** Start of today UTC — overdue = dueDate strictly before this. */
-export function startOfTodayUtc() {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
-
 export function isBlockedTask(task) {
   const tags = task?.tags || [];
   return tags.some((t) => /^blocked$/i.test(String(t || '').trim()));
@@ -71,27 +64,6 @@ export async function hasTaskReadAccess(user) {
     hasApiPermissionFromContext(perms, false, 'tasks.read')
     || hasApiPermissionFromContext(perms, false, 'tasks.manage')
   );
-}
-
-/** @returns {Promise<{ tasks: object[], total: number, scope: 'all'|'mine', canSeeAll: boolean }>} */
-export async function fetchAccessibleTasks(user, options = {}) {
-  const ctx = buildProjectQueryContext(user);
-  const isAdmin = await userIsAdmin({ roleIds: ctx.userRoleIds });
-  const canSeeAll =
-    isAdmin
-    || ctx.apiPermissions.has('tasks.read')
-    || ctx.apiPermissions.has('tasks.manage');
-
-  const filter = buildTaskServiceFilter(user, options);
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 100);
-  const result = await queryTasks(filter, { limit, sortBy: options.sortBy || '-createdAt' });
-  const tasks = result.results || [];
-  return {
-    tasks,
-    total: result.totalResults ?? tasks.length,
-    scope: canSeeAll ? 'all' : 'mine',
-    canSeeAll,
-  };
 }
 
 /** Entity hints for conversation memory after a fetch_tasks turn. */
@@ -207,8 +179,3 @@ export async function resolveAssigneeByName(name) {
 }
 
 /** Flatten task assignee User ids. */
-export function assigneeUserIds(task) {
-  return (task?.assignedTo || [])
-    .map((a) => String(a?._id || a?.id || a))
-    .filter(Boolean);
-}

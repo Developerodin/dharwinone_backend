@@ -65,6 +65,26 @@ export function detectEntityTypeDrift(reply, facts) {
 }
 
 /**
+ * Detect entity-type drift AND apply the correction the detector was built
+ * for. Streaming cannot recall tokens already sent and non-streaming should
+ * not rewrite fluent prose wholesale, so the correction is an appended
+ * sentence naming the authoritative entity type — the reply's number is
+ * already right (enforceCounts runs first), only the noun drifted.
+ *
+ * @param {string} reply
+ * @param {{ counts: object[], primary: object|null }} facts
+ * @returns {{ reply: string, mismatched: boolean, expected: string|null, found: string|null }}
+ */
+export function applyEntityTypeDrift(reply, facts) {
+  const drift = detectEntityTypeDrift(reply, facts);
+  if (!drift.mismatched) return { reply: reply || '', ...drift };
+  const plural = drift.expected.endsWith('s') ? drift.expected : `${drift.expected}s`;
+  const correction =
+    `\n\n*To be precise: these records are ${plural}, not ${drift.found} — the lookup was scoped to the ${drift.expected} role.*`;
+  return { reply: `${reply || ''}${correction}`, ...drift };
+}
+
+/**
  * Walk every count fact and patch wrong numbers in the reply.
  *
  * @param {string} reply
@@ -95,40 +115,6 @@ export function enforceCounts(reply, facts) {
     });
   }
 
-  if (out.patched) {
-    const lines = out.mismatches
-      .map((m) => `**${m.label}**: ${m.expected} (replaced LLM's "${m.found}")`)
-      .join(', ');
-    out.reply += `\n\n> _Auto-correction: authoritative counts from retrieval — ${lines}._`;
-  }
   return out;
 }
 
-/**
- * Compare attendance-summary day counts against any per-day numbers the LLM
- * surfaced. Lighter pass than enforceCounts (status names aren't unique).
- *
- * @param {string} reply
- * @param {{ counts: object[] }} facts
- * @returns {{ issues: string[] }}
- */
-export function detectAttendanceMismatch(reply, facts) {
-  const issues = [];
-  const att = facts?.counts?.find((c) => c.kind === 'attendance_summary_day');
-  if (!att?.counts) return { issues };
-  const text = String(reply || '').toLowerCase();
-  for (const [statusName, expected] of Object.entries(att.counts)) {
-    const re = new RegExp(`(\\d+)\\s+${statusName.toLowerCase()}\\b`, 'g');
-    let m;
-    // eslint-disable-next-line no-cond-assign
-    while ((m = re.exec(text)) !== null) {
-      const found = Number(m[1]);
-      if (found !== expected) {
-        issues.push(
-          `attendance ${att.date}: ${statusName} says ${found} in reply, retrieval says ${expected}`,
-        );
-      }
-    }
-  }
-  return { issues };
-}

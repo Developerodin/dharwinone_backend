@@ -246,26 +246,58 @@ const initSocket = (httpServer) => {
         if (!conversationId || !callType) return cb?.({ error: 'conversationId and callType required' });
         const call = await chatCallService.initiateCall(conversationId, userId, callType);
         const callId = String(call._id);
-        const participantIds = await chatService.getConversationParticipantIds(conversationId);
+        const roomName = `chat-${conversationId}-${callId}`;
+        const [participantIds, conv] = await Promise.all([
+          chatService.getConversationParticipantIds(conversationId),
+          chatService.ensureParticipant(conversationId, userId),
+        ]);
+        const conversationType = conv?.type === 'group' ? 'group' : 'direct';
+        const callScope = conversationType;
+        const groupName =
+          conversationType === 'group'
+            ? String(conv?.name || 'Group').trim() || 'Group'
+            : undefined;
+        const participantCount = participantIds.length;
+        const callerName = socket.userName || 'Someone';
+
         participantIds.forEach((pid) => {
           const pidStr = String(pid);
           if (pidStr !== userId) {
-            io.to(`user:${pidStr}`).emit('call:incoming', {
+            const incomingPayload = {
               callId,
               conversationId,
               callType,
-              caller: { id: userId, name: socket.userName },
-            });
-            // Mobile push so the callee is alerted when the app is backgrounded/closed.
+              callScope,
+              conversationType,
+              roomName,
+              participantIds,
+              participantCount,
+              caller: { id: userId, name: callerName },
+              ...(groupName !== undefined && { groupName }),
+            };
+            io.to(`user:${pidStr}`).emit('call:incoming', incomingPayload);
+            const pushTitle =
+              conversationType === 'group'
+                ? `Incoming group ${callType === 'video' ? 'video' : 'voice'} call`
+                : `Incoming ${callType === 'video' ? 'video' : 'voice'} call`;
+            const pushBody =
+              conversationType === 'group' && groupName
+                ? `${callerName} started a group call in ${groupName}`
+                : `${callerName} is calling`;
             sendPushToUser(pidStr, {
-              title: `Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
-              body: `${socket.userName || 'Someone'} is calling`,
+              title: pushTitle,
+              body: pushBody,
               data: {
                 type: 'incoming_call',
                 callId,
                 conversationId,
                 callType,
-                callerName: socket.userName || 'Someone',
+                callScope,
+                conversationType,
+                callerName,
+                roomName,
+                participantCount: String(participantCount),
+                ...(groupName !== undefined && { groupName }),
               },
               channelId: 'incoming-calls',
             }).catch((e) => logger.warn('[push] call push failed: %s', e?.message || e));
@@ -469,9 +501,10 @@ const emitNewMessage = async (conversationId, message) => {
         if (uidStr !== senderStr) {
           io.to(`user:${uidStr}`).emit('new_message', payload);
           // Persist to Notification collection unless recipient is actively viewing this conversation
-          const room = io.sockets.adapter.rooms.get(`conversation:${conversationId}`);
+          const sockets = io.sockets;
+          const room = sockets.adapter.rooms.get(`conversation:${conversationId}`);
           const isActive = room && [...room].some(
-            (sid) => io.sockets.sockets.get(sid)?.data?.userId === uidStr
+            (sid) => sockets.sockets.get(sid)?.data?.userId === uidStr
           );
           if (!isActive && chatPermittedIds.has(uidStr) && !mutedIds.has(uidStr)) {
             notify(uid, {
@@ -518,25 +551,36 @@ const emitIncomingCall = async (conversationId, callData) => {
     const callerStr = callData.caller?.id != null ? String(callData.caller.id) : '';
     const callerName = callData.caller?.name || 'Someone';
     const callType = callData.callType || 'audio';
+    const callScope = callData.callScope || callData.conversationType || 'direct';
+    const isGroupInvite = callScope === 'group';
     if (ids?.length) {
       ids.forEach((uid) => {
         const uidStr = String(uid);
         if (callerStr && uidStr === callerStr) return;
         io.to(`user:${uidStr}`).emit('incoming_call', callData);
-        // Mobile push so callees are alerted when the app is backgrounded/closed
-        // (REST initiateCall path — socket call:initiate already pushes separately).
+        const pushTitle = isGroupInvite
+          ? `Incoming group ${callType === 'video' ? 'video' : 'voice'} call`
+          : `Incoming ${callType === 'video' ? 'video' : 'voice'} call`;
+        const pushBody =
+          isGroupInvite && callData.groupName
+            ? `${callerName} started a group call in ${callData.groupName}`
+            : isGroupInvite
+              ? `${callerName} started a group call`
+              : `${callerName} is calling`;
         sendPushToUser(uidStr, {
-          title: `Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
-          body: `${callerName} is calling`,
+          title: pushTitle,
+          body: pushBody,
           data: {
             type: 'incoming_call',
             callId: String(callData.callId || ''),
             conversationId: String(conversationId || ''),
             callType,
+            callScope,
             callerName,
             ...(callData.conversationType ? { conversationType: callData.conversationType } : {}),
             ...(callData.groupName ? { groupName: callData.groupName } : {}),
             ...(callData.roomName ? { roomName: callData.roomName } : {}),
+            ...(callData.participantCount != null ? { participantCount: String(callData.participantCount) } : {}),
           },
           channelId: 'incoming-calls',
         }).catch((e) => logger.warn('[push] incoming_call push failed: %s', e?.message || e));
@@ -600,14 +644,7 @@ const emitMessageDeleted = async (conversationId, messageId, deleteFor, deletedB
         const lastMessage = await chatService.getLastVisibleMessageForUser(conversationId, uidStr);
         io.to(`user:${uidStr}`).emit('conversation_updated', {
           conversationId,
-          lastMessage: lastMessage
-            ? {
-                content: lastMessage.content,
-                sender: lastMessage.sender || '',
-                createdAt: lastMessage.createdAt,
-                type: lastMessage.type,
-              }
-            : null,
+          lastMessage,
         });
       })
     );

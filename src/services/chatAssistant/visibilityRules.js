@@ -13,7 +13,6 @@
 
 import config from '../../config/config.js';
 
-const ALL_NON_DELETED = ['active', 'pending', 'disabled', 'archived'];
 const DEFAULT_VISIBLE = ['active', 'pending'];
 
 function readBoolEnv(name) {
@@ -87,34 +86,6 @@ export function canUserBeVisible(user, override) {
   if (user.platformSuperUser) return false;
   if (user.status === 'deleted') return false;
   return getVisibleUserStatuses(override).includes(user.status);
-}
-
-/**
- * Tag a user record with visibility metadata so downstream summarisers / the
- * LLM prompt can disclose state instead of silently filtering.
- */
-export function tagVisibility(record, override) {
-  if (!record) return record;
-  const visible = canUserBeVisible(record, override);
-  let reason = 'visible';
-  if (record.platformSuperUser) reason = 'platform';
-  else if (record.status === 'deleted') reason = 'deleted';
-  else if (record.status === 'disabled') reason = 'disabled';
-  else if (record.status === 'archived') reason = 'archived';
-  else if (record.status === 'pending') reason = 'pending';
-  return {
-    ...record,
-    visibility: { visible, hidden: !visible, reason, status: record.status || null },
-  };
-}
-
-/**
- * Read all non-deleted user statuses — useful when a query wants to fetch
- * "everyone except deleted" and let the caller filter via canUserBeVisible
- * for the orphan/cross-check path.
- */
-export function nonDeletedStatusClause() {
-  return { $in: ALL_NON_DELETED };
 }
 
 /**

@@ -204,10 +204,15 @@ const studentProfileImageUpload = multer({
 
 const chatAttachmentFileFilter = (req, file, cb) => {
   const mime = file.mimetype || '';
+  const originalName = (file.originalname || '').toLowerCase();
+  const videoExtensions = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+  const hasVideoExt = videoExtensions.some((ext) => originalName.endsWith(ext));
+  const unlabeledMime = !mime || mime === 'application/octet-stream';
   const ok =
     mime.startsWith('image/') ||
     mime.startsWith('audio/') ||
     mime.startsWith('video/') ||
+    (unlabeledMime && hasVideoExt) ||
     [
       'application/pdf',
       'application/msword',
@@ -225,12 +230,32 @@ const chatAttachmentFileFilter = (req, file, cb) => {
   );
 };
 
-/** Chat message attachments: images, audio, video, office/PDF/txt; 25MB per file */
+/** Chat message attachments: images, audio, video, office/PDF/txt; 100MB per file */
 const chatAttachmentsUpload = multer({
   storage,
   fileFilter: chatAttachmentFileFilter,
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
 });
+
+const uploadChatAttachments = (req, res, next) => {
+  chatAttachmentsUpload.fields([
+    { name: 'files', maxCount: 10 },
+    { name: 'file', maxCount: 10 },
+  ])(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return next(new ApiError(httpStatus.BAD_REQUEST, 'File size too large. Maximum 100MB per file.'));
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          return next(new ApiError(httpStatus.BAD_REQUEST, 'Too many files. Maximum 10 allowed.'));
+        }
+      }
+      return next(err);
+    }
+    next();
+  });
+};
 
 // Single-file document upload — used by candidate-self and admin-on-behalf-of-candidate doc endpoints.
 const uploadDocumentFile = (req, res, next) => {
@@ -247,4 +272,4 @@ const uploadDocumentFile = (req, res, next) => {
   });
 };
 
-export { uploadSingle, uploadJobApplicationFiles, uploadImagesVideos, studentProfileImageUpload, chatAttachmentsUpload, uploadDocumentFile };
+export { uploadSingle, uploadJobApplicationFiles, uploadImagesVideos, studentProfileImageUpload, chatAttachmentsUpload, uploadChatAttachments, uploadDocumentFile };
