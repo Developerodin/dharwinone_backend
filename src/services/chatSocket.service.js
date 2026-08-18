@@ -103,7 +103,8 @@ const initSocket = (httpServer) => {
         if (!conversationId) return cb?.({ error: 'conversationId required' });
         await chatService.ensureParticipant(conversationId, userId);
         socket.join(`conversation:${conversationId}`);
-        cb?.({ success: true });
+        // Finish delivery before acknowledging join so markAsRead that follows
+        // does not race and invent a same-time delivered receipt.
         try {
           const result = await chatService.markConversationDelivered(conversationId, userId);
           if (result.messageIds?.length) {
@@ -124,6 +125,7 @@ const initSocket = (httpServer) => {
         } catch (deliverErr) {
           logger.warn(`join deliver failed: ${deliverErr.message}`);
         }
+        cb?.({ success: true });
       } catch (err) {
         cb?.({ error: err.message || 'Failed to join' });
       }
@@ -430,8 +432,10 @@ const emitNewMessage = async (conversationId, message) => {
   io.to(`conversation:${conversationId}`).emit('new_message', payload);
 
   try {
-    const participantIds = await chatService.getConversationParticipantIds(conversationId);
-    if (participantIds && participantIds.length) {
+    const participantStates = await chatService.getConversationParticipantNotifyStates(conversationId);
+    const participantIds = participantStates.map((p) => p.id);
+    const mutedIds = new Set(participantStates.filter((p) => p.muted).map((p) => p.id));
+    if (participantIds.length) {
       const senderStr = String(payload.sender?._id || payload.sender?.id || '');
       // Only persist a bell notification for participants who can actually open the
       // chats page (chats.read). Otherwise they get a notification whose link the
@@ -469,7 +473,7 @@ const emitNewMessage = async (conversationId, message) => {
           const isActive = room && [...room].some(
             (sid) => io.sockets.sockets.get(sid)?.data?.userId === uidStr
           );
-          if (!isActive && chatPermittedIds.has(uidStr)) {
+          if (!isActive && chatPermittedIds.has(uidStr) && !mutedIds.has(uidStr)) {
             notify(uid, {
               type: 'chat_message',
               title: payload.sender?.name || 'New message',
@@ -571,7 +575,7 @@ const isUserOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(user
 
 const getIO = () => io;
 
-const emitMessageDeleted = (conversationId, messageId, deleteFor, deletedBy) => {
+const emitMessageDeleted = async (conversationId, messageId, deleteFor, deletedBy) => {
   if (!io) return;
   io.to(`conversation:${conversationId}`).emit('message_deleted', {
     conversationId,
@@ -579,6 +583,37 @@ const emitMessageDeleted = (conversationId, messageId, deleteFor, deletedBy) => 
     deleteFor,
     deletedBy: deletedBy != null ? String(deletedBy) : undefined,
   });
+
+  // Refresh chat-list previews so a deleted last message does not linger under the name.
+  try {
+    const participantIds = await chatService.getConversationParticipantIds(conversationId);
+    if (!participantIds?.length) return;
+
+    const targets =
+      deleteFor === 'everyone'
+        ? participantIds
+        : participantIds.filter((uid) => String(uid) === String(deletedBy));
+
+    await Promise.all(
+      targets.map(async (uid) => {
+        const uidStr = String(uid);
+        const lastMessage = await chatService.getLastVisibleMessageForUser(conversationId, uidStr);
+        io.to(`user:${uidStr}`).emit('conversation_updated', {
+          conversationId,
+          lastMessage: lastMessage
+            ? {
+                content: lastMessage.content,
+                sender: lastMessage.sender || '',
+                createdAt: lastMessage.createdAt,
+                type: lastMessage.type,
+              }
+            : null,
+        });
+      })
+    );
+  } catch (err) {
+    logger.warn(`message_deleted conversation_updated emit failed: ${err.message}`);
+  }
 };
 
 const emitMessageReacted = (conversationId, message) => {

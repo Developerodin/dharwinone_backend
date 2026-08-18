@@ -67,6 +67,12 @@ router.post(
   validate(emailValidation.trashThreads),
   emailController.trashThreads
 );
+router.post(
+  '/threads/delete',
+  requirePermissions('emails.manage'),
+  validate(emailValidation.deleteThreads),
+  emailController.deleteThreads
+);
 router.get('/messages/:id', requirePermissions('emails.read'), validate(emailValidation.getMessage), emailController.getMessage);
 router.get(
   '/messages/:messageId/attachments/:attachmentId',

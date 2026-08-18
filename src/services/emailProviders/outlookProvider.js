@@ -65,11 +65,12 @@ function msgPath(messageId) {
 /**
  * List message ids in a conversation. Graph rejects filter+orderby on conversationId
  * ("restriction or sort order is too complex"); omit $orderby and sort client-side.
+ * Trashed conversations are excluded from `/me/messages`, so fall back to Deleted Items.
  * @see https://learn.microsoft.com/en-us/graph/api/user-list-messages
  */
-async function listMessageIdsByConversationId(client, convEscaped) {
+async function listMessageIdsFromEndpoint(client, endpoint, convEscaped) {
   const res = await client
-    .api('/me/messages')
+    .api(endpoint)
     .filter(`conversationId eq '${convEscaped}'`)
     .select('id,receivedDateTime')
     .top(50)
@@ -81,6 +82,26 @@ async function listMessageIdsByConversationId(client, convEscaped) {
     return ta - tb;
   });
   return rows.map((m) => m.id).filter(Boolean);
+}
+
+async function listMessageIdsByConversationId(client, convEscaped) {
+  try {
+    const activeIds = await listMessageIdsFromEndpoint(client, '/me/messages', convEscaped);
+    if (activeIds.length > 0) return activeIds;
+  } catch (err) {
+    logger.warn('[Outlook] listMessageIds /me/messages failed: %s', err.message);
+  }
+
+  try {
+    return await listMessageIdsFromEndpoint(
+      client,
+      '/me/mailFolders/deleteditems/messages',
+      convEscaped
+    );
+  } catch (err) {
+    logger.warn('[Outlook] listMessageIds deleteditems failed: %s', err.message);
+    return [];
+  }
 }
 
 /**
@@ -1368,14 +1389,61 @@ export async function batchModifyThreads(account, threadIds, { addLabelIds = [],
 /**
  * Permanently delete a message (cannot be undone).
  * Use trashThreads to move to Deleted Items instead.
- * Graph DELETE on a message in Deleted Items removes it permanently;
- * DELETE elsewhere moves to Deleted Items — callers should only use this for trash.
+ * Graph permanentDelete removes the item even when not already in Deleted Items.
  */
 export async function deleteMessage(account, messageId) {
   await ensureValidToken(account);
   const client = createGraphClient(account.accessToken);
-  await client.api(msgPath(messageId)).delete();
+  try {
+    await client.api(`${msgPath(messageId)}/permanentDelete`).post({});
+  } catch (permanentErr) {
+    // Older Graph tenants may lack permanentDelete; DELETE in Deleted Items is permanent.
+    try {
+      await client.api(msgPath(messageId)).delete();
+    } catch (deleteErr) {
+      logger.warn(
+        '[Outlook] deleteMessage failed for %s: %s',
+        messageId,
+        deleteErr.message || permanentErr.message
+      );
+      throw deleteErr;
+    }
+  }
   return { success: true };
+}
+
+/**
+ * Permanently delete all messages in the given threads (e.g. empty from Trash).
+ * Resolves ids from mailbox + Deleted Items so trashed conversations are found.
+ */
+export async function deleteThreads(account, threadIds) {
+  if (!threadIds?.length) return { success: true, deleted: 0 };
+  await ensureValidToken(account);
+  const client = createGraphClient(account.accessToken);
+
+  let deleted = 0;
+  for (const tid of threadIds) {
+    const ids = await resolveMessageIdsForThread(client, tid);
+    if (ids.length === 0) {
+      logger.warn('[Outlook] deleteThreads: no messages found for thread key %s', tid);
+      continue;
+    }
+    for (const id of ids) {
+      try {
+        await client.api(`${msgPath(id)}/permanentDelete`).post({});
+        deleted += 1;
+      } catch (permanentErr) {
+        try {
+          await client.api(msgPath(id)).delete();
+          deleted += 1;
+        } catch (err) {
+          logger.warn('[Outlook] deleteThreads failed for %s: %s', id, err.message);
+          throw err;
+        }
+      }
+    }
+  }
+  return { success: true, deleted };
 }
 
 /**

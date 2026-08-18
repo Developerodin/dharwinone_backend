@@ -413,6 +413,8 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
   });
 
   // Grant permissions based on host/admission/approval rules.
+  // canPublishData follows canSubscribe so admitted / open-room participants can use
+  // in-meeting chat even when AV publish is temporarily blocked (pre-start).
   token.addGrant({
     room: roomName,
     roomJoin: true,

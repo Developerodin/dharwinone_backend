@@ -19,15 +19,41 @@ import { userHasReceipt } from '../utils/chatReceipts.js';
 /** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
 const PROFILE_PICTURE_PRESIGN_TTL_SEC = 7 * 24 * 3600;
 
+const viewerConversationPrefs = (participants, viewerUserId) => {
+  const uid = String(viewerUserId || '');
+  const mine = (participants || []).find((p) => participantRowUserId(p) === uid);
+  return {
+    muted: Boolean(mine?.muted),
+    pinned: mine?.pinnedAt != null,
+  };
+};
+
+const sanitizeParticipantsForClient = (participants) =>
+  (participants || []).map((p) => {
+    if (!p || typeof p !== 'object') return p;
+    const { muted, pinnedAt, ...rest } = p;
+    return rest;
+  });
+
 /**
  * Strip internal fields; for groups with an avatar key, attach fresh presigned URLs (same pattern as profile pic).
  * Supports legacy `avatarKey` in DB until migrated by a new upload.
+ * Viewer mute/pin are exposed at conversation level only (not on other participants).
  */
-const formatConversationForClient = async (conv) => {
+const formatConversationForClient = async (conv, viewerUserId) => {
   if (!conv) return conv;
-  const out = { ...conv, id: conv.id || conv._id?.toString() };
+  const prefs = viewerConversationPrefs(conv.participants, viewerUserId);
+  const out = {
+    ...conv,
+    id: conv.id || conv._id?.toString(),
+    muted: prefs.muted,
+    pinned: prefs.pinned,
+  };
   delete out._id;
   delete out.avatarKey;
+  delete out.myParticipant;
+  delete out.isPinned;
+  out.participants = sanitizeParticipantsForClient(out.participants);
 
   if (conv.type === 'group') {
     const key = conv.avatar?.key || conv.avatarKey;
@@ -109,6 +135,16 @@ const getConversationParticipantIds = async (conversationId) => {
   return (conv.participants || []).map((p) => p.user.toString());
 };
 
+/** Participant ids plus per-user mute, used when deciding whether to notify. */
+const getConversationParticipantNotifyStates = async (conversationId) => {
+  const conv = await Conversation.findById(conversationId).select('participants').lean();
+  if (!conv) return [];
+  return (conv.participants || []).map((p) => ({
+    id: p.user.toString(),
+    muted: Boolean(p.muted),
+  }));
+};
+
 /** Normalize Mongo id / populated user / string for comparisons */
 const toIdString = (x) => {
   if (x == null || x === '') return '';
@@ -176,13 +212,51 @@ const enrichCallForViewer = (call, viewerUserId) => {
 const listConversations = async (userId, { page = 1, limit = 20 }) => {
   const skip = (page - 1) * limit;
   const userObjectId = new mongoose.Types.ObjectId(userId);
-  const convs = await Conversation.find({ 'participants.user': userObjectId })
-    .sort({ lastMessageAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .populate('participants.user', 'name email')
-    .populate('createdBy', 'name email')
-    .lean();
+
+  const [ranked, total] = await Promise.all([
+    Conversation.aggregate([
+      { $match: { 'participants.user': userObjectId } },
+      {
+        $addFields: {
+          myParticipant: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: '$participants',
+                  as: 'p',
+                  cond: { $eq: ['$$p.user', userObjectId] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          isPinned: {
+            $cond: [{ $gt: [{ $ifNull: ['$myParticipant.pinnedAt', null] }, null] }, 1, 0],
+          },
+        },
+      },
+      { $sort: { isPinned: -1, lastMessageAt: -1, _id: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: { _id: 1 } },
+    ]),
+    Conversation.countDocuments({ 'participants.user': userObjectId }),
+  ]);
+
+  const rankedIds = ranked.map((row) => row._id);
+  const unordered =
+    rankedIds.length > 0
+      ? await Conversation.find({ _id: { $in: rankedIds } })
+          .populate('participants.user', 'name email')
+          .populate('createdBy', 'name email')
+          .lean()
+      : [];
+  const byId = new Map(unordered.map((c) => [c._id.toString(), c]));
+  const convs = rankedIds.map((id) => byId.get(id.toString())).filter(Boolean);
 
   const seenGroupKeys = new Set();
   const dedupedConvs = [];
@@ -213,25 +287,32 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     };
   };
 
-  const [lastMsgAgg, total] = await Promise.all([
-    convIds.length
-      ? Message.aggregate([
-          { $match: { conversation: { $in: convIds } } },
-          { $sort: { createdAt: -1 } },
-          {
-            $group: {
-              _id: '$conversation',
-              content: { $first: '$content' },
-              type: { $first: '$type' },
-              sender: { $first: '$sender' },
-              createdAt: { $first: '$createdAt' },
-              attachments: { $first: '$attachments' },
-            },
+  // Skip messages this user deleted for themselves, and skip "delete for everyone"
+  // tombstones so the chat list never shows deleted content as the latest preview.
+  const visibleLastMessageMatch = {
+    conversation: { $in: convIds },
+    $or: [
+      { deletedAt: null },
+      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+    ],
+  };
+
+  const lastMsgAgg = convIds.length
+    ? await Message.aggregate([
+        { $match: visibleLastMessageMatch },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$conversation',
+            content: { $first: '$content' },
+            type: { $first: '$type' },
+            sender: { $first: '$sender' },
+            createdAt: { $first: '$createdAt' },
+            attachments: { $first: '$attachments' },
           },
-        ])
-      : Promise.resolve([]),
-    Conversation.countDocuments({ 'participants.user': userObjectId }),
-  ]);
+        },
+      ])
+    : [];
 
   const senderIds = [...new Set(lastMsgAgg.map((m) => m.sender?.toString()).filter(Boolean))];
   const senders =
@@ -284,17 +365,40 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
     };
   });
 
-  const enrichedResults = await Promise.all(result.map((r) => formatConversationForClient({ ...r })));
+  const enrichedResults = await Promise.all(
+    result.map((r) => formatConversationForClient({ ...r }, userId))
+  );
   return { results: enrichedResults, page, limit, total, totalPages: Math.ceil(total / limit) || 1 };
 };
 
-const createConversation = async (userId, { type, participantIds, name }) => {
-  // The creator is prepended to the participant list below, so drop them from the
-  // invitee list first: the user picker does not exclude self, and a client that
-  // sends the creator's own id would otherwise store them as two participant rows.
-  const ids = [...new Set(participantIds.map((id) => id.toString()))].filter(
-    (id) => id !== userId.toString()
-  );
+const listConversationPreferences = async (userId) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const convs = await Conversation.find(
+    { 'participants.user': userObjectId },
+    { participants: 1 }
+  ).lean();
+  const muted = [];
+  const pinned = [];
+  for (const c of convs) {
+    const mine = (c.participants || []).find((p) => String(p.user) === String(userId));
+    if (!mine) continue;
+    const id = c._id.toString();
+    if (mine.muted) muted.push(id);
+    if (mine.pinnedAt) pinned.push(id);
+  }
+  return { muted, pinned };
+};
+
+const createConversation = async (userId, { type, participantIds, name, description }) => {
+  const creatorId = String(userId);
+  // Never include the creator twice — they are always prepended as owner/admin.
+  const ids = [
+    ...new Set(
+      (participantIds || [])
+        .map((id) => String(id))
+        .filter((id) => id && id !== creatorId)
+    ),
+  ];
   if (type === 'direct' && ids.length !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Direct conversation requires exactly one other participant');
   }
@@ -322,7 +426,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
         existingEarly &&
         (existingEarly.participants || []).some((p) => participantRowUserId(p) === userId)
       ) {
-        return formatConversationForClient({ ...existingEarly, id: existingEarly._id?.toString() });
+        return formatConversationForClient({ ...existingEarly, id: existingEarly._id?.toString() }, userId);
       }
     } else if (type === 'group') {
       const groupsEarly = await Conversation.find({
@@ -338,7 +442,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
         return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
       });
       if (existingGroup && (existingGroup.participants || []).some((p) => participantRowUserId(p) === userId)) {
-        return formatConversationForClient({ ...existingGroup, id: existingGroup._id?.toString() });
+        return formatConversationForClient({ ...existingGroup, id: existingGroup._id?.toString() }, userId);
       }
     }
     throw new ApiError(httpStatus.FORBIDDEN, 'You cannot start a conversation with this user');
@@ -351,7 +455,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
     })
       .populate('participants.user', 'name email')
       .lean();
-    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() });
+    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() }, userId);
   }
 
   if (type === 'group') {
@@ -367,7 +471,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
       const gIds = (g.participants || []).map((p) => p.user?._id?.toString?.()).filter(Boolean);
       return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
     });
-    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() });
+    if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() }, userId);
   }
 
   const participants = allParticipantIds.map((id, idx) => ({
@@ -384,7 +488,7 @@ const createConversation = async (userId, { type, participantIds, name }) => {
   });
   const populated = await conv.populate(['participants.user', 'createdBy']);
   const plain = populated.toObject();
-  return formatConversationForClient({ ...plain, id: plain._id?.toString() });
+  return formatConversationForClient({ ...plain, id: plain._id?.toString() }, userId);
 };
 
 const getConversation = async (conversationId, userId) => {
@@ -417,6 +521,8 @@ const getConversation = async (conversationId, userId) => {
             user: p.user?._id || p.user,
             lastReadAt: p.lastReadAt ?? null,
             role: p.role || 'member',
+            muted: Boolean(p.muted),
+            pinnedAt: p.pinnedAt ?? null,
           })),
         },
       });
@@ -427,7 +533,7 @@ const getConversation = async (conversationId, userId) => {
     }
   }
 
-  return formatConversationForClient({ ...conv, id: conv._id?.toString() });
+  return formatConversationForClient({ ...conv, id: conv._id?.toString() }, userId);
 };
 
 const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
@@ -517,6 +623,33 @@ const createMessage = async (conversationId, userId, { content, type, attachment
   return result;
 };
 
+/**
+ * Latest message still visible to a user (excludes their "delete for me" and all
+ * "delete for everyone" tombstones). Used for chat-list previews after deletion.
+ */
+const getLastVisibleMessageForUser = async (conversationId, userId) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const msg = await Message.findOne({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    $or: [
+      { deletedAt: null },
+      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name')
+    .lean();
+  if (!msg) return null;
+  const preview = buildChatMessagePreview(msg);
+  return {
+    content: preview.text,
+    sender: msg.sender?.name || '',
+    createdAt: msg.createdAt,
+    type: msg.type,
+    attachments: msg.attachments,
+  };
+};
+
 const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) => {
   await ensureParticipant(conversationId, userId);
   const msg = await Message.findOne({ _id: messageId, conversation: conversationId }).lean();
@@ -542,6 +675,21 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     deletedBy: userId,
   };
   await Message.findByIdAndUpdate(messageId, { $set: update });
+
+  // Keep conversation sort key in sync when the chronologically latest message is removed for everyone.
+  if (mode === 'everyone') {
+    const latestVisible = await Message.findOne({
+      conversation: conversationId,
+      $or: [{ deletedAt: null }, { deletedFor: 'me' }],
+    })
+      .sort({ createdAt: -1 })
+      .select('createdAt')
+      .lean();
+    await Conversation.findByIdAndUpdate(conversationId, {
+      lastMessageAt: latestVisible?.createdAt || null,
+    });
+  }
+
   const updated = await Message.findById(messageId)
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
@@ -658,23 +806,20 @@ const markAsRead = async (conversationId, userId) => {
     conversation: conversationId,
     sender: { $ne: userId },
   })
-    .select('_id readBy deliveredTo')
+    .select('_id readBy')
     .lean();
 
   const bulk = [];
   for (const msg of unread) {
-    const update = {};
-    const push = {};
-    if (!userHasReceipt(msg.readBy, userId)) {
-      push.readBy = { user: userId, at: now };
-    }
-    if (!userHasReceipt(msg.deliveredTo, userId)) {
-      push.deliveredTo = { user: userId, at: now };
-    }
-    if (Object.keys(push).length) {
-      update.$push = push;
-      bulk.push({ updateOne: { filter: { _id: msg._id }, update } });
-    }
+    // Only record read here. Delivery timestamps come from message_delivered /
+    // join_conversation so delivered/read times stay distinct.
+    if (userHasReceipt(msg.readBy, userId)) continue;
+    bulk.push({
+      updateOne: {
+        filter: { _id: msg._id },
+        update: { $push: { readBy: { user: userId, at: now } } },
+      },
+    });
   }
   if (bulk.length) {
     await Message.bulkWrite(bulk, { ordered: false });
@@ -1095,6 +1240,25 @@ const setGroupConversationAvatar = async (conversationId, userId, uploadResult) 
   return getConversation(conversationId, userId);
 };
 
+const setConversationPreferences = async (conversationId, userId, { muted, pinned } = {}) => {
+  await ensureParticipant(conversationId, userId);
+  if (typeof muted !== 'boolean' && typeof pinned !== 'boolean') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'muted or pinned is required');
+  }
+  const $set = {};
+  if (typeof muted === 'boolean') {
+    $set['participants.$.muted'] = muted;
+  }
+  if (typeof pinned === 'boolean') {
+    $set['participants.$.pinnedAt'] = pinned ? new Date() : null;
+  }
+  await Conversation.updateOne(
+    { _id: conversationId, 'participants.user': new mongoose.Types.ObjectId(userId) },
+    { $set }
+  );
+  return getConversation(conversationId, userId);
+};
+
 const deleteConversation = async (conversationId, userId) => {
   const conv = await ensureParticipant(conversationId, userId);
   if (conv.type === 'group') {
@@ -1112,12 +1276,15 @@ const deleteConversation = async (conversationId, userId) => {
 
 export {
   listConversations,
+  listConversationPreferences,
   createConversation,
   getConversation,
   getConversationParticipantIds,
+  getConversationParticipantNotifyStates,
   getMessages,
   createMessage,
   deleteMessage,
+  getLastVisibleMessageForUser,
   forwardMessage,
   reactToMessage,
   markAsRead,
@@ -1137,5 +1304,6 @@ export {
   setParticipantRole,
   updateGroupName,
   setGroupConversationAvatar,
+  setConversationPreferences,
   deleteConversation,
 };
