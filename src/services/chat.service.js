@@ -135,6 +135,21 @@ const getConversationParticipantIds = async (conversationId) => {
   return (conv.participants || []).map((p) => p.user.toString());
 };
 
+/** Notify targets for a call — uses conversation members when linked, else call.participants. */
+const getCallNotifyParticipantIds = async (call) => {
+  if (call?.conversation) {
+    return getConversationParticipantIds(String(call.conversation));
+  }
+  const ids = new Set();
+  const callerId = toIdString(call?.caller);
+  if (callerId) ids.add(callerId);
+  for (const p of call?.participants || []) {
+    const pid = toIdString(p);
+    if (pid) ids.add(pid);
+  }
+  return [...ids];
+};
+
 /** Participant ids plus per-user mute, used when deciding whether to notify. */
 const getConversationParticipantNotifyStates = async (conversationId) => {
   const conv = await Conversation.findById(conversationId).select('participants').lean();
@@ -166,8 +181,6 @@ const enrichCallForViewer = (call, viewerUserId) => {
   const direction = callerId && viewer && callerId === viewer ? 'outgoing' : 'incoming';
 
   const conv = call.conversation;
-  const isGroup =
-    conv && typeof conv === 'object' && conv.type === 'group';
 
   const participantUsers = (call.participants || []).map((p) => ({
     id: toIdString(p),
@@ -175,13 +188,28 @@ const enrichCallForViewer = (call, viewerUserId) => {
     email: p && p.email,
   }));
 
+  const isGroup =
+    (conv && typeof conv === 'object' && conv.type === 'group') ||
+    (!conv && participantUsers.length >= 3);
+
   const others = participantUsers.filter((p) => p.id && p.id !== viewer);
 
   let peer = { name: 'Unknown' };
 
   if (isGroup) {
-    const name = conv && typeof conv.name === 'string' && conv.name.trim() ? conv.name.trim() : 'Group';
-    peer = { name, isGroup: true };
+    if (conv && typeof conv.name === 'string' && conv.name.trim()) {
+      peer = { name: conv.name.trim(), isGroup: true };
+    } else if (others.length > 0) {
+      const firstName = others[0].name || 'Unknown';
+      const remaining = Math.max(0, participantUsers.length - 1);
+      const name =
+        remaining > 0
+          ? `${firstName} + ${remaining} member${remaining !== 1 ? 's' : ''}`
+          : firstName;
+      peer = { name, isGroup: true };
+    } else {
+      peer = { name: 'Group', isGroup: true };
+    }
   } else if (others.length === 1) {
     peer = { id: others[0].id, name: others[0].name, email: others[0].email };
   } else if (others.length > 1) {
@@ -1113,6 +1141,76 @@ const getActiveCallForConversation = async (conversationId, userId) => {
   return null;
 };
 
+/**
+ * Start a group call without creating a chat group.
+ *
+ * If an existing group conversation with exactly [caller + participantIds] already
+ * exists, the call is linked to that conversation (so call history shows the group).
+ * Otherwise the call is created with conversation = null — no group chat is made.
+ *
+ * Returns { call, roomName, conversationId? }
+ */
+const createGroupCall = async (userId, { participantIds, callType }) => {
+  const creatorId = String(userId);
+  const othersIds = [
+    ...new Set(
+      (participantIds || [])
+        .map((id) => String(id))
+        .filter((id) => id && id !== creatorId),
+    ),
+  ];
+
+  if (othersIds.length < 1) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'At least one other participant is required');
+  }
+
+  const allIds = [creatorId, ...othersIds];
+  const allObjectIds = allIds.map((id) => new mongoose.Types.ObjectId(id));
+
+  // Attempt to find an existing group conversation with exactly these members.
+  let conversationId = null;
+  let groupName = null;
+  const groups = await Conversation.find({
+    type: 'group',
+    'participants.user': { $all: allObjectIds },
+    'participants.0': { $exists: true },
+  })
+    .select('participants name displayName')
+    .lean();
+
+  const exactGroup = groups.find((g) => {
+    const gIds = (g.participants || [])
+      .map((p) => p.user?.toString?.())
+      .filter(Boolean);
+    return (
+      gIds.length === allObjectIds.length &&
+      allObjectIds.every((id) => gIds.includes(id.toString()))
+    );
+  });
+
+  if (exactGroup) {
+    conversationId = exactGroup._id.toString();
+    groupName = exactGroup.displayName || exactGroup.name || null;
+  }
+
+  const roomName = conversationId
+    ? `chat-${conversationId}-${Date.now()}`
+    : `group-call-${Date.now()}`;
+
+  const call = await ChatCall.create({
+    ...(conversationId ? { conversation: conversationId } : {}),
+    caller: userId,
+    participants: allObjectIds,
+    callType: callType || 'audio',
+    status: 'initiated',
+    livekitRoom: roomName,
+    startedAt: new Date(),
+  });
+
+  const populated = await call.populate(['caller', 'participants', 'roomJoinedUserIds', 'conversation']);
+  return { call: populated, roomName, conversationId, groupName };
+};
+
 const endCallByRoom = async (roomName, userId) => {
   const call = await ChatCall.findOne({ livekitRoom: roomName }).lean();
   if (!call) return null;
@@ -1280,6 +1378,7 @@ export {
   createConversation,
   getConversation,
   getConversationParticipantIds,
+  getCallNotifyParticipantIds,
   getConversationParticipantNotifyStates,
   getMessages,
   createMessage,
@@ -1296,6 +1395,7 @@ export {
   getActiveCallForConversation,
   endCallByRoom,
   createCall,
+  createGroupCall,
   updateCall,
   startChatCallRecording,
   ensureParticipant,

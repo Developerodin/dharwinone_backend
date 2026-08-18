@@ -179,6 +179,13 @@ const setConversationPreferences = {
     .or('muted', 'pinned'),
 };
 
+const initiateGroupCall = {
+  body: Joi.object().keys({
+    participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
+    callType: Joi.string().valid('audio', 'video').default('audio'),
+  }),
+};
+
 const startChatCallRecording = {
   params: callIdParam.params,
 };
@@ -202,5 +209,6 @@ export {
   setParticipantRole,
   updateGroupName,
   setConversationPreferences,
+  initiateGroupCall,
   startChatCallRecording,
 };

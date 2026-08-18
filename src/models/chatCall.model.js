@@ -3,7 +3,8 @@ import toJSON from './plugins/toJSON.plugin.js';
 
 const chatCallSchema = new mongoose.Schema(
   {
-    conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true },
+    /** Optional — ad-hoc group calls may have no linked chat conversation. */
+    conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', default: null },
     caller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     /** Users who actually connected to the LiveKit room (subset of participants). */
