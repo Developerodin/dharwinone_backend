@@ -8,7 +8,10 @@ const REFERRAL_LEAD_QUERY_CONTEXT_PATH = 'lastEntities.referralLeadQueryContext'
  */
 export function readReferralLeadQueryContext(memoryDoc = null) {
   const ctx = memoryDoc?.lastEntities?.referralLeadQueryContext;
-  if (!ctx?.candidateName && !ctx?.salesAgentName && !ctx?.referrerName) return null;
+  // `awaiting` alone is a valid context: the handler asked a clarifying
+  // question ("Which referral-lead candidate…?") and the next bare-name turn
+  // must be routable back to it — without this the question was a dead end.
+  if (!ctx?.candidateName && !ctx?.salesAgentName && !ctx?.referrerName && !ctx?.awaiting) return null;
   return {
     candidateName: ctx.candidateName ?? null,
     candidateId: ctx.candidateId ?? null,
@@ -18,6 +21,8 @@ export function readReferralLeadQueryContext(memoryDoc = null) {
     referrerUserId: ctx.referrerUserId ?? null,
     lastIntent: ctx.lastIntent ?? null,
     lastTotal: ctx.lastTotal ?? null,
+    awaiting: ctx.awaiting ?? null,
+    awaitingAt: ctx.awaitingAt ?? null,
     updatedAt: ctx.updatedAt ?? null,
   };
 }
@@ -35,7 +40,8 @@ export async function saveReferralLeadQueryContext({
   const hasAnchor =
     queryContext.candidateName ||
     queryContext.salesAgentName ||
-    queryContext.referrerName;
+    queryContext.referrerName ||
+    queryContext.awaiting;
   if (!hasAnchor) return null;
 
   await MemoryModel.findOneAndUpdate(

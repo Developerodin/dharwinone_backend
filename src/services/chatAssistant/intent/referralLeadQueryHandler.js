@@ -24,6 +24,31 @@ import {
   hasReferralLeadsReadAccess,
   searchReferralLeads,
 } from '../referralLeadsAnalytics.js';
+import { writeEntitySubject } from '../conversationState/entitySubject.js';
+import { usesPronoun } from './activityIntents.js';
+
+/** Same TTL as the other pending flows (pendingEntity.js, pendingJob.js). */
+const AWAITING_TTL_MS = 10 * 60 * 1000;
+
+/** Words that mark a message as a new question, not a name answer. */
+const QUESTION_SHAPE_RE =
+  /\b(who|whom|whose|what|when|where|which|why|how|is|are|was|were|do|does|did|can|could|should|would|list|show|count|many|please|yes|no|ok|okay|nope|yeah|cancel|nevermind)\b/i;
+
+/**
+ * A reply to "Which referral-lead candidate should I look up?" is a short
+ * name-shaped fragment. Anything question-shaped, pronoun-bearing, or long
+ * falls through to the other routers untouched.
+ * @param {string} message
+ * @returns {string|null} the cleaned name, or null
+ */
+function bareNameAnswer(message) {
+  const text = String(message || '').trim().replace(/[?.!]+$/, '').trim();
+  if (!text || text.length < 2 || text.length > 60) return null;
+  if (usesPronoun(text) || QUESTION_SHAPE_RE.test(text)) return null;
+  const tokens = text.split(/\s+/);
+  if (tokens.length > 5) return null;
+  return text;
+}
 
 /**
  * Pre-LLM gate for referral-lead domain queries (separate from Agent↔Employee and Applications).
@@ -47,12 +72,30 @@ export async function handleReferralLeadQuery({
   const readRlContext = deps.readReferralLeadQueryContext ?? readReferralLeadQueryContext;
   const saveRlContext = deps.saveReferralLeadQueryContext ?? saveReferralLeadQueryContext;
   const searchLeads = deps.searchReferralLeads ?? searchReferralLeads;
+  const writeSubject = deps.writeEntitySubject ?? writeEntitySubject;
 
   const referralLeadQueryContext = readRlContext(deps.memoryDoc ?? null);
-  const intent = detectReferralLeadIntent(userMessage, {
+  let intent = detectReferralLeadIntent(userMessage, {
     referralLeadQueryContext,
     currentEntitySubject: deps.currentEntitySubject ?? null,
   });
+
+  // The answer to our own clarifying question. A bare name carries no referral
+  // vocabulary, so the detector can't claim it — the fresh `awaiting` marker
+  // written by the clarify branch is what routes it back here instead of
+  // letting it fall through to the LLM path ("No employee found…").
+  let pendingNameAnswer = null;
+  if (!intent && referralLeadQueryContext?.awaiting) {
+    const askedAt = referralLeadQueryContext.awaitingAt
+      ? new Date(referralLeadQueryContext.awaitingAt).getTime()
+      : 0;
+    const fresh = askedAt && Date.now() - askedAt <= AWAITING_TTL_MS;
+    const name = fresh ? bareNameAnswer(userMessage) : null;
+    if (name) {
+      intent = referralLeadQueryContext.awaiting;
+      pendingNameAnswer = name;
+    }
+  }
   if (!intent) return null;
 
   const permissions = user?.authContext?.permissions;
@@ -78,8 +121,11 @@ export async function handleReferralLeadQuery({
         userId,
         intent,
         referralLeadQueryContext,
+        currentEntitySubject: deps.currentEntitySubject ?? null,
+        pendingNameAnswer,
         searchLeads,
         saveRlContext,
+        writeSubject,
       });
     case 'sales_agent_count':
     case 'sales_agent_list':
@@ -91,8 +137,10 @@ export async function handleReferralLeadQuery({
         intent,
         operation,
         referralLeadQueryContext,
+        pendingNameAnswer,
         searchLeads,
         saveRlContext,
+        writeSubject,
         deps,
       });
     case 'referrer_list':
@@ -105,8 +153,10 @@ export async function handleReferralLeadQuery({
         intent,
         operation,
         referralLeadQueryContext,
+        pendingNameAnswer,
         searchLeads,
         saveRlContext,
+        writeSubject,
         deps,
       });
     default:
@@ -121,15 +171,40 @@ async function handleCandidateLookup({
   userId,
   intent,
   referralLeadQueryContext,
+  currentEntitySubject = null,
+  pendingNameAnswer = null,
   searchLeads,
   saveRlContext,
+  writeSubject,
 }) {
-  const subject = resolveReferralLeadEntitySubject(userMessage, intent, {
-    referralLeadQueryContext,
-    currentEntitySubject: null,
-  });
+  // currentEntitySubject carries the person resolved by an earlier turn in another
+  // domain. Hardcoding null here meant "Who referred her?" could never bind to the
+  // person the user had just asked about, and the handler asked which candidate to
+  // look up instead of answering.
+  // pendingNameAnswer is the user's reply to our own clarifying question — the
+  // whole message IS the name, so it outranks pattern extraction.
+  const subject = pendingNameAnswer
+    ? { candidateName: pendingNameAnswer, candidateId: null, fromPendingQuestion: true }
+    : resolveReferralLeadEntitySubject(userMessage, intent, {
+      referralLeadQueryContext,
+      currentEntitySubject,
+    });
 
   if (!subject?.candidateName) {
+    // Remember what we asked, or the name-only reply to this question has no
+    // referral vocabulary to route it back here and dies in the LLM path.
+    // Same pattern as pendingEntity.js / pendingJob.js: state first, then ask.
+    if (userId && adminId) {
+      await saveRlContext({
+        userId,
+        adminId,
+        queryContext: {
+          ...(referralLeadQueryContext || {}),
+          awaiting: intent,
+          awaitingAt: new Date(),
+        },
+      });
+    }
     return {
       reply: 'Which referral-lead candidate should I look up?',
       blocks: [],
@@ -148,6 +223,15 @@ async function handleCandidateLookup({
 
   const rows = result?.results ?? [];
   if (!rows.length) {
+    // Persist the miss with the name as anchor — this also clears any
+    // `awaiting` marker so the NEXT message isn't consumed as another answer.
+    if (userId && adminId) {
+      await saveRlContext({
+        userId,
+        adminId,
+        queryContext: { candidateName: subject.candidateName, lastIntent: intent, lastTotal: 0 },
+      });
+    }
     const reply = renderLookup(intent, { lead: null, candidateName: subject.candidateName });
     return wrapReply(reply, intent, { candidateName: subject.candidateName, total: 0 });
   }
@@ -164,6 +248,7 @@ async function handleCandidateLookup({
         userId,
         adminId,
         saveRlContext,
+        writeSubject,
       });
     }
     return {
@@ -185,6 +270,7 @@ async function handleCandidateLookup({
     userId,
     adminId,
     saveRlContext,
+    writeSubject,
   });
 }
 
@@ -195,6 +281,7 @@ async function finishCandidateLookup({
   userId,
   adminId,
   saveRlContext,
+  writeSubject,
 }) {
   const candidateName = lead?.fullName || subject.candidateName;
   const reply = renderLookup(intent, { lead, candidateName });
@@ -210,6 +297,23 @@ async function finishCandidateLookup({
         lastTotal: 1,
       },
     });
+    // Promote the resolved person to the cross-domain subject so the next
+    // follow-up in ANY domain ("what's her email?") still means this person.
+    // referralLeadQueryContext above is referral-domain-local; without this
+    // write the lookup answered and the conversation forgot who "her" was.
+    // lead.id is the candidates-collection doc id → empDocId (never userId,
+    // which is a User ref).
+    if (typeof writeSubject === 'function' && candidateName) {
+      await writeSubject({
+        userId,
+        adminId,
+        subject: {
+          entityType: 'employee',
+          name: candidateName,
+          empDocId: lead?.id ?? null,
+        },
+      });
+    }
   }
 
   return wrapReply(reply, intent, {
@@ -258,15 +362,30 @@ async function handleSalesAgentScope({
   intent,
   operation,
   referralLeadQueryContext,
+  pendingNameAnswer = null,
   searchLeads,
   saveRlContext,
+  writeSubject,
   deps,
 }) {
   const agentName =
     extractSalesAgentNameFromMessage(userMessage, intent) ||
+    pendingNameAnswer ||
     referralLeadQueryContext?.salesAgentName;
 
   if (!agentName) {
+    // State first, then ask — see handleCandidateLookup.
+    if (userId && adminId) {
+      await saveRlContext({
+        userId,
+        adminId,
+        queryContext: {
+          ...(referralLeadQueryContext || {}),
+          awaiting: intent,
+          awaitingAt: new Date(),
+        },
+      });
+    }
     return {
       reply: 'Which sales agent should I count candidates for?',
       blocks: [],
@@ -318,6 +437,20 @@ async function handleSalesAgentScope({
         lastTotal: total,
       },
     });
+    // The resolved sales agent is a real User — promote them to the shared
+    // subject so "what's their email?" works outside the referral domain too.
+    if (typeof writeSubject === 'function') {
+      await writeSubject({
+        userId,
+        adminId,
+        subject: {
+          entityType: 'employee',
+          userId: resolved.user.id,
+          entityId: resolved.user.id,
+          name: resolved.user.name,
+        },
+      });
+    }
   }
 
   return wrapReply(reply, intent, {
@@ -337,15 +470,30 @@ async function handleReferrerScope({
   intent,
   operation,
   referralLeadQueryContext,
+  pendingNameAnswer = null,
   searchLeads,
   saveRlContext,
+  writeSubject,
   deps,
 }) {
   const referrerName =
     extractReferrerNameFromMessage(userMessage, intent) ||
+    pendingNameAnswer ||
     referralLeadQueryContext?.referrerName;
 
   if (!referrerName) {
+    // State first, then ask — see handleCandidateLookup.
+    if (userId && adminId) {
+      await saveRlContext({
+        userId,
+        adminId,
+        queryContext: {
+          ...(referralLeadQueryContext || {}),
+          awaiting: intent,
+          awaitingAt: new Date(),
+        },
+      });
+    }
     return {
       reply: 'Which referrer should I list candidates for?',
       blocks: [],
@@ -397,6 +545,19 @@ async function handleReferrerScope({
         lastTotal: total,
       },
     });
+    // Same promotion as the sales-agent scope — the referrer is a resolved User.
+    if (typeof writeSubject === 'function') {
+      await writeSubject({
+        userId,
+        adminId,
+        subject: {
+          entityType: 'employee',
+          userId: resolved.user.id,
+          entityId: resolved.user.id,
+          name: resolved.user.name,
+        },
+      });
+    }
   }
 
   return wrapReply(reply, intent, {

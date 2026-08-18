@@ -11,10 +11,17 @@ export async function readEntitySubject({
   const doc = await ConversationMemory.findOne({ userId, adminId }).lean();
   const subject = doc?.lastEntities?.currentEntitySubject;
   if (!subject?.userId && !subject?.entityId && !subject?.name && !subject?.jobId) return null;
+  // userId is a User ref. For job subjects entityId holds a Job _id (including
+  // legacy docs written before the write-side guard), so the entityId fallback
+  // must never apply to them — a Job id surfacing as userId sends person
+  // resolvers off to load a "person" that is actually a job posting.
+  const isJob = (subject.entityType || 'employee') === 'job';
   return {
     entityType: subject.entityType || 'employee',
     entityId: subject.entityId ? String(subject.entityId) : null,
-    userId: subject.userId ? String(subject.userId) : (subject.entityId ? String(subject.entityId) : null),
+    userId: subject.userId
+      ? String(subject.userId)
+      : (!isJob && subject.entityId ? String(subject.entityId) : null),
     employeeId: subject.employeeId || null,
     empDocId: subject.empDocId ? String(subject.empDocId) : null,
     jobId: subject.jobId ? String(subject.jobId) : null,
@@ -29,6 +36,10 @@ export async function readEntitySubject({
 export async function writeEntitySubject({
   userId, adminId, subject, ConversationMemory = ConversationMemoryModel,
 }) {
+  // Job subjects must never occupy the User-ref userId slot — subjectFromJob
+  // sets entityId to the Job _id, and the entityId fallback below would hand
+  // that Job id to every person resolver on the next follow-up turn.
+  const isJob = (subject.entityType || 'employee') === 'job';
   await ConversationMemory.findOneAndUpdate(
     { userId, adminId },
     {
@@ -36,7 +47,7 @@ export async function writeEntitySubject({
         [PATH]: {
           entityType: subject.entityType || 'employee',
           entityId: subject.entityId ?? subject.userId ?? subject.jobId ?? null,
-          userId: subject.userId ?? subject.entityId ?? null,
+          userId: subject.userId ?? (isJob ? null : subject.entityId ?? null),
           employeeId: subject.employeeId ?? null,
           empDocId: subject.empDocId ?? null,
           jobId: subject.jobId ?? null,

@@ -5,11 +5,19 @@ export const SAGE_DISPLAY_NAME = 'Sage';
 
 /**
  * Opening identity block for the LLM system prompt.
- * @param {{ name?: string, adminId?: any }} user
+ *
+ * The speaker's role comes from their resolved Role documents, never inferred.
+ * The old `adminId ? 'Employee' : 'Administrator'` inference was wrong for
+ * every Agent/SalesAgent/Recruiter/Candidate (adminId is a legacy creator
+ * pointer, not a role) and poisoned every role-sensitive answer with a false
+ * premise about who the model was talking to.
+ *
+ * @param {{ name?: string }} user
+ * @param {string[]} [roleNames] resolved active role names for this user
  */
-export function buildSageIdentityBlock(user) {
+export function buildSageIdentityBlock(user, roleNames = []) {
   const name = user?.name || 'there';
-  const role = user?.adminId ? 'Employee' : 'Administrator';
+  const role = roleNames.length ? roleNames.join(' + ') : 'User';
   return (
     `You are ${SAGE_DISPLAY_NAME}, a sharp, calm HR Chief of Staff embedded in the Dharwin platform.\n` +
     `You speak with ${name} (role: ${role}). You are conversational — never database-like.\n` +
@@ -100,7 +108,13 @@ export function buildMemorySections(memorySummary, lastEntities) {
     eb.push(`employeeId: ${lastEntities.employeeId}`);
   }
   if (lastEntities?.role) eb.push(`role: ${lastEntities.role}`);
-  if (lastEntities?.jobTitle) eb.push(`job: ${lastEntities.jobTitle}`);
+  if (lastEntities?.jobTitle) {
+    eb.push(`job: ${lastEntities.jobTitle}`);
+  } else if (lastEntities?.currentEntitySubject?.entityType === 'job' && lastEntities.currentEntitySubject.name) {
+    // Deterministic job routes store the subject here rather than in jobTitle —
+    // without this the LLM path can't resolve "what's its salary?" follow-ups.
+    eb.push(`job: ${lastEntities.currentEntitySubject.name}`);
+  }
   if (lastEntities?.lastDate) {
     eb.push(
       `date: ${lastEntities.lastDate}${lastEntities.lastDateLabel ? ` (${lastEntities.lastDateLabel})` : ''}`,

@@ -74,6 +74,28 @@ export async function resolveViewerRole(user) {
 }
 
 /**
+ * Resolve the viewer's actual role NAMES (all of them, not a collapsed tier).
+ * Used by the Sage identity block — the persona must introduce the speaker by
+ * their real roles, not by an inference from legacy fields.
+ *
+ * @param {{ roleIds?:string[], platformSuperUser?:boolean }|null|undefined} user
+ * @returns {Promise<string[]>}
+ */
+export async function resolveViewerRoleNames(user) {
+  if (!user) return [];
+  const roleIds = user.roleIds || [];
+  if (!roleIds.length) return user.platformSuperUser ? ['Administrator'] : [];
+  try {
+    const docs = await Role.find({ _id: { $in: roleIds }, status: 'active' })
+      .select('name')
+      .lean();
+    return docs.map((r) => r.name).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * RBAC predicate (legacy). Retained for tests / external callers. The
  * record-side gate in the renderer now blanks Employee ID per row when the
  * record's role is not "Employee", so no viewer-side restriction is needed.

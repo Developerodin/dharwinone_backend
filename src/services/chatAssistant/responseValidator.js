@@ -65,6 +65,26 @@ export function detectEntityTypeDrift(reply, facts) {
 }
 
 /**
+ * Detect entity-type drift AND apply the correction the detector was built
+ * for. Streaming cannot recall tokens already sent and non-streaming should
+ * not rewrite fluent prose wholesale, so the correction is an appended
+ * sentence naming the authoritative entity type — the reply's number is
+ * already right (enforceCounts runs first), only the noun drifted.
+ *
+ * @param {string} reply
+ * @param {{ counts: object[], primary: object|null }} facts
+ * @returns {{ reply: string, mismatched: boolean, expected: string|null, found: string|null }}
+ */
+export function applyEntityTypeDrift(reply, facts) {
+  const drift = detectEntityTypeDrift(reply, facts);
+  if (!drift.mismatched) return { reply: reply || '', ...drift };
+  const plural = drift.expected.endsWith('s') ? drift.expected : `${drift.expected}s`;
+  const correction =
+    `\n\n*To be precise: these records are ${plural}, not ${drift.found} — the lookup was scoped to the ${drift.expected} role.*`;
+  return { reply: `${reply || ''}${correction}`, ...drift };
+}
+
+/**
  * Walk every count fact and patch wrong numbers in the reply.
  *
  * @param {string} reply

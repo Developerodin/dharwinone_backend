@@ -1,7 +1,7 @@
 import Student from '../models/student.model.js';
 import Job from '../models/job.model.js';
-import ExternalJob from '../models/externalJob.model.js';
 import User from '../models/user.model.js';
+import Role from '../models/role.model.js';
 import Employee from '../models/employee.model.js';
 import Attendance from '../models/attendance.model.js';
 import { embedTexts } from '../utils/embedding.util.js';
@@ -145,26 +145,6 @@ function attendanceText(rec, ownerName) {
     .trim();
 }
 
-function externalJobText(j) {
-  const salary = (j.salaryMin || j.salaryMax)
-    ? `salary ${j.salaryMin ?? ''} ${j.salaryMax ?? ''} ${j.currency ?? ''}`.trim()
-    : '';
-  return [
-    'external listing job board',
-    j.source ?? '',
-    j.title ?? '',
-    j.company ?? '',
-    j.location ?? '',
-    j.isRemote ? 'remote' : '',
-    j.jobType ?? '',
-    j.experienceLevel ?? '',
-    j.description ?? '',
-    Array.isArray(j.skills) ? j.skills.join(' ') : '',
-    salary,
-    j.platformUrl ?? '',
-  ].filter(Boolean).join(' ').trim();
-}
-
 // ── Upsert helpers ─────────────────────────────────────────────────────────────
 
 async function upsertStudents(students) {
@@ -174,20 +154,29 @@ async function upsertStudents(students) {
   const users = await User.find({ _id: { $in: userIds } }, { _id: 1, adminId: 1, name: 1 }).lean();
   const userMap = Object.fromEntries(users.map((u) => [String(u._id), u]));
 
-  // Pre-filter to students that have a resolvable adminId — keeps text/embedding arrays aligned
-  const eligible = students.filter((s) => userMap[String(s.user)]?.adminId);
+  // Pre-filter to rows whose user still exists — keeps text/embedding arrays aligned.
+  // This used to require adminId, which dropped 4 of the 6 Student-role users for a
+  // field nothing queries here.
+  const eligible = students.filter((s) => userMap[String(s.user)]);
   const skipped = students.length - eligible.length;
-  if (skipped) logger.info(`[EmbeddingSync] students: ${eligible.length} eligible, ${skipped} skipped (no adminId)`);
+  if (skipped) logger.info(`[EmbeddingSync] students: ${eligible.length} eligible, ${skipped} skipped (no user)`);
   if (!eligible.length) return;
 
   const texts = eligible.map((s) => studentText(s, userMap[String(s.user)]?.name ?? '') || 'candidate');
   const embeddings = await embedTexts(texts);
 
-  const vectors = eligible.map((s, i) => ({
-    id: `student_${s._id}`,
-    values: embeddings[i],
-    metadata: { adminId: String(userMap[String(s.user)].adminId), mongoId: String(s._id), isActive: true },
-  }));
+  const vectors = eligible.map((s, i) => {
+    const u = userMap[String(s.user)];
+    return {
+      id: `student_${s._id}`,
+      values: embeddings[i],
+      metadata: {
+        ...(u?.adminId ? { adminId: String(u.adminId) } : {}),
+        mongoId: String(s._id),
+        isActive: true,
+      },
+    };
+  });
 
   await pineconeUpsert('students', vectors);
 }
@@ -210,7 +199,12 @@ async function upsertJobs(jobs) {
       metadata: {
         adminId,
         mongoId: String(j._id),
-        isActive: j.status === 'Active',
+        // The chatbot filters on `status` (chatAssistant.service.js:2666) with the
+        // full Job enum — Draft|Active|Closed|Archived. This used to write a boolean
+        // `isActive` instead, which nothing read and which collapsed the three
+        // non-active states together, so every status-filtered query matched zero
+        // points and silently fell through to the unranked path.
+        status: String(j.status ?? ''),
         jobOrigin: String(j.jobOrigin ?? 'internal'),
         jobType: String(j.jobType ?? ''),
         location: String(j.location ?? ''),
@@ -221,40 +215,6 @@ async function upsertJobs(jobs) {
     };
   });
   await pineconeUpsert('jobs', vectors);
-}
-
-async function upsertExternalJobs(jobs) {
-  if (!jobs.length) return;
-  // Resolve savedBy user's adminId so multi-tenant filter works
-  const userIds = [...new Set(jobs.map((j) => String(j.savedBy)))];
-  const users = await User.find({ _id: { $in: userIds } }, { _id: 1, adminId: 1 }).lean();
-  const userMap = Object.fromEntries(users.map((u) => [String(u._id), u]));
-
-  const texts = jobs.map((j) => externalJobText(j) || 'external job');
-  const embeddings = await embedTexts(texts);
-  const vectors = jobs.map((j, i) => {
-    const owner = userMap[String(j.savedBy)];
-    const adminId = owner?.adminId ? String(owner.adminId) : String(j.savedBy);
-    return {
-      id: `external_job_${j._id}`,
-      values: embeddings[i],
-      metadata: {
-        adminId,
-        mongoId: String(j._id),
-        jobOrigin: 'external',
-        source: String(j.source ?? ''),
-        title: String(j.title ?? ''),
-        company: String(j.company ?? ''),
-        location: String(j.location ?? ''),
-        jobType: String(j.jobType ?? ''),
-        experienceLevel: String(j.experienceLevel ?? ''),
-        isRemote: !!j.isRemote,
-        savedBy: String(j.savedBy ?? ''),
-        platformUrl: String(j.platformUrl ?? ''),
-      },
-    };
-  });
-  await pineconeUpsert('external_jobs', vectors);
 }
 
 async function upsertEmployeeUsers(users) {
@@ -280,7 +240,9 @@ async function upsertEmployeeUsers(users) {
       id: `employee_${u._id}`,
       values: embeddings[i],
       metadata: {
-        adminId: String(u.adminId),
+        // Omitted rather than String(undefined) — most employees carry adminId on the
+        // Employee row only, and a literal "undefined" would be a matchable value.
+        ...(u.adminId ? { adminId: String(u.adminId) } : {}),
         mongoId: String(u._id),
         isActive: u.status === 'active',
         employeeId: String(p?.employeeId ?? ''),
@@ -302,9 +264,12 @@ async function upsertAttendance(records) {
   const users = await User.find({ _id: { $in: userIds } }, { _id: 1, name: 1, adminId: 1 }).lean();
   const userMap = Object.fromEntries(users.map((u) => [String(u._id), u]));
 
-  const eligible = records.filter((r) => r.user && userMap[String(r.user)]?.adminId);
+  // Requires only that the user still exists. Requiring adminId here dropped
+  // attendance for everyone whose User row never received one — the same 65 people
+  // the employees step used to lose — for a field nothing queries in this namespace.
+  const eligible = records.filter((r) => r.user && userMap[String(r.user)]);
   const skipped = records.length - eligible.length;
-  if (skipped) logger.info(`[EmbeddingSync] attendance: ${eligible.length} eligible, ${skipped} skipped (no user/adminId)`);
+  if (skipped) logger.info(`[EmbeddingSync] attendance: ${eligible.length} eligible, ${skipped} skipped (no user)`);
   if (!eligible.length) return;
 
   const texts = eligible.map((r) => attendanceText(r, userMap[String(r.user)]?.name) || 'attendance');
@@ -316,7 +281,7 @@ async function upsertAttendance(records) {
       id: `attendance_${r._id}`,
       values: embeddings[i],
       metadata: {
-        adminId: String(u.adminId),
+        ...(u.adminId ? { adminId: String(u.adminId) } : {}),
         mongoId: String(r._id),
         userId: String(r.user),
         userName: String(u.name ?? ''),
@@ -354,8 +319,15 @@ export async function runEmbeddingBackfill() {
   let step = 'init';
   try {
     step = 'students';
+    // Student is a user role held by 6 users and has nothing to do with jobs. The
+    // students COLLECTION is a different thing: a per-person attendance/HR profile
+    // created for everyone (205 rows, ~15k attendance records keyed to it), so
+    // embedding all of it put 188 employees into a namespace called `students`.
+    // Scope to the actual role; the collection itself stays untouched.
+    const studentRole = await Role.findOne({ name: 'Student' }, { _id: 1 }).lean();
+    const studentUserIds = studentRole ? await User.distinct('_id', { roleIds: studentRole._id }) : [];
     await processCursor(
-      Student.find({}, { user: 1, skills: 1, experience: 1 }),
+      Student.find({ user: { $in: studentUserIds } }, { user: 1, skills: 1, experience: 1 }),
       upsertStudents,
       BATCH_SIZE,
       'students'
@@ -373,20 +345,33 @@ export async function runEmbeddingBackfill() {
       'jobs'
     );
 
-    step = 'external_jobs';
-    await processCursor(
-      ExternalJob.find({}, {
-        title: 1, company: 1, location: 1, description: 1, jobType: 1, experienceLevel: 1,
-        source: 1, savedBy: 1, isRemote: 1, salaryMin: 1, salaryMax: 1, currency: 1,
-        skills: 1, platformUrl: 1,
-      }),
-      upsertExternalJobs,
-      BATCH_SIZE,
-      'external_jobs'
-    );
+    // No external_jobs step: every ExternalJob is mirrored into a Job row
+    // (jobOrigin: 'external'), and the `jobs` cursor above is unfiltered, so those
+    // listings are already embedded. Embedding them a second time into a namespace
+    // no query reads only doubled the API spend. The chatbot reaches external jobs
+    // through the mirrored rows — chatAssistant.service.js#fetch_external_jobs.
 
     step = 'employees';
-    const empFilter = { adminId: { $exists: true, $ne: null }, status: { $ne: 'deleted' } };
+    // Was gated on `adminId: { $exists: true, $ne: null }`, which silently skipped 65
+    // real employees: adminId is written to the Employee (candidates) row, not always
+    // back onto the User. It was never an "is an employee" test.
+    //
+    // Nor is "owns a profile row": Administrators, Agents and Testers all carry
+    // Employee records with DBS ids, so keying off the profile alone embedded 213
+    // people where Settings → Roles shows 192 employees. Role is the definition the
+    // product uses, so use it. Candidate is included because both employees and
+    // candidates can apply for a job — match_candidates_to_job reads this namespace.
+    const [employeeRole, candidateRole] = await Promise.all([
+      Role.findOne({ name: 'Employee' }, { _id: 1 }).lean(),
+      Role.findOne({ name: 'Candidate' }, { _id: 1 }).lean(),
+    ]);
+    const workforceRoleIds = [employeeRole?._id, candidateRole?._id].filter(Boolean);
+    const employeeOwnerIds = await Employee.distinct('owner', { owner: { $ne: null } });
+    const empFilter = {
+      _id: { $in: employeeOwnerIds },
+      roleIds: { $in: workforceRoleIds },
+      status: { $ne: 'deleted' },
+    };
     await processCursor(
       User.find(empFilter, { name: 1, domain: 1, location: 1, profileSummary: 1, adminId: 1, status: 1 }),
       upsertEmployeeUsers,
@@ -415,18 +400,44 @@ export async function runEmbeddingBackfill() {
   }
 }
 
+/**
+ * Employee ∪ Candidate — the definition of the `employees` namespace, matching what
+ * Settings → Roles calls employees. Keeps the post-save hooks in step with the
+ * backfill filter; without it a single Agent/Administrator save would put someone
+ * back into the namespace the backfill deliberately leaves out.
+ * @param {{ roleIds?: any[] }|null} user
+ */
+async function hasWorkforceRole(user) {
+  if (!user?.roleIds?.length) return false;
+  const roles = await Role.find({ name: { $in: ['Employee', 'Candidate'] } }, { _id: 1 }).lean();
+  const ids = new Set(roles.map((r) => String(r._id)));
+  return user.roleIds.some((r) => ids.has(String(r)));
+}
+
 // ── Post-save hooks ────────────────────────────────────────────────────────────
 
 export function registerEmbeddingHooks() {
   Student.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
     try {
       if (!doc) return;
-      const u = await User.findById(doc.user, { adminId: 1, name: 1 }).lean();
-      if (!u?.adminId) return;
+      const u = await User.findById(doc.user, { adminId: 1, name: 1, roleIds: 1 }).lean();
+      if (!u) return;
+      // Only actual Student-role users belong in this namespace — the students
+      // collection itself holds an attendance profile for everyone.
+      const studentRole = await Role.findOne({ name: 'Student' }, { _id: 1 }).lean();
+      if (!studentRole || !(u.roleIds || []).some((r) => String(r) === String(studentRole._id))) return;
       const text = studentText(doc, u.name ?? '');
       const [emb] = await embedTexts([text]);
       await pineconeUpsert('students', [
-        { id: `student_${doc._id}`, values: emb, metadata: { adminId: String(u.adminId), mongoId: String(doc._id), isActive: true } },
+        {
+          id: `student_${doc._id}`,
+          values: emb,
+          metadata: {
+            ...(u.adminId ? { adminId: String(u.adminId) } : {}),
+            mongoId: String(doc._id),
+            isActive: true,
+          },
+        },
       ]);
     } catch (err) {
       logger.error(`[EmbeddingSync] student hook error: ${err?.stack || err?.message || String(err)}`);
@@ -447,7 +458,10 @@ export function registerEmbeddingHooks() {
           metadata: {
             adminId,
             mongoId: String(doc._id),
-            isActive: doc.status === 'Active',
+            // Must match upsertJobs' payload exactly — this hook overwrites the
+            // backfill's point on every save, so a divergence here silently
+            // reverts the field the chatbot filters on.
+            status: String(doc.status ?? ''),
             jobOrigin: String(doc.jobOrigin ?? 'internal'),
             jobType: String(doc.jobType ?? ''),
             location: String(doc.location ?? ''),
@@ -462,41 +476,13 @@ export function registerEmbeddingHooks() {
     }
   });
 
-  ExternalJob.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
-    try {
-      if (!doc) return;
-      const text = externalJobText(doc);
-      const [emb] = await embedTexts([text || 'external job']);
-      const owner = doc.savedBy ? await User.findById(doc.savedBy, { adminId: 1 }).lean() : null;
-      const adminId = owner?.adminId ? String(owner.adminId) : String(doc.savedBy);
-      await pineconeUpsert('external_jobs', [
-        {
-          id: `external_job_${doc._id}`,
-          values: emb,
-          metadata: {
-            adminId,
-            mongoId: String(doc._id),
-            jobOrigin: 'external',
-            source: String(doc.source ?? ''),
-            title: String(doc.title ?? ''),
-            company: String(doc.company ?? ''),
-            location: String(doc.location ?? ''),
-            jobType: String(doc.jobType ?? ''),
-            experienceLevel: String(doc.experienceLevel ?? ''),
-            isRemote: !!doc.isRemote,
-            savedBy: String(doc.savedBy ?? ''),
-            platformUrl: String(doc.platformUrl ?? ''),
-          },
-        },
-      ]);
-    } catch (err) {
-      logger.error(`[EmbeddingSync] external job hook error: ${err?.stack || err?.message || String(err)}`);
-    }
-  });
+  // No ExternalJob hook: saving an ExternalJob does not need its own embedding.
+  // Publishing one creates/updates the mirrored Job row, and the Job hook above
+  // embeds that. See the backfill for why the second namespace was dropped.
 
   User.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
     try {
-      if (!doc?.adminId) return;
+      if (!doc?._id) return;
       const profile = await Employee.findOne(
         { owner: doc._id },
         {
@@ -505,6 +491,9 @@ export function registerEmbeddingHooks() {
           degree: 1, visaType: 1,
         }
       ).lean();
+      // Same rule as the backfill: an HR profile AND an Employee/Candidate role.
+      if (!profile) return;
+      if (!(await hasWorkforceRole(doc))) return;
       const text = employeeUserText(doc, profile);
       const [emb] = await embedTexts([text || 'employee']);
       const skillsList = (profile?.skills ?? []).map((s) => s.name).filter(Boolean).join(',').slice(0, 1000);
@@ -513,7 +502,7 @@ export function registerEmbeddingHooks() {
           id: `employee_${doc._id}`,
           values: emb,
           metadata: {
-            adminId: String(doc.adminId),
+            ...(doc.adminId ? { adminId: String(doc.adminId) } : {}),
             mongoId: String(doc._id),
             isActive: doc.status === 'active',
             employeeId: String(profile?.employeeId ?? ''),
@@ -533,8 +522,11 @@ export function registerEmbeddingHooks() {
   Employee.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
     try {
       if (!doc?.owner) return;
-      const owner = await User.findById(doc.owner, { _id: 1, name: 1, adminId: 1, domain: 1, location: 1, profileSummary: 1, status: 1 }).lean();
-      if (!owner?.adminId) return;
+      const owner = await User.findById(doc.owner, { _id: 1, name: 1, adminId: 1, domain: 1, location: 1, profileSummary: 1, status: 1, roleIds: 1 }).lean();
+      // Requiring owner.adminId here dropped the same 65 people the backfill dropped.
+      // Role still gates it, so Admin/Agent profile edits stay out of the namespace.
+      if (!owner) return;
+      if (!(await hasWorkforceRole(owner))) return;
       const text = employeeUserText(owner, doc);
       const [emb] = await embedTexts([text || 'employee']);
       const skillsList = (doc.skills ?? []).map((s) => s.name).filter(Boolean).join(',').slice(0, 1000);
@@ -543,7 +535,7 @@ export function registerEmbeddingHooks() {
           id: `employee_${owner._id}`,
           values: emb,
           metadata: {
-            adminId: String(owner.adminId),
+            ...(owner.adminId ? { adminId: String(owner.adminId) } : {}),
             mongoId: String(owner._id),
             isActive: owner.status === 'active',
             employeeId: String(doc.employeeId ?? ''),
@@ -564,7 +556,7 @@ export function registerEmbeddingHooks() {
     try {
       if (!doc?.user) return;
       const owner = await User.findById(doc.user, { _id: 1, name: 1, adminId: 1 }).lean();
-      if (!owner?.adminId) return;
+      if (!owner) return;
       const text = attendanceText(doc, owner.name);
       const [emb] = await embedTexts([text || 'attendance']);
       const dateStr = doc.date ? new Date(doc.date).toISOString().slice(0, 10) : '';
@@ -573,7 +565,7 @@ export function registerEmbeddingHooks() {
           id: `attendance_${doc._id}`,
           values: emb,
           metadata: {
-            adminId: String(owner.adminId),
+            ...(owner.adminId ? { adminId: String(owner.adminId) } : {}),
             mongoId: String(doc._id),
             userId: String(doc.user),
             userName: String(owner.name ?? ''),

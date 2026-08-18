@@ -177,10 +177,10 @@ import {
 } from './chatAssistant/visibilityRules.js';
 import { extractFacts } from './chatAssistant/factExtractor.js';
 import { renderDeterministicAnswer } from './chatAssistant/factRenderer.js';
-import { enforceCounts, detectEntityTypeDrift } from './chatAssistant/responseValidator.js';
+import { enforceCounts, applyEntityTypeDrift } from './chatAssistant/responseValidator.js';
 import { blocksFromFacts } from './chatAssistant/renderers/index.js';
 import { envelope } from './chatAssistant/renderers/types.js';
-import { resolveViewerRole } from './chatAssistant/columnVisibility.js';
+import { resolveViewerRole, resolveViewerRoleNames } from './chatAssistant/columnVisibility.js';
 import { buildFallback } from './chatAssistant/fallbackGenerator.js';
 import { runEmployeeEntityQuery, runAgentEmployeeQuery, useEmployeeEntityQuery, resolveEntity } from './chatAssistant/entityQuery/index.js';
 import {
@@ -3447,22 +3447,33 @@ async function fetchModule(name, args, user, uiContext = null) {
 
       try {
         const qEmb = await embedQuery(`${job.title} ${jobSkills.join(' ')}`);
-        const matches = await pineconeQuery('students', qEmb, limit, null);
-        const mongoIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-        if (!mongoIds.length) return { job: job.title, candidates: [] };
+        // Anyone who can apply — candidates AND existing employees — lives in the
+        // Employee (candidates) collection, so the `employees` namespace is the whole
+        // applicable pool. This used to query `students`, which is not a student
+        // roster at all: it is a per-person attendance/HR profile whose skills array
+        // is empty for every row, so matching ranked people on name text alone and
+        // returned existing employees labelled as candidates.
+        const matches = await pineconeQuery('employees', qEmb, limit, null);
+        const ownerIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
+        if (!ownerIds.length) return { job: job.title, candidates: [] };
 
-        const students = await Student.find({ _id: { $in: mongoIds } })
-          .populate('user', 'name email')
-          .select('skills experience user')
+        const people = await Employee.find({ owner: { $in: ownerIds } })
+          .populate('owner', 'name email')
+          .select('fullName email skills owner')
           .lean();
 
-        const ranked = students.map((s) => {
-          const pScore = matches.find((m) => m.metadata?.mongoId === String(s._id))?.score ?? 0;
+        const ranked = people.map((p) => {
+          const ownerId = String(p.owner?._id ?? p.owner ?? '');
+          const pScore = matches.find((m) => m.metadata?.mongoId === ownerId)?.score ?? 0;
+          // Employee.skills are objects ({ name, level, ... }) while scoreMatch
+          // stringifies each entry — pass names or every skill becomes "[object Object]"
+          // and the overlap score is always zero.
+          const skillNames = (p.skills ?? []).map((s) => s?.name).filter(Boolean);
           return {
-            name: s.user?.name ?? 'Unknown',
-            email: s.user?.email ?? '',
-            skills: s.skills ?? [],
-            matchPct: scoreMatch(s.skills, jobSkills, pScore),
+            name: p.fullName || p.owner?.name || 'Unknown',
+            email: p.email || p.owner?.email || '',
+            skills: skillNames,
+            matchPct: scoreMatch(skillNames, jobSkills, pScore),
           };
         });
         ranked.sort((a, b) => b.matchPct - a.matchPct);
@@ -5831,14 +5842,14 @@ function summariseBlocks(blocks) {
   return `\n\n--- BLOCKS_INVENTORY (${blocks.length} block(s) will render below your reply) ---\n${lines.join('\n')}`;
 }
 
-function buildSystemPrompt(user, dataContext, memorySummary, lastEntities) {
+function buildSystemPrompt(user, dataContext, memorySummary, lastEntities, viewerRoleNames = []) {
   const { memorySection, entitySection } = buildMemorySections(memorySummary, lastEntities);
   const dataSection = dataContext
     ? `\n\nLive system data fetched for this query:\n${dataContext}`
     : '';
 
   return (
-    `${buildSageIdentityBlock(user)}\n` +
+    `${buildSageIdentityBlock(user, viewerRoleNames)}\n` +
     `${buildDateContextBlock()}\n\n` +
     `${SAGE_CONVERSATION_RULES}\n\n` +
     `STRICT DATA RULES (tools are source of truth — never override with guesses):\n` +
@@ -6994,6 +7005,43 @@ async function rehydrateLastEntities(le) {
   if (Array.isArray(le.lastResultList) && le.lastResultList.length) out.lastResultList = le.lastResultList;
   if (Array.isArray(le.focusStack) && le.focusStack.length) out.focusStack = le.focusStack;
 
+  // The deterministic routes track "who we are talking about" in
+  // currentEntitySubject / personConversationState; the LLM path tracks it in
+  // person/personUserId above. Until these two slots were copied through here,
+  // the LLM literally could not see the person a deterministic turn resolved
+  // ("tell me about Khushi" → "show her attendance" bound to someone else),
+  // and the hasSubject/hasPriorCommunication presentation flags were always
+  // false. Emit both so pronoun resolution and delta-presentation work across
+  // the deterministic/LLM boundary.
+  const sub = le.currentEntitySubject;
+  if (sub && (sub.userId || sub.entityId || sub.name)) {
+    out.currentEntitySubject = {
+      entityType: sub.entityType || 'employee',
+      userId: sub.userId ? String(sub.userId) : null,
+      entityId: sub.entityId ? String(sub.entityId) : null,
+      name: sub.name || null,
+      employeeId: sub.employeeId || null,
+      updatedAt: sub.updatedAt || null,
+    };
+    // Person subjects double as the legacy person pointer when the LLM path
+    // never set one — keeps le.person consumers (attendance, leave, tasks)
+    // aligned with the deterministic subject.
+    if (!out.person && sub.entityType !== 'job' && sub.name) {
+      out.person = sub.name;
+      if (!out.personUserId && sub.userId) out.personUserId = sub.userId;
+    }
+  }
+  const pcs = le.personConversationState;
+  if (pcs && (pcs.entityId || pcs.name)) {
+    out.personConversationState = {
+      entityId: pcs.entityId ? String(pcs.entityId) : null,
+      entityType: pcs.entityType || 'user',
+      name: pcs.name || null,
+      communicatedFields: Array.isArray(pcs.communicatedFields) ? pcs.communicatedFields : [],
+      updatedAt: pcs.updatedAt || null,
+    };
+  }
+
   out.updatedAt = le.updatedAt || null;
   return Object.values(out).some((v) => v !== null && v !== undefined) ? out : null;
 }
@@ -7190,12 +7238,29 @@ async function tryReferralLeadQueryRoute({ history, user, adminId, stream = fals
     ? await ConversationMemory.findOne({ userId, adminId }).lean()
     : null;
 
+  // The person resolved by an earlier turn, possibly in a different domain — asking
+  // "what do you know about X" then "who referred her?" must not lose X. Derived from
+  // the doc already loaded above rather than re-reading it: this route runs for every
+  // message and usually returns null without needing the subject at all.
+  // Jobs are excluded — a job title must never bind as a referral-lead candidate name.
+  const lastSubject = memDoc?.lastEntities?.currentEntitySubject;
+  const currentEntitySubject =
+    lastSubject?.name && lastSubject.entityType !== 'job'
+      ? {
+        name: lastSubject.name,
+        userId: lastSubject.userId
+          ? String(lastSubject.userId)
+          : (lastSubject.entityId ? String(lastSubject.entityId) : null),
+        entityType: lastSubject.entityType || 'employee',
+      }
+      : null;
+
   const result = await handleReferralLeadQuery({
     userMessage: lastUserMsg,
     user,
     adminId,
     userId,
-    deps: { memoryDoc: memDoc },
+    deps: { memoryDoc: memDoc, currentEntitySubject },
   });
 
   if (!result) return null;
@@ -8100,7 +8165,12 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   // Resolve viewer-role tier once per request so column-level RBAC in the
   // structured-block renderers (employees / people / …) can strip restricted
   // columns (e.g. employeeId is visible only to the 'employee' tier).
-  const viewerRole = await resolveViewerRole(user);
+  // Role NAMES feed the Sage identity block — the persona must not infer the
+  // speaker's role from legacy fields like adminId.
+  const [viewerRole, viewerRoleNames] = await Promise.all([
+    resolveViewerRole(user),
+    resolveViewerRoleNames(user),
+  ]);
 
   // Build structured blocks early so we can (a) inject the BLOCKS_INVENTORY
   // into the system prompt (rule 20 — LLM references blocks by id instead
@@ -8141,18 +8211,20 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
     model: 'gpt-4o-mini',
     temperature: 0.55,
     max_tokens: 1500,
-    messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities) }, ...history],
+    messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
   });
 
   const rawReply = (completion.choices[0]?.message?.content || '').trim() || FALLBACK_ANSWER;
   const enforced = enforceCounts(rawReply, facts);
   let reply = enforced.reply;
 
-  // Entity-type drift detector — catches "7 agents" → "7 employees" when the
-  // count is right but the noun is wrong. Append a corrective sentence so
-  // the user sees the authoritative entity type.
-  const drift = detectEntityTypeDrift(reply, facts);
+  // Entity-type drift — catches "7 agents" → "7 employees" when the count is
+  // right but the noun is wrong, and appends the corrective sentence. This
+  // used to only logger.warn while the comment claimed a correction was
+  // applied — the stated mitigation for prompt rule 18 did not exist.
+  const drift = applyEntityTypeDrift(reply, facts);
   if (drift.mismatched) {
+    reply = drift.reply;
     logger.warn(
       `[ChatAssistant] entityTypeDrift user=${user?.id} expected=${drift.expected} found=${drift.found}`
     );
@@ -8442,7 +8514,10 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   // structured-block renderers can strip restricted columns. See sendMessage
   // for the same setup — kept symmetric so streaming and non-streaming paths
   // produce identical envelopes for the same user.
-  const viewerRole = await resolveViewerRole(user);
+  const [viewerRole, viewerRoleNames] = await Promise.all([
+    resolveViewerRole(user),
+    resolveViewerRoleNames(user),
+  ]);
 
   // Build structured blocks before the LLM call so we can inject the
   // BLOCKS_INVENTORY into the system prompt (rule 20) and reuse them on
@@ -8485,7 +8560,7 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
     model: 'gpt-4o-mini',
     temperature: 0.55,
     max_tokens: 1500,
-    messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities) }, ...history],
+    messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
     stream: true,
     stream_options: { include_usage: true },
   });
@@ -8517,8 +8592,15 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
           `[ChatAssistant:stream] hallucinatedCounts user=${user?.id} mismatches=${JSON.stringify(enforced.mismatches)}`
         );
       }
-      const drift = detectEntityTypeDrift(finalReply, facts);
+      // Wrong-noun tokens are already on the wire, so the correction goes out
+      // as a trailing delta (same pattern as the count correction above).
+      const drift = applyEntityTypeDrift(finalReply, facts);
       if (drift.mismatched) {
+        const correction = drift.reply.slice(finalReply.length);
+        if (correction) {
+          onToken(correction);
+          finalReply = drift.reply;
+        }
         logger.warn(
           `[ChatAssistant:stream] entityTypeDrift user=${user?.id} expected=${drift.expected} found=${drift.found}`
         );

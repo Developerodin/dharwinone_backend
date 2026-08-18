@@ -311,12 +311,27 @@ export function resolveReferralLeadEntitySubject(message, intent, ctx = {}) {
   const rlCtx = ctx.referralLeadQueryContext;
   const stored = ctx.currentEntitySubject;
 
-  if (usesPronoun(message) && rlCtx?.candidateName) {
-    return {
-      candidateName: rlCtx.candidateName,
-      candidateId: rlCtx.candidateId ?? null,
-      fromContext: true,
-    };
+  if (usesPronoun(message)) {
+    if (rlCtx?.candidateName) {
+      return {
+        candidateName: rlCtx.candidateName,
+        candidateId: rlCtx.candidateId ?? null,
+        fromContext: true,
+      };
+    }
+    // Cross-domain carry-over. The person may have been resolved in another domain
+    // — a person profile or employee lookup — and never in the referral domain, so
+    // rlCtx is empty on the first referral question about them. The `stored` branch
+    // below cannot serve this case: it requires the literal name in the message,
+    // which a pronoun never has. Someone's current role does not determine whether
+    // their referral history is reachable.
+    if (stored?.name) {
+      return {
+        candidateName: stored.name,
+        candidateId: stored.userId ?? null,
+        fromContext: true,
+      };
+    }
   }
 
   const extracted = extractCandidateNameFromMessage(message, intent);

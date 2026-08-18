@@ -50,11 +50,16 @@ export async function handleActivityQuery({
   const writeSubject = deps.writeEntitySubject ?? writeEntitySubject;
   const fetchJobApplications = deps.fetchJobApplications;
 
-  const [currentEntitySubject, personConversationState, applicationQueryContext] = await Promise.all([
+  const [rawSubject, personConversationState, applicationQueryContext] = await Promise.all([
     readSubject({ userId, adminId, ...deps }),
     readPersonState({ userId, adminId, ...deps }),
     readAppQueryContext(deps.memoryDoc ?? null),
   ]);
+  // This is a person-scoped domain. After a job lookup the stored subject is the
+  // job itself — binding "her"/"his" to a job title asks the person resolver to
+  // find a person named "Mobile Engineer". Same guard the referral route applies
+  // in chatAssistant.service.js tryReferralLeadQueryRoute.
+  const currentEntitySubject = rawSubject?.entityType === 'job' ? null : rawSubject;
 
   const intent = detectActivityIntent(userMessage, {
     applicationQueryContext,
@@ -95,7 +100,9 @@ export async function handleActivityQuery({
         entitySubject,
         user,
         adminId,
+        userId,
         resolveProfile,
+        writeSubject,
         currentEntitySubject,
       });
     case 'interviews':
@@ -256,7 +263,9 @@ async function handleEmployeeExistence({
   entitySubject,
   user,
   adminId,
+  userId,
   resolveProfile,
+  writeSubject,
   currentEntitySubject,
 }) {
   const profile = await resolveProfile({
@@ -267,6 +276,14 @@ async function handleEmployeeExistence({
     impersonating: !!user?.__impersonating,
     adminId,
   });
+
+  // handleJobApplications promotes its resolved person to the conversation
+  // subject; this intent answered and threw the resolution away, so "is Khushi
+  // an employee?" → "who referred her?" lost Khushi. Keep the two symmetric.
+  if (profile?.kind === 'unique' && userId && adminId) {
+    const resolved = subjectFromProfile(profile);
+    if (resolved) await writeSubject({ userId, adminId, subject: resolved });
+  }
 
   const subject = {
     name: entitySubject.name || currentEntitySubject?.name,
