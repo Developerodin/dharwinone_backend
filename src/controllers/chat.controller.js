@@ -234,6 +234,32 @@ const initiateCall = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(result);
 });
 
+const initiateGroupCall = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const { participantIds, callType } = req.body;
+  const result = await chatService.createGroupCall(userId, { participantIds, callType });
+
+  const conversationType = result.conversationId ? 'group' : 'direct';
+  const groupName = result.groupName || undefined;
+
+  // Emit incoming call to all participants except the caller.
+  const io = getIO();
+  const otherIds = (participantIds || []).map(String).filter((id) => id !== userId);
+  for (const pid of otherIds) {
+    io.to(`user:${pid}`).emit('incoming_call', {
+      conversationId: result.conversationId || result.call?._id?.toString() || '',
+      callId: result.call?._id?.toString() || result.call?.id || '',
+      roomName: result.roomName,
+      callType: callType || 'audio',
+      caller: { id: userId, name: req.user?.name, email: req.user?.email },
+      conversationType,
+      ...(groupName ? { groupName } : {}),
+    });
+  }
+
+  res.status(httpStatus.CREATED).send(result);
+});
+
 const startChatCallRecording = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const result = await chatService.startChatCallRecording(req.params.id, userId);
@@ -354,6 +380,7 @@ export {
   listCallsForConversation,
   getActiveCallForConversation,
   initiateCall,
+  initiateGroupCall,
   updateCall,
   startChatCallRecording,
   endCallByRoom,

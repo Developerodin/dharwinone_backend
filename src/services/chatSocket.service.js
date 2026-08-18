@@ -359,11 +359,11 @@ const initSocket = (httpServer) => {
       try {
         const call = await chatCallService.cancelCall(callId, userId);
         if (call) {
-          const participantIds = await chatService.getConversationParticipantIds(String(call.conversation));
+          const participantIds = await chatService.getCallNotifyParticipantIds(call);
           participantIds.forEach((pid) => {
             io.to(`user:${String(pid)}`).emit('call:cancelled', {
               callId,
-              conversationId: String(call.conversation),
+              conversationId: call.conversation ? String(call.conversation) : '',
               cancelledBy: userId,
             });
           });
@@ -384,11 +384,11 @@ const initSocket = (httpServer) => {
               logger.warn(`call:end LiveKit cleanup failed: ${err?.message}`)
             );
           }
-          const participantIds = await chatService.getConversationParticipantIds(String(call.conversation));
+          const participantIds = await chatService.getCallNotifyParticipantIds(call);
           participantIds.forEach((pid) => {
             io.to(`user:${String(pid)}`).emit('call_ended', {
               callId,
-              conversationId: String(call.conversation),
+              conversationId: call.conversation ? String(call.conversation) : '',
               roomName: call.livekitRoom,
             });
           });
@@ -422,7 +422,18 @@ const initSocket = (httpServer) => {
               await chatCallService.endCall(String(call._id)).catch(() => {});
               if (call.livekitRoom) {
                 await deleteInterviewRoom(call.livekitRoom).catch(() => {});
-                emitCallEnded(String(call.conversation), call.livekitRoom);
+                if (call.conversation) {
+                  emitCallEnded(String(call.conversation), call.livekitRoom);
+                } else {
+                  const participantIds = await chatService.getCallNotifyParticipantIds(call);
+                  participantIds.forEach((pid) => {
+                    io.to(`user:${String(pid)}`).emit('call_ended', {
+                      callId: String(call._id),
+                      conversationId: '',
+                      roomName: call.livekitRoom,
+                    });
+                  });
+                }
               }
             }
           }).catch((err) => logger.warn(`disconnect call cleanup failed: ${err?.message}`));
@@ -435,11 +446,11 @@ const initSocket = (httpServer) => {
             await Promise.all(ringingCalls.map(async (call) => {
               const cancelled = await chatCallService.cancelCall(String(call._id), userId).catch(() => null);
               if (!cancelled) return;
-              const participantIds = await chatService.getConversationParticipantIds(String(call.conversation)).catch(() => []);
+              const participantIds = await chatService.getCallNotifyParticipantIds(cancelled);
               participantIds.forEach((pid) => {
                 ioRef.to(`user:${String(pid)}`).emit('call:cancelled', {
                   callId: String(call._id),
-                  conversationId: String(call.conversation),
+                  conversationId: call.conversation ? String(call.conversation) : '',
                   cancelledBy: userId,
                 });
               });
