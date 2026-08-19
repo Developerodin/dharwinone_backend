@@ -299,7 +299,8 @@ const internalMeetingActorQuery = async (actor = {}) => {
  * family, so the two surfaces stay isolated:
  *   - meetings.manage -> ALL internal meetings
  *   - meetings.read   -> OWN internal meetings (created / hosting / invited)
- *   - neither         -> nothing
+ *   - neither         -> still OWN (invitee:own) so Employee dashboard can show
+ *     Communication invites without granting communication.meetings nav access
  *
  * @param {Object} actor - req.user
  * @param {'read'|'write'} action
@@ -309,14 +310,18 @@ const internalMeetingScope = async (actor = {}, action = 'read') => {
   if (await hasApiPermission(actor, 'meetings.manage')) {
     return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.manage:all' } };
   }
+  const actorQuery = await internalMeetingActorQuery(actor);
   if (await hasApiPermission(actor, 'meetings.read')) {
-    const actorQuery = await internalMeetingActorQuery(actor);
     return {
       filter: actorQuery || EMPTY_SCOPE,
       scopeDebug: { scopeType: 'internalMeeting', action, role: actorQuery ? 'meetings.read:own' : 'meetings.read:none' },
     };
   }
-  return { filter: EMPTY_SCOPE, scopeDebug: { scopeType: 'internalMeeting', action, role: 'none' } };
+  // Authenticated invitees (e.g. HR Employee role) — own/host/invite only.
+  return {
+    filter: actorQuery || EMPTY_SCOPE,
+    scopeDebug: { scopeType: 'internalMeeting', action, role: actorQuery ? 'invitee:own' : 'none' },
+  };
 };
 
 /**
@@ -350,6 +355,7 @@ export {
   meetingScope,
   internalMeetingScope,
   orgEmployeeScope,
+  resolveActorEmails,
 };
 
 export default {
@@ -361,4 +367,5 @@ export default {
   meetingScope,
   internalMeetingScope,
   orgEmployeeScope,
+  resolveActorEmails,
 };

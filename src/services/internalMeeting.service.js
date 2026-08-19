@@ -6,13 +6,53 @@ import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
-import { internalMeetingScope } from './visibilityScope.service.js';
+import { internalMeetingScope, resolveActorEmails } from './visibilityScope.service.js';
 
 const internalMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
   link: getInAppMeetingLink(meeting.meetingId, invite),
   relatedEntity: { type: 'meeting', id: meeting.meetingId },
   metadata: { meetingId: meeting.meetingId, meetingKind: 'internal', ...extra },
 });
+
+const normalizeEmail = (value) => String(value || '').toLowerCase().trim();
+
+/** Prefer the invite email that matches the actor (company or login) for personal join links. */
+const pickActorJoinIdentity = (meeting, actor = {}, actorEmails = []) => {
+  const emailSet = new Set((actorEmails || []).map(normalizeEmail).filter(Boolean));
+  let joinEmail = '';
+  for (const h of meeting.hosts || []) {
+    const e = normalizeEmail(h?.email);
+    if (e && emailSet.has(e)) {
+      joinEmail = e;
+      break;
+    }
+  }
+  if (!joinEmail) {
+    for (const raw of meeting.emailInvites || []) {
+      const e = normalizeEmail(raw);
+      if (e && emailSet.has(e)) {
+        joinEmail = e;
+        break;
+      }
+    }
+  }
+  if (!joinEmail) joinEmail = normalizeEmail(actor.email) || [...emailSet][0] || '';
+  const name =
+    (typeof actor.name === 'string' && actor.name.trim()) ||
+    resolveInviteeDisplayName(meeting, joinEmail);
+  return { name, email: joinEmail };
+};
+
+const withPublicMeetingUrl = (doc, actor = null, actorEmails = []) => {
+  if (!doc) return doc;
+  if (actor) {
+    const invite = pickActorJoinIdentity(doc, actor, actorEmails);
+    doc.publicMeetingUrl = getPublicMeetingUrl(doc.meetingId, invite);
+  } else {
+    doc.publicMeetingUrl = getPublicMeetingUrl(doc.meetingId);
+  }
+  return doc;
+};
 
 const resolveInviteeDisplayName = (meeting, emailAddress) => {
   if (!emailAddress || typeof emailAddress !== 'string') return 'Guest';
@@ -131,9 +171,11 @@ const createInternalMeeting = async (body, userId) => {
 
 const queryInternalMeetings = async (filter, options, currentUser = null) => {
   let scopedFilter = filter;
+  let actorEmails = [];
   if (currentUser) {
     const { filter: scope } = await internalMeetingScope(currentUser, 'read');
     scopedFilter = { $and: [filter || {}, scope] };
+    actorEmails = await resolveActorEmails(currentUser);
   }
   const result = await InternalMeeting.paginate(scopedFilter, {
     ...options,
@@ -142,8 +184,7 @@ const queryInternalMeetings = async (filter, options, currentUser = null) => {
   });
   result.results = (result.results || []).map((m) => {
     const doc = m.toJSON ? m.toJSON() : m;
-    doc.publicMeetingUrl = getPublicMeetingUrl(doc.meetingId);
-    return doc;
+    return withPublicMeetingUrl(doc, currentUser, actorEmails);
   });
   return result;
 };
@@ -161,8 +202,8 @@ const getInternalMeetingById = async (id, currentUser = null) => {
   const populated = await InternalMeeting.findById(meeting._id).populate('createdBy');
   if (!populated) return null;
   const doc = populated.toJSON();
-  doc.publicMeetingUrl = getPublicMeetingUrl(populated.meetingId);
-  return doc;
+  const actorEmails = currentUser ? await resolveActorEmails(currentUser) : [];
+  return withPublicMeetingUrl(doc, currentUser, actorEmails);
 };
 
 const updateInternalMeetingById = async (id, updateBody) => {

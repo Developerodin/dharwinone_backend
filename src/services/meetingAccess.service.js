@@ -24,9 +24,15 @@ export function isAllowedByMeeting(meeting, user) {
 export function isAllowedByInternalMeeting(meeting, user) {
   if (!meeting) return false;
   if (user?.role === 'admin' || user?.isAdmin) return true;
-  const userId = String(user?._id || '');
-  if (String(meeting.createdBy || '') === userId) return true;
-  return (meeting.participants || []).some((p) => String(p.userId || p) === userId);
+  const userId = String(user?._id || user?.id || '');
+  if (userId && String(meeting.createdBy || '') === userId) return true;
+  // InternalMeeting schema uses hosts + emailInvites (no participants[]).
+  const emailLower = lc(user?.email);
+  if (!emailLower) return false;
+  const allowed = new Set();
+  (meeting.hosts || []).forEach((h) => h?.email && allowed.add(lc(h.email)));
+  (meeting.emailInvites || []).forEach((e) => allowed.add(lc(e)));
+  return allowed.has(emailLower);
 }
 
 export function isAllowedByChatCall(chatCall, user) {
@@ -43,8 +49,19 @@ export async function authorizeMeetingAccess(user, meetingId) {
   if (meeting && isAllowedByMeeting(meeting, user)) return { type: 'meeting', doc: meeting };
 
   const internal = await InternalMeeting.findOne({ meetingId }).lean();
-  if (internal && isAllowedByInternalMeeting(internal, user)) {
-    return { type: 'internalMeeting', doc: internal };
+  if (internal) {
+    // Match login or Employee company/profile emails against hosts + emailInvites.
+    let allowed = isAllowedByInternalMeeting(internal, user);
+    if (!allowed) {
+      try {
+        const { resolveActorEmails } = await import('./visibilityScope.service.js');
+        const emails = await resolveActorEmails(user);
+        allowed = emails.some((email) => isAllowedByInternalMeeting(internal, { ...user, email }));
+      } catch {
+        allowed = false;
+      }
+    }
+    if (allowed) return { type: 'internalMeeting', doc: internal };
   }
 
   const chatCall = await ChatCall.findOne({ livekitRoom: meetingId }).lean();

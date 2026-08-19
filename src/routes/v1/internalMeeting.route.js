@@ -16,8 +16,9 @@ router
     internalMeetingController.create
   )
   .get(
+    // Auth only — scope returns manage:all | read:own | invitee:own so Employees
+    // see Communication invites on the dashboard without meetings.read.
     auth(),
-    requirePermissions('meetings.read'),
     validate(internalMeetingValidation.getInternalMeetings),
     internalMeetingController.list
   );
@@ -44,7 +45,6 @@ router
   .route('/:id')
   .get(
     auth(),
-    requirePermissions('meetings.read'),
     validate(internalMeetingValidation.getInternalMeeting),
     internalMeetingController.get
   )
