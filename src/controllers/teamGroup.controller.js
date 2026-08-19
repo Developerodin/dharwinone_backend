@@ -5,6 +5,7 @@ import ApiError from '../utils/ApiError.js';
 import {
   createTeamGroup,
   queryTeamGroups,
+  listMyTeamGroups,
   getTeamGroupById,
   updateTeamGroupById,
   deleteTeamGroupById,
@@ -27,6 +28,12 @@ const list = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+/** Auth-only: return TeamGroups the caller is rostered on (no teams.read required). */
+const listMine = catchAsync(async (req, res) => {
+  const result = await listMyTeamGroups(req.user);
+  res.send(result);
+});
+
 const get = catchAsync(async (req, res) => {
   const team = await getTeamGroupById(req.params.teamGroupId);
   if (!team) {
@@ -45,4 +52,4 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { create, list, get, update, remove };
+export { create, list, listMine, get, update, remove };

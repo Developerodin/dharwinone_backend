@@ -168,20 +168,55 @@ const applicationScope = async (actor = {}, action = 'read') => {
   };
 };
 
-const meetingActorQuery = (actor = {}) => {
+const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Login email plus Employee profile emails (companyAssignedEmail / profile email).
+ * Meeting invites prefer companyAssignedEmail via pickOfficialEmail, so list scope
+ * must match that address — not only User.email — or invitees see an empty list.
+ */
+const resolveActorEmails = async (actor = {}) => {
+  const emails = new Set();
+  const loginEmail = normalizeEmail(actor.email);
+  if (loginEmail) emails.add(loginEmail);
   const actorId = toId(actor._id || actor.id);
-  const actorEmail = normalizeEmail(actor.email);
+  if (!actorId) return [...emails];
+  try {
+    const emp = await Employee.findOne({ owner: actorId }).select('companyAssignedEmail email').lean();
+    const company = normalizeEmail(emp?.companyAssignedEmail);
+    const profile = normalizeEmail(emp?.email);
+    if (company) emails.add(company);
+    if (profile) emails.add(profile);
+  } catch {
+    // Best-effort: scope still works with login email alone.
+  }
+  return [...emails];
+};
+
+/** Case-insensitive match — invite emails may be stored with original casing. */
+const emailFieldClauses = (fields, emails = []) => {
+  const clauses = [];
+  for (const email of emails) {
+    if (!email) continue;
+    const re = new RegExp(`^${escapeRegex(email)}$`, 'i');
+    for (const field of fields) {
+      clauses.push({ [field]: re });
+    }
+  }
+  return clauses;
+};
+
+const meetingActorQuery = async (actor = {}) => {
+  const actorId = toId(actor._id || actor.id);
+  const emails = await resolveActorEmails(actor);
   const or = [];
   if (actorId) or.push({ createdBy: actorId });
-  if (actorEmail) {
-    or.push(
-      { 'hosts.email': actorEmail },
-      { 'candidate.email': actorEmail },
-      { 'recruiter.email': actorEmail },
-      { 'agents.email': actorEmail },
-      { emailInvites: actorEmail }
-    );
-  }
+  or.push(
+    ...emailFieldClauses(
+      ['hosts.email', 'candidate.email', 'recruiter.email', 'agents.email', 'emailInvites'],
+      emails
+    )
+  );
   return or.length ? { $or: or } : null;
 };
 
@@ -199,7 +234,7 @@ const recordingScope = async (actor = {}, action = 'read') => {
     };
   }
 
-  const actorQuery = meetingActorQuery(actor);
+  const actorQuery = await meetingActorQuery(actor);
   if (!actorQuery) return { filter: EMPTY_SCOPE, scopeDebug: { scopeType: 'recording', action, role: 'none' } };
   const [mRows, iRows] = await Promise.all([
     Meeting.find(actorQuery, { meetingId: 1 }).lean(),
@@ -239,7 +274,7 @@ const meetingScope = async (actor = {}, action = 'read') => {
     return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interviews.full:all' } };
   }
   if (await hasApiPermission(actor, 'interviews.read')) {
-    const actorQuery = meetingActorQuery(actor);
+    const actorQuery = await meetingActorQuery(actor);
     return {
       filter: actorQuery || EMPTY_SCOPE,
       scopeDebug: { scopeType: 'meeting', action, role: actorQuery ? 'interviews.read:own' : 'interviews.read:none' },
@@ -248,13 +283,13 @@ const meetingScope = async (actor = {}, action = 'read') => {
   return { filter: EMPTY_SCOPE, scopeDebug: { scopeType: 'meeting', action, role: 'none' } };
 };
 
-/** Internal-meeting "own" query — createdBy, a host, or an invitee. */
-const internalMeetingActorQuery = (actor = {}) => {
+/** Internal-meeting "own" query — createdBy, a host, or an invitee (login or company email). */
+const internalMeetingActorQuery = async (actor = {}) => {
   const actorId = toId(actor._id || actor.id);
-  const actorEmail = normalizeEmail(actor.email);
+  const emails = await resolveActorEmails(actor);
   const or = [];
   if (actorId) or.push({ createdBy: actorId });
-  if (actorEmail) or.push({ 'hosts.email': actorEmail }, { emailInvites: actorEmail });
+  or.push(...emailFieldClauses(['hosts.email', 'emailInvites'], emails));
   return or.length ? { $or: or } : null;
 };
 
@@ -275,7 +310,7 @@ const internalMeetingScope = async (actor = {}, action = 'read') => {
     return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.manage:all' } };
   }
   if (await hasApiPermission(actor, 'meetings.read')) {
-    const actorQuery = internalMeetingActorQuery(actor);
+    const actorQuery = await internalMeetingActorQuery(actor);
     return {
       filter: actorQuery || EMPTY_SCOPE,
       scopeDebug: { scopeType: 'internalMeeting', action, role: actorQuery ? 'meetings.read:own' : 'meetings.read:none' },

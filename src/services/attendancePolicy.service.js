@@ -147,10 +147,19 @@ const holidayBlockFromAttendanceRow = (row) => ({
 const buildHolidayBlockDecision = (holidayCheck, prefix = 'Punch in') => ({
   allowed: false,
   reason: holidayCheck.reason,
+  holidayTitle: holidayCheck.holidayTitle || undefined,
   detail: holidayCheck.holidayTitle
     ? `${prefix} blocked: '${holidayCheck.holidayTitle}' is an assigned holiday.`
     : `${prefix} blocked: assigned holiday.`,
 });
+
+/** Map policy reason codes to the client-facing PUNCH_IN_BLOCKED reason enum. */
+const toPunchInBlockedReason = (policyReason) => {
+  if (policyReason === 'HOLIDAY_BLOCKED') return 'HOLIDAY';
+  if (policyReason === 'WEEK_OFF_BLOCKED') return 'WEEK_OFF';
+  if (policyReason === 'LEAVE_BLOCKED') return 'LEAVE';
+  return null;
+};
 
 /**
  * Check whether a UTC-midnight date is the student's week-off day.
@@ -462,6 +471,7 @@ export {
   validatePunchOutByUser,
   mergeHolidayDocs,
   holidayToTimestamps,
+  toPunchInBlockedReason,
 };
 export default {
   resolveAttendanceDay,
@@ -474,4 +484,5 @@ export default {
   validatePunchOutByUser,
   mergeHolidayDocs,
   holidayToTimestamps,
+  toPunchInBlockedReason,
 };

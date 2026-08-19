@@ -103,8 +103,17 @@ const sendInvitationEmails = (meeting, emails) => {
 const createInternalMeeting = async (body, userId) => {
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
+  const hosts = (body.hosts || []).map((h) => ({
+    ...h,
+    email: String(h?.email || '').trim().toLowerCase(),
+  }));
+  const emailInvites = (body.emailInvites || [])
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter(Boolean);
   const meeting = await InternalMeeting.create({
     ...body,
+    hosts,
+    emailInvites,
     durationMinutes,
     meetingId,
     roomName: meetingId,
@@ -165,6 +174,17 @@ const updateInternalMeetingById = async (id, updateBody) => {
   // Snapshot recipients before the edit so we email only newly-added invitees.
   const beforeInviteEmails = new Set(getInvitationEmails(meeting));
   const safeBody = { ...updateBody };
+  if (Array.isArray(safeBody.hosts)) {
+    safeBody.hosts = safeBody.hosts.map((h) => ({
+      ...h,
+      email: String(h?.email || '').trim().toLowerCase(),
+    }));
+  }
+  if (Array.isArray(safeBody.emailInvites)) {
+    safeBody.emailInvites = safeBody.emailInvites
+      .map((e) => String(e || '').trim().toLowerCase())
+      .filter(Boolean);
+  }
   const dur = Number(safeBody.durationMinutes);
   if (Number.isInteger(dur) && dur >= 1 && dur <= 480) {
     safeBody.durationMinutes = dur;

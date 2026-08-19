@@ -5,9 +5,11 @@ class ApiError extends Error {
     this.isOperational = isOperational;
     this.stack = stack || Error.captureStackTrace(this, this.constructor);
     // Backwards-compatible 5th positional: callers may pass either an object
-    // (legacy `extras` with subCode/details/errorCode) or an Array of structured
-    // per-row / per-field error entries (e.g. bulk Excel import validation).
-    if (Array.isArray(extras)) {
+    // (legacy `extras` with subCode/details/errorCode), a stable error-code string,
+    // or an Array of structured per-row / per-field error entries (e.g. bulk Excel import).
+    if (typeof extras === 'string' && extras.trim()) {
+      this.errorCode = extras.trim();
+    } else if (Array.isArray(extras)) {
       /** Structured per-row / per-field error entries */
       this.errors = extras;
     } else if (extras && typeof extras === 'object') {

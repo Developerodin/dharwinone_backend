@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import TeamGroup from '../models/teamGroup.model.js';
 import Position from '../models/position.model.js';
 import TeamMember from '../models/team.model.js';
+import Employee from '../models/employee.model.js';
 import Project from '../models/project.model.js';
 import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
@@ -9,6 +10,72 @@ import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const TEAM_GROUP_LIST_LIMIT_MAX = 200;
+
+/**
+ * Teams the authenticated user belongs to (TeamMember roster), without teams.read.
+ * Membership is resolved via Employee.owner → TeamMember.employeeId, with email /
+ * legacyEmail fallbacks for pre-migration and orphan rows.
+ *
+ * @param {{ id?: string, _id?: string, email?: string }} user
+ * @returns {Promise<{ results: Array<{ id: string, _id: string, name: string }>, totalResults: number }>}
+ */
+const listMyTeamGroups = async (user) => {
+  const userId = user?.id || user?._id;
+  if (!userId) {
+    return { results: [], totalResults: 0 };
+  }
+
+  const employee = await Employee.findOne({ owner: userId })
+    .select('_id email companyAssignedEmail')
+    .lean()
+    .exec();
+
+  const membershipOr = [];
+  if (employee?._id) {
+    membershipOr.push({ employeeId: employee._id });
+  }
+
+  const emails = [
+    user?.email,
+    employee?.email,
+    employee?.companyAssignedEmail,
+  ]
+    .map((e) => String(e || '').trim())
+    .filter(Boolean);
+  for (const email of [...new Set(emails.map((e) => e.toLowerCase()))]) {
+    const re = new RegExp(`^${escapeRegex(email)}$`, 'i');
+    membershipOr.push({ email: re }, { legacyEmail: re });
+  }
+
+  if (membershipOr.length === 0) {
+    return { results: [], totalResults: 0 };
+  }
+
+  const teamIds = await TeamMember.distinct('teamId', {
+    teamId: { $ne: null },
+    isActive: { $ne: false },
+    $or: membershipOr,
+  }).exec();
+
+  const validIds = (teamIds || []).filter((id) => id != null);
+  if (validIds.length === 0) {
+    return { results: [], totalResults: 0 };
+  }
+
+  const teams = await TeamGroup.find({ _id: { $in: validIds } })
+    .sort({ name: 1 })
+    .select('name')
+    .lean()
+    .exec();
+
+  const results = teams.map((t) => ({
+    id: String(t._id),
+    _id: String(t._id),
+    name: t.name,
+  }));
+
+  return { results, totalResults: results.length };
+};
 
 /**
  * @param {Array<string>} requestedIds
@@ -79,14 +146,24 @@ const queryTeamGroups = async (filter, options) => {
   /** Org-wide list when admin OR role grants teams.read / teams.manage. */
   const canSeeAll = isAdmin || apiPermissions.has('teams.read') || apiPermissions.has('teams.manage');
   let finalFilter = { ...filter };
-  /** Teams created by someone else still appear if the user is on that team's roster (email match). */
+  /** Teams created by someone else still appear if the user is on that team's roster. */
   if (!canSeeAll && userId) {
-    const uemail = String(userEmail || '').trim();
+    const membershipOr = [];
+    const employee = await Employee.findOne({ owner: userId }).select('_id email companyAssignedEmail').lean().exec();
+    if (employee?._id) membershipOr.push({ employeeId: employee._id });
+    const emails = [userEmail, employee?.email, employee?.companyAssignedEmail]
+      .map((e) => String(e || '').trim())
+      .filter(Boolean);
+    for (const email of [...new Set(emails.map((e) => e.toLowerCase()))]) {
+      const re = new RegExp(`^${escapeRegex(email)}$`, 'i');
+      membershipOr.push({ email: re }, { legacyEmail: re });
+    }
     let teamIdsImOn = [];
-    if (uemail) {
+    if (membershipOr.length) {
       teamIdsImOn = await TeamMember.distinct('teamId', {
         teamId: { $ne: null },
-        email: new RegExp(`^${escapeRegex(uemail)}$`, 'i'),
+        isActive: { $ne: false },
+        $or: membershipOr,
       }).exec();
     }
     finalFilter = {
@@ -169,6 +246,7 @@ const deleteTeamGroupById = async (id, currentUser) => {
 export {
   createTeamGroup,
   queryTeamGroups,
+  listMyTeamGroups,
   getTeamGroupById,
   updateTeamGroupById,
   deleteTeamGroupById,

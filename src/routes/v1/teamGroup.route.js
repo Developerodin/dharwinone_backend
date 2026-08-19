@@ -12,6 +12,9 @@ router
   .post(auth(), requirePermissions('teams.manage'), validate(teamGroupValidation.createTeamGroup), teamGroupController.create)
   .get(auth(), requirePermissions('teams.read'), validate(teamGroupValidation.getTeamGroups), teamGroupController.list);
 
+/** Must stay before /:teamGroupId so "mine" is not parsed as an ObjectId. */
+router.get('/mine', auth(), teamGroupController.listMine);
+
 router
   .route('/:teamGroupId')
   .get(auth(), requirePermissions('teams.read'), validate(teamGroupValidation.getTeamGroup), teamGroupController.get)

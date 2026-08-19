@@ -15,6 +15,7 @@ import {
   resolveAttendanceDay as policyResolveAttendanceDay,
   mergeHolidayDocs,
   holidayToTimestamps,
+  toPunchInBlockedReason,
 } from './attendancePolicy.service.js';
 import {
   aggregateDailyCappedWorkMs,
@@ -24,6 +25,28 @@ import {
 } from '../utils/attendanceDuration.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * Reject punch-in with a structured PUNCH_IN_BLOCKED payload for the dashboard UX.
+ * Falls back to a plain BAD_REQUEST when the policy reason is not a day-block.
+ */
+const throwPunchInBlocked = (policyDecision) => {
+  const blockReason = toPunchInBlockedReason(policyDecision?.reason);
+  const message = policyDecision?.detail || 'Punch in not allowed';
+  if (!blockReason) {
+    throw new ApiError(httpStatus.BAD_REQUEST, message, true, '', {
+      errorCode: policyDecision?.reason || undefined,
+    });
+  }
+  const details = { reason: blockReason };
+  if (blockReason === 'HOLIDAY' && policyDecision?.holidayTitle) {
+    details.holidayName = policyDecision.holidayTitle;
+  }
+  throw new ApiError(httpStatus.BAD_REQUEST, message, true, '', {
+    errorCode: 'PUNCH_IN_BLOCKED',
+    details,
+  });
+};
 
 /** Get UTC midnight for a given date (used as attendance "date" for calendar-date inputs). */
 const getUtcMidnight = (d) => {
@@ -143,7 +166,7 @@ const punchIn = async (studentId, body = {}) => {
 
   const policyDecision = await policyValidatePunchIn(studentId, punchInTime, timezone);
   if (!policyDecision.allowed) {
-    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch in not allowed', true, '', policyDecision.reason);
+    throwPunchInBlocked(policyDecision);
   }
 
   const student = await Student.findById(studentId).populate('user', 'name email').populate('shift', 'timezone');
@@ -186,7 +209,13 @@ const punchIn = async (studentId, body = {}) => {
 
   if (existing) {
     if (existing.status === 'Holiday' || existing.status === 'Leave') {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot punch in on Holiday or Leave day', true, '', 'HOLIDAY_BLOCKED');
+      throwPunchInBlocked({
+        reason: existing.status === 'Leave' ? 'LEAVE_BLOCKED' : 'HOLIDAY_BLOCKED',
+        detail: 'Cannot punch in on Holiday or Leave day',
+        holidayTitle: existing.status === 'Holiday'
+          ? (existing.notes?.replace(/^Holiday:\s*/i, '') || 'Holiday')
+          : undefined,
+      });
     }
     existing.punchIn = punchInTime;
     existing.timezone = timezone;
@@ -476,7 +505,7 @@ const punchInByUser = async (userId, body = {}) => {
 
   const policyDecision = await policyValidatePunchInByUser(userId, punchInTime, timezone);
   if (!policyDecision.allowed) {
-    throw new ApiError(httpStatus.BAD_REQUEST, policyDecision.detail || 'Punch in not allowed', true, '', policyDecision.reason);
+    throwPunchInBlocked(policyDecision);
   }
 
   const notes = body.notes != null ? String(body.notes) : '';
@@ -501,7 +530,13 @@ const punchInByUser = async (userId, body = {}) => {
 
   if (existing) {
     if (existing.status === 'Holiday' || existing.status === 'Leave') {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot punch in on Holiday or Leave day', true, '', 'HOLIDAY_BLOCKED');
+      throwPunchInBlocked({
+        reason: existing.status === 'Leave' ? 'LEAVE_BLOCKED' : 'HOLIDAY_BLOCKED',
+        detail: 'Cannot punch in on Holiday or Leave day',
+        holidayTitle: existing.status === 'Holiday'
+          ? (existing.notes?.replace(/^Holiday:\s*/i, '') || 'Holiday')
+          : undefined,
+      });
     }
     const doc = await Attendance.findById(existing._id);
     doc.punchIn = punchInTime;
