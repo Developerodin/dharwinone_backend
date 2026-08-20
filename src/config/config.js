@@ -241,6 +241,13 @@ const envVarsSchema = Joi.object()
     /** Canonical org key embedded in referral payload (single-tenant default). */
     REFERRAL_DEFAULT_ORG_ID: Joi.string().trim().optional().default('default'),
 
+    CONTACT_LOOKUP_HASH_SECRET: Joi.string()
+      .min(32)
+      .optional()
+      .description('HMAC key for contact-lookup audit email hashes; derived from JWT_SECRET if unset'),
+    CONTACT_LOOKUP_PER_MINUTE: Joi.number().integer().min(1).default(20),
+    CONTACT_LOOKUP_PER_MINUTE_PER_IP: Joi.number().integer().min(1).default(40),
+
     PINECONE_API_KEY: Joi.string().optional().allow('').description('Pinecone API key for vector search'),
     PINECONE_INDEX: Joi.string().optional().default('dharwin-hr').description('Pinecone index name'),
 
@@ -555,6 +562,11 @@ const config = {
   apollo: {
     apiKey: envVars.APOLLO_IO_API_KEY || '',
     webhookSecret: (envVars.APOLLO_WEBHOOK_SECRET || '').trim(),
+  },
+  contactLookup: {
+    hashSecret: envVars.CONTACT_LOOKUP_HASH_SECRET || '',
+    perMinute: envVars.CONTACT_LOOKUP_PER_MINUTE,
+    perMinutePerIp: envVars.CONTACT_LOOKUP_PER_MINUTE_PER_IP,
   },
   rateLimit: {
     authWindowMinutes: envVars.RATE_LIMIT_AUTH_WINDOW_MINUTES ?? 15,

@@ -11,7 +11,21 @@ import {
   emitConversationDeleted,
   getIO,
 } from '../services/chatSocket.service.js';
-import { queryUsers } from '../services/user.service.js';
+import mongoose from 'mongoose';
+import User from '../models/user.model.js';
+import {
+  baseEligible,
+  directoryScope,
+  serializeContact,
+  CONTACT_REASONS,
+  lookupExactEmail,
+} from '../services/communicationAccess.service.js';
+import {
+  hashEmail,
+  recordLookup,
+  dailyLookupCount,
+  LOOKUP_DAILY_CAP,
+} from '../services/communicationAccess.audit.js';
 import { uploadFileToS3 } from '../services/upload.service.js';
 import logger from '../config/logger.js';
 
@@ -42,8 +56,7 @@ const listConversationPreferences = catchAsync(async (req, res) => {
 });
 
 const createConversation = catchAsync(async (req, res) => {
-  const userId = getUserId(req);
-  const conv = await chatService.createConversation(userId, req.body);
+  const conv = await chatService.createConversation(getUserId(req), req.body, req.user);
   res.status(httpStatus.CREATED).send(conv);
 });
 
@@ -237,7 +250,7 @@ const initiateCall = catchAsync(async (req, res) => {
 const initiateGroupCall = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const { participantIds, callType } = req.body;
-  const result = await chatService.createGroupCall(userId, { participantIds, callType });
+  const result = await chatService.createGroupCall(userId, { participantIds, callType }, req.user);
 
   const conversationType = result.conversationId ? 'group' : 'direct';
   const groupName = result.groupName || undefined;
@@ -284,24 +297,98 @@ const endCallByRoom = catchAsync(async (req, res) => {
 });
 
 const searchUsers = catchAsync(async (req, res) => {
+  const viewer = req.user;
+  const viewerId = getUserId(req);
+  const scope = await directoryScope(viewer);
+
+  if (scope.kind === 'none') {
+    return res.status(httpStatus.FORBIDDEN).json({
+      code: httpStatus.FORBIDDEN,
+      message: 'Contact directory is not available for your role',
+    });
+  }
+
   const search = req.query.search?.trim();
   const limit = Math.min(250, parseInt(req.query.limit, 10) || 20);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const result = await queryUsers(
-    // Exclude the requester: you cannot chat with yourself, and picking yourself for a
-    // group put you in the participant list twice (duplicate member row / React key).
-    { search: search || undefined, status: 'active', _id: { $ne: getUserId(req) } },
-    // `_id` tiebreak keeps skip-based paging stable: names are not unique, and Mongo gives
-    // no deterministic order within a tie, so page N and N+1 could repeat or drop a user.
-    { limit, page, sortBy: 'name:asc,_id:asc' },
-    req.user
-  );
-  res.send(result);
+
+  const filter = await baseEligible(viewerId);
+
+  if (scope.kind === 'referred') {
+    filter._id = {
+      ...filter._id,
+      $in: [...scope.ids].map((id) => new mongoose.Types.ObjectId(id)),
+    };
+  }
+
+  if (search) {
+    const collapsed = search.replace(/\s+/g, ' ');
+    const escaped = collapsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(escaped.replace(/ /g, '\\s+'), 'i');
+    filter.$or = [{ name: { $regex: rx } }, { email: { $regex: rx } }];
+  }
+
+  const result = await User.paginate(filter, {
+    limit,
+    page,
+    sortBy: 'name:asc,_id:asc',
+  });
+
+  const reason =
+    scope.kind === 'referred' ? CONTACT_REASONS.DIRECTORY_REFERRED : CONTACT_REASONS.DIRECTORY_ALL;
+
+  const rows = result.results || [];
+  const roleIds = [...new Set(rows.flatMap((u) => (u.roleIds || []).map(String)))];
+  const roleNameById = new Map();
+  if (roleIds.length) {
+    const Role = (await import('../models/role.model.js')).default;
+    const roleDocs = await Role.find({ _id: { $in: roleIds } }).select('name').lean();
+    roleDocs.forEach((r) => roleNameById.set(String(r._id), r.name));
+  }
+  const roleLabel = (u) =>
+    (u.roleIds || []).map((id) => roleNameById.get(String(id))).filter(Boolean).join(', ') || null;
+
+  return res.send({
+    ...result,
+    results: rows.map((u) =>
+      serializeContact(viewer, { ...(u.toJSON ? u.toJSON() : u), roleName: roleLabel(u) }, { reason })
+    ),
+  });
+});
+
+const lookupUserByEmail = catchAsync(async (req, res) => {
+  const viewer = req.user;
+  const viewerId = getUserId(req);
+  const normalized = String(req.query.email).trim().toLowerCase();
+
+  // Service-level daily cap, on top of the two per-minute middleware limiters. Spec §6.
+  if ((await dailyLookupCount(viewerId)) >= LOOKUP_DAILY_CAP) {
+    return res
+      .status(httpStatus.TOO_MANY_REQUESTS)
+      .json({ message: 'Too many lookups. Please try again later.' });
+  }
+
+  const emailHash = hashEmail(normalized);
+  const user = await lookupExactEmail(viewerId, normalized);
+
+  // Audited on BOTH outcomes, from one place, after the single query — so no obviously divergent
+  // processing path exists between hit and miss. Not a claim of timing-attack resistance. Spec §3.2.
+  await recordLookup(req, { emailHash, outcome: user ? 'hit' : 'miss' });
+
+  if (!user) {
+    return res
+      .status(httpStatus.NOT_FOUND)
+      .json({ message: 'No registered user found with that email' });
+  }
+
+  return res.send({
+    contact: serializeContact(viewer, user, { reason: CONTACT_REASONS.EXACT_EMAIL_LOOKUP }),
+  });
 });
 
 const addParticipants = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  const conv = await chatService.addParticipants(req.params.id, userId, req.body);
+  const conv = await chatService.addParticipants(req.params.id, userId, req.body, req.user);
   await emitConversationUpdated(req.params.id);
   res.status(httpStatus.OK).send(conv);
 });
@@ -385,6 +472,7 @@ export {
   startChatCallRecording,
   endCallByRoom,
   searchUsers,
+  lookupUserByEmail,
   getSocketToken,
   addParticipants,
   removeParticipant,

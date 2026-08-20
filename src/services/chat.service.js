@@ -15,6 +15,7 @@ import {
   isGenericAttachmentPlaceholder,
 } from '../utils/chatMessagePreview.js';
 import { userHasReceipt } from '../utils/chatReceipts.js';
+import { assertCanInitiateWith, lookupExactEmail } from './communicationAccess.service.js';
 
 /** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
 const PROFILE_PICTURE_PRESIGN_TTL_SEC = 7 * 24 * 3600;
@@ -448,12 +449,32 @@ const listConversationPreferences = async (userId) => {
   return { muted, pinned };
 };
 
-const createConversation = async (userId, { type, participantIds, name, description }) => {
+const createConversation = async (
+  userId,
+  { type, participantIds, name, description, email },
+  viewer
+) => {
   const creatorId = String(userId);
+
+  // Restricted-role path: resolve the address server-side. grantedIds is request-local (spec §5.4).
+  let grantedIds = new Set();
+  let resolvedParticipantIds = participantIds;
+  if (email) {
+    if (type !== 'direct') {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'email is only valid for a direct conversation');
+    }
+    const target = await lookupExactEmail(userId, email);
+    if (!target) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'No registered user found with that email');
+    }
+    resolvedParticipantIds = [String(target._id)];
+    grantedIds = new Set(resolvedParticipantIds);
+  }
+
   // Never include the creator twice — they are always prepended as owner/admin.
   const ids = [
     ...new Set(
-      (participantIds || [])
+      (resolvedParticipantIds || [])
         .map((id) => String(id))
         .filter((id) => id && id !== creatorId)
     ),
@@ -532,6 +553,12 @@ const createConversation = async (userId, { type, participantIds, name, descript
     });
     if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() }, userId);
   }
+
+  // ORDER IS LOAD-BEARING — spec §5.3. This assert MUST come after the dedup returns above.
+  // A restricted user with a standing 1:1 and no shared group has canSeeUser === false, so
+  // assert-first would 403 them out of reopening THEIR OWN existing conversation. Dedup-first
+  // returns it and never reaches here. Do not "tidy" this by hoisting the assert.
+  await assertCanInitiateWith(viewer, ids, { grantedIds });
 
   const participants = allParticipantIds.map((id, idx) => ({
     user: id,
@@ -1181,7 +1208,13 @@ const getActiveCallForConversation = async (conversationId, userId) => {
  *
  * Returns { call, roomName, conversationId? }
  */
-const createGroupCall = async (userId, { participantIds, callType }) => {
+const createGroupCall = async (userId, { participantIds, callType }, viewer) => {
+  // FIRST statement. This endpoint accepted arbitrary user ids with no conversation context and
+  // then rang each target's device — the most severe of the bypasses in spec §5.1. The assert
+  // must precede any socket emission. Invariant I-3 (spec §4).
+  const otherIds = (participantIds || []).map(String).filter((id) => id !== String(userId));
+  await assertCanInitiateWith(viewer, otherIds);
+
   const creatorId = String(userId);
   const othersIds = [
     ...new Set(
@@ -1260,7 +1293,7 @@ const endCallByRoom = async (roomName, userId) => {
   return { success: true, conversationId, roomName };
 };
 
-const addParticipants = async (conversationId, userId, { participantIds }) => {
+const addParticipants = async (conversationId, userId, { participantIds }, viewer) => {
   await ensureAdmin(conversationId, userId);
   const ids = [...new Set((participantIds || []).map((id) => id.toString()))];
   if (!ids.length) throw new ApiError(httpStatus.BAD_REQUEST, 'participantIds required');
@@ -1269,6 +1302,11 @@ const addParticipants = async (conversationId, userId, { participantIds }) => {
   const existingIds = (conv.participants || []).map((p) => p.user.toString());
   const toAdd = ids.filter((id) => !existingIds.includes(id));
   if (!toAdd.length) return getConversation(conversationId, userId);
+
+  // Discovery gate: you cannot add someone you cannot see. This is what closes the group-add
+  // loophole — spec §5.5. Orthogonal to assertCallerCanAddRestrictedParticipants below, which
+  // answers a different question (hidden / platform-super targets).
+  await assertCanInitiateWith(viewer, toAdd.map(String));
 
   await assertCallerCanAddRestrictedParticipants(
     userId,

@@ -15,9 +15,11 @@ import Employee from '../models/employee.model.js';
 
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
 
+const viewerId = (viewer) => String(viewer?.id || viewer?._id || '');
+
 export const referredUserIds = async (viewer) => {
   const profileIds = await ReferralAttribution.find({
-    salesAgentUserId: oid(viewer.id),
+    salesAgentUserId: oid(viewerId(viewer)),
     isCurrent: true,
     isRevoked: false,
   }).distinct('subjectProfileId');

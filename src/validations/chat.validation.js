@@ -15,12 +15,33 @@ const listConversations = {
 };
 
 const createConversation = {
-  body: Joi.object().keys({
-    type: Joi.string().valid('direct', 'group').required(),
-    participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
-    name: Joi.string().trim().allow(''),
-    description: Joi.string().trim().max(500).allow(''),
-  }),
+  body: Joi.object()
+    .keys({
+      type: Joi.string().valid('direct', 'group').required(),
+      participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1),
+      name: Joi.string().trim().allow(''),
+      description: Joi.string().trim().max(500).allow(''),
+      /**
+       * Restricted-role path: the client sends the ADDRESS, never the id it got back from
+       * /users/lookup. The server re-resolves it, because Mongo ObjectIds embed a timestamp and
+       * counter and are partially guessable — an id-accepting write path would be a quieter
+       * enumeration oracle than the lookup endpoint. Direct conversations only; group creation
+       * remains a directory capability. Spec §5.4.
+       */
+      email: Joi.string().trim().lowercase().email().max(254).when('type', {
+        is: 'direct',
+        then: Joi.optional(),
+        otherwise: Joi.forbidden(),
+      }),
+    })
+    // Exactly one addressing mode for a direct conversation. Accepting both and letting `email`
+    // silently win leaves an ambiguous payload whose behaviour is invisible from the request:
+    // { type:'direct', participantIds:['<someone>'], email:'<someone-else>' } would create a chat
+    // with neither the caller's apparent intent nor an error.
+    .oxor('participantIds', 'email')
+    .when(Joi.object({ type: Joi.valid('direct') }).unknown(), {
+      then: Joi.object().or('participantIds', 'email'),
+    }),
 };
 
 const getMessages = {
@@ -129,6 +150,17 @@ const searchUsers = {
   }),
 };
 
+/**
+ * Exact-email lookup. Joi's .email() rejects partials such as "harsh@" or "harsh" AT THE
+ * VALIDATOR, before any query exists — FR-09 and FR-12 are enforced by shape, not by convention.
+ * Spec §3.2.
+ */
+const lookupUserByEmail = {
+  query: Joi.object().keys({
+    email: Joi.string().trim().lowercase().email().max(254).required(),
+  }),
+};
+
 const addParticipants = {
   params: Joi.object().keys({
     id: Joi.string().custom(objectId).required(),
@@ -204,6 +236,7 @@ export {
   listCalls,
   updateCall,
   searchUsers,
+  lookupUserByEmail,
   addParticipants,
   removeParticipant,
   setParticipantRole,

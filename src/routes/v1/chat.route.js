@@ -4,6 +4,7 @@ import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import { uploadChatAttachments } from '../../middlewares/upload.js';
+import { emailLookupLimiterByUser, emailLookupLimiterByIp } from '../../middlewares/rateLimiter.js';
 import * as chatValidation from '../../validations/chat.validation.js';
 import * as chatController from '../../controllers/chat.controller.js';
 
@@ -22,6 +23,16 @@ router.use(auth(), requirePermissions('chats.read'));
 
 router.get('/socket-token', chatController.getSocketToken);
 router.get('/users/search', validate(chatValidation.searchUsers), chatController.searchUsers);
+// Exact-email discovery. The ONLY discovery path for roles without a directory scope.
+// Deliberately NOT behind any directory guard — the access matrix grants exact-email lookup to
+// every role, including Sales Agent (spec §8.1). Two independent limiters. Spec §3.2.
+router.get(
+  '/users/lookup',
+  emailLookupLimiterByUser,
+  emailLookupLimiterByIp,
+  validate(chatValidation.lookupUserByEmail),
+  chatController.lookupUserByEmail
+);
 
 router.get('/conversations', validate(chatValidation.listConversations), chatController.listConversations);
 router.get('/conversations/preferences', chatController.listConversationPreferences);

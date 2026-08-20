@@ -24,8 +24,15 @@ import {
 
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
 
-const holds = (viewer, permission) =>
-  Array.isArray(viewer?.permissions) && viewer.permissions.includes(permission);
+const viewerId = (viewer) => String(viewer?.id || viewer?._id || '');
+
+const holds = (viewer, permission) => {
+  if (Array.isArray(viewer?.permissions) && viewer.permissions.includes(permission)) return true;
+  const ctxPerms = viewer?.authContext?.permissions;
+  if (ctxPerms instanceof Set && ctxPerms.has(permission)) return true;
+  if (Array.isArray(ctxPerms) && ctxPerms.includes(permission)) return true;
+  return false;
+};
 
 /**
  * The eligibility floor for EVERY discovery surface — directory list, exact lookup, pickers.
@@ -105,14 +112,15 @@ const isEligible = async (viewerId, targetId) => {
  * resolution authorization and grants nothing that outlives the response.
  */
 export const canSeeUser = async (viewer, targetId) => {
-  if (String(viewer.id) === String(targetId)) return false;
-  if (!(await isEligible(viewer.id, targetId))) return false;
+  const vid = viewerId(viewer);
+  if (String(vid) === String(targetId)) return false;
+  if (!(await isEligible(vid, targetId))) return false;
 
   const scope = await directoryScope(viewer);
   if (scope.kind === 'all') return true;
   if (scope.kind === 'referred' && scope.ids.has(String(targetId))) return true;
 
-  return sharesCurrentGroup(viewer.id, targetId);
+  return sharesCurrentGroup(vid, targetId);
 };
 
 /**
@@ -178,4 +186,58 @@ export const serializeContact = (viewer, target, { reason }) => {
   if (ROLE_NAME_REASONS.has(reason)) card.roleName = target.roleName ?? null;
 
   return card;
+};
+
+/**
+ * Resolve exactly one user by their complete registered email address. Spec §3.2.
+ *
+ * Normalisation matches how the data is stored: user.model.js declares email with
+ * { trim: true, lowercase: true }, so trim + lowercase + exact equality is not a policy choice.
+ *
+ * Exact equality only. No $regex, no $in on email, no limit — the single-row guarantee is
+ * structural, not conventional. Returns null on miss; the caller renders the fixed 404 body so
+ * absent, deactivated, and hidden users are indistinguishable.
+ */
+export const lookupExactEmail = async (viewerId, rawEmail) => {
+  const User = (await import('../models/user.model.js')).default;
+  const email = String(rawEmail).trim().toLowerCase();
+  const filter = await baseEligible(viewerId);
+  return User.findOne({ ...filter, email }).lean();
+};
+
+const hasViewerPermissions = (viewer) => {
+  if (Array.isArray(viewer?.permissions)) return true;
+  const ctxPerms = viewer?.authContext?.permissions;
+  if (ctxPerms instanceof Set) return true;
+  if (Array.isArray(ctxPerms)) return true;
+  return false;
+};
+
+/**
+ * The ONE discovery assertion for every communication write path. Invariant I-3 (spec §4):
+ * no endpoint may treat a client-supplied target user id as sufficient authorization.
+ *
+ * grantedIds holds ids the SERVER itself resolved during THIS request (see chat.service
+ * createConversation's email path). It is request-local and must never be persisted, cached,
+ * memoised, attached to the session or req.user, or accepted from client input in any form.
+ * There is no wire representation of it. Spec §5.4.
+ */
+export const assertCanInitiateWith = async (viewer, targetIds, { grantedIds = new Set() } = {}) => {
+  // Fail LOUD on a missing viewer. The tempting alternative — defaulting to
+  // `{ id: userId, permissions: [] }` — silently downgrades an Administrator to zero permissions
+  // whenever an internal caller forgets to forward req.user, producing a 403 that looks like a
+  // policy decision instead of the wiring bug it is. A thrown 500 is debuggable; a phantom 403 is not.
+  if (!viewer || !viewerId(viewer) || !hasViewerPermissions(viewer)) {
+    throw new Error(
+      'assertCanInitiateWith: viewer with { id, permissions } is required — forward req.user from the controller'
+    );
+  }
+
+  for (const id of targetIds) {
+    if (grantedIds.has(String(id))) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await canSeeUser(viewer, id))) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'You cannot start a conversation with this user');
+    }
+  }
 };

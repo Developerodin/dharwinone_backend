@@ -87,6 +87,33 @@ const teamsExport = rateLimit({
   message: { code: 429, message: 'Too many team exports — try again later' },
 });
 
+/**
+ * Exact-email contact lookup. TWO independent limiters, both applied. Spec §6.
+ * A per-user limit alone is insufficient: a compromised account can distribute requests across
+ * IPs, and multiple accounts can sit behind one source.
+ *
+ * ponytail: in-memory store, so caps are per process — on a multi-instance deploy the effective
+ * limit is this value times the instance count. True of every limiter in this file; accepted for
+ * consistency. Move to a shared store only if that headroom actually matters.
+ */
+const emailLookupLimiterByUser = rateLimit({
+  windowMs: 60 * 1000,
+  max: config.contactLookup?.perMinute ?? 20,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many lookups. Please try again in a minute.' },
+});
+
+const emailLookupLimiterByIp = rateLimit({
+  windowMs: 60 * 1000,
+  max: config.contactLookup?.perMinutePerIp ?? 40,
+  keyGenerator: (req) => req.ip,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many lookups. Please try again in a minute.' },
+});
+
 export {
   authLoginLimiter,
   authStrictFlowLimiter,
@@ -97,5 +124,7 @@ export {
   chatAssistantLimiter,
   teamsImport,
   teamsExport,
+  emailLookupLimiterByUser,
+  emailLookupLimiterByIp,
 };
 

@@ -27,6 +27,8 @@ const NAMESPACED_RESOURCE_KEYS = new Set([
  */
 const STANDALONE_API_PERMISSIONS = new Set([
   'devTickets.view', // "Help & Support access" role toggle
+  'communication.directory:all',
+  'communication.directory:referred',
 ]);
 
 /**
