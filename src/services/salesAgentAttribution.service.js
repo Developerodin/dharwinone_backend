@@ -502,8 +502,7 @@ export async function revokeSalesAgent(input, context, ctx = {}) {
 
   const candidate = await Employee.findById(candidateId);
   if (!candidate) throwError(404, 'CANDIDATE_NOT_FOUND', 'Candidate not found.');
-  assertSameTenant(candidate, actor);
-  assertActorMayAssign(actor);
+  await assertActorMayAssignResolved(actor);
 
   const current = await ReferralAttribution.findOne({
     subjectProfileId: candidate._id,
@@ -809,8 +808,7 @@ export async function pinAttributionJob(input, context, ctx = {}) {
   const actor = context.actor;
   const candidate = await Employee.findById(candidateId);
   if (!candidate) throwError(404, 'CANDIDATE_NOT_FOUND', 'Candidate not found.');
-  assertSameTenant(candidate, actor);
-  assertActorMayAssign(actor);
+  await assertActorMayAssignResolved(actor);
 
   if (jobId != null) {
     if (!reason || !String(reason).trim()) {

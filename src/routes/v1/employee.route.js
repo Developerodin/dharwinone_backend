@@ -55,7 +55,10 @@ const canManageSalesAgentAttribution = [
 ];
 const canRevokeSalesAgentAttribution = [
   auth(),
-  requirePermissions('candidates.revokeSalesAgentAttribution'),
+  requireAnyOfPermissions(
+    'candidates.revokeSalesAgentAttribution',
+    'candidates.manageSalesAgentAttribution'
+  ),
 ];
 const canReadSalesAgentAttribution = [auth(), requirePermissions('candidates.read')];
 

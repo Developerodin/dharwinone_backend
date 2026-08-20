@@ -26,7 +26,7 @@ import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
-import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
+import { APPLICATION_STATUSES, isInterviewSchedulingBlocked } from '../constants/atsPipeline.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
@@ -37,6 +37,47 @@ const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 60
 const PIPELINE_STATUSES = APPLICATION_STATUSES.filter((status) =>
   ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'].includes(status)
 );
+
+const escapeRegexForJobTitle = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const resolveJobObjectIdFromPosition = async (jobPos) => {
+  const trimmed = (jobPos || '').trim();
+  if (!trimmed) return null;
+  if (/^[0-9a-fA-F]{24}$/.test(trimmed)) {
+    const j = await Job.findById(trimmed).select('_id').lean();
+    return j?._id || null;
+  }
+  const j = await Job.findOne({
+    title: { $regex: new RegExp(`^${escapeRegexForJobTitle(trimmed)}$`, 'i') },
+  })
+    .select('_id')
+    .lean();
+  return j?._id || null;
+};
+
+/** Defense-in-depth: block scheduling when the candidate's application for this job is Rejected. */
+const assertInterviewSchedulingAllowed = async (candidateId, jobPosition) => {
+  const candId = candidateId;
+  const jobPos = (jobPosition || '').trim();
+  if (!candId || !mongoose.Types.ObjectId.isValid(candId) || !jobPos) return;
+
+  const jobObjId = await resolveJobObjectIdFromPosition(jobPos);
+  if (!jobObjId) return;
+
+  const application = await JobApplication.findOne({
+    candidate: new mongoose.Types.ObjectId(candId),
+    job: jobObjId,
+  })
+    .select('status')
+    .lean();
+
+  if (application && isInterviewSchedulingBlocked(application.status)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot schedule an interview for a rejected application. Change the application status first.'
+    );
+  }
+};
 
 /**
  * Resolve job application for an interview's candidate + jobPosition (shared forward / rollback).
@@ -319,6 +360,8 @@ const sendInvitationEmails = async (meeting, emails) => {
  * @returns {Promise<Object>} Meeting with publicMeetingUrl
  */
 const createMeeting = async (body, userId) => {
+  await assertInterviewSchedulingAllowed(body.candidate?.id, body.jobPosition);
+
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
   const creator = await User.findById(userId).select('adminId').lean();

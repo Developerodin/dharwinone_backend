@@ -38,7 +38,8 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     Shortlisted: ['Offered', 'Rejected'],
     Offered: ['Hired', 'Rejected'],
     Hired: [],
-    Rejected: [],
+    // Rejected is terminal for scheduling but may be reopened manually to any live stage except Interview.
+    Rejected: ['Applied', 'Screening', 'Shortlisted', 'Offered'],
   }),
   interviewResult: freezeTransitions({
     pending: ['selected', 'rejected'],
@@ -91,6 +92,9 @@ export const CANDIDATE_STATUS_MAP = Object.freeze({
     Cancelled: 'Process cancelled',
   }),
 });
+
+/** Application statuses that block scheduling a new interview. */
+export const isInterviewSchedulingBlocked = (applicationStatus) => applicationStatus === 'Rejected';
 
 export const isAllowedTransition = (workflow, from, to) => {
   if (!workflow || !from || !to) return false;
