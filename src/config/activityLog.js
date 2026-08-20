@@ -111,6 +111,9 @@ export const ActivityActions = {
   // Organization — headcount slots
   ORG_SLOT_CREATE: 'orgSlot.create',
   ORG_SLOT_UPDATE: 'orgSlot.update',
+  // Communication contact discovery
+  /** Exact-email contact lookup. Recorded on hit AND miss so the log is not an oracle. Spec §6. */
+  CONTACT_LOOKUP: 'contact.lookup',
 };
 
 export const EntityTypes = {
@@ -138,4 +141,6 @@ export const EntityTypes = {
   EMPLOYEE: 'Employee',
   ORG_SCENARIO: 'OrgScenario',
   ORG_SLOT: 'OrgSlot',
+  /** Exact-email lookup audit rows (entityId = sha256 of the normalised queried email) */
+  CONTACT_LOOKUP: 'ContactLookup',
 };
