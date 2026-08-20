@@ -120,3 +120,56 @@ export const canLookupUserByExactEmail = () => true;
 /** Whether the browsable directory surface is available at all. Spec §2. */
 export const canUseDirectorySearch = async (viewer) =>
   (await directoryScope(viewer)).kind !== 'none';
+
+/**
+ * Why a contact is being returned. The REASON decides field inclusion — never a bare boolean,
+ * which is too easy to pass without understanding why, and is how a projection drifts. Spec §3.3.
+ */
+export const CONTACT_REASONS = {
+  DIRECTORY_ALL: 'directory_all',
+  DIRECTORY_REFERRED: 'directory_referred',
+  EXACT_EMAIL_LOOKUP: 'exact_email_lookup',
+  CONVERSATION_PARTICIPANT: 'conversation_participant',
+};
+
+const EMAIL_REASONS = new Set([
+  CONTACT_REASONS.DIRECTORY_ALL,
+  CONTACT_REASONS.DIRECTORY_REFERRED,
+  CONTACT_REASONS.EXACT_EMAIL_LOOKUP,
+]);
+
+const ROLE_NAME_REASONS = new Set([
+  CONTACT_REASONS.DIRECTORY_ALL,
+  CONTACT_REASONS.DIRECTORY_REFERRED,
+]);
+
+/**
+ * The single projection for EVERY discovery surface — invariant I-1 (spec §4). Authorization
+ * (canSeeUser) decides WHETHER a target may be returned; this decides WHAT is returned.
+ *
+ * Replaces the previous full User toJSON() on chat search, so phone, notification preferences,
+ * timestamps, and companyAssignedEmail stop reaching every chats.read holder.
+ */
+export const serializeContact = (viewer, target, { reason }) => {
+  if (!Object.values(CONTACT_REASONS).includes(reason)) {
+    // Fail loud. A permissive default here would silently widen disclosure on a new surface.
+    throw new Error(`serializeContact: unknown reason "${reason}"`);
+  }
+
+  const card = {
+    id: String(target.id || target._id),
+    name: target.name || '',
+    // Present for the shared API contract; web ignores it and generates avatars client-side from
+    // the name. Consumers must tolerate null. Spec §3.3.
+    avatar: target.avatar || null,
+  };
+
+  if (EMAIL_REASONS.has(reason)) card.email = target.email;
+
+  // Withheld on the lookup path: the requester supplied the address, so echoing it discloses
+  // nothing, but the target's role is information they did not have and do not need in order to
+  // start a chat. Spec §3.3.
+  if (ROLE_NAME_REASONS.has(reason)) card.roleName = target.roleName ?? null;
+
+  return card;
+};
