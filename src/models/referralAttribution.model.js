@@ -60,5 +60,10 @@ referralAttributionSchema.index({ tenantId: 1, subjectProfileId: 1, assignedAt: 
 referralAttributionSchema.index({ tenantId: 1, assignedAt: -1 });
 referralAttributionSchema.index({ attributionEventId: 1 });
 
+// Serves communicationAccess.referral.js's referredUserIds() lookup, which is deliberately NOT
+// tenant-scoped (attribution rows take tenantId from the candidate, not the sales agent — see
+// referralLeads.service.js's resolveEffectiveTenantId()/tenantCandidateIds() comments).
+referralAttributionSchema.index({ salesAgentUserId: 1, isCurrent: 1, isRevoked: 1 });
+
 export default mongoose.models.ReferralAttribution
   || mongoose.model('ReferralAttribution', referralAttributionSchema);
