@@ -1,6 +1,4 @@
 import config from '../config/config.js';
-import { getFeatureFlag } from '../utils/featureFlags.js';
-import { COMMUNICATION_DIRECTORY_FLAG } from '../constants/communicationAccess.js';
 
 const CACHE_TTL_MS = 60000;
 const cache = new Map();
@@ -57,14 +55,8 @@ const resolveTaskboardV2 = (user) => {
   };
 };
 
-const resolveCommunicationDirectoryRbac = (user) => {
-  const enabled = getFeatureFlag(user?.tenantId, COMMUNICATION_DIRECTORY_FLAG);
-  return { enabled, rollout: enabled ? 'all' : 'off' };
-};
-
 const RESOLVERS = {
   'taskboard-v2': resolveTaskboardV2,
-  [COMMUNICATION_DIRECTORY_FLAG]: resolveCommunicationDirectoryRbac,
 };
 
 /**

@@ -7,14 +7,11 @@ Design: `docs/superpowers/specs/2026-08-20-communication-contact-discovery-rbac-
 `src/services/communicationAccess*.js`, `src/services/user.service.js`,
 `src/routes/v1/chat.route.js`.
 
-Set `FF_COMMUNICATION_DIRECTORY_RBAC=true` before running these.
-
 ## Directory scope
 
 - [ ] `communication.directory:all` account — `GET /v1/chats/users/search` returns other users, `totalResults` > 0.
 - [ ] `communication.directory:referred` account — results contain **only** its own referred people.
 - [ ] No directory permission — `GET /v1/chats/users/search` returns **403**.
-- [ ] Flag off — permissionless account gets 200 with full list (rollback works).
 
 ## Exact-email lookup
 

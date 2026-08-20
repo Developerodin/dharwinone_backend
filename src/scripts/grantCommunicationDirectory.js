@@ -66,7 +66,7 @@ const main = async () => {
     console.error(`\nUNRESOLVED SLUGS: ${plan.unresolved.join(', ')}`);
     console.error(
       'ABORTING. Discovery is deny-by-default, so an unresolved role means those users lose the\n' +
-        'directory at flag-flip. Create the role, or remove it from TARGETS with a written reason.'
+        'directory. Create the role, or remove it from TARGETS with a written reason.'
     );
     await mongoose.disconnect();
     process.exit(1);

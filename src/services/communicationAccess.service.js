@@ -15,11 +15,9 @@ import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import { getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
-import { getFeatureFlag } from '../utils/featureFlags.js';
 import {
   DIRECTORY_ALL_PERMISSION,
   DIRECTORY_REFERRED_PERMISSION,
-  COMMUNICATION_DIRECTORY_FLAG,
 } from '../constants/communicationAccess.js';
 
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
@@ -49,20 +47,8 @@ export const baseEligible = async (viewerId) => {
 /**
  * Keyed on permissions, never on role names: roles are renameable admin-created docs and their
  * spellings vary by org. Spec §2.2.
- *
- * Flag off returns { kind: 'all' } — exactly pre-change behaviour, so rollback is a flag flip
- * rather than a revert. Spec §9.1.
  */
 export const directoryScope = async (viewer) => {
-  // getFeatureFlag has a tenant-list mode: when FF_..._TENANTS is set it matches on tenantId.
-  // A missing tenantId there returns false, which would read as "flag off" and hand back
-  // { kind: 'all' } — the security control silently disabling itself. Fail CLOSED instead:
-  // if the tenant-scoped variant is configured but we have no tenant, enforce rather than skip.
-  const tenantListConfigured = Boolean(process.env.FF_COMMUNICATION_DIRECTORY_RBAC_TENANTS);
-  const flagOn = tenantListConfigured && !viewer?.tenantId
-    ? true
-    : getFeatureFlag(viewer?.tenantId, COMMUNICATION_DIRECTORY_FLAG);
-  if (!flagOn) return { kind: 'all' };
   if (holds(viewer, DIRECTORY_ALL_PERMISSION)) return { kind: 'all' };
   if (holds(viewer, DIRECTORY_REFERRED_PERMISSION)) {
     const { referredUserIds } = await import('./communicationAccess.referral.js');
