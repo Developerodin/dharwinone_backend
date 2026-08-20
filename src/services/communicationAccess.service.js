@@ -57,3 +57,66 @@ export const directoryScope = async (viewer) => {
   }
   return { kind: 'none' };
 };
+
+/**
+ * Current co-membership of a group conversation. Spec §2.6.
+ *
+ * !!! DO NOT ADD a status / archived / deletedAt / expiresAt guard to this query. !!!
+ * conversation.model.js has NO such fields, and participantSchema has no membership status.
+ * Group deletion is findByIdAndDelete (chat.service.js) and participant removal hard-removes the
+ * row, so presence in participants.user IS current membership. Mongo does not match a filter
+ * against an absent field: adding one returns zero documents for every pair, so the group
+ * exception fails CLOSED and silently — every restricted user loses their co-members, and a test
+ * asserting "restricted user cannot see a stranger" still passes.
+ *
+ * FORWARD GUARD: if archiving, soft-delete, group lifecycle state, or per-participant membership
+ * status is ever added to Conversation, this function MUST be updated in the same change and the
+ * canSeeUser truth-table tests extended. A soft-deleted group would otherwise keep granting
+ * discovery forever.
+ */
+export const sharesCurrentGroup = async (viewerId, targetId) => {
+  const Conversation = (await import('../models/conversation.model.js')).default;
+  const found = await Conversation.exists({
+    type: 'group',
+    'participants.user': { $all: [oid(viewerId), oid(targetId)] },
+  });
+  return Boolean(found);
+};
+
+const isEligible = async (viewerId, targetId) => {
+  const User = (await import('../models/user.model.js')).default;
+  const filter = await baseEligible(viewerId);
+  // MERGE into _id, never replace it. `{ ...filter, _id: oid(targetId) }` would overwrite the
+  // whole _id operator object and silently drop the $nin hidden-user exclusion — so every
+  // hideFromDirectory user would become discoverable. Mongo accepts $eq alongside $ne/$nin.
+  return Boolean(await User.exists({ ...filter, _id: { ...filter._id, $eq: oid(targetId) } }));
+};
+
+/**
+ * STANDING discovery authorization. Spec §2.4.
+ *
+ * An exact-email lookup must never cause this to return true (spec §2.0): the lookup is one-time
+ * resolution authorization and grants nothing that outlives the response.
+ */
+export const canSeeUser = async (viewer, targetId) => {
+  if (String(viewer.id) === String(targetId)) return false;
+  if (!(await isEligible(viewer.id, targetId))) return false;
+
+  const scope = await directoryScope(viewer);
+  if (scope.kind === 'all') return true;
+  if (scope.kind === 'referred' && scope.ids.has(String(targetId))) return true;
+
+  return sharesCurrentGroup(viewer.id, targetId);
+};
+
+/**
+ * ONE-TIME resolution authorization. Every role reaching this router already holds chats.read,
+ * and the access matrix grants exact-email lookup to every role without exception — including
+ * Sales Agent (spec §8.1). Kept as a named predicate so no shared middleware ever guards both
+ * this and the directory route.
+ */
+export const canLookupUserByExactEmail = () => true;
+
+/** Whether the browsable directory surface is available at all. Spec §2. */
+export const canUseDirectorySearch = async (viewer) =>
+  (await directoryScope(viewer)).kind !== 'none';
