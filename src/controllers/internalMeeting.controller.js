@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
+import { buildInternalMeetingsMongoFilter } from '../utils/internalMeetingQueryFilter.js';
 import * as internalMeetingService from '../services/internalMeeting.service.js';
 import * as meetingSeriesService from '../services/meetingSeries.service.js';
 import recordingService from '../services/recording.service.js';
@@ -17,7 +18,7 @@ const create = catchAsync(async (req, res) => {
 });
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'status']);
+  const filter = buildInternalMeetingsMongoFilter(req.query);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await internalMeetingService.queryInternalMeetings(filter, options, req.user);
   res.send(result);
