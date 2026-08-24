@@ -62,20 +62,6 @@ mongoose
     import('./services/numberPricing.service.js')
       .then((m) => m.ensureDefaultPricing())
       .catch((e) => logger.warn(`[NumberPricing] seed skipped: ${e.message}`));
-    // Contact-discovery permissions are deny-by-default, so a database that never had the grant
-    // migration applied leaves every role with the exact-email panel and no directory. Applying it
-    // at boot keeps deploys script-free; no-op once any targeted role already holds the permission.
-    import('./scripts/grantCommunicationDirectory.js')
-      .then((m) => m.ensureCommunicationDirectoryGrants())
-      .then((r) => {
-        if (r.unresolved.length) {
-          logger.warn(`[CommunicationDirectory] no active role matched slug(s): ${r.unresolved.join(', ')}`);
-        }
-        if (!r.skipped) {
-          logger.info(`[CommunicationDirectory] granted directory permission to ${r.written} role(s)`);
-        }
-      })
-      .catch((e) => logger.warn(`[CommunicationDirectory] grant skipped: ${e.message}`));
     const httpServer = http.createServer(app);
     if (config.env !== 'test') initSocket(httpServer);
     server = httpServer.listen(port, '0.0.0.0', async () => {

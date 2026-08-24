@@ -359,7 +359,7 @@ export const permissionAliases = {
   'chats.manage': ['chats.manage', 'communication.chats:create,edit,delete', 'communication.chats:view,create,edit,delete'],
   // Communication contact discovery. Spec §9.1: deliberately NO aliases and no inheritance
   // from chats.*. An alias here is the one mistake that silently re-grants the directory to
-  // everyone. Grant only via the Roles UI or src/scripts/grantCommunicationDirectory.js.
+  // everyone. Grant only via the Roles UI.
   'communication.directory:all': ['communication.directory:all'],
   'communication.directory:referred': ['communication.directory:referred'],
   // Email / Outlook (communication.emails:* → emails.read / emails.manage) + Settings "My email templates" (settings.email-templates:* → email-templates.*)
