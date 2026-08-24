@@ -1415,30 +1415,50 @@ export async function getFolderCounts(account) {
 /**
  * Create a new Gmail label.
  * @param {string} name - Display name for the label
- * @returns {Object} Created label with id, name, type
+ * @returns {Object} Created label with id, name, type, message
  */
 export async function createLabel(account, { name }) {
   if (!name || typeof name !== 'string' || !name.trim()) {
-    throw new Error('Label name is required');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Label name is required', true);
   }
   await ensureValidToken(account);
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({ access_token: account.accessToken });
   const gmail = getGmailClient(oauth2Client);
-  const res = await gmail.users.labels.create({
-    userId: 'me',
-    requestBody: {
-      name: name.trim(),
-      messageListVisibility: 'show',
-      labelListVisibility: 'labelShow',
-    },
-  });
-  const l = res.data;
-  return {
-    id: l.id,
-    name: l.name,
-    type: l.type,
-    messageListVisibility: l.messageListVisibility,
-    labelListVisibility: l.labelListVisibility,
-  };
+  try {
+    const res = await gmail.users.labels.create({
+      userId: 'me',
+      requestBody: {
+        name: name.trim(),
+        messageListVisibility: 'show',
+        labelListVisibility: 'labelShow',
+      },
+    });
+    const l = res.data;
+    return {
+      id: l.id,
+      name: l.name,
+      type: l.type,
+      messageListVisibility: l.messageListVisibility,
+      labelListVisibility: l.labelListVisibility,
+      message: 'Label created successfully.',
+    };
+  } catch (err) {
+    const status = err?.response?.status ?? err?.code;
+    const apiMessage =
+      err?.response?.data?.error?.message ||
+      err?.errors?.[0]?.message ||
+      err?.message ||
+      '';
+    const lower = String(apiMessage).toLowerCase();
+    if (
+      status === 409 ||
+      lower.includes('already exists') ||
+      lower.includes('exists or conflicts') ||
+      lower.includes('duplicate')
+    ) {
+      throw new ApiError(httpStatus.CONFLICT, 'Label already exists.', true);
+    }
+    throwGmailApiError(err, 'Could not create label');
+  }
 }

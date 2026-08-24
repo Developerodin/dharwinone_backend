@@ -1357,6 +1357,33 @@ export async function modifyMessage(account, messageId, { addLabelIds = [], remo
     }
   }
 
+  // Custom user folders created via createLabel — move into the destination folder.
+  const systemIds = new Set([
+    'INBOX',
+    'SENT',
+    'DRAFT',
+    'TRASH',
+    'SPAM',
+    'JUNK',
+    'ARCHIVE',
+    'STARRED',
+    'IMPORTANT',
+    'UNREAD',
+  ]);
+  const customDest = addLabelIds.find((id) => id && !systemIds.has(id));
+  if (customDest) {
+    try {
+      await client.api(`${msgPath(messageId)}/move`).post({ destinationId: customDest });
+    } catch (err) {
+      logger.warn(
+        '[Outlook] Failed to move message %s to custom folder %s: %s',
+        messageId,
+        customDest,
+        err.message,
+      );
+    }
+  }
+
   return { success: true };
 }
 
@@ -1535,10 +1562,37 @@ export async function listLabels(account) {
  */
 export async function createLabel(account, { name }) {
   if (!name || typeof name !== 'string' || !name.trim()) {
-    throw new Error('Label name is required');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Label name is required', true);
   }
   await ensureValidToken(account);
   const client = createGraphClient(account.accessToken);
-  const folder = await client.api('/me/mailFolders').post({ displayName: name.trim() });
-  return normalizeFolder(folder);
+  try {
+    const folder = await client.api('/me/mailFolders').post({ displayName: name.trim() });
+    return {
+      ...normalizeFolder(folder),
+      message: 'Label created successfully.',
+    };
+  } catch (err) {
+    const status = err?.statusCode ?? err?.code ?? err?.status;
+    const apiMessage =
+      err?.body?.error?.message ||
+      err?.message ||
+      '';
+    const lower = String(apiMessage).toLowerCase();
+    if (
+      status === 409 ||
+      lower.includes('already exists') ||
+      lower.includes('errorfolderexists') ||
+      lower.includes('folder with the specified name already exists') ||
+      lower.includes('conflict')
+    ) {
+      throw new ApiError(httpStatus.CONFLICT, 'Label already exists.', true);
+    }
+    throw new ApiError(
+      status && status >= 400 && status < 600 ? status : httpStatus.BAD_GATEWAY,
+      apiMessage || 'Could not create label',
+      true,
+      err?.stack
+    );
+  }
 }
