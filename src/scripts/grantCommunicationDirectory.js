@@ -48,6 +48,37 @@ export const planGrants = async () => {
   return { grants, unresolved, safeToApply: unresolved.length === 0 };
 };
 
+/**
+ * Idempotent boot-time equivalent of `--apply`, so a deploy never depends on someone remembering
+ * to SSH in and run this by hand. Assumes mongoose is already connected (src/index.js calls it
+ * inside connect().then()); it never connects or disconnects.
+ *
+ * Runs ONCE per database, not once per boot: if any resolved role already holds its directory
+ * permission the migration is considered done and nothing is written, so a deliberate revoke
+ * through the Roles UI is not silently undone by the next restart.
+ *
+ * ponytail: "some role already holds it" IS the run-once marker — no migrations collection.
+ * Ceiling — revoking the permission from EVERY targeted role re-arms the grant on the next boot.
+ * Add a real migration-ledger doc only if that turns out to be a scenario someone wants.
+ */
+export const ensureCommunicationDirectoryGrants = async () => {
+  const plan = await planGrants();
+  if (plan.grants.some((g) => g.alreadyHeld)) {
+    return { skipped: 'already-applied', written: 0, unresolved: plan.unresolved };
+  }
+
+  let written = 0;
+  for (const g of plan.grants) {
+    // eslint-disable-next-line no-await-in-loop
+    await Role.updateOne({ _id: g.roleId }, { $addToSet: { permissions: g.permission } });
+    written += 1;
+  }
+  // Unresolved slugs are reported, never fatal. The CLI aborts on them because a human is there to
+  // react; killing a boot over an optional role that does not exist in this environment would take
+  // the whole API down to protect one missing grant.
+  return { skipped: null, written, unresolved: plan.unresolved };
+};
+
 const main = async () => {
   const apply = process.argv.includes('--apply');
   await mongoose.connect(config.mongoose.url, config.mongoose.options);
