@@ -32,6 +32,11 @@ const messageSchema = new mongoose.Schema(
     deletedAt: { type: Date, default: null },
     deletedFor: { type: String, enum: ['me', 'everyone'], default: null },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    /**
+     * Per-user "delete for me" hides. Preferred over legacy deletedFor:'me'+deletedBy
+     * so one participant can hide a message without marking it deleted for others.
+     */
+    hiddenFor: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   },
   { timestamps: true }
 );
