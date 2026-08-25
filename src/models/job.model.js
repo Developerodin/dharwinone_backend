@@ -120,6 +120,17 @@ const jobSchema = new mongoose.Schema(
     },
     externalPlatformUrl: { type: String, trim: true },
 
+    // Auto-fetch ingestion scope (null for manually-saved/internal jobs -- those
+    // are never touched by stale cleanup, see externalJobAutoFetch.service.js).
+    autoFetchConfigId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ExternalJobAutoFetchConfig',
+      default: null,
+      index: true,
+    },
+    /** Last time an auto-fetch sync re-discovered this job; stale = missing from the latest successful run. */
+    lastSeenAt: { type: Date, default: null },
+
     // Per-user bookmark notes. visibility='public' visible to all who can read the job;
     // 'private' visible only to the note's owner.
     bookmarks: [

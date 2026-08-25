@@ -2,9 +2,18 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import requireExternalJobsAccess from '../../middlewares/requireExternalJobsAccess.js';
 import externalJobController from '../../controllers/externalJob.controller.js';
+import externalJobAutoFetchController from '../../controllers/externalJobAutoFetch.controller.js';
 import config from '../../config/config.js';
 
 const router = express.Router();
+
+// Auto-fetch: admin-managed recurring sync. Manage-level access only (same gate
+// as save/delete) -- regular external-jobs.read users cannot configure or run it.
+router.get('/auto-fetch', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobAutoFetchController.getConfig);
+router.post('/auto-fetch', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobAutoFetchController.saveConfig);
+router.patch('/auto-fetch', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobAutoFetchController.patchConfig);
+router.post('/auto-fetch/run', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobAutoFetchController.runNow);
+router.get('/auto-fetch/runs', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobAutoFetchController.listRuns);
 
 router.post('/search', auth(), requireExternalJobsAccess(), externalJobController.search);
 router.post('/save', auth(), requireExternalJobsAccess({ requireManage: true }), externalJobController.save);

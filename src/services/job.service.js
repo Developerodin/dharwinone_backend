@@ -65,7 +65,10 @@ const appendFilterClause = (filter, clause) => {
     return;
   }
   const snapshot = stripJobQueryMeta(filter);
-  Object.keys(filter).forEach((k) => delete filter[k]);
+  // Only clear the keys actually folded into `snapshot` -- request-context meta
+  // (userId/userRoleIds/platformSuperUser/forCandidates) must survive on `filter`
+  // for the access-control checks below queryJobs still needs to read them.
+  Object.keys(snapshot).forEach((k) => delete filter[k]);
   if (Object.keys(snapshot).length === 0) {
     Object.assign(filter, clause);
     return;

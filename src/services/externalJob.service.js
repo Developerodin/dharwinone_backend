@@ -4,11 +4,12 @@ import Job from '../models/job.model.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { syncPublishedJobForExternal, archivePublishedJobIfOrphaned } from './externalJobPublishedJob.service.js';
+import { resolveLocationMeta } from '../utils/jobLocation.util.js';
 
 const SOURCES = {
   'active-jobs-db': {
     host: 'active-jobs-db.p.rapidapi.com',
-    endpoints: { '24h': '/active-ats-24h', '7d': '/active-ats-7d' },
+    path: '/active-ats',
   },
   'linkedin-job-search-api': {
     host: 'linkedin-job-search-api.p.rapidapi.com',
@@ -64,6 +65,7 @@ export function mapRowToJob(row, sourceKey) {
   const jobIdUnique = jobId || `ext_${id}`;
 
   let location = '';
+  let locationMeta;
   const loc = row.locations_derived;
   if (Array.isArray(loc) && loc.length > 0) {
     const parts = loc
@@ -78,6 +80,9 @@ export function mapRowToJob(row, sourceKey) {
       .filter(Boolean);
     // Feeds list every site of one posting; source sites render "City +N more".
     location = parts.length > 1 ? `${parts[0]} +${parts.length - 1} more` : parts[0] || '';
+    // Resolve from the clean first location, not the "+N more" display string --
+    // the suffix has no comma before it and pollutes the trailing country segment.
+    if (parts[0]) locationMeta = resolveLocationMeta(parts[0]) || undefined;
   }
   if (!location && row.location_type) location = row.location_type;
 
@@ -126,6 +131,7 @@ export function mapRowToJob(row, sourceKey) {
     title: row.title || null,
     company: row.organization || null,
     location: location || null,
+    ...(locationMeta ? { locationMeta } : {}),
     // Prefer the source posting's own HTML (headings/lists/bold) over the flattened text dump.
     description: row.description_html || row.description_text || null,
     jobType,
@@ -140,10 +146,26 @@ export function mapRowToJob(row, sourceKey) {
   };
 }
 
-export function buildParams(filters) {
-  const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, remote } = filters;
+export function buildParams(filters, source = 'active-jobs-db') {
+  const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, remote, date_posted: datePosted } = filters;
   const limit = 10;
   const off = Math.max(0, Math.floor((Number(offset) || 0) / limit) * limit);
+  const timeFrame = (datePosted || '').toLowerCase().includes('7') ? '7d' : '24h';
+
+  if (source === 'active-jobs-db') {
+    const params = {
+      limit: String(limit),
+      offset: String(off),
+      time_frame: timeFrame,
+      description_format: 'text',
+    };
+    if (jobTitle && jobTitle.trim()) params.title = jobTitle.trim();
+    if (jobLocation && jobLocation.trim()) params.location = jobLocation.trim();
+    if (remote === true || remote === 'true') params.remote = 'true';
+    else if (remote === false || remote === 'false') params.remote = 'false';
+    return params;
+  }
+
   const params = {
     limit: String(limit),
     offset: String(off),
@@ -173,8 +195,8 @@ async function searchFromAPI(filters, source, userId) {
   checkRateLimit(userId);
 
   const variant = (filters.date_posted || '').toLowerCase().includes('7') ? '7d' : '24h';
-  const path = config.endpoints[variant] || config.endpoints['24h'];
-  const params = buildParams(filters);
+  const path = config.path || config.endpoints?.[variant] || config.endpoints?.['24h'];
+  const params = buildParams(filters, source);
   const query = new URLSearchParams(params).toString();
   const url = `https://${config.host}${path}?${query}`;
 

@@ -16,6 +16,13 @@ const externalJobSchema = new mongoose.Schema(
     title: { type: String, trim: true },
     company: { type: String, trim: true },
     location: { type: String, trim: true },
+    /** Normalized geographic metadata resolved from the clean first location string. */
+    locationMeta: {
+      city: { type: String, trim: true },
+      state: { type: String, trim: true },
+      country: { type: String, trim: true },
+      countryCode: { type: String, trim: true, uppercase: true },
+    },
     description: { type: String, trim: true },
     jobType: { type: String, trim: true },
     experienceLevel: { type: String, trim: true },
