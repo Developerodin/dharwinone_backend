@@ -102,6 +102,14 @@ const getMeetings = {
   }),
 };
 
+const getMyInterviews = {
+  query: Joi.object().keys({
+    sortBy: Joi.string().default('scheduledAt:asc'),
+    limit: Joi.number().integer().min(1).max(50).default(20),
+    page: Joi.number().integer().min(1).default(1),
+  }),
+};
+
 const exportMeetings = {
   query: Joi.object().keys(
     Object.fromEntries(
@@ -199,6 +207,7 @@ const endMeetingByRoomPublic = {
 export {
   createMeeting,
   getMeetings,
+  getMyInterviews,
   exportMeetings,
   getMeeting,
   getMeetingRecordings,

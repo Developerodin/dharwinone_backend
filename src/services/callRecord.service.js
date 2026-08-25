@@ -793,12 +793,6 @@ async function upsertDialerCallRecord({
   set['telephonyData.provider'] = provider;
   if (direction) set['telephonyData.direction'] = direction;
 
-  // Claim orphan rows created by status/recording webhooks before the voice seed.
-  // Never put the same path in both $set and $setOnInsert (Mongo rejects that).
-  if (createdBy && existing && existing.createdBy == null) {
-    set.createdBy = createdBy;
-  }
-
   if (status) {
     const st = normalizeStatus(status);
     const existingStatus = existing?.status ? String(existing.status).toLowerCase() : '';
@@ -838,23 +832,36 @@ async function upsertDialerCallRecord({
     }
   }
 
-  const setOnInsert = {
-    executionId: String(executionId),
-    source,
-    createdBy: createdBy || null,
-  };
+  // createdBy/source/bolnaVerifiedAt/createdAt are "set once, on whichever request
+  // actually establishes the row" fields. Twilio fires multiple webhooks for the
+  // same CallSid close together (the Voice-URL seed, which carries the real
+  // createdBy, and the dialed child leg's own statusCallback, whose From/To are
+  // phone numbers so it can never resolve a user and passes createdBy: null).
+  // A plain read-then-write here raced: both requests could read "no existing
+  // row", and whichever one physically performed the insert decided createdBy
+  // permanently — even a later request with the correct value couldn't reclaim
+  // it, because its own `existing` snapshot (read before the race resolved) was
+  // already stale. $ifNull is evaluated by the server at the moment this exact
+  // atomic operation runs, against the document's real current state, not a
+  // client-side snapshot, so it can't lose that race: first write wins for these
+  // fields, same as $setOnInsert did for a real single-writer insert, but safe
+  // under concurrent upserts too. A later request's OWN createdBy is never lost
+  // either way — if it lands second it just doesn't overwrite a real value.
+  set.executionId = String(executionId);
+  set.createdBy = { $ifNull: ['$createdBy', createdBy || null] };
+  set.source = { $ifNull: ['$source', source] };
+  const createdAtOverride = createdAt instanceof Date ? createdAt : createdAt ? new Date(createdAt) : null;
+  const validCreatedAtOverride = createdAtOverride && !Number.isNaN(createdAtOverride.getTime()) ? createdAtOverride : null;
+  set.createdAt = { $ifNull: ['$createdAt', validCreatedAtOverride || '$$NOW'] };
+  set.updatedAt = '$$NOW';
   if (provider === 'twilio') {
     // Twilio CallSid rows are never Bolna executions — skip Bolna reconcilers.
-    setOnInsert.bolnaVerifiedAt = new Date();
+    set.bolnaVerifiedAt = { $ifNull: ['$bolnaVerifiedAt', '$$NOW'] };
   }
-  // Backfill: preserve the real call time instead of "now".
-  if (createdAt) {
-    const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
-    if (!Number.isNaN(d.getTime())) setOnInsert.createdAt = d;
-  }
+
   return CallRecord.findOneAndUpdate(
     { executionId: String(executionId) },
-    { $set: set, $setOnInsert: setOnInsert },
+    [{ $set: set }],
     { new: true, upsert: true }
   )
     .lean()

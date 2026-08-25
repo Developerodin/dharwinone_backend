@@ -118,6 +118,7 @@ const getPageCapabilities = async (user) => {
       ],
       allowedEndpoints: [
         '/v1/ats/job-applications/my',
+        '/v1/meetings/my-interviews',
         '/v1/attendance/my',
         '/v1/jobs',
       ],

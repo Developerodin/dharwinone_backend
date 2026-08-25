@@ -1,3 +1,4 @@
+import { applyLocationMetaToPayload, resolveLocationMeta } from '../utils/jobLocation.util.js';
 import Job from '../models/job.model.js';
 import ExternalJob from '../models/externalJob.model.js';
 import logger from '../config/logger.js';
@@ -102,6 +103,7 @@ export async function syncPublishedJobForExternal(extDoc) {
   const externalId = String(extDoc.externalId).trim();
   const source = String(extDoc.source).trim();
   const payload = buildJobPayloadFromExternal({ ...extDoc.toObject?.() || extDoc, externalId, source });
+  applyLocationMetaToPayload(payload);
 
   let job = null;
 
@@ -117,12 +119,14 @@ export async function syncPublishedJobForExternal(extDoc) {
   }
 
   if (job) {
+    const locationMeta = resolveLocationMeta(payload.location);
     job.set({
       title: payload.title,
       organisation: payload.organisation,
       jobDescription: payload.jobDescription,
       jobType: payload.jobType,
       location: payload.location,
+      ...(locationMeta ? { locationMeta } : { locationMeta: undefined }),
       experienceLevel: payload.experienceLevel,
       skillTags: payload.skillTags,
       salaryRange: payload.salaryRange,
@@ -139,12 +143,14 @@ export async function syncPublishedJobForExternal(extDoc) {
       if (err && err.code === 11000) {
         job = await findMirroredJobByRef(externalId, source);
         if (job) {
+          const locationMeta = resolveLocationMeta(payload.location);
           job.set({
             title: payload.title,
             organisation: payload.organisation,
             jobDescription: payload.jobDescription,
             jobType: payload.jobType,
             location: payload.location,
+            ...(locationMeta ? { locationMeta } : { locationMeta: undefined }),
             experienceLevel: payload.experienceLevel,
             skillTags: payload.skillTags,
             salaryRange: payload.salaryRange,

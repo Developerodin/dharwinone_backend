@@ -281,11 +281,11 @@ const browseJobs = {
     jobType: Joi.string()
       .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
       .optional(),
-    location: Joi.string().optional(),
+    location: Joi.string().optional().trim(),
     experienceLevel: Joi.string()
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
       .optional(),
-    search: Joi.string().optional(),
+    search: Joi.string().optional().trim(),
     jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(100).default(12),

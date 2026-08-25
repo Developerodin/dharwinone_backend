@@ -14,6 +14,11 @@ router
   .post(auth(), requirePermissions('interviews.manage'), validate(meetingValidation.createMeeting), meetingController.create)
   .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeetings), meetingController.list);
 
+// Candidate self-service — auth only (no interviews.read). MUST be before /:id.
+router
+  .route('/my-interviews')
+  .get(auth(), validate(meetingValidation.getMyInterviews), meetingController.listMyInterviews);
+
 // Excel export of interviews (MUST be before /:id so "export" isn't captured as an id)
 router.post(
   '/export',
