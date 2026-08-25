@@ -13,6 +13,7 @@ import { getClientIpFromRequest, parseClientSuppliedIpHeader } from '../utils/re
 import { parseUserAgentDetails } from '../utils/parseUserAgent.util.js';
 import { nominatimReversePlace } from '../utils/nominatimReverse.util.js';
 import { ActivityActions } from '../config/activityLog.js';
+import { buildActivityLogExportBuffer } from '../utils/activityLogExcel.service.js';
 
 const EXPORT_ROW_CAP = 50000;
 const ACTIVITY_LOG_WRITE_FAILED_METRIC = 'activity_log_write_failed_total';
@@ -761,6 +762,59 @@ const streamActivityLogsCsv = async (filter, viewer, res) => {
   res.end();
 };
 
+/**
+ * Export all matching activity logs as .xlsx (no pagination). ActivityLog collection only.
+ * @param {Object} filter
+ * @param {object | null} viewer
+ * @returns {Promise<{ empty: true, total: 0 } | { empty: false, total: number, buffer: Buffer }>}
+ */
+const exportActivityLogsExcel = async (filter, viewer = null) => {
+  const mongoFilter = await buildActivityLogMongoFilter(filter, viewer);
+  const total = await ActivityLog.countDocuments(mongoFilter);
+  if (total === 0) {
+    return { empty: true, total: 0 };
+  }
+  if (total > EXPORT_ROW_CAP) {
+    throw new ApiError(
+      httpStatus.UNPROCESSABLE_ENTITY,
+      `Export would include ${total} rows; maximum is ${EXPORT_ROW_CAP}. Narrow your filters.`
+    );
+  }
+
+  const plains = [];
+  const seenIds = new Set();
+  const cursor = ActivityLog.find(mongoFilter)
+    .sort('-createdAt')
+    .populate({ path: 'actor', select: 'name email' })
+    .lean()
+    .cursor();
+
+  for await (const doc of cursor) {
+    const id = String(doc._id);
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    plains.push(enrichPlainForClient(doc));
+  }
+
+  await enrichActivityLogPlainsForEntityLabels(plains, viewer);
+
+  const rows = plains.map((plain) => ({
+    createdAt: plain.createdAt,
+    actorName: plain.actor?.name ?? '',
+    actorEmail: plain.actor?.email ?? '',
+    action: plain.action ?? '',
+    actionTitle: plain.action ?? '',
+    entityType: plain.entityType ?? '',
+    entityId: plain.entityId ?? '',
+    displayLocation: plain.displayLocation ?? '',
+    displayIp: plain.displayIp ?? '',
+    userAgent: plain.userAgent ?? '',
+  }));
+
+  const buffer = buildActivityLogExportBuffer(rows, filter);
+  return { empty: false, total: rows.length, buffer };
+};
+
 export {
   createActivityLog,
   queryActivityLogs,
@@ -768,6 +822,7 @@ export {
   buildActivityLogMongoFilter,
   buildQOrClause,
   streamActivityLogsCsv,
+  exportActivityLogsExcel,
   EXPORT_ROW_CAP,
   ACTIVITY_LOG_WRITE_FAILED_METRIC,
 };

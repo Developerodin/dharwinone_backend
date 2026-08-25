@@ -48,7 +48,7 @@ function countryTextFallbackTerms(countryCode, countryName) {
   return [...terms];
 }
 
-function resolveCountry(name) {
+export function resolveCountry(name) {
   const key = normalizeLocationKey(name);
   if (!key) return null;
 

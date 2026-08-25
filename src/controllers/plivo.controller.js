@@ -278,12 +278,29 @@ const sdkAnswer = catchAsync(async (req, res) => {
  * client.call(). Plivo's sdk-answer webhook often omits X-PH-callerId.
  */
 const postBrowserCallIntent = catchAsync(async (req, res) => {
-  const { toNumber, callerId } = req.body;
+  const { toNumber, callerId, businessName, executionId: clientExecutionId } = req.body || {};
+  const userId = req.user?.id || req.user?._id;
   const result = await telephonyService.registerBrowserCallIntent({ toNumber, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_REQUEST, result.error || 'Invalid browser call intent');
   }
-  res.status(httpStatus.OK).send({ intent: result.intent });
+
+  const executionId =
+    (clientExecutionId && String(clientExecutionId).trim()) ||
+    `plivo_${userId || 'anon'}_${Date.now()}`;
+  await callRecordService.assertDialerRecordMutationAllowed(executionId, userId);
+  const record = await callRecordService.upsertDialerCallRecord({
+    executionId,
+    createdBy: userId || null,
+    toPhoneNumber: toNumber,
+    fromPhoneNumber: callerId,
+    status: 'initiated',
+    direction: 'outbound',
+    provider: telephonyService.getProviderName(),
+    businessName: businessName || undefined,
+  });
+
+  res.status(httpStatus.OK).send({ intent: result.intent, executionId, record });
 });
 
 /**
@@ -321,12 +338,43 @@ const backfillTwilio = catchAsync(async (req, res) => {
 });
 
 /**
+ * POST /v1/plivo/dialer-initiate — seed a dialer CallRecord when the web
+ * softphone places an outbound call (Twilio CallSid or app-minted id for Plivo).
+ */
+const postDialerInitiate = catchAsync(async (req, res) => {
+  const { executionId, toNumber, fromPhoneNumber, direction, businessName, status } = req.body || {};
+  const userId = req.user?.id || req.user?._id;
+  if (!executionId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'executionId is required');
+  }
+
+  await callRecordService.assertDialerRecordMutationAllowed(executionId, userId);
+  const record = await callRecordService.upsertDialerCallRecord({
+    executionId: String(executionId),
+    createdBy: userId || null,
+    toPhoneNumber: toNumber,
+    fromPhoneNumber: fromPhoneNumber,
+    status: status || 'initiated',
+    direction: direction || 'outbound',
+    provider: telephonyService.getProviderName(),
+    businessName: businessName || undefined,
+  });
+
+  logger.info('[dialer] initiate recorded', {
+    executionId,
+    userId: userId ? String(userId) : null,
+  });
+
+  res.status(httpStatus.OK).send({ success: true, executionId: String(executionId), record });
+});
+
+/**
  * POST /v1/plivo/dialer-outcome — mark a dialer CallRecord terminal from the app
  * (reject / miss / cancel). Ensures call history updates when the user acts on
  * the native CallStyle notification before the Dial action webhook arrives.
  */
 const postDialerOutcome = catchAsync(async (req, res) => {
-  const { executionId, status, direction, fromPhoneNumber, toPhoneNumber } = req.body || {};
+  const { executionId, status, direction, fromPhoneNumber, toPhoneNumber, businessName } = req.body || {};
   const userId = req.user?.id || req.user?._id;
   if (!executionId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'executionId is required');
@@ -339,6 +387,7 @@ const postDialerOutcome = catchAsync(async (req, res) => {
         ? 'declined'
         : status;
 
+  await callRecordService.assertDialerRecordMutationAllowed(executionId, userId);
   const record = await callRecordService.upsertDialerCallRecord({
     executionId: String(executionId),
     createdBy: userId || null,
@@ -346,6 +395,8 @@ const postDialerOutcome = catchAsync(async (req, res) => {
     direction: direction || undefined,
     fromPhoneNumber: fromPhoneNumber || undefined,
     toPhoneNumber: toPhoneNumber || undefined,
+    provider: telephonyService.getProviderName(),
+    businessName: businessName || undefined,
   });
 
   logger.info('[dialer] outcome recorded', {
@@ -366,6 +417,7 @@ export {
   placeCall,
   setCallRecording,
   backfillTwilio,
+  postDialerInitiate,
   postDialerOutcome,
   answerCall,
   getSdkToken,

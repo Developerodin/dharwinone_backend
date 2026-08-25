@@ -101,6 +101,16 @@ router
     plivoController.backfillTwilio
   );
 
+// App-reported dialer call start (web softphone) — seeds Recent immediately.
+router
+  .route('/dialer-initiate')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.create'),
+    validate(plivoValidation.dialerInitiate),
+    plivoController.postDialerInitiate
+  );
+
 // App-reported dialer call outcome (reject / miss) for call history.
 router
   .route('/dialer-outcome')

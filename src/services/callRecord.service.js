@@ -1,9 +1,11 @@
+import httpStatus from 'http-status';
 import CallRecord, { TERMINAL_STATUSES, rankOf, isTerminal } from '../models/callRecord.model.js';
 import Job from '../models/job.model.js';
 import Employee from '../models/employee.model.js';
 import config from '../config/config.js';
 import { normalizePhone } from '../utils/phone.js';
 import { deriveCallInsights } from '../utils/candidateExtraction.js';
+import ApiError from '../utils/ApiError.js';
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -70,14 +72,13 @@ function isTwilioDialerRecord(record) {
 }
 
 /**
- * Mongo filter for dialer-placed (Twilio browser) calls only. The contact
- * "Recent calls" view uses this to exclude Bolna/Plivo verification calls and
- * anything else on the master call-records page. Mirrors isTwilioDialerRecord.
+ * Mongo filter for dialer-placed (browser/bridge) calls. Excludes Bolna/AI
+ * verification rows while matching Twilio and Plivo softphone/bridge records.
  */
 export const DIALER_CALL_FILTER = {
   $or: [
-    { 'telephonyData.provider': 'twilio' },
-    { executionId: { $regex: '^CA[a-f0-9]{32}$', $options: 'i' } },
+    { 'telephonyData.provider': { $in: ['twilio', 'plivo'] } },
+    { source: { $in: ['initiate', 'backfill'] } },
   ],
 };
 
@@ -86,10 +87,14 @@ const TWILIO_DEDUPE_BUCKET_MS = 2 * 60 * 1000;
 function twilioDialerGroupKey(record) {
   const to = normalizePhone(record.toPhoneNumber || record.recipientPhoneNumber || record.phone || '') || '';
   const from = normalizePhone(record.fromPhoneNumber || record.userNumber || '') || '';
-  const createdBy = String(record.createdBy || '');
   const t = record.createdAt ? new Date(record.createdAt).getTime() : 0;
   const bucket = Number.isFinite(t) ? Math.floor(t / TWILIO_DEDUPE_BUCKET_MS) : 0;
-  return `${createdBy}|${to}|${from}|${bucket}`;
+  // ponytail: no createdBy in the key — the orphaned PSTN child leg of a
+  // browser-dialer call always lands with createdBy null (its own To/From
+  // aren't resolvable to an owner), so keying on it split one physical call
+  // into two rows that never merged. to/from/bucket alone identifies "same
+  // call" since this only groups already-Twilio-dialer-shaped rows.
+  return `${to}|${from}|${bucket}`;
 }
 
 function scoreTwilioDialerRow(record) {
@@ -117,6 +122,9 @@ function mergeTwilioDialerRows(primary, secondary) {
   if (durB > durA) merged.duration = b.duration;
   if (!merged.recordingUrl && b.recordingUrl) merged.recordingUrl = b.recordingUrl;
   if (!merged.recordingArchivedAt && b.recordingArchivedAt) merged.recordingArchivedAt = b.recordingArchivedAt;
+  // The orphaned child leg has createdBy null; backfill from whichever leg has it
+  // so the merged row still resolves an owner for the dialer Recent filter.
+  if (!merged.createdBy && b.createdBy) merged.createdBy = b.createdBy;
   return merged;
 }
 
@@ -191,6 +199,9 @@ async function consolidateTwilioDialerDuplicates({ limit = 100 } = {}) {
       }
       if ((Number(merged.duration) || 0) > (Number(keeper.duration) || 0)) {
         $set.duration = merged.duration;
+      }
+      if (!keeper.createdBy && merged.createdBy) {
+        $set.createdBy = merged.createdBy;
       }
       if (Object.keys($set).length) {
         await CallRecord.updateOne({ _id: keeper._id }, { $set });
@@ -370,9 +381,7 @@ async function listCallRecords(options = {}) {
   }
 
   if (options.channel === 'dialer' && options.userId) {
-    // Dialer Recent: only this user's Twilio softphone/bridge CallRecords.
-    // Dialer rows are owned (createdBy), unlinked from job/candidate, and tagged
-    // via telephonyData.provider / CallSid-shaped executionId.
+    // Dialer Recent: only this user's softphone/bridge CallRecords (any provider).
     andConditions.push({ createdBy: options.userId, candidate: null, job: null });
     andConditions.push(DIALER_CALL_FILTER);
   } else if (!options.isAdmin && options.userId) {
@@ -737,6 +746,21 @@ async function createRecord(body) {
 }
 
 /**
+ * JWT-authed dialer endpoints must not mutate another user's CallRecord.
+ * Creates and orphan claims (createdBy null → real user) remain allowed.
+ */
+async function assertDialerRecordMutationAllowed(executionId, userId) {
+  if (!executionId) return;
+  const existing = await CallRecord.findOne({ executionId: String(executionId) })
+    .select('createdBy')
+    .lean();
+  if (!existing?.createdBy) return;
+  if (!userId || String(existing.createdBy) !== String(userId)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You do not have access to this call');
+  }
+}
+
+/**
  * Upsert a Twilio dialer CallRecord keyed by the Twilio CallSid (executionId).
  * Used by the Twilio voice/status/recording webhooks. createdBy/source are set
  * once on insert; status only moves forward (monotonic rank guard).
@@ -754,6 +778,7 @@ async function upsertDialerCallRecord({
   direction,
   createdAt,
   source = 'initiate',
+  businessName,
 } = {}) {
   if (!executionId) return null;
 
@@ -792,6 +817,10 @@ async function upsertDialerCallRecord({
   if (duration != null && !Number.isNaN(Number(duration))) set.duration = Number(duration);
   set['telephonyData.provider'] = provider;
   if (direction) set['telephonyData.direction'] = direction;
+  const trimmedBusinessName = businessName != null ? String(businessName).trim() : '';
+  if (trimmedBusinessName) {
+    set.businessName = { $ifNull: ['$businessName', trimmedBusinessName] };
+  }
 
   if (status) {
     const st = normalizeStatus(status);
@@ -1238,7 +1267,12 @@ async function getCallRecordScopeFields(executionId) {
  * Re-derive verification + callQuality for stored records that have extractedData
  * or a transcript but no verification yet. Idempotent.
  */
-export { userCanAccessCallRecord, getCallRecordScopeFields, getCallRecordingFields };
+export {
+  userCanAccessCallRecord,
+  getCallRecordScopeFields,
+  getCallRecordingFields,
+  assertDialerRecordMutationAllowed,
+};
 
 export async function backfillVerification(limit = 200) {
   const records = await CallRecord.find({
@@ -1271,8 +1305,10 @@ export async function backfillVerification(limit = 200) {
 export default {
   createFromWebhook,
   createRecord,
+  assertDialerRecordMutationAllowed,
   upsertDialerCallRecord,
   consolidateTwilioDialerDuplicates,
+  dedupeTwilioDialerRows,
   listCallRecords,
   fillMissingBusinessNameFromJobs,
   normalizePayload,

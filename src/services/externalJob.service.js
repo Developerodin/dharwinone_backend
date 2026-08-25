@@ -4,7 +4,7 @@ import Job from '../models/job.model.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { syncPublishedJobForExternal, archivePublishedJobIfOrphaned } from './externalJobPublishedJob.service.js';
-import { resolveLocationMeta } from '../utils/jobLocation.util.js';
+import { resolveLocationMeta, resolveCountry } from '../utils/jobLocation.util.js';
 
 const SOURCES = {
   'active-jobs-db': {
@@ -80,9 +80,27 @@ export function mapRowToJob(row, sourceKey) {
       .filter(Boolean);
     // Feeds list every site of one posting; source sites render "City +N more".
     location = parts.length > 1 ? `${parts[0]} +${parts.length - 1} more` : parts[0] || '';
-    // Resolve from the clean first location, not the "+N more" display string --
-    // the suffix has no comma before it and pollutes the trailing country segment.
-    if (parts[0]) locationMeta = resolveLocationMeta(parts[0]) || undefined;
+
+    const first = loc[0];
+    if (first && typeof first === 'object' && (first.city || first.admin || first.country)) {
+      // API already gives structured city/admin/country -- use it directly instead
+      // of re-parsing the joined display string. country-state-city is only needed
+      // for the one thing the API doesn't give us: the ISO country code.
+      const countryRes = first.country ? resolveCountry(first.country) : null;
+      const meta = {};
+      if (first.city) meta.city = first.city;
+      if (first.admin) meta.state = first.admin;
+      if (countryRes) {
+        meta.country = countryRes.countryName;
+        meta.countryCode = countryRes.countryCode;
+      } else if (first.country) {
+        meta.country = first.country;
+      }
+      if (Object.keys(meta).length) locationMeta = meta;
+    } else if (parts[0]) {
+      // Fallback for rows where locations_derived holds plain strings, not objects.
+      locationMeta = resolveLocationMeta(parts[0]) || undefined;
+    }
   }
   if (!location && row.location_type) location = row.location_type;
 
@@ -226,6 +244,38 @@ async function searchFromAPI(filters, source, userId) {
   return rows.map((row) => mapRowToJob(row, source));
 }
 
+/** Active Jobs DB only -- returns externalId-formatted ids (`ext_<id>`) that expired within timeFrame. */
+async function fetchExpiredIds(timeFrame, userId) {
+  const apiKey = process.env.RAPIDAPI_KEY || process.env.RAPIDAPI_API_KEY || '';
+  if (!apiKey) {
+    throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'RAPIDAPI_KEY is not configured.');
+  }
+  checkRateLimit(userId);
+
+  const host = SOURCES['active-jobs-db'].host;
+  const query = new URLSearchParams({ time_frame: timeFrame }).toString();
+  const response = await fetch(`https://${host}/expired-ats?${query}`, {
+    method: 'GET',
+    headers: { 'x-rapidapi-key': apiKey, 'x-rapidapi-host': host },
+    signal: AbortSignal.timeout(60000),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let msg = response.statusText;
+    try {
+      const data = JSON.parse(text);
+      msg = data?.detail || data?.message || data?.error || msg;
+    } catch {
+      if (text) msg = text.slice(0, 200);
+    }
+    throw new ApiError(response.status === 429 ? httpStatus.TOO_MANY_REQUESTS : httpStatus.BAD_GATEWAY, msg);
+  }
+
+  const ids = await response.json();
+  return (Array.isArray(ids) ? ids : []).map((id) => `ext_${id}`);
+}
+
 async function saveJob(userId, jobData) {
   const { externalId, source, ...rest } = jobData;
   if (!externalId || !source) {
@@ -300,6 +350,7 @@ async function unsaveJob(userId, externalId, source) {
 
 export default {
   searchFromAPI,
+  fetchExpiredIds,
   saveJob,
   getSavedJobs,
   unsaveJob,

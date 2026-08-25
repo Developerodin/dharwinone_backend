@@ -29,6 +29,8 @@ async function withLastRun(config) {
           completedAt: lastRun.completedAt,
           stats: lastRun.stats,
           errorMessage: lastRun.errorMessage,
+          currentQuery: lastRun.currentQuery || null,
+          fetchedJobs: lastRun.fetchedJobs || [],
         }
       : null,
   };

@@ -3,20 +3,21 @@
  * (externalJobAutoFetch.scheduler.js) and the manual "Fetch Now" API call this
  * SAME function -- there is exactly one sync implementation.
  *
- * Design decision (documented per the product spec's explicit requirement):
- * auto-fetched jobs are written DIRECTLY to the published `Job` model via the
- * existing syncPublishedJobForExternal(), never through `ExternalJob`.
- * `ExternalJob` is schema-required `savedBy: ObjectId` -- a real user's bookmark,
- * not a shared cache -- and a scheduled pull has no natural user. Inventing a
- * fake bot account to satisfy that constraint was the thing explicitly ruled
- * out. `syncPublishedJobForExternal` already dedupes purely on
- * `Job.externalRef.{externalId,source}` (via findMirroredJobByRef) and doesn't
- * require a real ExternalJob document (confirmed: `extDoc.toObject?.() || extDoc`
- * tolerates a plain object) -- so reusing it needs zero changes to ExternalJob's
- * user-owned semantics. `Job.createdBy` for these jobs is the config's own
- * `createdBy` (the admin who set up the auto-fetch) -- real provenance, not a
- * fabricated identity. Manually-saved jobs are completely unaffected: they still
- * go through ExternalJob/saveJob() exactly as before.
+ * Design decision: auto-fetched jobs are persisted through the same
+ * `externalJobService.saveJob()` path as a manual save, using the config's own
+ * `createdBy` (the admin who set up the auto-fetch) as `ExternalJob.savedBy` --
+ * real provenance, not a fabricated bot account. That upserts the `ExternalJob`
+ * row (so fetched jobs show up in that admin's Saved Jobs list) and mirrors it
+ * into the published `Job` model via `syncPublishedJobForExternal()` exactly as
+ * a manual save does. `Job.autoFetchConfigId` + `lastSeenAt` are then stamped
+ * separately for staleness tracking, which a manual save never touches.
+ *
+ * Expiry sweep: Active Jobs DB also exposes `/expired-ats`, an explicit
+ * "these postings are gone" signal (unlike the stale-archival heuristic below,
+ * which only infers absence from search results). Any Job/ExternalJob row for
+ * source `active-jobs-db` whose externalId shows up there is hard-deleted --
+ * scoped to that source's id space, not just this config's own fetched rows,
+ * since expiry is a property of the listing itself.
  *
  * Staleness scope: Job.autoFetchConfigId + Job.lastSeenAt (added to the Job
  * schema for this feature). A job is only eligible for archival if it belongs
@@ -33,8 +34,8 @@
 import ExternalJobAutoFetchConfig from '../models/externalJobAutoFetchConfig.model.js';
 import ExternalJobSyncRun from '../models/externalJobSyncRun.model.js';
 import Job from '../models/job.model.js';
+import ExternalJob from '../models/externalJob.model.js';
 import externalJobService from './externalJob.service.js';
-import { syncPublishedJobForExternal } from './externalJobPublishedJob.service.js';
 import logger from '../config/logger.js';
 
 // externalJob.service.js enforces 5 requests/minute per rate-limit key. Spacing
@@ -77,8 +78,17 @@ export async function runAutoFetchSync(config, trigger) {
   const run = await ExternalJobSyncRun.create({ configId: config._id, trigger, status: 'running' });
   await ExternalJobAutoFetchConfig.updateOne({ _id: config._id }, { $set: { lastRunStatus: 'running' } });
 
-  const stats = { fetched: 0, created: 0, updated: 0, staleArchived: 0, queriesRun: 0, queriesFailed: 0 };
+  const stats = {
+    fetched: 0,
+    created: 0,
+    updated: 0,
+    staleArchived: 0,
+    expiredRemoved: 0,
+    queriesRun: 0,
+    queriesFailed: 0,
+  };
   const failedQueries = [];
+  const fetchedJobsThisRun = [];
   const seenThisRun = new Set(); // `${source}:${externalId}` -- same job matched by more than one title/location
   const runStartedAt = new Date();
   const queries = buildQueries(config);
@@ -86,6 +96,13 @@ export async function runAutoFetchSync(config, trigger) {
 
   for (const { title, location } of queries) {
     stats.queriesRun += 1;
+    // Written immediately (before the slow provider call) so the modal's poll
+    // shows "fetching N of M" while the request is still in flight, not just
+    // after it resolves.
+    await ExternalJobSyncRun.updateOne(
+      { _id: run._id },
+      { $set: { currentQuery: { title, location, index: stats.queriesRun, total: queries.length }, stats } }
+    ).catch(() => {});
     try {
       const rows = await externalJobService.searchFromAPI(
         {
@@ -111,7 +128,11 @@ export async function runAutoFetchSync(config, trigger) {
             'externalRef.externalId': row.externalId,
             'externalRef.source': row.source,
           });
-          const job = await syncPublishedJobForExternal({
+          // Goes through the same ExternalJob upsert a manual save uses (savedBy =
+          // the config's own admin), so fetched jobs show up in that admin's Saved
+          // Jobs tab too -- saveJob() internally mirrors into Job via
+          // syncPublishedJobForExternal().
+          await externalJobService.saveJob(config.createdBy, {
             externalId: row.externalId,
             source: row.source,
             title: row.title,
@@ -126,14 +147,18 @@ export async function runAutoFetchSync(config, trigger) {
             salaryMax: row.salaryMax,
             salaryCurrency: row.salaryCurrency,
             platformUrl: row.platformUrl,
-            savedBy: config.createdBy,
+            postedAt: row.postedAt,
+            timePosted: row.timePosted,
           });
-          await Job.updateOne(
-            { _id: job._id },
-            { $set: { autoFetchConfigId: config._id, lastSeenAt: runStartedAt, status: 'Active' } }
+          const job = await Job.findOneAndUpdate(
+            { 'externalRef.externalId': row.externalId, 'externalRef.source': row.source },
+            { $set: { autoFetchConfigId: config._id, lastSeenAt: runStartedAt, status: 'Active' } },
+            { new: true, select: '_id' }
           );
+          if (!job) throw new Error('mirrored Job not found after saveJob()');
           if (existing) stats.updated += 1;
           else stats.created += 1;
+          fetchedJobsThisRun.push(row);
         } catch (err) {
           logger.warn(`[auto-fetch] persist failed externalId=${row.externalId}: ${err.message}`);
         }
@@ -143,6 +168,12 @@ export async function runAutoFetchSync(config, trigger) {
       failedQueries.push({ title, location, error: err.message || String(err) });
       logger.warn(`[auto-fetch] query failed title="${title}" location="${location}": ${err.message}`);
     }
+    // Same poll target the "before" write above used -- lets the modal/search-tab
+    // mirror grow live as each query's rows land, not just once at the very end.
+    await ExternalJobSyncRun.updateOne(
+      { _id: run._id },
+      { $set: { stats, fetchedJobs: fetchedJobsThisRun } }
+    ).catch(() => {});
     if (queries.length > 1) await sleep(RATE_LIMIT_DELAY_MS);
   }
 
@@ -166,6 +197,24 @@ export async function runAutoFetchSync(config, trigger) {
     stats.staleArchived = staleResult.modifiedCount || 0;
   }
 
+  // Explicit "gone" signal from the provider -- runs regardless of this run's
+  // query outcome, and covers every active-jobs-db row (not just this config's).
+  if (config.source === 'active-jobs-db') {
+    try {
+      const expiredIds = await externalJobService.fetchExpiredIds('1d', SYSTEM_RATE_LIMIT_KEY);
+      if (expiredIds.length) {
+        const jobResult = await Job.deleteMany({
+          'externalRef.source': 'active-jobs-db',
+          'externalRef.externalId': { $in: expiredIds },
+        });
+        await ExternalJob.deleteMany({ source: 'active-jobs-db', externalId: { $in: expiredIds } });
+        stats.expiredRemoved = jobResult.deletedCount || 0;
+      }
+    } catch (err) {
+      logger.warn(`[auto-fetch] expired sweep failed: ${err.message}`);
+    }
+  }
+
   await ExternalJobSyncRun.updateOne(
     { _id: run._id },
     {
@@ -173,6 +222,7 @@ export async function runAutoFetchSync(config, trigger) {
         status,
         stats,
         failedQueries,
+        currentQuery: null,
         completedAt: new Date(),
         errorMessage: status === 'failed' ? failedQueries[0]?.error || 'No queries configured' : null,
       },
