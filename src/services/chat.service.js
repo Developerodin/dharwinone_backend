@@ -137,13 +137,73 @@ const getConversationParticipantIds = async (conversationId) => {
 };
 
 /** Same visibility rules as getMessages — per-user deleted-for-me hides from deleter only. */
-const messageVisibilityFilter = (userId) => ({
-  $or: [
-    { deletedAt: null },
-    { deletedFor: 'everyone' },
-    { deletedFor: 'me', deletedBy: { $ne: new mongoose.Types.ObjectId(userId) } },
-  ],
-});
+const messageVisibilityFilter = (userId) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  return {
+    $and: [
+      // Hide messages this user deleted for themselves (new + legacy).
+      {
+        $nor: [{ hiddenFor: userObjectId }, { deletedFor: 'me', deletedBy: userObjectId }],
+      },
+      {
+        $or: [
+          { deletedAt: null },
+          { deletedFor: 'everyone' },
+          // Legacy delete-for-me by someone else — still visible to this user.
+          { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+        ],
+      },
+    ],
+  };
+};
+
+/**
+ * Chat-list / preview visibility: same personal hides as the thread, but exclude
+ * "deleted for everyone" tombstones so the list never shows deleted copy.
+ */
+const messagePreviewVisibilityFilter = (userId) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  return {
+    $and: [
+      {
+        $nor: [
+          { hiddenFor: userObjectId },
+          { deletedFor: 'me', deletedBy: userObjectId },
+          { deletedFor: 'everyone' },
+        ],
+      },
+      {
+        $or: [
+          { deletedAt: null },
+          { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
+        ],
+      },
+    ],
+  };
+};
+
+/**
+ * Present a message to a specific viewer. Legacy delete-for-me by *another* user
+ * must not surface as a tombstone (deletedAt) for this viewer.
+ */
+const presentMessageForUser = (msg, userId) => {
+  if (!msg) return msg;
+  const presented = { ...msg, id: msg._id?.toString?.() || msg.id };
+  const deletedById = presented.deletedBy?._id?.toString?.() || presented.deletedBy?.toString?.();
+  if (
+    presented.deletedFor === 'me' &&
+    deletedById &&
+    userId &&
+    deletedById !== String(userId)
+  ) {
+    presented.deletedAt = null;
+    presented.deletedFor = null;
+    presented.deletedBy = null;
+  }
+  // hiddenFor is server-side only — never needed by clients.
+  delete presented.hiddenFor;
+  return presented;
+};
 
 const formatLastMessagePreview = (lastMsg) => {
   if (!lastMsg) return null;
@@ -160,14 +220,14 @@ const formatLastMessagePreview = (lastMsg) => {
 const getLastMessagePreview = async (conversationId, userId) => {
   const msg = await Message.findOne({
     conversation: new mongoose.Types.ObjectId(conversationId),
-    ...messageVisibilityFilter(userId),
+    ...messagePreviewVisibilityFilter(userId),
   })
     .sort({ createdAt: -1 })
     .populate('sender', 'name')
     .lean();
   if (!msg) return null;
   return formatLastMessagePreview({
-    ...msg,
+    ...presentMessageForUser(msg, userId),
     sender: msg.sender ? { name: msg.sender.name } : undefined,
   });
 };
@@ -351,10 +411,7 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
   // tombstones so the chat list never shows deleted content as the latest preview.
   const visibleLastMessageMatch = {
     conversation: { $in: convIds },
-    $or: [
-      { deletedAt: null },
-      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
-    ],
+    ...messagePreviewVisibilityFilter(userId),
   };
 
   const lastMsgAgg = convIds.length
@@ -630,11 +687,7 @@ const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
   await ensureParticipant(conversationId, userId);
   const filter = {
     conversation: new mongoose.Types.ObjectId(conversationId),
-    $or: [
-      { deletedAt: null },
-      { deletedFor: 'everyone' },
-      { deletedFor: 'me', deletedBy: { $ne: new mongoose.Types.ObjectId(userId) } },
-    ],
+    ...messageVisibilityFilter(userId),
   };
   if (before) {
     const beforeDoc = await Message.findById(before);
@@ -666,7 +719,7 @@ const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
       );
     }
   }
-  return reversed.map((m) => ({ ...m, id: m._id?.toString() }));
+  return reversed.map((m) => presentMessageForUser(m, userId));
 };
 
 const createMessage = async (conversationId, userId, { content, type, attachments, replyTo }) => {
@@ -718,19 +771,15 @@ const createMessage = async (conversationId, userId, { content, type, attachment
  * "delete for everyone" tombstones). Used for chat-list previews after deletion.
  */
 const getLastVisibleMessageForUser = async (conversationId, userId) => {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
   const msg = await Message.findOne({
     conversation: new mongoose.Types.ObjectId(conversationId),
-    $or: [
-      { deletedAt: null },
-      { deletedFor: 'me', deletedBy: { $ne: userObjectId } },
-    ],
+    ...messagePreviewVisibilityFilter(userId),
   })
     .sort({ createdAt: -1 })
     .populate('sender', 'name')
     .lean();
   if (!msg) return null;
-  const preview = buildChatMessagePreview(msg);
+  const preview = buildChatMessagePreview(presentMessageForUser(msg, userId));
   return {
     content: preview.text,
     sender: msg.sender?.name || '',
@@ -747,6 +796,7 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
 
   const isSender = msg.sender.toString() === userId.toString();
   const mode = deleteFor === 'everyone' ? 'everyone' : 'me';
+  const userObjectId = new mongoose.Types.ObjectId(userId);
 
   // WhatsApp-style: anyone can delete for themselves; only the sender can delete for everyone.
   if (mode === 'everyone' && !isSender) {
@@ -759,18 +809,25 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     return result;
   }
 
-  const update = {
-    deletedAt: new Date(),
-    deletedFor: mode,
-    deletedBy: userId,
-  };
-  await Message.findByIdAndUpdate(messageId, { $set: update });
+  if (mode === 'me') {
+    // Per-user hide only — do NOT set deletedAt/deletedFor or other participants
+    // would see a tombstone when the message is still returned to them.
+    await Message.findByIdAndUpdate(messageId, {
+      $addToSet: { hiddenFor: userObjectId },
+    });
+  } else {
+    await Message.findByIdAndUpdate(messageId, {
+      $set: {
+        deletedAt: new Date(),
+        deletedFor: 'everyone',
+        deletedBy: userId,
+      },
+    });
 
-  // Keep conversation sort key in sync when the chronologically latest message is removed for everyone.
-  if (mode === 'everyone') {
+    // Keep conversation sort key in sync when the chronologically latest message is removed for everyone.
     const latestVisible = await Message.findOne({
       conversation: conversationId,
-      $or: [{ deletedAt: null }, { deletedFor: 'me' }],
+      $or: [{ deletedAt: null }, { deletedFor: { $ne: 'everyone' } }],
     })
       .sort({ createdAt: -1 })
       .select('createdAt')
@@ -784,8 +841,7 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
     .lean();
-  const result = { ...updated, id: updated._id?.toString() };
-  return result;
+  return presentMessageForUser(updated, userId);
 };
 
 /**
