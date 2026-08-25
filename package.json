@@ -12,6 +12,8 @@
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",
     "test": "node scripts/run-tests.mjs",
     "backfill:identity": "node src/scripts/backfillIdentityFromUser.js",
+    "backfill:job-location": "node src/scripts/backfillJobLocationMeta.js",
+    "backfill:job-location:dry": "node src/scripts/backfillJobLocationMeta.js --dry",
     "audit:ci": "npm audit --audit-level=high",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
