@@ -526,7 +526,11 @@ const config = {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
-    fromPhoneNumber: envVars.BOLNA_FROM_PHONE_NUMBER || envVars.CALLER_ID || '',
+    fromPhoneNumber:
+      envVars.BOLNA_FROM_PHONE_NUMBER ||
+      envVars.CALLER_ID ||
+      (envVars.TELEPHONY_PROVIDER === 'twilio' ? envVars.TWILIO_PHONE_NUMBER : '') ||
+      '',
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
     /** Applied to every outbound call; mirror in Bolna dashboard Call tab for each agent. */
     maxCallDurationSeconds: envVars.BOLNA_MAX_CALL_DURATION_SECONDS,
