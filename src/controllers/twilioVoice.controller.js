@@ -10,7 +10,10 @@ import twilioService from '../services/twilio.service.js';
 import telephonyService from '../services/telephony.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import { archiveTwilioRecording } from '../services/callRecordingArchive.service.js';
-import { resolveInboundUserIdForCalledNumber } from '../services/companyPhoneNumber.service.js';
+import {
+  resolveInboundUserIdForCalledNumber,
+  isCallerIdAllowedForUser,
+} from '../services/companyPhoneNumber.service.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
@@ -77,7 +80,21 @@ async function resolveOutboundCallerId(body) {
     logger.warn(`[Twilio] outbound rejected callerId: ${check.error}`);
     return null;
   }
-  return check.callerId || callerId;
+  const resolved = check.callerId || callerId;
+
+  // Twilio account ownership is NOT authorization — every user's number lives on the same
+  // account, so validateCallerId alone let a dialer client post another user's assigned
+  // number as its caller ID. `From` is the browser SDK identity (client:user_<id>).
+  const callerUserId = twilioService.userIdFromClient(body.From);
+  if (callerUserId && !(await isCallerIdAllowedForUser(callerUserId, resolved))) {
+    logger.warn('[Twilio] outbound rejected: callerId assigned to a different user', {
+      callerId: resolved,
+      userId: callerUserId,
+    });
+    return null;
+  }
+
+  return resolved;
 }
 
 /** POST /v1/public/twilio/voice — TwiML App Voice URL (browser/mobile outbound). */
