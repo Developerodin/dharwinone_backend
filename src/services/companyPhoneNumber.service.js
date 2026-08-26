@@ -177,6 +177,34 @@ export async function resolveInboundUserIdForCalledNumber(calledNumber) {
   return '';
 }
 
+/**
+ * Resolve outbound dialer ownership from an assigned company work number (caller ID).
+ * PSTN child-leg webhooks only carry phone numbers in From/To — not client:user_<id>.
+ * @param {string} callerId
+ * @returns {Promise<string>} Mongo User id or ''
+ */
+export async function resolveUserIdForAssignedCallerId(callerId) {
+  const phone = normalizeCalledNumber(callerId);
+  if (!phone) return '';
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const row = await CompanyPhoneNumber.findOne({
+        phoneNumber: phone,
+        isActive: true,
+        assignedTo: { $ne: null },
+      })
+        .select('assignedTo')
+        .lean();
+      if (row?.assignedTo) return String(row.assignedTo);
+    } catch (err) {
+      logger.warn('[CompanyPhoneNumber] outbound caller-id lookup failed', { phone, err: err?.message });
+    }
+  }
+
+  return '';
+}
+
 export async function listCompanyPhoneNumbers(_user, filters = {}) {
   // Company-global: every operator with company-number.read sees the same registry.
   const query = {};
@@ -374,23 +402,25 @@ export async function updateCompanyPhoneNumberById(user, id, patch) {
 }
 
 /**
- * May `userId` originate calls from `callerId`?
+ * May authenticated user `userId` originate human dialer calls from `callerId`?
  *
- * Twilio/Plivo account ownership is NOT authorization — every user's number sits on the
- * same account, so ownership checks alone let any dialer user pass someone else's number.
- * A number assigned to ANOTHER user is refused; unassigned or unregistered numbers (the
- * configured account default, shared lines) stay usable so legacy setups keep working.
+ * Fail-closed: the number must be an active CompanyPhoneNumber row assigned to this
+ * user. Provider account ownership is NOT authorization — every user's number sits on
+ * the same Twilio/Plivo account. Unassigned, unregistered, and other users' numbers
+ * are all rejected.
  *
- * Deliberately tenant-free: this runs inside the provider webhook, which has no tenant
- * context, and `assignedTo` is already user-specific.
+ * Deliberately tenant-free: runs inside provider webhooks (no tenant context) and
+ * `assignedTo` is already user-specific. AI-agent and in-app call paths do not use
+ * this gate.
  */
 export async function isCallerIdAllowedForUser(userId, callerId) {
+  if (!userId) return false;
   const phone = normalizeCalledNumber(callerId);
   if (!phone) return false;
   const row = await CompanyPhoneNumber.findOne({ phoneNumber: phone, isActive: true })
     .select('assignedTo')
     .lean();
-  if (!row?.assignedTo) return true;
+  if (!row?.assignedTo) return false;
   return String(row.assignedTo) === String(userId);
 }
 

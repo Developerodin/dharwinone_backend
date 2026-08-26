@@ -141,7 +141,7 @@ const placeCall = catchAsync(async (req, res) => {
   const { toNumber, agentPhone, callerId } = req.body;
   // Provider account ownership is not authorization — refuse another user's company number.
   if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(req.user?.id || req.user?._id, callerId))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is assigned to another user.');
+    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
   }
   const result = await telephonyService.placeBridgeCall({ toNumber, agentPhone, callerId });
   if (!result.success) {
@@ -286,7 +286,7 @@ const postBrowserCallIntent = catchAsync(async (req, res) => {
   const userId = req.user?.id || req.user?._id;
   // The browser SDK sends its own caller ID — gate it before Plivo ever sees it.
   if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(userId, callerId))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is assigned to another user.');
+    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
   }
   const result = await telephonyService.registerBrowserCallIntent({ toNumber, callerId });
   if (!result.success) {
@@ -354,6 +354,13 @@ const postDialerInitiate = catchAsync(async (req, res) => {
   const userId = req.user?.id || req.user?._id;
   if (!executionId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'executionId is required');
+  }
+
+  const outboundDirection = (direction || 'outbound').toLowerCase();
+  if (outboundDirection === 'outbound' && fromPhoneNumber) {
+    if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(userId, fromPhoneNumber))) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
+    }
   }
 
   await callRecordService.assertDialerRecordMutationAllowed(executionId, userId);

@@ -14,18 +14,15 @@
  */
 
 import logger from '../config/logger.js';
-import bolnaService from './bolna.service.js';
-import callSyncService from './callSync.service.js';
+import callSyncService, { backfillFromAgentList } from './callSync.service.js';
 import CallRecord, { TERMINAL_STATUSES } from '../models/callRecord.model.js';
 import callRecordService from './callRecord.service.js';
-import config from '../config/config.js';
 import { expireStaleCalls } from './chatCall.service.js';
+import bolnaService from './bolna.service.js';
 
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
 const RECONCILE_LOOKBACK_DAYS = 30;
 const RECONCILE_BATCH = 100;
-const BACKFILL_PAGE_SIZE = 50;
-const BACKFILL_PAGES = 1;
 /** Webhook stub age before unverified rows are auto-expired. */
 const STUB_GHOST_GRACE_MS = 60 * 60 * 1000; // 1 hour
 /** Bolna 404 grace before we expire a row we never seeded ourselves. */
@@ -94,48 +91,8 @@ async function reconcileStuckRecords() {
   return { reconciled: stuck.length, applied, errors };
 }
 
-async function backfillFromAgentList() {
-  // Pull from every owned agent (job recruiter, candidate, and any retired agents
-  // in BOLNA_ADDITIONAL_AGENT_IDS) so old-agent calls keep syncing.
-  const agents =
-    Array.isArray(config.bolna?.allAgentIds) && config.bolna.allAgentIds.length
-      ? config.bolna.allAgentIds
-      : [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
-  const uniqueAgents = [...new Set(agents)];
-  let scanned = 0;
-  let applied = 0;
-  let errors = 0;
-
-  for (const agentId of uniqueAgents) {
-    for (let page = 1; page <= BACKFILL_PAGES; page += 1) {
-      try {
-        const r = await bolnaService.getAgentExecutions({
-          agentId,
-          page_number: page,
-          page_size: BACKFILL_PAGE_SIZE,
-        });
-        if (!r.success || !Array.isArray(r.data)) {
-          errors += 1;
-          break;
-        }
-        scanned += r.data.length;
-        for (const exec of r.data) {
-          const payload = {
-            ...exec,
-            id: exec.id ?? exec.execution_id,
-            agent_id: exec.agent_id ?? agentId,
-          };
-          const result = await callSyncService.applyEvent(payload, 'backfill');
-          if (result.applied) applied += 1;
-        }
-        if (!r.has_more) break;
-      } catch (err) {
-        errors += 1;
-        logger.warn(`[callSync cron] backfill page ${page} agent=${agentId} failed: ${err.message}`);
-      }
-    }
-  }
-  return { scanned, applied, errors };
+async function reconcileBackfillFromAgentList() {
+  return backfillFromAgentList({ maxPages: 1 });
 }
 
 /**
@@ -286,7 +243,7 @@ export async function cleanupGhostCalls() {
 export async function runCallHistorySync() {
   try {
     const reconcile = await reconcileStuckRecords();
-    const backfill = await backfillFromAgentList();
+    const backfill = await reconcileBackfillFromAgentList();
     const chat = await reconcileChatCalls();
     const ghosts = await cleanupGhostCalls();
     const twilioDedupe = await callRecordService.consolidateTwilioDialerDuplicates();

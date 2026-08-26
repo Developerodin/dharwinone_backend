@@ -1,14 +1,32 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import CallRecord, { TERMINAL_STATUSES, rankOf, isTerminal } from '../models/callRecord.model.js';
 import Job from '../models/job.model.js';
 import Employee from '../models/employee.model.js';
 import config from '../config/config.js';
 import { normalizePhone } from '../utils/phone.js';
+import { CALL_SOURCES, UI_CALL_SOURCES, classifyCallSource } from '../utils/callSource.js';
 import { deriveCallInsights } from '../utils/candidateExtraction.js';
 import ApiError from '../utils/ApiError.js';
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+/** ObjectId or null — never a raw string (see the createdBy note in upsertDialerCallRecord). */
+function toObjectIdOrNull(value) {
+  const s = String(value ?? '');
+  return /^[a-f0-9]{24}$/i.test(s) ? new mongoose.Types.ObjectId(s) : null;
+}
+
+/** Outbound telephony only: fromPhoneNumber → CompanyPhoneNumber.assignedTo. */
+async function resolveDialerCreatedByFromCompanyNumber(fromPhoneNumber) {
+  try {
+    const { resolveUserIdForAssignedCallerId } = await import('./companyPhoneNumber.service.js');
+    return toObjectIdOrNull(await resolveUserIdForAssignedCallerId(fromPhoneNumber));
+  } catch {
+    return null;
+  }
 }
 
 /** Avoid mixing applicant names into job-post rows when Bolna user_data is stale or shared-agent polluted. */
@@ -341,6 +359,76 @@ export async function nonAdminCallScope(userId) {
   };
 }
 
+function composeMongoFilter(parts) {
+  if (!parts.length) return {};
+  if (parts.length === 1) return parts[0];
+  return { $and: parts };
+}
+
+function flattenMongoFilter(filter) {
+  if (!filter || Object.keys(filter).length === 0) return [];
+  if (filter.$and) return filter.$and;
+  return [filter];
+}
+
+/**
+ * Dialer Recent: load rows attributed to the user plus orphan PSTN child legs
+ * that share the same Twilio dedupe bucket (to/from/time). Child legs are
+ * createdBy:null and would be dropped by a naive createdBy filter, so Call
+ * Records (admin) could show the merged ringing leg while Recent only saw the
+ * stale parent — or missed the call entirely when dedupe preferred the child.
+ */
+async function fetchDialerChannelCallRows({ dialerScopeFilter, userId, sort, fetchCap }) {
+  const scopeParts = flattenMongoFilter(dialerScopeFilter);
+  const userOid = toObjectIdOrNull(userId);
+  const ownedRows = await CallRecord.find(
+    composeMongoFilter([...scopeParts, { createdBy: userOid || userId }])
+  )
+    .sort(sort)
+    .limit(fetchCap)
+    .lean();
+
+  const familyKeys = new Set();
+  let windowStart = null;
+  let windowEnd = null;
+  for (const row of ownedRows) {
+    if (!isTwilioDialerRecord(row)) continue;
+    const key = twilioDialerGroupKey(row);
+    if (familyKeys.has(key)) continue;
+    familyKeys.add(key);
+    const t = row.createdAt ? new Date(row.createdAt).getTime() : 0;
+    if (!Number.isFinite(t)) continue;
+    const bucket = Math.floor(t / TWILIO_DEDUPE_BUCKET_MS);
+    const start = bucket * TWILIO_DEDUPE_BUCKET_MS;
+    const end = (bucket + 1) * TWILIO_DEDUPE_BUCKET_MS;
+    if (windowStart == null || start < windowStart) windowStart = start;
+    if (windowEnd == null || end > windowEnd) windowEnd = end;
+  }
+
+  let familyRows = [];
+  if (familyKeys.size > 0 && windowStart != null && windowEnd != null) {
+    const orphanCandidates = await CallRecord.find(
+      composeMongoFilter([
+        ...scopeParts,
+        { createdBy: null },
+        { createdAt: { $gte: new Date(windowStart), $lt: new Date(windowEnd) } },
+      ])
+    )
+      .sort(sort)
+      .limit(fetchCap)
+      .lean();
+    familyRows = orphanCandidates.filter(
+      (row) => isTwilioDialerRecord(row) && familyKeys.has(twilioDialerGroupKey(row))
+    );
+  }
+
+  const byId = new Map();
+  for (const row of [...ownedRows, ...familyRows]) {
+    byId.set(String(row._id), row);
+  }
+  return [...byId.values()];
+}
+
 async function listCallRecords(options = {}) {
   const limit = Math.min(Number(options.limit) || 25, 500);
   const page = Number(options.page) || 1;
@@ -380,9 +468,16 @@ async function listCallRecords(options = {}) {
     andConditions.push({ language: String(options.language).trim() });
   }
 
-  if (options.channel === 'dialer' && options.userId) {
-    // Dialer Recent: only this user's softphone/bridge CallRecords (any provider).
-    andConditions.push({ createdBy: options.userId, candidate: null, job: null });
+  // Call-type filter (AI Agent / Telephony / In-App). Orthogonal to ownership —
+  // it narrows what a user may already see, it never widens it.
+  if (options.callSource && UI_CALL_SOURCES.includes(String(options.callSource))) {
+    andConditions.push({ callSource: String(options.callSource) });
+  }
+
+  const isDialerChannel = options.channel === 'dialer' && options.userId;
+  if (isDialerChannel) {
+    // Ownership is enforced after Twilio parent/child dedupe (see fetchDialerChannelCallRows).
+    andConditions.push({ candidate: null, job: null });
     andConditions.push(DIALER_CALL_FILTER);
   } else if (!options.isAdmin && options.userId) {
     // Dialer (Twilio) calls have no job/candidate link — nonAdminCallScope also
@@ -392,12 +487,29 @@ async function listCallRecords(options = {}) {
 
   const filter = andConditions.length === 0 ? {} : andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
 
-  const [results, total] = await Promise.all([
-    CallRecord.find(filter).sort(sort).skip(skip).limit(limit).lean(),
-    CallRecord.countDocuments(filter),
-  ]);
-
-  const dedupedResults = dedupeTwilioDialerRows(results);
+  let dedupedResults;
+  let total;
+  if (isDialerChannel) {
+    const fetchCap = Math.min(500, Math.max(limit * 10, 200));
+    const rawRows = await fetchDialerChannelCallRows({
+      dialerScopeFilter: filter,
+      userId: options.userId,
+      sort,
+      fetchCap,
+    });
+    const owned = dedupeTwilioDialerRows(rawRows).filter(
+      (r) => r.createdBy && String(r.createdBy) === String(options.userId)
+    );
+    total = owned.length;
+    dedupedResults = owned.slice(skip, skip + limit);
+  } else {
+    const [results, count] = await Promise.all([
+      CallRecord.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      CallRecord.countDocuments(filter),
+    ]);
+    dedupedResults = dedupeTwilioDialerRows(results);
+    total = count;
+  }
 
   // executionId -> Job (job post verification) or JobApplication (candidate verification)
   const executionIds = dedupedResults.map((r) => String(r.executionId || '')).filter(Boolean);
@@ -877,7 +989,31 @@ async function upsertDialerCallRecord({
   // under concurrent upserts too. A later request's OWN createdBy is never lost
   // either way — if it lands second it just doesn't overwrite a real value.
   set.executionId = String(executionId);
-  set.createdBy = { $ifNull: ['$createdBy', createdBy || null] };
+  // Pipeline updates bypass mongoose hooks, so the model's pre-save classifier
+  // never runs here — classify explicitly. Set-once, except that AI always wins:
+  // the first webhook often lacks the caller ID, so a later leg that recognises
+  // the configured AI number may upgrade the row, but never downgrade it.
+  const dialerCallSource = classifyCallSource({ provider, fromPhoneNumber, executionId });
+  set.callSource =
+    dialerCallSource === CALL_SOURCES.AI_AGENT
+      ? dialerCallSource
+      : { $ifNull: ['$callSource', dialerCallSource] };
+  let resolvedCreatedBy = toObjectIdOrNull(createdBy);
+  if (
+    !resolvedCreatedBy &&
+    !existing?.createdBy &&
+    dialerCallSource === CALL_SOURCES.TELEPHONY &&
+    effectiveDirection === 'outbound' &&
+    fromPhoneNumber
+  ) {
+    resolvedCreatedBy = await resolveDialerCreatedByFromCompanyNumber(fromPhoneNumber);
+  }
+  // Pipeline updates are NOT cast by Mongoose, so a plain `req.user.id` string
+  // lands as a BSON string while every list filter casts createdBy to ObjectId
+  // (schema type) -- the row then matches nothing and vanishes from the dialer's
+  // Recent list. Cast here; anything unusable becomes null (an orphan a later
+  // webhook can still claim) rather than a string that can never match.
+  set.createdBy = { $ifNull: ['$createdBy', resolvedCreatedBy] };
   set.source = { $ifNull: ['$source', source] };
   const createdAtOverride = createdAt instanceof Date ? createdAt : createdAt ? new Date(createdAt) : null;
   const validCreatedAtOverride = createdAtOverride && !Number.isNaN(createdAtOverride.getTime()) ? createdAtOverride : null;
@@ -997,11 +1133,17 @@ async function findCallRecordsToSyncForCron(options = {}) {
   return list;
 }
 
+async function loadCallSyncService() {
+  const modulePath = './callSync.service.js';
+  const callSyncModule = await import(modulePath);
+  return callSyncModule.default;
+}
 async function syncMissingData(limit = 20) {
   const records = await findRecordsNeedingSync(limit);
   let synced = 0;
   let errors = 0;
   const bolnaService = (await import('./bolna.service.js')).default;
+  const callSyncService = await loadCallSyncService();
   for (const rec of records) {
     if (!rec.executionId) continue;
     const result = await bolnaService.getExecutionDetails(rec.executionId);
@@ -1009,186 +1151,27 @@ async function syncMissingData(limit = 20) {
       errors += 1;
       continue;
     }
-    const updated = await updateFromExecutionDetails(rec.executionId, result.details);
-    if (updated) synced += 1;
+    const applied = await callSyncService.applyEvent(
+      {
+        ...result.details,
+        id: result.details.id ?? result.details.execution_id ?? rec.executionId,
+      },
+      'reconciliation'
+    );
+    if (applied.applied) synced += 1;
   }
   return { synced, errors };
 }
 
-function executionToCallRecordDoc(exec, agentId) {
-  const executionId = exec.id ?? exec.execution_id;
-  if (!executionId) return null;
-  const telephony = exec.telephony_data || {};
-  const userData = exec.user_data || {};
-  const execAgentKey = normalizeKey(exec.agent_id ?? exec.agentId ?? agentId);
-  const jobAgentKey = normalizeKey(config.bolna.agentId);
-  const candAgentKey = normalizeKey(config.bolna.candidateAgentId);
-  let purposeHint = '';
-  if (jobAgentKey && candAgentKey && jobAgentKey !== candAgentKey) {
-    if (execAgentKey === candAgentKey) purposeHint = 'job_application_verification';
-    else if (execAgentKey === jobAgentKey) purposeHint = 'job_posting_verification';
-  }
-  const businessName =
-    businessNameFromBolnaUserData(userData, purposeHint) ||
-    (userData.organisation ?? userData.name ?? userData.candidate_name
-      ? String(userData.organisation || userData.name || userData.candidate_name).trim()
-      : undefined);
-  const duration =
-    telephony.duration != null
-      ? parseInt(telephony.duration, 10)
-      : exec.conversation_time != null
-        ? Number(exec.conversation_time)
-        : undefined;
-  const doc = {
-    executionId: String(executionId),
-    agentId: (exec.agent_id ?? exec.agentId ?? agentId) ? String(exec.agent_id ?? exec.agentId ?? agentId).trim() : undefined,
-    status: normalizeStatus(exec.status),
-    toPhoneNumber: telephony.to_number || undefined,
-    recipientPhoneNumber: telephony.to_number || undefined,
-    phone: telephony.to_number || undefined,
-    fromPhoneNumber: telephony.from_number || undefined,
-    userNumber: telephony.from_number || undefined,
-    businessName: businessName || undefined,
-    transcript: exec.transcript || undefined,
-    duration: Number.isNaN(duration) ? undefined : duration,
-    recordingUrl: telephony.recording_url || undefined,
-    errorMessage: exec.error_message || undefined,
-    completedAt: exec.updated_at ? new Date(exec.updated_at) : null,
-    raw: { fromList: true },
-  };
-  if (exec.created_at) doc.createdAt = new Date(exec.created_at);
-  return doc;
-}
-
-/**
- * Decide whether a Bolna execution returned by the agent-list endpoint is
- * actually OURS, not a foreign-tenant call leaking under a shared agent_id.
- * Two ownership signals (any one is enough):
- *   1. telephony_data.from_number matches BOLNA_FROM_PHONE_NUMBER (our caller id)
- *   2. user_data carries one of our DB identifiers (job_id / candidate_id / application_id)
- * If neither, we skip — better a missing row than a permanent ghost.
- */
-function execLooksOwned(exec, ourFromPhone) {
-  const telephony = exec.telephony_data || {};
-  if (ourFromPhone) {
-    const from = String(telephony.from_number || '').replace(/\D/g, '');
-    const ours = String(ourFromPhone).replace(/\D/g, '');
-    if (ours && from && (from === ours || from.endsWith(ours.slice(-10)))) return true;
-  }
-  const ud = exec.user_data || {};
-  const idCandidates = [
-    ud.job_id, ud.jobId,
-    ud.candidate_id, ud.candidateId,
-    ud.application_id, ud.applicationId,
-  ];
-  if (idCandidates.some((v) => v != null && String(v).trim().length > 0)) return true;
-  return false;
-}
-
 async function backfillFromBolna(options = {}) {
-  const bolnaService = (await import('./bolna.service.js')).default;
-  const config = (await import('../config/config.js')).default;
+  const callSyncService = await loadCallSyncService();
   const maxPages = Math.min(Number(options.maxPages) || 2, 10);
-  const ourFromPhone = config.bolna?.fromPhoneNumber || '';
-  let backfilled = 0;
-  let errors = 0;
-  let skippedForeign = 0;
-
-  // Backfill from every owned agent: job recruiter, candidate, AND any retired
-  // agents listed in BOLNA_ADDITIONAL_AGENT_IDS that still hold call history.
-  const agentIds =
-    Array.isArray(config.bolna?.allAgentIds) && config.bolna.allAgentIds.length
-      ? config.bolna.allAgentIds
-      : [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
-  const uniqueAgentIds = [...new Set(agentIds)];
-
-  for (const agentId of uniqueAgentIds) {
-    if (!agentId) continue;
-    for (let page = 1; page <= maxPages; page += 1) {
-      const result = await bolnaService.getAgentExecutions({
-        agentId,
-        page_number: page,
-        page_size: 50,
-      });
-      if (!result.success || !result.data || !Array.isArray(result.data)) {
-        errors += 1;
-        break;
-      }
-      for (const exec of result.data) {
-        const doc = executionToCallRecordDoc(exec, agentId);
-        if (!doc) continue;
-        try {
-          const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();
-          // Foreign-call guard: only allow inserts (not updates) for execs
-          // that look like ours. An existing row may legitimately be ours
-          // even if user_data is sparse (Bolna sometimes drops it on aged
-          // executions), so we let updates through unconditionally.
-          if (!existing && !execLooksOwned(exec, ourFromPhone)) {
-            skippedForeign += 1;
-            continue;
-          }
-          if (existing) {
-            // Rank guard. Bolna's agent-list can return status='unknown' for
-            // executions that are queued / aged / errored in a way Bolna no
-            // longer knows about. Letting raw $set overwrite a terminal row
-            // (rank 10) lets the cron reconciler later escalate to 'expired'.
-            const existingRank = existing.statusRank ?? rankOf(existing.status);
-            const incomingRank = rankOf(doc.status);
-            const sameRankTerminalEnrichment =
-              incomingRank === existingRank &&
-              isTerminal(doc.status) &&
-              isTerminal(existing.status);
-            const allowStatusWrite =
-              incomingRank > existingRank || sameRankTerminalEnrichment;
-            await CallRecord.updateOne(
-              { executionId: doc.executionId },
-            {
-              $set: {
-                ...(allowStatusWrite && {
-                  status: doc.status,
-                  statusRank: incomingRank,
-                  statusUpdatedAt: new Date(),
-                }),
-                ...(doc.agentId && { agentId: doc.agentId }),
-                ...(doc.toPhoneNumber && {
-                  toPhoneNumber: doc.toPhoneNumber,
-                  recipientPhoneNumber: doc.recipientPhoneNumber,
-                  phone: doc.phone,
-                }),
-                ...(doc.fromPhoneNumber && {
-                  fromPhoneNumber: doc.fromPhoneNumber,
-                  userNumber: doc.userNumber,
-                }),
-                ...(doc.transcript && { transcript: doc.transcript }),
-                ...(doc.duration != null && { duration: doc.duration }),
-                ...(doc.recordingUrl && { recordingUrl: doc.recordingUrl }),
-                ...(doc.errorMessage != null && { errorMessage: doc.errorMessage }),
-                ...(doc.completedAt && { completedAt: doc.completedAt }),
-              },
-            }
-            );
-          } else {
-            // Tag provenance + Bolna-verified (we just got it from Bolna's
-            // agent-list, so by definition it exists upstream).
-            await CallRecord.create({
-              ...doc,
-              source: 'backfill',
-              bolnaVerifiedAt: new Date(),
-            });
-            backfilled += 1;
-          }
-        } catch (_) {
-          errors += 1;
-        }
-      }
-    if (!result.has_more) break;
-  }
-  }
-  if (skippedForeign > 0) {
-    const logger = (await import('../config/logger.js')).default;
-    logger.info(`[callRecord backfill] skipped ${skippedForeign} foreign exec(s) lacking ownership marker`);
-  }
-  return { backfilled, errors, skippedForeign };
+  const result = await callSyncService.backfillFromAgentList({ maxPages });
+  return {
+    backfilled: result.applied,
+    errors: result.errors,
+    skippedForeign: 0,
+  };
 }
 
 async function fillMissingBusinessNameFromJobs(limit = 100) {
@@ -1326,4 +1309,5 @@ export default {
   getCallRecordScopeFields,
   getCallRecordingFields,
 };
+
 

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
+import { CALL_SOURCES, classifyCallSource } from '../utils/callSource.js';
 
 /**
  * Status state machine. `statusRank` enforces monotonic forward progression so
@@ -98,6 +99,19 @@ const callRecordSchema = mongoose.Schema(
       type: String,
       enum: CALL_RECORD_SOURCES,
       default: 'legacy',
+      index: true,
+    },
+    /**
+     * What KIND of call this is — the classification the UI filters on.
+     * Orthogonal to `source` above (that is row provenance) and to
+     * telephonyData.provider (the AI agent dials over Twilio too).
+     * null = legacy row the classifier could not place; it is deliberately not
+     * one of the three UI categories, so such rows show only under "All Calls".
+     */
+    callSource: {
+      type: String,
+      enum: [...Object.values(CALL_SOURCES), null],
+      default: null,
       index: true,
     },
     /** User who initiated (when source='initiate'). Null for webhook/backfill stubs. */
@@ -235,6 +249,18 @@ const callRecordSchema = mongoose.Schema(
     timestamps: true,
   }
 );
+
+/**
+ * Classify on insert. Covers every `CallRecord.create(...)` path (Bolna seed,
+ * webhook stub, reconciliation, agent-list backfill) from one place. The dialer
+ * writes through an aggregation pipeline, which bypasses hooks entirely, so
+ * upsertDialerCallRecord calls classifyCallSource itself.
+ * Never trusts a client-supplied callSource: the classifier always wins (§15).
+ */
+callRecordSchema.pre('save', function setCallSource(next) {
+  if (this.isNew) this.callSource = classifyCallSource(this.toObject());
+  next();
+});
 
 callRecordSchema.index({ status: 1, createdAt: -1 });
 callRecordSchema.index({ statusRank: 1, statusUpdatedAt: -1 });

@@ -176,6 +176,10 @@ export const permissionAliases = {
   'offers.manage': ['offers.manage', 'ats.offers:create,edit,delete', 'ats.offers:view,create,edit,delete', 'candidates.manage'],
   // Communication internal meetings (/internal-meetings). Domain: communication.meetings → meetings.read / meetings.manage
   'meetings.read': ['meetings.read', 'communication.meetings:view', 'communication.meetings:view,create,edit,delete'],
+  // COARSE UNION ONLY — derived from ANY single write action (create OR edit OR delete).
+  // Retained for backwards compatibility with older roles; it means "has some write
+  // access", NOT "is an admin". Never gate unrestricted/tenant-wide reads on it:
+  // use MEETING_ALL_ACCESS (all four) instead.
   'meetings.manage': [
     'meetings.manage',
     'communication.meetings:create,edit,delete',
@@ -501,6 +505,23 @@ export const permissionAliases = {
     'organization.scenarios:view,create,edit,delete',
   ],
 };
+
+/**
+ * Communication → Meetings & Recordings tier constants.
+ *
+ * MEETING_ALL_ACCESS is the ONLY condition that grants unrestricted, tenant-wide
+ * access — to the meeting list, to the recording list, and to the LiveKit egress
+ * sync. Every lesser combination (create-only, view+create, view+edit+delete, …)
+ * stays scoped to the actor's own meetings.
+ *
+ * Deliberately NOT `meetings.manage`: that alias is a union of ANY single write
+ * action, so a create-only role satisfies it. Gating tenant-wide reads on it let
+ * a create-only role list every recording in the company.
+ *
+ * Shared by visibilityScope.service.js (data scope) and recording.route.js
+ * (route guard) so the two can never drift.
+ */
+export const MEETING_ALL_ACCESS = ['meetings.read', 'meetings.create', 'meetings.edit', 'meetings.delete'];
 
 /**
  * Resolve required permission to the list of permission strings that grant access.
