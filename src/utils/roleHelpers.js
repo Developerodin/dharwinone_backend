@@ -117,6 +117,32 @@ export const userHasCandidateRole = async (user) => {
   return !!hasRole;
 };
 
+/** Roles that may not sign in via the mobile app (`platform: "app"`). */
+export const MOBILE_APP_BLOCKED_ROLE_NAMES = ['Candidate', 'Student', 'Mentor'];
+
+/**
+ * True when mobile app login should be denied: every active assigned role is restricted
+ * (Candidate / Student / Mentor). If the user has at least one non-restricted role, allow access.
+ * @param {Object} user - User object with roleIds
+ * @returns {Promise<boolean>}
+ */
+export const userIsRestrictedFromMobileApp = async (user) => {
+  if (!user) return true;
+  const roleIds = user?.roleIds || [];
+  if (!roleIds.length) return true;
+
+  const roles = await Role.find({
+    _id: { $in: roleIds },
+    status: 'active',
+  })
+    .select('name')
+    .lean();
+
+  if (!roles.length) return true;
+
+  return roles.every((r) => MOBILE_APP_BLOCKED_ROLE_NAMES.includes(r.name));
+};
+
 /**
  * Internal HRMS staff role (employee dashboard — attendance, tasks, projects).
  * @param {Object} user - User object with roleIds

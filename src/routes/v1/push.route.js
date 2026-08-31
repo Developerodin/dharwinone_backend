@@ -12,5 +12,10 @@ router.use(auth());
 
 router.post('/register-token', validate(pushValidation.registerToken), pushController.registerToken);
 router.post('/unregister-token', validate(pushValidation.unregisterToken), pushController.unregisterToken);
+router.patch(
+  '/preferences',
+  validate(pushValidation.updatePreferences),
+  pushController.updatePreferences,
+);
 
 export default router;
