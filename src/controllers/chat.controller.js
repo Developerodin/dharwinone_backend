@@ -9,6 +9,7 @@ import {
   emitMessageReacted,
   emitConversationUpdated,
   emitConversationDeleted,
+  emitConversationDelivered,
   getIO,
 } from '../services/chatSocket.service.js';
 import mongoose from 'mongoose';
@@ -164,9 +165,34 @@ const reactToMessage = catchAsync(async (req, res) => {
   res.send(msg);
 });
 
+const markAsDelivered = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const conversationId = req.params.id;
+  const result = await chatService.markConversationDelivered(conversationId, userId);
+  try {
+    await emitConversationDelivered(conversationId, result);
+  } catch (err) {
+    logger.warn(`markAsDelivered notify failed: ${err.message}`);
+  }
+  res.send({
+    success: true,
+    deliveredAt: result.deliveredAt,
+    messageIds: result.messageIds ?? [],
+  });
+});
+
 const markAsRead = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const conversationId = req.params.id;
+
+  // Record delivery before read so REST clients (and cold starts) never skip grey ticks.
+  try {
+    const deliverResult = await chatService.markConversationDelivered(conversationId, userId);
+    await emitConversationDelivered(conversationId, deliverResult);
+  } catch (err) {
+    logger.warn(`markAsRead deliver failed: ${err.message}`);
+  }
+
   const result = await chatService.markAsRead(conversationId, userId);
 
   // Broadcast even when the client only hit REST (socket may be down).
@@ -463,6 +489,7 @@ export {
   deleteMessage,
   forwardMessage,
   reactToMessage,
+  markAsDelivered,
   markAsRead,
   listCalls,
   listCallsForConversation,

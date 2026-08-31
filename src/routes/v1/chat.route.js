@@ -108,6 +108,11 @@ router.post(
   chatController.uploadAndSendMessage
 );
 router.patch(
+  '/conversations/:id/delivered',
+  validate(chatValidation.conversationIdParam),
+  chatController.markAsDelivered
+);
+router.patch(
   '/conversations/:id/read',
   validate(chatValidation.conversationIdParam),
   chatController.markAsRead
