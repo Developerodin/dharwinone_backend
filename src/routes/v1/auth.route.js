@@ -166,9 +166,13 @@ export default router;
  *               password:
  *                 type: string
  *                 format: password
+ *               platform:
+ *                 type: string
+ *                 description: Optional client platform. Use "app" for mobile; blocked only when all active roles are Candidate/Student/Mentor.
  *             example:
  *               email: fake@example.com
  *               password: password1
+ *               platform: app
  *     responses:
  *       "200":
  *         description: OK
@@ -190,6 +194,16 @@ export default router;
  *             example:
  *               code: 401
  *               message: Invalid email or password
+ *       "403":
+ *         description: Role not allowed on mobile app (when platform is app)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               code: 403
+ *               message: This role is not allowed to access the mobile app.
+ *               errorCode: MOBILE_APP_ROLE_NOT_ALLOWED
  */
 
 /**

@@ -48,6 +48,8 @@ const login = {
   body: Joi.object().keys({
     email: Joi.string().required(),
     password: Joi.string().required(),
+    /** Optional client platform hint; `"app"` triggers mobile-only role checks. */
+    platform: Joi.string().trim().optional(),
   }),
 };
 
