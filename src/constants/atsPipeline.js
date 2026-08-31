@@ -133,13 +133,103 @@ export const compensationTypeForJobType = (jobType) => {
   return match ? match.compensationType : 'paid';
 };
 
+/** Candidate-facing lifecycle stages — a projection of the Meeting/Offer/Placement state machines. */
+export const CANDIDATE_LIFECYCLE_STAGES = freezeList([
+  'interview',
+  'offer',
+  'preboarding',
+  'onboarding',
+  'hired',
+  'deferred',
+  'rejected',
+]);
+
+/** Stage at which the selection lifecycle closed. Drives the compact rejection badge. */
+export const REJECTION_STAGES = freezeList(['interview', 'offer', 'preboarding', 'onboarding']);
+
+const REJECTION_STAGE_LABELS = Object.freeze({
+  interview: 'Rejected · Interview',
+  offer: 'Rejected · Offer',
+  preboarding: 'Rejected · Pre-boarding',
+  onboarding: 'Rejected · Onboarding',
+});
+
+const CANDIDATE_STAGE_LABELS = Object.freeze({
+  offer: 'Offer',
+  preboarding: 'Pre-boarding',
+  onboarding: 'Onboarding',
+  hired: 'Hired',
+  deferred: 'Deferred',
+});
+
 /**
- * Candidate-facing status for a job application. Pre-boarding is an internal
- * operational phase: while a Placement sits in 'Pending' the candidate still
- * sees "Offer" — internal onboarding workflows are never exposed to candidates.
- * With no active placement, the raw application status is returned unchanged.
+ * Canonical candidate-facing lifecycle resolver. ONE source of truth for the My Applications
+ * badge, the congratulations banner and the API's candidate-visible fields.
+ *
+ * Deepest durable evidence wins: Placement > Offer > Meeting.interviewResult. `interviewResult`
+ * is a mutable interview decision — once an Offer or Placement exists it must not be able to
+ * pull the candidate back to "Interview" or relabel a downstream rejection as an interview one.
+ *
+ * Rejection stage comes from existing persisted data, not from a new field:
+ * `Placement.enteredOnboardingAt` already discriminates pre-boarding vs onboarding (it is set
+ * once, never cleared), and the absence of a Placement means the offer never got accepted.
+ *
+ * Ceiling: assumes at most one live Offer/Placement per application (callers pass the latest).
+ * If an application ever needs to show several concurrent offers, this returns the newest only.
+ *
+ * @returns {{stage: string, badge: string, selectionPersisted: boolean,
+ *   showCongratulations: boolean, rejectionStage: string|null}}
  */
-export const resolveCandidateVisibleStatus = ({ applicationStatus, placementStatus } = {}) => {
-  if (placementStatus === 'Pending') return 'Offer';
-  return applicationStatus;
+export const resolveCandidateLifecycle = ({
+  applicationStatus,
+  placementStatus,
+  interviewResult,
+  offerStatus,
+  enteredOnboarding = false,
+} = {}) => {
+  const selectionPersisted =
+    Boolean(offerStatus || placementStatus) || interviewResult === 'selected';
+
+  const build = (stage, rejectionStage = null, badgeOverride = null) => ({
+    stage,
+    badge:
+      badgeOverride ||
+      (rejectionStage && REJECTION_STAGE_LABELS[rejectionStage]) ||
+      CANDIDATE_STAGE_LABELS[stage] ||
+      applicationStatus,
+    selectionPersisted,
+    showCongratulations: selectionPersisted && stage !== 'rejected',
+    rejectionStage,
+  });
+
+  // Causal stage, not cleanup state: rejecting/expiring an offer cascades Placement -> 'Cancelled'
+  // (offer.service cascadeOfferRejectionToPlacement). Checked before the placement block so that
+  // cascade cannot relabel an offer rejection as a pre-boarding one. A pre-boarding/onboarding
+  // cancellation leaves Offer.status = 'Accepted', so it still falls through below.
+  if (offerStatus === 'Rejected') return build('rejected', 'offer');
+
+  if (placementStatus) {
+    const placementStage = enteredOnboarding ? 'onboarding' : 'preboarding';
+    if (placementStatus === 'Cancelled') return build('rejected', placementStage);
+    if (placementStatus === 'Deferred') return build('deferred');
+    if (placementStatus === 'Joined') return build('hired');
+    if (placementStatus === 'Onboarding') return build('onboarding');
+    // 'Pending' = offer accepted, pre-boarding running.
+    return build('preboarding');
+  }
+
+  if (offerStatus) return build('offer');
+
+  if (interviewResult === 'rejected') return build('rejected', 'interview');
+  // Rejected before any interview decision (Applied/Screening) has no stage to name.
+  if (applicationStatus === 'Rejected') return build('rejected', null, 'Rejected');
+  if (interviewResult === 'selected') return build('offer');
+  if (interviewResult === 'pending') return build('interview', null, 'Interview');
+  return build('interview');
 };
+
+/**
+ * Candidate-facing badge label for a job application. Thin wrapper over
+ * `resolveCandidateLifecycle` — kept so existing callers keep a single-value API.
+ */
+export const resolveCandidateVisibleStatus = (input) => resolveCandidateLifecycle(input).badge;

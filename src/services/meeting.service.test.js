@@ -263,3 +263,146 @@ test('no User account for the candidate email: logs and skips, never falls back 
   const after = await Meeting.findById(meeting._id).lean();
   assert.equal(after.interviewResult, 'selected');
 });
+
+test('pending -> rejected cascades JobApplication.status to Rejected', async () => {
+  const candidate = await makeUser('rejapp1');
+  const adminId = new mongoose.Types.ObjectId();
+
+  const employee = await Employee.create({
+    owner: adminId,
+    adminId,
+    fullName: 'MTG_NOTIFY_TEST Candidate Reject',
+    email: candidate.email,
+    phoneNumber: '+10000000001',
+  });
+  createdEmployeeIds.push(employee._id);
+
+  const job = await Job.create({
+    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
+    title: 'MTG_NOTIFY_TEST_JOB_Reject Cascade',
+    jobDescription: 'Verify rejection cascades to application.',
+    jobType: 'Full-time',
+    location: 'Remote',
+    createdBy: adminId,
+  });
+  createdJobIds.push(job._id);
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: employee._id,
+    status: 'Interview',
+  });
+  createdApplicationIds.push(application._id);
+
+  const meeting = await makeMeeting({
+    candidate: { id: employee._id.toString(), email: candidate.email },
+    jobPosition: job.title,
+    interviewResult: 'pending',
+  });
+
+  await meetingService.updateMeetingById(
+    meeting._id.toString(),
+    { interviewResult: 'rejected' },
+    new mongoose.Types.ObjectId().toString()
+  );
+
+  const updated = await JobApplication.findById(application._id).lean();
+  assert.equal(updated.status, 'Rejected');
+});
+
+test('selected -> rejected rolls back offer and sets JobApplication Rejected', async () => {
+  const candidate = await makeUser('rejapp2');
+  const adminId = new mongoose.Types.ObjectId();
+
+  const employee = await Employee.create({
+    owner: adminId,
+    adminId,
+    fullName: 'MTG_NOTIFY_TEST Candidate Reject Selected',
+    email: candidate.email,
+    phoneNumber: '+10000000002',
+  });
+  createdEmployeeIds.push(employee._id);
+
+  const job = await Job.create({
+    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
+    title: 'MTG_NOTIFY_TEST_JOB_Reject After Selected',
+    jobDescription: 'Verify selected→rejected rollback.',
+    jobType: 'Full-time',
+    location: 'Remote',
+    createdBy: adminId,
+  });
+  createdJobIds.push(job._id);
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: employee._id,
+    status: 'Interview',
+  });
+  createdApplicationIds.push(application._id);
+
+  const meeting = await makeMeeting({
+    candidate: { id: employee._id.toString(), email: candidate.email },
+    jobPosition: job.title,
+    interviewResult: 'pending',
+  });
+
+  const actorId = new mongoose.Types.ObjectId().toString();
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
+
+  const afterSelect = await JobApplication.findById(application._id).lean();
+  assert.equal(afterSelect.status, 'Offered');
+  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'rejected' }, actorId);
+
+  const afterReject = await JobApplication.findById(application._id).lean();
+  assert.equal(afterReject.status, 'Rejected');
+  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 0);
+});
+
+test('rejected -> selected preserves selection flow (offer created)', async () => {
+  const candidate = await makeUser('rejapp3');
+  const adminId = new mongoose.Types.ObjectId();
+
+  const employee = await Employee.create({
+    owner: adminId,
+    adminId,
+    fullName: 'MTG_NOTIFY_TEST Candidate Reopen Selected',
+    email: candidate.email,
+    phoneNumber: '+10000000003',
+  });
+  createdEmployeeIds.push(employee._id);
+
+  const job = await Job.create({
+    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
+    title: 'MTG_NOTIFY_TEST_JOB_Rejected To Selected',
+    jobDescription: 'Verify rejected→selected still creates offer.',
+    jobType: 'Full-time',
+    location: 'Remote',
+    createdBy: adminId,
+  });
+  createdJobIds.push(job._id);
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: employee._id,
+    status: 'Interview',
+  });
+  createdApplicationIds.push(application._id);
+
+  const meeting = await makeMeeting({
+    candidate: { id: employee._id.toString(), email: candidate.email },
+    jobPosition: job.title,
+    interviewResult: 'pending',
+  });
+
+  const actorId = new mongoose.Types.ObjectId().toString();
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'rejected' }, actorId);
+  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Rejected');
+
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
+
+  const afterReselect = await JobApplication.findById(application._id).lean();
+  assert.equal(afterReselect.status, 'Offered');
+  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+});

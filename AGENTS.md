@@ -74,6 +74,230 @@ S582 Fix and deploy resolution for Vercel production build failure on dharwinfro
 Access 2511k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 
+# uat.dharwin.backend
+
+Dharwin UAT backend. Node.js + Express + Mongoose REST API for dharwinone.com. ESM throughout (`"type": "module"` — use `import`, never `require`).
+
+---
+
+## ⚠️ Critical safety rules — read these first
+
+### Database topology
+
+Three environments, only two databases:
+
+- **Production** (dharwinone.com) — its own separate MongoDB. Never assume local/staging behaviour (transactions, data, topology) tells you anything about prod.
+- **Staging + local dev** — **share the same MongoDB.** A script run "locally" against the default connection string (`MONGODB_URL` in `.env`) is hitting the same live data staging serves. Treat local runs of any DB-writing script as staging-impacting, never sandboxed.
+
+**Before running any script that writes, migrates or deletes data:** state which environment(s) it targets and which connection string it will actually use. If it needs to run against **production**, call it out explicitly and unmissably on its own line:
+
+> ⚠️ PRODUCTION DB — this needs to run against prod separately
+
+Don't bury it in a wall of output. Confirm before running it against prod.
+
+### Destructive operations — always confirm first
+
+- Never `git push --force` to `dharwin/main` or `dharwin/dev`.
+- Never `git reset --hard` on shared branches without confirming.
+- Never drop, truncate or bulk-delete MongoDB collections/documents without confirming, and never against prod without the ⚠️ callout above.
+- Deleting remote branches: ask first.
+
+### A `dharwin/main` push is a production release
+
+Name the target environment and confirm before pushing. Full checklist below.
+
+---
+
+## Branch → environment
+
+| Environment | Branch |
+|---|---|
+| **Production** | `dharwin/main` |
+| **Staging** | `dharwin/dev` |
+
+`dharwin` = `Developerodin/dharwinone_*` (real upstream), `origin` = fork. `origin/master` is dead — ignore it.
+
+---
+
+## Commands
+
+```
+npm run dev        # local server — nodemon, NODE_ENV=development, src/index.js
+npm start          # plain node src/index.js
+npm test           # full suite via scripts/run-tests.mjs
+npm run lint       # eslint .
+npm run lint:fix   # eslint . --fix
+```
+
+**Tests are an explicit manifest, not a glob.** `npm test` runs the paths listed in `scripts/test-manifest.json`; other `*.test.js` files exist on disk but are deliberately out of the suite. **Adding a test means adding its path to that manifest**, or it never runs.
+
+```
+# one file directly
+node --test --experimental-test-module-mocks src/services/offer.service.test.js
+
+# filter by name across the suite
+npm test -- --test-name-pattern="offer expiry"
+```
+
+Note: most test files and `scripts/` are gitignored, so a fresh clone runs only the few tracked tests. The runner skips manifest entries missing from disk rather than failing.
+
+Config is loaded via `src/config/config.js` (Joi-validated); env vars come from `.env` (gitignored — `.env.example` is the reference).
+
+## Architecture
+
+- **Entry:** `src/index.js` (Mongo connect, then listen) → `src/app.js` (Express app + middleware chain).
+- **Request path:** `src/routes/v1/` → `src/controllers/` → `src/services/` → Mongoose models in `src/models/`. Joi schemas in `src/validations/`, response shaping in `src/serializers/`, shared helpers in `src/utils/`.
+- **Auth:** JWT via `passport-jwt` (`src/config/passport.js`). Route guards in `src/middlewares/` — `auth.js`, `requirePermissions`, `requireAdministratorOrPermission`.
+- **RBAC:** roles and permissions live in the Mongo `Role` collection and are resolved at runtime by `src/services/permission.service.js` — there is **no** static roles config file to grep. `req.user.platformSuperUser` bypasses permission checks.
+- **Background work:** schedulers in `src/jobs/` plus `*.scheduler.js` files under `src/services/`; BullMQ queues in `src/queues/`.
+
+## Deploy mechanism
+
+- `Dockerfile` (`EXPOSE 3000`, `CMD ["node", "src/index.js"]`) and `docker-compose.yml` (app + `mongo:4.2.1-bionic`) exist for container/local runs.
+- **No CI runs on push.** `.github/` is gitignored, so the workflows that exist locally (`entity-query-tests.yml`, `keep-warm.yml`) have never been pushed. Nothing tests, builds or deploys automatically — a push only moves the branch.
+- `pm2` (^6.0.14) is a dependency.
+
+<!-- TODO — not derivable from the repo, please confirm and fill in:
+- how prod actually picks up a push (manual pull on the host? webhook?)
+- process manager + restart command on the host (pm2 restart <name>? systemd?)
+- host access (who/how, or "no direct SSH — coordinate with X")
+-->
+
+---
+
+## Production push checklist
+
+Run through this before every `dharwin/main` push.
+
+**1. No env flip needed here.** Unlike the frontend, `.env` is gitignored in this repo — the server reads its own `.env`. Nothing in the push touches it.
+
+**2. New env vars — check on every release.** Merging code never creates env vars. Any new `process.env.*` the release introduces must be set on the host **before** the deploy, or the feature silently no-ops or boot fails. Diff the release against what is live:
+
+```
+git diff dharwin/main..HEAD -- .env.example src/config/config.js
+```
+
+Set anything new on the host first, then deploy.
+
+**3. Other things a merge does not run:**
+- new dependencies → `npm install` on the host
+- DB migrations / backfill scripts → run against prod separately (see "Database topology")
+- new schedulers/cron → confirm they are registered and enabled on the host
+
+**4. Verify after pushing** with `git ls-remote dharwin main`, not the local remote-tracking ref, which goes stale. A fast-forward keeps original author dates, so nothing appears dated "today" on GitHub.
+
+**5. Sweep merged feature branches — only after a FULL merge.** A feature branch is deletable only once it has landed in **both** `dharwin/dev` (staging) **and** `dharwin/main` (production). Merged into one but not the other means it is still in flight — keep it.
+
+Fetch first so the refs are not stale, then verify both:
+
+```
+git fetch dharwin
+git merge-base --is-ancestor <branch> dharwin/dev    # exit 0 = in staging
+git merge-base --is-ancestor <branch> dharwin/main   # exit 0 = in production
+```
+
+Delete **only if both returned 0**:
+
+```
+git branch -d <branch>    # lowercase -d refuses if commits would be lost
+```
+
+If either check is non-zero, stop — the branch has unshipped work. Never delete `main`, `dev`, or `master`.
+
+---
+
+## Behavioral guidelines
+
+Guidelines to reduce common LLM coding mistakes. **Tradeoff:** these bias toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+### 5. Reuse Before Building
+
+**Search the codebase before writing anything new. Default to the laziest thing that works.**
+
+Take the first rung that holds: stdlib → native platform feature → an already-installed dependency → **existing code in this repo** → new code. Only the last rung adds surface area.
+
+Before adding any module, function, helper or component:
+- Search for one that already does it, or nearly does it. Name what you found and why it does or doesn't fit.
+- Prefer a minimal, additive change to an existing function over writing a parallel one.
+- Two near-identical implementations *is* the bug. If you are about to write the second, change the first.
+- If nothing fits, say what you searched for before writing the minimum.
+
+**Reuse must not break existing callers.** Before changing shared code, list who calls it. Prefer additive changes (a new optional parameter, a new branch) over changing a signature or altering current behaviour. If the change would alter what existing callers already get, that is not reuse — stop and say so rather than quietly changing it.
+
+The test: could a reviewer point at existing code and ask "why didn't you just use this?"
+
+### 6. Think Long-Term, Name the Failure Modes
+
+**Simple is not the same as short-sighted.** Rule 2 forbids speculative *code*, not thought.
+
+Before settling on an approach:
+- State how it fails. What happens on a retry, a duplicate request, two processes running at once, a partial write, empty input, a missing record, a timeout?
+- Say which of those you handle and which you deliberately don't, and why.
+- Name the ceiling: at what scale, load or edge case does this stop working? Leave that in a comment where the shortcut lives, with the upgrade path.
+- When two options are otherwise equal, take the one that is cheapest to change later.
+
+**This does not license speculative code.** Handle the failure modes that are real for this system today; *document* the rest instead of building for them. Thinking about the worst case is free — coding for an imaginary one is not.
+
+The test: if this breaks at 3am, would the person paged find the failure mode already named?
+
+---
+
 ## Agent rules
 
 ### Test run output (do not commit)
