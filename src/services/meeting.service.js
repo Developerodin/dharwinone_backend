@@ -768,6 +768,83 @@ const createPlacementFromInterview = async (meeting, userId) => {
 };
 
 /**
+ * Notify the candidate when an interview result transitions into 'selected' or 'rejected'.
+ * Candidate-facing only: resolves the recipient via the candidate's own email → User account
+ * (same resolution jobApplication.service.js uses for status-change notifications) and NEVER
+ * falls back to notifying the recruiter/host/job creator. Fire only on the transition edge
+ * (guards against duplicate notifications on repeat/no-op updates), never on
+ * move-to-preboarding or internal-transfer. Failures are logged and swallowed — must not roll
+ * back the interview result that was already saved.
+ * @param {Object} meeting - Meeting document (after save)
+ * @param {string} previousInterviewResult
+ * @param {string} newInterviewResult
+ */
+const notifyCandidateOfInterviewResultChange = async (meeting, previousInterviewResult, newInterviewResult) => {
+  const isNewlySelected = previousInterviewResult !== 'selected' && newInterviewResult === 'selected';
+  const isNewlyRejected = previousInterviewResult !== 'rejected' && newInterviewResult === 'rejected';
+  if (!isNewlySelected && !isNewlyRejected) return;
+
+  const candidateEmail = meeting.candidate?.email?.trim().toLowerCase();
+  if (!candidateEmail) {
+    logger.warn(
+      '[notifyCandidateOfInterviewResultChange] Meeting %s has no candidate email on file — skipping candidate notification',
+      meeting._id
+    );
+    return;
+  }
+
+  try {
+    const candidateUser = await User.findOne({ email: candidateEmail }).select('_id').lean();
+    if (!candidateUser) {
+      logger.warn(
+        '[notifyCandidateOfInterviewResultChange] No User account for candidate email %s (meeting %s) — skipping candidate notification',
+        candidateEmail,
+        meeting._id
+      );
+      return;
+    }
+
+    const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
+    const jobTitle = jobPositionDisplay || 'the role';
+    const { jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
+      createIfMissing: false,
+    });
+
+    const { title, message } = isNewlySelected
+      ? {
+          title: "Congratulations! You've Been Selected",
+          message: `Congratulations! You've been selected for ${jobTitle}.`,
+        }
+      : {
+          title: 'Application Update',
+          message: `Thank you for your time. Your application for ${jobTitle} was not selected to move forward.`,
+        };
+
+    const { notify } = await import('./notification.service.js');
+    await notify(candidateUser._id, {
+      type: 'job_application',
+      title,
+      message,
+      // Explicit link — the job_application resolver falls back to a recruiter-facing
+      // /ats/jobs/:id route when metadata.jobId is set, so this must not be left implicit.
+      link: '/ats/my-applications',
+      metadata: {
+        ...(jobId && { jobId }),
+        ...(application?._id && { applicationId: application._id.toString() }),
+        meetingId: meeting.meetingId,
+        interviewResult: newInterviewResult,
+      },
+    });
+  } catch (err) {
+    logger.error(
+      '[notifyCandidateOfInterviewResultChange] Failed to notify candidate for meeting %s:',
+      meeting._id,
+      err?.message || err
+    );
+  }
+};
+
+/**
  * Update meeting by id (MongoDB ObjectId or meetingId string)
  * @param {string} id - MongoDB ObjectId or meetingId
  * @param {Object} updateBody
@@ -819,6 +896,10 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   }
 
   const newInterviewResult = meeting.interviewResult;
+
+  // Single canonical emission point for candidate-facing selected/rejected notifications —
+  // do not duplicate this call on the move-to-preboarding or internal-transfer paths.
+  await notifyCandidateOfInterviewResultChange(meeting, previousInterviewResult, newInterviewResult);
 
   if (
     previousInterviewResult === 'selected' &&

@@ -1327,39 +1327,61 @@ const shareOfferWithCandidate = async (id, currentUser, payload = {}) => {
   return { sharedTo: to };
 };
 
+const EXPIRING_OFFER_STATUSES = ['Sent', 'Under Negotiation'];
+
 /**
  * EC-4: Auto-expire offers whose offerValidityDate has passed and are still Sent/Under Negotiation.
  * Called by the candidate scheduler on each run. Does NOT affect Draft/Accepted/Rejected offers.
- * @returns {Promise<number>} number of offers expired
+ *
+ * Idempotent under a duplicate/concurrent/retried scheduler run: each offer is claimed with an
+ * atomic `findOneAndUpdate` guarded by `status: { $in: EXPIRING_OFFER_STATUSES }` in the filter —
+ * same claim-guard pattern as the meeting reminder scheduler (see
+ * `Meeting.findOneAndUpdate({ _id, reminderSentAt: null, ... })` in meeting.service.js). A second
+ * run finds the status already 'Rejected', the guard no longer matches, `findOneAndUpdate` returns
+ * null, and that offer is skipped — so cascades and notifications only ever fire for the offers
+ * *this* call actually transitioned.
+ *
+ * @returns {Promise<number>} number of offers expired by this call
  */
 export const autoExpireOffers = async () => {
   const now = new Date();
 
-  // Fetch IDs first so we can cascade to job applications using the same set.
-  const toExpire = await Offer.find(
-    {
-      status: { $in: ['Sent', 'Under Negotiation'] },
-      offerValidityDate: { $lt: now },
-    },
-    { _id: 1, jobApplication: 1 }
+  // Fetch candidate IDs only — the atomic claim below re-selects exactly the fields the
+  // notification block reads from the post-transition document.
+  const candidates = await Offer.find(
+    { status: { $in: EXPIRING_OFFER_STATUSES }, offerValidityDate: { $lt: now } },
+    { _id: 1 }
   ).lean();
 
-  if (!toExpire.length) return 0;
+  if (!candidates.length) return 0;
 
-  const offerIds = toExpire.map((o) => o._id);
-  const appIds = toExpire.map((o) => o.jobApplication).filter(Boolean);
-
-  await Offer.updateMany(
-    { _id: { $in: offerIds } },
-    {
-      $set: {
-        status: 'Rejected',
-        rejectedAt: now,
-        rejectionReason: 'Offer expired: validity date passed without candidate response.',
+  const expired = [];
+  for (const c of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const claimed = await Offer.findOneAndUpdate(
+      { _id: c._id, status: { $in: EXPIRING_OFFER_STATUSES } },
+      {
+        $set: {
+          status: 'Rejected',
+          rejectedAt: now,
+          rejectionReason: 'Offer expired: validity date passed without candidate response.',
+        },
       },
-    }
-  );
+      { new: true }
+    )
+      // jobApplication -> cascade to JobApplication/referral sync below.
+      // createdBy       -> internal "offer creator" notification recipient.
+      // candidate       -> resolves the candidate Employee -> User for the candidate notification.
+      // job.title       -> both notification messages.
+      .select('_id jobApplication createdBy candidate job')
+      .populate('job', 'title')
+      .lean();
+    if (claimed) expired.push(claimed);
+  }
 
+  if (!expired.length) return 0;
+
+  const appIds = expired.map((o) => o.jobApplication).filter(Boolean);
   if (appIds.length) {
     await JobApplication.updateMany({ _id: { $in: appIds } }, { $set: { status: 'Rejected' } });
     const candidateIds = await JobApplication.distinct('candidate', { _id: { $in: appIds } });
@@ -1368,29 +1390,80 @@ export const autoExpireOffers = async () => {
     );
   }
 
-  // Notify each offer creator so they know which offers have lapsed.
+  // Notify both the offer creator (internal) and the candidate (external) for every offer this
+  // run actually expired.
+  let notify;
+  let notifyByEmail;
+  let plainTextEmailBody;
   try {
-    const { notify, plainTextEmailBody } = await import('./notification.service.js');
-    for (const o of toExpire) {
-      const creatorId = o.createdBy;
-      if (!creatorId) continue;
-      const jobObj = o.job && typeof o.job === 'object' ? o.job : null;
-      const title = jobObj?.title || 'a role';
-      const msg = `The offer for "${title}" has expired. The validity date passed without a candidate response. The offer has been automatically rejected.`;
-      notify(creatorId, {
-        type: 'offer',
-        title: 'Offer expired automatically',
-        message: msg,
-        link: '/ats/offers-placement',
-        email: {
-          subject: `Offer expired: ${title}`,
-          text: plainTextEmailBody(msg, '/ats/offers-placement'),
-        },
-      }).catch(() => {});
-    }
-  } catch (_) { /* non-fatal */ }
+    ({ notify, notifyByEmail, plainTextEmailBody } = await import('./notification.service.js'));
+  } catch (e) {
+    logger.warn(`[offer] autoExpireOffers: failed to load notification.service: ${e?.message || e}`);
+    return expired.length;
+  }
 
-  return toExpire.length;
+  for (const o of expired) {
+    const jobTitle = (o.job && typeof o.job === 'object' && o.job.title) || 'a role';
+
+    // Internal: notify the offer creator/owner (existing intended notification — type/link unchanged).
+    try {
+      const creatorId = o.createdBy;
+      if (creatorId) {
+        const msg = `The offer for "${jobTitle}" has expired. The validity date passed without a candidate response. The offer has been automatically rejected.`;
+        // eslint-disable-next-line no-await-in-loop
+        await notify(creatorId, {
+          type: 'offer',
+          title: 'Offer expired automatically',
+          message: msg,
+          link: '/ats/offers-placement',
+          email: {
+            subject: `Offer expired: ${jobTitle}`,
+            text: plainTextEmailBody(msg, '/ats/offers-placement'),
+          },
+        });
+      }
+    } catch (e) {
+      logger.warn(`[offer] autoExpireOffers: creator notify failed for offer ${o._id}: ${e?.message || e}`);
+    }
+
+    // Candidate-facing: never expose internal offer detail (salary/notes/recruiter reasoning).
+    // Reuses the existing "My Applications" job_application notification verbatim
+    // (jobApplication.service.js) — link is passed explicitly so it can never be overridden by
+    // the job_application link resolver's recruiter-facing `/ats/jobs/:id` fallback.
+    try {
+      if (!o.candidate) {
+        logger.warn(`[offer] autoExpireOffers: offer ${o._id} has no candidate — skipped candidate notification`);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        const cand = await Employee.findById(o.candidate).select('email').lean();
+        if (!cand?.email) {
+          logger.warn(`[offer] autoExpireOffers: candidate ${o.candidate} has no email on file (offer ${o._id}) — skipped candidate notification`);
+        } else {
+          const candMsg = `Your application for "${jobTitle}" is now Rejected.`;
+          // eslint-disable-next-line no-await-in-loop
+          const doc = await notifyByEmail(cand.email, {
+            type: 'job_application',
+            title: 'Application status: Rejected',
+            message: candMsg,
+            link: '/ats/my-applications',
+            email: {
+              subject: `Application status: Rejected — ${jobTitle}`,
+              text: plainTextEmailBody(candMsg, '/ats/my-applications'),
+            },
+          });
+          if (!doc) {
+            // notifyByEmail returns null when no User account matches this email — log and skip;
+            // never fall back to notifying the recruiter/creator in the candidate's place.
+            logger.warn(`[offer] autoExpireOffers: no User account for candidate ${o.candidate} (offer ${o._id}) — skipped candidate notification`);
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`[offer] autoExpireOffers: candidate notify failed for offer ${o._id}: ${e?.message || e}`);
+    }
+  }
+
+  return expired.length;
 };
 
 export {

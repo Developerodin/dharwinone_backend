@@ -27,6 +27,9 @@ docs/
 # Local ops scripts (never push)
 scripts/*
 !scripts/mirror-cloud-to-local.js
+# test runner + manifest must ship so the tracked tests are runnable on a clone
+!scripts/run-tests.mjs
+!scripts/test-manifest.json
 tests/
 graphify-out/
 
@@ -34,6 +37,19 @@ graphify-out/
 **/__tests__/
 *.test.js
 *.test.mjs
+
+# Notification Batch 1 tests ARE tracked (registered in scripts/test-manifest.json).
+# Parent dirs must be re-included first: git cannot re-include a file whose
+# parent directory is excluded. Everything else under them stays ignored.
+!src/__tests__/
+!src/__tests__/routes/
+!src/__tests__/routes/notification.route.permissions.test.js
+!src/services/__tests__/
+src/services/__tests__/fixtures/
+src/services/__tests__/helpers/
+!src/services/__tests__/job.applicationNotification.test.js
+!src/services/meeting.service.test.js
+!src/services/offer.service.test.js
 
 # editor plans and CI config stay local â€” never pushed
 .cursor/

@@ -1253,7 +1253,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       const reviewPath = `/ats/jobs`;
       const recruiterMsg = `${fullName} applied to "${job.title || 'your job'}".`;
       notify(job.createdBy, {
-        type: 'application',
+        type: 'job_application',
         title: 'New job application',
         message: recruiterMsg,
         link: reviewPath,
