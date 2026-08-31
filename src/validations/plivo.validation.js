@@ -78,6 +78,21 @@ const browserCallIntent = {
     .keys({
       toNumber: e164.required(),
       callerId: e164.required(),
+      businessName: Joi.string().trim().allow('').max(200).optional(),
+      executionId: Joi.string().trim().max(128).optional(),
+    })
+    .required(),
+};
+
+const dialerInitiate = {
+  body: Joi.object()
+    .keys({
+      executionId: Joi.string().trim().max(128).required(),
+      toNumber: e164.required(),
+      fromPhoneNumber: e164.required(),
+      direction: Joi.string().valid('inbound', 'outbound').default('outbound'),
+      businessName: Joi.string().trim().allow('').max(200).optional(),
+      status: Joi.string().valid('initiated', 'ringing').default('initiated'),
     })
     .required(),
 };
@@ -102,6 +117,7 @@ const dialerOutcome = {
       direction: Joi.string().valid('inbound', 'outbound').optional(),
       fromPhoneNumber: Joi.string().trim().allow('').optional(),
       toPhoneNumber: Joi.string().trim().allow('').optional(),
+      businessName: Joi.string().trim().allow('').max(200).optional(),
     })
     .required(),
 };
@@ -114,6 +130,7 @@ export {
   listSubscriptions,
   placeCall,
   browserCallIntent,
+  dialerInitiate,
   setRecording,
   dialerOutcome,
 };

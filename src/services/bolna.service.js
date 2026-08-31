@@ -6,9 +6,30 @@ import { normalizePhone, validatePhone, validatePhonePlausible } from '../utils/
 import logger from '../config/logger.js';
 import config from '../config/config.js';
 
-/** Caller ID priority: request > BOLNA_FROM_PHONE_NUMBER > CALLER_ID. */
+/** Caller ID priority: request > BOLNA_FROM_PHONE_NUMBER/CALLER_ID > TWILIO_PHONE_NUMBER (when telephony is twilio). */
 function getCallerId(params) {
-  return params.from_phone_number || params.fromPhoneNumber || config.bolna.fromPhoneNumber || '';
+  const explicit = params.from_phone_number || params.fromPhoneNumber;
+  if (explicit) return explicit;
+  if (config.bolna.fromPhoneNumber) return config.bolna.fromPhoneNumber;
+  if (config.telephony?.provider === 'twilio' && config.twilio?.phoneNumber) {
+    return config.twilio.phoneNumber;
+  }
+  return '';
+}
+
+/** Append a hint when Bolna still validates caller ID against the wrong telephony provider. */
+function enrichBolnaTelephonyError(message, fromPhoneNumber) {
+  const msg = String(message || '');
+  const lower = msg.toLowerCase();
+  if (!lower.includes('plivo') && !lower.includes('twilio')) return msg;
+  if (!lower.includes('from_number') && !lower.includes('telephony provider')) return msg;
+  const provider = config.telephony?.provider || 'plivo';
+  const hint =
+    provider === 'twilio'
+      ? ' Dharwin TELEPHONY_PROVIDER=twilio only affects the dialer. Bolna outbound calls use the telephony provider configured on each Bolna agent (Call tab → Providers). Switch BOLNA_CANDIDATE_AGENT_ID and BOLNA_AGENT_ID to Twilio in the Bolna dashboard, link your Twilio number there, and set BOLNA_FROM_PHONE_NUMBER to that E.164 number.'
+      : ' Ensure BOLNA_FROM_PHONE_NUMBER is a number registered under the Bolna agent telephony provider (Plivo).'
+  const fromHint = fromPhoneNumber ? ` from_phone_number=${fromPhoneNumber}.` : '';
+  return `${msg}.${fromHint}${hint}`;
 }
 
 function getConfig() {
@@ -177,7 +198,10 @@ async function initiateCall(params) {
       } else {
         logger.error(`Bolna API error (${res.status}): ${message}`);
       }
-      return { success: false, error: message };
+      return {
+        success: false,
+        error: enrichBolnaTelephonyError(message, payload.from_phone_number),
+      };
     }
 
     const executionId = data.id ?? data.execution_id ?? data.executionId;

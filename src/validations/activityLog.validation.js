@@ -46,9 +46,15 @@ const getActivityLogs = {
 };
 
 const exportActivityLogs = {
-  query: Joi.object().keys({
-    ...activityLogFilterQuery,
-  }),
+  query: Joi.object()
+    .keys({
+      ...activityLogFilterQuery,
+      source: Joi.forbidden(),
+      page: Joi.forbidden(),
+      limit: Joi.forbidden(),
+      sortBy: Joi.forbidden(),
+    })
+    .unknown(false),
 };
 
 export { getActivityLogs, exportActivityLogs };

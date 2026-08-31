@@ -2,6 +2,7 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import { requirePermissionOrAdministrator } from '../../middlewares/requirePermissionOrAdministrator.js';
+import requireTelephonyProvider from '../../middlewares/requireTelephonyProvider.js';
 import * as plivoValidation from '../../validations/plivo.validation.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
 
@@ -50,6 +51,7 @@ router
   .post(
     auth(),
     requirePermissionOrAdministrator('calls.create'),
+    requireTelephonyProvider('plivo'),
     validate(plivoValidation.buyNumber),
     plivoController.buyNumber
   );
@@ -99,6 +101,16 @@ router
     auth(),
     requirePermissionOrAdministrator('calls.create'),
     plivoController.backfillTwilio
+  );
+
+// App-reported dialer call start (web softphone) — seeds Recent immediately.
+router
+  .route('/dialer-initiate')
+  .post(
+    auth(),
+    requirePermissionOrAdministrator('calls.create'),
+    validate(plivoValidation.dialerInitiate),
+    plivoController.postDialerInitiate
   );
 
 // App-reported dialer call outcome (reject / miss) for call history.

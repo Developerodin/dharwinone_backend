@@ -336,13 +336,17 @@ const enrichCallForViewer = (call, viewerUserId) => {
   return { direction, peer };
 };
 
-const listConversations = async (userId, { page = 1, limit = 20 }) => {
+const listConversations = async (userId, { page = 1, limit = 20, type } = {}) => {
   const skip = (page - 1) * limit;
   const userObjectId = new mongoose.Types.ObjectId(userId);
+  const matchFilter = { 'participants.user': userObjectId };
+  if (type === 'direct' || type === 'group') {
+    matchFilter.type = type;
+  }
 
   const [ranked, total] = await Promise.all([
     Conversation.aggregate([
-      { $match: { 'participants.user': userObjectId } },
+      { $match: matchFilter },
       {
         $addFields: {
           myParticipant: {
@@ -371,7 +375,7 @@ const listConversations = async (userId, { page = 1, limit = 20 }) => {
       { $limit: limit },
       { $project: { _id: 1 } },
     ]),
-    Conversation.countDocuments({ 'participants.user': userObjectId }),
+    Conversation.countDocuments(matchFilter),
   ]);
 
   const rankedIds = ranked.map((row) => row._id);

@@ -54,6 +54,7 @@ import teamGroupRoute from './teamGroup.route.js';
 import pmAssistantRoute from './pmAssistant.route.js';
 import bolnaRoute from './bolna.route.js';
 import plivoRoute from './plivo.route.js';
+import twilioRoute from './twilio.route.js';
 import companyPhoneNumberRoute from './companyPhoneNumber.route.js';
 import numberPricingRoute from './numberPricing.route.js';
 import contactRoute from './contact.route.js';
@@ -282,6 +283,10 @@ const defaultRoutes = [
   {
     path: '/plivo',
     route: plivoRoute,
+  },
+  {
+    path: '/twilio',
+    route: twilioRoute,
   },
   {
     path: '/company-phone-numbers',

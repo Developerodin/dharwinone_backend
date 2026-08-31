@@ -14,6 +14,10 @@ import {
   startCallRecordSyncScheduler,
   stopCallRecordSyncScheduler,
 } from './services/callRecordSync.scheduler.js';
+import {
+  startExternalJobAutoFetchScheduler,
+  stopExternalJobAutoFetchScheduler,
+} from './services/externalJobAutoFetch.scheduler.js';
 import { startMeetingScheduler, stopMeetingScheduler } from './services/meeting.scheduler.js';
 import { startRecordingScheduler, stopRecordingScheduler } from './services/recording.scheduler.js';
 import {
@@ -50,6 +54,7 @@ let jobVerificationSchedulerId;
 let callRecordSyncSchedulerId;
 let applicationVerificationSchedulerId;
 let recordingDiscoverySchedulerId;
+let externalJobAutoFetchSchedulerId;
 let redisFeaturesEnabled = false;
 const port = config.port || process.env.PORT || 3000;
 
@@ -79,6 +84,7 @@ mongoose
         candidateSchedulerId = startCandidateScheduler(candidateSchedulerMinutes);
         jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
         callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
+        externalJobAutoFetchSchedulerId = startExternalJobAutoFetchScheduler();
         applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(2);
         startMeetingScheduler();
         startRecordingScheduler(getEgressClient());
@@ -117,6 +123,7 @@ const exitHandler = () => {
       stopCandidateScheduler(candidateSchedulerId);
       stopJobVerificationCallScheduler(jobVerificationSchedulerId);
       stopCallRecordSyncScheduler(callRecordSyncSchedulerId);
+      stopExternalJobAutoFetchScheduler(externalJobAutoFetchSchedulerId);
       applicationVerificationCallScheduler.stopApplicationVerificationCallScheduler(applicationVerificationSchedulerId);
       stopMeetingScheduler();
       stopRecordingScheduler();

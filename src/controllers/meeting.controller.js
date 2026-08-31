@@ -18,6 +18,12 @@ const list = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const listMyInterviews = catchAsync(async (req, res) => {
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const result = await meetingService.queryMyInterviews(req.user, options);
+  res.send(result);
+});
+
 const get = catchAsync(async (req, res) => {
   const meeting = await meetingService.getMeetingById(req.params.id, req.user);
   if (!meeting) {
@@ -77,4 +83,4 @@ const internalTransfer = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { create, list, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding, internalTransfer };
+export { create, list, listMyInterviews, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding, internalTransfer };

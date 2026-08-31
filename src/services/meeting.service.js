@@ -461,6 +461,95 @@ const assertMeetingInScope = async (meeting, currentUser) => {
   }
 };
 
+/** Owner row, or email match (public-apply candidates use job creator as owner). */
+const findApplicantCandidateForMeetings = async (user) => {
+  const userId = user._id || user.id;
+  let candidate = await Employee.findOne({ owner: userId });
+  if (!candidate) {
+    const emailNorm = String(user.email || '').toLowerCase().trim();
+    if (emailNorm) {
+      candidate = await Employee.findOne({ email: emailNorm });
+    }
+  }
+  return candidate;
+};
+
+const buildMyInterviewsCandidateFilter = async (user) => {
+  const or = [];
+  const emailNorm = String(user.email || '').toLowerCase().trim();
+  if (emailNorm) {
+    or.push({ 'candidate.email': new RegExp(`^${escapeRegexForJobTitle(emailNorm)}$`, 'i') });
+  }
+  const candidate = await findApplicantCandidateForMeetings(user);
+  if (candidate) {
+    or.push({ 'candidate.id': candidate._id.toString() });
+  }
+  return or.length ? { $or: or } : null;
+};
+
+const meetingEndsAt = (scheduledAt, durationMinutes) => {
+  const start = new Date(scheduledAt).getTime();
+  if (Number.isNaN(start)) return null;
+  const mins = Number(durationMinutes) > 0 ? Number(durationMinutes) : 60;
+  return new Date(start + mins * 60000);
+};
+
+const enrichMeetingForCandidateDashboard = async (meeting) => {
+  const doc = meeting.toJSON ? meeting.toJSON() : { ...meeting };
+  doc.publicMeetingUrl = getPublicMeetingUrl(doc.meetingId);
+
+  let jobTitle = '';
+  let companyName = '';
+  const jobPos = (doc.jobPosition || '').trim();
+  if (jobPos && OBJECT_ID_HEX_RE.test(jobPos)) {
+    const job = await Job.findById(jobPos).select('title organisation').lean();
+    jobTitle = job?.title?.trim() || '';
+    companyName = job?.organisation?.name?.trim() || '';
+  } else if (jobPos) {
+    jobTitle = jobPos;
+  }
+  doc.jobTitle = jobTitle;
+  doc.companyName = companyName;
+  return doc;
+};
+
+/**
+ * Upcoming interviews for the signed-in candidate (auth only — no interviews.read).
+ * Returns scheduled rows where the meeting window has not ended and result is not rejected.
+ */
+const queryMyInterviews = async (currentUser, options = {}) => {
+  const candidateFilter = await buildMyInterviewsCandidateFilter(currentUser);
+  if (!candidateFilter) {
+    return { results: [], page: 1, limit: options.limit || 20, totalPages: 0, totalResults: 0 };
+  }
+
+  const now = new Date();
+  const filter = {
+    $and: [
+      candidateFilter,
+      { status: 'scheduled' },
+      { interviewResult: { $ne: 'rejected' } },
+    ],
+  };
+
+  const result = await Meeting.paginate(filter, {
+    ...options,
+    sortBy: options.sortBy || 'scheduledAt:asc',
+    limit: options.limit || 20,
+    page: options.page || 1,
+  });
+
+  const upcoming = (result.results || []).filter((m) => {
+    const end = meetingEndsAt(m.scheduledAt, m.durationMinutes);
+    return end && end >= now;
+  });
+
+  result.results = await Promise.all(upcoming.map((m) => enrichMeetingForCandidateDashboard(m)));
+  result.totalResults = result.results.length;
+  result.totalPages = Math.ceil(result.totalResults / (result.limit || 20)) || 0;
+  return result;
+};
+
 const queryMeetings = async (filter, options, currentUser = null) => {
   let scopedFilter = filter;
   if (currentUser) {
@@ -1352,6 +1441,7 @@ export const sendInterviewConclusionNotifications = async () => {
 
 export {
   createMeeting,
+  queryMyInterviews,
   queryMeetings,
   getMeetingById,
   getMeetingByMeetingId,

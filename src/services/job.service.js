@@ -17,6 +17,7 @@ import {
   countApplicants,
   queryApplicants,
 } from './applicantQuery.service.js';
+import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/jobLocation.util.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -64,7 +65,10 @@ const appendFilterClause = (filter, clause) => {
     return;
   }
   const snapshot = stripJobQueryMeta(filter);
-  Object.keys(filter).forEach((k) => delete filter[k]);
+  // Only clear the keys actually folded into `snapshot` -- request-context meta
+  // (userId/userRoleIds/platformSuperUser/forCandidates) must survive on `filter`
+  // for the access-control checks below queryJobs still needs to read them.
+  Object.keys(snapshot).forEach((k) => delete filter[k]);
   if (Object.keys(snapshot).length === 0) {
     Object.assign(filter, clause);
     return;
@@ -255,6 +259,7 @@ const isOwnerOrAdmin = async (user, resource) => {
 
 const createJob = async (createdById, payload) => {
   stripForbiddenJobFields(payload);
+  applyLocationMetaToPayload(payload);
   const job = await Job.create({
     createdBy: createdById,
     ...payload,
@@ -279,17 +284,27 @@ const queryJobs = async (filter, options) => {
   delete filter.salaryMin;
   delete filter.salaryMax;
 
-  // Handle search query
-  if (filter.search) {
-    const searchRegex = new RegExp(escapeRegex(filter.search), 'i');
-    filter.$or = [
-      { title: searchRegex },
-      { 'organisation.name': searchRegex },
-      { jobDescription: searchRegex },
-      { location: searchRegex },
-      { skillTags: { $in: [searchRegex] } },
-    ];
-    delete filter.search;
+  const searchTerm = filter.search != null ? String(filter.search).trim() : '';
+  const locationTerm = filter.location != null ? String(filter.location).trim() : '';
+  delete filter.search;
+  delete filter.location;
+
+  if (searchTerm) {
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
+    appendFilterClause(filter, {
+      $or: [
+        { title: searchRegex },
+        { 'organisation.name': searchRegex },
+        { jobDescription: searchRegex },
+        { location: searchRegex },
+        { skillTags: { $in: [searchRegex] } },
+      ],
+    });
+  }
+
+  if (locationTerm) {
+    const locationClause = buildLocationFilterClause(locationTerm);
+    if (locationClause) appendFilterClause(filter, locationClause);
   }
 
   // Candidate-facing: return all active jobs, no createdBy filter
@@ -401,6 +416,9 @@ const updateJobById = async (id, updateBody, currentUser) => {
   }
 
   stripForbiddenJobFields(updateBody);
+  if (updateBody.location != null) {
+    applyLocationMetaToPayload(updateBody);
+  }
   Object.assign(job, updateBody);
   await job.save();
 

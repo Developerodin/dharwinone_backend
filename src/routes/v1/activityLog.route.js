@@ -9,6 +9,14 @@ import * as activityLogController from '../../controllers/activityLog.controller
 const router = express.Router();
 
 router.get(
+  '/export/excel',
+  auth(),
+  requireActivityLogsListAccess,
+  validate(activityLogValidation.exportActivityLogs),
+  activityLogController.exportActivityLogsExcel
+);
+
+router.get(
   '/export',
   auth(),
   requireDesignatedSuperadmin,

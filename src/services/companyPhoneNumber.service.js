@@ -13,6 +13,23 @@ function tenantIdForUser(user) {
   return user?.tenantId || user?._id || user?.id;
 }
 
+function currentTelephonyProvider() {
+  return config.telephony?.provider === 'twilio' ? 'twilio' : 'plivo';
+}
+
+/** Dropdown registry query: active-provider numbers + any assigned row (cross-provider visibility). */
+export function buildAssignableNumbersQuery(tenantId, activeProvider) {
+  const providerClauses =
+    activeProvider === 'twilio'
+      ? [{ provider: 'twilio' }, { provider: { $exists: false } }, { provider: null }]
+      : [{ provider: activeProvider }];
+
+  return {
+    tenantId,
+    $or: [...providerClauses, { assignedTo: { $ne: null } }],
+  };
+}
+
 function toE164Phone(raw) {
   if (!raw) return '';
   const trimmed = String(raw).trim();
@@ -316,7 +333,10 @@ export async function listUserPhoneAssignments(adminUser) {
     if (!assignedByUserId.has(uid)) assignedByUserId.set(uid, row);
   }
 
-  const numbers = await CompanyPhoneNumber.find({ tenantId }).sort({ phoneNumber: 1 }).lean();
+  const activeProvider = currentTelephonyProvider();
+  const numbers = await CompanyPhoneNumber.find(buildAssignableNumbersQuery(tenantId, activeProvider))
+    .sort({ phoneNumber: 1 })
+    .lean();
 
   const roster = users.map((u) => {
     const uid = String(u._id);

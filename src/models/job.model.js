@@ -41,6 +41,13 @@ const jobSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    /** Normalized geographic metadata for hierarchical browse filters; display uses `location`. */
+    locationMeta: {
+      city: { type: String, trim: true },
+      state: { type: String, trim: true },
+      country: { type: String, trim: true },
+      countryCode: { type: String, trim: true, uppercase: true },
+    },
 
     // Skill Tags (flat list for quick filtering)
     skillTags: [{ type: String, trim: true }],
@@ -113,6 +120,17 @@ const jobSchema = new mongoose.Schema(
     },
     externalPlatformUrl: { type: String, trim: true },
 
+    // Auto-fetch ingestion scope (null for manually-saved/internal jobs -- those
+    // are never touched by stale cleanup, see externalJobAutoFetch.service.js).
+    autoFetchConfigId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ExternalJobAutoFetchConfig',
+      default: null,
+      index: true,
+    },
+    /** Last time an auto-fetch sync re-discovered this job; stale = missing from the latest successful run. */
+    lastSeenAt: { type: Date, default: null },
+
     // Per-user bookmark notes. visibility='public' visible to all who can read the job;
     // 'private' visible only to the note's owner.
     bookmarks: [
@@ -131,6 +149,9 @@ const jobSchema = new mongoose.Schema(
 jobSchema.index({ title: 'text', 'organisation.name': 'text', jobDescription: 'text' });
 jobSchema.index({ jobType: 1 });
 jobSchema.index({ location: 1 });
+jobSchema.index({ 'locationMeta.countryCode': 1 });
+jobSchema.index({ 'locationMeta.countryCode': 1, 'locationMeta.state': 1 });
+jobSchema.index({ 'locationMeta.countryCode': 1, 'locationMeta.city': 1 });
 jobSchema.index({ status: 1 });
 jobSchema.index({ skillTags: 1 });
 jobSchema.index({ createdAt: -1 });

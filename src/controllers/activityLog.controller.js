@@ -1,6 +1,8 @@
+import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import config from '../config/config.js';
+import ApiError from '../utils/ApiError.js';
 import { getGrantingPermissions } from '../config/permissions.js';
 import * as activityLogService from '../services/activityLog.service.js';
 
@@ -57,11 +59,35 @@ const getActivityLogs = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const resolveExportFilter = (req) =>
+  resolveActivityLogListFilter({
+    query: req.query,
+    permissions: req.authContext?.permissions,
+    isDesignated: config.isDesignatedSuperadminEmail(req.user.email),
+    isPlatformSuperUser: !!req.user.platformSuperUser,
+    uid: String(req.user._id || req.user.id),
+  });
+
 const exportActivityLogs = catchAsync(async (req, res) => {
-  const filter = pick(req.query, listFilterKeys);
+  const filter = resolveExportFilter(req);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="activity-logs-export.csv"');
   await activityLogService.streamActivityLogsCsv(filter, req.user, res);
+});
+
+const exportActivityLogsExcel = catchAsync(async (req, res) => {
+  const filter = resolveExportFilter(req);
+  const result = await activityLogService.exportActivityLogsExcel(filter, req.user);
+  if (result.empty) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No activity logs match the selected filters.');
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="activity-logs-${date}.xlsx"`);
+  res.send(result.buffer);
 });
 
 /** Server-seen client IP (for audit UI); same value stored on activity log entries as `ip`. */
@@ -69,4 +95,10 @@ const getActivityLogNetworkPreview = catchAsync(async (req, res) => {
   res.send({ ip: req.ip || null });
 });
 
-export { getActivityLogs, exportActivityLogs, getActivityLogNetworkPreview, resolveActivityLogListFilter };
+export {
+  getActivityLogs,
+  exportActivityLogs,
+  exportActivityLogsExcel,
+  getActivityLogNetworkPreview,
+  resolveActivityLogListFilter,
+};

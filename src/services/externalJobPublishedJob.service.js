@@ -1,3 +1,4 @@
+import { resolveLocationMeta } from '../utils/jobLocation.util.js';
 import Job from '../models/job.model.js';
 import ExternalJob from '../models/externalJob.model.js';
 import logger from '../config/logger.js';
@@ -101,7 +102,13 @@ async function findMirroredJobByRef(externalId, source) {
 export async function syncPublishedJobForExternal(extDoc) {
   const externalId = String(extDoc.externalId).trim();
   const source = String(extDoc.source).trim();
-  const payload = buildJobPayloadFromExternal({ ...extDoc.toObject?.() || extDoc, externalId, source });
+  const extPlain = extDoc.toObject?.() || extDoc;
+  const payload = buildJobPayloadFromExternal({ ...extPlain, externalId, source });
+  // Prefer meta already resolved from the clean structured location (mapRowToJob /
+  // auto-fetch); only re-derive from the collapsed display string as a fallback for
+  // rows saved before that resolution existed. Computed once, reused below instead
+  // of re-running the resolver on every branch (create / update / retry-after-11000).
+  const locationMeta = extPlain.locationMeta || resolveLocationMeta(payload.location);
 
   let job = null;
 
@@ -123,6 +130,7 @@ export async function syncPublishedJobForExternal(extDoc) {
       jobDescription: payload.jobDescription,
       jobType: payload.jobType,
       location: payload.location,
+      ...(locationMeta ? { locationMeta } : { locationMeta: undefined }),
       experienceLevel: payload.experienceLevel,
       skillTags: payload.skillTags,
       salaryRange: payload.salaryRange,
@@ -134,7 +142,7 @@ export async function syncPublishedJobForExternal(extDoc) {
     await job.save();
   } else {
     try {
-      job = await Job.create(payload);
+      job = await Job.create({ ...payload, ...(locationMeta ? { locationMeta } : {}) });
     } catch (err) {
       if (err && err.code === 11000) {
         job = await findMirroredJobByRef(externalId, source);
@@ -145,6 +153,7 @@ export async function syncPublishedJobForExternal(extDoc) {
             jobDescription: payload.jobDescription,
             jobType: payload.jobType,
             location: payload.location,
+            ...(locationMeta ? { locationMeta } : { locationMeta: undefined }),
             experienceLevel: payload.experienceLevel,
             skillTags: payload.skillTags,
             salaryRange: payload.salaryRange,
@@ -168,7 +177,11 @@ export async function syncPublishedJobForExternal(extDoc) {
     throw new Error('syncPublishedJobForExternal: failed to resolve Job');
   }
 
-  await ExternalJob.updateOne({ _id: extDoc._id }, { $set: { publishedJobId: job._id } }).exec();
+  // Auto-fetch calls this with a plain object (no ExternalJob row at all -- see
+  // externalJobAutoFetch.service.js) -- nothing to link back in that case.
+  if (extDoc._id) {
+    await ExternalJob.updateOne({ _id: extDoc._id }, { $set: { publishedJobId: job._id } }).exec();
+  }
 
   return job;
 }
