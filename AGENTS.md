@@ -73,3 +73,14 @@ S582 Fix and deploy resolution for Vercel production build failure on dharwinfro
 
 Access 2511k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
+
+## Agent rules
+
+### Test run output (do not commit)
+
+Do not commit local or CI scratch files from test runs. Redirect verbose test output to gitignored paths or delete after use.
+
+Examples (see `.gitignore`):
+- `test-full-output.log`, `test-full-final.log` (`test-full*.log`)
+- `.test-full-output.txt`
+- `*.test-output.log`

@@ -11,6 +11,11 @@ yarn-error.log
 # Code coverage
 coverage
 
+# Test run output (local/CI scratch — do not commit)
+test-full*.log
+.test-full-output.txt
+*.test-output.log
+
 # Local webhook payload backups (LiveKit Egress)
 recordings/
 
