@@ -40,6 +40,7 @@ import {
   userHasPersonProfileRole,
   userIsAdmin,
   userIsAgent,
+  userIsRestrictedFromMobileApp,
   validateRoleIdsForAgent,
 } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
@@ -506,7 +507,7 @@ const registerMentor = catchAsync(async (req, res) => {
 });
 
 const login = catchAsync(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, platform } = req.body;
   const user = await loginUserWithEmailAndPassword(email, password);
   const hasPersonProfile = await userHasPersonProfileRole(user);
   if (hasPersonProfile) {
@@ -520,6 +521,17 @@ const login = catchAsync(async (req, res) => {
         { errorCode: 'CANDIDATE_RESIGNED' }
       );
     }
+  }
+  // Mobile app only: block when every active role is Candidate/Student/Mentor.
+  // Any allowed role (e.g. Employee + Candidate) → permit. Omit `platform` → unchanged clients.
+  if (platform === 'app' && (await userIsRestrictedFromMobileApp(user))) {
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'This role is not allowed to access the mobile app.',
+      true,
+      '',
+      { errorCode: 'MOBILE_APP_ROLE_NOT_ALLOWED' }
+    );
   }
   await updateUserById(user.id, { lastLoginAt: new Date() });
   user.lastLoginAt = new Date();
