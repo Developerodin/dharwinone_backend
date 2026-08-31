@@ -196,10 +196,14 @@ const updateUserById = async (userId, updateBody) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
   const previousStatus = user.status;
+  const pendingToActive = updateBody.status === 'active' && previousStatus === 'pending';
   // Captured pre-save: the Employee mirror is matched by email, and on an email change the
   // linked profile still carries the old one.
   const previousEmail = user.email;
   Object.assign(user, updateBody);
+  if (pendingToActive) {
+    user.activatedAt = new Date();
+  }
   await user.save();
 
   // Keep linked Employee profile in sync with User (admin PATCH /users, PATCH /auth/me, etc.)
@@ -218,7 +222,7 @@ const updateUserById = async (userId, updateBody) => {
   }
 
   // Send confirmation email when candidate account is activated by admin (pending -> active)
-  if (updateBody.status === 'active' && previousStatus === 'pending' && user.email) {
+  if (pendingToActive && user.email) {
     const { sendCandidateAccountActivationEmail } = await import('./email.service.js');
     sendCandidateAccountActivationEmail(user.email, user.name).catch((err) => {
       logger.warn(`Failed to send account activation email to ${user.email}: ${err?.message || err}`);

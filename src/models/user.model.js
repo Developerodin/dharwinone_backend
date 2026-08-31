@@ -85,6 +85,11 @@ const userSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
+    /** Set once when status transitions pending → active (email verify or admin activation). */
+    activatedAt: {
+      type: Date,
+      default: null,
+    },
     notificationPreferences: {
       leaveUpdates: { type: Boolean, default: true },
       leaveUpdatesInApp: { type: Boolean, default: true },
@@ -151,6 +156,7 @@ userSchema.options.toJSON.transform = function (doc, ret, options) {
   if (originalUserToJSON) originalUserToJSON(doc, ret, options);
   ret.createdAt = doc.createdAt;
   ret.updatedAt = doc.updatedAt;
+  ret.activatedAt = doc.activatedAt;
   delete ret.platformSuperUser;
   delete ret.hideFromDirectory;
   return ret;

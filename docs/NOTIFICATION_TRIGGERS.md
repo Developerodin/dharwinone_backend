@@ -41,7 +41,9 @@ When adding a trigger: update this file, `notification.model.js` `type` enum, fr
 | Certificate issued | `certificate.service.js` | `notify` | `certificate` | Student’s user | N/A | Optional `email` + prefs |
 | Recruiter assigned | `candidate.service.js` `assignRecruiterToCandidate` | `notify` | `recruiter` | Recruiter user | N/A | Optional `email` + prefs |
 | Agent assigned | `candidate.service.js` | `notify` | `assignment` | Agent user | N/A | No email pref key |
-| Account activated | `user.service.js` `updateUserById` | `notify` | `account` | Activated user | N/A | In-app only (no `email` block) |
+| Account activated (admin) | `user.service.js` `updateUserById` | `notify` | `account` | Activated user | N/A | Only when `previousStatus === 'pending'` and `status` becomes `'active'`; sets `User.activatedAt` atomically on save |
+| Account activated (email verify) | `auth.service.js` `verifyEmail` | `notify` | `account` | Verified user | N/A | `buildVerifyEmailUpdatePlan` sets `status: 'active'` + `activatedAt` when user was `pending`; in-app only (activation email is separate) |
+| Account activated (stale verify heal) | `auth.service.js` `healPendingCandidateAfterStaleVerify` | `notify` | `account` | Repaired user | N/A | Idempotent: no-op if user is not `pending` or already has roles; same `activatedAt` + notify rules as verify path |
 | Resign / joining scheduler | `candidate.scheduler.js` | `notify` / `notifyByEmail` | `account` | Admin + candidate | Candidate needs User for in-app | Fire-and-forget |
 | Job share | `job.controller.js` `shareJobEmail` | `notifyByEmail` | `general` | `to` if user exists | No in-app | Template email separate |
 | Candidate invite | `auth.controller.js` | `notifyByEmail` | `general` | Invitee | No in-app | Bulk array; invitation email separate |
@@ -52,6 +54,13 @@ When adding a trigger: update this file, `notification.model.js` `type` enum, fr
 ## Webhooks and duplicates
 
 Bolna (and similar) may deliver **at-least-once**. Post-call follow-up uses an atomic claim on `CallRecord` so the same `executionId` does not send duplicate email + notification after a successful claim.
+
+## Account activation (`User.activatedAt`)
+
+- **Field:** `User.activatedAt` (`Date | null`, default `null`) — set once on the first `pending` → `active` transition.
+- **Not set on:** users created directly as `active` (admin registration), `active` → `active` updates, or unrelated profile edits.
+- **Notification timing:** `Notification.createdAt` remains the in-app notification creation time (synchronous `notify()` at activation). It is **not** copied onto `User.activatedAt` and is not rewritten for old rows.
+- **Backfill:** Existing users keep `activatedAt: null`. Historical `notification.createdAt` for title `"Your account has been activated"` is an imperfect proxy (missing rows, failed notify, pre-notification-era activations); no automatic backfill is performed.
 
 ## Related doc
 
