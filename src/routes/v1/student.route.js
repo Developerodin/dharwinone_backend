@@ -6,6 +6,8 @@ import requireStudentsReadOrOwnStudent from '../../middlewares/requireStudentsRe
 import * as studentValidation from '../../validations/student.validation.js';
 import * as studentController from '../../controllers/student.controller.js';
 import * as studentExcelController from '../../controllers/studentExcel.controller.js';
+import * as studentNoteController from '../../controllers/studentNote.controller.js';
+import * as studentNoteValidation from '../../validations/studentNote.validation.js';
 import { studentProfileImageUpload } from '../../middlewares/upload.js';
 
 const router = express.Router();
@@ -14,8 +16,39 @@ router
   .route('/')
   .get(auth(), requirePermissions('students.read'), validate(studentValidation.getStudents), studentController.getStudents);
 
+router.get(
+  '/filter-options',
+  auth(),
+  requirePermissions('students.read'),
+  validate(studentValidation.getStudentFilterOptions),
+  studentController.getStudentFilterOptions
+);
+
 // Excel export of students (MUST be before /:studentId so "export" isn't captured as an id)
 router.get('/export', auth(), requirePermissions('students.read'), studentExcelController.exportExcel);
+
+router
+  .route('/:studentId/notes')
+  .get(
+    auth(),
+    requirePermissions('students.read'),
+    validate(studentNoteValidation.listNotes),
+    studentNoteController.listNotes
+  )
+  .post(
+    auth(),
+    requirePermissions('students.manage'),
+    validate(studentNoteValidation.createNote),
+    studentNoteController.createNote
+  );
+
+router.delete(
+  '/notes/:noteId',
+  auth(),
+  requirePermissions('students.manage'),
+  validate(studentNoteValidation.deleteNote),
+  studentNoteController.deleteNote
+);
 
 // Users with Student role but no Training student profile (so they don't appear in assignment)
 router.get(

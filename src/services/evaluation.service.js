@@ -92,6 +92,7 @@ export const computeAtRisk = (row, now = Date.now()) => {
 
 const applyEvaluationFilters = (evaluations, filters) => {
   let rows = evaluations;
+  if (filters.studentId) rows = rows.filter((r) => r.studentId === filters.studentId);
   if (filters.courseId) rows = rows.filter((r) => r.courseId === filters.courseId);
   if (filters.positionId) rows = rows.filter((r) => r.positionId === filters.positionId);
   if (filters.categoryId) rows = rows.filter((r) => (r.categoryIds || []).includes(filters.categoryId));
@@ -106,6 +107,128 @@ const applyEvaluationFilters = (evaluations, filters) => {
     );
   }
   return rows;
+};
+
+/** Mirrors frontend deriveOverallStatus — keep in sync with evaluation-utils.ts */
+export const deriveOverallStatus = (courses) => {
+  if (!courses?.length) return 'Not Started';
+  const statuses = courses.map((c) => c.displayStatus ?? deriveCourseDisplayStatus(c));
+  if (statuses.every((s) => s === 'Completed')) return 'Completed';
+  if (statuses.some((s) => s === 'In Progress' || s === 'Completed')) return 'In Progress';
+  return 'Not Started';
+};
+
+export const aggregateStudentRows = (evaluations) => {
+  const map = new Map();
+  for (const e of evaluations) {
+    if (!e.studentId) continue;
+    const existing = map.get(e.studentId) || [];
+    existing.push(e);
+    map.set(e.studentId, existing);
+  }
+
+  const rows = [];
+  for (const [studentId, courses] of map.entries()) {
+    const avgCompletion = courses.reduce((s, c) => s + (c.completionRate ?? 0), 0) / courses.length;
+    const scores = courses.map((c) => c.quizScore).filter((v) => v != null);
+    const avgQuiz = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+    rows.push({
+      studentId,
+      studentName: courses[0].studentName,
+      positionName: courses[0].positionName ?? null,
+      coursesAssigned: courses.length,
+      avgCompletion: Math.round(avgCompletion),
+      overallStatus: deriveOverallStatus(courses),
+      completedCount: courses.filter((c) => deriveCourseDisplayStatus(c) === 'Completed').length,
+      avgQuizScore: avgQuiz,
+      atRiskCount: courses.filter((c) => c.atRisk).length,
+    });
+  }
+  return rows;
+};
+
+export const aggregateCourseRows = (evaluations) => {
+  const map = new Map();
+  for (const e of evaluations) {
+    if (!e.courseId) continue;
+    const existing = map.get(e.courseId) || [];
+    existing.push(e);
+    map.set(e.courseId, existing);
+  }
+
+  const rows = [];
+  for (const [courseId, rowsForCourse] of map.entries()) {
+    const avgCompletion =
+      rowsForCourse.reduce((s, c) => s + (c.completionRate ?? 0), 0) / rowsForCourse.length;
+    const categories = new Set();
+    for (const r of rowsForCourse) for (const n of r.categoryNames || []) categories.add(n);
+    rows.push({
+      courseId,
+      courseName: rowsForCourse[0].courseName,
+      categoryNames: [...categories],
+      studentsAssigned: rowsForCourse.length,
+      avgCompletion: Math.round(avgCompletion),
+      completedCount: rowsForCourse.filter((c) => deriveCourseDisplayStatus(c) === 'Completed').length,
+      atRiskCount: rowsForCourse.filter((c) => c.atRisk).length,
+    });
+  }
+  return rows;
+};
+
+const STUDENT_SORT_FIELDS = {
+  student: 'studentName',
+  studentName: 'studentName',
+  position: 'positionName',
+  courses: 'coursesAssigned',
+  avgCompletion: 'avgCompletion',
+  status: 'overallStatus',
+  avgQuiz: 'avgQuizScore',
+};
+
+const COURSE_SORT_FIELDS = {
+  course: 'courseName',
+  courseName: 'courseName',
+  categories: 'categoryNames',
+  students: 'studentsAssigned',
+  avgCompletion: 'avgCompletion',
+  atRisk: 'atRiskCount',
+};
+
+const compareValues = (a, b) => {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (Array.isArray(a) && Array.isArray(b)) return a.join(', ').localeCompare(b.join(', '));
+  return String(a).localeCompare(String(b), undefined, { sensitivity: 'base' });
+};
+
+export const sortEvaluationViewRows = (rows, view, sortBy, sortOrder = 'asc') => {
+  const fieldMap = view === 'course' ? COURSE_SORT_FIELDS : STUDENT_SORT_FIELDS;
+  const field = fieldMap[sortBy] || (view === 'course' ? 'courseName' : 'studentName');
+  const dir = sortOrder === 'desc' ? -1 : 1;
+  return [...rows].sort((left, right) => compareValues(left[field], right[field]) * dir);
+};
+
+/**
+ * @param {Array} items
+ * @param {number} page 1-based
+ * @param {number} limit
+ */
+export const paginateList = (items, page, limit) => {
+  const total = items.length;
+  const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+  const safePage = totalPages === 0 ? 1 : Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * limit;
+  return {
+    items: items.slice(start, start + limit),
+    meta: {
+      total,
+      page: safePage,
+      limit,
+      totalPages,
+    },
+  };
 };
 
 const buildSummary = (evaluations) => {
@@ -281,15 +404,28 @@ export const buildEvaluation = ({
 
 const parseEvaluationQuery = (query = {}) => {
   const page = Math.max(1, parseInt(query.page, 10) || 1);
+  const hasPagination = query.page != null || query.limit != null;
   const rawLimit = parseInt(query.limit, 10);
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(500, rawLimit) : 0;
+  const limit =
+    hasPagination && Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(500, rawLimit)
+      : hasPagination
+        ? 50
+        : 0;
+  const view = query.view === 'course' ? 'course' : 'student';
+  const sortOrder = query.sortOrder === 'desc' ? 'desc' : 'asc';
+  const sortBy = query.sortBy ? String(query.sortBy) : null;
   return {
     courseId: query.courseId ? String(query.courseId) : null,
+    studentId: query.studentId ? String(query.studentId) : null,
     positionId: query.positionId ? String(query.positionId) : null,
     categoryId: query.categoryId ? String(query.categoryId) : null,
     status: query.status ? String(query.status) : null,
     q: (query.q || '').trim() || null,
     atRiskOnly: query.atRisk === 'true' || query.atRisk === '1',
+    view,
+    sortBy,
+    sortOrder,
     page,
     limit,
   };
@@ -392,22 +528,31 @@ const getEvaluationData = async (query = {}) => {
   const filtered = applyEvaluationFilters(built.evaluations, filters);
   const summary = buildSummary(filtered);
 
-  const result = { summary, evaluations: filtered };
+  const aggregated =
+    filters.view === 'course' ? aggregateCourseRows(filtered) : aggregateStudentRows(filtered);
+  const sorted = sortEvaluationViewRows(aggregated, filters.view, filters.sortBy, filters.sortOrder);
 
   if (filters.limit > 0) {
-    const total = filtered.length;
-    const totalPages = Math.max(1, Math.ceil(total / filters.limit));
-    const start = (filters.page - 1) * filters.limit;
-    result.evaluations = filtered.slice(start, start + filters.limit);
-    result.meta = {
-      total,
-      page: filters.page,
-      limit: filters.limit,
-      totalPages,
+    const { items, meta } = paginateList(sorted, filters.page, filters.limit);
+    const pageStudentIds = new Set(items.map((r) => r.studentId).filter(Boolean));
+    const pageCourseIds = new Set(items.map((r) => r.courseId).filter(Boolean));
+    const pageEvaluations = filtered.filter((row) =>
+      filters.view === 'course' ? pageCourseIds.has(row.courseId) : pageStudentIds.has(row.studentId)
+    );
+
+    return {
+      summary,
+      rows: items,
+      evaluations: pageEvaluations,
+      meta,
     };
   }
 
-  return result;
+  return {
+    summary,
+    rows: sorted,
+    evaluations: filtered,
+  };
 };
 
 /**
@@ -471,6 +616,11 @@ export default {
   getEvaluationData,
   buildEvaluation,
   deriveCourseDisplayStatus,
+  deriveOverallStatus,
+  aggregateStudentRows,
+  aggregateCourseRows,
+  sortEvaluationViewRows,
+  paginateList,
   computeAtRisk,
   computeEnrollmentStatusBreakdown,
   isEmployeeResigned,

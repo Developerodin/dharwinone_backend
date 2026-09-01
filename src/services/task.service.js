@@ -253,7 +253,16 @@ const enrichWithOffboarding = async (results, now) => {
 
 const queryTasks = async (filter, options) => {
   applyCommaFilter(filter, 'priority');
+  applyCommaFilter(filter, 'status');
   expandPriorityFilterForDefaultMedium(filter);
+
+  /* Only tasks that carry a dueDate. Mongo sorts missing values FIRST on an ascending
+     sort, so a dashboard ordering by dueDate would otherwise be filled by an undated
+     backlog and hide every overdue task. Absent flag => filter untouched. */
+  if (isTruthyQueryFlag(filter.hasDueDate)) {
+    filter.dueDate = { $ne: null, $exists: true };
+  }
+  delete filter.hasDueDate;
   applyCommaFilter(filter, 'sprintId', (id) => new mongoose.Types.ObjectId(id));
   applyCommaFilter(filter, 'createdBy', (id) => new mongoose.Types.ObjectId(id));
 

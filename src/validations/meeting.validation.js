@@ -88,18 +88,56 @@ const meetingFilterQueryKeys = {
   recruiter: Joi.string().trim().allow(''),
   /** Comma-separated interview types (Video, In-Person, Phone). */
   interviewType: Joi.string().trim().allow(''),
+  /**
+   * Optional scheduledAt window, as ISO INSTANTS (not calendar days) — the caller
+   * resolves its own local day to UTC before sending. Omitted => unchanged behaviour
+   * for every existing consumer.
+   */
+  dateFrom: Joi.date().iso(),
+  /* Ordering is checked in boundedDateRange, not with Joi.ref('dateFrom') — an
+     unresolvable ref makes a dateTo-only query fail, and either bound alone is valid. */
+  dateTo: Joi.date().iso(),
   sortBy: Joi.string(),
   limit: Joi.number().integer().min(1).max(100),
   page: Joi.number().integer().min(1),
 };
 
+/**
+ * Widest scheduledAt window a caller may request, in days. A dashboard asks for one
+ * day; an operator filtering the Interviews table asks for weeks. An unbounded range
+ * (dateFrom=1970 & dateTo=2099) is a full-collection scan wearing a filter, so it is
+ * refused rather than served slowly.
+ */
+const MAX_MEETING_DATE_RANGE_DAYS = 92;
+
+/**
+ * Order and width of the scheduledAt window. Only applies when BOTH bounds are present —
+ * either one alone is a valid open-ended window.
+ */
+const boundedDateRange = (value, helpers) => {
+  const { dateFrom, dateTo } = value;
+  if (!dateFrom || !dateTo) return value;
+  const spanMs = new Date(dateTo).getTime() - new Date(dateFrom).getTime();
+  if (spanMs < 0) {
+    return helpers.error('any.invalid', { message: 'dateTo must not precede dateFrom' });
+  }
+  if (spanMs / 86400000 > MAX_MEETING_DATE_RANGE_DAYS) {
+    return helpers.error('any.invalid', {
+      message: `dateFrom..dateTo must span at most ${MAX_MEETING_DATE_RANGE_DAYS} days`,
+    });
+  }
+  return value;
+};
+
 const getMeetings = {
-  query: Joi.object().keys({
-    ...meetingFilterQueryKeys,
-    sortBy: meetingFilterQueryKeys.sortBy.default('-createdAt'),
-    limit: meetingFilterQueryKeys.limit.default(10),
-    page: meetingFilterQueryKeys.page.default(1),
-  }),
+  query: Joi.object()
+    .keys({
+      ...meetingFilterQueryKeys,
+      sortBy: meetingFilterQueryKeys.sortBy.default('-createdAt'),
+      limit: meetingFilterQueryKeys.limit.default(10),
+      page: meetingFilterQueryKeys.page.default(1),
+    })
+    .custom(boundedDateRange, 'bounded scheduledAt range'),
 };
 
 const getMyInterviews = {
@@ -111,11 +149,13 @@ const getMyInterviews = {
 };
 
 const exportMeetings = {
-  query: Joi.object().keys(
-    Object.fromEntries(
-      Object.entries(meetingFilterQueryKeys).filter(([key]) => !['page', 'limit'].includes(key))
+  query: Joi.object()
+    .keys(
+      Object.fromEntries(
+        Object.entries(meetingFilterQueryKeys).filter(([key]) => !['page', 'limit'].includes(key))
+      )
     )
-  ),
+    .custom(boundedDateRange, 'bounded scheduledAt range'),
   body: Joi.object()
     .keys({
       ids: Joi.array()
