@@ -350,7 +350,7 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
   return CompanyPhoneNumber.create(payload);
 }
 
-export async function updateCompanyPhoneNumberById(user, id, patch) {
+export async function updateCompanyPhoneNumberById(_user, id, patch) {
   const doc = await CompanyPhoneNumber.findOne({ _id: id });
   if (!doc) throw new ApiError(httpStatus.NOT_FOUND, 'Company phone number not found');
 

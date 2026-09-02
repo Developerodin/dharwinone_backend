@@ -18,7 +18,6 @@ import mongoose from 'mongoose';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
-import plivoService from '../services/plivo.service.js';
 import telephonyService from '../services/telephony.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
@@ -74,7 +73,7 @@ const getAvailableNumbers = catchAsync(async (req, res) => {
 });
 
 /** GET /v1/plivo/numbers/countries — Twilio-driven country catalogue + retail/regulatory flags. */
-const getCountries = catchAsync(async (req, res) => {
+const getCountries = catchAsync(async (_req, res) => {
   const result = await telephonyService.listAvailableCountries();
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to list countries');
