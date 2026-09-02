@@ -11,6 +11,14 @@ const ensureStudentExists = async (studentId) => {
   }
 };
 
+// .lean() / toObject() skip the toJSON plugin (and toJSON would strip createdAt).
+const toClientNote = (n) => ({
+  ...n,
+  id: String(n._id),
+  student: String(n.student),
+  postedBy: n.postedBy != null ? String(n.postedBy) : n.postedBy,
+});
+
 const listForStudent = async (studentId, requesterUser) => {
   await ensureStudentExists(studentId);
   const isAdmin = await userIsAdmin(requesterUser);
@@ -20,7 +28,7 @@ const listForStudent = async (studentId, requesterUser) => {
   const notes = await StudentNote.find({ student: studentId, ...visibilityClause })
     .sort({ createdAt: -1 })
     .lean();
-  return notes;
+  return notes.map(toClientNote);
 };
 
 const createNote = async (studentId, requesterUser, payload) => {
@@ -32,7 +40,7 @@ const createNote = async (studentId, requesterUser, payload) => {
     postedBy: requesterUser._id,
     postedByName: requesterUser.name || requesterUser.email || 'Unknown',
   });
-  return note.toObject();
+  return toClientNote(note.toObject());
 };
 
 const deleteNote = async (noteId, requesterUser) => {
