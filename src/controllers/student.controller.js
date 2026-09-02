@@ -12,6 +12,7 @@ const getStudents = catchAsync(async (req, res) => {
     'position',
     'search',
     'employeeRoleOnly',
+    'studentRoleOnly',
     'excludeResignedEmployed',
     'names',
     'skills',
@@ -26,7 +27,7 @@ const getStudents = catchAsync(async (req, res) => {
 });
 
 const getStudentFilterOptions = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'position', 'search', 'employeeRoleOnly', 'excludeResignedEmployed']);
+  const filter = pick(req.query, ['status', 'position', 'search', 'employeeRoleOnly', 'studentRoleOnly', 'excludeResignedEmployed']);
   const options = await studentService.getStudentFilterOptions(filter);
   res.send(options);
 });
@@ -40,7 +41,7 @@ const getMyProfile = catchAsync(async (req, res) => {
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student profile not found for this user');
   }
-  res.send(student);
+  res.send(await studentService.serializeStudentForApi(student));
 });
 
 const getStudent = catchAsync(async (req, res) => {
@@ -48,7 +49,7 @@ const getStudent = catchAsync(async (req, res) => {
   if (!student) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-  res.send(student);
+  res.send(await studentService.serializeStudentForApi(student));
 });
 
 const updateStudent = catchAsync(async (req, res) => {
@@ -61,7 +62,7 @@ const updateStudent = catchAsync(async (req, res) => {
     {},
     req
   );
-  res.send(student);
+  res.send(await studentService.serializeStudentForApi(student));
 });
 
 const deleteStudent = catchAsync(async (req, res) => {
@@ -83,7 +84,7 @@ const uploadProfileImage = catchAsync(async (req, res) => {
   }
 
   const student = await studentService.updateStudentProfileImage(req.params.studentId, req.file, req.user);
-  res.status(httpStatus.OK).send(student);
+  res.status(httpStatus.OK).send(await studentService.serializeStudentForApi(student));
 });
 
 const getProfileImage = catchAsync(async (req, res) => {
@@ -113,7 +114,7 @@ const createStudentFromUser = catchAsync(async (req, res) => {
   const student = await studentService.createStudentFromUser(req.body.userId, {
     ensureStudentRoleForCandidateOwner: Boolean(req.body.ensureStudentRoleForCandidateOwner),
   });
-  res.status(httpStatus.CREATED).send(student);
+  res.status(httpStatus.CREATED).send(await studentService.serializeStudentForApi(student));
 });
 
 /**

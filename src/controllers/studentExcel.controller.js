@@ -13,6 +13,7 @@ export const exportExcel = catchAsync(async (req, res) => {
     'status',
     'position',
     'search',
+    'studentRoleOnly',
     'names',
     'skills',
     'education',

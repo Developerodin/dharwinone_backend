@@ -9,6 +9,34 @@ import { uploadFileToS3 } from './upload.service.js';
 import { createUser } from './user.service.js';
 import { getRoleByName } from './role.service.js';
 import { getShiftById } from './shift.service.js';
+import { applyPersonProfileFallback, collectStudentFilterFacets, studentToPlain } from '../utils/studentProfileDisplay.js';
+
+const STUDENT_USER_SELECT = 'name email role roleIds status isEmailVerified phoneNumber';
+
+const overlayPersonProfiles = async (students) => {
+  if (!students?.length) return [];
+  const plains = students.map(studentToPlain);
+  const userIds = plains
+    .map((student) => student.user?.id || student.user?._id || student.user)
+    .filter(Boolean);
+  if (!userIds.length) {
+    return plains.map((student) => applyPersonProfileFallback(student, null));
+  }
+  const employees = await Employee.find({ owner: { $in: userIds } })
+    .select('owner phoneNumber shortBio skills qualifications degree')
+    .lean();
+  const byOwner = new Map(employees.map((row) => [String(row.owner), row]));
+  return plains.map((student) => {
+    const ownerId = student.user?.id || student.user?._id || student.user;
+    return applyPersonProfileFallback(student, byOwner.get(String(ownerId)) || null);
+  });
+};
+
+const serializeStudentForApi = async (student) => {
+  if (!student) return student;
+  const [overlaid] = await overlayPersonProfiles([student]);
+  return overlaid;
+};
 
 /**
  * Register a new student
@@ -84,19 +112,36 @@ const buildExperienceYearsExpr = () => ({
             '$$value',
             {
               $cond: [
+                { $ne: ['$$this.startDate', null] },
                 {
-                  $and: [{ $ne: ['$$this.startDate', null] }, { $ne: ['$$this.endDate', null] }],
-                },
-                {
-                  $max: [
-                    0,
-                    {
-                      $divide: [
-                        { $subtract: ['$$this.endDate', '$$this.startDate'] },
-                        31557600000,
+                  $let: {
+                    vars: {
+                      endDate: {
+                        $cond: [
+                          { $eq: ['$$this.isCurrent', true] },
+                          { $ifNull: ['$$this.endDate', '$$NOW'] },
+                          '$$this.endDate',
+                        ],
+                      },
+                    },
+                    in: {
+                      $cond: [
+                        { $ne: ['$$endDate', null] },
+                        {
+                          $max: [
+                            0,
+                            {
+                              $divide: [
+                                { $subtract: ['$$endDate', '$$this.startDate'] },
+                                31557600000,
+                              ],
+                            },
+                          ],
+                        },
+                        0,
                       ],
                     },
-                  ],
+                  },
                 },
                 0,
               ],
@@ -139,6 +184,7 @@ const buildStudentMongoFilter = async (filter) => {
     search,
     position,
     employeeRoleOnly,
+    studentRoleOnly,
     excludeResignedEmployed,
     status,
     names,
@@ -166,7 +212,7 @@ const buildStudentMongoFilter = async (filter) => {
   const nameFilters = parseStringList(names);
   const skillFilters = parseStringList(skills);
   const educationFilters = parseStringList(education);
-  const emailFilter = email?.trim();
+  const emailFilters = parseStringList(email);
 
   if (nameFilters.length) {
     const matchingUsers = await User.find({
@@ -182,9 +228,14 @@ const buildStudentMongoFilter = async (filter) => {
     );
   }
 
-  if (emailFilter) {
-    const emailRegex = new RegExp(escapeRegex(emailFilter), 'i');
-    const matchingUsers = await User.find({ email: { $regex: emailRegex } }).select('_id').lean();
+  if (emailFilters.length) {
+    const matchingUsers = await User.find({
+      $or: emailFilters.map((value) => ({
+        email: { $regex: escapeRegex(value), $options: 'i' },
+      })),
+    })
+      .select('_id')
+      .lean();
     mergeUserIdFilter(
       mongoFilter,
       matchingUsers.map((u) => u._id)
@@ -192,10 +243,40 @@ const buildStudentMongoFilter = async (filter) => {
   }
 
   if (skillFilters.length) {
-    const skillClauses = skillFilters.map((skill) => ({
-      skills: { $regex: escapeRegex(skill), $options: 'i' },
-    }));
-    mongoFilter.$and = [...(mongoFilter.$and || []), ...skillClauses];
+    const skillClauses = skillFilters.map((skill) => {
+      const regex = { $regex: escapeRegex(skill), $options: 'i' };
+      return { $or: [{ skills: regex }, { 'skills.name': regex }] };
+    });
+    // Facets/rows overlay Candidate (Employee) skills when Student.skills is empty.
+    // Match that displayed set: Student.skills OR (empty Student.skills AND Employee.skills).
+    const matchingEmployees = await Employee.find({
+      $and: skillFilters.map((skill) => ({
+        'skills.name': { $regex: escapeRegex(skill), $options: 'i' },
+      })),
+    })
+      .select('owner')
+      .lean();
+    const overlayOwnerIds = matchingEmployees.map((row) => row.owner).filter(Boolean);
+    if (overlayOwnerIds.length) {
+      const studentSkillsMatch =
+        skillClauses.length === 1 ? skillClauses[0] : { $and: skillClauses };
+      mongoFilter.$and = [
+        ...(mongoFilter.$and || []),
+        {
+          $or: [
+            studentSkillsMatch,
+            {
+              $and: [
+                { user: { $in: overlayOwnerIds } },
+                { $or: [{ skills: { $exists: false } }, { skills: { $size: 0 } }] },
+              ],
+            },
+          ],
+        },
+      ];
+    } else {
+      mongoFilter.$and = [...(mongoFilter.$and || []), ...skillClauses];
+    }
   }
 
   if (educationFilters.length) {
@@ -203,6 +284,7 @@ const buildStudentMongoFilter = async (filter) => {
       $or: [
         { 'education.degree': { $regex: escapeRegex(edu), $options: 'i' } },
         { 'education.institution': { $regex: escapeRegex(edu), $options: 'i' } },
+        { 'education.institute': { $regex: escapeRegex(edu), $options: 'i' } },
         { 'education.fieldOfStudy': { $regex: escapeRegex(edu), $options: 'i' } },
       ],
     }));
@@ -266,6 +348,41 @@ const buildStudentMongoFilter = async (filter) => {
     }
   }
 
+  if (truthy(studentRoleOnly)) {
+    const studentRole = await getRoleByName('Student');
+    if (!studentRole) {
+      mergeUserIdFilter(mongoFilter, []);
+    } else if (status === 'inactive') {
+      // Deactivated students lose the Student role; rely on student.status only.
+    } else if (status === 'all') {
+      const roleScopedUsers = await User.find({
+        roleIds: studentRole._id,
+        status: { $in: ['active', 'pending'] },
+      })
+        .select('_id')
+        .lean();
+      const roleUserIds = roleScopedUsers.map((u) => u._id);
+      const roleScopeClause = {
+        $or: [
+          { status: 'inactive' },
+          ...(roleUserIds.length > 0 ? [{ user: { $in: roleUserIds } }] : [{ user: { $in: [] } }]),
+        ],
+      };
+      mongoFilter.$and = [...(mongoFilter.$and || []), roleScopeClause];
+    } else {
+      const roleScopedUsers = await User.find({
+        roleIds: studentRole._id,
+        status: { $in: ['active', 'pending'] },
+      })
+        .select('_id')
+        .lean();
+      mergeUserIdFilter(
+        mongoFilter,
+        roleScopedUsers.map((u) => u._id)
+      );
+    }
+  }
+
   if (truthy(excludeResignedEmployed)) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -308,11 +425,12 @@ const hydrateStudentsInOrder = async (studentDocs) => {
   const ids = studentDocs.map((doc) => doc._id);
   const order = new Map(ids.map((id, index) => [id.toString(), index]));
   const students = await Student.find({ _id: { $in: ids } })
-    .populate('user', 'name email role roleIds status isEmailVerified')
+    .populate('user', STUDENT_USER_SELECT)
     .populate('shift', 'name description timezone startTime endTime isActive')
     .populate('position', 'name');
 
-  return students.sort((left, right) => order.get(left.id) - order.get(right.id));
+  const ordered = students.sort((left, right) => order.get(left.id) - order.get(right.id));
+  return overlayPersonProfiles(ordered);
 };
 
 const getAggregationSortKey = (sortField) => {
@@ -440,26 +558,17 @@ const queryStudents = async (filter, options) => {
     return queryStudentsWithJoinSort(mongoFilter, options, field, order);
   }
 
-  return Student.paginate(mongoFilter, {
+  const result = await Student.paginate(mongoFilter, {
     ...options,
-    populate: 'user,position,shift',
+    populate: [
+      { path: 'user', select: STUDENT_USER_SELECT },
+      'position',
+      'shift',
+    ],
   });
+  result.results = await overlayPersonProfiles(result.results);
+  return result;
 };
-
-const formatEducationLabel = (education = []) =>
-  education
-    .map((edu) => {
-      const parts = [];
-      if (edu.degree?.trim()) parts.push(edu.degree.trim());
-      if (edu.institution?.trim()) parts.push(edu.institution.trim());
-      if (edu.endDate) {
-        const year = new Date(edu.endDate).getFullYear();
-        if (!Number.isNaN(year)) parts.push(`(${year})`);
-      }
-      return parts.join(' - ');
-    })
-    .filter(Boolean)
-    .join(', ');
 
 const computeExperienceYears = (experience = []) =>
   Math.round(
@@ -481,31 +590,17 @@ const getStudentFilterOptions = async (filter = {}) => {
   const mongoFilter = await buildStudentMongoFilter(filter);
   const students = await Student.find(mongoFilter)
     .populate('user', 'name email')
-    .select('skills education experience')
+    .select('skills education experience user')
     .lean();
 
-  const nameSet = new Set();
-  const skillSet = new Set();
-  const educationSet = new Set();
-  const experiences = [];
-
-  students.forEach((student) => {
-    if (student.user?.name) nameSet.add(student.user.name);
-    (student.skills || []).forEach((skill) => {
-      if (skill?.trim()) skillSet.add(skill.trim());
-    });
-    const educationLabel = formatEducationLabel(student.education || []);
-    if (educationLabel) educationSet.add(educationLabel);
-    experiences.push(computeExperienceYears(student.experience || []));
-  });
-
+  const overlaid = await overlayPersonProfiles(students);
+  const facets = collectStudentFilterFacets(overlaid);
+  const experiences = students.map((student) => computeExperienceYears(student.experience || []));
   const min = experiences.length ? Math.min(...experiences) : 0;
   const max = experiences.length ? Math.max(...experiences) : 50;
 
   return {
-    names: Array.from(nameSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
-    skills: Array.from(skillSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
-    education: Array.from(educationSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    ...facets,
     experience: { min, max },
   };
 };
@@ -535,7 +630,7 @@ const queryStudentsForExport = async (filter, options = {}) => {
  */
 const getStudentById = async (id) => {
   return Student.findById(id)
-    .populate('user', 'name email role roleIds status isEmailVerified')
+    .populate('user', STUDENT_USER_SELECT)
     .populate('shift', 'name description timezone startTime endTime isActive')
     .populate('position', 'name');
 };
@@ -546,7 +641,7 @@ const getStudentById = async (id) => {
  * @returns {Promise<Student>}
  */
 const getStudentByUserId = async (userId) => {
-  return Student.findOne({ user: userId }).populate('user', 'name email role roleIds status isEmailVerified');
+  return Student.findOne({ user: userId }).populate('user', STUDENT_USER_SELECT);
 };
 
 /**
@@ -1068,6 +1163,7 @@ export {
   EXPORT_MAX_ROWS,
   getStudentById,
   getStudentByUserId,
+  serializeStudentForApi,
   getOrCreateStudentForAttendance,
   getAttendanceIdentity,
   updateStudentById,

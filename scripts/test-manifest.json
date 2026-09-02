@@ -124,6 +124,7 @@
   "./src/services/__tests__/salesAgentAttribution.revoke.test.js",
   "./src/services/__tests__/salesAgentAttribution.transactionRollback.test.js",
   "./src/services/__tests__/student.buildStudentMongoFilter.test.js",
+  "./src/services/__tests__/studentProfileDisplay.test.js",
   "./src/services/__tests__/summaryFinalize.fixture.test.js",
   "./src/services/__tests__/team.service.A1.test.js",
   "./src/services/__tests__/team.service.populate.test.js",

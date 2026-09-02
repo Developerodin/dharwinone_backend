@@ -22,6 +22,8 @@ const getStudents = {
     page: Joi.number().integer(),
     /** When true, only users with the Employee RBAC role (excludes agents, candidates, attendance-only profiles). */
     employeeRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
+    /** When true, only users with the Student RBAC role (Training students list). */
+    studentRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
     /** When true, exclude owners linked to a resigned/inactive employee record. */
     excludeResignedEmployed: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
   }),
@@ -33,6 +35,7 @@ const getStudentFilterOptions = {
     position: Joi.string().custom(objectId).optional(),
     search: Joi.string().allow('').optional(),
     employeeRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
+    studentRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
     excludeResignedEmployed: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
   }),
 };
