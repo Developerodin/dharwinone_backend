@@ -113,6 +113,7 @@
   "./src/services/__tests__/referralLeads.export.salesAgent.test.js",
   "./src/services/__tests__/referralLeads.list.salesAgent.test.js",
   "./src/services/__tests__/referralLeads.stats.salesAgent.test.js",
+  "./src/services/__tests__/referralLeads.pagination.test.js",
   "./src/services/__tests__/referralLeadsQueryBuilder.test.js",
   "./src/services/__tests__/salesAgentAttribution.assign.test.js",
   "./src/services/__tests__/salesAgentAttribution.change.test.js",

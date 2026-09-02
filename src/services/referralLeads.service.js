@@ -29,6 +29,9 @@ import { buildReferralLeadsExportBuffer } from '../utils/referralLeadsExcel.serv
 import {
   applyNewFilters,
   buildSalesAgentListEnrichmentStages,
+  parseReferralLeadsPageLimit,
+  referralLeadsPaginationStages,
+  resolveReferralLeadsPagination,
 } from './referralLeadsQueryBuilder.js';
 import ReferralAttribution from '../models/referralAttribution.model.js';
 import { getOwnerIdsWithApplicantCandidateRoleOnly } from './role.service.js';
@@ -851,8 +854,7 @@ export const needsEffectiveStatusPipeline = (query = {}) =>
 export const listReferralLeads = async (req) => {
   const canSeeAll = await canUserSeeAllReferralLeads(req);
   const q = req.query || {};
-  const limit = Math.min(Math.max(parseInt(q.limit, 10) || 25, 1), 100);
-  const page = Math.max(parseInt(q.page, 10) || 1, 1);
+  const { page: requestedPage, limit } = parseReferralLeadsPageLimit(q);
   const baseMatch = await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q });
   const match = { ...baseMatch, ...applyNewFilters(q) };
   if (baseMatch.$and) {
@@ -863,7 +865,7 @@ export const listReferralLeads = async (req) => {
   const statusMatch = effectiveStatusMatch(q);
   const quickMatch = quickFilterEffectiveStatusMatch(q);
   const effStages = needsEffectiveStatusPipeline(q) ? buildEffectiveStatusStages(new Date()) : [];
-  const pipeline = [
+  const dataStages = [
     { $match: match },
     ...buildSalesAgentListEnrichmentStages(),
     ...ownerStages,
@@ -872,27 +874,33 @@ export const listReferralLeads = async (req) => {
     ...quickMatch,
     ...referralLeadsPopulateReferrerAndJobStages(),
     { $sort: { referredAt: -1, _id: -1 } },
-    { $skip: (page - 1) * limit },
-    { $limit: limit },
   ];
+  const requestedSkip = (requestedPage - 1) * limit;
 
   // Total uses the same match + owner filter + effective-status filter (no enrichment/populate, which
   // don't change row count), so it matches the stats card total exactly.
   const [rows, totalArr] = await Promise.all([
-    Employee.aggregate(pipeline),
+    Employee.aggregate([...dataStages, ...referralLeadsPaginationStages({ skip: requestedSkip, limit })]),
     Employee.aggregate([{ $match: match }, ...ownerStages, ...effStages, ...statusMatch, ...quickMatch, { $count: 'c' }]),
   ]);
   const total = totalArr[0]?.c ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const pagination = resolveReferralLeadsPagination({ page: requestedPage, limit, total });
+  let pageRows = rows;
+  if (pagination.page !== requestedPage) {
+    pageRows = await Employee.aggregate([
+      ...dataStages,
+      ...referralLeadsPaginationStages({ skip: pagination.skip, limit: pagination.limit }),
+    ]);
+  }
 
-  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(rows);
-  const results = await Promise.all(rows.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
+  const appliedJobApplyOrphans = await appliedJobPostingOrphansForJobApplyApplied(pageRows);
+  const results = await Promise.all(pageRows.map((r) => shapeLeadRow(r, { appliedJobApplyOrphans })));
   return {
     results,
-    page,
-    limit,
-    total,
-    totalPages,
+    page: pagination.page,
+    limit: pagination.limit,
+    total: pagination.total,
+    totalPages: pagination.totalPages,
     staleDataWarning: false,
   };
 };

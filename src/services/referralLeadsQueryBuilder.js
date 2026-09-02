@@ -1,5 +1,36 @@
 import mongoose from 'mongoose';
 
+export const DEFAULT_REFERRAL_LEADS_LIMIT = 25;
+export const MAX_REFERRAL_LEADS_LIMIT = 100;
+
+export function parseReferralLeadsPageLimit(query = {}) {
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || DEFAULT_REFERRAL_LEADS_LIMIT, 1), MAX_REFERRAL_LEADS_LIMIT);
+  const page = Math.max(parseInt(query.page, 10) || 1, 1);
+  return { page, limit };
+}
+
+/**
+ * Count is the filtered total (before skip/limit). Invalid pages clamp to the last
+ * valid page so `?page=999` does not return an empty table.
+ */
+export function resolveReferralLeadsPagination({ page, limit, total }) {
+  const safeLimit = Math.min(Math.max(limit || DEFAULT_REFERRAL_LEADS_LIMIT, 1), MAX_REFERRAL_LEADS_LIMIT);
+  const safeTotal = total || 0;
+  const totalPages = Math.max(1, Math.ceil(safeTotal / safeLimit) || 1);
+  const safePage = safeTotal === 0 ? 1 : Math.min(Math.max(1, page), totalPages);
+  return {
+    page: safePage,
+    limit: safeLimit,
+    total: safeTotal,
+    totalPages,
+    skip: (safePage - 1) * safeLimit,
+  };
+}
+
+export function referralLeadsPaginationStages({ skip, limit }) {
+  return [{ $skip: skip }, { $limit: limit }];
+}
+
 export function buildLeadMatchStage(filters = {}, scope = {}) {
   const match = {};
   if (scope.tenantId) match.tenantId = scope.tenantId;
