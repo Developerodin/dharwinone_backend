@@ -1,7 +1,7 @@
 import { buildSingleSheetBuffer, fmtDate } from './xlsxWorkbook.js';
 
 const EVALUATION_HEADERS = [
-  'Student',
+  'User',
   'Course',
   'Position',
   'Categories',

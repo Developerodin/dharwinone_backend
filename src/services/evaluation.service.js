@@ -109,6 +109,53 @@ const applyEvaluationFilters = (evaluations, filters) => {
   return rows;
 };
 
+/** Scope filters only — used before aggregation so row counts stay correct. */
+export const applyStructuralEvaluationFilters = (evaluations, filters) =>
+  applyEvaluationFilters(evaluations, { ...filters, status: null, atRiskOnly: false, q: null });
+
+/**
+ * Visibility filters on aggregated rows. Aggregates are built from structural scope only.
+ */
+export const filterAggregatedEvaluationRows = (aggregated, structuralEvaluations, filters, view) => {
+  let rows = aggregated;
+
+  if (filters.atRiskOnly) {
+    rows = rows.filter((row) => row.atRiskCount > 0);
+  }
+
+  if (filters.status) {
+    if (view === 'student') {
+      rows = rows.filter((row) => row.overallStatus === filters.status);
+    } else {
+      const courseIds = new Set(
+        structuralEvaluations
+          .filter((r) => r.displayStatus === filters.status)
+          .map((r) => r.courseId)
+          .filter(Boolean)
+      );
+      rows = rows.filter((row) => courseIds.has(row.courseId));
+    }
+  }
+
+  if (filters.q) {
+    const q = filters.q.toLowerCase();
+    const matching = structuralEvaluations.filter(
+      (r) =>
+        (r.studentName && r.studentName.toLowerCase().includes(q)) ||
+        (r.courseName && r.courseName.toLowerCase().includes(q))
+    );
+    if (view === 'student') {
+      const studentIds = new Set(matching.map((r) => r.studentId).filter(Boolean));
+      rows = rows.filter((row) => studentIds.has(row.studentId));
+    } else {
+      const courseIds = new Set(matching.map((r) => r.courseId).filter(Boolean));
+      rows = rows.filter((row) => courseIds.has(row.courseId));
+    }
+  }
+
+  return rows;
+};
+
 /** Mirrors frontend deriveOverallStatus — keep in sync with evaluation-utils.ts */
 export const deriveOverallStatus = (courses) => {
   if (!courses?.length) return 'Not Started';
@@ -402,6 +449,12 @@ export const buildEvaluation = ({
   };
 };
 
+const parseAtRiskQuery = (raw) => {
+  if (raw === true || raw === 'true' || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === '0') return false;
+  return false;
+};
+
 const parseEvaluationQuery = (query = {}) => {
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const hasPagination = query.page != null || query.limit != null;
@@ -415,14 +468,15 @@ const parseEvaluationQuery = (query = {}) => {
   const view = query.view === 'course' ? 'course' : 'student';
   const sortOrder = query.sortOrder === 'desc' ? 'desc' : 'asc';
   const sortBy = query.sortBy ? String(query.sortBy) : null;
+  const courseRaw = query.courseId ?? query.course;
   return {
-    courseId: query.courseId ? String(query.courseId) : null,
+    courseId: courseRaw ? String(courseRaw) : null,
     studentId: query.studentId ? String(query.studentId) : null,
     positionId: query.positionId ? String(query.positionId) : null,
     categoryId: query.categoryId ? String(query.categoryId) : null,
     status: query.status ? String(query.status) : null,
     q: (query.q || '').trim() || null,
-    atRiskOnly: query.atRisk === 'true' || query.atRisk === '1',
+    atRiskOnly: parseAtRiskQuery(query.atRisk),
     view,
     sortBy,
     sortOrder,
@@ -528,15 +582,24 @@ const getEvaluationData = async (query = {}) => {
   const filtered = applyEvaluationFilters(built.evaluations, filters);
   const summary = buildSummary(filtered);
 
-  const aggregated =
-    filters.view === 'course' ? aggregateCourseRows(filtered) : aggregateStudentRows(filtered);
+  const structuralFiltered = applyStructuralEvaluationFilters(built.evaluations, filters);
+  let aggregated =
+    filters.view === 'course'
+      ? aggregateCourseRows(structuralFiltered)
+      : aggregateStudentRows(structuralFiltered);
+  aggregated = filterAggregatedEvaluationRows(
+    aggregated,
+    structuralFiltered,
+    filters,
+    filters.view
+  );
   const sorted = sortEvaluationViewRows(aggregated, filters.view, filters.sortBy, filters.sortOrder);
 
   if (filters.limit > 0) {
     const { items, meta } = paginateList(sorted, filters.page, filters.limit);
     const pageStudentIds = new Set(items.map((r) => r.studentId).filter(Boolean));
     const pageCourseIds = new Set(items.map((r) => r.courseId).filter(Boolean));
-    const pageEvaluations = filtered.filter((row) =>
+    const pageEvaluations = structuralFiltered.filter((row) =>
       filters.view === 'course' ? pageCourseIds.has(row.courseId) : pageStudentIds.has(row.studentId)
     );
 
@@ -625,5 +688,7 @@ export default {
   computeEnrollmentStatusBreakdown,
   isEmployeeResigned,
   resolveStudentPositionMeta,
+  applyStructuralEvaluationFilters,
+  filterAggregatedEvaluationRows,
   AT_RISK_STALE_DAYS,
 };
