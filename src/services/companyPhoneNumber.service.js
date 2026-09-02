@@ -9,8 +9,75 @@ import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { getDirectoryHiddenUserIds, viewerSeesHiddenUsers } from '../utils/platformAccess.util.js';
 
-function tenantIdForUser(user) {
-  return user?.tenantId || user?._id || user?.id;
+/**
+ * SINGLE-COMPANY ARCHITECTURE.
+ *
+ * CompanyPhoneNumber is the company's ONE shared registry — it is deliberately NOT
+ * partitioned by tenant. This app has no organization entity: `user.tenantId` is null for
+ * every user and `user.adminId` is a creator pointer (whoever was logged in when the
+ * account was made), so deriving a tenant from the operator split one company's registry
+ * into a partition per operator — each admin saw a different set of numbers, and Sync
+ * created a second local row for a Twilio number that already existed under someone else.
+ *
+ * Who may READ or MANAGE the registry is still controlled by RBAC
+ * (company-number.read / company-number.manage) on the routes. Global !== unguarded.
+ *
+ * @see provenanceTenantId — stamped on new rows for audit only, never a query filter.
+ */
+
+/**
+ * Provenance stamp for NEW rows only: which operator's account created this record.
+ * The column is retained for audit/history and to satisfy the schema's `required`.
+ *
+ * NEVER use this in a query filter for CompanyPhoneNumber — doing so re-creates the
+ * per-operator partition this module was fixed to remove.
+ */
+function provenanceTenantId(user) {
+  return user?.tenantId || user?.adminId || user?._id || user?.id;
+}
+
+const ALREADY_ASSIGNED_MESSAGE = 'This number is already assigned to another user.';
+
+/** One user -> at most one number, company-wide. */
+async function clearUserAssignments(userId, exceptId = null) {
+  const filter = { assignedTo: userId };
+  if (exceptId) filter._id = { $ne: exceptId };
+  await CompanyPhoneNumber.updateMany(filter, { $set: { assignedTo: null } });
+}
+
+/**
+ * The single place both assign-user and PATCH apply the assignment invariants:
+ *   one number -> one user   claim is ONE atomic findOneAndUpdate, so two concurrent
+ *                            claims cannot both win; stealing requires allowReassign
+ *   one user -> one number   the user's other numbers are cleared afterwards
+ *
+ * Claim first, clear second: the old order cleared the user's numbers and only then
+ * looked the target up, so a 404 left the user holding nothing.
+ *
+ * @param {{ companyPhoneNumberId: any, userId: any, allowReassign?: boolean }} params
+ *   allowReassign — the admin assign-user flow may move a number between users. PATCH may not.
+ */
+async function claimNumberForUser({ companyPhoneNumberId, userId, allowReassign = false }) {
+  const filter = { _id: companyPhoneNumberId };
+  if (!allowReassign) {
+    filter.$or = [{ assignedTo: null }, { assignedTo: userId }];
+  }
+
+  const claimed = await CompanyPhoneNumber.findOneAndUpdate(
+    filter,
+    { $set: { assignedTo: userId } },
+    { new: true },
+  );
+
+  if (!claimed) {
+    const exists = await CompanyPhoneNumber.exists({ _id: companyPhoneNumberId });
+    throw exists
+      ? new ApiError(httpStatus.CONFLICT, ALREADY_ASSIGNED_MESSAGE)
+      : new ApiError(httpStatus.NOT_FOUND, 'Company phone number not found');
+  }
+
+  await clearUserAssignments(userId, claimed._id);
+  return claimed;
 }
 
 function currentTelephonyProvider() {
@@ -18,14 +85,13 @@ function currentTelephonyProvider() {
 }
 
 /** Dropdown registry query: active-provider numbers + any assigned row (cross-provider visibility). */
-export function buildAssignableNumbersQuery(tenantId, activeProvider) {
+export function buildAssignableNumbersQuery(activeProvider) {
   const providerClauses =
     activeProvider === 'twilio'
       ? [{ provider: 'twilio' }, { provider: { $exists: false } }, { provider: null }]
       : [{ provider: activeProvider }];
 
   return {
-    tenantId,
     $or: [...providerClauses, { assignedTo: { $ne: null } }],
   };
 }
@@ -77,13 +143,23 @@ export async function resolveInboundUserIdForCalledNumber(calledNumber) {
 
   if (mongoose.connection.readyState === 1) {
     try {
-      const mapping = await CompanyPhoneNumber.findOne({
-        phoneNumber: phone,
-        isActive: true,
-      })
+      // One company, one registry: an active E.164 resolves to a single canonical row, so
+      // no tenant context is needed (and the public webhook has none to give). The prior
+      // multi-row disambiguation existed only because the per-operator partition let one
+      // Twilio number exist twice; the provider-identity dedup removes that possibility.
+      const mappings = await CompanyPhoneNumber.find({ phoneNumber: phone, isActive: true })
         .select('assignedTo')
+        .sort({ createdAt: 1 })
         .lean();
 
+      if (mappings.length > 1) {
+        logger.warn('[CompanyPhoneNumber] duplicate active rows for one number — run the dedup migration', {
+          phone,
+          rows: mappings.length,
+        });
+      }
+
+      const mapping = mappings.find((m) => m.assignedTo) || mappings[0];
       if (mapping?.assignedTo) {
         return String(mapping.assignedTo);
       }
@@ -101,9 +177,37 @@ export async function resolveInboundUserIdForCalledNumber(calledNumber) {
   return '';
 }
 
-export async function listCompanyPhoneNumbers(user, filters = {}) {
-  const tenantId = tenantIdForUser(user);
-  const query = { tenantId };
+/**
+ * Resolve outbound dialer ownership from an assigned company work number (caller ID).
+ * PSTN child-leg webhooks only carry phone numbers in From/To — not client:user_<id>.
+ * @param {string} callerId
+ * @returns {Promise<string>} Mongo User id or ''
+ */
+export async function resolveUserIdForAssignedCallerId(callerId) {
+  const phone = normalizeCalledNumber(callerId);
+  if (!phone) return '';
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const row = await CompanyPhoneNumber.findOne({
+        phoneNumber: phone,
+        isActive: true,
+        assignedTo: { $ne: null },
+      })
+        .select('assignedTo')
+        .lean();
+      if (row?.assignedTo) return String(row.assignedTo);
+    } catch (err) {
+      logger.warn('[CompanyPhoneNumber] outbound caller-id lookup failed', { phone, err: err?.message });
+    }
+  }
+
+  return '';
+}
+
+export async function listCompanyPhoneNumbers(_user, filters = {}) {
+  // Company-global: every operator with company-number.read sees the same registry.
+  const query = {};
 
   if (filters.isActive === 'true') query.isActive = true;
   if (filters.isActive === 'false') query.isActive = false;
@@ -128,8 +232,24 @@ export async function listCompanyPhoneNumbers(user, filters = {}) {
   return { numbers: rows, total: rows.length };
 }
 
+/**
+ * Canonical identity of a provider-owned number: the provider resource, NOT the phone
+ * string and NOT the operator. One Twilio SID == one local row, so it does not matter
+ * who presses Sync. Falls back to provider + normalized E.164 only when the provider
+ * gave us no SID.
+ */
+async function findByProviderIdentity({ provider, twilioSid, phoneNumber }) {
+  if (twilioSid) {
+    const bySid = await CompanyPhoneNumber.findOne({ provider, twilioSid });
+    if (bySid) return bySid;
+    // Legacy rows synced before SIDs were stored: adopt by number, then backfill the SID.
+    const legacy = await CompanyPhoneNumber.findOne({ provider, phoneNumber, twilioSid: { $in: ['', null] } });
+    if (legacy) return legacy;
+  }
+  return CompanyPhoneNumber.findOne({ provider, phoneNumber });
+}
+
 export async function syncCompanyPhoneNumbersFromProvider(user) {
-  const tenantId = tenantIdForUser(user);
   const telephonyService = (await import('./telephony.service.js')).default;
   const provider = telephonyService.getProviderName();
   const result = await telephonyService.listOwnedNumbers({ limit: 200, offset: 0 });
@@ -145,14 +265,17 @@ export async function syncCompanyPhoneNumbersFromProvider(user) {
     const mapped = mapProviderOwnedRow(row, provider);
     if (!mapped.phoneNumber) continue;
 
-    const existing = await CompanyPhoneNumber.findOne({
-      tenantId,
+    // Keyed on the provider resource, so Sync run by ANY operator updates the same row
+    // instead of creating a second copy under that operator's old tenant partition.
+    const existing = await findByProviderIdentity({
+      provider: mapped.provider,
+      twilioSid: mapped.twilioSid,
       phoneNumber: mapped.phoneNumber,
     });
 
     if (!existing) {
       await CompanyPhoneNumber.create({
-        tenantId,
+        tenantId: provenanceTenantId(user),
         provider: mapped.provider,
         phoneNumber: mapped.phoneNumber,
         friendlyName: mapped.friendlyName,
@@ -163,6 +286,8 @@ export async function syncCompanyPhoneNumbersFromProvider(user) {
       });
       created += 1;
     } else {
+      // Provider metadata only. `assignedTo` is deliberately absent here: a sync must never
+      // assign, unassign or reassign a number — only an explicit assignment operation may.
       existing.provider = mapped.provider;
       if (mapped.twilioSid) existing.twilioSid = mapped.twilioSid;
       if (!existing.friendlyName && mapped.friendlyName) existing.friendlyName = mapped.friendlyName;
@@ -176,7 +301,6 @@ export async function syncCompanyPhoneNumbersFromProvider(user) {
 }
 
 export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {}) {
-  const tenantId = tenantIdForUser(user);
   const telephonyService = (await import('./telephony.service.js')).default;
   const provider = telephonyService.getProviderName();
   const phoneNumber = normalizeCalledNumber(
@@ -186,7 +310,7 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
 
   const buyerId = user._id || user.id;
   const payload = {
-    tenantId,
+    tenantId: provenanceTenantId(user),
     provider,
     phoneNumber,
     friendlyName: purchasePayload.friendlyName || phoneNumber,
@@ -216,7 +340,7 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
     payload.subscriptionId = purchasePayload.subscriptionId;
   }
 
-  const existing = await CompanyPhoneNumber.findOne({ tenantId, phoneNumber });
+  const existing = await findByProviderIdentity({ provider, twilioSid: payload.twilioSid, phoneNumber });
   if (existing) {
     Object.assign(existing, payload);
     await existing.save();
@@ -227,8 +351,7 @@ export async function recordCompanyPhoneNumberPurchase(user, purchasePayload = {
 }
 
 export async function updateCompanyPhoneNumberById(user, id, patch) {
-  const tenantId = tenantIdForUser(user);
-  const doc = await CompanyPhoneNumber.findOne({ _id: id, tenantId });
+  const doc = await CompanyPhoneNumber.findOne({ _id: id });
   if (!doc) throw new ApiError(httpStatus.NOT_FOUND, 'Company phone number not found');
 
   if (patch.friendlyName !== undefined) doc.friendlyName = String(patch.friendlyName || '').trim();
@@ -241,7 +364,14 @@ export async function updateCompanyPhoneNumberById(user, id, patch) {
     } else {
       const assignee = await User.findById(patch.assignedTo).select('_id');
       if (!assignee) throw new ApiError(httpStatus.BAD_REQUEST, 'Assigned user not found');
-      doc.assignedTo = assignee._id;
+      // Same invariants as assign-user. allowReassign stays false so PATCH cannot take a
+      // number off another user — deliberate reassignment goes through POST /assign-user.
+      const claimed = await claimNumberForUser({
+        companyPhoneNumberId: doc._id,
+        userId: assignee._id,
+        allowReassign: false,
+      });
+      doc.assignedTo = claimed.assignedTo;
     }
   }
 
@@ -269,6 +399,29 @@ export async function updateCompanyPhoneNumberById(user, id, patch) {
     { path: 'departmentId', select: 'name' },
     { path: 'teamId', select: 'name' },
   ]);
+}
+
+/**
+ * May authenticated user `userId` originate human dialer calls from `callerId`?
+ *
+ * Fail-closed: the number must be an active CompanyPhoneNumber row assigned to this
+ * user. Provider account ownership is NOT authorization — every user's number sits on
+ * the same Twilio/Plivo account. Unassigned, unregistered, and other users' numbers
+ * are all rejected.
+ *
+ * Deliberately tenant-free: runs inside provider webhooks (no tenant context) and
+ * `assignedTo` is already user-specific. AI-agent and in-app call paths do not use
+ * this gate.
+ */
+export async function isCallerIdAllowedForUser(userId, callerId) {
+  if (!userId) return false;
+  const phone = normalizeCalledNumber(callerId);
+  if (!phone) return false;
+  // Match the assignment in the query rather than fetching one row and comparing it.
+  // Fetch-then-compare reads an arbitrary row when a number has duplicate active rows
+  // (the pre-dedup state migrateCompanyPhoneRegistryGlobal removes), so it could land on
+  // the unassigned copy and refuse a user who IS correctly assigned.
+  return Boolean(await CompanyPhoneNumber.exists({ phoneNumber: phone, isActive: true, assignedTo: userId }));
 }
 
 /** Numbers assigned to a user for caller-id / inbound context. */
@@ -311,7 +464,6 @@ async function buildAssignableUsersQuery(requester) {
 
 /** Roster of org users with assigned company work number (Settings number tab). */
 export async function listUserPhoneAssignments(adminUser) {
-  const tenantId = tenantIdForUser(adminUser);
   const users = await User.find(await buildAssignableUsersQuery(adminUser))
     .select('name email roleIds')
     .sort({ name: 1 })
@@ -324,7 +476,8 @@ export async function listUserPhoneAssignments(adminUser) {
     allRoleIds.length > 0 ? await Role.find({ _id: { $in: allRoleIds } }).select('name').lean() : [];
   const roleNameById = new Map(roleDocs.map((r) => [String(r._id), r.name]));
 
-  const assignedRows = await CompanyPhoneNumber.find({ tenantId, assignedTo: { $ne: null } })
+  // Company-global: the roster shows the same assignments to every authorized manager.
+  const assignedRows = await CompanyPhoneNumber.find({ assignedTo: { $ne: null } })
     .select('phoneNumber friendlyName assignedTo isActive')
     .lean();
   const assignedByUserId = new Map();
@@ -334,7 +487,7 @@ export async function listUserPhoneAssignments(adminUser) {
   }
 
   const activeProvider = currentTelephonyProvider();
-  const numbers = await CompanyPhoneNumber.find(buildAssignableNumbersQuery(tenantId, activeProvider))
+  const numbers = await CompanyPhoneNumber.find(buildAssignableNumbersQuery(activeProvider))
     .sort({ phoneNumber: 1 })
     .lean();
 
@@ -366,21 +519,32 @@ export async function listUserPhoneAssignments(adminUser) {
 
 /** Assign one registry number to a user (clears any prior number on that user). */
 export async function assignPhoneNumberToUser(adminUser, { userId, companyPhoneNumberId }) {
-  const tenantId = tenantIdForUser(adminUser);
-  const user = await User.findOne({ _id: userId, ...(await buildAssignableUsersQuery(adminUser)) }).select('_id');
+  // `_id: userId` MUST come after the spread. buildAssignableUsersQuery() sets its own `_id`
+  // (the hidden-directory $nin), and the old `{ _id: userId, ...query }` order let that
+  // clobber the id — findOne then returned an ARBITRARY assignable user and the number was
+  // assigned to them instead of the one the operator picked. The hidden-user restriction is
+  // preserved separately via $and so it still cannot be bypassed.
+  const assignable = await buildAssignableUsersQuery(adminUser);
+  const hiddenClause = assignable._id;
+  const filter = { ...assignable, _id: userId };
+  if (hiddenClause) filter.$and = [{ _id: hiddenClause }];
+
+  const user = await User.findOne(filter).select('_id');
   if (!user) throw new ApiError(httpStatus.BAD_REQUEST, 'User not found');
 
-  await CompanyPhoneNumber.updateMany({ tenantId, assignedTo: userId }, { $set: { assignedTo: null } });
-
+  // Unassign: "— None —" in the roster clears whatever the user held, company-wide.
   if (!companyPhoneNumberId) {
+    await clearUserAssignments(userId);
     return { userId: String(userId), companyPhoneNumberId: null, companyPhoneNumber: '' };
   }
 
-  const doc = await CompanyPhoneNumber.findOne({ _id: companyPhoneNumberId, tenantId });
-  if (!doc) throw new ApiError(httpStatus.NOT_FOUND, 'Company phone number not found');
-
-  doc.assignedTo = user._id;
-  await doc.save();
+  // allowReassign: this IS the intended admin reassignment flow (company-number.manage),
+  // so moving a number from one user to another is deliberate here — unlike PATCH.
+  const doc = await claimNumberForUser({
+    companyPhoneNumberId,
+    userId: user._id,
+    allowReassign: true,
+  });
 
   return {
     userId: String(userId),
@@ -461,7 +625,8 @@ export async function purchaseNumberForUser(user, body = {}) {
   });
 
   const subscription = await numberSubscriptionService.createWaivedSubscription({
-    tenantId: tenantIdForUser(user),
+    // NumberSubscription keeps its own tenant column — a different model, unchanged here.
+    tenantId: provenanceTenantId(user),
     userId: buyerId,
     companyPhoneNumberId: companyNumber?._id,
     phoneNumber: companyNumber?.phoneNumber || result.phoneNumberE164 || phoneNumber,

@@ -14,7 +14,7 @@ const router = express.Router();
 
 router.use(auth());
 
-router.get('/admin/audit', requirePermissions('candidates.manage'), validate(notificationValidation.getAuditLog), notificationController.getAuditLog);
+router.get('/admin/audit', requirePermissions('activityLogs.manage'), validate(notificationValidation.getAuditLog), notificationController.getAuditLog);
 router.get('/', validate(notificationValidation.getNotifications), notificationController.list);
 router.get('/unread-count', notificationController.unreadCount);
 router.get('/sse', notificationController.sse);

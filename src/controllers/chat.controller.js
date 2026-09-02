@@ -5,10 +5,13 @@ import {
   emitNewMessage,
   emitIncomingCall,
   emitCallEnded,
+  emitCallCancelled,
+  emitCallDeclined,
   emitMessageDeleted,
   emitMessageReacted,
   emitConversationUpdated,
   emitConversationDeleted,
+  emitConversationDelivered,
   getIO,
 } from '../services/chatSocket.service.js';
 import mongoose from 'mongoose';
@@ -164,9 +167,34 @@ const reactToMessage = catchAsync(async (req, res) => {
   res.send(msg);
 });
 
+const markAsDelivered = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const conversationId = req.params.id;
+  const result = await chatService.markConversationDelivered(conversationId, userId);
+  try {
+    await emitConversationDelivered(conversationId, result);
+  } catch (err) {
+    logger.warn(`markAsDelivered notify failed: ${err.message}`);
+  }
+  res.send({
+    success: true,
+    deliveredAt: result.deliveredAt,
+    messageIds: result.messageIds ?? [],
+  });
+});
+
 const markAsRead = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const conversationId = req.params.id;
+
+  // Record delivery before read so REST clients (and cold starts) never skip grey ticks.
+  try {
+    const deliverResult = await chatService.markConversationDelivered(conversationId, userId);
+    await emitConversationDelivered(conversationId, deliverResult);
+  } catch (err) {
+    logger.warn(`markAsRead deliver failed: ${err.message}`);
+  }
+
   const result = await chatService.markAsRead(conversationId, userId);
 
   // Broadcast even when the client only hit REST (socket may be down).
@@ -280,9 +308,31 @@ const startChatCallRecording = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(result);
 });
 
+const getCall = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const call = await chatService.getCallById(req.params.id, userId);
+  res.send(call);
+});
+
 const updateCall = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  const call = await chatService.updateCall(req.params.id, userId, req.body);
+  const callId = req.params.id;
+  const before = await chatService.getCallById(callId, userId);
+  const previousStatus = String(before?.status ?? '').toLowerCase();
+  const callerId = String(before?.caller?.id ?? before?.caller?._id ?? before?.caller ?? '');
+
+  const call = await chatService.updateCall(callId, userId, req.body);
+  const newStatus = String(req.body?.status ?? call?.status ?? '').toLowerCase();
+  const preConnect = previousStatus === 'initiated' || previousStatus === 'ringing';
+
+  if (preConnect && previousStatus !== newStatus) {
+    if (newStatus === 'missed' && callerId === userId) {
+      await emitCallCancelled(call, userId);
+    } else if (newStatus === 'declined' && callerId !== userId) {
+      await emitCallDeclined(call, userId);
+    }
+  }
+
   res.send(call);
 });
 
@@ -291,8 +341,11 @@ const endCallByRoom = catchAsync(async (req, res) => {
   const { roomName } = req.body;
   if (!roomName) return res.status(400).json({ message: 'roomName required' });
   const result = await chatService.endCallByRoom(roomName, userId);
-  if (result?.conversationId) {
-    emitCallEnded(result.conversationId, roomName);
+  if (result) {
+    await emitCallEnded(result.conversationId, roomName, {
+      callId: result.callId,
+      call: result.call,
+    });
   }
   res.send({ success: true });
 });
@@ -463,10 +516,12 @@ export {
   deleteMessage,
   forwardMessage,
   reactToMessage,
+  markAsDelivered,
   markAsRead,
   listCalls,
   listCallsForConversation,
   getActiveCallForConversation,
+  getCall,
   initiateCall,
   initiateGroupCall,
   updateCall,

@@ -60,24 +60,169 @@ const registerStudent = async (studentBody, isAdminRegistration = false) => {
   return { user, student };
 };
 
+const EXPORT_MAX_ROWS = 10000;
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseStringList = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
+
+const buildExperienceYearsExpr = () => ({
+  $round: [
+    {
+      $reduce: {
+        input: { $ifNull: ['$experience', []] },
+        initialValue: 0,
+        in: {
+          $add: [
+            '$$value',
+            {
+              $cond: [
+                {
+                  $and: [{ $ne: ['$$this.startDate', null] }, { $ne: ['$$this.endDate', null] }],
+                },
+                {
+                  $max: [
+                    0,
+                    {
+                      $divide: [
+                        { $subtract: ['$$this.endDate', '$$this.startDate'] },
+                        31557600000,
+                      ],
+                    },
+                  ],
+                },
+                0,
+              ],
+            },
+          ],
+        },
+      },
+    },
+    0,
+  ],
+});
+
+const mergeUserIdFilter = (mongoFilter, userIds) => {
+  if (!userIds.length) {
+    mongoFilter.user = { $in: [] };
+    return;
+  }
+  if (mongoFilter.user?.$in) {
+    const allowed = new Set(userIds.map(String));
+    const narrowed = mongoFilter.user.$in.filter((id) => allowed.has(String(id)));
+    mongoFilter.user = narrowed.length ? { $in: narrowed } : { $in: [] };
+    return;
+  }
+  if (mongoFilter.user?.$nin) {
+    const blocked = new Set(mongoFilter.user.$nin.map(String));
+    const allowed = userIds.filter((id) => !blocked.has(String(id)));
+    mongoFilter.user = allowed.length ? { $in: allowed } : { $in: [] };
+    return;
+  }
+  mongoFilter.user = { ...(mongoFilter.user || {}), $in: userIds };
+};
+
 /**
- * Query for students
- * @param {Object} filter - Mongo filter (status, search)
- * @param {Object} options - Query options
- * @param {string} [options.sortBy] - Sort option in the format: sortField:(desc|asc)
- * @param {number} [options.limit] - Maximum number of results per page (default = 10)
- * @param {number} [options.page] - Current page (default = 1)
- * @returns {Promise<QueryResult>}
+ * Build Mongo filter for student list queries.
+ * @param {Object} filter
+ * @returns {Promise<Object>}
  */
-const queryStudents = async (filter, options) => {
-  const { search, position, employeeRoleOnly, excludeResignedEmployed, ...restFilter } = filter;
+const buildStudentMongoFilter = async (filter) => {
+  const {
+    search,
+    position,
+    employeeRoleOnly,
+    excludeResignedEmployed,
+    status,
+    names,
+    skills,
+    education,
+    email,
+    experienceMin,
+    experienceMax,
+    ...restFilter
+  } = filter;
   const mongoFilter = { ...restFilter };
   if (position) mongoFilter.position = position;
+  delete mongoFilter.status;
 
   const truthy = (v) => v === true || v === 'true' || v === '1' || v === 1;
 
-  if (!mongoFilter.status) {
+  if (status === 'all') {
+    // no status constraint
+  } else if (status === 'inactive') {
+    mongoFilter.status = 'inactive';
+  } else {
     mongoFilter.status = 'active';
+  }
+
+  const nameFilters = parseStringList(names);
+  const skillFilters = parseStringList(skills);
+  const educationFilters = parseStringList(education);
+  const emailFilter = email?.trim();
+
+  if (nameFilters.length) {
+    const matchingUsers = await User.find({
+      $or: nameFilters.map((name) => ({
+        name: { $regex: escapeRegex(name), $options: 'i' },
+      })),
+    })
+      .select('_id')
+      .lean();
+    mergeUserIdFilter(
+      mongoFilter,
+      matchingUsers.map((u) => u._id)
+    );
+  }
+
+  if (emailFilter) {
+    const emailRegex = new RegExp(escapeRegex(emailFilter), 'i');
+    const matchingUsers = await User.find({ email: { $regex: emailRegex } }).select('_id').lean();
+    mergeUserIdFilter(
+      mongoFilter,
+      matchingUsers.map((u) => u._id)
+    );
+  }
+
+  if (skillFilters.length) {
+    const skillClauses = skillFilters.map((skill) => ({
+      skills: { $regex: escapeRegex(skill), $options: 'i' },
+    }));
+    mongoFilter.$and = [...(mongoFilter.$and || []), ...skillClauses];
+  }
+
+  if (educationFilters.length) {
+    const educationClauses = educationFilters.map((edu) => ({
+      $or: [
+        { 'education.degree': { $regex: escapeRegex(edu), $options: 'i' } },
+        { 'education.institution': { $regex: escapeRegex(edu), $options: 'i' } },
+        { 'education.fieldOfStudy': { $regex: escapeRegex(edu), $options: 'i' } },
+      ],
+    }));
+    mongoFilter.$and = [...(mongoFilter.$and || []), { $or: educationClauses }];
+  }
+
+  const minExp = experienceMin != null && experienceMin !== '' ? Number(experienceMin) : null;
+  const maxExp = experienceMax != null && experienceMax !== '' ? Number(experienceMax) : null;
+  if (Number.isFinite(minExp) || Number.isFinite(maxExp)) {
+    const experienceClauses = [];
+    const yearsExpr = buildExperienceYearsExpr();
+    if (Number.isFinite(minExp)) {
+      experienceClauses.push({ $gte: [yearsExpr, minExp] });
+    }
+    if (Number.isFinite(maxExp)) {
+      experienceClauses.push({ $lte: [yearsExpr, maxExp] });
+    }
+    mongoFilter.$expr = {
+      $and: [...(mongoFilter.$expr?.$and || []), ...experienceClauses],
+    };
   }
 
   if (search && search.trim()) {
@@ -145,11 +290,242 @@ const queryStudents = async (filter, options) => {
     }
   }
 
-  const students = await Student.paginate(mongoFilter, {
+  return mongoFilter;
+};
+
+const parseStudentSortBy = (sortBy) => {
+  const raw = sortBy || 'createdAt:desc';
+  const [field, direction = 'asc'] = raw.split(':');
+  return {
+    field,
+    order: direction === 'desc' ? -1 : 1,
+  };
+};
+
+const hydrateStudentsInOrder = async (studentDocs) => {
+  if (!studentDocs.length) return [];
+
+  const ids = studentDocs.map((doc) => doc._id);
+  const order = new Map(ids.map((id, index) => [id.toString(), index]));
+  const students = await Student.find({ _id: { $in: ids } })
+    .populate('user', 'name email role roleIds status isEmailVerified')
+    .populate('shift', 'name description timezone startTime endTime isActive')
+    .populate('position', 'name');
+
+  return students.sort((left, right) => order.get(left.id) - order.get(right.id));
+};
+
+const getAggregationSortKey = (sortField) => {
+  if (sortField === 'name') return '_userNameLower';
+  if (sortField === 'education') return '_educationSortKey';
+  if (sortField === 'skills') return '_skillsSortKey';
+  return '_userNameLower';
+};
+
+const queryStudentsWithJoinSort = async (mongoFilter, options, sortField, sortOrder) => {
+  const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
+  const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
+  const skip = (page - 1) * limit;
+  const sortKey = getAggregationSortKey(sortField);
+
+  const [facetResult] = await Student.aggregate([
+    { $match: mongoFilter },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'user',
+        foreignField: '_id',
+        as: '_userDoc',
+      },
+    },
+    { $unwind: { path: '$_userDoc', preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        _userNameLower: { $toLower: { $ifNull: ['$_userDoc.name', ''] } },
+        _educationSortKey: {
+          $toLower: {
+            $let: {
+              vars: { edu: { $ifNull: [{ $arrayElemAt: ['$education', 0] }, {}] } },
+              in: {
+                $trim: {
+                  input: {
+                    $concat: [
+                      { $ifNull: ['$$edu.degree', ''] },
+                      {
+                        $cond: [
+                          {
+                            $and: [
+                              { $gt: [{ $strLenCP: { $ifNull: ['$$edu.degree', ''] } }, 0] },
+                              { $gt: [{ $strLenCP: { $ifNull: ['$$edu.institution', ''] } }, 0] },
+                            ],
+                          },
+                          ' - ',
+                          '',
+                        ],
+                      },
+                      { $ifNull: ['$$edu.institution', ''] },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+        _skillsSortKey: {
+          $toLower: {
+            $reduce: {
+              input: {
+                $sortArray: {
+                  input: {
+                    $filter: {
+                      input: { $ifNull: ['$skills', []] },
+                      as: 'skill',
+                      cond: { $gt: [{ $strLenCP: { $trim: { input: '$$skill' } } }, 0] },
+                    },
+                  },
+                  sortBy: 1,
+                },
+              },
+              initialValue: '',
+              in: {
+                $cond: [
+                  { $eq: ['$$value', ''] },
+                  { $trim: { input: '$$this' } },
+                  {
+                    $concat: ['$$value', ', ', { $trim: { input: '$$this' } }],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+    { $sort: { [sortKey]: sortOrder, _id: 1 } },
+    {
+      $facet: {
+        metadata: [{ $count: 'totalResults' }],
+        data: [{ $skip: skip }, { $limit: limit }],
+      },
+    },
+  ]);
+
+  const totalResults = facetResult?.metadata?.[0]?.totalResults ?? 0;
+  const totalPages = Math.ceil(totalResults / limit) || 0;
+  const results = await hydrateStudentsInOrder(facetResult?.data ?? []);
+
+  return {
+    results,
+    page,
+    limit,
+    totalPages,
+    totalResults,
+  };
+};
+
+/**
+ * Query for students
+ * @param {Object} filter - Mongo filter (status, search)
+ * @param {Object} options - Query options
+ * @param {string} [options.sortBy] - Sort option in the format: sortField:(desc|asc)
+ * @param {number} [options.limit] - Maximum number of results per page (default = 10)
+ * @param {number} [options.page] - Current page (default = 1)
+ * @returns {Promise<QueryResult>}
+ */
+const queryStudents = async (filter, options) => {
+  const mongoFilter = await buildStudentMongoFilter(filter);
+  const { field, order } = parseStudentSortBy(options?.sortBy);
+
+  if (field === 'name' || field === 'education' || field === 'skills') {
+    return queryStudentsWithJoinSort(mongoFilter, options, field, order);
+  }
+
+  return Student.paginate(mongoFilter, {
     ...options,
     populate: 'user,position,shift',
   });
-  return students;
+};
+
+const formatEducationLabel = (education = []) =>
+  education
+    .map((edu) => {
+      const parts = [];
+      if (edu.degree?.trim()) parts.push(edu.degree.trim());
+      if (edu.institution?.trim()) parts.push(edu.institution.trim());
+      if (edu.endDate) {
+        const year = new Date(edu.endDate).getFullYear();
+        if (!Number.isNaN(year)) parts.push(`(${year})`);
+      }
+      return parts.join(' - ');
+    })
+    .filter(Boolean)
+    .join(', ');
+
+const computeExperienceYears = (experience = []) =>
+  Math.round(
+    experience.reduce((total, exp) => {
+      if (!exp.startDate || !exp.endDate) return total;
+      const start = new Date(exp.startDate);
+      const end = new Date(exp.endDate);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return total;
+      const years = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+      return total + Math.max(0, years);
+    }, 0)
+  );
+
+/**
+ * Distinct filter option values for the students sidebar.
+ * @param {Object} filter
+ */
+const getStudentFilterOptions = async (filter = {}) => {
+  const mongoFilter = await buildStudentMongoFilter(filter);
+  const students = await Student.find(mongoFilter)
+    .populate('user', 'name email')
+    .select('skills education experience')
+    .lean();
+
+  const nameSet = new Set();
+  const skillSet = new Set();
+  const educationSet = new Set();
+  const experiences = [];
+
+  students.forEach((student) => {
+    if (student.user?.name) nameSet.add(student.user.name);
+    (student.skills || []).forEach((skill) => {
+      if (skill?.trim()) skillSet.add(skill.trim());
+    });
+    const educationLabel = formatEducationLabel(student.education || []);
+    if (educationLabel) educationSet.add(educationLabel);
+    experiences.push(computeExperienceYears(student.experience || []));
+  });
+
+  const min = experiences.length ? Math.min(...experiences) : 0;
+  const max = experiences.length ? Math.max(...experiences) : 50;
+
+  return {
+    names: Array.from(nameSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    skills: Array.from(skillSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    education: Array.from(educationSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    experience: { min, max },
+  };
+};
+
+/**
+ * Export students with the same filters/sort as the list view, capped for safety.
+ */
+const queryStudentsForExport = async (filter, options = {}) => {
+  const firstPage = await queryStudents(filter, {
+    ...options,
+    page: 1,
+    limit: EXPORT_MAX_ROWS,
+  });
+  const capped = firstPage.totalResults > EXPORT_MAX_ROWS;
+  return {
+    results: firstPage.results,
+    totalResults: firstPage.totalResults,
+    capped,
+    exportMax: EXPORT_MAX_ROWS,
+  };
 };
 
 /**
@@ -270,15 +646,20 @@ const getStudentProfileImageUrl = async (studentId) => {
   }
 
   const image = student.profileImage;
-  if (!image?.key) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Profile image not found');
+  if (image?.key) {
+    const url = await generatePresignedDownloadUrl(image.key, 3600);
+    return {
+      url,
+      mimeType: image.mimeType,
+    };
   }
 
-  const url = await generatePresignedDownloadUrl(image.key, 3600);
-  return {
-    url,
-    mimeType: image.mimeType,
-  };
+  const legacyUrl = student.profileImageUrl || image?.url;
+  if (legacyUrl) {
+    return { url: legacyUrl };
+  }
+
+  return null;
 };
 
 /**
@@ -680,7 +1061,11 @@ const assignShiftToStudents = async (studentIds, shiftId, _user) => {
 
 export {
   registerStudent,
+  buildStudentMongoFilter,
   queryStudents,
+  getStudentFilterOptions,
+  queryStudentsForExport,
+  EXPORT_MAX_ROWS,
   getStudentById,
   getStudentByUserId,
   getOrCreateStudentForAttendance,

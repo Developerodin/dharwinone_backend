@@ -26,7 +26,11 @@ import { deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
-import { APPLICATION_STATUSES, isInterviewSchedulingBlocked } from '../constants/atsPipeline.js';
+import {
+  APPLICATION_STATUSES,
+  isAllowedTransition,
+  isInterviewSchedulingBlocked,
+} from '../constants/atsPipeline.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
@@ -122,6 +126,26 @@ async function resolveJobApplicationForInterviewMeeting(meeting, options = {}) {
     application = await JobApplication.findOne({
       candidate: candidateObjId,
       status: { $in: PIPELINE_STATUSES },
+    }).sort({ updatedAt: -1 });
+    if (application?.job) {
+      jobId = application.job._id?.toString?.() ?? String(application.job);
+    }
+  }
+
+  // Re-open path: interview result flipped back to selected after rejection leaves
+  // JobApplication in Rejected — still the same row createPlacementFromInterview must target.
+  if (!application && jobId) {
+    application = await JobApplication.findOne({
+      candidate: candidateObjId,
+      job: new mongoose.Types.ObjectId(jobId),
+      status: 'Rejected',
+    });
+  }
+
+  if (!application) {
+    application = await JobApplication.findOne({
+      candidate: candidateObjId,
+      status: 'Rejected',
     }).sort({ updatedAt: -1 });
     if (application?.job) {
       jobId = application.job._id?.toString?.() ?? String(application.job);
@@ -236,6 +260,78 @@ async function rollbackInterviewSelectionPipeline(meeting) {
     throw err;
   }
 
+  if (syncCandidateId) {
+    await syncReferralPipelineStatusForCandidate(syncCandidateId);
+  }
+}
+
+/**
+ * Mirror interview rejection onto the linked JobApplication so candidate-facing status matches.
+ * @param {object} meeting - Meeting doc (after save)
+ */
+async function applyInterviewRejectionToApplication(meeting) {
+  let syncCandidateId = null;
+  try {
+    const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
+    if (!candidateObjId || !application) {
+      logger.info('[applyInterviewRejectionToApplication] No application — nothing to update');
+      return;
+    }
+    if (application.status === 'Rejected') {
+      return;
+    }
+    const fromStatus = application.status;
+    if (!isAllowedTransition('application', fromStatus, 'Rejected')) {
+      logger.warn(
+        '[applyInterviewRejectionToApplication] Cannot transition %s → Rejected for application %s',
+        fromStatus,
+        application._id
+      );
+      return;
+    }
+    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Rejected' } });
+    syncCandidateId = candidateObjId;
+    logger.info(
+      '[applyInterviewRejectionToApplication] Set application %s to Rejected (meeting=%s)',
+      application._id,
+      meeting._id
+    );
+  } catch (err) {
+    logger.error('[applyInterviewRejectionToApplication] Failed:', err?.message || err);
+    throw err;
+  }
+  if (syncCandidateId) {
+    await syncReferralPipelineStatusForCandidate(syncCandidateId);
+  }
+}
+
+/**
+ * When an interview result reopens from rejected → pending, restore the application to Interview.
+ * System-driven (same class as auto-Interview on schedule), not a manual recruiter transition.
+ * @param {object} meeting - Meeting doc (after save)
+ */
+async function reopenApplicationAfterInterviewRejection(meeting) {
+  let syncCandidateId = null;
+  try {
+    const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
+    if (!candidateObjId || !application) {
+      logger.info('[reopenApplicationAfterInterviewRejection] No application — nothing to update');
+      return;
+    }
+    if (application.status !== 'Rejected') {
+      return;
+    }
+    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+    syncCandidateId = candidateObjId;
+    logger.info(
+      '[reopenApplicationAfterInterviewRejection] Restored application %s to Interview (meeting=%s)',
+      application._id,
+      meeting._id
+    );
+  } catch (err) {
+    logger.error('[reopenApplicationAfterInterviewRejection] Failed:', err?.message || err);
+    throw err;
+  }
   if (syncCandidateId) {
     await syncReferralPipelineStatusForCandidate(syncCandidateId);
   }
@@ -768,6 +864,83 @@ const createPlacementFromInterview = async (meeting, userId) => {
 };
 
 /**
+ * Notify the candidate when an interview result transitions into 'selected' or 'rejected'.
+ * Candidate-facing only: resolves the recipient via the candidate's own email → User account
+ * (same resolution jobApplication.service.js uses for status-change notifications) and NEVER
+ * falls back to notifying the recruiter/host/job creator. Fire only on the transition edge
+ * (guards against duplicate notifications on repeat/no-op updates), never on
+ * move-to-preboarding or internal-transfer. Failures are logged and swallowed — must not roll
+ * back the interview result that was already saved.
+ * @param {Object} meeting - Meeting document (after save)
+ * @param {string} previousInterviewResult
+ * @param {string} newInterviewResult
+ */
+const notifyCandidateOfInterviewResultChange = async (meeting, previousInterviewResult, newInterviewResult) => {
+  const isNewlySelected = previousInterviewResult !== 'selected' && newInterviewResult === 'selected';
+  const isNewlyRejected = previousInterviewResult !== 'rejected' && newInterviewResult === 'rejected';
+  if (!isNewlySelected && !isNewlyRejected) return;
+
+  const candidateEmail = meeting.candidate?.email?.trim().toLowerCase();
+  if (!candidateEmail) {
+    logger.warn(
+      '[notifyCandidateOfInterviewResultChange] Meeting %s has no candidate email on file — skipping candidate notification',
+      meeting._id
+    );
+    return;
+  }
+
+  try {
+    const candidateUser = await User.findOne({ email: candidateEmail }).select('_id').lean();
+    if (!candidateUser) {
+      logger.warn(
+        '[notifyCandidateOfInterviewResultChange] No User account for candidate email %s (meeting %s) — skipping candidate notification',
+        candidateEmail,
+        meeting._id
+      );
+      return;
+    }
+
+    const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
+    const jobTitle = jobPositionDisplay || 'the role';
+    const { jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
+      createIfMissing: false,
+    });
+
+    const { title, message } = isNewlySelected
+      ? {
+          title: "Congratulations! You've Been Selected",
+          message: `Congratulations! You've been selected for ${jobTitle}.`,
+        }
+      : {
+          title: 'Application Update',
+          message: `Thank you for your time. Your application for ${jobTitle} was not selected to move forward.`,
+        };
+
+    const { notify } = await import('./notification.service.js');
+    await notify(candidateUser._id, {
+      type: 'job_application',
+      title,
+      message,
+      // Explicit link — the job_application resolver falls back to a recruiter-facing
+      // /ats/jobs/:id route when metadata.jobId is set, so this must not be left implicit.
+      link: '/ats/my-applications',
+      metadata: {
+        ...(jobId && { jobId }),
+        ...(application?._id && { applicationId: application._id.toString() }),
+        meetingId: meeting.meetingId,
+        interviewResult: newInterviewResult,
+      },
+    });
+  } catch (err) {
+    logger.error(
+      '[notifyCandidateOfInterviewResultChange] Failed to notify candidate for meeting %s:',
+      meeting._id,
+      err?.message || err
+    );
+  }
+};
+
+/**
  * Update meeting by id (MongoDB ObjectId or meetingId string)
  * @param {string} id - MongoDB ObjectId or meetingId
  * @param {Object} updateBody
@@ -820,6 +993,10 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
 
   const newInterviewResult = meeting.interviewResult;
 
+  // Single canonical emission point for candidate-facing selected/rejected notifications —
+  // do not duplicate this call on the move-to-preboarding or internal-transfer paths.
+  await notifyCandidateOfInterviewResultChange(meeting, previousInterviewResult, newInterviewResult);
+
   if (
     previousInterviewResult === 'selected' &&
     (newInterviewResult === 'pending' || newInterviewResult === 'rejected')
@@ -828,6 +1005,20 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
       await rollbackInterviewSelectionPipeline(meeting);
     } catch (err) {
       logger.error('[updateMeetingById] rollbackInterviewSelectionPipeline failed:', err?.message || err);
+    }
+  }
+
+  if (newInterviewResult === 'rejected' && previousInterviewResult !== 'rejected') {
+    try {
+      await applyInterviewRejectionToApplication(meeting);
+    } catch (err) {
+      logger.error('[updateMeetingById] applyInterviewRejectionToApplication failed:', err?.message || err);
+    }
+  } else if (newInterviewResult === 'pending' && previousInterviewResult === 'rejected') {
+    try {
+      await reopenApplicationAfterInterviewRejection(meeting);
+    } catch (err) {
+      logger.error('[updateMeetingById] reopenApplicationAfterInterviewRejection failed:', err?.message || err);
     }
   }
 

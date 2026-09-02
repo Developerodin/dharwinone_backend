@@ -172,6 +172,7 @@ export const createNotification = async (userId, options) => {
       notificationId: String(doc._id),
       ...(relatedEntityId ? { relatedEntityId } : {}),
       ...(isChat && relatedEntityId ? { conversationId: relatedEntityId } : {}),
+      ...(metadata?.messageId ? { messageId: String(metadata.messageId) } : {}),
       ...(metadata?.messageType ? { messageType: String(metadata.messageType) } : {}),
       ...(metadata?.attachmentName ? { attachmentName: String(metadata.attachmentName) } : {}),
       ...(metadata?.documentType ? { documentType: String(metadata.documentType) } : {}),

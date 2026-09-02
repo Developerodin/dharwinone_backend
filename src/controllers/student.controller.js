@@ -7,10 +7,28 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const getStudents = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'position', 'search', 'employeeRoleOnly', 'excludeResignedEmployed']);
+  const filter = pick(req.query, [
+    'status',
+    'position',
+    'search',
+    'employeeRoleOnly',
+    'excludeResignedEmployed',
+    'names',
+    'skills',
+    'education',
+    'email',
+    'experienceMin',
+    'experienceMax',
+  ]);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await studentService.queryStudents(filter, options);
   res.send(result);
+});
+
+const getStudentFilterOptions = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['status', 'position', 'search', 'employeeRoleOnly', 'excludeResignedEmployed']);
+  const options = await studentService.getStudentFilterOptions(filter);
+  res.send(options);
 });
 
 /**
@@ -75,8 +93,12 @@ const getProfileImage = catchAsync(async (req, res) => {
   if (req.headers.accept && req.headers.accept.includes('application/json')) {
     return res.status(httpStatus.OK).send({
       success: true,
-      data,
+      data: data ?? null,
     });
+  }
+
+  if (!data?.url) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Profile image not found');
   }
 
   // Default: redirect to presigned URL for direct preview/download
@@ -140,6 +162,7 @@ const assignShift = catchAsync(async (req, res) => {
 
 export {
   getStudents,
+  getStudentFilterOptions,
   getStudent,
   getMyProfile,
   updateStudent,

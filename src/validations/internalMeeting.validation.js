@@ -104,6 +104,14 @@ const updateInternalMeeting = {
     .min(1),
 };
 
+// Dedicated cancel action for a one-off meeting — no body (status is hardcoded server-side
+// so a DELETE-tier caller can never smuggle other field edits through this endpoint).
+const cancelInternalMeeting = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim().min(1),
+  }),
+};
+
 const deleteInternalMeeting = {
   params: Joi.object().keys({
     // Mongo _id or LiveKit meetingId (meeting_…) — resolved in the service layer.
@@ -131,6 +139,7 @@ export {
   getInternalMeetings,
   getInternalMeeting,
   updateInternalMeeting,
+  cancelInternalMeeting,
   deleteInternalMeeting,
   resendInternalInvitations,
   getInternalMeetingRecordings,

@@ -17,6 +17,7 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
 import { serializeCandidateApplication } from '../serializers/candidateApplication.serializer.js';
+import { loadInterviewResultsForApplications } from '../services/candidateApplicationInterviewResult.service.js';
 
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
@@ -101,24 +102,36 @@ const getMyApplications = catchAsync(async (req, res) => {
   });
 
   const appIds = result.results.map((a) => a._id);
+  // Newest offer first: an application can be re-offered, and only the latest one describes
+  // the candidate's current stage. Its placement (if any) is the live one.
   const offers = await Offer.find({ jobApplication: { $in: appIds } })
-    .select('_id jobApplication')
+    .select('_id jobApplication status')
+    .sort({ createdAt: -1 })
     .lean();
-  const offerToApp = new Map(offers.map((o) => [String(o._id), String(o.jobApplication)]));
-  const placements = await Placement.find({ offer: { $in: offers.map((o) => o._id) } })
-    .select('offer status')
-    .lean();
-  const appToPlacementStatus = new Map();
-  for (const p of placements) {
-    const appId = offerToApp.get(String(p.offer));
-    if (appId) appToPlacementStatus.set(appId, p.status);
+  const appToOffer = new Map();
+  for (const o of offers) {
+    const appId = String(o.jobApplication);
+    if (!appToOffer.has(appId)) appToOffer.set(appId, o);
   }
+  const latestOfferIds = [...appToOffer.values()].map((o) => o._id);
+  const placements = await Placement.find({ offer: { $in: latestOfferIds } })
+    .select('offer status enteredOnboardingAt')
+    .lean();
+  const placementByOfferId = new Map(placements.map((p) => [String(p.offer), p]));
 
-  result.results = result.results.map((app) =>
-    serializeCandidateApplication(app, {
-      placementStatus: appToPlacementStatus.get(String(app.id || app._id)),
-    })
-  );
+  const interviewResultByAppId = await loadInterviewResultsForApplications(result.results);
+
+  result.results = result.results.map((app) => {
+    const appId = String(app.id || app._id);
+    const offer = appToOffer.get(appId);
+    const placement = offer ? placementByOfferId.get(String(offer._id)) : undefined;
+    return serializeCandidateApplication(app, {
+      offerStatus: offer?.status,
+      placementStatus: placement?.status,
+      enteredOnboarding: Boolean(placement?.enteredOnboardingAt),
+      interviewResult: interviewResultByAppId.get(appId) ?? null,
+    });
+  });
 
   res.send(result);
 });

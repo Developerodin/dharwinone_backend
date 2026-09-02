@@ -802,8 +802,10 @@ async function mintWebrtcToken({ uid } = {}) {
  */
 async function sdkAnswerXml({ to, callerId, intentToken }) {
   let dest = normalizePlivoDialTarget(to);
-  let from = normalizePlivoDialTarget(callerId);
-  let intentSource = isE164(from) ? 'header' : null;
+  // Never trust X-PH-callerId / From headers — caller ID is authorized only via the
+  // browser-call-intent registry (postBrowserCallIntent runs isCallerIdAllowedForUser).
+  let from = '';
+  let intentSource = null;
   let tokenVerified = false;
   let storeHit = false;
   const token = String(intentToken || '').trim();
@@ -811,7 +813,7 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
     const byToken = await peekBrowserCallIntentByToken(token);
     if (byToken) {
       dest = byToken.dest;
-      if (!isE164(from)) from = byToken.callerId;
+      from = byToken.callerId;
       intentSource = 'token-store';
       storeHit = true;
     }
@@ -832,13 +834,19 @@ async function sdkAnswerXml({ to, callerId, intentToken }) {
       storeHit = true;
     }
   }
+  const headerFrom = normalizePlivoDialTarget(callerId);
+  if (isE164(headerFrom) && isE164(from) && headerFrom !== from) {
+    logger.warn(
+      `Plivo sdk-answer ignored spoofed callerId header (intent=${intentSource || 'none'}) dest=…${dest.slice(-4)}`
+    );
+  }
   if (!isE164(dest) || !isE164(from)) {
     logger.warn(
       `Plivo sdkAnswerXml reconstruct failed intentPresent=${Boolean(token)} tokenVerified=${tokenVerified} storeHit=${storeHit} dest=${dest || 'empty'} from=${from || 'empty'} source=${intentSource || 'none'}`
     );
     return null;
   }
-  if (intentSource && intentSource !== 'header') {
+  if (intentSource) {
     logger.info(`Plivo sdk-answer caller ID via ${intentSource} for dest ...${dest.slice(-4)}`);
   }
   return bridgeAnswerXml({ toNumber: dest, callerId: from });

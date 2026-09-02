@@ -137,5 +137,20 @@ const internalMeetingSchema = mongoose.Schema(
 internalMeetingSchema.plugin(toJSON);
 internalMeetingSchema.plugin(paginate);
 
+/**
+ * dateFrom/dateTo window queries (dashboard "today", meetings list date filter).
+ *
+ * This model declared no indexes at all, so the dateFrom/dateTo filter the endpoint
+ * has always accepted was served by a collection scan. The range on scheduledAt is the
+ * selective predicate for every such query and also satisfies the scheduledAt sort.
+ *
+ * Derived from the schema and the query shape, NOT from an explain() run — no DB was
+ * available when it was added. Correctness does not depend on it; only latency does.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build the
+ * index. It needs a deliberate index-creation step on deploy.
+ */
+internalMeetingSchema.index({ scheduledAt: 1 });
+
 const InternalMeeting = mongoose.model('InternalMeeting', internalMeetingSchema);
 export default InternalMeeting;

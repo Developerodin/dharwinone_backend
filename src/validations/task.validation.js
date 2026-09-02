@@ -27,6 +27,22 @@ const commaSeparatedPriorities = Joi.string().custom((value, helpers) => {
   return value;
 }, 'comma-separated priorities');
 
+/**
+ * Multi-status list, e.g. "new,todo,on_going,in_review" for "open tasks".
+ * A single value still validates, so every existing caller is unaffected.
+ * Mirrors {@link commaSeparatedPriorities}; the service applies both via applyCommaFilter.
+ */
+const commaSeparatedStatuses = Joi.string().custom((value, helpers) => {
+  const parts = String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (!TASK_STATUSES.includes(part)) return helpers.error('any.invalid');
+  }
+  return value;
+}, 'comma-separated statuses');
+
 /** Query flags: accept Joi booleans plus URL-style "1"/"0" (task board url-state). */
 const queryBooleanFlag = Joi.alternatives()
   .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
@@ -63,7 +79,7 @@ const createTask = {
 
 const getTasks = {
   query: Joi.object().keys({
-    status: Joi.string().valid(...TASK_STATUSES).optional(),
+    status: commaSeparatedStatuses.optional(),
     projectId: Joi.string().custom(objectId).optional(),
     priority: commaSeparatedPriorities.optional(),
     sprintId: commaSeparatedObjectIds.optional(),
@@ -73,6 +89,12 @@ const getTasks = {
     unassigned: queryBooleanFlag,
     leaving: queryBooleanFlag,
     reassigned: queryBooleanFlag,
+    /**
+     * Only tasks that carry a dueDate. The dashboard task widget orders by dueDate,
+     * and Mongo sorts missing values FIRST ascending — without this an undated backlog
+     * would fill the widget and hide every overdue task. Omitted => unchanged behaviour.
+     */
+    hasDueDate: queryBooleanFlag,
     sortBy: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(200).optional(),
     page: Joi.number().integer().optional(),

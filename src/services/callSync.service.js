@@ -28,6 +28,7 @@ import CallRecord, {
 } from '../models/callRecord.model.js';
 import CallEvent from '../models/callEvent.model.js';
 import callRecordService from './callRecord.service.js';
+import bolnaService from './bolna.service.js';
 
 // Lazy import — chatSocket.service.js loads chat.service.js which touches many
 // models; deferring the import keeps callSync usable from any layer.
@@ -441,11 +442,66 @@ export async function seedRecord({
   return record;
 }
 
+const DEFAULT_BACKFILL_PAGE_SIZE = 50;
+const DEFAULT_BACKFILL_PAGES = 1;
+
+/**
+ * List recent Bolna agent executions and feed each through applyEvent.
+ * Shared by the reconciliation cron and manual /call-records/sync.
+ *
+ * @param {{ maxPages?: number, pageSize?: number }} [options]
+ * @returns {Promise<{ scanned: number, applied: number, errors: number }>}
+ */
+export async function backfillFromAgentList(options = {}) {
+  const pageSize = Math.min(Number(options.pageSize) || DEFAULT_BACKFILL_PAGE_SIZE, 100);
+  const maxPages = Math.min(Number(options.maxPages) || DEFAULT_BACKFILL_PAGES, 10);
+  const agents =
+    Array.isArray(config.bolna?.allAgentIds) && config.bolna.allAgentIds.length
+      ? config.bolna.allAgentIds
+      : [config.bolna?.agentId, config.bolna?.candidateAgentId].filter(Boolean);
+  const uniqueAgents = [...new Set(agents)];
+  let scanned = 0;
+  let applied = 0;
+  let errors = 0;
+
+  for (const agentId of uniqueAgents) {
+    for (let page = 1; page <= maxPages; page += 1) {
+      try {
+        const r = await bolnaService.getAgentExecutions({
+          agentId,
+          page_number: page,
+          page_size: pageSize,
+        });
+        if (!r.success || !Array.isArray(r.data)) {
+          errors += 1;
+          break;
+        }
+        scanned += r.data.length;
+        for (const exec of r.data) {
+          const payload = {
+            ...exec,
+            id: exec.id ?? exec.execution_id,
+            agent_id: exec.agent_id ?? agentId,
+          };
+          const result = await applyEvent(payload, 'backfill');
+          if (result.applied) applied += 1;
+        }
+        if (!r.has_more) break;
+      } catch (err) {
+        errors += 1;
+        logger.warn(`[callSync] backfill page ${page} agent=${agentId} failed: ${err.message}`);
+      }
+    }
+  }
+  return { scanned, applied, errors };
+}
+
 export { STATUS_RANK, TERMINAL_STATUSES, rankOf, isTerminal, normalizeStatus };
 
 export default {
   applyEvent,
   seedRecord,
+  backfillFromAgentList,
   verifyBolnaSecret,
   normalizeStatus,
 };

@@ -285,6 +285,9 @@ const getCallRecords = catchAsync(async (req, res) => {
     sortBy: req.query.sortBy,
     order: req.query.order,
     channel: req.query.channel,
+    // Narrows the result set by call type. Ownership still comes from req.user
+    // below — a client cannot widen its own visibility with this.
+    callSource: req.query.callSource,
     userId,
     isAdmin,
   };
@@ -452,10 +455,17 @@ const refreshCallRecord = catchAsync(async (req, res) => {
       exec.error || 'Failed to fetch execution from Bolna'
     );
   }
-  const record = await callRecordService.updateFromExecutionDetails(executionId, exec.details, {
-    setCompletedAt: true,
-    setErrorMessage: true,
-  });
+  const result = await callSyncService.applyEvent(
+    {
+      ...exec.details,
+      id: exec.details.id ?? exec.details.execution_id ?? executionId,
+    },
+    'reconciliation',
+    { requestId: req.id || req.headers?.['x-request-id'] || null }
+  );
+  const CallRecord = (await import('../models/callRecord.model.js')).default;
+  const record =
+    result.record || (await CallRecord.findOne({ executionId: String(executionId) }).lean());
   if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
   res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
 });

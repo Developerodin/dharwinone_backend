@@ -1,3 +1,18 @@
+/**
+ * LEGACY NAME — this controller is PROVIDER-AGNOSTIC, not Plivo-specific.
+ *
+ * It serves the telephony control plane for whichever provider is configured, and the
+ * frontend routes Twilio traffic through it too (shared/lib/api/telephony.ts calls
+ * /plivo/call, /plivo/sdk-token, /plivo/browser-call-intent, /plivo/dialer-initiate...).
+ * twilio.route.js imports it as well. Only the route prefix still says "plivo".
+ *
+ * Provider selection belongs to telephony.service.js, which dispatches on
+ * config.telephony.provider (TELEPHONY_PROVIDER env). So:
+ *   - call telephonyService here, never plivoService or twilioService directly
+ *   - do NOT add `if (provider === 'twilio')` branches in this file
+ * Genuinely provider-specific webhook handling lives elsewhere (e.g. twilioVoice.controller.js),
+ * because provider callback payloads differ and cannot be abstracted.
+ */
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import catchAsync from '../utils/catchAsync.js';
@@ -139,6 +154,10 @@ const getOwnedNumbers = catchAsync(async (req, res) => {
  */
 const placeCall = catchAsync(async (req, res) => {
   const { toNumber, agentPhone, callerId } = req.body;
+  // Provider account ownership is not authorization — refuse another user's company number.
+  if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(req.user?.id || req.user?._id, callerId))) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
+  }
   const result = await telephonyService.placeBridgeCall({ toNumber, agentPhone, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to place call');
@@ -280,6 +299,10 @@ const sdkAnswer = catchAsync(async (req, res) => {
 const postBrowserCallIntent = catchAsync(async (req, res) => {
   const { toNumber, callerId, businessName, executionId: clientExecutionId } = req.body || {};
   const userId = req.user?.id || req.user?._id;
+  // The browser SDK sends its own caller ID — gate it before Plivo ever sees it.
+  if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(userId, callerId))) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
+  }
   const result = await telephonyService.registerBrowserCallIntent({ toNumber, callerId });
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_REQUEST, result.error || 'Invalid browser call intent');
@@ -346,6 +369,13 @@ const postDialerInitiate = catchAsync(async (req, res) => {
   const userId = req.user?.id || req.user?._id;
   if (!executionId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'executionId is required');
+  }
+
+  const outboundDirection = (direction || 'outbound').toLowerCase();
+  if (outboundDirection === 'outbound' && fromPhoneNumber) {
+    if (!(await companyPhoneNumberService.isCallerIdAllowedForUser(userId, fromPhoneNumber))) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'That caller ID is not assigned to you.');
+    }
   }
 
   await callRecordService.assertDialerRecordMutationAllowed(executionId, userId);

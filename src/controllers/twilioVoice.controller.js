@@ -10,7 +10,11 @@ import twilioService from '../services/twilio.service.js';
 import telephonyService from '../services/telephony.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import { archiveTwilioRecording } from '../services/callRecordingArchive.service.js';
-import { resolveInboundUserIdForCalledNumber } from '../services/companyPhoneNumber.service.js';
+import {
+  resolveInboundUserIdForCalledNumber,
+  resolveUserIdForAssignedCallerId,
+  isCallerIdAllowedForUser,
+} from '../services/companyPhoneNumber.service.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
@@ -45,10 +49,20 @@ async function resolveDialerCreatedBy(body) {
   const toUser = twilioService.userIdFromClient(body?.To);
   if (toUser) return toUser;
 
+  const direction = resolveDialerDirection(body);
   const called = body?.To || body?.Called || '';
-  if (called && !String(called).startsWith('client:')) {
+  if (direction === 'inbound' && called && !String(called).startsWith('client:')) {
     try {
       return (await resolveInboundUserIdForCalledNumber(called)) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  const caller = body?.From || body?.Caller || '';
+  if (caller && !String(caller).startsWith('client:')) {
+    try {
+      return (await resolveUserIdForAssignedCallerId(caller)) || null;
     } catch {
       return null;
     }
@@ -68,7 +82,31 @@ async function resolveOutboundCallerId(body) {
     body['X-PH-callerId'] ||
     body['X-PH-CallerId'] ||
     '';
+  const callerUserId = twilioService.userIdFromClient(body.From);
   let callerId = twilioService.toE164(raw);
+
+  // Authenticated browser/mobile dialer: strict assignment check, no account-default fallback.
+  if (callerUserId) {
+    if (!callerId) {
+      logger.warn('[Twilio] outbound rejected: authenticated dialer must supply an assigned caller ID');
+      return null;
+    }
+    if (!(await isCallerIdAllowedForUser(callerUserId, callerId))) {
+      logger.warn('[Twilio] outbound rejected: callerId not assigned to user', {
+        callerId,
+        userId: callerUserId,
+      });
+      return null;
+    }
+    const check = await telephonyService.validateCallerId(callerId);
+    if (!check.valid) {
+      logger.warn(`[Twilio] outbound rejected callerId: ${check.error}`);
+      return null;
+    }
+    return check.callerId || callerId;
+  }
+
+  // Non-browser paths (unsigned bridge legs, etc.) keep legacy provider validation.
   if (!callerId) {
     callerId = twilioService.toE164(twilioService.getConfig().phoneNumber);
   }

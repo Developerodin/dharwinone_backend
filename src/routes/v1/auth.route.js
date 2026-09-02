@@ -6,6 +6,7 @@ import * as authValidation from '../../validations/auth.validation.js';
 import * as authController from '../../controllers/auth.controller.js';
 import auth from '../../middlewares/auth.js';
 import optionalAuth from '../../middlewares/optionalAuth.js';
+import requirePermissionIfAuthenticated from '../../middlewares/requirePermissionIfAuthenticated.js';
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
 import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
 import { authLoginLimiter, authStrictFlowLimiter } from '../../middlewares/rateLimiter.js';
@@ -41,6 +42,7 @@ router.post(
   '/register-student',
   authStrictFlowLimiter,
   optionalAuth(),
+  requirePermissionIfAuthenticated('students.manage'),
   validate(authValidation.registerStudent),
   authController.registerStudent
 );

@@ -41,6 +41,7 @@ export const buildVerifyEmailUpdatePlan = (user, opts) => {
   const scalarSet = { isEmailVerified: true };
   if (wasPending) {
     scalarSet.status = 'active';
+    scalarSet.activatedAt = new Date();
   }
   if (user.setRegistrationSourcePublicCandidate) {
     scalarSet.registrationSource = 'public_candidate';

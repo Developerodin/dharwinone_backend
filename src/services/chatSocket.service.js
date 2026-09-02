@@ -107,21 +107,7 @@ const initSocket = (httpServer) => {
         // does not race and invent a same-time delivered receipt.
         try {
           const result = await chatService.markConversationDelivered(conversationId, userId);
-          if (result.messageIds?.length) {
-            const payload = {
-              conversationId: result.conversationId,
-              userId: result.userId,
-              deliveredAt: result.deliveredAt,
-              messageIds: result.messageIds,
-            };
-            io.to(`conversation:${conversationId}`).emit('conversation_delivered', payload);
-            const participantIds = await chatService.getConversationParticipantIds(conversationId);
-            for (const pid of participantIds || []) {
-              const pidStr = String(pid);
-              if (pidStr === String(userId)) continue;
-              io.to(`user:${pidStr}`).emit('conversation_delivered', payload);
-            }
-          }
+          await emitConversationDelivered(conversationId, result);
         } catch (deliverErr) {
           logger.warn(`join deliver failed: ${deliverErr.message}`);
         }
@@ -165,6 +151,12 @@ const initSocket = (httpServer) => {
       const { conversationId } = data || {};
       if (conversationId) {
         try {
+          try {
+            const deliverResult = await chatService.markConversationDelivered(conversationId, userId);
+            await emitConversationDelivered(conversationId, deliverResult);
+          } catch (deliverErr) {
+            logger.warn(`message_read deliver failed: ${deliverErr.message}`);
+          }
           const result = await chatService.markAsRead(conversationId, userId);
           const payload = {
             conversationId,
@@ -217,24 +209,7 @@ const initSocket = (httpServer) => {
       if (!conversationId) return;
       try {
         const result = await chatService.markConversationDelivered(conversationId, userId);
-        if (!result.messageIds?.length) return;
-        const payload = {
-          conversationId: result.conversationId,
-          userId: result.userId,
-          deliveredAt: result.deliveredAt,
-          messageIds: result.messageIds,
-        };
-        io.to(`conversation:${conversationId}`).emit('conversation_delivered', payload);
-        try {
-          const participantIds = await chatService.getConversationParticipantIds(conversationId);
-          for (const pid of participantIds || []) {
-            const pidStr = String(pid);
-            if (pidStr === String(userId)) continue;
-            io.to(`user:${pidStr}`).emit('conversation_delivered', payload);
-          }
-        } catch (notifyErr) {
-          logger.warn(`conversation_delivered user notify failed: ${notifyErr.message}`);
-        }
+        await emitConversationDelivered(conversationId, result);
       } catch (err) {
         logger.warn(`conversation_delivered failed: ${err.message}`);
       }
@@ -341,12 +316,7 @@ const initSocket = (httpServer) => {
       try {
         const call = await chatCallService.declineCall(callId);
         if (call) {
-          const callerId = String(call.caller);
-          io.to(`user:${callerId}`).emit('call:declined', {
-            callId,
-            conversationId: String(call.conversation),
-            declinedBy: userId,
-          });
+          await emitCallDeclined(call, userId);
         }
       } catch (err) {
         logger.warn(`call:decline failed: ${err.message}`);
@@ -359,14 +329,7 @@ const initSocket = (httpServer) => {
       try {
         const call = await chatCallService.cancelCall(callId, userId);
         if (call) {
-          const participantIds = await chatService.getCallNotifyParticipantIds(call);
-          participantIds.forEach((pid) => {
-            io.to(`user:${String(pid)}`).emit('call:cancelled', {
-              callId,
-              conversationId: call.conversation ? String(call.conversation) : '',
-              cancelledBy: userId,
-            });
-          });
+          await emitCallCancelled(call, userId);
         }
       } catch (err) {
         logger.warn(`call:cancel failed: ${err.message}`);
@@ -384,13 +347,9 @@ const initSocket = (httpServer) => {
               logger.warn(`call:end LiveKit cleanup failed: ${err?.message}`)
             );
           }
-          const participantIds = await chatService.getCallNotifyParticipantIds(call);
-          participantIds.forEach((pid) => {
-            io.to(`user:${String(pid)}`).emit('call_ended', {
-              callId,
-              conversationId: call.conversation ? String(call.conversation) : '',
-              roomName: call.livekitRoom,
-            });
+          await emitCallEnded(call.conversation ? String(call.conversation) : '', call.livekitRoom, {
+            callId: String(call._id),
+            call,
           });
         }
       } catch (err) {
@@ -438,22 +397,14 @@ const initSocket = (httpServer) => {
             }
           }).catch((err) => logger.warn(`disconnect call cleanup failed: ${err?.message}`));
 
-          // Cancel any ringing calls this user initiated — without this, the
+          // Cancel any pre-accept calls this user initiated — without this, the
           // call sits in "ringing" forever when the caller closes their tab
           // before the callee answers/declines.
-          const ioRef = io;
-          ChatCall.find({ caller: userId, status: 'ringing' }).lean().then(async (ringingCalls) => {
+          ChatCall.find({ caller: userId, status: { $in: ['initiated', 'ringing'] } }).lean().then(async (ringingCalls) => {
             await Promise.all(ringingCalls.map(async (call) => {
               const cancelled = await chatCallService.cancelCall(String(call._id), userId).catch(() => null);
               if (!cancelled) return;
-              const participantIds = await chatService.getCallNotifyParticipantIds(cancelled);
-              participantIds.forEach((pid) => {
-                ioRef.to(`user:${String(pid)}`).emit('call:cancelled', {
-                  callId: String(call._id),
-                  conversationId: call.conversation ? String(call.conversation) : '',
-                  cancelledBy: userId,
-                });
-              });
+              await emitCallCancelled(cancelled, userId);
             }));
           }).catch((err) => logger.warn(`disconnect ring cleanup failed: ${err?.message}`));
         }
@@ -526,6 +477,7 @@ const emitNewMessage = async (conversationId, message) => {
               triggeredBy: payload.sender?._id || payload.sender?.id,
               relatedEntity: { type: 'conversation', id: conversationId },
               metadata: {
+                messageId: payload.id ?? payload._id,
                 messageType: preview.kind,
                 ...(preview.attachmentName ? { attachmentName: preview.attachmentName } : {}),
                 ...(preview.documentType ? { documentType: preview.documentType } : {}),
@@ -542,16 +494,65 @@ const emitNewMessage = async (conversationId, message) => {
   }
 };
 
-const emitCallEnded = (conversationId, roomName) => {
+const emitCallEnded = async (conversationId, roomName, options = {}) => {
   if (!io) return;
-  io.to(`conversation:${conversationId}`).emit('call_ended', { conversationId, roomName });
-  try {
-    chatService.getConversationParticipantIds(conversationId).then((ids) => {
-      if (ids) ids.forEach((uid) => io.to(`user:${uid}`).emit('call_ended', { conversationId, roomName }));
-    }).catch(() => {});
-  } catch (err) {
-    logger.warn(`call_ended emit failed: ${err.message}`);
+  const callId = options.callId != null ? String(options.callId) : undefined;
+  const payload = {
+    ...(conversationId ? { conversationId: String(conversationId) } : {}),
+    ...(roomName ? { roomName: String(roomName) } : {}),
+    ...(callId ? { callId } : {}),
+  };
+
+  if (conversationId) {
+    io.to(`conversation:${conversationId}`).emit('call_ended', payload);
   }
+
+  try {
+    let participantIds = [];
+    if (options.call) {
+      participantIds = await chatService.getCallNotifyParticipantIds(options.call);
+    } else if (conversationId) {
+      participantIds = await chatService.getConversationParticipantIds(conversationId);
+    }
+    for (const uid of participantIds || []) {
+      io.to(`user:${String(uid)}`).emit('call_ended', payload);
+    }
+  } catch (err) {
+    logger.warn(`call_ended emit failed: ${err?.message}`);
+  }
+};
+
+const emitCallCancelled = async (call, cancelledBy) => {
+  if (!io || !call) return;
+  const callId = String(call._id ?? call.id ?? '');
+  if (!callId) return;
+  const conversationId = call.conversation ? String(call.conversation) : '';
+  const payload = {
+    callId,
+    ...(conversationId ? { conversationId } : {}),
+    ...(cancelledBy != null ? { cancelledBy: String(cancelledBy) } : {}),
+  };
+  try {
+    const participantIds = await chatService.getCallNotifyParticipantIds(call);
+    for (const pid of participantIds || []) {
+      io.to(`user:${String(pid)}`).emit('call:cancelled', payload);
+    }
+  } catch (err) {
+    logger.warn(`call:cancelled emit failed: ${err?.message}`);
+  }
+};
+
+const emitCallDeclined = async (call, declinedBy) => {
+  if (!io || !call) return;
+  const callId = String(call._id ?? call.id ?? '');
+  if (!callId) return;
+  const callerId = String(call.caller?._id ?? call.caller ?? '');
+  if (!callerId) return;
+  io.to(`user:${callerId}`).emit('call:declined', {
+    callId,
+    conversationId: call.conversation ? String(call.conversation) : '',
+    ...(declinedBy != null ? { declinedBy: String(declinedBy) } : {}),
+  });
 };
 
 const emitIncomingCall = async (conversationId, callData) => {
@@ -629,6 +630,32 @@ const emitSupportCameraIncomingCall = (targetUserId, payload) => {
 const isUserOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 
 const getIO = () => io;
+
+/**
+ * Broadcast conversation_delivered to the thread room and each other participant's user room.
+ * @param {string} conversationId
+ * @param {{ conversationId?: string, userId?: string, deliveredAt?: string, messageIds?: string[] }} result
+ */
+const emitConversationDelivered = async (conversationId, result) => {
+  if (!io || !result?.messageIds?.length) return;
+  const payload = {
+    conversationId: result.conversationId,
+    userId: result.userId,
+    deliveredAt: result.deliveredAt,
+    messageIds: result.messageIds,
+  };
+  io.to(`conversation:${conversationId}`).emit('conversation_delivered', payload);
+  try {
+    const participantIds = await chatService.getConversationParticipantIds(conversationId);
+    for (const pid of participantIds || []) {
+      const pidStr = String(pid);
+      if (pidStr === String(result.userId)) continue;
+      io.to(`user:${pidStr}`).emit('conversation_delivered', payload);
+    }
+  } catch (notifyErr) {
+    logger.warn(`conversation_delivered user notify failed: ${notifyErr.message}`);
+  }
+};
 
 const emitMessageDeleted = async (conversationId, messageId, deleteFor, deletedBy) => {
   if (!io) return;
@@ -747,10 +774,13 @@ export {
   emitIncomingCall,
   emitSupportCameraIncomingCall,
   emitCallEnded,
+  emitCallCancelled,
+  emitCallDeclined,
   emitMessageDeleted,
   emitMessageReacted,
   emitConversationUpdated,
   emitConversationDeleted,
+  emitConversationDelivered,
   emitCallUpdate,
   isUserOnline,
   getIO,

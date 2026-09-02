@@ -49,6 +49,8 @@ const getCallRecords = {
     sortBy: Joi.string().valid('date', 'createdAt').default('createdAt'),
     order: Joi.string().valid('asc', 'desc').default('desc'),
     channel: Joi.string().valid('dialer'), // dialer: only the caller's own dialer-placed calls
+    // Read-side filter only. Never a way to *assert* a source — the server classifies.
+    callSource: Joi.string().valid('ai_agent', 'telephony', 'in_app'),
   }),
 };
 

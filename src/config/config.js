@@ -104,6 +104,12 @@ const envVarsSchema = Joi.object()
       .optional()
       .description('Comma-separated extra Bolna agent IDs (e.g. retired agents still holding call history) to also pull executions/recordings from'),
     BOLNA_FROM_PHONE_NUMBER: Joi.string().optional().description('Bolna caller ID in E.164 format'),
+    BOLNA_ADDITIONAL_FROM_NUMBERS: Joi.string()
+      .optional()
+      .allow('')
+      .description(
+        'Comma-separated retired Bolna caller IDs still present in call history. Classification only — never dialed from.'
+      ),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
     BOLNA_MAX_CALL_DURATION_SECONDS: Joi.number()
@@ -531,6 +537,15 @@ const config = {
       envVars.CALLER_ID ||
       (envVars.TELEPHONY_PROVIDER === 'twilio' ? envVars.TWILIO_PHONE_NUMBER : '') ||
       '',
+    /**
+     * Caller IDs the AI agent used in the past. Classification only — outbound
+     * calls always go out on fromPhoneNumber. Mirrors additionalAgentIds: a
+     * retired number still owns historical CallRecords that must read AI Agent.
+     */
+    additionalFromNumbers: String(envVars.BOLNA_ADDITIONAL_FROM_NUMBERS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
     /** Applied to every outbound call; mirror in Bolna dashboard Call tab for each agent. */
     maxCallDurationSeconds: envVars.BOLNA_MAX_CALL_DURATION_SECONDS,
@@ -726,6 +741,12 @@ config.bolna.allAgentIds = [
   ...new Set(
     [config.bolna.agentId, config.bolna.candidateAgentId, ...config.bolna.additionalAgentIds].filter(Boolean)
   ),
+];
+
+// Every caller ID the AI agent has ever used — current plus retired. Call-source
+// classification reads this; outbound dialing still uses fromPhoneNumber alone.
+config.bolna.allFromNumbers = [
+  ...new Set([config.bolna.fromPhoneNumber, ...config.bolna.additionalFromNumbers].filter(Boolean)),
 ];
 
 // Production: warn if email/share links would use localhost or SMTP is incomplete

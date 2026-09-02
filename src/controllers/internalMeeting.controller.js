@@ -47,6 +47,27 @@ const update = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+/**
+ * Cancel a one-off (non-recurring) meeting. Separate from `update` so it can be gated on
+ * the DELETE permission instead of EDIT — the row's "Cancel meeting" icon requires DELETE,
+ * while the general edit form (which also has a status field) requires EDIT. Status is
+ * hardcoded here, not read from req.body, so a DELETE-only caller can never smuggle other
+ * field edits (title, hosts, etc.) through this endpoint.
+ */
+const cancel = catchAsync(async (req, res) => {
+  const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
+  if (!existing) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
+  if (existing.seriesId) {
+    return res.status(httpStatus.BAD_REQUEST).send({
+      message: 'Recurring meetings are cancelled via DELETE /internal-meetings/:id?mode=…',
+    });
+  }
+  const result = await internalMeetingService.updateInternalMeetingById(req.params.id, { status: 'cancelled' });
+  res.send(result);
+});
+
 const remove = catchAsync(async (req, res) => {
   const mode = req.query.mode || 'single';
   const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
@@ -72,13 +93,24 @@ const remove = catchAsync(async (req, res) => {
 });
 
 const resendInvitations = catchAsync(async (req, res) => {
+  // Ownership/scope check — an EDIT-only (non-all-four) user may only act on their own meetings.
+  const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
+  if (!existing) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
   const result = await internalMeetingService.resendInternalMeetingInvitations(req.params.id);
   res.send(result);
 });
 
 const getRecordings = catchAsync(async (req, res) => {
+  // Ownership/scope check — a VIEW-only (non-all-four) user may only see their own meetings'
+  // recordings, not any meetingId they happen to pass in the URL.
+  const existing = await internalMeetingService.getInternalMeetingById(req.params.id, req.user);
+  if (!existing) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
   const list = await recordingService.listByMeetingId(req.params.id);
   res.send(list);
 });
 
-export { create, list, get, update, remove, resendInvitations, getRecordings };
+export { create, list, get, update, cancel, remove, resendInvitations, getRecordings };

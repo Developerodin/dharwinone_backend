@@ -1058,7 +1058,25 @@ const listCallsForConversation = async (conversationId, userId, { limit = 50 } =
   });
 };
 
-const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search } = {}) => {
+function buildChatCallStatusFilter(status, userId, { incomingMissedOnly = false } = {}) {
+  if (!status || String(status).trim().toLowerCase() === 'all') return null;
+  const statusNorm = String(status).trim().toLowerCase().replace(/-/g, '_');
+  if (statusNorm === 'missed') {
+    const missedStatuses = { status: { $in: ['missed', 'no_answer', 'canceled', 'cancelled'] } };
+    if (incomingMissedOnly && userId) {
+      return {
+        $and: [missedStatuses, { caller: { $ne: userId } }],
+      };
+    }
+    return missedStatuses;
+  }
+  if (statusNorm === 'declined') {
+    return { status: { $in: ['declined', 'rejected', 'busy'] } };
+  }
+  return { status: String(status).trim() };
+}
+
+const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search, status } = {}) => {
   // Reconcile stuck rings/ongoing before reading so the UI never shows a call
   // that's been "ringing" for an hour. Cheap bulk update; no-op when clean.
   // Lazy require to avoid the static cycle chat.service → chatCall.service → chat.service.
@@ -1071,6 +1089,13 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search
   }
   const skip = (page - 1) * limit;
   let filter = isAdmin ? {} : { $or: [{ caller: userId }, { participants: userId }] };
+
+  const statusFilter = buildChatCallStatusFilter(status, userId, {
+    incomingMissedOnly: !isAdmin,
+  });
+  if (statusFilter) {
+    filter = filter.$and ? { $and: [...filter.$and, statusFilter] } : { $and: [filter, statusFilter] };
+  }
 
   const searchTerm = typeof search === 'string' ? search.trim() : '';
   if (searchTerm) {
@@ -1179,6 +1204,43 @@ const createCall = async (conversationId, userId, { callType }) => {
   });
   const populated = await call.populate(['caller', 'participants', 'roomJoinedUserIds', 'conversation']);
   return { call: populated, roomName };
+};
+
+const getCallById = async (callId, userId) => {
+  try {
+    // eslint-disable-next-line import/no-cycle
+    const chatCallMod = await import('./chatCall.service.js');
+    await chatCallMod.expireStaleCalls();
+  } catch (err) {
+    logger.warn(`[getCallById] expireStaleCalls failed: ${err?.message}`);
+  }
+
+  const call = await ChatCall.findById(callId)
+    .populate('caller', 'name email')
+    .populate('participants', 'name email')
+    .populate('roomJoinedUserIds', 'name email')
+    .populate('conversation')
+    .lean();
+  if (!call) throw new ApiError(httpStatus.NOT_FOUND, 'Call not found');
+  const callerId = call.caller?._id?.toString?.() ?? call.caller?.toString?.() ?? '';
+  const isParticipant =
+    callerId === userId ||
+    call.participants?.some((p) => {
+      const participantId = p?._id?.toString?.() ?? p?.toString?.() ?? '';
+      return participantId === userId;
+    });
+  if (!isParticipant) throw new ApiError(httpStatus.FORBIDDEN, 'Not a participant');
+
+  const conversationId = call.conversation?._id?.toString?.() ?? call.conversation?.toString?.() ?? '';
+  const item = {
+    ...call,
+    id: call._id?.toString?.(),
+    conversationId: conversationId || undefined,
+    livekitRoom: call.livekitRoom || undefined,
+    roomName: call.livekitRoom || undefined,
+  };
+  Object.assign(item, enrichCallForViewer(item, userId));
+  return item;
 };
 
 const updateCall = async (callId, userId, { status, duration, recordRoomJoin }) => {
@@ -1350,7 +1412,13 @@ const endCallByRoom = async (roomName, userId) => {
   if (roomName.startsWith('chat-')) {
     await livekitService.deleteInterviewRoom(roomName).catch(() => {});
   }
-  return { success: true, conversationId, roomName };
+  return {
+    success: true,
+    conversationId,
+    roomName,
+    callId: String(call._id),
+    call,
+  };
 };
 
 const addParticipants = async (conversationId, userId, { participantIds }, viewer) => {
@@ -1523,6 +1591,7 @@ export {
   listCallsForUser,
   listCallsForConversation,
   getActiveCallForConversation,
+  getCallById,
   endCallByRoom,
   createCall,
   createGroupCall,

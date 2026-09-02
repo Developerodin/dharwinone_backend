@@ -9,6 +9,7 @@ import {
   userIsSalesAgent,
 } from '../utils/roleHelpers.js';
 import { hasApiPermission, hasAllApiPermissions } from '../utils/permissionCheck.js';
+import { MEETING_ALL_ACCESS } from '../config/permissions.js';
 
 const EMPTY_SCOPE = { _id: { $in: [] } };
 
@@ -221,16 +222,17 @@ const meetingActorQuery = async (actor = {}) => {
 };
 
 /**
- * Matrix row `communication.meetings` view + create → meetings.read + meetings.create.
- * Users with both see every LiveKit recording; tenantId/adminId must not narrow the list.
+ * Recordings follow MEETING visibility: unrestricted only under the same all-four
+ * condition {@link internalMeetingScope} requires. This was previously view+create,
+ * so a role without edit/delete could list every LiveKit recording in the company —
+ * including recordings of meetings it could not even see in the meeting list.
+ * Any lesser combination falls through to the own/host/invited recording set below.
  */
-const RECORDING_FULL_LIST_ACCESS = ['meetings.read', 'meetings.create'];
-
 const recordingScope = async (actor = {}, action = 'read') => {
-  if (await hasAllApiPermissions(actor, RECORDING_FULL_LIST_ACCESS)) {
+  if (await hasAllApiPermissions(actor, MEETING_ALL_ACCESS)) {
     return {
       filter: {},
-      scopeDebug: { scopeType: 'recording', action, role: 'meetings.read+create:all' },
+      scopeDebug: { scopeType: 'recording', action, role: 'meetings.all:all' },
     };
   }
 
@@ -297,7 +299,7 @@ const internalMeetingActorQuery = async (actor = {}) => {
  * Build a Mongoose filter restricting InternalMeeting (Communication) docs.
  * Mirrors {@link meetingScope} but driven by the SEPARATE meetings.* permission
  * family, so the two surfaces stay isolated:
- *   - meetings.manage -> ALL internal meetings
+ *   - all four meetings.* actions -> ALL internal meetings
  *   - meetings.read   -> OWN internal meetings (created / hosting / invited)
  *   - neither         -> still OWN (invitee:own) so Employee dashboard can show
  *     Communication invites without granting communication.meetings nav access
@@ -307,8 +309,8 @@ const internalMeetingActorQuery = async (actor = {}) => {
  * @returns {Promise<{ filter: object, scopeDebug: object }>}
  */
 const internalMeetingScope = async (actor = {}, action = 'read') => {
-  if (await hasApiPermission(actor, 'meetings.manage')) {
-    return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.manage:all' } };
+  if (await hasAllApiPermissions(actor, MEETING_ALL_ACCESS)) {
+    return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.all:all' } };
   }
   const actorQuery = await internalMeetingActorQuery(actor);
   if (await hasApiPermission(actor, 'meetings.read')) {

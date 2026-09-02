@@ -7,6 +7,9 @@ import { getConversationParticipantIds } from './chat.service.js';
 const apiKey = config.livekit?.apiKey;
 const apiSecret = config.livekit?.apiSecret;
 
+/** Pre-accept states — HTTP createCall uses `initiated`; legacy paths use `ringing`. */
+const PRE_CONNECT_STATUSES = ['initiated', 'ringing'];
+
 const mintP2PToken = async (roomName, participantIdentity, participantName) => {
   if (!apiKey || !apiSecret) throw new Error('LiveKit credentials not configured');
   const token = new AccessToken(apiKey, apiSecret, {
@@ -45,10 +48,12 @@ const initiateCall = async (conversationId, callerId, callType) => {
 const acceptCall = async (callId) => {
   const existing = await ChatCall.findById(callId).lean();
   if (!existing) return null;
-  const roomName = `chat-${existing.conversation}-${callId}`;
+  const roomName =
+    (existing.livekitRoom && String(existing.livekitRoom).trim()) ||
+    `chat-${existing.conversation}-${callId}`;
 
   const call = await ChatCall.findOneAndUpdate(
-    { _id: callId, status: 'ringing' },
+    { _id: callId, status: { $in: PRE_CONNECT_STATUSES } },
     { status: 'ongoing', startedAt: new Date(), livekitRoom: roomName },
     { new: true }
   )
@@ -72,16 +77,16 @@ const acceptCall = async (callId) => {
 
 const declineCall = async (callId) => {
   return ChatCall.findOneAndUpdate(
-    { _id: callId, status: 'ringing' },
-    { status: 'declined' },
+    { _id: callId, status: { $in: PRE_CONNECT_STATUSES } },
+    { status: 'declined', endedAt: new Date() },
     { new: true }
   ).lean();
 };
 
 const cancelCall = async (callId, callerId) => {
   return ChatCall.findOneAndUpdate(
-    { _id: callId, status: 'ringing', caller: callerId },
-    { status: 'missed' },
+    { _id: callId, status: { $in: PRE_CONNECT_STATUSES }, caller: callerId },
+    { status: 'missed', endedAt: new Date() },
     { new: true }
   ).lean();
 };
@@ -89,10 +94,10 @@ const cancelCall = async (callId, callerId) => {
 const endCall = async (callId) => {
   const call = await ChatCall.findById(callId).lean();
   if (!call) return null;
-  // Ringing-but-never-answered → missed (caller hung up before callee answered).
-  if (call.status === 'ringing') {
+  // Pre-accept hang-up → missed (caller ended before callee answered).
+  if (PRE_CONNECT_STATUSES.includes(call.status)) {
     return ChatCall.findOneAndUpdate(
-      { _id: callId, status: 'ringing' },
+      { _id: callId, status: { $in: PRE_CONNECT_STATUSES } },
       { status: 'missed', endedAt: new Date() },
       { new: true }
     ).lean();
@@ -124,7 +129,7 @@ const expireStaleCalls = async () => {
 
   const [ringRes, ongoingRes] = await Promise.all([
     ChatCall.updateMany(
-      { status: 'ringing', createdAt: { $lte: ringCutoff } },
+      { status: { $in: PRE_CONNECT_STATUSES }, createdAt: { $lte: ringCutoff } },
       { $set: { status: 'missed', endedAt: new Date() } }
     ),
     ChatCall.updateMany(

@@ -1,17 +1,38 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
+const stringListQuery = Joi.alternatives().try(
+  Joi.array().items(Joi.string().trim().min(1)),
+  Joi.string().trim().min(1)
+);
+
 const getStudents = {
   query: Joi.object().keys({
-    status: Joi.string().valid('active', 'inactive'),
+    status: Joi.string().valid('active', 'inactive', 'all'),
     position: Joi.string().custom(objectId).optional(),
     search: Joi.string().allow('').optional(),
+    names: stringListQuery.optional(),
+    skills: stringListQuery.optional(),
+    education: stringListQuery.optional(),
+    email: Joi.string().allow('').optional(),
+    experienceMin: Joi.number().integer().min(0).optional(),
+    experienceMax: Joi.number().integer().min(0).optional(),
     sortBy: Joi.string(),
     limit: Joi.number().integer(),
     page: Joi.number().integer(),
     /** When true, only users with the Employee RBAC role (excludes agents, candidates, attendance-only profiles). */
     employeeRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
     /** When true, exclude owners linked to a resigned/inactive employee record. */
+    excludeResignedEmployed: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
+  }),
+};
+
+const getStudentFilterOptions = {
+  query: Joi.object().keys({
+    status: Joi.string().valid('active', 'inactive', 'all'),
+    position: Joi.string().custom(objectId).optional(),
+    search: Joi.string().allow('').optional(),
+    employeeRoleOnly: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
     excludeResignedEmployed: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0')).optional(),
   }),
 };
@@ -153,4 +174,4 @@ const assignShift = {
   }),
 };
 
-export { getStudents, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, assignShift };
+export { getStudents, getStudentFilterOptions, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, assignShift };
