@@ -14,6 +14,8 @@
     "backfill:identity": "node src/scripts/backfillIdentityFromUser.js",
     "backfill:job-location": "node src/scripts/backfillJobLocationMeta.js",
     "backfill:job-location:dry": "node src/scripts/backfillJobLocationMeta.js --dry",
+    "migrate:phone-registry:dry": "node src/scripts/migrateCompanyPhoneRegistryGlobal.js --dry",
+    "migrate:phone-registry": "node src/scripts/migrateCompanyPhoneRegistryGlobal.js --apply",
     "audit:ci": "npm audit --audit-level=high",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
