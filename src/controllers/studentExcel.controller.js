@@ -9,14 +9,30 @@ import * as studentExcelService from '../services/studentExcel.service.js';
  * as the list) with a high limit so the export respects the active view.
  */
 export const exportExcel = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['status', 'position', 'search']);
-  const result = await studentService.queryStudents(filter, { limit: 100000, page: 1 });
-  const buf = studentExcelService.buildStudentsExportBuffer(result.results || []);
+  const filter = pick(req.query, [
+    'status',
+    'position',
+    'search',
+    'names',
+    'skills',
+    'education',
+    'email',
+    'experienceMin',
+    'experienceMax',
+  ]);
+  const options = pick(req.query, ['sortBy']);
+  const { results, capped, totalResults, exportMax } = await studentService.queryStudentsForExport(filter, options);
+  const buf = studentExcelService.buildStudentsExportBuffer(results || []);
   const date = new Date().toISOString().slice(0, 10);
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   );
   res.setHeader('Content-Disposition', `attachment; filename="students-export-${date}.xlsx"`);
+  if (capped) {
+    res.setHeader('X-Export-Capped', 'true');
+    res.setHeader('X-Export-Total-Results', String(totalResults));
+    res.setHeader('X-Export-Max-Rows', String(exportMax));
+  }
   res.send(buf);
 });

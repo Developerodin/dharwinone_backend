@@ -417,11 +417,11 @@ export async function isCallerIdAllowedForUser(userId, callerId) {
   if (!userId) return false;
   const phone = normalizeCalledNumber(callerId);
   if (!phone) return false;
-  const row = await CompanyPhoneNumber.findOne({ phoneNumber: phone, isActive: true })
-    .select('assignedTo')
-    .lean();
-  if (!row?.assignedTo) return false;
-  return String(row.assignedTo) === String(userId);
+  // Match the assignment in the query rather than fetching one row and comparing it.
+  // Fetch-then-compare reads an arbitrary row when a number has duplicate active rows
+  // (the pre-dedup state migrateCompanyPhoneRegistryGlobal removes), so it could land on
+  // the unassigned copy and refuse a user who IS correctly assigned.
+  return Boolean(await CompanyPhoneNumber.exists({ phoneNumber: phone, isActive: true, assignedTo: userId }));
 }
 
 /** Numbers assigned to a user for caller-id / inbound context. */

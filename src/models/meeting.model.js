@@ -190,6 +190,23 @@ meetingSchema.index({ status: 1, conclusionNotifiedAt: 1, scheduledAt: 1 });
 meetingSchema.index({ 'candidate.id': 1 });
 
 /**
+ * dateFrom/dateTo window queries (dashboard "today", Interviews table date filter).
+ *
+ * The two scheduler indexes above cannot serve these: their leading key is `status`,
+ * and buildMeetingsMongoFilter expresses status as a case-insensitive $regex plus an
+ * $or over null/''/missing — never an equality — so the prefix is unusable. Here the
+ * range on scheduledAt is the selective predicate anyway (one day out of years), and
+ * this index also satisfies the scheduledAt sort.
+ *
+ * Derived from the schema and the query shape, NOT from an explain() run — no DB was
+ * available when it was added. Correctness does not depend on it; only latency does.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build the
+ * index. It needs a deliberate index-creation step on deploy.
+ */
+meetingSchema.index({ scheduledAt: 1 });
+
+/**
  * Generate unique meetingId
  * @returns {string}
  */

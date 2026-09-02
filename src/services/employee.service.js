@@ -3341,16 +3341,21 @@ const CANDIDATE_ME_FIELDS = [
   'salarySlips',
 ];
 
+/** Subset of CANDIDATE_ME_FIELDS with no User equivalent — the four identity fields are written through User. */
+const CANDIDATE_ONLY_ME_FIELDS = CANDIDATE_ME_FIELDS.filter(
+  (field) => !['fullName', 'email', 'phoneNumber', 'countryCode'].includes(field)
+);
+
 /**
  * Atomically update User and Candidate for PATCH /auth/me/with-candidate.
  * Syncs name→fullName and profilePicture to candidate. Returns { user, candidate }.
  */
 const updateUserAndCandidateForMe = async (userId, body) => {
-  const result = await queryCandidates({ owner: userId }, { limit: 1, page: 1 });
-  const candidateDoc = result.results?.[0];
-  if (!candidateDoc) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
-  }
+  // Direct owner lookup, exactly like GET /auth/me/with-candidate. This used to go
+  // through queryCandidates(), i.e. the ATS *list* query, which applies list scoping
+  // (owner must hold an active Employee/Candidate role, employmentStatus defaults to
+  // 'current'), so every staff role 404'd here on a profile the GET had just returned.
+  const candidate = await Employee.findOne({ owner: userId });
 
   // Identity fields route through User (single source of truth); the mirror in
   // updateUserById copies them onto the Employee doc. Everything else stays here.
@@ -3363,15 +3368,21 @@ const updateUserAndCandidateForMe = async (userId, body) => {
   if (body.profilePicture !== undefined) userPayload.profilePicture = body.profilePicture;
   if (body.notificationPreferences !== undefined) userPayload.notificationPreferences = body.notificationPreferences;
 
+  // A user with no ATS profile (staff-only account) may still update their own User
+  // fields — name, photo, notification preferences. Only reject when the body carries
+  // fields that have nowhere to land.
+  if (!candidate && CANDIDATE_ONLY_ME_FIELDS.some((key) => body[key] !== undefined)) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No candidate profile found for your account');
+  }
+
   if (Object.keys(userPayload).length > 0) {
     // eslint-disable-next-line import/no-cycle -- user.service imports employee.service; runtime-only
     const { updateUserById } = await import('./user.service.js');
     await updateUserById(userId, userPayload);
   }
 
-  const candidate = await Employee.findById(candidateDoc.id || candidateDoc._id);
   if (!candidate) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+    return { user: await User.findById(userId), candidate: null };
   }
 
   const candidatePayload = {};
