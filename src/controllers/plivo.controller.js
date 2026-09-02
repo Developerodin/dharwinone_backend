@@ -1,3 +1,18 @@
+/**
+ * LEGACY NAME — this controller is PROVIDER-AGNOSTIC, not Plivo-specific.
+ *
+ * It serves the telephony control plane for whichever provider is configured, and the
+ * frontend routes Twilio traffic through it too (shared/lib/api/telephony.ts calls
+ * /plivo/call, /plivo/sdk-token, /plivo/browser-call-intent, /plivo/dialer-initiate...).
+ * twilio.route.js imports it as well. Only the route prefix still says "plivo".
+ *
+ * Provider selection belongs to telephony.service.js, which dispatches on
+ * config.telephony.provider (TELEPHONY_PROVIDER env). So:
+ *   - call telephonyService here, never plivoService or twilioService directly
+ *   - do NOT add `if (provider === 'twilio')` branches in this file
+ * Genuinely provider-specific webhook handling lives elsewhere (e.g. twilioVoice.controller.js),
+ * because provider callback payloads differ and cannot be abstracted.
+ */
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import catchAsync from '../utils/catchAsync.js';
