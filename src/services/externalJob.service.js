@@ -10,12 +10,26 @@ const SOURCES = {
   'active-jobs-db': {
     host: 'active-jobs-db.p.rapidapi.com',
     path: '/active-ats',
+    timeFrames: ['24h', '7d', '6m'],
   },
   'linkedin-job-search-api': {
     host: 'linkedin-job-search-api.p.rapidapi.com',
     endpoints: { '24h': '/active-jb-24h', '7d': '/active-jb-7d' },
+    timeFrames: ['24h', '7d'],
   },
 };
+
+/**
+ * Posted-window options the UI offers, mapped to the `time_frame` RapidAPI accepts.
+ *
+ * `all` is an application-only value and is never sent: Active Jobs DB's windows
+ * nest (24h is inside 7d is inside 6m), so "All Time" IS the 6m window. Requesting
+ * all three would return the 6m set plus two subsets of itself, spend three of the
+ * five requests a user gets per minute, and leave three independently-ordered
+ * offset streams that cannot share one `offset` without repeating or skipping rows.
+ */
+const POSTED_TIME_FRAMES = { '24h': '24h', '7d': '7d', '6m': '6m', all: '6m' };
+const DEFAULT_TIME_FRAME = '24h';
 
 const LEGACY_SOURCE_ALIASES = {
   'linkedin-jobs-api': 'linkedin-job-search-api',
@@ -23,6 +37,23 @@ const LEGACY_SOURCE_ALIASES = {
 
 function normalizeSource(source) {
   return LEGACY_SOURCE_ALIASES[source] || source;
+}
+
+/**
+ * date_posted (UI value) -> time_frame (RapidAPI value), rejected when the source
+ * has no endpoint for that window. LinkedIn only publishes 24h and 7d feeds, so
+ * `6m`/`all` are refused rather than quietly served as 7 days.
+ */
+export function resolveTimeFrame(datePosted, source) {
+  const timeFrame = POSTED_TIME_FRAMES[String(datePosted || '').trim().toLowerCase()] || DEFAULT_TIME_FRAME;
+  const supported = SOURCES[normalizeSource(source)]?.timeFrames;
+  if (supported && !supported.includes(timeFrame)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `This source only covers jobs posted in the last ${supported.join(' or ')}.`
+    );
+  }
+  return timeFrame;
 }
 
 const RATE_LIMIT_REQUESTS = 5;
@@ -168,7 +199,7 @@ export function buildParams(filters, source = 'active-jobs-db') {
   const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, remote, date_posted: datePosted } = filters;
   const limit = 10;
   const off = Math.max(0, Math.floor((Number(offset) || 0) / limit) * limit);
-  const timeFrame = (datePosted || '').toLowerCase().includes('7') ? '7d' : '24h';
+  const timeFrame = resolveTimeFrame(datePosted, source);
 
   if (source === 'active-jobs-db') {
     const params = {
@@ -212,7 +243,7 @@ async function searchFromAPI(filters, source, userId) {
 
   checkRateLimit(userId);
 
-  const variant = (filters.date_posted || '').toLowerCase().includes('7') ? '7d' : '24h';
+  const variant = resolveTimeFrame(filters.date_posted, source);
   const path = config.path || config.endpoints?.[variant] || config.endpoints?.['24h'];
   const params = buildParams(filters, source);
   const query = new URLSearchParams(params).toString();

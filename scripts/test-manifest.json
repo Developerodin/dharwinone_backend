@@ -274,5 +274,7 @@
   "src/services/__tests__/plivo.sdkAnswerIntent.test.js",
   "src/services/chatAssistant/__tests__/referralLeadIntents.test.js",
   "src/services/chatAssistant/__tests__/roleRegistry.test.js",
-  "src/services/__tests__/employee.updateMeSelfProfile.test.js"
+  "src/services/__tests__/employee.updateMeSelfProfile.test.js",
+  "src/validations/__tests__/externalJob.validation.test.js",
+  "src/services/__tests__/externalJob.postedWindow.test.js"
 ]

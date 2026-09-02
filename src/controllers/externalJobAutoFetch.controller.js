@@ -36,10 +36,28 @@ async function withLastRun(config) {
   };
 }
 
-function sanitizeStringArray(value) {
-  if (!Array.isArray(value)) return undefined;
-  const cleaned = value.map((v) => String(v || '').trim()).filter(Boolean);
-  return [...new Set(cleaned)];
+const MAX_TERMS = 50;
+const MAX_TERM_LENGTH = 100;
+
+/**
+ * `undefined` means "not supplied" (PATCH leaves the field alone, POST clears it).
+ * Anything supplied but not an array is rejected rather than silently treated as
+ * "not supplied", which on POST would have wiped the saved list.
+ */
+function sanitizeStringArray(value, field) {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `${field} must be an array of strings.`);
+  }
+  const cleaned = value.map((v) => String(v ?? '').trim()).filter(Boolean);
+  if (cleaned.some((v) => v.length > MAX_TERM_LENGTH)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `Each ${field} entry must be ${MAX_TERM_LENGTH} characters or fewer.`);
+  }
+  const unique = [...new Set(cleaned)];
+  if (unique.length > MAX_TERMS) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `${field} cannot have more than ${MAX_TERMS} entries.`);
+  }
+  return unique;
 }
 
 const getConfig = catchAsync(async (req, res) => {
@@ -49,8 +67,8 @@ const getConfig = catchAsync(async (req, res) => {
 });
 
 function applyConfigFields(config, body, { partial }) {
-  const titles = sanitizeStringArray(body.titles);
-  const locations = sanitizeStringArray(body.locations);
+  const titles = sanitizeStringArray(body.titles, 'titles');
+  const locations = sanitizeStringArray(body.locations, 'locations');
   if (titles !== undefined) config.titles = titles;
   else if (!partial) config.titles = [];
 
@@ -114,7 +132,7 @@ const runNow = catchAsync(async (req, res) => {
 const listRuns = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const config = await getOrCreateConfig(userId);
-  const limit = Math.min(Number(req.query.limit) || 10, 50);
+  const limit = Math.min(Math.max(Math.floor(Number(req.query.limit)) || 10, 1), 50);
   const runs = await ExternalJobSyncRun.find({ configId: config._id })
     .sort({ createdAt: -1 })
     .limit(limit)

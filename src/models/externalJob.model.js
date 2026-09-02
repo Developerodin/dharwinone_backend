@@ -58,6 +58,8 @@ externalJobSchema.index({ savedAt: -1 });
 externalJobSchema.plugin(toJSON);
 externalJobSchema.plugin(paginate);
 
+export const EXTERNAL_JOB_SOURCES = SOURCES;
+
 const ExternalJob = mongoose.model('ExternalJob', externalJobSchema);
 
 export default ExternalJob;
