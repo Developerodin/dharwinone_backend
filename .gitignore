@@ -81,6 +81,7 @@ backups/
 .claude/
 .codex/
 CLAUDE.md
+.impeccable/
 
 # Backfill script run journals (carry --undo paths, not source)
 attendance-status-backfill.*.journal.json
