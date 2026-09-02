@@ -223,6 +223,10 @@ const startChatCallRecording = {
   params: callIdParam.params,
 };
 
+const getCall = {
+  params: callIdParam.params,
+};
+
 export {
   conversationIdParam,
   callIdParam,
@@ -236,6 +240,7 @@ export {
   initiateCall,
   listCalls,
   updateCall,
+  getCall,
   searchUsers,
   lookupUserByEmail,
   addParticipants,

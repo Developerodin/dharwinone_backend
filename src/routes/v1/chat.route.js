@@ -124,6 +124,7 @@ router.post(
 );
 
 router.get('/calls', validate(chatValidation.listCalls), chatController.listCalls);
+router.get('/calls/:id', validate(chatValidation.getCall), chatController.getCall);
 router.post('/calls/group', validate(chatValidation.initiateGroupCall), chatController.initiateGroupCall);
 router.get(
   '/conversations/:id/active-call',

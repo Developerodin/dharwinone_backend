@@ -5,6 +5,8 @@ import {
   emitNewMessage,
   emitIncomingCall,
   emitCallEnded,
+  emitCallCancelled,
+  emitCallDeclined,
   emitMessageDeleted,
   emitMessageReacted,
   emitConversationUpdated,
@@ -306,9 +308,31 @@ const startChatCallRecording = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(result);
 });
 
+const getCall = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const call = await chatService.getCallById(req.params.id, userId);
+  res.send(call);
+});
+
 const updateCall = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  const call = await chatService.updateCall(req.params.id, userId, req.body);
+  const callId = req.params.id;
+  const before = await chatService.getCallById(callId, userId);
+  const previousStatus = String(before?.status ?? '').toLowerCase();
+  const callerId = String(before?.caller?.id ?? before?.caller?._id ?? before?.caller ?? '');
+
+  const call = await chatService.updateCall(callId, userId, req.body);
+  const newStatus = String(req.body?.status ?? call?.status ?? '').toLowerCase();
+  const preConnect = previousStatus === 'initiated' || previousStatus === 'ringing';
+
+  if (preConnect && previousStatus !== newStatus) {
+    if (newStatus === 'missed' && callerId === userId) {
+      await emitCallCancelled(call, userId);
+    } else if (newStatus === 'declined' && callerId !== userId) {
+      await emitCallDeclined(call, userId);
+    }
+  }
+
   res.send(call);
 });
 
@@ -317,8 +341,11 @@ const endCallByRoom = catchAsync(async (req, res) => {
   const { roomName } = req.body;
   if (!roomName) return res.status(400).json({ message: 'roomName required' });
   const result = await chatService.endCallByRoom(roomName, userId);
-  if (result?.conversationId) {
-    emitCallEnded(result.conversationId, roomName);
+  if (result) {
+    await emitCallEnded(result.conversationId, roomName, {
+      callId: result.callId,
+      call: result.call,
+    });
   }
   res.send({ success: true });
 });
@@ -494,6 +521,7 @@ export {
   listCalls,
   listCallsForConversation,
   getActiveCallForConversation,
+  getCall,
   initiateCall,
   initiateGroupCall,
   updateCall,

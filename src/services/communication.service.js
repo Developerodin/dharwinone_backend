@@ -2,6 +2,41 @@ import callRecordService from './callRecord.service.js';
 import * as chatService from './chat.service.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
+const MISSED_STATUS_VALUES = ['missed', 'no_answer', 'canceled', 'cancelled'];
+
+function normalizeCallStatus(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/-/g, '_');
+}
+
+function callerIdFromChatCall(call) {
+  const caller = call?.caller;
+  if (!caller) return '';
+  if (typeof caller === 'object') {
+    return String(caller._id ?? caller.id ?? '');
+  }
+  return String(caller);
+}
+
+function isIncomingMissedChatCall(call, viewerUserId) {
+  const status = normalizeCallStatus(call?.status);
+  if (!MISSED_STATUS_VALUES.includes(status)) return false;
+  if (!viewerUserId) return true;
+  const callerId = callerIdFromChatCall(call);
+  return Boolean(callerId && callerId !== String(viewerUserId));
+}
+
+function isIncomingMissedTelephonyRecord(record) {
+  const status = normalizeCallStatus(record?.status);
+  if (!MISSED_STATUS_VALUES.includes(status)) return false;
+  const direction = normalizeCallStatus(
+    record?.telephonyData?.direction ?? record?.direction ?? record?.telephonyData?.call_type,
+  );
+  if (!direction) return true;
+  return direction === 'inbound' || direction === 'incoming';
+}
+
 /**
  * List unified calls (Bolna telephony + Chat in-app) with server-side merge, filter, sort, pagination.
  * @param {Object} options - { user, source, search, status, purpose, page, limit, sortBy, order }
@@ -18,8 +53,60 @@ async function listUnifiedCalls(options = {}) {
 
   const isAdmin = await userIsAdmin(user || {});
 
-  const fetchTelephony = source === 'all' || source === 'telephony';
-  const fetchChat = source === 'all' || source === 'in_app';
+  // Single-source queries use native DB pagination (status filter applied in Mongo).
+  if (source === 'in_app') {
+    const chatData = await chatService.listCalls(userId, {
+      page,
+      limit,
+      isAdmin,
+      search: options.search,
+      status: options.status,
+    });
+    const results = (chatData.results || []).map((c) => ({
+      source: 'in_app',
+      id: c.id || c._id?.toString(),
+      createdAt: c.createdAt,
+      chatCall: c,
+    }));
+    return {
+      results,
+      page,
+      limit,
+      total: chatData.total ?? 0,
+      totalPages: chatData.totalPages ?? (Math.ceil((chatData.total ?? 0) / limit) || 1),
+    };
+  }
+
+  if (source === 'telephony') {
+    const telephonyData = await callRecordService.listCallRecords({
+      userId,
+      isAdmin,
+      page,
+      limit,
+      search: options.search,
+      status: options.status,
+      language: options.language,
+      sortBy,
+      order,
+    });
+    const results = (telephonyData.results || []).map((r) => ({
+      source: 'telephony',
+      id: r._id?.toString() || r.id,
+      createdAt: r.createdAt,
+      telephony: r,
+    }));
+    const total = telephonyData.total ?? results.length;
+    return {
+      results,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  const fetchTelephony = source === 'all';
+  const fetchChat = source === 'all';
 
   /** Fetch enough rows from each source to merge-sort-slice for the requested page. */
   const mergeFetchLimit = Math.min(page * limit, 5000);
@@ -44,6 +131,7 @@ async function listUnifiedCalls(options = {}) {
           limit: mergeFetchLimit,
           isAdmin,
           search: options.search,
+          status: options.status,
         })
       : Promise.resolve({ results: [], totalPages: 0, total: 0 }),
   ]);
@@ -85,8 +173,16 @@ async function listUnifiedCalls(options = {}) {
           ? (u.data.status || 'unknown').toLowerCase().replace(/-/g, '_')
           : (u.data.status || '').toLowerCase().replace(/-/g, '_');
       if (statusNorm === 'missed') {
-        // Unanswered only — exclude explicit declines.
-        return ['missed', 'no_answer', 'canceled', 'cancelled'].includes(s);
+        if (isAdmin) {
+          return MISSED_STATUS_VALUES.includes(s);
+        }
+        if (u.source === 'in_app') {
+          return isIncomingMissedChatCall(u.data, userId);
+        }
+        if (u.source === 'telephony') {
+          return isIncomingMissedTelephonyRecord(u.data);
+        }
+        return MISSED_STATUS_VALUES.includes(s);
       }
       if (statusNorm === 'declined') {
         return ['declined', 'rejected', 'busy'].includes(s);
