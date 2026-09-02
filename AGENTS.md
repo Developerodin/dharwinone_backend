@@ -308,3 +308,7 @@ Examples (see `.gitignore`):
 - `test-full-output.log`, `test-full-final.log` (`test-full*.log`)
 - `.test-full-output.txt`
 - `*.test-output.log`
+
+### Commits
+
+Never add `Co-Authored-By` / `Co-authored-by` (or any Cursor/Claude/Copilot assistant trailer) to commits, commit messages, PR titles, or PR bodies. Do not let hooks, templates, or "Generated with …" footers add it. If a tool injects it, strip it before the commit stands.
