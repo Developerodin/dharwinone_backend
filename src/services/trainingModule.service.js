@@ -1,13 +1,17 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
 import Mentor from '../models/mentor.model.js';
+import Category from '../models/category.model.js';
+import User from '../models/user.model.js';
 import * as studentService from './student.service.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
 import logger from '../config/logger.js';
+import { hasApiPermissionFromContext } from '../utils/permissionCheck.js';
 
 const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
 
@@ -22,6 +26,79 @@ const LIST_EXCLUDE_FIELDS = [
   '-playlist.testLinkOrReference',
 ].join(' ');
 
+/**
+ * Resolve category query (ObjectId or display name) to a category _id.
+ * @param {string} category
+ * @returns {Promise<string|import('mongoose').Types.ObjectId|null>}
+ */
+const resolveCategoryId = async (category) => {
+  if (!category) return null;
+  const raw = String(category).trim();
+  if (/^[a-fA-F0-9]{24}$/.test(raw)) return raw;
+  const doc = await Category.findOne({ name: raw }).select('_id').lean();
+  return doc?._id ?? null;
+};
+
+/**
+ * Mentor ids whose linked user name equals the instructor chip label.
+ * @param {string} instructor
+ * @returns {Promise<import('mongoose').Types.ObjectId[]>}
+ */
+const mentorIdsForInstructorName = async (instructor) => {
+  const name = String(instructor || '').trim();
+  if (!name) return [];
+  const users = await User.find({ name }).select('_id').lean();
+  if (!users.length) return [];
+  const mentors = await Mentor.find({ user: { $in: users.map((u) => u._id) } })
+    .select('_id')
+    .lean();
+  return mentors.map((m) => m._id);
+};
+
+/**
+ * Mentor ids whose user name matches a search substring.
+ * @param {string} trimmed
+ * @returns {Promise<import('mongoose').Types.ObjectId[]>}
+ */
+const mentorIdsMatchingSearch = async (trimmed) => {
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const users = await User.find({ name: new RegExp(escaped, 'i') })
+    .select('_id')
+    .limit(50)
+    .lean();
+  if (!users.length) return [];
+  const mentors = await Mentor.find({ user: { $in: users.map((u) => u._id) } })
+    .select('_id')
+    .lean();
+  return mentors.map((m) => m._id);
+};
+
+/**
+ * Category and instructor labels for the agent curriculum toolbar (all assigned modules).
+ * @param {object} assignmentFilter
+ * @returns {Promise<{ categories: string[], instructors: string[] }>}
+ */
+const loadMineCatalogFacets = async (assignmentFilter) => {
+  const docs = await TrainingModule.find(assignmentFilter)
+    .select('categories mentorsAssigned')
+    .populate('categories', 'name')
+    .populate({ path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } })
+    .lean();
+  const categorySet = new Set();
+  const instructorSet = new Set();
+  for (const doc of docs) {
+    for (const cat of doc.categories || []) {
+      if (cat?.name) categorySet.add(cat.name);
+    }
+    const mentorName = doc.mentorsAssigned?.[0]?.user?.name;
+    instructorSet.add(mentorName || 'Instructor');
+  }
+  return {
+    categories: [...categorySet].sort((a, b) => a.localeCompare(b)),
+    instructors: [...instructorSet].sort((a, b) => a.localeCompare(b)),
+  };
+};
+
 const normalizeQuizQuestions = (questions = []) =>
   questions.map((q) => ({
     questionText: q.questionText,
@@ -32,10 +109,34 @@ const normalizeQuizQuestions = (questions = []) =>
     })),
   }));
 
+/**
+ * Coerce a Q&A question maxMarks; missing or invalid values become 100.
+ * @param {unknown} value
+ * @returns {number}
+ */
+const questionMaxMarks = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 1) return 100
+  return n
+}
+
+/**
+ * Optional pass percentage on a Q&A item; omit when unset.
+ * @param {unknown} value
+ * @returns {number|undefined}
+ */
+const normalizePassPercentage = (value) => {
+  if (value == null || value === '') return undefined
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined
+  return n
+}
+
 const normalizeEssayQuestions = (questions = []) =>
   questions.map((q) => ({
     questionText: q.questionText,
     expectedAnswer: q.expectedAnswer || undefined,
+    maxMarks: questionMaxMarks(q.maxMarks),
   }));
 
 /**
@@ -156,17 +257,25 @@ const createTrainingModule = async (moduleBody, currentUser) => {
           }
           break;
 
-        case 'essay':
-          if (item.essayData?.questions) {
-            processedItem.essay = { questions: normalizeEssayQuestions(item.essayData.questions) };
-          } else if (item.essay?.questions) {
-            processedItem.essay = { questions: normalizeEssayQuestions(item.essay.questions) };
+        case 'essay': {
+          const essaySrc = item.essayData?.questions ? item.essayData : item.essay
+          if (essaySrc?.questions) {
+            processedItem.essay = {
+              questions: normalizeEssayQuestions(essaySrc.questions),
+              passPercentage: normalizePassPercentage(essaySrc.passPercentage),
+            }
           }
-          break;
+          break
+        }
       }
 
       processedPlaylist.push(processedItem);
     }
+  }
+
+  const createStatus = moduleBody.status || 'draft';
+  if (createStatus === 'published') {
+    assertCanPublishPlaylist(processedPlaylist);
   }
 
   // Create training module
@@ -211,6 +320,41 @@ const resolveAssignmentIdsForUser = async (currentUser) => {
 };
 
 /**
+ * True when the caller can list/edit drafts and archived modules.
+ * Permissions live on `authContext.permissions` (a Set), not `user.permissions`.
+ * @param {object} [currentUser]
+ * @returns {boolean}
+ */
+const callerCanManageTrainingModules = (currentUser) => {
+  if (!currentUser) return false;
+  if (currentUser.platformSuperUser || currentUser.authContext?.isAdmin) return true;
+  const ctxPerms = currentUser.authContext?.permissions;
+  if (hasApiPermissionFromContext(ctxPerms, !!currentUser.platformSuperUser, 'modules.manage')) {
+    return true;
+  }
+  if (hasApiPermissionFromContext(ctxPerms, !!currentUser.platformSuperUser, 'training.modules.manage')) {
+    return true;
+  }
+  const extra = [];
+  if (ctxPerms instanceof Set) extra.push(...ctxPerms);
+  if (Array.isArray(currentUser.permissions)) extra.push(...currentUser.permissions);
+  return extra.some((p) => {
+    const s = String(p);
+    return /training\.modules/i.test(s) && /(create|edit|delete|manage)/i.test(s);
+  });
+};
+
+/**
+ * Publishing requires at least one playlist item.
+ * @param {unknown[]} playlist
+ */
+const assertCanPublishPlaylist = (playlist) => {
+  if (!Array.isArray(playlist) || playlist.length === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Add at least one playlist item before publishing.');
+  }
+};
+
+/**
  * Query for training modules.
  *
  * Visibility rules (applied here so it cannot be bypassed by FE state):
@@ -227,10 +371,12 @@ const resolveAssignmentIdsForUser = async (currentUser) => {
  * @returns {Promise<QueryResult>}
  */
 const queryTrainingModules = async (filter, options, currentUser) => {
-  const { search, category, status, mine, ...restFilter } = filter;
+  const { search, category, status, mine, instructor, ...restFilter } = filter;
   const mongoFilter = { ...restFilter };
+  const isMine = mine === true || mine === 'true';
+  let assignmentScope = null;
 
-  if (mine === true || mine === 'true') {
+  if (isMine) {
     const { studentId, mentorId } = await resolveAssignmentIdsForUser(currentUser);
     const orClauses = [];
     if (studentId) orClauses.push({ students: studentId });
@@ -239,54 +385,57 @@ const queryTrainingModules = async (filter, options, currentUser) => {
       // No student/mentor profile → no assignments → empty result.
       return { results: [], page: Number(options.page) || 1, limit: Number(options.limit) || 10, totalPages: 0, totalResults: 0 };
     }
+    assignmentScope = { $or: orClauses };
     mongoFilter.$or = orClauses;
   }
 
   // Non-admin callers only ever see published modules unless they explicitly
   // ask for a different status (FE may pass status=draft from an admin
   // dashboard; permission gate above ensures the route is still authorised).
-  const callerPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];
-  const canManageModules = callerPermissions.some((p) =>
-    ['modules.manage', 'training.modules.manage', 'training.modules:create,edit,delete', 'training.modules:view,create,edit,delete'].includes(p)
-  );
+  const canManageModules = callerCanManageTrainingModules(currentUser);
 
   if (search && search.trim()) {
     const trimmed = search.trim();
-    // $text uses the training_module_text_idx for sub-millisecond search on
-    // alphanumeric queries. Fall back to anchored regex on short / regex-
-    // unsafe queries (which can still use the moduleName btree index for
-    // prefix matches).
-    const isTextSafe = trimmed.length >= 3 && /^[\p{L}\p{N}\s'-]+$/u.test(trimmed);
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefix = new RegExp('^' + escaped, 'i');
+    const anywhere = new RegExp(escaped, 'i');
+    const mentorIds = await mentorIdsMatchingSearch(trimmed);
+    const searchOr = [
+      { moduleName: prefix },
+      { moduleName: anywhere },
+      { shortDescription: anywhere },
+    ];
+    if (mentorIds.length) searchOr.push({ mentorsAssigned: { $in: mentorIds } });
+    const isTextSafe = !isMine && trimmed.length >= 3 && /^[\p{L}\p{N}\s'-]+$/u.test(trimmed);
     if (isTextSafe) {
       mongoFilter.$text = { $search: trimmed };
+    } else if (Array.isArray(mongoFilter.$or)) {
+      const mineOr = mongoFilter.$or;
+      delete mongoFilter.$or;
+      mongoFilter.$and = [{ $or: mineOr }, { $or: searchOr }];
     } else {
-      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const prefix = new RegExp('^' + escaped, 'i');
-      const anywhere = new RegExp(escaped, 'i');
-      const searchOr = [
-        { moduleName: prefix },
-        { moduleName: anywhere },
-        { shortDescription: anywhere },
-      ];
-      // If `mine` already set a $or for assignment, merge under $and so the
-      // user's assignments AND the search match must both hold (otherwise the
-      // search $or silently overwrites the assignment scope).
-      if (Array.isArray(mongoFilter.$or)) {
-        const mineOr = mongoFilter.$or;
-        delete mongoFilter.$or;
-        mongoFilter.$and = [{ $or: mineOr }, { $or: searchOr }];
-      } else {
-        mongoFilter.$or = searchOr;
-      }
+      mongoFilter.$or = searchOr;
     }
   }
 
-  if (category) mongoFilter.categories = category;
+  if (category) {
+    const categoryId = await resolveCategoryId(category);
+    mongoFilter.categories = categoryId || new mongoose.Types.ObjectId();
+  }
+  if (instructor) {
+    const mentorIds = await mentorIdsForInstructorName(instructor);
+    mongoFilter.mentorsAssigned = { $in: mentorIds.length ? mentorIds : [new mongoose.Types.ObjectId()] };
+  }
   if (status) {
     mongoFilter.status = status;
   } else if (!canManageModules) {
     mongoFilter.status = 'published';
   }
+
+  const catalogPopulate = [
+    { path: 'categories', select: 'name' },
+    { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } },
+  ];
 
   // Note: lean:true is intentionally NOT used. The toJSON plugin renames
   // _id -> id only on Mongoose docs, and the FE filters by `id` on modules,
@@ -294,27 +443,33 @@ const queryTrainingModules = async (filter, options, currentUser) => {
   // grouping silently fails (every folder appears empty).
   const modules = await TrainingModule.paginate(mongoFilter, {
     ...options,
-    select: LIST_EXCLUDE_FIELDS,
-    populate: [
-      { path: 'categories', select: 'name' },
-      { path: 'positions', select: 'name department' },
-      { path: 'students', select: 'user', populate: { path: 'user', select: 'name' } },
-      { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } },
-    ],
+    select: isMine ? `${LIST_EXCLUDE_FIELDS} -playlist -students` : LIST_EXCLUDE_FIELDS,
+    // List cards need category names + mentor names + students.length (ids, not populated users).
+    populate: catalogPopulate,
   });
 
-  // Parallel cover-image URL regeneration (cached).
+  // Signed URLs only for rows that actually have a cover key (skip empty Promise.all).
   if (modules.results?.length) {
-    await Promise.all(
-      modules.results.map(async (m) => {
-        if (!m.coverImage?.key) return;
-        try {
-          m.coverImage.url = await signedDownloadUrl(m.coverImage.key, 7 * 24 * 3600);
-        } catch (error) {
-          logger.error('Failed to regenerate cover image URL:', error);
-        }
-      })
-    );
+    const coverJobs = [];
+    for (const m of modules.results) {
+      if (!m.coverImage?.key) continue;
+      coverJobs.push(
+        signedDownloadUrl(m.coverImage.key, 7 * 24 * 3600)
+          .then((url) => {
+            m.coverImage.url = url;
+          })
+          .catch((error) => {
+            logger.error('Failed to regenerate cover image URL:', error);
+          })
+      );
+    }
+    if (coverJobs.length) await Promise.all(coverJobs);
+  }
+
+  if (isMine && assignmentScope) {
+    const facetFilter = { ...assignmentScope };
+    if (mongoFilter.status) facetFilter.status = mongoFilter.status;
+    modules.facets = await loadMineCatalogFacets(facetFilter);
   }
 
   return modules;
@@ -511,18 +666,21 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
           }
           break;
 
-        case 'essay':
-          if (item.essayData?.questions) {
-            processedItem.essay = { questions: normalizeEssayQuestions(item.essayData.questions) };
-          } else if (item.essay?.questions) {
-            processedItem.essay = { questions: normalizeEssayQuestions(item.essay.questions) };
+        case 'essay': {
+          const essaySrc = item.essayData?.questions ? item.essayData : item.essay
+          if (essaySrc?.questions) {
+            processedItem.essay = {
+              questions: normalizeEssayQuestions(essaySrc.questions),
+              passPercentage: normalizePassPercentage(essaySrc.passPercentage),
+            }
           } else if (item._id) {
-            const existingItem = module.playlist.find((p) => p._id.toString() === String(item._id));
+            const existingItem = module.playlist.find((p) => p._id.toString() === String(item._id))
             if (existingItem?.essay?.questions) {
-              processedItem.essay = existingItem.essay;
+              processedItem.essay = existingItem.essay
             }
           }
-          break;
+          break
+        }
       }
 
       processedPlaylist.push(processedItem);
@@ -530,6 +688,12 @@ const updateTrainingModuleById = async (moduleId, updateBody, currentUser) => {
     module.playlist = processedPlaylist;
     // Prevent raw payload from overwriting normalized/merged playlist below
     updateBody.playlist = processedPlaylist;
+  }
+
+  const nextStatus = updateBody.status ?? module.status;
+  if (nextStatus === 'published') {
+    const playlist = updateBody.playlist ?? module.playlist;
+    assertCanPublishPlaylist(playlist);
   }
 
   // Update other fields

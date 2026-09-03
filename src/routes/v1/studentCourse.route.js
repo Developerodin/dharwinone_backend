@@ -47,6 +47,30 @@ router
     studentCourseController.markItemComplete
   );
 
+router
+  .route('/:studentId/courses/:moduleId/incomplete-item')
+  .post(
+    auth(),
+    requireAnyOfPermissions('students.courses.manage', 'students.quizzes.take'),
+    validate(studentCourseValidation.markItemIncomplete),
+    studentCourseController.markItemIncomplete
+  );
+
+router
+  .route('/:studentId/courses/:moduleId/notes/:playlistItemId')
+  .get(
+    auth(),
+    requireAnyOfPermissions('students.courses.manage', 'students.quizzes.take', 'students.courses.read'),
+    validate(studentCourseValidation.courseNoteParams),
+    studentCourseController.getCourseNote
+  )
+  .put(
+    auth(),
+    requireAnyOfPermissions('students.courses.manage', 'students.quizzes.take'),
+    validate(studentCourseValidation.upsertCourseNote),
+    studentCourseController.upsertCourseNote
+  );
+
 // Update last accessed item
 router
   .route('/:studentId/courses/:moduleId/last-accessed')

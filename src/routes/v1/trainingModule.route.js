@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
+import coerceTrainingModuleArrays from '../../middlewares/coerceTrainingModuleArrays.js';
 import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as trainingModuleValidation from '../../validations/trainingModule.validation.js';
 import * as trainingModuleController from '../../controllers/trainingModule.controller.js';
@@ -114,6 +115,7 @@ router
     auth(),
     requirePermissions('modules.manage'),
     handleFileUploads,
+    coerceTrainingModuleArrays,
     validate(trainingModuleValidation.createTrainingModule),
     trainingModuleController.createTrainingModule
   )
@@ -162,6 +164,7 @@ router
     auth(),
     requirePermissions('modules.manage'),
     handleFileUploads,
+    coerceTrainingModuleArrays,
     validate(trainingModuleValidation.updateTrainingModule),
     trainingModuleController.updateTrainingModule
   )

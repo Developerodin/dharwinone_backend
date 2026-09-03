@@ -6,23 +6,39 @@ import * as trainingModuleService from '../services/trainingModule.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
+/**
+ * Parse a JSON-encoded array field from multipart without throwing on "".
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function parseJsonField(value) {
+  if (value == null || value === '') return value;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ApiError(httpStatus.BAD_REQUEST, `Invalid JSON in request body (${message})`);
+  }
+}
+
+/**
+ * Coerce remaining string JSON fields after Joi (playlist).
+ * @param {Record<string, unknown>} moduleData
+ */
+function parseMultipartJsonFields(moduleData) {
+  for (const key of ['categories', 'students', 'mentorsAssigned', 'positions', 'playlist']) {
+    if (typeof moduleData[key] === 'string') {
+      moduleData[key] = parseJsonField(moduleData[key]);
+    }
+  }
+}
+
 const createTrainingModule = catchAsync(async (req, res) => {
   // Extract files from req.files (handled by multer)
   const moduleData = { ...req.body };
 
-  // Parse JSON fields if they're strings (common with multipart/form-data)
-  if (typeof moduleData.categories === 'string') {
-    moduleData.categories = JSON.parse(moduleData.categories);
-  }
-  if (typeof moduleData.students === 'string') {
-    moduleData.students = JSON.parse(moduleData.students);
-  }
-  if (typeof moduleData.mentorsAssigned === 'string') {
-    moduleData.mentorsAssigned = JSON.parse(moduleData.mentorsAssigned);
-  }
-  if (typeof moduleData.playlist === 'string') {
-    moduleData.playlist = JSON.parse(moduleData.playlist);
-  }
+  parseMultipartJsonFields(moduleData);
 
   // Handle cover image file
   if (req.files && req.files.coverImage) {
@@ -71,7 +87,7 @@ const createTrainingModule = catchAsync(async (req, res) => {
 });
 
 const getTrainingModules = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['search', 'category', 'status', 'mine']);
+  const filter = pick(req.query, ['search', 'category', 'status', 'mine', 'instructor']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await trainingModuleService.queryTrainingModules(filter, options, req.user);
   res.send(result);
@@ -95,19 +111,7 @@ const getModuleEmployees = catchAsync(async (req, res) => {
 const updateTrainingModule = catchAsync(async (req, res) => {
   const moduleData = { ...req.body };
 
-  // Parse JSON fields if they're strings
-  if (typeof moduleData.categories === 'string') {
-    moduleData.categories = JSON.parse(moduleData.categories);
-  }
-  if (typeof moduleData.students === 'string') {
-    moduleData.students = JSON.parse(moduleData.students);
-  }
-  if (typeof moduleData.mentorsAssigned === 'string') {
-    moduleData.mentorsAssigned = JSON.parse(moduleData.mentorsAssigned);
-  }
-  if (typeof moduleData.playlist === 'string') {
-    moduleData.playlist = JSON.parse(moduleData.playlist);
-  }
+  parseMultipartJsonFields(moduleData);
 
   // Handle cover image file
   if (req.files && req.files.coverImage) {

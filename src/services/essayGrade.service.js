@@ -1,6 +1,13 @@
 import OpenAI from 'openai';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+import {
+  scaleAiScoreToMarks,
+  questionMaxMarks,
+  sumObtainedMarks,
+  totalMaxMarks,
+  percentageFromMarks,
+} from '../utils/essayMarks.util.js';
 
 function getClient() {
   const apiKey = config.openai?.apiKey;
@@ -90,60 +97,61 @@ function normalizeRubricValue(v) {
 
 /**
  * Grade all essay answers and compute overall score.
- * @param {Array} questions - [{ questionText, expectedAnswer }]
+ * AI returns 0–100; points are scaled onto each question's maxMarks.
+ * @param {Array} questions - [{ questionText, expectedAnswer, maxMarks }]
  * @param {Array} answers - [{ questionIndex, typedAnswer }]
- * @returns {Promise<{ totalQuestions, correctAnswers, percentage, gradedAnswers }>}
+ * @returns {Promise<{ totalQuestions, correctAnswers, percentage, obtainedMarks, maxMarks, gradedAnswers }>}
  */
 export async function gradeEssayAttempt(questions, answers) {
-  const gradedAnswers = [];
-  let totalScore = 0;
-  let gradedCount = 0;
+  const gradedAnswers = []
 
-  for (const a of answers) {
-    const q = questions[a.questionIndex];
+  for (let i = 0; i < questions.length; i += 1) {
+    const q = questions[i]
+    const a = answers.find((ans) => Number(ans.questionIndex) === i) || { questionIndex: i, typedAnswer: '' }
+    const maxMarks = questionMaxMarks(q?.maxMarks)
+
     if (!q) {
       gradedAnswers.push({
-        questionIndex: a.questionIndex,
+        questionIndex: i,
         typedAnswer: a.typedAnswer || '',
         score: null,
         feedback: null,
         rubric: null,
         suggestions: null,
-      });
-      continue;
+      })
+      continue
     }
 
     const { score, feedback, rubric, suggestions } = await gradeEssayAnswer(
       q.questionText,
       q.expectedAnswer,
       a.typedAnswer
-    );
+    )
+    const points = scaleAiScoreToMarks(score, maxMarks)
 
     gradedAnswers.push({
-      questionIndex: a.questionIndex,
+      questionIndex: i,
       typedAnswer: a.typedAnswer || '',
-      score,
+      score: points,
       feedback,
       rubric: rubric || undefined,
       suggestions: suggestions || undefined,
-    });
-
-    if (score != null) {
-      totalScore += score;
-      gradedCount++;
-    }
+    })
   }
 
-  const totalQuestions = questions.length;
-  const avgScore = gradedCount > 0 ? Math.round(totalScore / gradedCount) : 0;
-  const percentage = totalQuestions > 0 && gradedCount > 0 ? avgScore : null;
+  const obtainedMarks = sumObtainedMarks(gradedAnswers)
+  const maxMarksTotal = totalMaxMarks(questions)
+  const scoredCount = gradedAnswers.filter((g) => typeof g.score === 'number').length
+  const percentage = scoredCount > 0 ? percentageFromMarks(obtainedMarks, maxMarksTotal) : null
 
   return {
-    totalQuestions,
-    correctAnswers: gradedCount > 0 ? Math.round((avgScore / 100) * totalQuestions) : 0,
-    percentage: percentage ?? 0,
+    totalQuestions: questions.length,
+    correctAnswers: scoredCount,
+    percentage,
+    obtainedMarks,
+    maxMarks: maxMarksTotal,
     gradedAnswers,
-  };
+  }
 }
 
 /**

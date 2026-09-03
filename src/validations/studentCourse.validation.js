@@ -7,9 +7,13 @@ const getStudentCourses = {
   }),
   query: Joi.object().keys({
     status: Joi.string().valid('enrolled', 'in-progress', 'completed', 'dropped'),
+    search: Joi.string().allow(''),
+    category: Joi.string().allow(''),
+    instructor: Joi.string().allow(''),
+    progress: Joi.string().valid('not-started', 'in-progress', 'completed'),
     sortBy: Joi.string(),
-    limit: Joi.number().integer(),
-    page: Joi.number().integer(),
+    limit: Joi.number().integer().min(1).max(100),
+    page: Joi.number().integer().min(1),
   }),
 };
 
@@ -42,6 +46,35 @@ const markItemComplete = {
     .required(),
 };
 
+const markItemIncomplete = {
+  params: Joi.object().keys({
+    studentId: Joi.string().required().custom(objectId),
+    moduleId: Joi.string().required().custom(objectId),
+  }),
+  body: Joi.object()
+    .keys({
+      playlistItemId: Joi.string().required(),
+    })
+    .required(),
+};
+
+const courseNoteParams = {
+  params: Joi.object().keys({
+    studentId: Joi.string().required().custom(objectId),
+    moduleId: Joi.string().required().custom(objectId),
+    playlistItemId: Joi.string().required(),
+  }),
+};
+
+const upsertCourseNote = {
+  params: courseNoteParams.params,
+  body: Joi.object()
+    .keys({
+      body: Joi.string().allow('').max(20000).required(),
+    })
+    .required(),
+};
+
 const updateLastAccessed = {
   params: Joi.object().keys({
     studentId: Joi.string().required().custom(objectId),
@@ -54,4 +87,13 @@ const updateLastAccessed = {
     .required(),
 };
 
-export { getStudentCourses, getStudentCourse, startCourse, markItemComplete, updateLastAccessed };
+export {
+  getStudentCourses,
+  getStudentCourse,
+  startCourse,
+  markItemComplete,
+  markItemIncomplete,
+  courseNoteParams,
+  upsertCourseNote,
+  updateLastAccessed,
+};

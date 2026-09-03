@@ -47,6 +47,8 @@ const studentEssayAttemptSchema = mongoose.Schema(
       totalQuestions: { type: Number },
       correctAnswers: { type: Number },
       percentage: { type: Number, min: 0, max: 100 },
+      obtainedMarks: { type: Number, min: 0 },
+      maxMarks: { type: Number, min: 0 },
     },
     startedAt: {
       type: Date,

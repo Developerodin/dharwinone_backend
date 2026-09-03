@@ -135,6 +135,11 @@ const trainingModuleSchema = mongoose.Schema(
         },
         // For essay
         essay: {
+          passPercentage: {
+            type: Number,
+            min: 0,
+            max: 100,
+          },
           questions: [
             {
               questionText: {
@@ -144,6 +149,11 @@ const trainingModuleSchema = mongoose.Schema(
               expectedAnswer: {
                 type: String,
                 trim: true,
+              },
+              maxMarks: {
+                type: Number,
+                min: 1,
+                default: 100,
               },
             },
           ],
@@ -185,6 +195,7 @@ trainingModuleSchema.plugin(paginate);
 trainingModuleSchema.index({ status: 1, createdAt: -1 });
 trainingModuleSchema.index({ categories: 1, createdAt: -1 });
 trainingModuleSchema.index({ positions: 1 });
+trainingModuleSchema.index({ students: 1 });
 trainingModuleSchema.index({ moduleName: 1 });
 trainingModuleSchema.index({ createdAt: -1 });
 trainingModuleSchema.index(

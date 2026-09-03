@@ -368,9 +368,17 @@ export const buildEvaluation = ({
     const mid = idStr(a.module);
     if (!sid || !mid) continue;
     const k = pairKey(sid, mid);
-    const entry = essayByKey.get(k) || { tries: 0, sum: 0 };
+    const entry = essayByKey.get(k) || { tries: 0, sum: 0, graded: 0, pending: 0 };
     entry.tries += 1;
-    entry.sum += a.score?.percentage ?? 0;
+    const status = a.status === 'reviewed' ? 'graded' : a.status;
+    const pct = a.score?.percentage;
+    const hasPct = typeof pct === 'number';
+    if ((status === 'graded' || !status) && hasPct) {
+      entry.sum += pct;
+      entry.graded += 1;
+    } else if (status === 'submitted' || (status === 'graded' && !hasPct)) {
+      entry.pending += 1;
+    }
     essayByKey.set(k, entry);
   }
 
@@ -425,8 +433,9 @@ export const buildEvaluation = ({
       quizScore: quiz && quiz.tries > 0 ? Math.round(quiz.sum / quiz.tries) : null,
       quizScoreBest: quiz && quiz.tries > 0 ? Math.round(quiz.best) : null,
       quizTries: quiz?.tries ?? 0,
-      essayScore: essay && essay.tries > 0 ? Math.round(essay.sum / essay.tries) : null,
+      essayScore: essay && essay.graded > 0 ? Math.round(essay.sum / essay.graded) : null,
       essayTries: essay?.tries ?? 0,
+      essayPending: essay?.pending ?? 0,
       certificateIssued: Boolean(progress?.certificate?.issued),
       positionId: meta.positionId ?? idStr(progress?.student?.position) ?? null,
       positionName: meta.positionName ?? progress?.student?.position?.name ?? null,
@@ -532,9 +541,8 @@ const getEvaluationData = async (query = {}) => {
     StudentEssayAttempt.find({
       student: { $in: [...studentIdSet] },
       module: { $in: [...moduleIdSet] },
-      status: { $in: ['graded', 'reviewed'] },
     })
-      .select('student module score.percentage')
+      .select('student module score.percentage status')
       .lean(),
   ]);
 
