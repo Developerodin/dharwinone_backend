@@ -159,6 +159,68 @@ export const describeCompensationChange = (before, after) => {
   return { before: typeBefore, after: typeAfter, sourceBefore, sourceAfter };
 };
 
+/** Never recorded, changed or not. */
+const NEVER_LOGGED = new Set(['password', 'confirmPassword']);
+
+/**
+ * Recorded as `[changed]` instead of by value: base64 payloads, signed URLs and long arrays that
+ * would bury the signal and bloat every audit row.
+ */
+const LOGGED_AS_CHANGED_ONLY = new Set([
+  'documents',
+  'salarySlips',
+  'profilePicture',
+  'qualifications',
+  'experiences',
+  'skills',
+  'socialLinks',
+]);
+
+/**
+ * Compare by value: ObjectIds and Dates are never === each other and would otherwise report a
+ * change on every save.
+ *
+ * ObjectId-like values have a meaningful `toString`; plain objects and arrays do not — they all
+ * stringify to "[object Object]", which would make every array look unchanged. Those fall back to
+ * a structural comparison.
+ */
+const comparable = (v) => {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'object') {
+    const asString = String(v);
+    return asString === '[object Object]' ? JSON.stringify(v) : asString;
+  }
+  return v;
+};
+
+/**
+ * Old and new value of every field this request actually moved.
+ *
+ * The employee audit previously recorded only which field NAMES were in the payload, so the log
+ * could say `compensationType` was submitted but not that it went unpaid → paid. That gap is why a
+ * real reversion had nothing to follow. Actor and timestamp come from the activity log itself.
+ *
+ * Only fields present in `body` are considered — the record may differ for reasons this request had
+ * nothing to do with.
+ *
+ * @returns {Object|null} `{ field: { from, to } }`, or null when nothing moved
+ */
+export const buildFieldChangeLog = (before, after, body) => {
+  const changes = {};
+  for (const key of Object.keys(body || {})) {
+    if (NEVER_LOGGED.has(key)) continue;
+    if (body[key] === undefined) continue;
+
+    const from = comparable(before?.[key]);
+    const to = comparable(after?.[key]);
+    if (from === to) continue;
+
+    changes[key] = LOGGED_AS_CHANGED_ONLY.has(key) ? '[changed]' : { from, to };
+  }
+  return Object.keys(changes).length ? changes : null;
+};
+
 export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate, body, entityId, actions) => {
   const departmentIdBefore =
     beforeCandidate?.departmentId != null ? String(beforeCandidate.departmentId) : null;
@@ -186,13 +248,17 @@ export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate
   const fieldsUpdated = Object.keys(body).filter(
     (k) => Object.prototype.hasOwnProperty.call(body, k) && body[k] !== undefined
   );
+  // `fieldsUpdated` says what the payload carried; `changes` says what actually moved and to what.
+  // The form submits every field on every save, so the two are very different questions — and the
+  // second is the one you need when reconstructing who changed a value and when.
+  const changes = buildFieldChangeLog(beforeCandidate, afterCandidate, body);
   return {
     audit: fieldsUpdated.length
       ? {
           action: actions.CANDIDATE_UPDATE,
           entityType: actions.CANDIDATE,
           entityId: String(entityId),
-          metadata: { fieldsUpdated },
+          metadata: { fieldsUpdated, ...(changes ? { changes } : {}) },
           occurredAt: new Date(),
         }
       : null,
