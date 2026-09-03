@@ -55,6 +55,28 @@ const getMessages = {
   }),
 };
 
+const listCallsForConversation = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    before: Joi.string().custom(objectId),
+    limit: Joi.number().integer().min(1).max(100),
+  }),
+};
+
+const getConversationTimeline = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    before: Joi.date().iso(),
+    beforeId: Joi.string().custom(objectId),
+    beforeKind: Joi.string().valid('message', 'call'),
+    limit: Joi.number().integer().min(1).max(100),
+  }),
+};
+
 const attachmentItem = Joi.object().keys({
   url: Joi.string().uri().required(),
   key: Joi.string().allow(''),
@@ -117,6 +139,13 @@ const deleteMessage = {
   }),
   body: Joi.object().keys({
     deleteFor: Joi.string().valid('me', 'everyone').default('me'),
+  }),
+};
+
+const getConversationMessage = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+    msgId: Joi.string().custom(objectId).required(),
   }),
 };
 
@@ -231,11 +260,14 @@ export {
   conversationIdParam,
   callIdParam,
   deleteMessage,
+  getConversationMessage,
   forwardMessage,
   reactToMessage,
   listConversations,
   createConversation,
   getMessages,
+  listCallsForConversation,
+  getConversationTimeline,
   sendMessage,
   initiateCall,
   listCalls,

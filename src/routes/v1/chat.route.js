@@ -77,8 +77,18 @@ router.get(
   chatController.getMessages
 );
 router.get(
+  '/conversations/:id/messages/:msgId',
+  validate(chatValidation.getConversationMessage),
+  chatController.getConversationMessage
+);
+router.get(
+  '/conversations/:id/timeline',
+  validate(chatValidation.getConversationTimeline),
+  chatController.getConversationTimeline
+);
+router.get(
   '/conversations/:id/calls',
-  validate(chatValidation.conversationIdParam),
+  validate(chatValidation.listCallsForConversation),
   chatController.listCallsForConversation
 );
 router.post(

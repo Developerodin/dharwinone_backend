@@ -6,6 +6,7 @@ import * as chatCallService from '../services/chatCall.service.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import crypto from 'crypto';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 
 const parseChatRoomConversationId = (roomName) => {
   if (!roomName || !roomName.startsWith('chat-')) return null;
@@ -22,6 +23,16 @@ const stablePublicParticipantIdentity = ({ roomName, participantName, participan
     .digest('hex')
     .slice(0, 10);
   return `guest-${digest}`;
+};
+
+/** Meeting host/owner, Administrator role, or platform super user. */
+const canActAsMeetingHost = async (roomName, user) => {
+  if (!user) return false;
+  if (user.platformSuperUser) return true;
+  if (await userIsAdmin(user)) return true;
+  const email = user.email;
+  if (!email) return false;
+  return livekitService.isParticipantHost(roomName, email);
 };
 
 /**
@@ -59,12 +70,15 @@ const getToken = catchAsync(async (req, res) => {
     });
   }
 
+  const isPrivilegedAdmin =
+    Boolean(req.user?.platformSuperUser) || (await userIsAdmin(req.user));
   const { token, isHost, canPublish, meetingEndAt, rejected } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
     participantEmail: email,
-    forceFullPermissions: forChatCall,
+    // Admins / platform super users join with full host-equivalent grants (no waiting room).
+    forceFullPermissions: forChatCall || isPrivilegedAdmin,
   });
 
   res.status(httpStatus.OK).json({
@@ -72,8 +86,8 @@ const getToken = catchAsync(async (req, res) => {
     roomName,
     participantName: name,
     participantIdentity,
-    isHost,
-    canPublish,
+    isHost: isHost || isPrivilegedAdmin,
+    canPublish: canPublish || isPrivilegedAdmin,
     meetingEndAt,
     rejected, // true → host denied this waiter; client shows terminal screen, stops polling
   });
@@ -208,9 +222,8 @@ const getWaitingParticipants = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
   }
 
-  // Waiting roster contains participant names (PII) — only the meeting host may see it.
-  const hostEmail = req.user?.email;
-  if (!hostEmail || !(await livekitService.isParticipantHost(roomName, hostEmail))) {
+  // Waiting roster contains participant names (PII) — only the meeting host/admin may see it.
+  if (!(await canActAsMeetingHost(roomName, req.user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can view waiting participants');
   }
 
@@ -238,8 +251,7 @@ const admitParticipant = catchAsync(async (req, res) => {
   if (!hostEmail) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Authenticated user email required to admit participants');
   }
-  const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
-  if (!isHost) {
+  if (!(await canActAsMeetingHost(roomName, req.user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only hosts can admit participants');
   }
 
@@ -274,8 +286,7 @@ const removeParticipant = catchAsync(async (req, res) => {
   if (!hostEmail) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Authenticated user email required to remove participants');
   }
-  const isHost = await livekitService.isParticipantHost(roomName, hostEmail);
-  if (!isHost) {
+  if (!(await canActAsMeetingHost(roomName, req.user))) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Only hosts can remove participants');
   }
 

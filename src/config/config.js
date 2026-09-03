@@ -314,6 +314,8 @@ const envVarsSchema = Joi.object()
       .default('all'),
     /** Comma-separated user emails always enabled for taskboard-v2 (even when rollout is off). */
     FEATURE_FLAG_TASKBOARD_V2_ALLOWLIST: Joi.string().optional().allow(''),
+    /** Latest published mobile app version (semver). GET /v1/app/version */
+    MOBILE_APP_LATEST_VERSION: Joi.string().optional().default('1.0.0'),
   })
   .unknown();
 
@@ -730,6 +732,9 @@ const config = {
           .filter(Boolean)
       ),
     },
+  },
+  app: {
+    latestVersion: envVars.MOBILE_APP_LATEST_VERSION || '1.0.0',
   },
 };
 

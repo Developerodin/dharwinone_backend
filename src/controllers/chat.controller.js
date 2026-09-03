@@ -85,6 +85,25 @@ const getMessages = catchAsync(async (req, res) => {
   res.send(messages);
 });
 
+const getConversationMessage = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const msg = await chatService.getConversationMessage(req.params.id, req.params.msgId, userId);
+  res.send(msg);
+});
+
+const getConversationTimeline = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const limit = parseInt(req.query.limit, 10) || 20;
+  const { before, beforeId, beforeKind } = req.query;
+  const timeline = await chatService.getConversationTimeline(req.params.id, userId, {
+    before,
+    beforeId,
+    beforeKind,
+    limit,
+  });
+  res.send(timeline);
+});
+
 const sendMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const msg = await chatService.createMessage(req.params.id, userId, req.body);
@@ -233,7 +252,8 @@ const listCalls = catchAsync(async (req, res) => {
 const listCallsForConversation = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const limit = parseInt(req.query.limit, 10) || 50;
-  const calls = await chatService.listCallsForConversation(req.params.id, userId, { limit });
+  const before = req.query.before;
+  const calls = await chatService.listCallsForConversation(req.params.id, userId, { before, limit });
   res.send(calls);
 });
 
@@ -511,6 +531,8 @@ export {
   createConversation,
   getConversation,
   getMessages,
+  getConversationMessage,
+  getConversationTimeline,
   sendMessage,
   uploadAndSendMessage,
   deleteMessage,

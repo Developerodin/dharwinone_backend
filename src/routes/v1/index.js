@@ -77,6 +77,7 @@ import orgStructureRoute from './orgStructure.route.js';
 import orgScenarioRoute from './orgScenario.route.js';
 import orgSlotRoute from './orgSlot.route.js';
 import pushRoute from './push.route.js';
+import appRoute from './app.route.js';
 
 /**
  * RBAC inventory: Most mounted routers use requirePermissions (see each *.route.js).
@@ -331,6 +332,10 @@ const defaultRoutes = [
   {
     path: '/push',
     route: pushRoute,
+  },
+  {
+    path: '/app',
+    route: appRoute,
   },
   {
     path: '/recordings',

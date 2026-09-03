@@ -722,6 +722,177 @@ const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
   return reversed.map((m) => presentMessageForUser(m, userId));
 };
 
+const hydrateMessageAttachments = async (messages) => {
+  for (const m of messages) {
+    if (m.attachments?.length) {
+      m.attachments = await Promise.all(
+        m.attachments.map(async (a) => {
+          if (a.key) {
+            try {
+              const url = await generatePresignedDownloadUrl(a.key, 3600);
+              return { ...a, url };
+            } catch {
+              return a;
+            }
+          }
+          return a;
+        }),
+      );
+    }
+  }
+  return messages;
+};
+
+/**
+ * Single message in a conversation if visible to the viewer.
+ * Used to confirm a reply target exists before loading older pages to jump to it.
+ */
+const getConversationMessage = async (conversationId, messageId, userId) => {
+  await ensureParticipant(conversationId, userId);
+  const msg = await Message.findOne({
+    _id: messageId,
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    ...messageVisibilityFilter(userId),
+  })
+    .populate('sender', 'name email')
+    .populate({
+      path: 'replyTo',
+      select: 'content type sender createdAt',
+      populate: { path: 'sender', select: 'name' },
+    })
+    .populate('reactions.user', 'name')
+    .lean();
+
+  if (!msg) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  }
+
+  await hydrateMessageAttachments([msg]);
+  return presentMessageForUser(msg, userId);
+};
+
+/**
+ * Combined conversation timeline (messages + call logs), newest page first then
+ * returned in chronological order. Single cursor: before = ISO createdAt of the
+ * oldest item the client already has (optional beforeId + beforeKind for ties).
+ */
+const getConversationTimeline = async (
+  conversationId,
+  userId,
+  { before, beforeId, beforeKind, limit = 20 } = {},
+) => {
+  await ensureParticipant(conversationId, userId);
+  const take = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  const beforeDate = before ? new Date(before) : null;
+  const validBefore =
+    beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null;
+
+  const messageFilter = {
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    ...messageVisibilityFilter(userId),
+  };
+  const callFilter = {
+    conversation: conversationId,
+    $or: [{ caller: userId }, { participants: userId }],
+  };
+
+  // Inclusive upper bound; exact cursor row is removed in JS so same-ms ties work.
+  if (validBefore) {
+    messageFilter.createdAt = { $lte: validBefore };
+    callFilter.createdAt = { $lte: validBefore };
+  }
+
+  const [rawMessages, rawCalls] = await Promise.all([
+    Message.find(messageFilter)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(take)
+      .populate('sender', 'name email')
+      .populate({
+        path: 'replyTo',
+        select: 'content type sender createdAt',
+        populate: { path: 'sender', select: 'name' },
+      })
+      .populate('reactions.user', 'name')
+      .lean(),
+    ChatCall.find(callFilter)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(take)
+      .populate('caller', 'name email')
+      .populate('participants', 'name email')
+      .populate('roomJoinedUserIds', 'name email')
+      .populate('conversation')
+      .lean(),
+  ]);
+
+  await hydrateMessageAttachments(rawMessages);
+
+  const kindRank = (kind) => (kind === 'call' ? 0 : 1);
+
+  const compareDesc = (a, b) => {
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    if (ta !== tb) return tb - ta;
+    const kr = kindRank(a.kind) - kindRank(b.kind);
+    if (kr !== 0) return kr;
+    return String(b.id).localeCompare(String(a.id));
+  };
+
+  const isStrictlyOlderThanCursor = (item) => {
+    if (!validBefore) return true;
+    if (!beforeId || !beforeKind) {
+      return new Date(item.createdAt).getTime() < validBefore.getTime();
+    }
+    const cursorItem = {
+      kind: beforeKind,
+      id: beforeId,
+      createdAt: validBefore,
+    };
+    // compareDesc(cursor, item) < 0 ⇒ cursor is newer ⇒ item is older.
+    return compareDesc(cursorItem, item) < 0;
+  };
+
+  const merged = [
+    ...rawMessages.map((m) => ({
+      kind: 'message',
+      id: m._id?.toString(),
+      createdAt: m.createdAt,
+      data: presentMessageForUser(m, userId),
+    })),
+    ...rawCalls.map((c) => {
+      const item = { ...c, id: c._id?.toString() };
+      Object.assign(item, enrichCallForViewer(item, userId));
+      return {
+        kind: 'call',
+        id: item.id,
+        createdAt: c.createdAt,
+        data: item,
+      };
+    }),
+  ]
+    .filter(isStrictlyOlderThanCursor)
+    .sort(compareDesc);
+
+  const page = merged.slice(0, take);
+  const hasMore =
+    page.length >= take &&
+    (merged.length > take || rawMessages.length >= take || rawCalls.length >= take);
+  // Chronological (oldest → newest) within this page, matching getMessages.
+  page.reverse();
+
+  const oldest = page[0] || null;
+  return {
+    items: page,
+    hasMore,
+    nextBefore: oldest
+      ? {
+          before: new Date(oldest.createdAt).toISOString(),
+          beforeId: oldest.id,
+          beforeKind: oldest.kind,
+        }
+      : null,
+  };
+};
+
 const createMessage = async (conversationId, userId, { content, type, attachments, replyTo }) => {
   await ensureParticipant(conversationId, userId);
 
@@ -1038,12 +1209,23 @@ const markConversationDelivered = async (conversationId, userId) => {
   };
 };
 
-const listCallsForConversation = async (conversationId, userId, { limit = 50 } = {}) => {
+const listCallsForConversation = async (conversationId, userId, { before, limit = 50 } = {}) => {
   await ensureParticipant(conversationId, userId);
-  const calls = await ChatCall.find({
+  const filter = {
     conversation: conversationId,
     $or: [{ caller: userId }, { participants: userId }],
-  })
+  };
+  if (before) {
+    const beforeDoc = await ChatCall.findById(before).select('createdAt conversation').lean();
+    if (
+      beforeDoc &&
+      String(beforeDoc.conversation) === String(conversationId) &&
+      beforeDoc.createdAt
+    ) {
+      filter.createdAt = { $lt: beforeDoc.createdAt };
+    }
+  }
+  const calls = await ChatCall.find(filter)
     .sort({ createdAt: -1 })
     .limit(limit)
     .populate('caller', 'name email')
@@ -1579,6 +1761,8 @@ export {
   getCallNotifyParticipantIds,
   getConversationParticipantNotifyStates,
   getMessages,
+  getConversationMessage,
+  getConversationTimeline,
   createMessage,
   deleteMessage,
   getLastVisibleMessageForUser,
