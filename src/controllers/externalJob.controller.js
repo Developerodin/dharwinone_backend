@@ -21,6 +21,7 @@ const search = catchAsync(async (req, res) => {
     job_location: body.job_location || '',
     offset: body.offset ?? 0,
     date_posted: body.date_posted || '24h',
+    work_arrangement: body.work_arrangement,
     remote: body.remote,
   };
   const jobs = await externalJobService.searchFromAPI(filters, source, userId);

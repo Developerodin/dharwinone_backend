@@ -135,9 +135,15 @@ export function mapRowToJob(row, sourceKey) {
   }
   if (!location && row.location_type) location = row.location_type;
 
-  const employmentType = row.employment_type;
-  const jobType =
+  const employmentType = row.ai_employment_type ?? row.employment_type;
+  let jobType =
     Array.isArray(employmentType) && employmentType.length ? employmentType[0] : employmentType || null;
+  if (typeof jobType === 'string' && jobType.includes('_')) {
+    jobType = jobType
+      .split('_')
+      .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+      .join(' ');
+  }
 
   const postedAt = row.date_posted ? new Date(row.date_posted) : null;
   let timePosted = row.date_posted || null;
@@ -158,7 +164,8 @@ export function mapRowToJob(row, sourceKey) {
   let salaryMin = null;
   let salaryMax = null;
   let salaryCurrency = null;
-  const raw = row.salary_raw;
+  // RapidAPI renamed salary_raw -> salary (2025); keep both for compatibility.
+  const raw = row.salary ?? row.salary_raw;
   if (raw && typeof raw === 'object') {
     if (raw.currency) salaryCurrency = raw.currency;
     // schema.org MonetaryAmount nests the range under `value` (QuantitativeValue);
@@ -170,8 +177,18 @@ export function mapRowToJob(row, sourceKey) {
     if (typeof min === 'number' && !Number.isNaN(min)) salaryMin = min;
     if (typeof max === 'number' && !Number.isNaN(max)) salaryMax = max;
   }
-  if (row.ai_salary_minvalue != null) salaryMin = Number(row.ai_salary_minvalue);
-  if (row.ai_salary_maxvalue != null) salaryMax = Number(row.ai_salary_maxvalue);
+  const aiMin = row.ai_salary_min_value ?? row.ai_salary_minvalue;
+  const aiMax = row.ai_salary_max_value ?? row.ai_salary_maxvalue;
+  const aiValue = row.ai_salary_value;
+  if (aiMin != null) salaryMin = Number(aiMin);
+  if (aiMax != null) salaryMax = Number(aiMax);
+  if (salaryMin == null && salaryMax == null && aiValue != null) {
+    const single = Number(aiValue);
+    if (!Number.isNaN(single)) {
+      salaryMin = single;
+      salaryMax = single;
+    }
+  }
   if (row.ai_salary_currency) salaryCurrency = row.ai_salary_currency;
 
   return {
@@ -195,11 +212,30 @@ export function mapRowToJob(row, sourceKey) {
   };
 }
 
+const WORK_ARRANGEMENT_MAP = {
+  remote_ok: 'Remote OK',
+  remote_solely: 'Remote Solely',
+  remote_both: 'Remote OK,Remote Solely',
+};
+
+export function resolveWorkArrangement(filters = {}) {
+  const { work_arrangement: workArrangement, remote } = filters;
+  if (workArrangement && WORK_ARRANGEMENT_MAP[workArrangement]) {
+    return WORK_ARRANGEMENT_MAP[workArrangement];
+  }
+  // Legacy: remote=true without work_arrangement → both remote types.
+  if (remote === true || remote === 'true') {
+    return WORK_ARRANGEMENT_MAP.remote_both;
+  }
+  return null;
+}
+
 export function buildParams(filters, source = 'active-jobs-db') {
-  const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, remote, date_posted: datePosted } = filters;
+  const { job_title: jobTitle = '', job_location: jobLocation = '', offset = 0, date_posted: datePosted } = filters;
   const limit = 10;
   const off = Math.max(0, Math.floor((Number(offset) || 0) / limit) * limit);
   const timeFrame = resolveTimeFrame(datePosted, source);
+  const aiWorkArrangement = resolveWorkArrangement(filters);
 
   if (source === 'active-jobs-db') {
     const params = {
@@ -210,8 +246,7 @@ export function buildParams(filters, source = 'active-jobs-db') {
     };
     if (jobTitle && jobTitle.trim()) params.title = jobTitle.trim();
     if (jobLocation && jobLocation.trim()) params.location = jobLocation.trim();
-    if (remote === true || remote === 'true') params.remote = 'true';
-    else if (remote === false || remote === 'false') params.remote = 'false';
+    if (aiWorkArrangement) params.ai_work_arrangement = aiWorkArrangement;
     return params;
   }
 
@@ -223,8 +258,7 @@ export function buildParams(filters, source = 'active-jobs-db') {
   };
   if (jobTitle && jobTitle.trim()) params.title_filter = jobTitle.trim();
   if (jobLocation && jobLocation.trim()) params.location_filter = jobLocation.trim();
-  if (remote === true || remote === 'true') params.remote = 'true';
-  else if (remote === false || remote === 'false') params.remote = 'false';
+  if (aiWorkArrangement) params.ai_work_arrangement = aiWorkArrangement;
   return params;
 }
 

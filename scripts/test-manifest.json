@@ -280,5 +280,6 @@
   "./src/services/__tests__/candidateCompensationWrite.test.js",
   "./src/services/__tests__/offerCompensationSync.test.js",
   "./src/utils/__tests__/auditMetadata.helper.test.js",
-  "./src/services/__tests__/offerCompensationGate.test.js"
+  "./src/services/__tests__/offerCompensationGate.test.js",
+  "./src/__tests__/routes/upload.route.permissions.test.js"
 ]

@@ -432,6 +432,7 @@ export const permissionAliases = {
     'employees.manage',
     'files-storage.manage',
     'my-profile.manage',
+    'personal-information.manage',
     'students.manage',
     'jobs.manage',
     'projects.manage',

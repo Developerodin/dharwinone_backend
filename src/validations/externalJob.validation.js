@@ -33,6 +33,9 @@ const searchExternalJobs = {
     // `all` is an application value; the service maps it to the widest window the
     // source supports and never forwards it to RapidAPI.
     date_posted: Joi.string().valid('24h', '7d', '6m', 'all'),
+    // `''` or omit = all work arrangements (no RapidAPI filter).
+    work_arrangement: Joi.string().valid('', 'remote_ok', 'remote_solely', 'remote_both').allow(null),
+    // Legacy boolean; when true and work_arrangement is absent, treated as remote_both.
     remote: Joi.boolean().allow(null),
   }),
 };
