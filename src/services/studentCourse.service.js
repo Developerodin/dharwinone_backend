@@ -4,11 +4,11 @@ import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
 import Employee from '../models/employee.model.js';
-import StudentQuizAttempt from '../models/studentQuizAttempt.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
-import { refreshTrainingModuleCoverImages, refreshTrainingCoverImageUrl } from '../utils/trainingCoverImageUrl.js';
+import { refreshTrainingCoverImageUrl } from '../utils/trainingCoverImageUrl.js';
+import { queryStudentCourses } from './studentCourseQuery.service.js';
 import logger from '../config/logger.js';
 
 const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
@@ -62,235 +62,96 @@ const getOrCreateProgress = async (studentId, moduleId) => {
   return progress;
 };
 
+const LEARN_MODULE_SELECT =
+  'moduleName shortDescription coverImage categories playlist status createdAt updatedAt students';
+
 /**
- * Default progress for a module when student has no progress record yet (so assigned courses still show in list).
+ * Slim progress payload for complete/incomplete/start (no full mongoose document).
+ * @param {import('mongoose').Document} progress
  */
-const defaultProgressRow = (_moduleId) => ({
-  progress: { percentage: 0, completedItems: [], lastAccessedAt: null, lastAccessedItem: null },
-  quizScores: { totalQuizzes: 0, completedQuizzes: 0, averageScore: 0, totalScore: 0 },
-  enrolledAt: new Date(),
-  startedAt: null,
-  completedAt: null,
-  status: 'enrolled',
-  certificate: { issued: false, issuedAt: null, certificateId: null, certificateUrl: null },
+const toCourseProgressPayload = (progress) => ({
+  progress: {
+    percentage: progress.progress?.percentage ?? 0,
+    completedItems: progress.progress?.completedItems ?? [],
+    lastAccessedAt: progress.progress?.lastAccessedAt,
+    lastAccessedItem: progress.progress?.lastAccessedItem,
+  },
+  status: progress.status,
+  completedAt: progress.completedAt,
+  startedAt: progress.startedAt,
+  quizScores: progress.quizScores,
+  certificate: progress.certificate,
 });
 
 /**
- * Query student courses (all modules assigned to student, with or without progress).
- * Ensures data is visible on the candidate "My Courses" list even before they start a course.
- * @param {ObjectId} studentId
- * @param {Object} filter - Filter options (status)
- * @param {Object} options - Query options (sortBy, limit, page)
- * @returns {Promise<QueryResult>}
- */
-const queryStudentCourses = async (studentId, filter, options) => {
-  const { status } = filter;
-  const limit = Math.min(Number(options.limit) || 10, 100);
-  const page = Number(options.page) || 1;
-  const sortBy = options.sortBy || 'enrolledAt:desc';
-
-  // Find all modules where student is assigned (with full populate)
-  const modules = await TrainingModule.find({ students: studentId })
-    .populate('categories')
-    .populate({ path: 'students', select: 'user', populate: { path: 'user', select: 'name email' } })
-    .populate({ path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name email' } })
-    .lean();
-
-  if (modules.length === 0) {
-    return {
-      results: [],
-      page,
-      limit,
-      totalPages: 0,
-      totalResults: 0,
-    };
-  }
-
-  // Student courses API was returning stale presigned S3 URLs from MongoDB.
-  // Regenerate fresh URLs (cached) like trainingModule.service queryTrainingModules.
-  await refreshTrainingModuleCoverImages(modules, signedDownloadUrl, (error) => {
-    logger.error('Failed to regenerate cover image URL:', error);
-  });
-
-  const moduleIds = modules.map((m) => m._id);
-  const progressList = await StudentCourseProgress.find({
-    student: studentId,
-    module: { $in: moduleIds },
-  }).lean();
-
-  const progressByModule = new Map();
-  progressList.forEach((p) => progressByModule.set(p.module.toString(), p));
-
-  // Build one result per module (progress or default)
-  let results = modules.map((module) => {
-    const progress = progressByModule.get(module._id.toString());
-    if (progress) {
-      return {
-        module: {
-          id: module._id.toString(),
-          moduleName: module.moduleName,
-          shortDescription: module.shortDescription,
-          coverImage: module.coverImage,
-          categories: module.categories,
-          playlist: module.playlist,
-          status: module.status,
-          createdAt: module.createdAt,
-          updatedAt: module.updatedAt,
-        },
-        progress: {
-          percentage: progress.progress?.percentage ?? 0,
-          completedItems: progress.progress?.completedItems ?? [],
-          lastAccessedAt: progress.progress?.lastAccessedAt,
-          lastAccessedItem: progress.progress?.lastAccessedItem,
-        },
-        quizScores: progress.quizScores ?? {},
-        enrolledAt: progress.enrolledAt,
-        startedAt: progress.startedAt,
-        completedAt: progress.completedAt,
-        status: progress.status || 'enrolled',
-        certificate: progress.certificate ?? { issued: false, issuedAt: null, certificateId: null, certificateUrl: null },
-      };
-    }
-    return {
-      module: {
-        id: module._id.toString(),
-        moduleName: module.moduleName,
-        shortDescription: module.shortDescription,
-        coverImage: module.coverImage,
-        categories: module.categories,
-        playlist: module.playlist,
-        status: module.status,
-        createdAt: module.createdAt,
-        updatedAt: module.updatedAt,
-      },
-      ...defaultProgressRow(module._id),
-    };
-  });
-
-  // Filter by status if provided
-  if (status) {
-    results = results.filter((r) => r.status === status);
-  }
-
-  // Sort: by lastAccessedAt desc, then enrolledAt desc, then by module name
-  const [sortField, sortOrder] = (sortBy || 'enrolledAt:desc').split(':');
-  const desc = sortOrder === 'desc';
-  results.sort((a, b) => {
-    const aVal = sortField === 'enrolledAt' ? (a.enrolledAt ? new Date(a.enrolledAt).getTime() : 0) : (a.progress?.lastAccessedAt ? new Date(a.progress.lastAccessedAt).getTime() : 0);
-    const bVal = sortField === 'enrolledAt' ? (b.enrolledAt ? new Date(b.enrolledAt).getTime() : 0) : (b.progress?.lastAccessedAt ? new Date(b.progress.lastAccessedAt).getTime() : 0);
-    if (aVal !== bVal) return desc ? bVal - aVal : aVal - bVal;
-    const aName = a.module.moduleName || '';
-    const bName = b.module.moduleName || '';
-    return aName.localeCompare(bName);
-  });
-
-  const totalResults = results.length;
-  const totalPages = Math.ceil(totalResults / limit) || 1;
-  const start = (page - 1) * limit;
-  const paginatedResults = results.slice(start, start + limit);
-
-  return {
-    results: paginatedResults,
-    page,
-    limit,
-    totalPages,
-    totalResults,
-  };
-};
-
-/**
- * Get single student course with full details
+ * Get single student course with learn-page fields only (no roster populate, no quiz attempts).
  * @param {ObjectId} studentId
  * @param {ObjectId} moduleId
  * @returns {Promise<Object>}
  */
 const getStudentCourse = async (studentId, moduleId) => {
-  // Verify student is assigned to module
-  const module = await TrainingModule.findById(moduleId).populate([
-    { path: 'categories' },
-    { path: 'students', select: 'user', populate: { path: 'user', select: 'name email' } },
-    { path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name email' } },
+  const [module, studentExists] = await Promise.all([
+    TrainingModule.findById(moduleId)
+      .select(LEARN_MODULE_SELECT)
+      .populate({ path: 'categories', select: 'name description' })
+      .lean(),
+    Student.exists({ _id: studentId }),
   ]);
-  
+
   if (!module) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
   }
-  
-  const student = await Student.findById(studentId);
-  if (!student) {
+  if (!studentExists) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-  
-  // When populated, module.students are documents with _id; when not, they are ObjectIds
-  const isAssigned = module.students.some((s) => {
-    const sid = s && (s._id != null ? s._id : s);
-    return sid && sid.toString() === studentId.toString();
-  });
 
+  const isAssigned = (module.students || []).some((sid) => sid && sid.toString() === studentId.toString());
   if (!isAssigned) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Student is not assigned to this module');
   }
 
-  try {
-    await refreshTrainingCoverImageUrl(module.coverImage, signedDownloadUrl);
-  } catch (error) {
-    logger.error('Failed to regenerate cover image URL:', error);
+  const [progress] = await Promise.all([
+    getOrCreateProgress(studentId, moduleId),
+    refreshTrainingCoverImageUrl(module.coverImage, signedDownloadUrl).catch((error) => {
+      logger.error('Failed to regenerate cover image URL:', error);
+    }),
+  ]);
+
+  const totalsChanged = await syncProgressTotals(progress, module);
+  if (totalsChanged) {
+    await progress.save();
   }
-  
-  // Get or create progress
-  const progress = await getOrCreateProgress(studentId, moduleId);
-  await syncProgressTotals(progress, module);
-  
-  // Get quiz attempts for this course
-  const quizAttempts = await StudentQuizAttempt.find({
-    student: studentId,
-    module: moduleId,
-  }).sort({ createdAt: -1 });
-  
-  // Mark which playlist items are completed
-  const playlistWithProgress = module.playlist.map((item, index) => {
+
+  const completedIds = new Set((progress.progress.completedItems || []).map((ci) => ci.playlistItemId));
+  const playlistWithProgress = (module.playlist || []).map((item, index) => {
     const itemId = index.toString();
-    const isCompleted = progress.progress.completedItems.some(
-      (ci) => ci.playlistItemId === itemId
-    );
-    
-    // Get quiz attempts for this item
-    const itemQuizAttempts = quizAttempts.filter(
-      (qa) => qa.playlistItemId === itemId
-    );
-    
     return {
-      ...item.toObject(),
+      ...item,
       playlistItemId: itemId,
-      isCompleted,
-      quizAttempts: item.contentType === 'quiz' ? itemQuizAttempts : undefined,
+      isCompleted: completedIds.has(itemId),
     };
   });
-  
+
+  const categories = (module.categories || []).map((c) => ({
+    id: c.id ?? (c._id != null ? String(c._id) : undefined),
+    name: c.name,
+    description: c.description,
+  }));
+
   return {
     module: {
-      id: module.id,
+      id: module._id.toString(),
       moduleName: module.moduleName,
       shortDescription: module.shortDescription,
       coverImage: module.coverImage,
-      categories: module.categories,
+      categories,
       playlist: playlistWithProgress,
       status: module.status,
       createdAt: module.createdAt,
       updatedAt: module.updatedAt,
     },
-    progress: {
-      percentage: progress.progress.percentage,
-      completedItems: progress.progress.completedItems,
-      lastAccessedAt: progress.progress.lastAccessedAt,
-      lastAccessedItem: progress.progress.lastAccessedItem,
-    },
-    quizScores: progress.quizScores,
+    ...toCourseProgressPayload(progress),
     enrolledAt: progress.enrolledAt,
-    startedAt: progress.startedAt,
-    completedAt: progress.completedAt,
-    status: progress.status,
-    certificate: progress.certificate,
   };
 };
 
@@ -315,8 +176,8 @@ const startCourse = async (studentId, moduleId) => {
 
 /**
  * Recompute progress percentage and status from completedItems vs playlist length.
- * Persists when percentage or status changed.
- * @returns {Promise<boolean>} true if document was saved
+ * Mutates `progress`; caller must save.
+ * @returns {Promise<boolean>} true if percentage or status changed
  */
 const syncProgressTotals = async (progress, module) => {
   const totalItems = module?.playlist?.length ?? 0;
@@ -345,7 +206,7 @@ const syncProgressTotals = async (progress, module) => {
   }
 
   if (changed) {
-    await progress.save();
+    progress.markModified('progress');
   }
 
   return changed;
@@ -380,8 +241,8 @@ const markItemComplete = async (studentId, moduleId, playlistItemId, contentType
     progress.progress.lastAccessedItem = { playlistItemId };
   }
 
-  await syncProgressTotals(progress, module);
-  if (!alreadyCompleted) {
+  const totalsChanged = await syncProgressTotals(progress, module);
+  if (!alreadyCompleted || totalsChanged) {
     progress.markModified('progress');
     await progress.save();
   }
@@ -389,6 +250,34 @@ const markItemComplete = async (studentId, moduleId, playlistItemId, contentType
   if (progress.progress.percentage === 100 && !alreadyCompleted) {
     await autoGenerateCertificateIfEligible(studentId, moduleId);
   }
+
+  return progress;
+};
+
+/**
+ * Remove a playlist item from completedItems and recompute percentage.
+ * @param {ObjectId} studentId
+ * @param {ObjectId} moduleId
+ * @param {string} playlistItemId
+ * @returns {Promise<StudentCourseProgress>}
+ */
+const markItemIncomplete = async (studentId, moduleId, playlistItemId) => {
+  const progress = await getOrCreateProgress(studentId, moduleId);
+  const module = await TrainingModule.findById(moduleId);
+  if (!module) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
+  }
+
+  progress.progress.completedItems = progress.progress.completedItems.filter(
+    (item) => item.playlistItemId !== playlistItemId
+  );
+  progress.progress.lastAccessedAt = new Date();
+  progress.progress.lastAccessedItem = { playlistItemId };
+  progress.markModified('progress');
+
+  await syncProgressTotals(progress, module);
+  progress.markModified('progress');
+  await progress.save();
 
   return progress;
 };
@@ -455,6 +344,8 @@ export {
   getStudentCourse,
   startCourse,
   markItemComplete,
+  markItemIncomplete,
   updateLastAccessed,
   recalculateProgress,
+  toCourseProgressPayload,
 };

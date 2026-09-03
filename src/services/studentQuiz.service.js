@@ -6,6 +6,7 @@ import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Student from '../models/student.model.js';
 import { autoGenerateCertificateIfEligible } from './certificate.service.js';
 import { explainQuizCorrectAnswer } from './essayGrade.service.js';
+import { assertQuizUnlocked } from './quizSequentialLock.service.js';
 
 /**
  * Deduplicate question options by text (keep first occurrence; if any duplicate is correct, mark kept as correct).
@@ -33,35 +34,37 @@ const deduplicateQuestionOptions = (options) => {
  * @returns {Promise<Object>}
  */
 const getQuiz = async (studentId, moduleId, playlistItemId) => {
-  const module = await TrainingModule.findById(moduleId);
+  const [module, studentExists, progress] = await Promise.all([
+    TrainingModule.findById(moduleId).select('playlist students'),
+    Student.exists({ _id: studentId }),
+    StudentCourseProgress.findOne({ student: studentId, module: moduleId }).select('progress.completedItems').lean(),
+  ]);
   if (!module) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
   }
-  
-  const student = await Student.findById(studentId);
-  if (!student) {
+  if (!studentExists) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-  
-  // Verify student is assigned
-  const isAssigned = module.students.some(
+
+  const isAssigned = (module.students || []).some(
     (id) => id.toString() === studentId.toString()
   );
   if (!isAssigned) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Student is not assigned to this module');
   }
-  
-  // Find quiz item in playlist
+
   const itemIndex = parseInt(playlistItemId, 10);
   if (isNaN(itemIndex) || itemIndex < 0 || itemIndex >= module.playlist.length) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Quiz item not found in playlist');
   }
-  
+
   const playlistItem = module.playlist[itemIndex];
   if (playlistItem.contentType !== 'quiz') {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Playlist item is not a quiz');
   }
-  
+
+  await assertQuizUnlocked(studentId, module, playlistItemId, progress);
+
   if (!playlistItem.quiz || !playlistItem.quiz.questions) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Quiz has no questions');
   }
@@ -174,35 +177,38 @@ const calculateScore = (questions, studentAnswers) => {
  */
 const submitQuizAttempt = async (studentId, moduleId, playlistItemId, attemptData) => {
   const { answers, timeSpent = 0 } = attemptData;
-  
-  const module = await TrainingModule.findById(moduleId);
+
+  const [module, studentExists, progress] = await Promise.all([
+    TrainingModule.findById(moduleId),
+    Student.exists({ _id: studentId }),
+    StudentCourseProgress.findOne({ student: studentId, module: moduleId }),
+  ]);
+
   if (!module) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
   }
-  
-  const student = await Student.findById(studentId);
-  if (!student) {
+  if (!studentExists) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
-  
-  // Verify student is assigned
-  const isAssigned = module.students.some(
+
+  const isAssigned = (module.students || []).some(
     (id) => id.toString() === studentId.toString()
   );
   if (!isAssigned) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Student is not assigned to this module');
   }
-  
-  // Find quiz item
+
   const itemIndex = parseInt(playlistItemId, 10);
   if (isNaN(itemIndex) || itemIndex < 0 || itemIndex >= module.playlist.length) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Quiz item not found');
   }
-  
+
   const playlistItem = module.playlist[itemIndex];
   if (playlistItem.contentType !== 'quiz') {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Playlist item is not a quiz');
   }
+
+  await assertQuizUnlocked(studentId, module, playlistItemId, progress);
   
   if (!playlistItem.quiz || !playlistItem.quiz.questions) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Quiz has no questions');
@@ -264,7 +270,6 @@ const submitQuizAttempt = async (studentId, moduleId, playlistItemId, attemptDat
   });
   
   // Update student course progress – mark quiz item complete only when score >= 90%
-  const progress = await StudentCourseProgress.findOne({ student: studentId, module: moduleId });
   if (progress) {
     const isQuizCompleted = progress.progress.completedItems.some(
       (item) => item.playlistItemId === playlistItemId

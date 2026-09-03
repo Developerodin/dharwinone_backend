@@ -90,11 +90,13 @@ const playlistItemSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
   essayData: Joi.object({
+    passPercentage: Joi.number().min(0).max(100).optional(),
     questions: Joi.array()
       .items(
         Joi.object({
           questionText: Joi.string().required(),
           expectedAnswer: Joi.string().allow('').optional(),
+          maxMarks: Joi.number().min(1).optional(),
         })
       )
       .min(1),
@@ -104,11 +106,13 @@ const playlistItemSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
   essay: Joi.object({
+    passPercentage: Joi.number().min(0).max(100).optional(),
     questions: Joi.array()
       .items(
         Joi.object({
           questionText: Joi.string().required(),
           expectedAnswer: Joi.string().allow('').optional(),
+          maxMarks: Joi.number().min(1).optional(),
         })
       )
       .min(1),
@@ -119,14 +123,42 @@ const playlistItemSchema = Joi.object({
   }),
 });
 
+/** Multipart may send id lists as a real array, JSON string, or "". */
+const idArrayField = Joi.alternatives()
+  .try(
+    Joi.array().items(Joi.custom(objectId)),
+    Joi.string().allow('').custom((value, helpers) => {
+      if (value === '' || value == null) return [];
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+          return helpers.error('any.invalid');
+        }
+        const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate(parsed);
+        if (error) {
+          return helpers.error('any.invalid');
+        }
+        return coerced;
+      } catch (err) {
+        if (typeof value === 'string' && value.trim() && !value.trim().startsWith('[')) {
+          const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate([value.trim()]);
+          if (!error) return coerced;
+        }
+        return helpers.error('any.invalid');
+      }
+    })
+  );
+
+const createIdArrayField = idArrayField.default([]);
+
 const createTrainingModule = {
   body: Joi.object().keys({
-    categories: Joi.array().items(Joi.custom(objectId)).default([]),
-    positions: Joi.array().items(Joi.custom(objectId)).default([]),
+    categories: createIdArrayField,
+    positions: createIdArrayField,
     moduleName: Joi.string().required().trim(),
     shortDescription: Joi.string().required().trim(),
-    students: Joi.array().items(Joi.custom(objectId)).default([]),
-    mentorsAssigned: Joi.array().items(Joi.custom(objectId)).default([]),
+    students: createIdArrayField,
+    mentorsAssigned: createIdArrayField,
     playlist: Joi.array().items(playlistItemSchema).default([]),
     status: Joi.string().valid('draft', 'published', 'archived').default('draft'),
   }),
@@ -134,12 +166,13 @@ const createTrainingModule = {
 
 const getTrainingModules = {
   query: Joi.object().keys({
-    search: Joi.string(),
-    category: Joi.custom(objectId),
+    search: Joi.string().allow(''),
+    category: Joi.alternatives().try(Joi.custom(objectId), Joi.string()),
+    instructor: Joi.string().allow(''),
     status: Joi.string().valid('draft', 'published', 'archived'),
     mine: Joi.boolean(),
     sortBy: Joi.string(),
-    limit: Joi.number().integer(),
+    limit: Joi.number().integer().max(2000),
     page: Joi.number().integer(),
   }),
 };
@@ -150,60 +183,18 @@ const getTrainingModule = {
   }),
 };
 
-/** Multipart PATCH may send categories as a JSON string (e.g. "[]"). */
-const updateCategoriesField = Joi.alternatives()
-  .try(
-    Joi.array().items(Joi.custom(objectId)),
-    Joi.string().custom((value, helpers) => {
-      try {
-        const parsed = JSON.parse(value);
-        if (!Array.isArray(parsed)) {
-          return helpers.error('any.invalid');
-        }
-        const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate(parsed);
-        if (error) {
-          return helpers.error('any.invalid');
-        }
-        return coerced;
-      } catch {
-        return helpers.error('any.invalid');
-      }
-    })
-  );
-
-/** Same as categories: FormData empty roster sends students/mentorsAssigned as literal "[]". */
-const updateIdArrayField = Joi.alternatives()
-  .try(
-    Joi.array().items(Joi.custom(objectId)),
-    Joi.string().custom((value, helpers) => {
-      try {
-        const parsed = JSON.parse(value);
-        if (!Array.isArray(parsed)) {
-          return helpers.error('any.invalid');
-        }
-        const { error, value: coerced } = Joi.array().items(Joi.custom(objectId)).validate(parsed);
-        if (error) {
-          return helpers.error('any.invalid');
-        }
-        return coerced;
-      } catch {
-        return helpers.error('any.invalid');
-      }
-    })
-  );
-
 const updateTrainingModule = {
   params: Joi.object().keys({
     moduleId: Joi.custom(objectId).required(),
   }),
   body: Joi.object()
     .keys({
-      categories: updateCategoriesField,
-      positions: updateIdArrayField,
+      categories: idArrayField,
+      positions: idArrayField,
       moduleName: Joi.string().trim(),
       shortDescription: Joi.string().trim(),
-      students: updateIdArrayField,
-      mentorsAssigned: updateIdArrayField,
+      students: idArrayField,
+      mentorsAssigned: idArrayField,
       playlist: Joi.array().items(playlistItemSchema),
       status: Joi.string().valid('draft', 'published', 'archived'),
     })

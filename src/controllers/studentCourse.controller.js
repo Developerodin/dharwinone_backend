@@ -3,6 +3,7 @@ import pick from '../utils/pick.js';
 import ApiError from '../utils/ApiError.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as studentCourseService from '../services/studentCourse.service.js';
+import * as courseLearnerNoteService from '../services/courseLearnerNote.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
@@ -12,7 +13,7 @@ import { userIsAdmin } from '../utils/roleHelpers.js';
  */
 const getStudentCourses = catchAsync(async (req, res) => {
   const { studentId } = req.params;
-  const filter = pick(req.query, ['status']);
+  const filter = pick(req.query, ['status', 'search', 'category', 'instructor', 'progress']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   
   // Check if student can view own courses or has permission
@@ -74,7 +75,22 @@ const markItemComplete = catchAsync(async (req, res) => {
     contentType
   );
   
-  res.send(progress);
+  res.send(studentCourseService.toCourseProgressPayload(progress));
+});
+
+/**
+ * Mark playlist item as incomplete
+ */
+const markItemIncomplete = catchAsync(async (req, res) => {
+  const { studentId, moduleId } = req.params;
+  const { playlistItemId } = req.body;
+
+  if (!playlistItemId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'playlistItemId is required');
+  }
+
+  const progress = await studentCourseService.markItemIncomplete(studentId, moduleId, playlistItemId);
+  res.send(studentCourseService.toCourseProgressPayload(progress));
 });
 
 /**
@@ -94,7 +110,25 @@ const updateLastAccessed = catchAsync(async (req, res) => {
     playlistItemId
   );
   
-  res.send(progress);
+  res.send(studentCourseService.toCourseProgressPayload(progress));
+});
+
+/**
+ * Get private learner note for a playlist item.
+ */
+const getCourseNote = catchAsync(async (req, res) => {
+  const { studentId, moduleId, playlistItemId } = req.params;
+  const note = await courseLearnerNoteService.getNote(studentId, moduleId, playlistItemId);
+  res.send(note);
+});
+
+/**
+ * Upsert private learner note for a playlist item.
+ */
+const upsertCourseNote = catchAsync(async (req, res) => {
+  const { studentId, moduleId, playlistItemId } = req.params;
+  const note = await courseLearnerNoteService.upsertNote(studentId, moduleId, playlistItemId, req.body.body);
+  res.send(note);
 });
 
 export {
@@ -102,5 +136,8 @@ export {
   getStudentCourse,
   startCourse,
   markItemComplete,
+  markItemIncomplete,
   updateLastAccessed,
+  getCourseNote,
+  upsertCourseNote,
 };
