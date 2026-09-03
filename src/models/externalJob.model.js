@@ -52,7 +52,9 @@ const externalJobSchema = new mongoose.Schema(
 );
 
 externalJobSchema.index({ externalId: 1, source: 1, savedBy: 1 }, { unique: true });
-externalJobSchema.index({ savedBy: 1 });
+// Serves the saved list exactly: filter on savedBy, sort by savedAt desc, in one index
+// scan. The separate { savedBy: 1 } index could filter but left Mongo sorting in memory.
+externalJobSchema.index({ savedBy: 1, savedAt: -1 });
 externalJobSchema.index({ savedAt: -1 });
 
 externalJobSchema.plugin(toJSON);

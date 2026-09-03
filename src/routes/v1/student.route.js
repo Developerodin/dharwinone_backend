@@ -6,6 +6,7 @@ import requireStudentsReadOrOwnStudent from '../../middlewares/requireStudentsRe
 import * as studentValidation from '../../validations/student.validation.js';
 import * as studentController from '../../controllers/student.controller.js';
 import * as studentExcelController from '../../controllers/studentExcel.controller.js';
+import * as weekOffExportController from '../../controllers/weekOffExport.controller.js';
 import * as studentNoteController from '../../controllers/studentNote.controller.js';
 import * as studentNoteValidation from '../../validations/studentNote.validation.js';
 import { studentProfileImageUpload } from '../../middlewares/upload.js';
@@ -87,6 +88,13 @@ router.post(
   requirePermissions('attendance.assign'),
   validate(studentValidation.importWeekOff),
   studentController.importWeekOff
+);
+router.get(
+  '/week-off/export',
+  auth(),
+  requirePermissions('attendance.assign'),
+  validate(studentValidation.exportWeekOff),
+  weekOffExportController.exportWeekOffExcel
 );
 // Week-off calendar - MUST be before /:studentId
 router

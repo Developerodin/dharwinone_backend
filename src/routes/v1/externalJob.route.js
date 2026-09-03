@@ -19,6 +19,8 @@ router.get('/auto-fetch/runs', auth(), requireExternalJobsAccess({ requireManage
 
 router.post('/search', auth(), requireExternalJobsAccess(), validate(externalJobValidation.searchExternalJobs), externalJobController.search);
 router.post('/save', auth(), requireExternalJobsAccess({ requireManage: true }), validate(externalJobValidation.saveExternalJob), externalJobController.save);
+// Registered before the parameterised routes below so `ids` is never read as an id.
+router.get('/saved/ids', auth(), requireExternalJobsAccess(), externalJobController.listSavedIds);
 router.get('/saved', auth(), requireExternalJobsAccess(), validate(externalJobValidation.getSavedExternalJobs), externalJobController.listSaved);
 router.delete(
   '/saved/:externalId',
@@ -37,7 +39,14 @@ router.post(
   validate(externalJobValidation.saveHrContact),
   externalJobController.saveHrContact
 );
-router.get('/hr-contacts', auth(), requireExternalJobsAccess(), externalJobController.listSavedHrContacts);
+router.get('/hr-contacts/ids', auth(), requireExternalJobsAccess(), externalJobController.listSavedHrContactIds);
+router.get(
+  '/hr-contacts',
+  auth(),
+  requireExternalJobsAccess(),
+  validate(externalJobValidation.getSavedHrContacts),
+  externalJobController.listSavedHrContacts
+);
 router.delete(
   '/hr-contacts/:apolloId',
   auth(),

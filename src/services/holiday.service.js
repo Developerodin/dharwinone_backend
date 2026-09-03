@@ -2,6 +2,9 @@ import httpStatus from 'http-status';
 import Holiday from '../models/holiday.model.js';
 import ApiError from '../utils/ApiError.js';
 
+/** Escape special regex chars in a string for safe $regex use */
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Create a new holiday
  * @param {Object} holidayBody
@@ -66,6 +69,24 @@ const queryHolidays = async (filter, options) => {
       $gte: dateFilter,
       $lt: nextDay,
     };
+  }
+
+  if (filter.title && typeof filter.title === 'string') {
+    const trimmed = filter.title.trim();
+    if (trimmed) {
+      filter.title = { $regex: escapeRegex(trimmed), $options: 'i' };
+    } else {
+      delete filter.title;
+    }
+  }
+
+  if (filter.group && typeof filter.group === 'string') {
+    const trimmed = filter.group.trim();
+    if (trimmed) {
+      filter.group = { $regex: escapeRegex(trimmed), $options: 'i' };
+    } else {
+      delete filter.group;
+    }
   }
 
   const holidays = await Holiday.paginate(filter, options);

@@ -165,6 +165,32 @@ const getWeekOff = {
   }),
 };
 
+const exportWeekOff = {
+  query: Joi.object().keys({
+    days: Joi.string()
+      .trim()
+      .required()
+      .custom((value, helpers) => {
+        const parsed = value
+          .split(',')
+          .map((day) => day.trim())
+          .filter(Boolean);
+        if (!parsed.length) {
+          return helpers.error('any.invalid');
+        }
+        const invalid = parsed.filter((day) => !VALID_DAYS.includes(day));
+        if (invalid.length) {
+          return helpers.message(`Invalid week-off day(s): ${invalid.join(', ')}`);
+        }
+        return value;
+      })
+      .messages({
+        'any.required': 'At least one week-off day is required',
+        'any.invalid': 'At least one week-off day is required',
+      }),
+  }),
+};
+
 const assignShift = {
   body: Joi.object().keys({
     studentIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required().messages({
@@ -177,4 +203,4 @@ const assignShift = {
   }),
 };
 
-export { getStudents, getStudentFilterOptions, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, assignShift };
+export { getStudents, getStudentFilterOptions, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, exportWeekOff, assignShift };

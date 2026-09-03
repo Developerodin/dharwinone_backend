@@ -69,11 +69,32 @@ const saveExternalJob = {
   }),
 };
 
+// Shared by both saved lists. `validate` compiles with no allowUnknown, so an unknown
+// query key 400s the whole request -- these must stay in step with what the client sends.
+const savedListQuery = {
+  limit: Joi.number().integer().min(1).max(100),
+  page: Joi.number().integer().min(1),
+  // Free text, matched case-insensitively and escaped server-side.
+  q: Joi.string().trim().max(200).allow('', null),
+  // Date-only (`YYYY-MM-DD`) from the pickers, or a full ISO timestamp. Deliberately
+  // strings, not Joi.date(): Joi would coerce both to a Date and the service could no
+  // longer tell them apart, which is what makes a date-only `savedTo` cover the whole day
+  // instead of stopping at midnight. Parsing (and rejecting nonsense) lives in
+  // utils/externalJobFilters.js, where it is tested.
+  savedFrom: Joi.string().trim().max(40).allow('', null),
+  savedTo: Joi.string().trim().max(40).allow('', null),
+};
+
 const getSavedExternalJobs = {
   query: Joi.object().keys({
-    limit: Joi.number().integer().min(1).max(100),
-    page: Joi.number().integer().min(1),
+    ...savedListQuery,
+    source: Joi.string().valid(...SOURCE_INPUTS).allow('', null),
   }),
+};
+
+// No `company` key: the UI has one search box, and `q` already spans companyName.
+const getSavedHrContacts = {
+  query: Joi.object().keys(savedListQuery),
 };
 
 const unsaveExternalJob = {
@@ -130,6 +151,7 @@ export {
   searchExternalJobs,
   saveExternalJob,
   getSavedExternalJobs,
+  getSavedHrContacts,
   unsaveExternalJob,
   enrichJob,
   saveHrContact,

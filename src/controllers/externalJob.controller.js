@@ -5,6 +5,7 @@ import externalJobService from '../services/externalJob.service.js';
 import apolloService from '../services/apollo.service.js';
 import ApolloEnrichment from '../models/apolloEnrichment.model.js';
 import SavedHrContact from '../models/savedHrContact.model.js';
+import { buildSavedContactsFilter } from '../utils/externalJobFilters.js';
 import config from '../config/config.js';
 
 const search = catchAsync(async (req, res) => {
@@ -34,11 +35,23 @@ const save = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(job);
 });
 
+const SAVED_JOB_QUERY_KEYS = ['limit', 'page', 'q', 'source', 'savedFrom', 'savedTo'];
+
 const listSaved = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
-  const options = pick(req.query, ['limit', 'page']);
+  const options = pick(req.query, SAVED_JOB_QUERY_KEYS);
   const result = await externalJobService.getSavedJobs(userId, options);
   res.send(result);
+});
+
+/**
+ * Every saved `externalId`, so the Search tab can fill its bookmarks without loading the
+ * saved jobs themselves. The list is paginated; bookmark state is not page-scoped.
+ */
+const listSavedIds = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const ids = await externalJobService.getSavedJobExternalIds(userId);
+  res.send({ ids });
 });
 
 const unsave = catchAsync(async (req, res) => {
@@ -183,10 +196,27 @@ const saveHrContact = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send(contact);
 });
 
+const SAVED_CONTACT_QUERY_KEYS = ['limit', 'page', 'q', 'savedFrom', 'savedTo'];
+
 const listSavedHrContacts = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
-  const contacts = await SavedHrContact.find({ userId }).sort({ savedAt: -1 }).limit(200);
-  res.send({ contacts });
+  const options = pick(req.query, SAVED_CONTACT_QUERY_KEYS);
+  const result = await SavedHrContact.paginate(buildSavedContactsFilter(userId, options), {
+    sortBy: 'savedAt:desc',
+    limit: options.limit || 20,
+    page: options.page || 1,
+  });
+  // `contacts` is the shape this endpoint returned before it was paginated, kept so a
+  // frontend deployed against a newer backend keeps working through the deploy window.
+  // Drop it once no client reads it.
+  res.send({ ...result, contacts: result.results });
+});
+
+/** Saved contact ids, so the preview panel can tick "already saved" without the full list. */
+const listSavedHrContactIds = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const ids = await SavedHrContact.distinct('apolloId', { userId });
+  res.send({ ids });
 });
 
 const deleteHrContact = catchAsync(async (req, res) => {
@@ -200,10 +230,12 @@ export default {
   search,
   save,
   listSaved,
+  listSavedIds,
   unsave,
   enrichJob,
   apolloWebhook,
   saveHrContact,
   listSavedHrContacts,
+  listSavedHrContactIds,
   deleteHrContact,
 };

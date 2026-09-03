@@ -123,8 +123,14 @@ const corsOptions = {
     'idempotency-key',
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
-  // Let the browser read the download filename on cross-origin .xlsx/file exports.
-  exposedHeaders: ['Content-Disposition'],
+  // Let the browser read export metadata on cross-origin .xlsx/file downloads.
+  exposedHeaders: [
+    'Content-Disposition',
+    'X-Export-Row-Count',
+    'X-Export-Capped',
+    'X-Export-Total-Results',
+    'X-Export-Max-Rows',
+  ],
 };
 
 app.use(cors(corsOptions));

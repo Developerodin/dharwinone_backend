@@ -26,6 +26,9 @@ const schema = new mongoose.Schema(
 );
 
 schema.index({ userId: 1, apolloId: 1 }, { unique: true });
+// The saved-contacts list filters on userId and sorts by savedAt desc; the unique index
+// above cannot serve that sort because apolloId sits between the two fields.
+schema.index({ userId: 1, savedAt: -1 });
 schema.plugin(toJSON);
 schema.plugin(paginate);
 

@@ -5,6 +5,8 @@ import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { syncPublishedJobForExternal, archivePublishedJobIfOrphaned } from './externalJobPublishedJob.service.js';
 import { resolveLocationMeta, resolveCountry } from '../utils/jobLocation.util.js';
+import { buildSavedJobsFilter } from '../utils/externalJobFilters.js';
+import { selectExternalJobsNeedingMirror } from '../utils/externalJobMirrorRepair.js';
 
 const SOURCES = {
   'active-jobs-db': {
@@ -364,34 +366,58 @@ async function saveJob(userId, jobData) {
 }
 
 async function getSavedJobs(userId, options = {}) {
-  const filter = { savedBy: userId };
+  const filter = buildSavedJobsFilter(userId, options);
   const result = await ExternalJob.paginate(filter, {
     sortBy: 'savedAt:desc',
     limit: options.limit || 20,
     page: options.page || 1,
-    ...options,
   });
 
-  // Repair: create/update mirrored Job if missing, or publishedJobId points at a removed Job
-  if (result.results?.length) {
-    for (const doc of result.results) {
-      let needsMirror = !doc.publishedJobId;
-      if (!needsMirror && doc.publishedJobId) {
-        const stillThere = await Job.exists({ _id: doc.publishedJobId });
-        if (!stillThere) needsMirror = true;
-      }
-      if (!needsMirror) continue;
-      try {
-        await syncPublishedJobForExternal(doc);
-      } catch (err) {
-        logger.error(
-          `Mirror Job sync failed for saved external ${doc.externalId} (${doc.source}): ${err?.message || err}`
-        );
-      }
-    }
-  }
+  await repairMirrorsForPage(result.results);
 
   return result;
+}
+
+/**
+ * Rebuild any mirrored Job on this page that is missing or points at a deleted Job.
+ *
+ * One `Job.find` for the whole page, not one `Job.exists` per row — the per-row version
+ * cost up to ~100 extra round-trips on every load of the Saved tab and was the reason the
+ * tab felt slow. Writes still happen only for rows that are actually broken, which is
+ * rare, so the steady-state cost of the healing is a single indexed id lookup.
+ */
+async function repairMirrorsForPage(docs) {
+  if (!docs?.length) return;
+
+  const pinnedIds = docs.map((doc) => doc.publishedJobId).filter(Boolean);
+  const liveJobIds = pinnedIds.length
+    ? (await Job.find({ _id: { $in: pinnedIds } }, { _id: 1 }).lean()).map((row) => row._id)
+    : [];
+
+  for (const doc of selectExternalJobsNeedingMirror(docs, liveJobIds)) {
+    try {
+      await syncPublishedJobForExternal(doc);
+    } catch (err) {
+      logger.error(
+        `Mirror Job sync failed for saved external ${doc.externalId} (${doc.source}): ${err?.message || err}`
+      );
+    }
+  }
+}
+
+/**
+ * Every `externalId` this user has saved, for the bookmark state on the Search tab.
+ *
+ * Separate from the paginated list because the two answer different questions: the list
+ * shows one page, this covers everything the user has ever saved. Without it, moving the
+ * Saved tab onto real pagination would render every bookmark past the first page as
+ * unsaved. Keyed by `externalId` alone, ignoring source, to match how the client indexes.
+ *
+ * ponytail: unbounded on purpose — at a realistic few thousand saves this is a small array
+ * of short strings. Page it if one user ever passes ~50k saved jobs.
+ */
+async function getSavedJobExternalIds(userId) {
+  return ExternalJob.distinct('externalId', { savedBy: userId });
 }
 
 async function unsaveJob(userId, externalId, source) {
@@ -418,5 +444,6 @@ export default {
   fetchExpiredIds,
   saveJob,
   getSavedJobs,
+  getSavedJobExternalIds,
   unsaveJob,
 };
