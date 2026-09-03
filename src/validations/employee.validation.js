@@ -268,6 +268,12 @@ const updateCandidateBodyBase = {
   companyAssignedEmail: Joi.string().email().allow('', null),
   companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
   compensationType: Joi.string().valid('paid', 'unpaid').optional(),
+  /**
+   * Explicit intent to change an offer-derived compensation snapshot. Not stored — the service
+   * strips it. Required because the employee form PATCHes its whole body on every save, so
+   * carrying `compensationType` cannot by itself mean the user chose to change it.
+   */
+  compensationOverride: Joi.boolean().optional(),
 };
 
 /** Admin/manager PATCH — optional personal-info fields may be empty. */

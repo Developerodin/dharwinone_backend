@@ -276,5 +276,9 @@
   "src/services/chatAssistant/__tests__/roleRegistry.test.js",
   "src/services/__tests__/employee.updateMeSelfProfile.test.js",
   "src/validations/__tests__/externalJob.validation.test.js",
-  "src/services/__tests__/externalJob.postedWindow.test.js"
+  "src/services/__tests__/externalJob.postedWindow.test.js",
+  "./src/services/__tests__/candidateCompensationWrite.test.js",
+  "./src/services/__tests__/offerCompensationSync.test.js",
+  "./src/utils/__tests__/auditMetadata.helper.test.js",
+  "./src/services/__tests__/offerCompensationGate.test.js"
 ]

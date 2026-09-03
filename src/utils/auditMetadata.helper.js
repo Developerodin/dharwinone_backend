@@ -140,6 +140,25 @@ export const countDescendantUnits = (units, rootId) => {
  * @param {string} entityId
  * @param {{ EMPLOYEE_DEPARTMENT_ASSIGN: string, CANDIDATE_UPDATE: string, EMPLOYEE: string, CANDIDATE: string }} actions
  */
+/**
+ * What changed about an employee's compensation, or `null` if nothing did.
+ *
+ * Provenance counts as a change. The previous audit condition fired only when the VALUE moved,
+ * and additionally required an admin actor and a locked record — so a bulk form save that
+ * restamped `compensationSource` to 'manual' left no trail at all. In production that mislabelled
+ * every accepted unpaid-internship hire and left a real revert with nothing to follow.
+ *
+ * @returns {{before: string|null, after: string|null, sourceBefore: string|null, sourceAfter: string|null}|null}
+ */
+export const describeCompensationChange = (before, after) => {
+  const typeBefore = before?.compensationType ?? null;
+  const typeAfter = after?.compensationType ?? null;
+  const sourceBefore = before?.compensationSource ?? null;
+  const sourceAfter = after?.compensationSource ?? null;
+  if (typeBefore === typeAfter && sourceBefore === sourceAfter) return null;
+  return { before: typeBefore, after: typeAfter, sourceBefore, sourceAfter };
+};
+
 export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate, body, entityId, actions) => {
   const departmentIdBefore =
     beforeCandidate?.departmentId != null ? String(beforeCandidate.departmentId) : null;

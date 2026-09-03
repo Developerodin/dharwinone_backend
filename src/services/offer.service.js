@@ -11,6 +11,7 @@ import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
+import { assertCompensationChangeAllowed } from './offerCompensationGate.js';
 import { recordPlacementAudit } from './placementAudit.service.js';
 import logger from '../config/logger.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
@@ -181,17 +182,62 @@ const resolveOfferCandidateId = (offer) => {
     : offer.candidate;
 };
 
+/**
+ * jobType is the contract; `offer.compensationType` is only a cache of the derivation, kept for
+ * queries. So derive whenever a jobType exists rather than preferring the stored value.
+ *
+ * The previous `offer.compensationType || compensationTypeForJobType(...)` could never fall
+ * through: the field defaults to 'paid', and 'paid' is truthy. Any offer written before the field
+ * existed — or by a raw driver write that skipped the service — would therefore mirror 'paid' onto
+ * the employee while its jobType read INTERN_UNPAID.
+ */
 const buildCompensationSnapshotFromOffer = (offer) => ({
-  compensationType: offer.compensationType || compensationTypeForJobType(offer.jobType),
+  compensationType: offer.jobType
+    ? compensationTypeForJobType(offer.jobType)
+    : offer.compensationType ?? 'paid',
   compensationSource: offer.compensationSource || 'jobTypeDerived',
 });
 
-/** Mirror offer job-type compensation to Employee when the offer is active (not Draft/Rejected). */
+/**
+ * Mirror offer job-type compensation to Employee when the offer is active (not Draft/Rejected).
+ *
+ * Returns what actually happened. Every path used to return `undefined`, so a sync that never ran
+ * looked exactly like one that succeeded — and production holds offers whose `candidate` points at
+ * a document that no longer exists, where `findByIdAndUpdate` is a silent no-op. Callers may
+ * ignore the outcome; the point is that it is observable at all.
+ *
+ * @returns {Promise<'synced'|'missed:candidate-not-found'|'skipped:no-job-type'|'skipped:no-candidate'|'skipped:status'>}
+ */
 const syncCompensationFromOfferToEmployee = async (offer) => {
-  if (!offer?.jobType || !OFFER_STATUSES_SYNC_COMPENSATION.has(offer.status)) return;
+  const offerId = offer?._id ?? offer?.id ?? 'unknown';
+
+  // A syncable offer with no job type cannot derive compensation — worth saying so out loud.
+  if (!offer?.jobType) {
+    if (OFFER_STATUSES_SYNC_COMPENSATION.has(offer?.status)) {
+      logger.warn(
+        `compensation sync skipped: offer ${offerId} is ${offer.status} but has no jobType`
+      );
+    }
+    return 'skipped:no-job-type';
+  }
+
+  // Draft/Rejected are deliberately not mirrored. Normal, so no warning.
+  if (!OFFER_STATUSES_SYNC_COMPENSATION.has(offer.status)) return 'skipped:status';
+
   const cand = resolveOfferCandidateId(offer);
-  if (!cand) return;
-  await Employee.findByIdAndUpdate(cand, buildCompensationSnapshotFromOffer(offer));
+  if (!cand) {
+    logger.warn(`compensation sync skipped: offer ${offerId} has no resolvable candidate`);
+    return 'skipped:no-candidate';
+  }
+
+  const updated = await Employee.findByIdAndUpdate(cand, buildCompensationSnapshotFromOffer(offer));
+  if (!updated) {
+    logger.warn(
+      `compensation sync missed: offer ${offerId} points at candidate ${cand}, which does not exist`
+    );
+    return 'missed:candidate-not-found';
+  }
+  return 'synced';
 };
 
 const applyLetterFieldsFromUpdate = (offer, updateBody) => {
@@ -692,13 +738,29 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     await ensureAccess(currentUser, offer);
   }
 
+  // Captured before the non-Draft allowlist below, which would otherwise strip it.
+  const compensationAck = updateBody.compensationChangeAck === true;
+
   if (offer.status !== 'Draft') {
     const allowed = ['status', 'notes', 'rejectionReason', ...OFFER_LETTER_FIELD_KEYS, 'ctcBreakdown'];
     const keys = Object.keys(updateBody).filter((k) => allowed.includes(k));
     updateBody = Object.fromEntries(keys.map((k) => [k, updateBody[k]]));
   }
 
+  const compensationBefore = offer.compensationType;
   const jobTypeInPayload = applyLetterFieldsFromUpdate(offer, updateBody);
+  const compensationChanging = offer.compensationType !== compensationBefore;
+  const placementForGate = compensationChanging
+    ? await Placement.findOne({ offer: offer._id })
+        .select('status cancelledBy cancelledAt deferredBy deferredAt')
+        .lean()
+    : null;
+  // Throws 422 with a stable errorCode when the placement has moved past the offer stage.
+  assertCompensationChangeAllowed({
+    placement: placementForGate,
+    changing: compensationChanging,
+    ack: compensationAck,
+  });
 
   if (updateBody.ctcBreakdown) {
     const cb = updateBody.ctcBreakdown;
@@ -772,10 +834,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         };
         if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
 
-        const employeeSnapshot = {
-          compensationType: offer.compensationType || compensationTypeForJobType(offer.jobType),
-          compensationSource: offer.compensationSource || 'jobTypeDerived',
-        };
+        const employeeSnapshot = buildCompensationSnapshotFromOffer(offer);
         if (offer.joiningDate) employeeSnapshot.joiningDate = offer.joiningDate;
 
         const persistAcceptLifecycle = async (session) => {
@@ -948,8 +1007,30 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
 
   await syncJoiningDateFromAcceptedOfferToPlacementAndEmployee(offer);
   await syncDesignationFromAcceptedOfferToEmployee(offer);
-  if (jobTypeInPayload || offer.isModified('compensationType')) {
+  // `offer.isModified(...)` is always false here — save() clears the modified paths — so the
+  // pre-save comparison is what this condition was actually reaching for.
+  if (jobTypeInPayload || compensationChanging) {
     await syncCompensationFromOfferToEmployee(offer);
+  }
+
+  // A compensation change on a live placement is a decision about someone already past the offer
+  // stage. Record who made it, on whom, and what it moved — the audit trail is why the change is
+  // permitted at all.
+  if (compensationChanging && placementForGate) {
+    await recordPlacementAudit({
+      placementId: placementForGate._id,
+      action: 'PLACEMENT_COMPENSATION_CHANGED',
+      actorId: currentUser?._id ?? currentUser?.id ?? null,
+      fromValue: String(compensationBefore ?? ''),
+      toValue: String(offer.compensationType ?? ''),
+      details: {
+        offerId: String(offer._id),
+        candidateId: String(resolveOfferCandidateId(offer) ?? ''),
+        jobType: offer.jobType ?? null,
+        placementStage: placementForGate.status ?? null,
+        acknowledged: true,
+      },
+    });
   }
 
   return getOfferById(offer._id);
@@ -961,7 +1042,7 @@ const GENERATE_LETTER_PATCH_KEYS = [...OFFER_LETTER_FIELD_KEYS, 'ctcBreakdown'];
 /**
  * Apply letter-form fields from generate-letter POST body in one save (avoids a separate PATCH).
  */
-const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
+const applyOfferLetterPatchForGenerate = async (offer, rawBody, actorId = null) => {
   if (!rawBody || typeof rawBody !== 'object') return;
 
   const updateBody = { ...rawBody };
@@ -973,7 +1054,25 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
 
   if (Object.keys(updateBody).length === 0) return;
 
+  // Read from rawBody: the key filter above drops anything outside the letter slice.
+  const compensationAck = rawBody.compensationChangeAck === true;
+  const compensationBefore = offer.compensationType;
+
   applyLetterFieldsFromUpdate(offer, updateBody);
+
+  const compensationChanging = offer.compensationType !== compensationBefore;
+  const placementForGate = compensationChanging
+    ? await Placement.findOne({ offer: offer._id })
+        .select('status cancelledBy cancelledAt deferredBy deferredAt')
+        .lean()
+    : null;
+  // Saving the letter is the other way compensation reaches a live placement, so it carries the
+  // same gate as updateOfferById. Throws 422 with a stable errorCode.
+  assertCompensationChangeAllowed({
+    placement: placementForGate,
+    changing: compensationChanging,
+    ack: compensationAck,
+  });
 
   if (updateBody.ctcBreakdown) {
     const cb = updateBody.ctcBreakdown;
@@ -999,6 +1098,25 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody) => {
   await syncDesignationFromAcceptedOfferToEmployee(offer);
   // Letter save always sends jobType; mirror compensation for Sent/Accepted/Under Negotiation.
   await syncCompensationFromOfferToEmployee(offer);
+
+  // Same audit as updateOfferById — both routes into a live placement leave the same trail.
+  if (compensationChanging && placementForGate) {
+    await recordPlacementAudit({
+      placementId: placementForGate._id,
+      action: 'PLACEMENT_COMPENSATION_CHANGED',
+      actorId: actorId ?? null,
+      fromValue: String(compensationBefore ?? ''),
+      toValue: String(offer.compensationType ?? ''),
+      details: {
+        offerId: String(offer._id),
+        candidateId: String(resolveOfferCandidateId(offer) ?? ''),
+        jobType: offer.jobType ?? null,
+        placementStage: placementForGate.status ?? null,
+        acknowledged: true,
+        via: 'offer-letter-save',
+      },
+    });
+  }
 };
 
 /**
@@ -1148,7 +1266,7 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const hasPayload =
     letterPayload && typeof letterPayload === 'object' && Object.keys(letterPayload).length > 0;
   if (hasPayload) {
-    await applyOfferLetterPatchForGenerate(offer, letterPayload);
+    await applyOfferLetterPatchForGenerate(offer, letterPayload, currentUser?._id ?? currentUser?.id ?? null);
   }
 
   const fresh = await getOfferById(id, currentUser);
@@ -1476,5 +1594,6 @@ export {
   getLetterDefaultsForTitle,
   shareOfferWithCandidate,
   syncJoiningDateFromAcceptedOfferToPlacementAndEmployee,
+  syncCompensationFromOfferToEmployee,
   STATUS_VALUES,
 };

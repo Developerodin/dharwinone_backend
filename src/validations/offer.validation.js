@@ -60,6 +60,11 @@ const createOffer = {
       ...letterBodyKeys,
       compensationType: Joi.forbidden(),
       compensationSource: Joi.forbidden(),
+      /**
+       * Explicit acknowledgement that the candidate is already past the offer stage. Required by
+       * the service before a compensation change is persisted onto a live placement. Not stored.
+       */
+      compensationChangeAck: Joi.boolean().optional(),
     })
     .required(),
 };
@@ -85,6 +90,11 @@ const updateOffer = {
       ...letterBodyKeys,
       compensationType: Joi.forbidden(),
       compensationSource: Joi.forbidden(),
+      /**
+       * Explicit acknowledgement that the candidate is already past the offer stage. Required by
+       * the service before a compensation change is persisted onto a live placement. Not stored.
+       */
+      compensationChangeAck: Joi.boolean().optional(),
     })
     .min(1),
 };

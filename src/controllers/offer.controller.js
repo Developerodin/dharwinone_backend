@@ -14,6 +14,8 @@ import {
   shareOfferWithCandidate,
 } from '../services/offer.service.js';
 import * as jobService from '../services/job.service.js';
+import Placement from '../models/placement.model.js';
+import { evaluateCompensationChange } from '../services/offerCompensationGate.js';
 import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 
 // Forward authContext onto req.user so service-layer pipeline-perm bypass can read permissions.
@@ -36,7 +38,33 @@ const get = catchAsync(async (req, res) => {
   if (!offer) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Offer not found');
   }
-  res.send(offer);
+
+  /**
+   * How far past the offer stage this candidate is, so the letter form can disable the job-type
+   * control or warn before saving, instead of letting someone fill in a change the server will
+   * reject. Attached here rather than inside getOfferById, which runs after every write and would
+   * pay for this query on paths that never need it.
+   */
+  const placement = await Placement.findOne({ offer: offer._id })
+    .select('status cancelledBy cancelledAt deferredBy deferredAt')
+    .populate('cancelledBy', 'name email')
+    .populate('deferredBy', 'name email')
+    .lean();
+  const verdict = evaluateCompensationChange(placement);
+  const offRampActor =
+    placement && placement.status === 'Cancelled' ? placement.cancelledBy : placement?.deferredBy;
+
+  res.send({
+    ...offer.toJSON(),
+    compensationGate: {
+      allowed: verdict.allowed,
+      confirm: verdict.confirm,
+      reason: verdict.reason,
+      stage: verdict.stage,
+      at: verdict.at,
+      actorName: offRampActor?.name ?? null,
+    },
+  });
 });
 
 const update = catchAsync(async (req, res) => {

@@ -85,7 +85,7 @@ import {
 } from '../services/sopChecklist.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
-import { buildEmployeeUpdateAuditEnvelope } from '../utils/auditMetadata.helper.js';
+import { buildEmployeeUpdateAuditEnvelope, describeCompensationChange } from '../utils/auditMetadata.helper.js';
 
 /** PR2: legacy candidates.manage OR employees.manage (employee record CRUD). */
 export const canManageCandidates = (req) => {
@@ -469,7 +469,6 @@ const update = catchAsync(async (req, res) => {
   const beforeCandidate = await getCandidateById(req.params.candidateId);
   if (!beforeCandidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   const compWasLocked = Boolean(beforeCandidate.get?.('compensationLocked'));
-  const compBefore = beforeCandidate.compensationType ?? null;
   const candidate = await updateCandidateById(req.params.candidateId, req.body, req.user);
   const cid = candidate?._id ?? candidate?.id ?? req.params.candidateId;
   const actor = String(req.user.id || req.user._id);
@@ -481,20 +480,22 @@ const update = catchAsync(async (req, res) => {
   });
   await activityLogService.persistActivityLogFailSoft(actor, auditEnvelope, req);
 
-  // Dedicated audit trail when an admin overrode a locked compensation snapshot.
-  const compAfter = candidate?.compensationType ?? null;
-  if (
-    req.user.canOverrideCompensation &&
-    compWasLocked &&
-    Object.prototype.hasOwnProperty.call(req.body, 'compensationType') &&
-    compBefore !== compAfter
-  ) {
+  // Audit every compensation movement — value or provenance, whoever made it. The previous
+  // condition also required an admin actor, a locked record and a changed VALUE, so a bulk form
+  // save that merely restamped compensationSource left no trail at all. That blind spot is how a
+  // real revert went unnoticed until a support ticket.
+  const compensationChange = describeCompensationChange(beforeCandidate, candidate);
+  if (compensationChange) {
     await activityLogService.createActivityLog(
       actor,
       ActivityActions.CANDIDATE_COMPENSATION_OVERRIDE,
       EntityTypes.EMPLOYEE,
       String(cid),
-      { before: compBefore, after: compAfter },
+      {
+        ...compensationChange,
+        locked: compWasLocked,
+        deliberate: req.body?.compensationOverride === true,
+      },
       req
     );
   }

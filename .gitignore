@@ -85,3 +85,10 @@ CLAUDE.md
 
 # Backfill script run journals (carry --undo paths, not source)
 attendance-status-backfill.*.journal.json
+
+# Compensation snapshot guard: a bulk form PATCH must never revert an offer-derived value.
+!src/services/__tests__/candidateCompensationWrite.test.js
+!src/services/__tests__/offerCompensationSync.test.js
+!src/utils/__tests__/
+!src/utils/__tests__/auditMetadata.helper.test.js
+!src/services/__tests__/offerCompensationGate.test.js

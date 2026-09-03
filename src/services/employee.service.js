@@ -1434,13 +1434,30 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   // frozen offer-sourced snapshot. Everyone else keeps the locked snapshot
   // (ATS plan interpretation #7).
   if (sanitized.compensationType !== undefined) {
-    if (candidate.get('compensationLocked') && !currentUser?.canOverrideCompensation) {
+    const unchanged = sanitized.compensationType === candidate.compensationType;
+    const locked = Boolean(candidate.get('compensationLocked'));
+    const deliberate =
+      sanitized.compensationOverride === true && Boolean(currentUser?.canOverrideCompensation);
+
+    if (unchanged) {
+      // The employee edit form PATCHes its whole body on every save, so it restates
+      // compensationType even when the user never touched it. Restating the current value is not
+      // an act of setting it — stamping 'manual' here rewrote the provenance of every
+      // offer-derived record and so hid a real revert.
+      delete sanitized.compensationType;
+      delete sanitized.compensationSource;
+    } else if (locked && !deliberate) {
+      // Permission alone cannot tell "I intend to override compensation" apart from "I saved a
+      // form that happened to carry the field". A form loaded before the offer was accepted would
+      // otherwise silently revert the snapshot on save. Overriding a locked snapshot has to say so.
       delete sanitized.compensationType;
       delete sanitized.compensationSource;
     } else {
       sanitized.compensationSource = 'manual';
     }
   }
+  // Request-only intent flag; never a stored field.
+  delete sanitized.compensationOverride;
 
   const designationProvided = Object.prototype.hasOwnProperty.call(sanitized, 'designation');
   const positionProvided = Object.prototype.hasOwnProperty.call(sanitized, 'position');
