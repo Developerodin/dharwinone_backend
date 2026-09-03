@@ -10,6 +10,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
 import { ALLOWED_TRANSITIONS, PLACEMENT_STATUSES } from '../constants/atsPipeline.js';
+import { applyDepartmentToEmployee } from './employeeDepartment.helper.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 
 // Any pipeline-scope perm (15 keys across pre-boarding/onboarding/offers) grants full read
@@ -117,9 +118,9 @@ const VALID_STATUS = new Set(PLACEMENT_STATUSES);
  * Lifecycle:
  *   Pending    → Onboarding | Joined | Deferred | Cancelled  (pre-boarding queue; Joined kept for legacy/admin)
  *   Onboarding → Pending | Joined | Deferred | Cancelled     (pre-boarding done, pre-join window)
- *   Joined     → Deferred                                    (rare reversal)
+ *   Joined     → Pending | Onboarding | Deferred | Cancelled (admin corrections / reversals)
  *   Deferred   → Pending | Onboarding | Joined | Cancelled
- *   Cancelled  → Pending | Onboarding | Deferred             (re-open)
+ *   Cancelled  → Pending | Onboarding | Joined | Deferred    (re-open)
  */
 const allowedTransitions = {
   Pending: new Set(ALLOWED_TRANSITIONS.placement.Pending),
@@ -729,6 +730,13 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       }
     }
     placement.status = updateBody.status;
+    if (updateBody.status === 'Cancelled' || updateBody.status === 'Deferred') {
+      const emp = await Employee.findById(placement.candidate);
+      if (emp) {
+        applyDepartmentToEmployee(emp, null);
+        await emp.save();
+      }
+    }
   }
 
   if (updateBody.joiningDate !== undefined) {

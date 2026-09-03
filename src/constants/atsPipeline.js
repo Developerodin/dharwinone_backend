@@ -56,9 +56,9 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
   placement: freezeTransitions({
     Pending: ['Onboarding', 'Joined', 'Deferred', 'Cancelled'],
     Onboarding: ['Pending', 'Joined', 'Deferred', 'Cancelled'],
-    Joined: ['Deferred'],
+    Joined: ['Pending', 'Onboarding', 'Deferred', 'Cancelled'],
     Deferred: ['Pending', 'Onboarding', 'Joined', 'Cancelled'],
-    Cancelled: ['Pending', 'Onboarding', 'Deferred'],
+    Cancelled: ['Pending', 'Onboarding', 'Joined', 'Deferred'],
   }),
 });
 
