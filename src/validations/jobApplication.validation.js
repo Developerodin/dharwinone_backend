@@ -82,8 +82,8 @@ const getJobApplications = {
       .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
       .optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
   }),
 };
 
@@ -93,8 +93,8 @@ const getMyApplications = {
       .valid(...STATUS_VALUES)
       .optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
   }),
 };
 
