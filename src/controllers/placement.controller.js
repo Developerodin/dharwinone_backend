@@ -11,7 +11,7 @@ import {
 } from '../services/placement.service.js';
 
 const list = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['jobId', 'candidateId', 'status', 'preBoardingStatus', 'stage']);
+  const filter = pick(req.query, ['jobId', 'candidateId', 'status', 'preBoardingStatus', 'stage', 'search']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   // Expose authContext so the service can detect pipeline-scope read perms and skip owner narrowing.
   req.user.authContext = req.authContext;

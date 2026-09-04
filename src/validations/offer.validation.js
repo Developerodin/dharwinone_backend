@@ -65,6 +65,8 @@ const createOffer = {
        * the service before a compensation change is persisted onto a live placement. Not stored.
        */
       compensationChangeAck: Joi.boolean().optional(),
+      /** HR confirmed creating an offer without a prior interview marked selected. Not stored. */
+      ackBypassInterview: Joi.boolean().optional(),
     })
     .required(),
 };

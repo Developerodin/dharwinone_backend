@@ -196,6 +196,63 @@ const isLeave = async (studentId, localMidnight) => {
 };
 
 /**
+ * Which of the given attendance days must not receive a manual Present record.
+ *
+ * Same sources punch-in already uses, evaluated in bulk instead of one day at a time:
+ * assigned holidays (student profile + employee profile), a Holiday/Leave attendance
+ * row already sitting on the day, and the person's week-off. Backdated attendance uses
+ * this twice — to block an employee's request up front, and to warn the reviewer before
+ * an approve overwrites a leave or holiday.
+ *
+ * @param {{ studentId?: string, userId?: string, dates: Date[] }} args - `dates` are UTC midnights
+ * @returns {Promise<Array<{ date: string, kind: 'holiday'|'leave'|'weekoff', label: string }>>}
+ */
+const findBlockedAttendanceDays = async ({ studentId, userId, dates }) => {
+  if (!Array.isArray(dates) || dates.length === 0) return [];
+
+  const student = studentId ? await Student.findById(studentId).populate('holidays').lean() : null;
+  const ownerUserId = userId || resolveOwnerUserId(student);
+  const employee = await loadEmployeeHolidayProfile(ownerUserId);
+
+  const holidays = mergeHolidayDocs(student?.holidays, employee?.holidays);
+  const weekOff = [...new Set([...(student?.weekOff || []), ...(employee?.weekOff || [])])];
+
+  const or = [];
+  if (studentId) or.push({ student: studentId });
+  if (ownerUserId) or.push({ user: ownerUserId });
+  const rows = or.length
+    ? await Attendance.find({ $or: or, date: { $in: dates }, status: { $in: ['Holiday', 'Leave'] } })
+        .select('date status notes leaveType')
+        .lean()
+    : [];
+  const rowByDay = new Map(rows.map((r) => [new Date(r.date).getTime(), r]));
+
+  const blocked = [];
+  for (const day of dates) {
+    const iso = day.toISOString().slice(0, 10);
+    const holidayCheck = isHoliday({ holidays }, day);
+    if (holidayCheck.blocked) {
+      blocked.push({ date: iso, kind: 'holiday', label: holidayCheck.holidayTitle || 'Holiday' });
+      continue;
+    }
+    const row = rowByDay.get(day.getTime());
+    if (row?.status === 'Holiday') {
+      blocked.push({ date: iso, kind: 'holiday', label: holidayBlockFromAttendanceRow(row).holidayTitle });
+      continue;
+    }
+    if (row?.status === 'Leave') {
+      blocked.push({ date: iso, kind: 'leave', label: row.leaveType ? `${row.leaveType} leave` : 'Leave' });
+      continue;
+    }
+    const dayName = DAY_NAMES[day.getUTCDay()];
+    if (weekOff.length && weekOff.includes(dayName)) {
+      blocked.push({ date: iso, kind: 'weekoff', label: dayName });
+    }
+  }
+  return blocked;
+};
+
+/**
  * Validate whether a student is permitted to punch in at the given time.
  * Returns a structured decision object; callers decide whether to throw or warn.
  *
@@ -465,6 +522,7 @@ export {
   isHoliday,
   isWeekOff,
   isLeave,
+  findBlockedAttendanceDays,
   validatePunchIn,
   validatePunchInByUser,
   validatePunchOut,
@@ -478,6 +536,7 @@ export default {
   isHoliday,
   isWeekOff,
   isLeave,
+  findBlockedAttendanceDays,
   validatePunchIn,
   validatePunchInByUser,
   validatePunchOut,

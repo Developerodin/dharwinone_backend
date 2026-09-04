@@ -59,4 +59,12 @@ const remove = catchAsync(async (req, res) => {
   });
 });
 
-export { create, list, get, update, remove };
+const listAssignees = catchAsync(async (req, res) => {
+  const result = await shiftService.queryShiftAssignees(
+    req.params.shiftId,
+    pick(req.query, ['page', 'limit', 'search'])
+  );
+  res.status(httpStatus.OK).send({ success: true, data: result });
+});
+
+export { create, list, get, update, remove, listAssignees };

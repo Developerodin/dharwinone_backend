@@ -191,6 +191,44 @@ const exportWeekOff = {
   }),
 };
 
+const listWeekOffAssignments = {
+  query: Joi.object().keys({
+    day: Joi.string()
+      .valid(...VALID_DAYS)
+      .required()
+      .messages({
+        'any.required': 'Week-off day is required',
+        'any.only': 'Week-off day must be a valid weekday',
+      }),
+    page: Joi.number().integer().min(1).optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    search: Joi.string().trim().allow('').max(120).optional(),
+  }),
+};
+
+const listWeekOffDayCounts = {
+  query: Joi.object().keys({}),
+};
+
+const unassignWeekOffDay = {
+  body: Joi.object()
+    .keys({
+      day: Joi.string()
+        .valid(...VALID_DAYS)
+        .required()
+        .messages({
+          'any.required': 'Week-off day is required',
+          'any.only': 'Week-off day must be a valid weekday',
+        }),
+      studentId: Joi.string().custom(objectId).optional(),
+      candidateId: Joi.string().custom(objectId).optional(),
+    })
+    .or('studentId', 'candidateId')
+    .messages({
+      'object.missing': 'A student or employee is required',
+    }),
+};
+
 const assignShift = {
   body: Joi.object().keys({
     studentIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required().messages({
@@ -203,4 +241,4 @@ const assignShift = {
   }),
 };
 
-export { getStudents, getStudentFilterOptions, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, exportWeekOff, assignShift };
+export { getStudents, getStudentFilterOptions, getStudent, updateStudent, deleteStudent, createStudentFromUser, updateWeekOff, importWeekOff, getWeekOff, exportWeekOff, listWeekOffAssignments, listWeekOffDayCounts, unassignWeekOffDay, assignShift };

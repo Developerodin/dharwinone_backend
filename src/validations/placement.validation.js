@@ -28,9 +28,10 @@ const getPlacements = {
       .optional(),
     // Queue selector: owns the offerStatus + stage-discriminator filter; `status` narrows within it.
     stage: Joi.string().valid('preBoarding', 'onboarding').optional(),
+    search: Joi.string().trim().allow('').max(120).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
   }),
 };
 

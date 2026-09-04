@@ -1,42 +1,47 @@
+import crypto from 'crypto';
 import XLSX from 'xlsx';
-import User from '../models/user.model.js';
-import { createUser } from './user.service.js';
+import { createUser, queryRecruitersForExport } from './user.service.js';
 import { getRoleByName } from './role.service.js';
+
+/** Import rows without a Password column still need a valid User.password. */
+const generateImportPassword = () => {
+  const base = crypto.randomBytes(8).toString('hex');
+  return `Rx${base}1`;
+};
 
 /**
  * Export recruiters (users with Recruiter role via roleIds) to Excel
  */
-const exportRecruitersToExcel = async () => {
-  const recruiterRole = await getRoleByName('Recruiter');
-  const query = recruiterRole
-    ? { roleIds: recruiterRole._id, status: { $nin: ['deleted'] } }
-    : { status: 'impossible-match' }; // no recruiter role = no results
-  const users = await User.find(query)
-    .select('name email phoneNumber countryCode education domain location profileSummary status createdAt')
-    .sort({ createdAt: -1 });
+const exportRecruitersToExcel = async (filter = {}, options = {}, requester = null) => {
+  const { results, totalResults, capped, exportMax } = await queryRecruitersForExport(
+    filter,
+    options,
+    requester
+  );
 
-  const exportData = users.map((u) => {
-    const domains = Array.isArray(u.domain) ? u.domain : (u.domain ? [u.domain] : []);
+  const exportData = results.map((u) => {
+    const obj = typeof u.toJSON === 'function' ? u.toJSON() : u;
+    const domains = Array.isArray(obj.domain) ? obj.domain : obj.domain ? [obj.domain] : [];
     return {
-      Name: u.name || '',
-      Email: u.email || '',
-      Password: '',
-      'Country Code': u.countryCode || 'IN',
-      Phone: u.phoneNumber || '',
-      Education: u.education || '',
+      Name: obj.name || '',
+      Email: obj.email || '',
+      'Country Code': obj.countryCode || 'IN',
+      Phone: obj.phoneNumber || '',
+      Education: obj.education || '',
       Domain: domains.join('|'),
-      Location: u.location || '',
-      'Profile Summary': u.profileSummary || '',
-      Status: u.status || '',
-      'Created At': u.createdAt ? new Date(u.createdAt).toISOString() : '',
+      Location: obj.location || '',
+      'Profile Summary': obj.profileSummary || '',
+      Status: obj.status || '',
+      'Created At': obj.createdAt ? new Date(obj.createdAt).toISOString() : '',
     };
   });
 
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.json_to_sheet(exportData);
-  worksheet['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 40 }, { wch: 12 }, { wch: 25 }];
+  worksheet['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 14 }, { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 40 }, { wch: 12 }, { wch: 25 }];
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Recruiters');
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  return { buffer, totalResults, capped, exportMax };
 };
 
 /**
@@ -46,7 +51,6 @@ const getRecruiterTemplateBuffer = () => {
   const headers = [{
     Name: 'John Doe',
     Email: 'john@example.com',
-    Password: 'password1',
     'Country Code': 'IN',
     Phone: '9876543210',
     Education: 'B.Tech',
@@ -56,7 +60,7 @@ const getRecruiterTemplateBuffer = () => {
   }];
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.json_to_sheet(headers);
-  worksheet['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 40 }];
+  worksheet['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 14 }, { wch: 20 }, { wch: 25 }, { wch: 30 }, { wch: 25 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Recruiters');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 };
@@ -81,7 +85,9 @@ const importRecruitersFromExcel = async (fileBuffer) => {
     const row = data[i];
     const name = row.Name || row.name || '';
     const email = (row.Email || row.email || '').toString().trim().toLowerCase();
-    const password = row.Password || row.password || '';
+    const passwordRaw = row.Password ?? row.password ?? '';
+    const passwordProvided = Boolean(String(passwordRaw).trim());
+    const password = passwordProvided ? String(passwordRaw).trim() : generateImportPassword();
     const countryCodeRaw = row['Country Code'] || row.countryCode || row.CountryCode || 'IN';
     const countryCode = typeof countryCodeRaw === 'string' ? countryCodeRaw.trim().toUpperCase() || 'IN' : 'IN';
     const phone = row.Phone || row.phone || row.phoneNumber || '';
@@ -94,11 +100,18 @@ const importRecruitersFromExcel = async (fileBuffer) => {
     const profileSummary = row['Profile Summary'] || row.profileSummary || row.ProfileSummary || '';
 
     try {
-      if (!name || !email || !password) {
-        throw new Error('Name, Email, and Password are required');
+      if (!name || !email) {
+        throw new Error('Name and Email are required');
       }
-      if (password.length < 8 || !/\d/.test(password) || !/[a-zA-Z]/.test(password)) {
+      if (
+        passwordProvided &&
+        (password.length < 8 || !/\d/.test(password) || !/[a-zA-Z]/.test(password))
+      ) {
         throw new Error('Password must be at least 8 characters with 1 letter and 1 number');
+      }
+      const summaryTrimmed = profileSummary ? profileSummary.toString().trim() : '';
+      if (summaryTrimmed.length > 4000) {
+        throw new Error('Profile Summary must be at most 4000 characters');
       }
 
       const user = await createUser({
@@ -113,7 +126,7 @@ const importRecruitersFromExcel = async (fileBuffer) => {
         education: education ? education.toString().trim() : undefined,
         domain: domainArr.length > 0 ? domainArr : undefined,
         location: location ? location.toString().trim() : undefined,
-        profileSummary: profileSummary ? profileSummary.toString().trim() : undefined,
+        profileSummary: summaryTrimmed || undefined,
       });
 
       results.successful.push({ row: i + 2, email, id: user._id.toString() });

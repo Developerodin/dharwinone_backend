@@ -138,7 +138,6 @@ export function deriveReferralPipelineStatus(ctx) {
   if (hasSelectedInterview(meetings)) return 'offer';
   if (primaryApp && ['Interview', 'Screening'].includes(primaryApp.status)) return 'interview';
 
-  if (primaryApp?.status === 'Hired' || primaryApp?.status === 'Offered') return 'offer';
   if (primaryApp?.status === 'Applied') return 'applied';
   if (apps.length && apps.every((a) => a.status === 'Rejected')) return 'rejected';
 

@@ -18,6 +18,10 @@ import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.
 import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
 import { SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 import * as emailService from './email.service.js';
+import {
+  applicationHasSelectedInterview,
+  ensureInterviewSelectedForOfferBypass,
+} from './offerInterviewBypass.service.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
 
@@ -534,6 +538,17 @@ const createOfferCore = async (applicationId, payload, userId) => {
   const existing = await Offer.findOne({ jobApplication: applicationId });
   if (existing) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'An offer already exists for this application');
+  }
+
+  const hasSelectedInterview = await applicationHasSelectedInterview(application);
+  if (!hasSelectedInterview) {
+    if (!payload.ackBypassInterview) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'This candidate has no interview marked selected. Confirm bypass to create the offer.'
+      );
+    }
+    await ensureInterviewSelectedForOfferBypass(application, userId);
   }
 
   const gross = payload.ctcBreakdown?.gross ?? 0;

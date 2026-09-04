@@ -211,22 +211,29 @@ const removeHolidays = catchAsync(async (req, res) => {
 });
 
 const assignLeave = catchAsync(async (req, res) => {
-  const { studentIds, dates, leaveType, notes } = req.body;
+  const { studentIds, dates, leaveType, notes, from, to, excludedDates } = req.body;
   const result = await attendanceService.assignLeavesToStudents(
     studentIds,
     dates,
     leaveType,
     notes || '',
-    req.user
+    req.user,
+    { from, to, excludedDates }
   );
   res.status(httpStatus.OK).send({ success: true, ...result });
 });
 
 const regularize = catchAsync(async (req, res) => {
   const { studentId } = req.params;
-  const { attendanceEntries } = req.body;
-  const result = await attendanceService.regularizeAttendance(studentId, attendanceEntries, req.user);
-  res.status(httpStatus.OK).send({ success: true, message: `Regularized ${result.createdOrUpdated} attendance record(s).`, ...result });
+  const { attendanceEntries, conflictPolicy } = req.body;
+  const result = await attendanceService.regularizeAttendance(studentId, attendanceEntries, req.user, { conflictPolicy });
+  const skippedNote = result.skipped ? ` ${result.skipped.length} day(s) left untouched.` : '';
+  const overwrittenNote = result.overwritten ? ` ${result.overwritten.length} holiday/leave day(s) replaced.` : '';
+  res.status(httpStatus.OK).send({
+    success: true,
+    message: `Regularized ${result.createdOrUpdated} attendance record(s).${skippedNote}${overwrittenNote}`,
+    ...result,
+  });
 });
 
 const getMyUpcomingHolidays = catchAsync(async (req, res) => {

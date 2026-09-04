@@ -350,6 +350,9 @@ export const permissionAliases = {
   'users.read': [
     'users.read',
     'users.manage',
+    'recruiters.read',
+    'ats.recruiters:view',
+    'ats.recruiters:view,create,edit,delete',
     'interviews.read',
     'interviews.manage',
     'kanban.read',
@@ -359,6 +362,11 @@ export const permissionAliases = {
   ],
   // Recruiters
   'recruiters.read': ['recruiters.read', 'ats.recruiters:view', 'ats.recruiters:view,create,edit,delete'],
+  'recruiters.manage': [
+    'recruiters.manage',
+    'ats.recruiters:create,edit,delete',
+    'ats.recruiters:view,create,edit,delete',
+  ],
   'chats.read': ['chats.read', 'communication.chats:view', 'communication.chats:view,create,edit,delete'],
   'chats.manage': ['chats.manage', 'communication.chats:create,edit,delete', 'communication.chats:view,create,edit,delete'],
   // Communication contact discovery. Spec §9.1: deliberately NO aliases and no inheritance

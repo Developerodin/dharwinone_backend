@@ -5,6 +5,7 @@ import ApiError from '../utils/ApiError.js';
 import {
   createJob,
   queryJobs,
+  getJobFilterOptions,
   getJobById,
   updateJobById,
   deleteJobById,
@@ -71,10 +72,16 @@ const create = catchAsync(async (req, res) => {
 const list = catchAsync(async (req, res) => {
   const filter = pick(req.query, [
     'title',
+    'titles',
+    'companies',
+    'locations',
     'jobType',
     'location',
     'status',
     'experienceLevel',
+    'experienceMin',
+    'experienceMax',
+    'postingDate',
     'createdBy',
     'search',
     'forCandidates',
@@ -91,6 +98,15 @@ const list = catchAsync(async (req, res) => {
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobs(filter, options);
   res.send(result);
+});
+
+const jobFilterOptions = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['status', 'search', 'jobOrigin']);
+  filter.userRoleIds = req.user.roleIds || [];
+  filter.userId = req.user.id || req.user._id;
+  filter.platformSuperUser = req.user.platformSuperUser;
+  const options = await getJobFilterOptions(filter);
+  res.send(options);
 });
 
 const get = catchAsync(async (req, res) => {
@@ -138,9 +154,22 @@ const remove = catchAsync(async (req, res) => {
 
 // Excel Export
 const exportExcel = catchAsync(async (req, res) => {
-  // ids = the rows visible on the client after its own filtering. Role scoping is
-  // still applied below, so naming ids can't widen access beyond what the user may see.
-  const filter = {};
+  const filter = pick(req.body, [
+    'status',
+    'search',
+    'titles',
+    'companies',
+    'locations',
+    'jobOrigin',
+    'salaryMin',
+    'salaryMax',
+    'salaryNotSpecified',
+    'experienceMin',
+    'experienceMax',
+    'postingDate',
+    'sortBy',
+  ]);
+
   const { ids } = req.body;
   if (ids?.length) {
     filter._id = { $in: ids };
@@ -150,14 +179,19 @@ const exportExcel = catchAsync(async (req, res) => {
   filter.userId = req.user.id || req.user._id;
   filter.platformSuperUser = req.user.platformSuperUser;
 
-  const excelBuffer = await exportJobsToExcel(filter);
+  const { buffer, capped, totalResults, exportMax } = await exportJobsToExcel(filter);
 
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   );
   res.setHeader('Content-Disposition', `attachment; filename=jobs_export_${Date.now()}.xlsx`);
-  res.send(excelBuffer);
+  if (capped) {
+    res.setHeader('X-Export-Capped', 'true');
+    res.setHeader('X-Export-Total-Results', String(totalResults));
+    res.setHeader('X-Export-Max-Rows', String(exportMax));
+  }
+  res.send(buffer);
 });
 
 // Excel Template download
@@ -477,6 +511,7 @@ const jobStats = catchAsync(async (req, res) => {
 export {
   create,
   list,
+  jobFilterOptions,
   get,
   update,
   remove,

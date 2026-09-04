@@ -1,6 +1,10 @@
 import Joi from 'joi';
 import { password, objectId, notificationPreferencesSchema } from './custom.validation.js';
 
+const stringListQuery = Joi.alternatives().try(
+  Joi.array().items(Joi.string().trim().min(1)),
+  Joi.string().trim().min(1)
+);
 
 const createUser = {
   body: Joi.object().keys({
@@ -19,9 +23,21 @@ const getUsers = {
     search: Joi.string().allow('').optional(),
     /** Filter by app role name (e.g. recruiter, sales_agent for pickers). */
     role: Joi.string().valid('recruiter', 'referral_eligible', 'sales_agent').optional(),
-    sortBy: Joi.string(),
-    limit: Joi.number().integer(),
-    page: Joi.number().integer(),
+    names: stringListQuery.optional(),
+    domains: stringListQuery.optional(),
+    education: stringListQuery.optional(),
+    locations: stringListQuery.optional(),
+    email: Joi.string().allow('').optional(),
+    sortBy: Joi.string().regex(/^(name|email|education|location|createdAt):(asc|desc)$/),
+    limit: Joi.number().integer().min(1).max(100),
+    page: Joi.number().integer().min(1),
+  }),
+};
+
+const getUserFilterOptions = {
+  query: Joi.object().keys({
+    role: Joi.string().valid('recruiter').required(),
+    search: Joi.string().allow('').optional(),
   }),
 };
 
@@ -48,7 +64,7 @@ const updateUser = {
       education: Joi.string().trim().allow('', null),
       domain: Joi.array().items(Joi.string().trim()).allow(null),
       location: Joi.string().trim().allow('', null),
-      profileSummary: Joi.string().trim().allow('', null),
+      profileSummary: Joi.string().trim().max(4000).allow('', null),
       profilePicture: Joi.object({
         url: Joi.string().uri().optional(),
         key: Joi.string().optional().trim(),
@@ -68,5 +84,11 @@ const deleteUser = {
   }),
 };
 
-export { createUser, getUsers, getUser, updateUser, deleteUser };
+const getPublicRecruiter = {
+  params: Joi.object().keys({
+    recruiterId: Joi.string().custom(objectId).required(),
+  }),
+};
+
+export { createUser, getUsers, getUserFilterOptions, getUser, updateUser, deleteUser, getPublicRecruiter };
 

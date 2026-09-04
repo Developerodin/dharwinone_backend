@@ -45,8 +45,8 @@ const getStudentGroups = {
     isActive: Joi.boolean().optional(),
     createdBy: Joi.string().custom(objectId).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
   }),
 };
 

@@ -3,16 +3,37 @@ import httpStatus from 'http-status';
 import StudentGroup from '../models/studentGroup.model.js';
 import Student from '../models/student.model.js';
 import ApiError from '../utils/ApiError.js';
+import { collationForSortBy } from '../utils/mongoCollation.js';
 import attendanceService from './attendance.service.js';
+
+const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const exactNameRegex = (name) => new RegExp(`^${escapeRegex(name)}$`, 'i');
+
+const applyStudentGroupListFilter = (filter = {}) => {
+  const next = { ...filter };
+  if (typeof next.name === 'string') {
+    const trimmed = next.name.trim();
+    if (trimmed) next.name = { $regex: escapeRegex(trimmed), $options: 'i' };
+    else delete next.name;
+  }
+  return next;
+};
+
+const assertUniqueGroupName = async (trimmedName, excludeId) => {
+  const query = { name: { $regex: exactNameRegex(trimmedName) } };
+  if (excludeId) query._id = { $ne: excludeId };
+  const existing = await StudentGroup.findOne(query).select('_id').lean();
+  if (existing) {
+    throw new ApiError(httpStatus.BAD_REQUEST, `A group with the name "${trimmedName}" already exists. Use a different name.`);
+  }
+};
 
 const createStudentGroup = async (groupBody, user) => {
   const { name, description, studentIds } = groupBody;
 
   const trimmedName = (name || '').trim();
-  const existing = await StudentGroup.findOne({ name: { $regex: new RegExp(`^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }).select('_id').lean();
-  if (existing) {
-    throw new ApiError(httpStatus.BAD_REQUEST, `A group with the name "${trimmedName}" already exists. Use a different name.`);
-  }
+  await assertUniqueGroupName(trimmedName);
 
   const idsToValidate = studentIds && studentIds.length > 0 ? studentIds : [];
   if (idsToValidate.length > 0) {
@@ -38,7 +59,10 @@ const createStudentGroup = async (groupBody, user) => {
 };
 
 const queryStudentGroups = async (filter, options) => {
-  const result = await StudentGroup.paginate(filter, options);
+  const result = await StudentGroup.paginate(applyStudentGroupListFilter(filter), {
+    ...options,
+    collation: collationForSortBy(options.sortBy),
+  });
   if (result.results && result.results.length > 0) {
     const count = result.results.length;
     for (let i = 0; i < count; i++) {
@@ -101,15 +125,7 @@ const updateStudentGroupById = async (groupId, updateBody, _user) => {
 
   if (updateBody.name !== undefined) {
     const trimmedName = (updateBody.name || '').trim();
-    const existing = await StudentGroup.findOne({
-      _id: { $ne: groupId },
-      name: { $regex: new RegExp(`^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-    })
-      .select('_id')
-      .lean();
-    if (existing) {
-      throw new ApiError(httpStatus.BAD_REQUEST, `A group with the name "${trimmedName}" already exists. Use a different name.`);
-    }
+    await assertUniqueGroupName(trimmedName, groupId);
     updateBody.name = trimmedName;
   }
 
@@ -229,6 +245,7 @@ const removeHolidaysFromGroup = async (groupId, holidayIds, user) => {
 };
 
 export {
+  applyStudentGroupListFilter,
   createStudentGroup,
   queryStudentGroups,
   getStudentGroupById,

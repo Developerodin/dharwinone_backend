@@ -7,22 +7,35 @@ import * as studentGroupController from '../../controllers/studentGroup.controll
 
 const router = express.Router();
 
+const requireAttendanceAssign = requirePermissions('attendance.assign');
+const requireStudentsManage = requirePermissions('students.manage');
+
 router
   .route('/')
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.createStudentGroup),
     studentGroupController.create
   )
-  .get(auth(), validate(studentGroupValidation.getStudentGroups), studentGroupController.list);
+  .get(
+    auth(),
+    requireAttendanceAssign,
+    validate(studentGroupValidation.getStudentGroups),
+    studentGroupController.list
+  );
 
 router
   .route('/:groupId/students')
-  .get(auth(), validate(studentGroupValidation.getGroupStudents), studentGroupController.listGroupStudents)
+  .get(
+    auth(),
+    requireAttendanceAssign,
+    validate(studentGroupValidation.getGroupStudents),
+    studentGroupController.listGroupStudents
+  )
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.addStudentsToGroup),
     studentGroupController.addStudents
   );
@@ -31,7 +44,7 @@ router
   .route('/:groupId/students/remove')
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.removeStudentsFromGroup),
     studentGroupController.removeStudents
   );
@@ -40,29 +53,34 @@ router
   .route('/:groupId/holidays')
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.assignHolidaysToGroup),
     studentGroupController.assignHolidays
   )
   .delete(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.removeHolidaysFromGroup),
     studentGroupController.removeHolidays
   );
 
 router
   .route('/:groupId')
-  .get(auth(), validate(studentGroupValidation.getStudentGroup), studentGroupController.get)
+  .get(
+    auth(),
+    requireAttendanceAssign,
+    validate(studentGroupValidation.getStudentGroup),
+    studentGroupController.get
+  )
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.updateStudentGroup),
     studentGroupController.update
   )
   .delete(
     auth(),
-    requirePermissions('students.manage'),
+    requireStudentsManage,
     validate(studentGroupValidation.getStudentGroup),
     studentGroupController.remove
   );

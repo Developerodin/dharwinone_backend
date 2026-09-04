@@ -18,6 +18,7 @@ import {
   queryApplicants,
 } from './applicantQuery.service.js';
 import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/jobLocation.util.js';
+import { collationForSortBy } from '../utils/mongoCollation.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -38,6 +39,29 @@ const SALARY_NOT_SPECIFIED_CLAUSE = {
 };
 
 const DEFAULT_SALARY_FILTER_MAX = 200000;
+const DEFAULT_EXPERIENCE_FILTER_MAX = 20;
+const FILTER_OPTIONS_MAX = 500;
+const EXPORT_MAX_ROWS = 10000;
+
+const EXPERIENCE_LEVEL_BOUNDS = {
+  'Entry Level': { min: 0, max: 2 },
+  'Mid Level': { min: 2, max: 5 },
+  'Senior Level': { min: 5, max: 10 },
+  Executive: { min: 10, max: 20 },
+};
+
+const JOB_SORT_ALLOWLIST = new Set([
+  'createdAt:desc',
+  'createdAt:asc',
+  'title:asc',
+  'title:desc',
+  'organisation.name:asc',
+  'organisation.name:desc',
+  'location:asc',
+  'location:desc',
+  'minExperience:asc',
+  'minExperience:desc',
+]);
 
 /** Keys that are request context, not Job document fields — never snapshot into $and. */
 const JOB_QUERY_META_KEYS = new Set([
@@ -48,6 +72,12 @@ const JOB_QUERY_META_KEYS = new Set([
   'salaryNotSpecified',
   'salaryMin',
   'salaryMax',
+  'experienceMin',
+  'experienceMax',
+  'postingDate',
+  'titles',
+  'companies',
+  'locations',
 ]);
 
 const stripJobQueryMeta = (obj) => {
@@ -97,6 +127,118 @@ const buildSalaryRangeOverlapClause = (filterMin, filterMax) => ({
     },
   ],
 });
+
+const parseStringList = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
+
+const resolveJobSortBy = (sortBy) => {
+  if (!sortBy || typeof sortBy !== 'string') return 'createdAt:desc';
+  const normalized = sortBy.trim();
+  return JOB_SORT_ALLOWLIST.has(normalized) ? normalized : 'createdAt:desc';
+};
+
+const buildExperienceLevelMinExpr = () => ({
+  $switch: {
+    branches: Object.entries(EXPERIENCE_LEVEL_BOUNDS).map(([level, bounds]) => ({
+      case: { $eq: ['$experienceLevel', level] },
+      then: bounds.min,
+    })),
+    default: null,
+  },
+});
+
+const buildExperienceLevelMaxExpr = () => ({
+  $switch: {
+    branches: Object.entries(EXPERIENCE_LEVEL_BOUNDS).map(([level, bounds]) => ({
+      case: { $eq: ['$experienceLevel', level] },
+      then: bounds.max,
+    })),
+    default: null,
+  },
+});
+
+/** Overlap filter: job experience range intersects [filterMin, filterMax]; unspecified jobs excluded. */
+const buildExperienceRangeOverlapClause = (filterMin, filterMax) => ({
+  $expr: {
+    $let: {
+      vars: {
+        levelMin: buildExperienceLevelMinExpr(),
+        levelMax: buildExperienceLevelMaxExpr(),
+        jobMin: {
+          $ifNull: ['$minExperience', buildExperienceLevelMinExpr()],
+        },
+        jobMax: {
+          $ifNull: [
+            '$maxExperience',
+            {
+              $ifNull: ['$minExperience', { $ifNull: [buildExperienceLevelMaxExpr(), buildExperienceLevelMinExpr()] }],
+            },
+          ],
+        },
+      },
+      in: {
+        $and: [
+          { $ne: ['$$jobMin', null] },
+          { $lte: ['$$jobMin', filterMax] },
+          { $gte: ['$$jobMax', filterMin] },
+        ],
+      },
+    },
+  },
+});
+
+const applyJobExperienceQueryFilters = (filter, experienceOpts = {}) => {
+  const minRaw = experienceOpts.experienceMin;
+  const maxRaw = experienceOpts.experienceMax;
+  const min = minRaw !== undefined && minRaw !== '' ? Number(minRaw) : null;
+  const max = maxRaw !== undefined && maxRaw !== '' ? Number(maxRaw) : null;
+  const minActive = min != null && Number.isFinite(min) && min > 0;
+  const maxActive = max != null && Number.isFinite(max) && max < DEFAULT_EXPERIENCE_FILTER_MAX;
+  if (!minActive && !maxActive) return;
+
+  const filterMin = minActive ? min : 0;
+  const filterMax = maxActive ? max : DEFAULT_EXPERIENCE_FILTER_MAX;
+  appendFilterClause(filter, buildExperienceRangeOverlapClause(filterMin, filterMax));
+};
+
+const applyPostingDateFilter = (filter, postingDateRaw) => {
+  const postingDate = postingDateRaw != null ? String(postingDateRaw).trim() : '';
+  if (!postingDate) return;
+  const match = postingDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return;
+  const start = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  appendFilterClause(filter, { createdAt: { $gte: start, $lt: end } });
+};
+
+const applyJobListFacetFilters = (filter, facetOpts = {}) => {
+  const titleFilters = parseStringList(facetOpts.titles);
+  const companyFilters = parseStringList(facetOpts.companies);
+  const locationFilters = parseStringList(facetOpts.locations);
+
+  if (titleFilters.length) {
+    appendFilterClause(filter, {
+      $or: titleFilters.map((title) => ({
+        title: { $regex: escapeRegex(title), $options: 'i' },
+      })),
+    });
+  }
+
+  if (companyFilters.length) {
+    appendFilterClause(filter, { 'organisation.name': { $in: companyFilters } });
+  }
+
+  if (locationFilters.length) {
+    appendFilterClause(filter, { location: { $in: locationFilters } });
+  }
+};
 
 const applyJobSalaryQueryFilters = (filter, salaryOpts = {}) => {
   const notSpecified =
@@ -284,6 +426,30 @@ const queryJobs = async (filter, options) => {
   delete filter.salaryMin;
   delete filter.salaryMax;
 
+  const experienceQueryOpts = {
+    experienceMin: filter.experienceMin,
+    experienceMax: filter.experienceMax,
+  };
+  delete filter.experienceMin;
+  delete filter.experienceMax;
+
+  const facetQueryOpts = {
+    titles: filter.titles,
+    companies: filter.companies,
+    locations: filter.locations,
+  };
+  delete filter.titles;
+  delete filter.companies;
+  delete filter.locations;
+
+  const postingDate = filter.postingDate;
+  delete filter.postingDate;
+
+  const statusRaw = filter.status;
+  if (statusRaw === 'all') {
+    delete filter.status;
+  }
+
   const searchTerm = filter.search != null ? String(filter.search).trim() : '';
   const locationTerm = filter.location != null ? String(filter.location).trim() : '';
   delete filter.search;
@@ -307,6 +473,25 @@ const queryJobs = async (filter, options) => {
     if (locationClause) appendFilterClause(filter, locationClause);
   }
 
+  applyJobListFacetFilters(filter, facetQueryOpts);
+  applyPostingDateFilter(filter, postingDate);
+
+  const paginateOptions = {
+    ...options,
+    sortBy: resolveJobSortBy(options?.sortBy),
+    populate: options.populate !== undefined ? options.populate : LIST_JOBS_POPULATE,
+    collation: collationForSortBy(options?.sortBy, [
+      'title',
+      'organisation.name',
+      'location',
+    ]),
+  };
+
+  const applySharedListFilters = (targetFilter) => {
+    applyJobSalaryQueryFilters(targetFilter, salaryQueryOpts);
+    applyJobExperienceQueryFilters(targetFilter, experienceQueryOpts);
+  };
+
   // Candidate-facing: return all active jobs, no createdBy filter
   if (filter.forCandidates) {
     delete filter.forCandidates;
@@ -323,9 +508,8 @@ const queryJobs = async (filter, options) => {
       filter.$and = [{ status }, MIRROR_EXTERNAL_OR];
     }
 
-    applyJobSalaryQueryFilters(filter, salaryQueryOpts);
-    const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
-    return result;
+    applySharedListFilters(filter);
+    return Job.paginate(filter, paginateOptions);
   }
 
   // Staff with Administrator / Agent / Recruiter see all jobs; others only own internal + mirrored external
@@ -365,9 +549,8 @@ const queryJobs = async (filter, options) => {
         : { ...rest, ...visibilityClause };
     }
 
-    applyJobSalaryQueryFilters(finalFilter, salaryQueryOpts);
-    const result = await Job.paginate(finalFilter, { ...options, populate: LIST_JOBS_POPULATE });
-    return result;
+    applySharedListFilters(finalFilter);
+    return Job.paginate(finalFilter, paginateOptions);
   }
 
   delete filter.userRoleIds;
@@ -383,9 +566,8 @@ const queryJobs = async (filter, options) => {
     filter.$and = clauses;
   }
 
-  applyJobSalaryQueryFilters(filter, salaryQueryOpts);
-  const result = await Job.paginate(filter, { ...options, populate: LIST_JOBS_POPULATE });
-  return result;
+  applySharedListFilters(filter);
+  return Job.paginate(filter, paginateOptions);
 };
 
 const getJobById = async (id) => {
@@ -518,23 +700,28 @@ const autoCols = (aoa, headers) =>
   });
 
 // Excel Export
-const exportJobsToExcel = async (filters = {}) => {
-  const canSeeAllTenantJobs = await userCanViewAllJobsForListing({
-    roleIds: filters.userRoleIds || [],
-    platformSuperUser: filters.platformSuperUser,
+const queryJobsForExport = async (filter, options = {}) => {
+  const firstPage = await queryJobs(filter, {
+    ...options,
+    page: 1,
+    limit: EXPORT_MAX_ROWS,
   });
-  delete filters.platformSuperUser;
-  if (!canSeeAllTenantJobs && filters.userId) {
-    filters.createdBy = filters.userId;
-  }
-  delete filters.userRole;
-  delete filters.userId;
-  delete filters.userRoleIds;
+  const capped = firstPage.totalResults > EXPORT_MAX_ROWS;
+  return {
+    results: firstPage.results,
+    totalResults: firstPage.totalResults,
+    capped,
+    exportMax: EXPORT_MAX_ROWS,
+  };
+};
 
-  const jobs = await Job.find(filters)
-    .populate('createdBy', 'name email')
-    .populate('templateId', 'name')
-    .sort({ createdAt: -1 });
+const exportJobsToExcel = async (filters = {}) => {
+  const listFilter = { ...filters };
+  delete listFilter._id;
+
+  const { results: jobs, capped, totalResults, exportMax } = await queryJobsForExport(listFilter, {
+    sortBy: filters.sortBy,
+  });
 
   const headers = [
     'Job Title', 'Organisation Name', 'Organisation Website', 'Organisation Email',
@@ -575,14 +762,83 @@ const exportJobsToExcel = async (filters = {}) => {
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet(aoa);
   worksheet['!cols'] = autoCols(aoa, headers);
-  // Filter dropdowns on the header row. (The community xlsx writer drops !freeze,
-  // so setting it would be dead code.)
   const lastCol = XLSX.utils.encode_col(headers.length - 1);
   worksheet['!autofilter'] = { ref: `A1:${lastCol}${aoa.length}` };
 
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Jobs');
 
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  return {
+    buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
+    capped,
+    totalResults,
+    exportMax,
+  };
+};
+
+const getJobFilterOptions = async (filter = {}) => {
+  const listFilter = {
+    ...filter,
+    userRoleIds: filter.userRoleIds || [],
+    userId: filter.userId,
+    platformSuperUser: filter.platformSuperUser,
+  };
+
+  const firstPage = await queryJobs(listFilter, {
+    page: 1,
+    limit: FILTER_OPTIONS_MAX,
+    sortBy: 'title:asc',
+    select: 'title organisation.name location status minExperience maxExperience experienceLevel',
+    lean: true,
+    populate: [],
+  });
+  const titles = new Set();
+  const companies = new Set();
+  const locations = new Set();
+  const statuses = new Set();
+  const jobs = [];
+  let expMin = DEFAULT_EXPERIENCE_FILTER_MAX;
+  let expMax = 0;
+
+  for (const job of firstPage.results) {
+    const id = job._id != null ? String(job._id) : job.id != null ? String(job.id) : '';
+    if (id) {
+      jobs.push({
+        id,
+        title: job.title ? String(job.title).trim() || 'Untitled' : 'Untitled',
+      });
+    }
+    if (job.title) titles.add(String(job.title).trim());
+    if (job.organisation?.name) companies.add(String(job.organisation.name).trim());
+    if (job.location) locations.add(String(job.location).trim());
+    if (job.status) statuses.add(String(job.status).trim());
+
+    let jobMin = job.minExperience;
+    let jobMax = job.maxExperience;
+    if (jobMin == null && jobMax == null && job.experienceLevel && EXPERIENCE_LEVEL_BOUNDS[job.experienceLevel]) {
+      jobMin = EXPERIENCE_LEVEL_BOUNDS[job.experienceLevel].min;
+      jobMax = EXPERIENCE_LEVEL_BOUNDS[job.experienceLevel].max;
+    }
+    if (jobMin != null && Number.isFinite(jobMin)) {
+      expMin = Math.min(expMin, jobMin);
+      expMax = Math.max(expMax, jobMin);
+    }
+    if (jobMax != null && Number.isFinite(jobMax)) {
+      expMin = Math.min(expMin, jobMax);
+      expMax = Math.max(expMax, jobMax);
+    }
+  }
+
+  return {
+    titles: [...titles].sort((a, b) => a.localeCompare(b)),
+    companies: [...companies].sort((a, b) => a.localeCompare(b)),
+    locations: [...locations].sort((a, b) => a.localeCompare(b)),
+    statuses: [...statuses].sort((a, b) => a.localeCompare(b)),
+    experience: {
+      min: firstPage.results.length ? expMin : 0,
+      max: firstPage.results.length ? Math.max(expMax, expMin) : DEFAULT_EXPERIENCE_FILTER_MAX,
+    },
+    jobs,
+  };
 };
 
 // Excel Template (headers + sample row for import)
@@ -1492,6 +1748,8 @@ async function getJobStats(jobId, currentUser = {}) {
 export {
   createJob,
   queryJobs,
+  queryJobsForExport,
+  getJobFilterOptions,
   getJobById,
   updateJobById,
   deleteJobById,

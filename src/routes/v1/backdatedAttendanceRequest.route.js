@@ -50,7 +50,7 @@ router
   )
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(backdatedAttendanceRequestValidation.updateBackdatedAttendanceRequest),
     backdatedAttendanceRequestController.update
   );
@@ -59,7 +59,7 @@ router
   .route('/:requestId/approve')
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(backdatedAttendanceRequestValidation.approveBackdatedAttendanceRequest),
     backdatedAttendanceRequestController.approve
   );
@@ -68,7 +68,7 @@ router
   .route('/:requestId/reject')
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(backdatedAttendanceRequestValidation.rejectBackdatedAttendanceRequest),
     backdatedAttendanceRequestController.reject
   );

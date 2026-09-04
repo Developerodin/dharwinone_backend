@@ -92,7 +92,12 @@ export function buildInternalMeetingsMongoFilter(query = {}) {
 
   const status = String(query.status ?? '').trim();
   if (status) {
-    and.push({ status: { $regex: new RegExp(`^${escapeRegex(status)}$`, 'i') } });
+    const normalized = status.toLowerCase();
+    if (normalized === 'completed') {
+      and.push({ status: { $in: ['ended', 'completed'] } });
+    } else {
+      and.push({ status: { $regex: new RegExp(`^${escapeRegex(status)}$`, 'i') } });
+    }
   }
 
   const searchTerm = String(query.search ?? query.title ?? '').trim();

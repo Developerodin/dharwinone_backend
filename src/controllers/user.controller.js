@@ -33,10 +33,29 @@ const createUser = catchAsync(async (req, res) => {
 });
 
 const getUsers = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['name', 'status', 'search', 'role']);
+  const filter = pick(req.query, [
+    'name',
+    'status',
+    'search',
+    'role',
+    'names',
+    'domains',
+    'education',
+    'locations',
+    'email',
+  ]);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await userService.queryUsers(filter, options, req.user);
   res.send(result);
+});
+
+const getUserFilterOptions = catchAsync(async (req, res) => {
+  if (req.query.role !== 'recruiter') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Only recruiter filter options are supported');
+  }
+  const filter = pick(req.query, ['search', 'role']);
+  const options = await userService.getRecruiterFilterOptions(filter, req.user);
+  res.send(options);
 });
 
 const getUser = catchAsync(async (req, res) => {
@@ -151,11 +170,18 @@ const deleteUser = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+const getPublicRecruiter = catchAsync(async (req, res) => {
+  const profile = await userService.getPublicRecruiterProfile(req.params.recruiterId);
+  res.send(profile);
+});
+
 export {
   createUser,
   getUsers,
+  getUserFilterOptions,
   getUser,
   updateUser,
   deleteUser,
+  getPublicRecruiter,
 };
 

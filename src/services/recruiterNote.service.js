@@ -13,6 +13,18 @@ const ensureRecruiterExists = async (recruiterId) => {
   }
 };
 
+/** .lean() / .toObject() bypass Mongoose toJSON — always expose `id` for API clients. */
+const serializeRecruiterNote = (note) => ({
+  id: String(note._id ?? note.id),
+  recruiter: String(note.recruiter),
+  note: note.note,
+  visibility: note.visibility,
+  postedBy: String(note.postedBy),
+  postedByName: note.postedByName,
+  createdAt: note.createdAt,
+  updatedAt: note.updatedAt,
+});
+
 const listForRecruiter = async (recruiterId, requesterUser) => {
   await ensureRecruiterExists(recruiterId);
   const isAdmin = await userIsAdmin(requesterUser);
@@ -22,7 +34,7 @@ const listForRecruiter = async (recruiterId, requesterUser) => {
   const notes = await RecruiterNote.find({ recruiter: recruiterId, ...visibilityClause })
     .sort({ createdAt: -1 })
     .lean();
-  return notes;
+  return notes.map(serializeRecruiterNote);
 };
 
 const createNote = async (recruiterId, requesterUser, payload) => {
@@ -34,7 +46,7 @@ const createNote = async (recruiterId, requesterUser, payload) => {
     postedBy: requesterUser._id,
     postedByName: requesterUser.name || requesterUser.email || 'Unknown',
   });
-  return note.toObject();
+  return serializeRecruiterNote(note.toObject());
 };
 
 const deleteNote = async (noteId, requesterUser) => {
@@ -72,7 +84,7 @@ const shareRecruiterByEmail = async (recruiterId, payload, requesterUser) => {
   const sharedBy = requesterUser?.name || requesterUser?.email || 'A Dharwin user';
 
   const frontendBase = (process.env.WEB_URL || getFrontendBaseUrl()).replace(/\/$/, '');
-  const profileUrl = `${frontendBase}/ats/recruiters/edit/${recruiterId}`;
+  const profileUrl = `${frontendBase}/public-recruiter/${recruiterId}`;
 
   const domainText = Array.isArray(recruiter.domain)
     ? recruiter.domain.filter(Boolean).join(', ')

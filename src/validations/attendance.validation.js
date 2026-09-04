@@ -185,29 +185,44 @@ const removeHolidaysFromStudents = {
   }),
 };
 
+// Same string contract as YmdFilterDateInput / savedFrom+savedTo: YYYY-MM-DD or ISO.
+const assignLeaveBound = Joi.string().trim().min(10).max(40);
+
 const assignLeavesToStudents = {
-  body: Joi.object().keys({
-    studentIds: Joi.array()
-      .items(Joi.string().custom(objectId))
-      .min(1)
-      .required()
-      .messages({
-        'array.min': 'At least one student ID is required',
-        'any.required': 'Student IDs are required',
+  body: Joi.object()
+    .keys({
+      studentIds: Joi.array()
+        .items(Joi.string().custom(objectId))
+        .min(1)
+        .required()
+        .messages({
+          'array.min': 'At least one student ID is required',
+          'any.required': 'Student IDs are required',
+        }),
+      dates: Joi.array()
+        .items(Joi.alternatives().try(Joi.date(), Joi.date().iso(), Joi.string().trim()))
+        .min(1)
+        // ponytail: 90 working-day ceiling; server {from,to} + insertMany if year-long bulk is needed
+        .max(90)
+        .optional()
+        .messages({
+          'array.min': 'At least one date is required',
+          'array.max': 'At most 90 dates can be assigned at once',
+        }),
+      from: assignLeaveBound,
+      to: assignLeaveBound,
+      excludedDates: Joi.array().items(assignLeaveBound).max(90).optional(),
+      leaveType: Joi.string().valid('casual', 'sick', 'unpaid').required().messages({
+        'any.required': 'Leave type is required',
       }),
-    dates: Joi.array()
-      .items(Joi.alternatives().try(Joi.date(), Joi.date().iso(), Joi.string().trim()))
-      .min(1)
-      .required()
-      .messages({
-        'array.min': 'At least one date is required',
-        'any.required': 'Dates are required',
-      }),
-    leaveType: Joi.string().valid('casual', 'sick', 'unpaid').required().messages({
-      'any.required': 'Leave type is required',
+      notes: Joi.string().allow('').optional(),
+    })
+    .or('dates', 'from')
+    .and('from', 'to')
+    .messages({
+      'object.missing': 'Either dates or from and to are required',
+      'object.and': 'from and to are both required',
     }),
-    notes: Joi.string().allow('').optional(),
-  }),
 };
 
 const regularizeEntrySchema = Joi.object().keys({
@@ -231,6 +246,8 @@ const regularizeAttendance = {
         'array.min': 'At least one attendance entry is required',
         'any.required': 'Attendance entries are required',
       }),
+    /** Omitted on the first call; the API then 409s with the conflicting days for the admin to decide. */
+    conflictPolicy: Joi.string().valid('overwrite', 'skip').optional(),
   }),
 };
 

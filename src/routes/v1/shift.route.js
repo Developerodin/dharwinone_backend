@@ -17,6 +17,14 @@ router
   )
   .get(auth(), requirePermissions('students.read'), validate(shiftValidation.getShifts), shiftController.list);
 
+router.get(
+  '/:shiftId/assignees',
+  auth(),
+  requirePermissions('attendance.assign'),
+  validate(shiftValidation.listShiftAssignees),
+  shiftController.listAssignees
+);
+
 router
   .route('/:shiftId')
   .get(auth(), requirePermissions('students.read'), validate(shiftValidation.getShift), shiftController.get)

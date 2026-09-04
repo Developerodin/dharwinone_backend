@@ -96,6 +96,27 @@ router.get(
   validate(studentValidation.exportWeekOff),
   weekOffExportController.exportWeekOffExcel
 );
+router.get(
+  '/week-off/counts',
+  auth(),
+  requirePermissions('attendance.assign'),
+  validate(studentValidation.listWeekOffDayCounts),
+  weekOffExportController.listWeekOffDayCounts
+);
+router.get(
+  '/week-off/assignments',
+  auth(),
+  requirePermissions('attendance.assign'),
+  validate(studentValidation.listWeekOffAssignments),
+  weekOffExportController.listWeekOffAssignments
+);
+router.post(
+  '/week-off/unassign',
+  auth(),
+  requirePermissions('attendance.assign'),
+  validate(studentValidation.unassignWeekOffDay),
+  weekOffExportController.unassignWeekOffDay
+);
 // Week-off calendar - MUST be before /:studentId
 router
   .route('/week-off')

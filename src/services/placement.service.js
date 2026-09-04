@@ -401,6 +401,8 @@ const pushAnd = (query, clause) => {
   query.$and = (query.$and || []).concat([clause]);
 };
 
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Build the queue query for a stage:
  *   preBoarding → offerStatus=Accepted, enteredOnboardingAt=null, status∈{Pending,Deferred,Cancelled}
@@ -486,6 +488,32 @@ const queryPlacements = async (filter, options, currentUser) => {
   const narrow = await narrowPlacementQueryToValidCandidates(query, filter);
   if (!narrow.ok) {
     return emptyPaginateResult(options);
+  }
+
+  // Search is scoped to this queue's candidate/job ids (not the full Employee/Job collections).
+  // Ceiling: distinct + $in grow with queue size; upgrade to $lookup if a queue hits thousands.
+  const searchTerm = filter.search != null ? String(filter.search).trim() : '';
+  if (searchTerm) {
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
+    const employeeMatch = {
+      $or: [{ fullName: searchRegex }, { email: searchRegex }, { employeeId: searchRegex }],
+    };
+    if (query.candidate) employeeMatch._id = query.candidate;
+    const Job = (await import('../models/job.model.js')).default;
+    const [matchingEmployees, jobRefs] = await Promise.all([
+      Employee.find(employeeMatch).select('_id').lean(),
+      Placement.distinct('job', query),
+    ]);
+    const matchingJobs = jobRefs.length
+      ? await Job.find({ _id: { $in: jobRefs }, title: searchRegex }).select('_id').lean()
+      : [];
+    pushAnd(query, {
+      $or: [
+        { candidate: { $in: matchingEmployees.map((e) => e._id) } },
+        { job: { $in: matchingJobs.map((j) => j._id) } },
+        { employeeId: searchRegex },
+      ],
+    });
   }
 
   const result = await Placement.paginate(query, {

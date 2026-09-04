@@ -16,8 +16,12 @@ router
   .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobs), jobController.list);
 
 router
+  .route('/filter-options')
+  .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobFilterOptions), jobController.jobFilterOptions);
+
+router
   .route('/export/excel')
-  // POST, not GET: the body carries up to 500 visible row ids, too long for a URL.
+  // POST: body carries list filters (and optional legacy ids) too long for a URL.
   .post(auth(), requirePermissions('jobs.read'), validate(jobValidation.exportJobs), jobController.exportExcel);
 
 router

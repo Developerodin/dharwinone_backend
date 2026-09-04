@@ -16,6 +16,7 @@ import {
   mergeHolidayDocs,
   holidayToTimestamps,
   toPunchInBlockedReason,
+  findBlockedAttendanceDays,
 } from './attendancePolicy.service.js';
 import {
   aggregateDailyCappedWorkMs,
@@ -151,6 +152,85 @@ const getHolidayDates = (holiday) => {
     const d = new Date(t);
     d.setUTCHours(0, 0, 0, 0);
     dates.push(d);
+  }
+  return dates;
+};
+
+const DEFAULT_WEEK_OFF = ['Saturday', 'Sunday'];
+const MAX_ASSIGN_LEAVE_SPAN_DAYS = 90;
+const ASSIGN_LEAVE_YMD = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** YYYY-MM-DD (YmdFilterDateInput) or ISO → UTC midnight. Same date-only rule as savedFrom/savedTo. */
+const parseAssignLeaveBound = (value) => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return null;
+  if (ASSIGN_LEAVE_YMD.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      return null;
+    }
+    return date;
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return getUtcMidnight(date);
+};
+
+const utcYmd = (date) => date.toISOString().slice(0, 10);
+
+const unionWeekOffDayNames = (students) => {
+  const names = new Set();
+  if (!students.length) {
+    for (const day of DEFAULT_WEEK_OFF) names.add(day);
+    return [...names];
+  }
+  for (const student of students) {
+    const list = Array.isArray(student.weekOff) && student.weekOff.length ? student.weekOff : DEFAULT_WEEK_OFF;
+    for (const day of list) names.add(day);
+  }
+  return [...names];
+};
+
+/**
+ * Inclusive UTC calendar range → working-day midnights, skipping week-offs, holidays, excludedDates.
+ * Mirrors frontend expandLeaveDatesInRange; reuses getHolidayDates for holiday spans.
+ */
+const expandAssignLeaveRange = ({ from, to, excludedDates, weekOffDayNames, holidayDates }) => {
+  const start = parseAssignLeaveBound(from);
+  const end = parseAssignLeaveBound(to);
+  if (!start || !end) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid from/to date');
+  }
+  if (end < start) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'End date must be on or after start date.');
+  }
+  const spanDays = Math.round((end.getTime() - start.getTime()) / UTC_DAY_MS) + 1;
+  if (spanDays > MAX_ASSIGN_LEAVE_SPAN_DAYS) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Choose a range of at most ${MAX_ASSIGN_LEAVE_SPAN_DAYS} calendar days.`
+    );
+  }
+
+  const excluded = new Set();
+  for (const raw of excludedDates || []) {
+    const bound = parseAssignLeaveBound(raw);
+    if (bound) excluded.add(utcYmd(bound));
+  }
+  const holidayKeys = new Set((holidayDates || []).map(utcYmd));
+  const weekOffSet = new Set(weekOffDayNames.length ? weekOffDayNames : DEFAULT_WEEK_OFF);
+
+  const dates = [];
+  for (let t = start.getTime(); t <= end.getTime(); t += UTC_DAY_MS) {
+    const date = new Date(t);
+    date.setUTCHours(0, 0, 0, 0);
+    const key = utcYmd(date);
+    if (excluded.has(key)) continue;
+    if (weekOffSet.has(getDayName(date))) continue;
+    if (holidayKeys.has(key)) continue;
+    dates.push(date);
   }
   return dates;
 };
@@ -1260,40 +1340,63 @@ const removeHolidaysFromStudents = async (studentIds, holidayIds, _user) => {
 /**
  * Assign leave to students (create Attendance with status Leave for each student x date)
  * @param {Array<string>} studentIds
- * @param {Array<string|Date>} dates - ISO date strings or Date objects
+ * @param {Array<string|Date>} [dates] - ISO date strings or Date objects (leave-request path)
  * @param {string} leaveType - 'casual' | 'sick' | 'unpaid'
  * @param {string} [notes]
  * @param {Object} user
+ * @param {{ from?: string, to?: string, excludedDates?: string[] }} [range] - YmdFilterDateInput YYYY-MM-DD/ISO
  */
-const assignLeavesToStudents = async (studentIds, dates, leaveType, notes, _user) => {
+const assignLeavesToStudents = async (studentIds, dates, leaveType, notes, _user, range = {}) => {
   const students = await Student.find({ _id: { $in: studentIds } })
-    .select('joiningDate')
+    .select('joiningDate weekOff')
     .populate('user', 'name email');
   if (students.length !== studentIds.length) {
     const foundIds = students.map((s) => String(s._id));
     const missingIds = studentIds.filter((id) => !foundIds.includes(String(id)));
     throw new ApiError(httpStatus.NOT_FOUND, `Some students not found: ${missingIds.join(', ')}`);
   }
-  if (!Array.isArray(dates) || dates.length === 0) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'At least one date is required');
-  }
   if (!['casual', 'sick', 'unpaid'].includes(leaveType)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Leave type must be casual, sick, or unpaid');
   }
 
-  const normalizedDates = dates
-    .map((d) => {
-      const date = new Date(d);
-      if (isNaN(date.getTime())) throw new ApiError(httpStatus.BAD_REQUEST, `Invalid date: ${d}`);
-      return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
-    })
-    .filter((date, i, self) => i === self.findIndex((d) => d.getTime() === date.getTime()))
-    .sort((a, b) => a - b);
+  const from = range?.from;
+  const to = range?.to;
+  let normalizedDates;
+  if (from && to) {
+    const holidays = await Holiday.find({ isActive: true }).select('date endDate').lean();
+    const holidayDates = holidays.flatMap(getHolidayDates);
+    normalizedDates = expandAssignLeaveRange({
+      from,
+      to,
+      excludedDates: range.excludedDates,
+      weekOffDayNames: unionWeekOffDayNames(students),
+      holidayDates,
+    });
+    if (normalizedDates.length === 0) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'The selected range has no working days after excluding week-offs, holidays, and removed dates.'
+      );
+    }
+  } else {
+    if (!Array.isArray(dates) || dates.length === 0) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'At least one date is required');
+    }
+    normalizedDates = dates
+      .map((d) => {
+        const date = new Date(d);
+        if (isNaN(date.getTime())) throw new ApiError(httpStatus.BAD_REQUEST, `Invalid date: ${d}`);
+        return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
+      })
+      .filter((date, i, self) => i === self.findIndex((d) => d.getTime() === date.getTime()))
+      .sort((a, b) => a - b);
+  }
 
   const createdRecords = [];
   const skipped = [];
   const studentMap = new Map(students.map((s) => [String(s._id), s]));
 
+  // ponytail: sequential findOne+create; insertMany if year-long bulk is needed
   for (const studentId of studentIds) {
     const student = studentMap.get(String(studentId));
     if (!student) continue;
@@ -1391,7 +1494,37 @@ const regularizeEntryErrorMessage = (err) => {
  * @param {Array} attendanceEntries - [{ date, punchIn, punchOut?, timezone?, notes? }] (ISO strings or Date)
  * @param {Object} user - must have students.manage (checked by route)
  */
-const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
+/**
+ * Days in a regularize batch that already carry a holiday, a recorded leave, or a week-off.
+ * Same source backdated requests use, so both surfaces agree on what "conflict" means.
+ */
+const findRegularizeConflicts = async (studentId, attendanceEntries) => {
+  const dates = [];
+  const seen = new Set();
+  for (const entry of attendanceEntries) {
+    const d = new Date(entry?.date);
+    if (isNaN(d.getTime())) continue;
+    const midnight = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    if (seen.has(midnight.getTime())) continue;
+    seen.add(midnight.getTime());
+    dates.push(midnight);
+  }
+  return findBlockedAttendanceDays({ studentId, dates });
+};
+
+/**
+ * Admin instant backdated write.
+ *
+ * Writing Present over a holiday or a recorded leave destroys that record, so it is no longer
+ * silent: the first call returns 409 with the conflicting days, and the admin re-sends with an
+ * explicit `conflictPolicy` — 'skip' to leave those days alone, 'overwrite' to replace them.
+ *
+ * @param {string} studentId
+ * @param {Array} attendanceEntries
+ * @param {Object} _user
+ * @param {{ conflictPolicy?: 'overwrite'|'skip' }} [options]
+ */
+const regularizeAttendance = async (studentId, attendanceEntries, _user, options = {}) => {
   const student = await Student.findById(studentId)
     .populate('user', 'name email')
     .populate('shift', 'name timezone startTime endTime');
@@ -1407,13 +1540,41 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'At least one attendance entry is required');
   }
 
+  const { conflictPolicy } = options;
+  const conflicts = await findRegularizeConflicts(studentId, attendanceEntries);
+  if (conflicts.length > 0 && conflictPolicy !== 'overwrite' && conflictPolicy !== 'skip') {
+    throw new ApiError(
+      httpStatus.CONFLICT,
+      `${conflicts.length} of these days already have a holiday, leave, or week-off recorded.`,
+      true,
+      '',
+      { errorCode: 'ATTENDANCE_DAY_CONFLICTS', details: { conflicts } }
+    );
+  }
+
+  let entriesToWrite = attendanceEntries;
+  if (conflicts.length > 0 && conflictPolicy === 'skip') {
+    const skip = new Set(conflicts.map((c) => c.date));
+    entriesToWrite = attendanceEntries.filter((entry) => {
+      const d = new Date(entry?.date);
+      if (isNaN(d.getTime())) return true;
+      return !skip.has(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0, 10));
+    });
+    if (entriesToWrite.length === 0) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Every day in this range is a holiday, leave, or week-off. Nothing left to add.'
+      );
+    }
+  }
+
   const today = new Date();
   const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 0, 0, 0, 0));
   const createdOrUpdated = [];
   const errors = [];
 
-  for (let i = 0; i < attendanceEntries.length; i++) {
-    const entry = attendanceEntries[i];
+  for (let i = 0; i < entriesToWrite.length; i++) {
+    const entry = entriesToWrite[i];
     try {
       const dateObj = new Date(entry.date);
       if (isNaN(dateObj.getTime())) {
@@ -1516,6 +1677,8 @@ const regularizeAttendance = async (studentId, attendanceEntries, _user) => {
 
   return {
     createdOrUpdated: createdOrUpdated.length,
+    skipped: conflictPolicy === 'skip' && conflicts.length > 0 ? conflicts : undefined,
+    overwritten: conflictPolicy === 'overwrite' && conflicts.length > 0 ? conflicts : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
 };

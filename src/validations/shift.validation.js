@@ -63,7 +63,9 @@ const getShifts = {
     name: Joi.string().optional().trim(),
     timezone: Joi.string().optional().trim(),
     isActive: Joi.boolean().optional(),
-    sortBy: Joi.string().optional(),
+    sortBy: Joi.string()
+      .valid('name:asc', 'name:desc', 'createdAt:asc', 'createdAt:desc')
+      .optional(),
     limit: Joi.number().integer().optional(),
     page: Joi.number().integer().optional(),
   }),
@@ -75,4 +77,15 @@ const deleteShift = {
   }),
 };
 
-export { createShift, updateShift, getShift, getShifts, deleteShift };
+const listShiftAssignees = {
+  params: Joi.object().keys({
+    shiftId: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    page: Joi.number().integer().min(1).optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    search: Joi.string().trim().allow('').max(120).optional(),
+  }),
+};
+
+export { createShift, updateShift, getShift, getShifts, deleteShift, listShiftAssignees };

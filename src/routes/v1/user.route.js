@@ -1,7 +1,7 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import * as userValidation from '../../validations/user.validation.js';
 import * as userController from '../../controllers/user.controller.js';
 
@@ -10,13 +10,22 @@ const router = express.Router();
 router
   .route('/')
   .post(auth(), requirePermissions('users.manage'), validate(userValidation.createUser), userController.createUser)
-  .get(auth(), requirePermissions('users.read'), validate(userValidation.getUsers), userController.getUsers);
+  .get(auth(), requireAnyOfPermissions('users.read', 'recruiters.read'), validate(userValidation.getUsers), userController.getUsers);
+
+router
+  .route('/filter-options')
+  .get(
+    auth(),
+    requireAnyOfPermissions('users.read', 'recruiters.read'),
+    validate(userValidation.getUserFilterOptions),
+    userController.getUserFilterOptions
+  );
 
 router
   .route('/:userId')
-  .get(auth(), requirePermissions('users.read'), validate(userValidation.getUser), userController.getUser)
-  .patch(auth(), requirePermissions('users.manage'), validate(userValidation.updateUser), userController.updateUser)
-  .delete(auth(), requirePermissions('users.manage'), validate(userValidation.deleteUser), userController.deleteUser);
+  .get(auth(), requireAnyOfPermissions('users.read', 'recruiters.read'), validate(userValidation.getUser), userController.getUser)
+  .patch(auth(), requireAnyOfPermissions('users.manage', 'recruiters.manage'), validate(userValidation.updateUser), userController.updateUser)
+  .delete(auth(), requireAnyOfPermissions('users.manage', 'recruiters.manage'), validate(userValidation.deleteUser), userController.deleteUser);
 
   export default router;
 

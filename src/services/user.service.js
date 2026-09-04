@@ -1,12 +1,171 @@
 import httpStatus from 'http-status';
 
 import ApiError from '../utils/ApiError.js';
-import { SALES_AGENT_ROLE_NAMES } from '../utils/roleHelpers.js';
+import { SALES_AGENT_ROLE_NAMES, userHasRecruiterRole } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
 import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
 import Token from '../models/token.model.js';
 import logger from '../config/logger.js';
+import { collationForSortBy } from '../utils/mongoCollation.js';
 
+const FILTER_OPTIONS_LIMIT = 500;
+const FILTER_OPTIONS_SCAN_LIMIT = 2000;
+const RECRUITER_EXPORT_MAX_ROWS = 10000;
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseStringList = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
+
+const appendAndClause = (mongoFilter, clause) => {
+  mongoFilter.$and = [...(mongoFilter.$and || []), clause];
+};
+
+const applyUserFacetFilters = (mongoFilter, filter) => {
+  const nameFilters = parseStringList(filter.names);
+  if (nameFilters.length) {
+    appendAndClause(mongoFilter, {
+      $or: nameFilters.map((name) => ({
+        name: { $regex: escapeRegex(name), $options: 'i' },
+      })),
+    });
+  }
+
+  const domainFilters = parseStringList(filter.domains);
+  if (domainFilters.length) {
+    appendAndClause(mongoFilter, {
+      $or: domainFilters.map((domain) => ({
+        domain: { $regex: escapeRegex(domain), $options: 'i' },
+      })),
+    });
+  }
+
+  const educationFilters = parseStringList(filter.education);
+  if (educationFilters.length) {
+    appendAndClause(mongoFilter, {
+      $or: educationFilters.map((edu) => ({
+        education: { $regex: escapeRegex(edu), $options: 'i' },
+      })),
+    });
+  }
+
+  const locationFilters = parseStringList(filter.locations);
+  if (locationFilters.length) {
+    appendAndClause(mongoFilter, {
+      $or: locationFilters.map((loc) => ({
+        location: { $regex: escapeRegex(loc), $options: 'i' },
+      })),
+    });
+  }
+
+  const emailFilters = parseStringList(filter.email);
+  if (emailFilters.length) {
+    appendAndClause(mongoFilter, {
+      $or: emailFilters.map((value) => ({
+        email: { $regex: escapeRegex(value), $options: 'i' },
+      })),
+    });
+  }
+};
+
+const applyRoleScope = async (mongoFilter, role) => {
+  if (role !== 'recruiter' && role !== 'referral_eligible' && role !== 'sales_agent') {
+    return;
+  }
+  const Role = (await import('../models/role.model.js')).default;
+  let roleQuery;
+  if (role === 'sales_agent') {
+    roleQuery = {
+      status: 'active',
+      $or: [
+        { name: { $in: SALES_AGENT_ROLE_NAMES } },
+        { slug: 'salesagent' },
+        { name: { $regex: /^sales[\s_-]*agent$/i } },
+      ],
+    };
+  } else {
+    const targetRoles =
+      role === 'recruiter'
+        ? ['Recruiter']
+        : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
+    roleQuery = { name: { $in: targetRoles }, status: 'active' };
+  }
+  const roles = await Role.find(roleQuery).select('_id').lean();
+  if (roles.length > 0) {
+    mongoFilter.roleIds = { $in: roles.map((r) => r._id) };
+  } else {
+    mongoFilter._id = { $in: [] };
+  }
+};
+
+const applySearchFilter = (mongoFilter, search) => {
+  if (!search || !search.trim()) return;
+  const collapsed = search.trim().replace(/\s+/g, ' ');
+  const escaped = collapsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const searchRegex = new RegExp(escaped.replace(/ /g, '\\s+'), 'i');
+  mongoFilter.$or = [{ name: { $regex: searchRegex } }, { email: { $regex: searchRegex } }];
+};
+
+const applyHiddenUserFilter = async (mongoFilter, requester) => {
+  if (!requester || viewerSeesHiddenUsers(requester)) return;
+  const hiddenIds = await getDirectoryHiddenUserIds();
+  if (hiddenIds.length === 0) return;
+  mongoFilter._id = { ...(mongoFilter._id || {}), $nin: hiddenIds };
+};
+
+/**
+ * Build Mongo filter for GET /users list queries (recruiter facet filters, role scope, search).
+ * @param {Object} filter
+ * @param {object | null} [requester]
+ */
+const buildUserListMongoFilter = async (filter, requester = null) => {
+  const { search, role, names, domains, education, locations, email, ...restFilter } = filter;
+  const mongoFilter = { ...restFilter };
+
+  await applyRoleScope(mongoFilter, role);
+  applyUserFacetFilters(mongoFilter, { names, domains, education, locations, email });
+  applySearchFilter(mongoFilter, search);
+  await applyHiddenUserFilter(mongoFilter, requester);
+
+  return mongoFilter;
+};
+
+const collectRecruiterFilterFacets = (users) => {
+  const names = new Set();
+  const domains = new Set();
+  const education = new Set();
+  const locations = new Set();
+  const emails = new Set();
+
+  for (const user of users) {
+    if (user.name?.trim()) names.add(user.name.trim());
+    if (user.email?.trim()) emails.add(user.email.trim());
+    if (user.education?.trim()) education.add(user.education.trim());
+    if (user.location?.trim()) locations.add(user.location.trim());
+    const domainValues = Array.isArray(user.domain) ? user.domain : user.domain ? [user.domain] : [];
+    for (const domain of domainValues) {
+      const trimmed = String(domain).trim();
+      if (trimmed) domains.add(trimmed);
+    }
+  }
+
+  const sortCi = (left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' });
+  const cap = (values) => [...values].sort(sortCi).slice(0, FILTER_OPTIONS_LIMIT);
+
+  return {
+    names: cap(names),
+    domains: cap(domains),
+    education: cap(education),
+    locations: cap(locations),
+    emails: cap(emails),
+  };
+};
 
 /**
  * Create a user
@@ -50,60 +209,11 @@ const createUser = async (userBody, options = {}) => {
  * @returns {Promise<QueryResult>}
  */
 const queryUsers = async (filter, options, requester = null) => {
-  const { search, role, ...restFilter } = filter;
-  const mongoFilter = { ...restFilter };
-  if (role === 'recruiter' || role === 'referral_eligible' || role === 'sales_agent') {
-    const Role = (await import('../models/role.model.js')).default;
-    let roleQuery;
-    if (role === 'sales_agent') {
-      // The sales-agent role's display name is admin-defined and varies by org
-      // ("Sales Agent", "sales agent", "sales_agent", "Sales_Agent", ...). Match it
-      // canonically — by slug and a case/space-insensitive name — so we resolve the
-      // role id regardless of spelling, then filter users by that id. Exact-name-only
-      // matching silently returned zero agents whenever the name differed by a space
-      // or letter case.
-      roleQuery = {
-        status: 'active',
-        $or: [
-          { name: { $in: SALES_AGENT_ROLE_NAMES } },
-          { slug: 'salesagent' },
-          { name: { $regex: /^sales[\s_-]*agent$/i } },
-        ],
-      };
-    } else {
-      const targetRoles =
-        role === 'recruiter'
-          ? ['Recruiter']
-          : ['Administrator', 'Agent', 'agent', 'Sales Agent', 'sales_agent'];
-      roleQuery = { name: { $in: targetRoles }, status: 'active' };
-    }
-    const roles = await Role.find(roleQuery).select('_id').lean();
-    if (roles.length > 0) {
-      mongoFilter.roleIds = { $in: roles.map((r) => r._id) };
-    } else {
-      mongoFilter._id = { $in: [] };
-    }
-  }
-  if (search && search.trim()) {
-    // Whitespace-tolerant: collapse runs of whitespace in the input, then map each
-    // literal space to `\s+` so "Mohammed Osman" matches "Mohammed  Osman" (and tabs / NBSP).
-    const collapsed = search.trim().replace(/\s+/g, ' ');
-    const escaped = collapsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const searchRegex = new RegExp(escaped.replace(/ /g, '\\s+'), 'i');
-    mongoFilter.$or = [
-      { name: { $regex: searchRegex } },
-      { email: { $regex: searchRegex } },
-    ];
-  }
-  if (requester && !viewerSeesHiddenUsers(requester)) {
-    const hiddenIds = await getDirectoryHiddenUserIds();
-    if (hiddenIds.length > 0) {
-      // Merge, don't replace: callers may already constrain `_id` (chat user search
-      // excludes the requester). Overwriting silently reinstated whoever they excluded.
-      mongoFilter._id = { ...(mongoFilter._id || {}), $nin: hiddenIds };
-    }
-  }
-  const users = await User.paginate(mongoFilter, options);
+  const mongoFilter = await buildUserListMongoFilter(filter, requester);
+  const users = await User.paginate(mongoFilter, {
+    ...options,
+    collation: collationForSortBy(options.sortBy, ['name', 'email', 'education', 'location']),
+  });
   // Attach the company-assigned (official) email from each linked Employee profile so callers
   // (meeting / interview invites) can prefer it over the personal login email. Best-effort: a
   // failure here must never break the user list.
@@ -134,6 +244,36 @@ const queryUsers = async (filter, options, requester = null) => {
     logger.warn(`queryUsers companyAssignedEmail enrich failed: ${err?.message || err}`);
   }
   return users;
+};
+
+/**
+ * Distinct sidebar filter values for recruiters (scoped by role + optional search).
+ */
+const getRecruiterFilterOptions = async (filter = {}, requester = null) => {
+  const mongoFilter = await buildUserListMongoFilter({ ...filter, role: 'recruiter' }, requester);
+  const users = await User.find(mongoFilter)
+    .select('name email education domain location')
+    .limit(FILTER_OPTIONS_SCAN_LIMIT)
+    .lean();
+  return collectRecruiterFilterFacets(users);
+};
+
+/**
+ * Export recruiters with the same filters/sort as the list view, capped for safety.
+ */
+const queryRecruitersForExport = async (filter, options = {}, requester = null) => {
+  const firstPage = await queryUsers(
+    { ...filter, role: 'recruiter' },
+    { ...options, page: 1, limit: RECRUITER_EXPORT_MAX_ROWS },
+    requester
+  );
+  const capped = firstPage.totalResults > RECRUITER_EXPORT_MAX_ROWS;
+  return {
+    results: firstPage.results,
+    totalResults: firstPage.totalResults,
+    capped,
+    exportMax: RECRUITER_EXPORT_MAX_ROWS,
+  };
 };
 
 /**
@@ -360,14 +500,53 @@ const deleteUserById = async (userId) => {
   return user;
 };
 
+/**
+ * Public recruiter profile (no auth). Only active users with the Recruiter role.
+ * Returns a sanitized subset safe for external sharing.
+ */
+const getPublicRecruiterProfile = async (recruiterId) => {
+  const user = await User.findById(recruiterId)
+    .select(
+      'name email phoneNumber countryCode education domain location profileSummary profilePicture status roleIds'
+    )
+    .lean();
+  if (!user || user.status !== 'active') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Recruiter not found');
+  }
+  const isRecruiter = await userHasRecruiterRole(user);
+  if (!isRecruiter) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Recruiter not found');
+  }
+  const profileUrl = user.profilePicture?.url;
+  return {
+    id: String(user._id),
+    name: user.name || '',
+    email: user.email || '',
+    phoneNumber: user.phoneNumber || '',
+    countryCode: user.countryCode || '',
+    education: user.education || '',
+    domain: Array.isArray(user.domain) ? user.domain.filter(Boolean) : [],
+    location: user.location || '',
+    profileSummary: user.profileSummary || '',
+    profilePicture: profileUrl ? { url: profileUrl } : null,
+  };
+};
+
 export {
   createUser,
+  buildUserListMongoFilter,
+  applyUserFacetFilters,
+  parseStringList,
   queryUsers,
+  getRecruiterFilterOptions,
+  queryRecruitersForExport,
+  RECRUITER_EXPORT_MAX_ROWS,
   getUserById,
   getUserByIdForRequester,
   getUserByEmail,
   updateUserById,
   deleteUserById,
   countPlatformSuperUsers,
+  getPublicRecruiterProfile,
 };
 

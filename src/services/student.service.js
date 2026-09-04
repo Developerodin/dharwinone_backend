@@ -8,7 +8,7 @@ import { uploadFileToS3 } from './upload.service.js';
 // eslint-disable-next-line import/no-cycle
 import { createUser } from './user.service.js';
 import { getRoleByName } from './role.service.js';
-import { getShiftById } from './shift.service.js';
+import { getShiftById, shiftAssignDualWriteFilters } from './shift.service.js';
 import { applyPersonProfileFallback, collectStudentFilterFacets, studentToPlain } from '../utils/studentProfileDisplay.js';
 
 const STUDENT_USER_SELECT = 'name email role roleIds status isEmailVerified phoneNumber';
@@ -1126,10 +1126,9 @@ const assignShiftToStudents = async (studentIds, shiftId, _user) => {
     throw new ApiError(httpStatus.NOT_FOUND, `Some students not found: ${missingIds.join(', ')}`);
   }
 
-  const updateResult = await Student.updateMany(
-    { _id: { $in: studentIds } },
-    { $set: { shift: shiftId } }
-  );
+  const { student, employee, update } = shiftAssignDualWriteFilters(students, shiftId);
+  const updateResult = await Student.updateMany(student, update);
+  if (employee) await Employee.updateMany(employee, update);
 
   const updatedStudents = await Student.find({ _id: { $in: studentIds } })
     .populate('user', 'name email')

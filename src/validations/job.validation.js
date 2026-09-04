@@ -1,6 +1,11 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 
+const stringListQuery = Joi.alternatives().try(
+  Joi.array().items(Joi.string().trim().min(1)),
+  Joi.string().trim().min(1)
+);
+
 const COMPANY_SIZE_BUCKETS = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5000+'];
 
 const organisation = Joi.object({
@@ -73,13 +78,21 @@ const createJob = {
 const getJobs = {
   query: Joi.object().keys({
     title: Joi.string().optional(),
+    titles: stringListQuery.optional(),
+    companies: stringListQuery.optional(),
+    locations: stringListQuery.optional(),
     jobType: Joi.string()
       .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
       .optional(),
     location: Joi.string().optional(),
-    status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
+    status: Joi.string().valid('all', 'Draft', 'Active', 'Closed', 'Archived').optional(),
     experienceLevel: Joi.string()
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
+      .optional(),
+    experienceMin: Joi.number().min(0).max(80).optional(),
+    experienceMax: Joi.number().min(0).max(80).optional(),
+    postingDate: Joi.string()
+      .pattern(/^\d{4}-\d{2}-\d{2}$/)
       .optional(),
     createdBy: Joi.string().custom(objectId).optional(),
     search: Joi.string().optional(),
@@ -89,8 +102,16 @@ const getJobs = {
     salaryMax: Joi.number().min(0).optional(),
     salaryNotSpecified: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
+  }),
+};
+
+const getJobFilterOptions = {
+  query: Joi.object().keys({
+    status: Joi.string().valid('all', 'Draft', 'Active', 'Closed', 'Archived').optional(),
+    search: Joi.string().allow('').optional(),
+    jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
   }),
 };
 
@@ -153,13 +174,24 @@ const shareJobEmail = {
   }).required(),
 };
 
-// The jobs list filters client-side (title/company/location arrays, salary and
-// experience ranges), so no server query reproduces what the user sees. The page
-// posts the visible row ids instead; omitting them exports every job in scope.
-// 500 matches the list's own fetch limit.
 const exportJobs = {
   body: Joi.object().keys({
-    ids: Joi.array().items(Joi.string().custom(objectId)).min(1).max(500).optional(),
+    ids: Joi.array().items(Joi.string().custom(objectId)).min(1).optional(),
+    status: Joi.string().valid('all', 'Draft', 'Active', 'Closed', 'Archived').optional(),
+    search: Joi.string().optional(),
+    titles: stringListQuery.optional(),
+    companies: stringListQuery.optional(),
+    locations: stringListQuery.optional(),
+    jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
+    salaryMin: Joi.number().min(0).optional(),
+    salaryMax: Joi.number().min(0).optional(),
+    salaryNotSpecified: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')).optional(),
+    experienceMin: Joi.number().min(0).max(80).optional(),
+    experienceMax: Joi.number().min(0).max(80).optional(),
+    postingDate: Joi.string()
+      .pattern(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    sortBy: Joi.string().optional(),
   }),
 };
 
@@ -384,6 +416,7 @@ const getJobStats = {
 export {
   createJob,
   getJobs,
+  getJobFilterOptions,
   getJob,
   updateJob,
   deleteJob,

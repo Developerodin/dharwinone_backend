@@ -28,6 +28,12 @@ const create = catchAsync(async (req, res) => {
   const { jobApplicationId, ...payload } = req.body;
   const userId = req.user?.id ?? req.user?._id;
   const raw = jobApplicationId != null && String(jobApplicationId).trim() ? String(jobApplicationId).trim() : null;
+  if (!raw) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'jobApplicationId is required. Link the offer to a candidate job application.'
+    );
+  }
   const offer = await createOffer(raw, payload, userId);
   res.status(httpStatus.CREATED).send(offer);
 });
