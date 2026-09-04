@@ -22,7 +22,12 @@ import { isTerminal } from '../models/callRecord.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhonePlausible, isPlaceholderPhone } from '../utils/phone.js';
-import { authHasPermission, sanitizeCallRecord, sanitizeCallRecords } from '../utils/callRecordAccess.util.js';
+import {
+  authHasPermission,
+  sanitizeBolnaExecution,
+  sanitizeCallRecord,
+  sanitizeCallRecords,
+} from '../utils/callRecordAccess.util.js';
 
 /** Field-level access flags for the Call Transcripts / Call AI role toggles. */
 function callRecordAccessFlags(req) {
@@ -263,13 +268,19 @@ const getBolnaDiagnostics = catchAsync(async (req, res) => {
 
 const getCallStatus = catchAsync(async (req, res) => {
   const { executionId } = req.params;
+  // Ownership + field-level access, matching every sibling single-record read in this
+  // file. Without these the endpoint proxies Bolna's raw execution payload — transcript
+  // and extracted_data included — to anyone holding only `calls.view`, bypassing the
+  // call-transcripts.read / call-ai.read toggles. Harmless while the underlying request
+  // 404'd; a live leak once the endpoint was corrected to /executions/{id}.
+  await assertCanAccessCall(req, executionId);
   const result = await bolnaService.getExecutionDetails(executionId);
   if (!result.success) {
     throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to fetch call status');
   }
   res.status(httpStatus.OK).send({
     success: true,
-    details: result.details,
+    details: sanitizeBolnaExecution(result.details, callRecordAccessFlags(req)),
   });
 });
 

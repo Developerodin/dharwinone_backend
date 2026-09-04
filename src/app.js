@@ -15,6 +15,7 @@ import tenantResolver from './middlewares/tenantResolver.js';
 import { errorConverter, errorHandler } from './middlewares/error.js';
 import requestId from './middlewares/requestId.js';
 import { verifyBolnaWebhook } from './middlewares/verifyWebhook.js';
+import { webhookLimiter } from './middlewares/rateLimiter.js';
 import ApiError from './utils/ApiError.js';
 import * as bolnaController from './controllers/bolna.controller.js';
 
@@ -123,6 +124,14 @@ const corsOptions = {
     'idempotency-key',
     /** ATS mutation screen context (apiClient request interceptor) */
     'x-audit-source',
+    /**
+     * Captcha token for the public apply form. Must be listed here or the browser's
+     * preflight blocks it: a custom header makes the multipart POST non-simple. The
+     * apply body is multipart, so req.body is empty at the captcha middleware (which
+     * runs before multer, deliberately) — the header is the only working transport.
+     */
+    'x-captcha-token',
+    'X-Captcha-Token',
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
   // Let the browser read export metadata on cross-origin .xlsx/file downloads.
@@ -143,7 +152,7 @@ app.use(passport.initialize());
 passport.use('jwt', jwtStrategy);
 
 // health / root (for Render health checks and visiting the URL)
-app.post('/', verifyBolnaWebhook, bolnaController.receiveWebhook);
+app.post('/', webhookLimiter, verifyBolnaWebhook, bolnaController.receiveWebhook);
 app.get('/', (req, res) => {
   const payload = { status: 'ok', message: 'UAT Dharwin Backend API', openapi: '/v1/openapi.json' };
   if (config.env === 'development') {

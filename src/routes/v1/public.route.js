@@ -9,11 +9,14 @@ import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
+import * as userValidation from '../../validations/user.validation.js';
+import * as userController from '../../controllers/user.controller.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
 import * as twilioVoiceController from '../../controllers/twilioVoice.controller.js';
 import { verifyTwilioWebhook } from '../../middlewares/verifyTwilioWebhook.js';
 import { uploadJobApplicationFiles } from '../../middlewares/upload.js';
 import { publicRegistrationLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
+import { verifyCaptcha } from '../../middlewares/verifyCaptcha.js';
 
 const router = express.Router();
 
@@ -141,29 +144,29 @@ router.get('/jobs', validate(jobValidation.listPublicJobs), jobController.listPu
 router.get('/jobs/:jobId', validate(jobValidation.getPublicJob), jobController.getPublicJob);
 
 /**
+ * GET /v1/public/recruiters/:recruiterId
+ * Public recruiter profile (no auth). Active users with Recruiter role only.
+ */
+router.get(
+  '/recruiters/:recruiterId',
+  validate(userValidation.getPublicRecruiter),
+  userController.getPublicRecruiter
+);
+
+/**
  * POST /v1/public/jobs/:jobId/apply
  * Public job application (no auth). Creates user, candidate with resume, and job application.
  * Returns auth tokens for auto-login.
  *
- * B11 fix: lightweight CAPTCHA gate. When CAPTCHA_REQUIRED=true the request must include a
- * non-empty `x-captcha-token` header (or `captchaToken` body field). Real verification (hCaptcha /
- * reCaptcha / Cloudflare Turnstile) plugs into this middleware later — wire the provider call
- * and reject on failure. Default ships open so existing clients keep working.
+ * This route also triggers an outbound AI voice call to the supplied phone number, before
+ * any email verification — so the captcha is the only thing standing between the internet
+ * and our dialler. verifyCaptcha performs real provider-side verification; it enforces as
+ * soon as CAPTCHA_PROVIDER and CAPTCHA_SECRET are set.
  */
-const captchaGate = (req, res, next) => {
-  if (String(process.env.CAPTCHA_REQUIRED || '').toLowerCase() !== 'true') return next();
-  const token = req.headers['x-captcha-token'] || req.body?.captchaToken;
-  if (!token || String(token).trim().length === 0) {
-    return res.status(400).json({ code: 400, message: 'Captcha verification required', errorCode: 'CAPTCHA_REQUIRED' });
-  }
-  // TODO: verify token with provider (hCaptcha / reCaptcha / Turnstile) before next().
-  return next();
-};
-
 router.post(
   '/jobs/:jobId/apply',
   publicRegistrationLimiter,
-  captchaGate,
+  verifyCaptcha,
   uploadJobApplicationFiles,
   validate(jobValidation.publicApplyToJob),
   jobController.publicApplyToJob

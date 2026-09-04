@@ -398,11 +398,15 @@ const publicApplyToJob = {
     jobId: Joi.string().custom(objectId).required(),
   }),
   body: Joi.object().keys({
-    fullName: Joi.string().required().trim().min(2).messages({
-      'any.required': 'Full name is required',
-      'string.empty': 'Full name cannot be empty',
-      'string.min': 'Full name must be at least 2 characters',
-    }),
+    // max: this field is unauthenticated input that ends up inside the voice agent's
+    // system prompt. Uncapped, a 200k-character name produced a 403KB user_data payload.
+    fullName: Joi.string().required().trim().min(2).max(120)
+      .messages({
+        'any.required': 'Full name is required',
+        'string.empty': 'Full name cannot be empty',
+        'string.min': 'Full name must be at least 2 characters',
+        'string.max': 'Full name must be 120 characters or fewer',
+      }),
     email: Joi.string().email().required().trim().messages({
       'any.required': 'Email is required',
       'string.email': 'Email must be valid',

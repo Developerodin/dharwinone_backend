@@ -57,6 +57,25 @@ const envVarsSchema = Joi.object()
     }),
     /** When set, Bolna webhooks must send matching `X-Bolna-Webhook-Secret`. Required behavior in production (see verifyWebhook middleware). */
     BOLNA_WEBHOOK_SECRET: Joi.string().optional().allow('').description('Shared secret for Bolna webhook requests'),
+    /** Comma-separated source IPs allowed to POST the Bolna webhooks. Defaults to Bolna's documented egress IPs. */
+    BOLNA_WEBHOOK_ALLOWED_IPS: Joi.string()
+      .optional()
+      .allow('')
+      .description('Bolna webhook source IP allowlist (comma-separated). Bolna authenticates by IP, not a shared secret.'),
+    /** Escape hatch for local webhook testing. Never set this outside a developer machine. */
+    BOLNA_WEBHOOK_ALLOW_INSECURE: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    /** Captcha provider for the public apply form. Verification is enforced as soon as provider + secret are both set. */
+    // lowercase() normalises BEFORE valid() runs — otherwise CAPTCHA_PROVIDER=Turnstile
+    // fails schema validation and takes down app boot for the whole service.
+    CAPTCHA_PROVIDER: Joi.string()
+      .lowercase()
+      .valid('turnstile', 'hcaptcha', 'recaptcha', '')
+      .optional()
+      .allow(null)
+      .empty(''),
+    CAPTCHA_SECRET: Joi.string().optional().allow('').description('Server-side secret for the captcha provider'),
+    /** Legacy flag: demand a token be present without verifying it. Superseded by CAPTCHA_PROVIDER. */
+    CAPTCHA_REQUIRED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     /** Default true; set to false only for dev SMTP with self-signed certs */
     SMTP_TLS_REJECT_UNAUTHORIZED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     /** Background schedulers. Unset = on in production only. See config.schedulersEnabled. */
@@ -671,6 +690,30 @@ const config = {
   },
   webhooks: {
     bolnaSecret: (envVars.BOLNA_WEBHOOK_SECRET || '').trim(),
+    /**
+     * Bolna authenticates outbound webhooks by SOURCE IP and never sends a shared
+     * secret, so the IP allowlist — not `bolnaSecret` — is the real control here.
+     * Documented egress IPs, overridable when Bolna changes them.
+     */
+    bolnaAllowedIps: String(
+      envVars.BOLNA_WEBHOOK_ALLOWED_IPS || '13.203.39.153,13.126.9.249,13.202.133.53'
+    )
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    /** Local-dev only: accept unverified webhook callers. Never enable on a shared host. */
+    bolnaAllowInsecure: ['true', '1'].includes(
+      String(envVars.BOLNA_WEBHOOK_ALLOW_INSECURE || '').trim().toLowerCase()
+    ),
+  },
+  captcha: {
+    /** '' disables verification. Set BOTH provider and secret to enforce. */
+    provider: String(envVars.CAPTCHA_PROVIDER || '').trim().toLowerCase(),
+    secret: String(envVars.CAPTCHA_SECRET || '').trim(),
+    /** Legacy: require a token to be PRESENT even with no provider configured. */
+    requireTokenOnly: ['true', '1'].includes(
+      String(envVars.CAPTCHA_REQUIRED || '').trim().toLowerCase()
+    ),
   },
   auth: {
     returnTokensInJson:

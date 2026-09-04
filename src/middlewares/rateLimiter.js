@@ -32,6 +32,20 @@ const publicRegistrationLimiter = rateLimit({
   message: { message: 'Too many registration attempts. Please try again later.' },
 });
 
+/**
+ * Provider webhooks. Generous, because a real burst of call-completion callbacks is
+ * legitimate — this exists to bound a forged flood, not to shape normal traffic.
+ * The IP allowlist in verifyWebhook is the actual authentication; this is layer two.
+ */
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  skipSuccessfulRequests: false,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many webhook requests.' },
+});
+
 /** Other unauthenticated POSTs under /v1/public (LiveKit, meetings, job apply, etc.). */
 const publicWriteLimiter = rateLimit({
   windowMs: (config.rateLimit?.publicWriteWindowMinutes ?? 15) * 60 * 1000,
@@ -119,6 +133,7 @@ export {
   authStrictFlowLimiter,
   publicRegistrationLimiter,
   publicWriteLimiter,
+  webhookLimiter,
   attendancePunchLimiter,
   jobsBrowseLimiter,
   chatAssistantLimiter,

@@ -105,21 +105,6 @@ function eventTimestamp(payload) {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-/** Verify Bolna webhook secret (header). Mirrors verifyBolnaWebhook middleware. */
-export function verifyBolnaSecret(headerSecret) {
-  const expected = (config.webhooks?.bolnaSecret || '').trim();
-  if (!expected) return true;
-  if (!headerSecret) return false;
-  try {
-    const a = Buffer.from(String(headerSecret), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Map applyEvent source values to the canonical `source` enum stored on
  * CallRecord. Webhook + webhook_candidate collapse to 'webhook' since they
@@ -543,7 +528,6 @@ export default {
   applyEvent,
   seedRecord,
   backfillFromAgentList,
-  verifyBolnaSecret,
   normalizeStatus,
   isOwnAgent,
   resolveAgentId,

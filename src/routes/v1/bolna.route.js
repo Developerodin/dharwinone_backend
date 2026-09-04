@@ -44,10 +44,6 @@ router
   .post(auth(), requirePermissions('calls.create'), validate(bolnaValidation.initiateCandidateCall), bolnaController.initiateCandidateCall);
 
 router
-  .route('/call-status/:executionId')
-  .get(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallStatus), bolnaController.getCallStatus);
-
-router
   .route('/call-records')
   .get(auth(), requirePermissions('calls.view'), validate(bolnaValidation.getCallRecords), bolnaController.getCallRecords);
 

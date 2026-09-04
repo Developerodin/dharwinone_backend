@@ -36,12 +36,17 @@ const unclaimedFilter = () => [
   { verificationCallInitiatedAt: { $lt: new Date(Date.now() - CLAIM_RETRY_MS) } },
 ];
 
+let inFlight = false;
+
 async function findApplicationsNeedingCalls() {
   try {
     const eligibleSince = new Date(Date.now() - ELIGIBILITY_WINDOW_MS);
 
     const applications = await JobApplication.find({
       verificationCallExecutionId: { $in: [null, ''] },
+      // Terminal failures are not retried: one first attempt plus up to seven 15-minute
+      // claim retries inside the 2-hour window (8 dials max by design).
+      verificationCallStatus: { $nin: ['failed'] },
       createdAt: { $gte: eligibleSince },
       $or: unclaimedFilter(),
     })
@@ -289,9 +294,18 @@ async function syncApplicationCallRecords() {
  * Main scheduler run function
  */
 async function run() {
-  logger.debug('Running application verification call scheduler...');
-  await runApplicationVerificationCalls();
-  await syncApplicationCallRecords();
+  if (inFlight) {
+    logger.info('[applicationVerificationCall] previous tick still running; skipping');
+    return;
+  }
+  inFlight = true;
+  try {
+    logger.debug('Running application verification call scheduler...');
+    await runApplicationVerificationCalls();
+    await syncApplicationCallRecords();
+  } finally {
+    inFlight = false;
+  }
 }
 
 /**

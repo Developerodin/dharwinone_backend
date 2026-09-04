@@ -41,6 +41,41 @@ function getConfig() {
   };
 }
 
+/** Every Bolna request gets the same ceiling. Node's fetch has no default timeout. */
+const BOLNA_TIMEOUT_MS = 30000;
+
+/**
+ * fetch() with a hard timeout.
+ *
+ * Without this, a Bolna socket that opens and never answers hangs the caller forever.
+ * That matters most on the schedulers: they await Bolna inside a sequential `for` loop
+ * while setInterval keeps firing new overlapping runs, which then re-select the same
+ * un-stamped rows and dial them a second time.
+ *
+ * Throws a plain Error on timeout so every caller's existing catch reports it the same
+ * way as any other transport failure.
+ */
+async function bolnaFetch(url, options = {}, timeoutMs = BOLNA_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    // Read the body HERE, while the abort signal is still armed. fetch() resolves as soon
+    // as the headers land, so clearing the timeout on resolve would leave the body read
+    // unbounded — and a socket that sends headers then stalls would hang the scheduler
+    // loops indefinitely, which is the exact failure this wrapper exists to prevent.
+    const text = await res.text();
+    return { res, text };
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Request timeout: Bolna API did not respond within ${timeoutMs / 1000} seconds.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Initiate a call via Bolna.
  * @param {Object} params - { phone, candidateName, jobTitle, organisation, jobType, location?, experienceLevel?, salaryRange?, fromPhoneNumber?, agentId?, maxCallDurationSeconds? }
@@ -153,30 +188,15 @@ async function initiateCall(params) {
   }
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const { res, text } = await bolnaFetch(`${apiBase}/call`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
 
-    let res;
-    try {
-      res = await fetch(`${apiBase}/call`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-    } catch (fetchErr) {
-      clearTimeout(timeoutId);
-      if (fetchErr.name === 'AbortError') {
-        return { success: false, error: 'Request timeout: Bolna API did not respond within 30 seconds.' };
-      }
-      throw fetchErr;
-    }
-    clearTimeout(timeoutId);
-
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -232,7 +252,7 @@ async function getExecutionDetails(executionId) {
     // execution — it is not a status stub, it does not exist. Callers read that 404 as
     // "execution gone" and write terminal `expired`/`failed`, so the singular form was
     // killing every in-flight call record roughly a minute after it was created.
-    const res = await fetch(`${apiBase}/executions/${executionId}`, {
+    const { res, text } = await bolnaFetch(`${apiBase}/executions/${executionId}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -253,7 +273,6 @@ async function getExecutionDetails(executionId) {
       };
     }
 
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -288,11 +307,10 @@ async function getExecutionFull(executionId) {
   if (!executionId) return { success: false, error: 'executionId is required.' };
 
   try {
-    const res = await fetch(`${apiBase}/executions/${executionId}`, {
+    const { res, text } = await bolnaFetch(`${apiBase}/executions/${executionId}`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     });
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -328,7 +346,7 @@ async function getAgentExecutions(options = {}) {
   const size = Math.min(50, Math.max(1, Number(options.page_size) || 50));
 
   try {
-    const res = await fetch(
+    const { res, text } = await bolnaFetch(
       `${apiBase}/v2/agent/${aid}/executions?page_number=${page}&page_size=${size}`,
       {
         method: 'GET',
@@ -339,7 +357,6 @@ async function getAgentExecutions(options = {}) {
       }
     );
 
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -366,46 +383,6 @@ async function getAgentExecutions(options = {}) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, error: message };
-  }
-}
-
-/**
- * Fetch an agent's full config from Bolna (GET /v2/agent/{id}).
- * Used to VERIFY a PATCH actually landed before placing a call — Bolna renders
- * the system prompt with a delay/cache, so a call placed immediately after a
- * PATCH can otherwise run against a stale prompt.
- * @param {string} agentId
- * @returns {Promise<{ success: boolean, agent?: Object, error?: string }>}
- */
-async function getAgent(agentId) {
-  const { apiKey, apiBase } = getConfig();
-  if (!apiKey) return { success: false, error: 'BOLNA_API_KEY is not set.' };
-  if (!agentId) return { success: false, error: 'agentId is required.' };
-
-  try {
-    const res = await fetch(`${apiBase}/v2/agent/${agentId}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const text = await res.text();
-    let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      /* ignore JSON parse error */
-    }
-
-    if (!res.ok) {
-      const message = (data && (data.message || data.error)) || text || res.statusText;
-      return { success: false, error: message };
-    }
-    return { success: true, agent: data };
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -439,7 +416,7 @@ async function updateAgentPrompt(agentId, systemPrompt, options = {}) {
   }
 
   try {
-    const res = await fetch(`${apiBase}/v2/agent/${agentId}`, {
+    const { res, text } = await bolnaFetch(`${apiBase}/v2/agent/${agentId}`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -448,7 +425,6 @@ async function updateAgentPrompt(agentId, systemPrompt, options = {}) {
       body: JSON.stringify(body),
     });
 
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -502,7 +478,7 @@ async function bolnaApiRequest(method, path, body) {
   if (!apiKey) return { success: false, error: 'BOLNA_API_KEY is not set.' };
 
   try {
-    const res = await fetch(`${apiBase}${path}`, {
+    const { res, text } = await bolnaFetch(`${apiBase}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -510,7 +486,6 @@ async function bolnaApiRequest(method, path, body) {
       },
       body: body != null ? JSON.stringify(body) : undefined,
     });
-    const text = await res.text();
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
@@ -575,7 +550,6 @@ export default {
   getExecutionDetails,
   getExecutionFull,
   getAgentExecutions,
-  getAgent,
   getConfig,
   updateAgentPrompt,
   verifyExecutionExistsInBolna,
