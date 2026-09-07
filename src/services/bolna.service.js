@@ -228,7 +228,11 @@ async function getExecutionDetails(executionId) {
   }
 
   try {
-    const res = await fetch(`${apiBase}/execution/${executionId}`, {
+    // `/executions/{id}` (plural). The singular `/execution/{id}` 404s for EVERY
+    // execution — it is not a status stub, it does not exist. Callers read that 404 as
+    // "execution gone" and write terminal `expired`/`failed`, so the singular form was
+    // killing every in-flight call record roughly a minute after it was created.
+    const res = await fetch(`${apiBase}/executions/${executionId}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -272,9 +276,9 @@ async function getExecutionDetails(executionId) {
 
 /**
  * Get FULL execution details including telephony_data (recording_url,
- * provider_call_id, etc). NOTE: this uses `/executions/{id}` (plural) — unlike
- * `/execution/{id}` (singular, getExecutionDetails) which returns only a status
- * stub WITHOUT telephony_data.
+ * provider_call_id, etc). Uses `/executions/{id}` (plural), the same path
+ * `getExecutionDetails` now uses — the singular `/execution/{id}` this once
+ * described does not exist and 404s for every id.
  * @param {string} executionId
  * @returns {Promise<{ success: boolean, details?: Object, notFound?: boolean, error?: string }>}
  */

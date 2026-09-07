@@ -20,17 +20,33 @@ import { initiateCandidateVerificationCall } from './bolnaCandidateVerification.
  * - No existing verification call
  * - Has valid phone number
  */
+/**
+ * How far back an application stays eligible for its verification call. This was 10
+ * minutes, so a restart, a deploy, a Bolna error or an 11th application in one tick
+ * dropped the candidate forever — it aged out before the next pass could reach it.
+ */
+const ELIGIBILITY_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/** A claim older than this is treated as abandoned and may be retried. */
+const CLAIM_RETRY_MS = 15 * 60 * 1000;
+
+/** `$in: [null]` also matches absent fields, covering never-claimed in one branch. */
+const unclaimedFilter = () => [
+  { verificationCallInitiatedAt: { $in: [null] } },
+  { verificationCallInitiatedAt: { $lt: new Date(Date.now() - CLAIM_RETRY_MS) } },
+];
+
 async function findApplicationsNeedingCalls() {
   try {
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-    
+    const eligibleSince = new Date(Date.now() - ELIGIBILITY_WINDOW_MS);
+
     const applications = await JobApplication.find({
-      $or: [
-        { verificationCallExecutionId: { $in: [null, ''] } },
-        { verificationCallExecutionId: { $exists: false } },
-      ],
-      createdAt: { $gte: tenMinutesAgo },
+      verificationCallExecutionId: { $in: [null, ''] },
+      createdAt: { $gte: eligibleSince },
+      $or: unclaimedFilter(),
     })
+      // Oldest first, so a backlog drains instead of starving behind limit(10).
+      .sort({ createdAt: 1 })
       .populate({
         path: 'candidate',
         select:
@@ -112,6 +128,21 @@ async function runApplicationVerificationCalls() {
           continue;
         }
         
+        // Claim before dialling. executionId was previously only written AFTER Bolna
+        // returned, so a call that outlived the 2-minute tick was re-selected and the
+        // candidate was rung twice. Whoever flips verificationCallInitiatedAt first owns
+        // the application; everyone else skips it.
+        const claimed = await JobApplication.findOneAndUpdate(
+          {
+            _id: application._id,
+            verificationCallExecutionId: { $in: [null, ''] },
+            $or: unclaimedFilter(),
+          },
+          { $set: { verificationCallInitiatedAt: new Date() } },
+          { new: true, projection: { _id: 1 } }
+        ).lean();
+        if (!claimed) continue;
+
         logger.info(`Initiating verification call for application ${application._id} to ${phone}`);
 
         const config = (await import('../config/config.js')).default;

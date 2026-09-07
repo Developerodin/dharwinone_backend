@@ -79,13 +79,13 @@ mongoose
         startAttendanceScheduler();
         const candidateSchedulerMinutes = Math.min(
           1440,
-          Math.max(1, Number(config.candidate?.schedulerIntervalMinutes) || 5)
+          Math.max(1, Number(config.candidate?.schedulerIntervalMinutes) || 1)
         );
         candidateSchedulerId = startCandidateScheduler(candidateSchedulerMinutes);
         jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
         callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
         externalJobAutoFetchSchedulerId = startExternalJobAutoFetchScheduler();
-        applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(2);
+        applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(1);
         startMeetingScheduler();
         startRecordingScheduler(getEgressClient());
         recordingDiscoverySchedulerId = startRecordingDiscoveryScheduler();

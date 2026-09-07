@@ -6,23 +6,60 @@ import callRecordService from './callRecord.service.js';
 import { normalizePhone } from '../utils/phone.js';
 import { initiateJobPostingVerificationCall } from './bolnaJobPostingVerification.service.js';
 
+/**
+ * How far back a job stays eligible for its verification call. This was 5 minutes, which
+ * meant a restart, a deploy, a Bolna error or an 11th job in one tick dropped the job
+ * forever — it aged out before the next pass could reach it. Two hours gives the retry
+ * below room to work while never cold-calling an employer about a stale posting.
+ */
+const ELIGIBILITY_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/** A claim older than this is treated as abandoned and may be retried. */
+const CLAIM_RETRY_MS = 15 * 60 * 1000;
+
 async function runJobVerificationCalls() {
   try {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const now = Date.now();
+    const eligibleSince = new Date(now - ELIGIBILITY_WINDOW_MS);
+    const claimExpiredBefore = new Date(now - CLAIM_RETRY_MS);
+    // `$in: [null]` also matches documents where the field is absent, so this covers the
+    // never-called and the never-claimed cases without a second `$or` branch.
+    const unclaimed = [
+      { verificationCallInitiatedAt: { $in: [null] } },
+      { verificationCallInitiatedAt: { $lt: claimExpiredBefore } },
+    ];
+
     const jobs = await Job.find({
-      $or: [
-        { verificationCallExecutionId: { $in: [null, ''] } },
-        { verificationCallExecutionId: { $exists: false } },
-      ],
+      verificationCallExecutionId: { $in: [null, ''] },
       'organisation.phone': { $exists: true, $nin: [null, ''] },
-      createdAt: { $gte: fiveMinutesAgo },
+      createdAt: { $gte: eligibleSince },
       jobOrigin: { $ne: 'external' },
+      $or: unclaimed,
     })
+      // Oldest first: with limit(10) and no sort, a backlog could return the same page
+      // every tick and starve everything behind it.
+      .sort({ createdAt: 1 })
       .limit(10)
       .lean();
 
     for (const job of jobs) {
       if (!job.organisation?.phone) continue;
+
+      // Claim before dialling. The executionId was previously only written AFTER Bolna
+      // returned, so a call that outlived the 60s tick was re-selected and the employer
+      // was dialled twice. This findOneAndUpdate is atomic: whoever flips
+      // verificationCallInitiatedAt first owns the job, everyone else moves on.
+      const claimed = await Job.findOneAndUpdate(
+        {
+          _id: job._id,
+          verificationCallExecutionId: { $in: [null, ''] },
+          $or: unclaimed,
+        },
+        { $set: { verificationCallInitiatedAt: new Date() } },
+        { new: true, projection: { _id: 1 } }
+      ).lean();
+      if (!claimed) continue;
+
       const rawPhone = String(job.organisation.phone).trim();
       const phone = normalizePhone(rawPhone) || rawPhone;
       const contactLabel = job.organisation?.name || job.title || 'Organisation contact';

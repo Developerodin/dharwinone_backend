@@ -193,7 +193,7 @@ const envVarsSchema = Joi.object()
     ACTIVITY_LOG_TTL_SECONDS: Joi.number().integer().min(0).optional().default(0),
 
     /** Candidate scheduler (`employee.scheduler.js`): resign auto-deactivate, joining reminders, role promotion, offer expiry. Default 5 min. */
-    CANDIDATE_SCHEDULER_INTERVAL_MINUTES: Joi.number().integer().min(1).max(1440).optional().default(5),
+    CANDIDATE_SCHEDULER_INTERVAL_MINUTES: Joi.number().integer().min(1).max(1440).optional().default(1),
 
     /**
      * Comma-separated emails: sole accounts for Activity Logs API/UI and support camera invites.
