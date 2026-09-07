@@ -82,6 +82,7 @@ export const applyPersonProfileFallback = (student, person = null) => {
 
   const studentBio = asTrimmedString(student?.bio);
   next.bio = studentBio || asTrimmedString(person?.shortBio) || student?.bio || '';
+  next.employeeId = asTrimmedString(person?.employeeId) || asTrimmedString(student?.employeeId) || '';
 
   if (!hasUsableEducation(student?.education)) {
     const fromQualifications = qualificationsToEducation(person?.qualifications);

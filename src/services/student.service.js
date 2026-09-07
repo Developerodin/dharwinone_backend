@@ -23,7 +23,7 @@ const overlayPersonProfiles = async (students) => {
     return plains.map((student) => applyPersonProfileFallback(student, null));
   }
   const employees = await Employee.find({ owner: { $in: userIds } })
-    .select('owner phoneNumber shortBio skills qualifications degree')
+    .select('owner phoneNumber shortBio skills qualifications degree employeeId')
     .lean();
   const byOwner = new Map(employees.map((row) => [String(row.owner), row]));
   return plains.map((student) => {
