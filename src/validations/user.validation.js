@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { password, objectId, notificationPreferencesSchema } from './custom.validation.js';
+import { password, objectId, boundedLimit, notificationPreferencesSchema } from './custom.validation.js';
 
 const stringListQuery = Joi.alternatives().try(
   Joi.array().items(Joi.string().trim().min(1)),
@@ -29,7 +29,7 @@ const getUsers = {
     locations: stringListQuery.optional(),
     email: Joi.string().allow('').optional(),
     sortBy: Joi.string().regex(/^(name|email|education|location|createdAt):(asc|desc)$/),
-    limit: Joi.number().integer().min(1).max(100),
+    limit: boundedLimit(100),
     page: Joi.number().integer().min(1),
   }),
 };

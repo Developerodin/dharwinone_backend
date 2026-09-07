@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 
 const stringListQuery = Joi.alternatives().try(
   Joi.array().items(Joi.string().trim().min(1)),
@@ -201,7 +201,7 @@ const listWeekOffAssignments = {
         'any.only': 'Week-off day must be a valid weekday',
       }),
     page: Joi.number().integer().min(1).optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     search: Joi.string().trim().allow('').max(120).optional(),
   }),
 };

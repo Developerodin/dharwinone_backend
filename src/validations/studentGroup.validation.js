@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 
 const createStudentGroup = {
   body: Joi.object().keys({
@@ -35,7 +35,7 @@ const getGroupStudents = {
   }),
   query: Joi.object().keys({
     page: Joi.number().integer().min(1).optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
   }),
 };
 
@@ -45,7 +45,7 @@ const getStudentGroups = {
     isActive: Joi.boolean().optional(),
     createdBy: Joi.string().custom(objectId).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };

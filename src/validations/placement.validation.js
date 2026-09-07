@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 import { PLACEMENT_STATUSES, PRE_BOARDING_STATUSES } from '../constants/atsPipeline.js';
 
 const PLACEMENT_STATUS_SET = new Set(PLACEMENT_STATUSES);
@@ -30,7 +30,7 @@ const getPlacements = {
     stage: Joi.string().valid('preBoarding', 'onboarding').optional(),
     search: Joi.string().trim().allow('').max(120).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };

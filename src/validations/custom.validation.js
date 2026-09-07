@@ -50,6 +50,29 @@ const devTicketRef = (value, helpers) => {
   return helpers.message('"{{#label}}" must be a valid mongo id or DEV ticket id');
 };
 
+/**
+ * Page-size bound that CLAMPS instead of rejecting.
+ *
+ * A hard `.max(n)` turns an oversized `?limit=` into a 400 that kills the whole
+ * screen, and it buys nothing: the server still never has to serve more than `n`
+ * either way. Every already-deployed client that asks for more — the previous
+ * frontend build during a release window, the mobile app, the task board's own
+ * TASK_LIMIT — then breaks on a request the server could have answered.
+ *
+ * So: coerce into [1, max] and answer. The caller gets a short first page instead
+ * of a dead list, and `validate.js` writes the clamped value back onto req.query,
+ * so controllers and paginate() only ever see a bounded number.
+ *
+ * Deliberately silent — an out-of-range limit is a stale client, not an error the
+ * user can act on. Non-numeric input still fails, as it should.
+ *
+ * @param {number} max - largest page size this endpoint will serve
+ */
+const boundedLimit = (max) =>
+  Joi.number()
+    .integer()
+    .custom((value) => Math.min(Math.max(value, 1), max));
+
 const password = (value, helpers) => {
   if (value.length < 8) {
     return helpers.message('password must be at least 8 characters');
@@ -60,5 +83,5 @@ const password = (value, helpers) => {
   return value;
 };
 
-export { objectId, devTicketRef, password, notificationPreferencesSchema };
+export { objectId, devTicketRef, password, boundedLimit, notificationPreferencesSchema };
 

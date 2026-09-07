@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
@@ -82,7 +82,7 @@ const getJobApplications = {
       .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
       .optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };
@@ -93,7 +93,7 @@ const getMyApplications = {
       .valid(...STATUS_VALUES)
       .optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };

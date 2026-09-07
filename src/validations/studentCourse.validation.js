@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 
 const getStudentCourses = {
   params: Joi.object().keys({
@@ -12,7 +12,7 @@ const getStudentCourses = {
     instructor: Joi.string().allow(''),
     progress: Joi.string().valid('not-started', 'in-progress', 'completed'),
     sortBy: Joi.string(),
-    limit: Joi.number().integer().min(1).max(100),
+    limit: boundedLimit(100),
     page: Joi.number().integer().min(1),
   }),
 };

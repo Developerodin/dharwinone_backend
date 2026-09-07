@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 
 const stringListQuery = Joi.alternatives().try(
   Joi.array().items(Joi.string().trim().min(1)),
@@ -102,7 +102,7 @@ const getJobs = {
     salaryMax: Joi.number().min(0).optional(),
     salaryNotSpecified: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };

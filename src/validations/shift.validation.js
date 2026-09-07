@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 
 const timeFormat = (value, helpers) => {
   if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)) {
@@ -83,7 +83,7 @@ const listShiftAssignees = {
   }),
   query: Joi.object().keys({
     page: Joi.number().integer().min(1).optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: boundedLimit(100).optional(),
     search: Joi.string().trim().allow('').max(120).optional(),
   }),
 };
