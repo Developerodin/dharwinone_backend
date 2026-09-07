@@ -2,16 +2,75 @@ import XLSX from 'xlsx';
 import { defangCell, fmtDateTime } from './xlsxWorkbook.js';
 
 const ACTIVITY_LOG_HEADERS = [
-  'Timestamp',
+  // Timestamps come from fmtDateTime, which is UTC. The screen shows the viewer's local time,
+  // so an unlabelled column here reads as the same event happening hours earlier.
+  'Timestamp (UTC)',
   'Actor',
   'Actor Email',
   'Action',
   'Action Code',
   'Entity Type',
+  'Entity Name',
+  'Entity ID',
   'Location',
   'IP Address',
   'User Agent',
 ];
+
+/**
+ * Stored entity types the sheet renames on the way out, so a download reads the same as the screen.
+ * "Candidate" is the pre-rename spelling of an employee record; both spellings are still written.
+ */
+const ENTITY_TYPE_LABELS = { Candidate: 'Employee' };
+
+/**
+ * Display name of a stored entity type.
+ * @param {unknown} entityType
+ * @returns {string}
+ */
+export function entityTypeLabel(entityType) {
+  const t = typeof entityType === 'string' ? entityType.trim() : '';
+  return t ? ENTITY_TYPE_LABELS[t] ?? t : '';
+}
+
+/** Metadata keys that hold a human name for the affected record, best first. */
+const ENTITY_NAME_KEYS = ['targetUserName', 'roleName', 'fullName', 'name', 'jobTitle', 'title'];
+
+/**
+ * Human name of the record an entry touched, or '' when the entry carries none.
+ * @param {unknown} metadata
+ * @returns {string}
+ */
+export function pickEntityName(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return '';
+  for (const key of ENTITY_NAME_KEYS) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+/**
+ * Human title for a dotted action code: `attendance.punchOutByAdmin` → `Attendance punch out by admin`.
+ *
+ * ponytail: derived, not a curated map. The frontend keeps ~200 hand-written titles and a second
+ * copy here would drift the moment either side gains an action. Derivation is never wrong, only
+ * blunter. Port the map if the wording ever has to match the screen word for word.
+ * @param {string} action
+ * @returns {string}
+ */
+export function humanizeActionCode(action) {
+  const code = typeof action === 'string' ? action.trim() : '';
+  if (!code) return '';
+  const words = code
+    .split('.')
+    .flatMap((part) => part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_-]+/))
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  if (!words.length) return '';
+  const [first, ...rest] = words;
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ');
+}
 
 /**
  * @param {Record<string, unknown>} filter
@@ -25,8 +84,8 @@ export function buildActivityLogFilterMetaRows(filter = {}) {
     ['Entity type', filter.entityType],
     ['Entity id', filter.entityId],
     ['Actor', filter.actor],
-    ['Start date', filter.startDate],
-    ['End date', filter.endDate],
+    ['Start date (UTC)', filter.startDate],
+    ['End date (UTC)', filter.endDate],
     ['IP', filter.ip],
     ['Include attendance', filter.includeAttendance],
   ];
@@ -49,9 +108,11 @@ export function buildActivityLogExportBuffer(rows = [], filter = {}) {
     fmtDateTime(row.createdAt),
     row.actorName ?? '',
     row.actorEmail ?? '',
-    row.actionTitle ?? row.action ?? '',
+    row.actionTitle ?? humanizeActionCode(row.action),
     row.action ?? '',
-    row.entityType ?? '',
+    entityTypeLabel(row.entityType),
+    row.entityName ?? pickEntityName(row.metadata),
+    row.entityId ?? '',
     row.displayLocation ?? '',
     row.displayIp ?? '',
     row.userAgent ?? '',

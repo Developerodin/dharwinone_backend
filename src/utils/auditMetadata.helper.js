@@ -222,6 +222,15 @@ export const buildFieldChangeLog = (before, after, body) => {
 };
 
 export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate, body, entityId, actions) => {
+  // The name the record had at save time. Without it the row is just an ObjectId, and once the
+  // employee is deleted no lookup can ever recover who the entry was about.
+  const personName =
+    typeof afterCandidate?.fullName === 'string' && afterCandidate.fullName.trim()
+      ? afterCandidate.fullName.trim()
+      : typeof beforeCandidate?.fullName === 'string' && beforeCandidate.fullName.trim()
+        ? beforeCandidate.fullName.trim()
+        : null;
+
   const departmentIdBefore =
     beforeCandidate?.departmentId != null ? String(beforeCandidate.departmentId) : null;
   const departmentIdAfter =
@@ -237,6 +246,7 @@ export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate
         entityType: actions.EMPLOYEE,
         entityId: String(entityId),
         metadata: {
+          ...(personName ? { fullName: personName } : {}),
           departmentIdBefore,
           departmentIdAfter,
         },
@@ -258,7 +268,7 @@ export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate
           action: actions.CANDIDATE_UPDATE,
           entityType: actions.CANDIDATE,
           entityId: String(entityId),
-          metadata: { fieldsUpdated, ...(changes ? { changes } : {}) },
+          metadata: { ...(personName ? { fullName: personName } : {}), fieldsUpdated, ...(changes ? { changes } : {}) },
           occurredAt: new Date(),
         }
       : null,

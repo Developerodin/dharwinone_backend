@@ -5,6 +5,13 @@ import ActivityLogOutbox from '../models/activityLogOutbox.model.js';
 import User from '../models/user.model.js';
 import Role from '../models/role.model.js';
 import Impersonation from '../models/impersonation.model.js';
+import Employee from '../models/employee.model.js';
+import Job from '../models/job.model.js';
+import JobApplication from '../models/jobApplication.model.js';
+import Category from '../models/category.model.js';
+import Department from '../models/department.model.js';
+import OrgUnit from '../models/orgUnit.model.js';
+import SupportTicket from '../models/supportTicket.model.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import { viewerSeesHiddenUsers, getDirectoryHiddenUserIds } from '../utils/platformAccess.util.js';
@@ -13,7 +20,7 @@ import { getClientIpFromRequest, parseClientSuppliedIpHeader } from '../utils/re
 import { parseUserAgentDetails } from '../utils/parseUserAgent.util.js';
 import { nominatimReversePlace } from '../utils/nominatimReverse.util.js';
 import { ActivityActions } from '../config/activityLog.js';
-import { buildActivityLogExportBuffer } from '../utils/activityLogExcel.service.js';
+import { buildActivityLogExportBuffer, pickEntityName } from '../utils/activityLogExcel.service.js';
 
 const EXPORT_ROW_CAP = 50000;
 const ACTIVITY_LOG_WRITE_FAILED_METRIC = 'activity_log_write_failed_total';
@@ -46,9 +53,28 @@ const Q_ACTOR_LOOKUP_TIMEOUT_MS = 1500;
  * @param {import('mongoose').Types.ObjectId[]} [actorIds] - matching user ids (may be empty)
  * @returns {object[]}
  */
+/**
+ * Metadata keys holding a human name for the affected record. The search box offers
+ * "what changed", so a name typed there has to reach the row that changed it.
+ * ponytail: an explicit key list, not a whole-subdocument scan — metadata is Mixed and
+ * matching it wholesale needs $expr + $toString per document. Add keys as they appear.
+ */
+const Q_METADATA_NAME_KEYS = [
+  'metadata.targetUserName',
+  'metadata.roleName',
+  'metadata.name',
+  'metadata.jobTitle',
+  'metadata.title',
+];
+
 const buildQOrClause = (qTrim, actorIds = []) => {
   const re = new RegExp(escapeRegExp(qTrim), 'i');
-  const orClause = [{ action: re }, { entityType: re }, { entityId: re }];
+  const orClause = [
+    { action: re },
+    { entityType: re },
+    { entityId: re },
+    ...Q_METADATA_NAME_KEYS.map((key) => ({ [key]: re })),
+  ];
   // Only treat as an ip-ish query when at least one digit/dot/colon is present, so plain
   // hex-letter words ("ada", "beef", "cafe", "fee") don't spawn pointless ip/clientIp clauses.
   if (/^(?=.*[\d.:])[\d.:a-fA-F]{3,}$/i.test(qTrim) && qTrim.length <= 45) {
@@ -421,10 +447,34 @@ const buildActivityLogMongoFilter = async (filter, viewer = null) => {
   const { startDate, endDate, includeAttendance, ip, q, ...rest } = filter;
   const mongoFilter = { ...rest };
 
+  // A person record is stored as "Candidate" on rows written before the rename and "Employee" on
+  // rows written after, so one dropdown entry has to match both. The filter accepts a
+  // comma-separated list for that; a single value still compares by equality, which keeps every
+  // saved URL and bookmark working. Joi keeps this a string, so no query operator can be injected.
+  const entityTypes =
+    typeof mongoFilter.entityType === 'string'
+      ? mongoFilter.entityType
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : [];
+  if (entityTypes.length > 1) {
+    mongoFilter.entityType = { $in: entityTypes };
+  } else if (entityTypes.length === 1) {
+    [mongoFilter.entityType] = entityTypes;
+  } else {
+    delete mongoFilter.entityType;
+  }
+
+  // Asking for attendance by entity type is asking for it just as much as asking by action
+  // code: without this, `entityType=Attendance` is a dropdown option that can only ever
+  // return zero rows, because every Attendance row carries an `attendance.*` action.
+  // Membership, not equality — the value may now be a list.
   const wantAttendance =
     includeAttendance === true ||
     includeAttendance === 'true' ||
-    (mongoFilter.action && String(mongoFilter.action).startsWith('attendance.'));
+    (mongoFilter.action && String(mongoFilter.action).startsWith('attendance.')) ||
+    entityTypes.includes('Attendance');
 
   if (!wantAttendance) {
     const noAtt = { action: { $not: /^attendance\./ } };
@@ -554,6 +604,66 @@ const userDisplayFromDoc = (u) => {
 };
 
 /**
+ * entityType -> where that record's human name lives. One batched query per type present on the
+ * page. Types absent here keep showing the raw id, deliberately: Referral (entityId is a jti),
+ * ContactLookup (a hash), OrgStructure/OrgScenario (no single named record), Attendance
+ * (name lives two hops away and those rows are excluded from the list by default), and
+ * Student/Mentor (they resolve to User docs, which need the hidden-user gate below — add them
+ * here only together with that check).
+ *
+ * ponytail: a flat table, not a resolver per type. Adding a type is one line.
+ */
+const ENTITY_LABEL_SOURCES = {
+  Candidate: { model: Employee, select: 'fullName', label: (d) => d.fullName },
+  Employee: { model: Employee, select: 'fullName', label: (d) => d.fullName },
+  Job: { model: Job, select: 'title', label: (d) => d.title },
+  JobApplication: {
+    model: JobApplication,
+    select: 'candidate',
+    populate: { path: 'candidate', select: 'fullName' },
+    label: (d) => d.candidate?.fullName,
+  },
+  Category: { model: Category, select: 'name', label: (d) => d.name },
+  Department: { model: Department, select: 'name', label: (d) => d.name },
+  OrgUnit: { model: OrgUnit, select: 'name', label: (d) => d.name },
+  SupportTicket: { model: SupportTicket, select: 'title', label: (d) => d.title },
+};
+
+/**
+ * Look up the display name of every row whose entityType appears in ENTITY_LABEL_SOURCES.
+ * Deleted records simply resolve to nothing and the row keeps its id.
+ * @param {Record<string, unknown>[]} plains
+ * @returns {Promise<Map<string, string>>} `${entityType}:${entityId}` -> name
+ */
+const resolveEntityNamesFromSources = async (plains) => {
+  const idsByType = new Map();
+  for (const row of plains) {
+    if (!ENTITY_LABEL_SOURCES[row.entityType]) continue;
+    const eid = row.entityId != null ? String(row.entityId).trim() : '';
+    if (!eid || !mongoose.Types.ObjectId.isValid(eid)) continue;
+    if (!idsByType.has(row.entityType)) idsByType.set(row.entityType, new Set());
+    idsByType.get(row.entityType).add(eid);
+  }
+
+  const labels = new Map();
+  await Promise.all(
+    [...idsByType].map(async ([type, ids]) => {
+      const src = ENTITY_LABEL_SOURCES[type];
+      let query = src.model.find({ _id: { $in: [...ids] } }).select(src.select);
+      if (src.populate) query = query.populate(src.populate);
+      const docs = await query.lean();
+      for (const doc of docs) {
+        const label = src.label(doc);
+        if (typeof label === 'string' && label.trim()) {
+          labels.set(`${type}:${doc._id.toString()}`, label.trim());
+        }
+      }
+    })
+  );
+  return labels;
+};
+
+/**
  * Fill targetUserName / roleName from DB when missing from stored metadata (legacy rows, partial writes).
  * @param {Record<string, unknown>[]} plains
  * @param {object|null} viewer - req.user
@@ -631,6 +741,8 @@ const enrichActivityLogPlainsForEntityLabels = async (plains, viewer = null) => 
     }
   }
 
+  const sourceLabels = await resolveEntityNamesFromSources(plains);
+
   for (const row of plains) {
     const eid = row.entityId != null ? String(row.entityId).trim() : '';
     if (!eid) continue;
@@ -647,6 +759,10 @@ const enrichActivityLogPlainsForEntityLabels = async (plains, viewer = null) => 
       const label = impToLabel.get(eid);
       if (label) row.metadata = { ...meta, targetUserName: label };
     }
+
+    // The name as it was when the action happened beats the name the record carries today,
+    // so stored metadata wins over the live lookup.
+    row.entityName = pickEntityName(row.metadata) || sourceLabels.get(`${row.entityType}:${eid}`) || null;
   }
 };
 
@@ -798,14 +914,18 @@ const exportActivityLogsExcel = async (filter, viewer = null) => {
 
   await enrichActivityLogPlainsForEntityLabels(plains, viewer);
 
+  // `metadata` carries the entity labels that enrichActivityLogPlainsForEntityLabels just
+  // resolved; the sheet builder turns it into the Entity Name column. Without it the export
+  // names the type ("User") but never the record, which is the one thing an audit needs.
   const rows = plains.map((plain) => ({
     createdAt: plain.createdAt,
     actorName: plain.actor?.name ?? '',
     actorEmail: plain.actor?.email ?? '',
     action: plain.action ?? '',
-    actionTitle: plain.action ?? '',
     entityType: plain.entityType ?? '',
+    entityName: plain.entityName || undefined,
     entityId: plain.entityId ?? '',
+    metadata: plain.metadata ?? null,
     displayLocation: plain.displayLocation ?? '',
     displayIp: plain.displayIp ?? '',
     userAgent: plain.userAgent ?? '',
@@ -821,6 +941,7 @@ export {
   sanitizeMetadata,
   buildActivityLogMongoFilter,
   buildQOrClause,
+  resolveEntityNamesFromSources,
   streamActivityLogsCsv,
   exportActivityLogsExcel,
   EXPORT_ROW_CAP,
