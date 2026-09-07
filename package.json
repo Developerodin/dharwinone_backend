@@ -33,7 +33,6 @@
     "agent:docker:down": "docker compose -f livekit/docker-compose.yml rm -sf summary-agent",
     "stack:up": "docker compose -f livekit/docker-compose.yml up -d --build && npm run dev",
     "stack:down": "docker compose -f livekit/docker-compose.yml down",
-    "mirror:dump": "node scripts/mirror-cloud-to-local.js",
     "generate:employee-filters": "node scripts/generate-employee-filter-joi.mjs && node scripts/generate-employee-filter-types.mjs && node scripts/assert-employee-filter-parity.mjs",
     "test:entity-query": "node --test --experimental-test-module-mocks \"src/schemas/__tests__/*.test.js\" \"src/schemas/employees/__tests__/*.test.js\" \"src/services/chatAssistant/entityQuery/__tests__/*.test.js\" \"src/services/chatAssistant/__tests__/columnVisibility.test.js\" \"src/services/chatAssistant/__tests__/employeeEmploymentFilter.test.js\" \"src/services/chatAssistant/__tests__/visibilityRules.employeeOwnerQuery.test.js\" \"src/validations/__tests__/chatAssistant.validation.test.js\""
   },
