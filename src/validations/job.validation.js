@@ -75,6 +75,16 @@ const createJob = {
   }).required(),
 };
 
+const searchJobFacet = {
+  query: Joi.object().keys({
+    facet: Joi.string().valid('title', 'company', 'location').required(),
+    q: Joi.string().trim().allow('').optional(),
+    limit: Joi.number().integer().min(1).max(50).optional(),
+    status: Joi.string().valid('all', 'Draft', 'Active', 'Closed', 'Archived').optional(),
+    jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
+  }),
+};
+
 const getJobs = {
   query: Joi.object().keys({
     title: Joi.string().optional(),
@@ -417,6 +427,7 @@ export {
   createJob,
   getJobs,
   getJobFilterOptions,
+  searchJobFacet,
   getJob,
   updateJob,
   deleteJob,

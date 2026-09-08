@@ -10,6 +10,7 @@ import {
   updateJobById,
   deleteJobById,
   exportJobsToExcel,
+  searchJobFacetValues,
   getJobsTemplateBuffer,
   importJobsFromExcel,
   createJobTemplate,
@@ -98,6 +99,15 @@ const list = catchAsync(async (req, res) => {
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobs(filter, options);
   res.send(result);
+});
+
+const jobFacetSearch = catchAsync(async (req, res) => {
+  const filter = pick(req.query, ['facet', 'q', 'limit', 'status', 'jobOrigin']);
+  filter.userRoleIds = req.user.roleIds || [];
+  filter.userId = req.user.id || req.user._id;
+  filter.platformSuperUser = req.user.platformSuperUser;
+  const values = await searchJobFacetValues(filter);
+  res.send({ values });
 });
 
 const jobFilterOptions = catchAsync(async (req, res) => {
@@ -512,6 +522,7 @@ export {
   create,
   list,
   jobFilterOptions,
+  jobFacetSearch,
   get,
   update,
   remove,

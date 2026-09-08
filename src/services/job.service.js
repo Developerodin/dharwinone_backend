@@ -409,7 +409,12 @@ const createJob = async (createdById, payload) => {
   return job;
 };
 
-const queryJobs = async (filter, options) => {
+/**
+ * Turn a request-shaped job filter into the final Mongo filter, visibility rules included.
+ * Split out of `queryJobs` so facet lookups can reuse the exact same visibility and
+ * filter semantics instead of growing a second, drifting copy. Mutates `filter`.
+ */
+const buildJobListFilter = async (filter) => {
   let jobOriginMode = 'all';
   if (filter.jobOrigin === 'internal') jobOriginMode = 'internal';
   else if (filter.jobOrigin === 'external') jobOriginMode = 'external';
@@ -476,17 +481,6 @@ const queryJobs = async (filter, options) => {
   applyJobListFacetFilters(filter, facetQueryOpts);
   applyPostingDateFilter(filter, postingDate);
 
-  const paginateOptions = {
-    ...options,
-    sortBy: resolveJobSortBy(options?.sortBy),
-    populate: options.populate !== undefined ? options.populate : LIST_JOBS_POPULATE,
-    collation: collationForSortBy(options?.sortBy, [
-      'title',
-      'organisation.name',
-      'location',
-    ]),
-  };
-
   const applySharedListFilters = (targetFilter) => {
     applyJobSalaryQueryFilters(targetFilter, salaryQueryOpts);
     applyJobExperienceQueryFilters(targetFilter, experienceQueryOpts);
@@ -509,7 +503,7 @@ const queryJobs = async (filter, options) => {
     }
 
     applySharedListFilters(filter);
-    return Job.paginate(filter, paginateOptions);
+    return filter;
   }
 
   // Staff with Administrator / Agent / Recruiter see all jobs; others only own internal + mirrored external
@@ -550,7 +544,7 @@ const queryJobs = async (filter, options) => {
     }
 
     applySharedListFilters(finalFilter);
-    return Job.paginate(finalFilter, paginateOptions);
+    return finalFilter;
   }
 
   delete filter.userRoleIds;
@@ -567,7 +561,17 @@ const queryJobs = async (filter, options) => {
   }
 
   applySharedListFilters(filter);
-  return Job.paginate(filter, paginateOptions);
+  return filter;
+};
+
+const queryJobs = async (filter, options) => {
+  const finalFilter = await buildJobListFilter(filter);
+  return Job.paginate(finalFilter, {
+    ...options,
+    sortBy: resolveJobSortBy(options?.sortBy),
+    populate: options.populate !== undefined ? options.populate : LIST_JOBS_POPULATE,
+    collation: collationForSortBy(options?.sortBy, ['title', 'organisation.name', 'location']),
+  });
 };
 
 const getJobById = async (id) => {
@@ -775,6 +779,50 @@ const exportJobsToExcel = async (filters = {}) => {
   };
 };
 
+const JOB_FACET_FIELDS = {
+  title: 'title',
+  company: 'organisation.name',
+  location: 'location',
+};
+
+const JOB_FACET_MAX = 50;
+
+/**
+ * Distinct values for one filter facet, matching the same visibility rules as the list.
+ * Replaces client-side filtering of `getJobFilterOptions`, which could only ever see the
+ * first FILTER_OPTIONS_MAX jobs. Empty `q` returns [] -- the panel shows options on typing.
+ */
+const searchJobFacetValues = async (filter = {}) => {
+  const facet = String(filter.facet || '').trim();
+  const field = JOB_FACET_FIELDS[facet];
+  if (!field) return [];
+
+  const q = filter.q != null ? String(filter.q).trim() : '';
+  if (!q) return [];
+
+  const limit = Math.min(Number(filter.limit) || JOB_FACET_MAX, JOB_FACET_MAX);
+
+  const listFilter = { ...filter };
+  delete listFilter.facet;
+  delete listFilter.q;
+  delete listFilter.limit;
+
+  const match = await buildJobListFilter(listFilter);
+  appendFilterClause(match, {
+    [field]: { $regex: escapeRegex(q), $options: 'i', $ne: '' },
+  });
+
+  const rows = await Job.aggregate([
+    { $match: match },
+    { $group: { _id: `$${field}` } },
+    { $match: { _id: { $type: 'string', $ne: '' } } },
+    { $sort: { _id: 1 } },
+    { $limit: limit },
+  ]).collation({ locale: 'en', strength: 1 });
+
+  return rows.map((row) => String(row._id).trim()).filter(Boolean);
+};
+
 const getJobFilterOptions = async (filter = {}) => {
   const listFilter = {
     ...filter,
@@ -798,6 +846,10 @@ const getJobFilterOptions = async (filter = {}) => {
   const jobs = [];
   let expMin = DEFAULT_EXPERIENCE_FILTER_MAX;
   let expMax = 0;
+  // Tracks whether any job actually declared experience. Without it the `expMin`
+  // seed leaks out as a real bound (min=max=20) for a result set where no job
+  // specifies experience, which reads as a user-applied filter on the client.
+  let sawExperience = false;
 
   for (const job of firstPage.results) {
     const id = job._id != null ? String(job._id) : job.id != null ? String(job.id) : '';
@@ -821,10 +873,12 @@ const getJobFilterOptions = async (filter = {}) => {
     if (jobMin != null && Number.isFinite(jobMin)) {
       expMin = Math.min(expMin, jobMin);
       expMax = Math.max(expMax, jobMin);
+      sawExperience = true;
     }
     if (jobMax != null && Number.isFinite(jobMax)) {
       expMin = Math.min(expMin, jobMax);
       expMax = Math.max(expMax, jobMax);
+      sawExperience = true;
     }
   }
 
@@ -834,8 +888,8 @@ const getJobFilterOptions = async (filter = {}) => {
     locations: [...locations].sort((a, b) => a.localeCompare(b)),
     statuses: [...statuses].sort((a, b) => a.localeCompare(b)),
     experience: {
-      min: firstPage.results.length ? expMin : 0,
-      max: firstPage.results.length ? Math.max(expMax, expMin) : DEFAULT_EXPERIENCE_FILTER_MAX,
+      min: sawExperience ? expMin : 0,
+      max: sawExperience ? Math.max(expMax, expMin) : DEFAULT_EXPERIENCE_FILTER_MAX,
     },
     jobs,
   };
@@ -1750,6 +1804,7 @@ export {
   queryJobs,
   queryJobsForExport,
   getJobFilterOptions,
+  searchJobFacetValues,
   getJobById,
   updateJobById,
   deleteJobById,

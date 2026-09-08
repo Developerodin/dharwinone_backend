@@ -20,6 +20,15 @@ router
   .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.getJobFilterOptions), jobController.jobFilterOptions);
 
 router
+  .route('/filter-options/facet')
+  .get(
+    auth(),
+    requirePermissions('jobs.read'),
+    validate(jobValidation.searchJobFacet),
+    jobController.jobFacetSearch
+  );
+
+router
   .route('/export/excel')
   // POST: body carries list filters (and optional legacy ids) too long for a URL.
   .post(auth(), requirePermissions('jobs.read'), validate(jobValidation.exportJobs), jobController.exportExcel);
