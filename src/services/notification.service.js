@@ -323,16 +323,24 @@ export const notify = async (userId, options) => {
 
   let doc = null;
   if (!user || isChannelAllowed(type, 'inApp', user?.notificationPreferences)) {
-    doc = await createNotification(userId, {
-      type,
-      title,
-      message,
-      link,
-      relatedEntity,
-      metadata,
-      triggeredBy,
-      richContent,
-    });
+    try {
+      doc = await createNotification(userId, {
+        type,
+        title,
+        message,
+        link,
+        relatedEntity,
+        metadata,
+        triggeredBy,
+        richContent,
+      });
+    } catch (err) {
+      // In-app and email are independent channels. A malformed in-app payload must not
+      // take the email with it: the queued email below is the one a reminder recipient
+      // actually acts on, and callers that swallow this rejection would otherwise lose
+      // both with no log line.
+      logger.warn(`notify: in-app write failed (user=${userId}, type=${type}): ${err?.message || err}`);
+    }
   }
 
   if (emailOptions?.subject && (emailOptions.text || emailOptions.html) && user?.email) {
