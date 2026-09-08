@@ -61,8 +61,17 @@ const notificationSchema = mongoose.Schema(
     },
     relatedEntity: {
       type: { type: String, default: null },
+      /**
+       * Free-form entity id, stored as a string. NOT an ObjectId: meeting notifications
+       * reference the LiveKit room id (`meeting_<hex>`), which is what
+       * `utils/notificationLink.js` turns into `/join/room?room=<id>`. An ObjectId path
+       * here threw a CastError on every meeting notification and — because notify()
+       * queues the email after this write — took the reminder email down with it.
+       * Documents that stored a BSON ObjectId before this change hydrate to their hex
+       * string, which is what every consumer already does with `String(id)`.
+       */
       id: {
-        type: mongoose.Schema.Types.ObjectId,
+        type: String,
         default: null,
       },
       _id: false,
