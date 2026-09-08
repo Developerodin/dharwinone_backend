@@ -439,7 +439,11 @@ const OFFER_LETTER_POPULATE = [
   { path: 'candidate', select: 'fullName email phoneNumber address' },
   { path: 'jobApplication', select: 'status notes' },
   { path: 'createdBy', select: 'name email' },
+  { path: 'letterVersions.savedBy', select: 'name email' },
 ];
+
+/** // ponytail: hard cap — each snapshot may hold large HTML; upgrade path = OfferLetterVersion collection. */
+const MAX_LETTER_VERSIONS = 50;
 
 const INTERNAL_OFFER_LETTER_JOB_TITLE = 'Offer letter (internal)';
 
@@ -645,6 +649,88 @@ const getOfferById = async (id, currentUser = null) => {
     await ensureAccess(currentUser, offer);
   }
   return offer;
+};
+
+/**
+ * Build a plain letter-field snapshot for version history (JSON-stable dates).
+ */
+const buildLetterSnapshot = (offer) => {
+  const cb = offer?.ctcBreakdown;
+  return {
+    letterFullName: offer?.letterFullName ?? '',
+    letterAddress: offer?.letterAddress ?? '',
+    positionTitle: offer?.positionTitle ?? '',
+    jobType: offer?.jobType ?? undefined,
+    weeklyHours: typeof offer?.weeklyHours === 'number' ? offer.weeklyHours : undefined,
+    workLocation: offer?.workLocation ?? '',
+    roleResponsibilities: Array.isArray(offer?.roleResponsibilities)
+      ? [...offer.roleResponsibilities]
+      : [],
+    positionOverviewHtml: offer?.positionOverviewHtml ?? '',
+    trainingOutcomes: Array.isArray(offer?.trainingOutcomes) ? [...offer.trainingOutcomes] : [],
+    trainingOutcomesHtml: offer?.trainingOutcomesHtml ?? '',
+    compensationNarrative: offer?.compensationNarrative ?? '',
+    academicAlignmentNote: offer?.academicAlignmentNote ?? '',
+    employmentEligibilityLines: Array.isArray(offer?.employmentEligibilityLines)
+      ? [...offer.employmentEligibilityLines]
+      : [],
+    supervisor: {
+      firstName: offer?.supervisor?.firstName ?? '',
+      lastName: offer?.supervisor?.lastName ?? '',
+      phone: offer?.supervisor?.phone ?? '',
+      email: offer?.supervisor?.email ?? '',
+    },
+    letterDate: offer?.letterDate ? new Date(offer.letterDate) : null,
+    joiningDate: offer?.joiningDate ? new Date(offer.joiningDate) : null,
+    ctcBreakdown: {
+      base: cb?.base ?? 0,
+      hra: cb?.hra ?? 0,
+      specialAllowances: cb?.specialAllowances ?? 0,
+      otherAllowances: cb?.otherAllowances ?? 0,
+      gross: cb?.gross ?? 0,
+      currency: cb?.currency ?? 'USD',
+    },
+  };
+};
+
+/**
+ * Append an immutable letter version after a successful Save letter.
+ * Skips when the snapshot matches the latest version (no-op re-save).
+ */
+const appendLetterVersion = async (offerId, offerDoc, actorId = null) => {
+  if (!offerId || !offerDoc) return;
+  const snapshot = buildLetterSnapshot(offerDoc);
+  const existing = Array.isArray(offerDoc.letterVersions) ? offerDoc.letterVersions : [];
+  const last = existing.length ? existing[existing.length - 1] : null;
+  if (last?.snapshot) {
+    try {
+      const norm = (s) =>
+        JSON.stringify({
+          ...s,
+          letterDate: s.letterDate ? new Date(s.letterDate).toISOString() : null,
+          joiningDate: s.joiningDate ? new Date(s.joiningDate).toISOString() : null,
+        });
+      if (norm(last.snapshot) === norm(snapshot)) return;
+    } catch {
+      /* compare best-effort — still append on stringify failure */
+    }
+  }
+  const nextVersion = (Number(offerDoc.letterVersionSeq) || existing.length || 0) + 1;
+  const entry = {
+    version: nextVersion,
+    savedAt: new Date(),
+    savedBy: actorId || undefined,
+    snapshot,
+  };
+  await Offer.findByIdAndUpdate(offerId, {
+    $set: { letterVersionSeq: nextVersion },
+    $push: {
+      letterVersions: {
+        $each: [entry],
+        $slice: -MAX_LETTER_VERSIONS,
+      },
+    },
+  });
 };
 
 /**
@@ -1175,6 +1261,8 @@ const queryOffers = async (filter, options, currentUser) => {
   const result = await Offer.paginate(query, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
+    // ponytail: list never needs version HTML blobs — keep payloads lean.
+    select: options.select || '-letterVersions',
     populate: [
       { path: 'job', select: 'title organisation status' },
       { path: 'candidate', select: 'fullName email phoneNumber address profilePicture employeeId department designation reportingManager' },
@@ -1368,7 +1456,11 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     await syncCompensationFromOfferToEmployee(finalOffer);
   }
 
-  return finalOffer;
+  // Persist letter history after a successful Save letter (generate-letter).
+  const actorId = currentUser?._id ?? currentUser?.id ?? null;
+  await appendLetterVersion(id, finalOffer, actorId);
+
+  return getOfferById(id, currentUser);
 };
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);

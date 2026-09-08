@@ -115,6 +115,59 @@ const offerSchema = new mongoose.Schema(
     /** Shown in letter header; defaults to now when generating */
     letterDate: { type: Date },
     offerLetterGeneratedAt: { type: Date },
+    /**
+     * Monotonic counter for letterVersions.version (survives $slice trim of old entries).
+     * // ponytail: bump on each Save letter; not a document revision of the Offer itself.
+     */
+    letterVersionSeq: { type: Number, default: 0, min: 0 },
+    /**
+     * Immutable snapshots of letter fields after each successful Save letter.
+     * // ponytail: capped via $slice in service (MAX_LETTER_VERSIONS); HTML blobs grow the doc.
+     */
+    letterVersions: {
+      type: [
+        new mongoose.Schema(
+          {
+            version: { type: Number, required: true, min: 1 },
+            savedAt: { type: Date, required: true, default: Date.now },
+            savedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            snapshot: {
+              letterFullName: { type: String, trim: true },
+              letterAddress: { type: String, trim: true },
+              positionTitle: { type: String, trim: true },
+              jobType: { type: String, enum: ['FT_40', 'PT_25', 'INTERN_UNPAID'] },
+              weeklyHours: { type: Number },
+              workLocation: { type: String, trim: true },
+              roleResponsibilities: [{ type: String, trim: true }],
+              positionOverviewHtml: { type: String, trim: true },
+              trainingOutcomes: [{ type: String, trim: true }],
+              trainingOutcomesHtml: { type: String, trim: true },
+              compensationNarrative: { type: String, trim: true },
+              academicAlignmentNote: { type: String, trim: true },
+              employmentEligibilityLines: [{ type: String, trim: true }],
+              supervisor: {
+                firstName: { type: String, trim: true },
+                lastName: { type: String, trim: true },
+                phone: { type: String, trim: true },
+                email: { type: String, trim: true },
+              },
+              letterDate: { type: Date },
+              joiningDate: { type: Date },
+              ctcBreakdown: {
+                base: { type: Number },
+                hra: { type: Number },
+                specialAllowances: { type: Number },
+                otherAllowances: { type: Number },
+                gross: { type: Number },
+                currency: { type: String, trim: true },
+              },
+            },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     sentAt: { type: Date },
     underNegotiationAt: { type: Date },
     acceptedAt: { type: Date },
