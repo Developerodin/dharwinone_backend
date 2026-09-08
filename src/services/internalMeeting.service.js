@@ -232,7 +232,19 @@ const updateInternalMeetingById = async (id, updateBody) => {
   } else if ('durationMinutes' in safeBody) {
     delete safeBody.durationMinutes;
   }
+  const previousScheduledAt = meeting.scheduledAt;
   Object.assign(meeting, safeBody);
+  // Same reasoning as updateMeetingById: every claimed reminder window refers to the old
+  // start time, so clear them all and let the scheduler re-catch the new one.
+  const movedTo = meeting.scheduledAt;
+  if (
+    previousScheduledAt &&
+    movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime()
+  ) {
+    meeting.reminderSentAt = null;
+    meeting.reminderState = new Map();
+  }
   if (previousStatus !== 'ended' && meeting.status === 'ended') {
     meeting.endedAt = new Date();
   } else if (previousStatus === 'ended' && meeting.status !== 'ended') {
@@ -403,6 +415,7 @@ const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
 
   const User = (await import('../models/user.model.js')).default;
   const { notify } = await import('./notification.service.js');
+  const { sendMeetingReminderEmail } = await import('./email.service.js');
 
   for (const m of meetings) {
     const claimFilter = { _id: m._id, [stateField]: { $exists: false } };
@@ -414,6 +427,7 @@ const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
     const result = await InternalMeeting.updateOne(claimFilter, { $set: claimSet });
     if (result.modifiedCount === 0) continue; // another tick/process claimed it
 
+    let delivered = 0;
     const emails = getInvitationEmails(m);
     const title = m.title || 'Meeting';
     const message = `Your meeting "${title}" starts in ${label}.`;
@@ -429,20 +443,64 @@ const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
       const uid = user?._id ? String(user._id) : '';
       if (user && uid && !remindedUserIds.has(uid)) {
         remindedUserIds.add(uid);
-        notify(user._id, {
-          type: 'meeting_reminder',
-          title: 'Meeting reminder',
-          message,
-          ...internalMeetingNotificationFields(m, { name: inviteName, email }),
-          email: {
-            subject: `Reminder: ${title} starts soon`,
-            text: `${message}\n\n${publicUrl}`,
-          },
-        }).catch(() => {});
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await notify(user._id, {
+            type: 'meeting_reminder',
+            title: 'Meeting reminder',
+            message,
+            ...internalMeetingNotificationFields(m, { name: inviteName, email }),
+            email: {
+              subject: `Reminder: ${title} starts soon`,
+              text: `${message}\n\n${publicUrl}`,
+            },
+          });
+          delivered += 1;
+        } catch (err) {
+          logger.warn(
+            `[internalMeetingReminders] ${m.meetingId} ${minutes}m notify failed for ${email}: ${err?.message || err}`
+          );
+        }
+      } else if (!user) {
+        // Invitees who are not system users — external guests — got nothing at all before
+        // this branch existed. ATS interviews have always emailed them; internal meetings
+        // now match. Addressed to the invited address, not to a User record's email.
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const sent = await sendMeetingReminderEmail(email, {
+            title,
+            scheduledAt: m.scheduledAt,
+            timezone: m.timezone || 'UTC',
+            publicMeetingUrl: publicUrl,
+            inviteeName: inviteName,
+            kindLabel: 'meeting',
+          });
+          if (sent) delivered += 1;
+        } catch (err) {
+          logger.warn(
+            `[internalMeetingReminders] ${m.meetingId} ${minutes}m guest email failed for ${email}: ${err?.message || err}`
+          );
+        }
       }
+    }
+
+    if (delivered === 0) {
+      // Nothing reached anyone, so give the claim back and let the next tick try again —
+      // the window is two ticks wide. Ceiling: a process killed between the claim and the
+      // send still loses this reminder. Closing that needs the claimedAt lease + attempts
+      // counter the ATS T-15 pass already carries; lift it here if that starts biting.
+      const release = { $unset: { [stateField]: '' } };
+      if (minutes === 15) release.$set = { reminderSentAt: null };
+      // eslint-disable-next-line no-await-in-loop
+      await InternalMeeting.updateOne({ _id: m._id }, release);
+      logger.warn(
+        `[internalMeetingReminders] ${m.meetingId} ${minutes}m reached nobody (${emails.length} invitee(s)) — claim released`
+      );
     }
   }
 };
+
+export { sendInternalMeetingRemindersForWindow };
 
 export const sendUpcomingInternalMeetingReminders = async () => {
   for (const w of REMINDER_WINDOWS) {
