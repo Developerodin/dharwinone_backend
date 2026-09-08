@@ -65,6 +65,7 @@ src/services/__tests__/helpers/
 scripts/migrations/*
 !scripts/migrations/__tests__/
 !scripts/migrations/__tests__/2026-09-08-backfill-meeting-reminder-retry.test.js
+!scripts/migrations/2026-09-08-backfill-meeting-reminder-retry.js
 
 # editor plans and CI config stay local â€” never pushed
 .cursor/
