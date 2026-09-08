@@ -33,6 +33,8 @@
  */
 import ExternalJobAutoFetchConfig from '../models/externalJobAutoFetchConfig.model.js';
 import ExternalJobSyncRun from '../models/externalJobSyncRun.model.js';
+import { writeAtsAudit } from './atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import Job from '../models/job.model.js';
 import ExternalJob from '../models/externalJob.model.js';
 import externalJobService from './externalJob.service.js';
@@ -232,6 +234,33 @@ export async function runAutoFetchSync(config, trigger) {
     { _id: config._id },
     { $set: { lastRunAt: new Date(), lastRunStatus: status } }
   );
+
+  if (config.createdBy) {
+    writeAtsAudit(
+      String(config.createdBy),
+      {
+        action: ActivityActions.EXTERNAL_JOB_AUTO_FETCH,
+        entityType: EntityTypes.EXTERNAL_JOB,
+        entityId: String(config._id),
+        metadata: {
+          trigger,
+          source: config.source ?? null,
+          runId: String(run._id),
+          status,
+          stats,
+          queriesRun: stats.queriesRun,
+          queriesFailed: stats.queriesFailed,
+          fetched: stats.fetched,
+          created: stats.created,
+          updated: stats.updated,
+          staleArchived: stats.staleArchived,
+          expiredRemoved: stats.expiredRemoved,
+        },
+      },
+      null,
+      { editContext: { staffEdit: true } }
+    ).catch((err) => logger.warn(`[auto-fetch] audit failed: ${err.message}`));
+  }
 
   return { runId: run._id, status, stats, failedQueries };
 }

@@ -7,6 +7,10 @@ import ApolloEnrichment from '../models/apolloEnrichment.model.js';
 import SavedHrContact from '../models/savedHrContact.model.js';
 import { buildSavedContactsFilter } from '../utils/externalJobFilters.js';
 import config from '../config/config.js';
+import { writeAtsAudit } from '../services/atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+
+const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 const search = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -32,6 +36,17 @@ const search = catchAsync(async (req, res) => {
 const save = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const job = await externalJobService.saveJob(userId, req.body);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EXTERNAL_JOB_SAVE,
+      entityType: EntityTypes.EXTERNAL_JOB,
+      entityId: String(job?._id || job?.id || job?.externalId || 'saved'),
+      metadata: { source: req.body?.source },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send(job);
 });
 
@@ -59,6 +74,17 @@ const unsave = catchAsync(async (req, res) => {
   const { externalId } = req.params;
   const source = req.query.source;
   await externalJobService.unsaveJob(userId, externalId, source);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EXTERNAL_JOB_DELETE,
+      entityType: EntityTypes.EXTERNAL_JOB,
+      entityId: String(externalId),
+      metadata: { source },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -193,6 +219,17 @@ const saveHrContact = catchAsync(async (req, res) => {
     { userId, apolloId, firstName: firstName || '', lastName: lastName || '', title: title || '', email: email || '', phoneNumbers: phoneNumbers || [], linkedinUrl: linkedinUrl || '', location: location || '', companyName: companyName || '', savedAt: new Date() },
     { upsert: true, new: true }
   );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EXTERNAL_JOB_HR_CONTACT_SAVE,
+      entityType: EntityTypes.EXTERNAL_JOB,
+      entityId: String(apolloId),
+      metadata: { companyName },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send(contact);
 });
 
@@ -223,6 +260,17 @@ const deleteHrContact = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const { apolloId } = req.params;
   await SavedHrContact.deleteOne({ userId, apolloId });
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EXTERNAL_JOB_HR_CONTACT_DELETE,
+      entityType: EntityTypes.EXTERNAL_JOB,
+      entityId: String(apolloId),
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 

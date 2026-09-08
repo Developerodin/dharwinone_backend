@@ -1,10 +1,14 @@
-import { COMPENSATION_LABELS } from './employeeFilter.registry.js';
+import { COMPENSATION_LABELS, EMPLOYMENT_TYPE_LABELS } from './employeeFilter.registry.js';
 import { renderDeterministicEmployeeList } from '../../services/chatAssistant/renderers/employees.js';
 
 function filterDescriptor(filters = {}) {
   const parts = [];
   if (filters.compensationType && COMPENSATION_LABELS[filters.compensationType]) {
     parts.push(COMPENSATION_LABELS[filters.compensationType]);
+  }
+  // Reads after compensation so the pair comes out as "Unpaid Freelance", not "Freelance Unpaid".
+  if (filters.employmentType && EMPLOYMENT_TYPE_LABELS[filters.employmentType]) {
+    parts.push(EMPLOYMENT_TYPE_LABELS[filters.employmentType]);
   }
   // "active" belongs to the account axis (Active/Disabled/Pending). Employment
   // is Current/Resigned; borrowing the other axis's word is what turned a

@@ -13,9 +13,17 @@ import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import { assertCompensationChangeAllowed } from './offerCompensationGate.js';
 import { recordPlacementAudit } from './placementAudit.service.js';
+import { writeAtsAudit } from './atsAudit.service.js';
+import { buildFieldChangeLog } from '../utils/auditMetadata.helper.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import logger from '../config/logger.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
-import { OFFER_STATUSES, compensationTypeForJobType } from '../constants/atsPipeline.js';
+import {
+  OFFER_STATUSES,
+  OFFER_JOB_TYPE_VALUES,
+  compensationTypeForJobType,
+  offerJobTypeToEmploymentType,
+} from '../constants/atsPipeline.js';
 import { SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 import * as emailService from './email.service.js';
 import {
@@ -195,12 +203,22 @@ const resolveOfferCandidateId = (offer) => {
  * existed — or by a raw driver write that skipped the service — would therefore mirror 'paid' onto
  * the employee while its jobType read INTERN_UNPAID.
  */
-const buildCompensationSnapshotFromOffer = (offer) => ({
-  compensationType: offer.jobType
-    ? compensationTypeForJobType(offer.jobType)
-    : offer.compensationType ?? 'paid',
-  compensationSource: offer.compensationSource || 'jobTypeDerived',
-});
+const buildEmploymentSnapshotFromOffer = (offer) => {
+  const snapshot = {
+    compensationType: offer.jobType
+      ? compensationTypeForJobType(offer.jobType)
+      : offer.compensationType ?? 'paid',
+    compensationSource: offer.compensationSource || 'jobTypeDerived',
+  };
+  // Employment category rides the same write: it comes from the same field, on the same
+  // statuses. Syncing it separately (as designation does, on Accepted only) would leave an
+  // employee showing 'unpaid' with no employment type between Sent and Accepted.
+  // Omitted rather than nulled when the job type is unknown, so a bad value cannot erase a
+  // category that was already correct.
+  const employmentType = offerJobTypeToEmploymentType(offer.jobType);
+  if (employmentType) snapshot.employmentType = employmentType;
+  return snapshot;
+};
 
 /**
  * Mirror offer job-type compensation to Employee when the offer is active (not Draft/Rejected).
@@ -234,7 +252,7 @@ const syncCompensationFromOfferToEmployee = async (offer) => {
     return 'skipped:no-candidate';
   }
 
-  const updated = await Employee.findByIdAndUpdate(cand, buildCompensationSnapshotFromOffer(offer));
+  const updated = await Employee.findByIdAndUpdate(cand, buildEmploymentSnapshotFromOffer(offer));
   if (!updated) {
     logger.warn(
       `compensation sync missed: offer ${offerId} points at candidate ${cand}, which does not exist`
@@ -304,7 +322,18 @@ const toLetterContext = (offer) => {
   const addrFromEmp = formatAddressLine(candidate && candidate.address);
   const address = (offer.letterAddress && offer.letterAddress.trim()) || addrFromEmp || '';
   const jt = offer.jobType || 'FT_40';
+  /**
+   * Two axes, deliberately separate.
+   *
+   * `isIntern` drives letter STRUCTURE — training outcomes, the section headings, whether a
+   * supervisor block appears. `isUnpaid` drives only whether there is compensation to state.
+   *
+   * They were the same test while INTERN_UNPAID was the sole unpaid type. An unpaid freelancer is
+   * not a trainee: they get the ordinary letter minus the compensation section, so keying the
+   * compensation off `isIntern` would demand a CTC they do not have.
+   */
   const isIntern = jt === 'INTERN_UNPAID';
+  const isUnpaid = compensationTypeForJobType(jt) === 'unpaid';
   let weeklyHours =
     Number.isFinite(offer.weeklyHours) && offer.weeklyHours >= 1 && offer.weeklyHours <= 168 ? offer.weeklyHours : 40;
   if (jt === 'PT_25') weeklyHours = 20;
@@ -337,6 +366,7 @@ const toLetterContext = (offer) => {
       : [];
   return {
     isIntern,
+    isUnpaid,
     jobType: jt,
     weeklyHours,
     fullName,
@@ -348,7 +378,7 @@ const toLetterContext = (offer) => {
     trainingBullets: isIntern ? trainingBullets : undefined,
     positionOverviewHtml: positionOverviewHtml || undefined,
     trainingOutcomesHtml: isIntern && trainingOutcomesHtml ? trainingOutcomesHtml : undefined,
-    compensation: isIntern ? undefined : comp,
+    compensation: isUnpaid ? undefined : comp,
     supervisor: supFinal,
     academicNote: offer.academicAlignmentNote,
     eligibilityLines: Array.isArray(offer.employmentEligibilityLines)
@@ -369,16 +399,22 @@ const validateAndBuildLetterContext = (offer) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Joining date is required for the offer letter.');
   }
   if (!offer.jobType) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Job type is required (FT_40, PT_25, or INTERN_UNPAID).');
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Job type is required (one of: ${OFFER_JOB_TYPE_VALUES.join(', ')}).`
+    );
   }
   if (ctx.roleBullets.length === 0) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'At least one role / responsibility is required.');
   }
+  // Training outcomes belong to the internship, not to being unpaid — an unpaid freelancer has
+  // none. Compensation, on the other hand, is required by anything that pays.
   if (ctx.isIntern) {
     if (!ctx.trainingBullets || ctx.trainingBullets.length === 0) {
       throw new ApiError(httpStatus.BAD_REQUEST, 'Training / learning outcomes are required for an unpaid internship offer.');
     }
   } else if (
+    !ctx.isUnpaid &&
     !(
       Number(offer.ctcBreakdown?.gross) > 0 ||
       (offer.compensationNarrative && offer.compensationNarrative.trim())
@@ -447,12 +483,13 @@ const MAX_LETTER_VERSIONS = 50;
 
 const INTERNAL_OFFER_LETTER_JOB_TITLE = 'Offer letter (internal)';
 
-const mapPayloadJobTypeToJobListingType = (payload) => {
-  const jt = payload?.jobType;
-  if (jt === 'PT_25') return 'Part-time';
-  if (jt === 'INTERN_UNPAID') return 'Internship';
-  return 'Full-time';
-};
+/**
+ * Job type for the shell listing behind a standalone offer letter. Falls back to Full-time only
+ * when the payload names no job type at all — an unrecognised one would otherwise be silently
+ * relabelled, which is how the two enums drifted apart in the first place.
+ */
+const mapPayloadJobTypeToJobListingType = (payload) =>
+  offerJobTypeToEmploymentType(payload?.jobType) ?? 'Full-time';
 
 /**
  * When no job application is provided, create a shell job + candidate + application
@@ -599,6 +636,24 @@ const createOfferCore = async (applicationId, payload, userId) => {
 
   await application.updateOne({ status: 'Offered' });
   await syncReferralPipelineStatusForCandidate(candRefId);
+
+  writeAtsAudit(
+    String(userId),
+    {
+      action: ActivityActions.OFFER_CREATE,
+      entityType: EntityTypes.OFFER,
+      entityId: String(offer._id),
+      metadata: {
+        related: {
+          jobApplicationId: String(applicationId),
+          candidateId: String(candRefId),
+          jobId: String(jobRefId),
+        },
+      },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit offer.create:', err?.message || err));
 
   return getOfferById(offer._id);
 };
@@ -839,6 +894,11 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     await ensureAccess(currentUser, offer);
   }
 
+  const originalUpdateKeys = Object.keys(updateBody).filter(
+    (k) => k !== 'compensationChangeAck' && updateBody[k] !== undefined
+  );
+  const offerBeforeAudit = offer.toObject ? offer.toObject() : { ...offer };
+
   // Captured before the non-Draft allowlist below, which would otherwise strip it.
   const compensationAck = updateBody.compensationChangeAck === true;
 
@@ -935,7 +995,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         };
         if (offer.joiningDate) placementBase.joiningDate = offer.joiningDate;
 
-        const employeeSnapshot = buildCompensationSnapshotFromOffer(offer);
+        const employeeSnapshot = buildEmploymentSnapshotFromOffer(offer);
         if (offer.joiningDate) employeeSnapshot.joiningDate = offer.joiningDate;
 
         const persistAcceptLifecycle = async (session) => {
@@ -1039,6 +1099,17 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         description: `Sent offer for ${jobTitle}`,
         metadata: { offerId: offer._id, jobTitle, joiningDate: offer.joiningDate },
       }).catch((err) => logger.warn('logRecruiterActivity offer_sent:', err?.message || err));
+      writeAtsAudit(
+        String(currentUser?._id || offer.createdBy),
+        {
+          action: ActivityActions.OFFER_STATUS_CHANGE,
+          entityType: EntityTypes.OFFER,
+          entityId: String(offer._id),
+          metadata: { statusBefore: oldStatus, statusAfter: newStatus, legacyRecruiterType: 'offer_sent' },
+        },
+        null,
+        { editContext: { staffEdit: true } }
+      ).catch((err) => logger.warn('ats_audit offer.statusChange:', err?.message || err));
     } else if (newStatus === 'Under Negotiation') {
       // Notify creator that candidate has entered negotiation.
       const creatorId = offer.createdBy?._id || offer.createdBy;
@@ -1078,6 +1149,17 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         description: `Offer accepted for ${jobTitle}`,
         metadata: { offerId: offer._id, jobTitle, joiningDate: offer.joiningDate },
       }).catch((err) => logger.warn('logRecruiterActivity offer_accepted:', err?.message || err));
+      writeAtsAudit(
+        String(currentUser?._id || creatorId),
+        {
+          action: ActivityActions.OFFER_STATUS_CHANGE,
+          entityType: EntityTypes.OFFER,
+          entityId: String(offer._id),
+          metadata: { statusBefore: oldStatus, statusAfter: newStatus, legacyRecruiterType: 'offer_accepted' },
+        },
+        null,
+        { editContext: { staffEdit: true } }
+      ).catch((err) => logger.warn('ats_audit offer.statusChange:', err?.message || err));
     } else if (newStatus === 'Rejected') {
       const creatorId = offer.createdBy?._id || offer.createdBy;
       if (creatorId) {
@@ -1100,6 +1182,17 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         description: `Offer rejected for ${jobTitle}`,
         metadata: { offerId: offer._id, jobTitle, rejectionReason: offer.rejectionReason || null },
       }).catch((err) => logger.warn('logRecruiterActivity offer_rejected:', err?.message || err));
+      writeAtsAudit(
+        String(currentUser?._id || creatorId),
+        {
+          action: ActivityActions.OFFER_STATUS_CHANGE,
+          entityType: EntityTypes.OFFER,
+          entityId: String(offer._id),
+          metadata: { statusBefore: oldStatus, statusAfter: newStatus, legacyRecruiterType: 'offer_rejected' },
+        },
+        null,
+        { editContext: { staffEdit: true } }
+      ).catch((err) => logger.warn('ats_audit offer.statusChange:', err?.message || err));
     }
   }
 
@@ -1132,6 +1225,33 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         acknowledged: true,
       },
     });
+  }
+
+  const nonStatusKeys = originalUpdateKeys.filter((k) => k !== 'status');
+  if (nonStatusKeys.length) {
+    const offerAfterAudit = offer.toObject ? offer.toObject() : { ...offer };
+    const auditBody = Object.fromEntries(nonStatusKeys.map((k) => [k, offerAfterAudit[k]]));
+    const fieldChanges = buildFieldChangeLog(offerBeforeAudit, offerAfterAudit, auditBody);
+    if (fieldChanges) {
+      writeAtsAudit(
+        String(currentUser?._id ?? currentUser?.id ?? offer.createdBy),
+        {
+          action: ActivityActions.OFFER_UPDATE,
+          entityType: EntityTypes.OFFER,
+          entityId: String(offer._id),
+          metadata: {
+            changes: fieldChanges,
+            fieldsUpdated: nonStatusKeys,
+            related: {
+              candidateId: String(resolveOfferCandidateId(offer) ?? ''),
+              jobId: offer.job ? String(offer.job?._id ?? offer.job) : null,
+            },
+          },
+        },
+        null,
+        { editContext: { staffEdit: true } }
+      ).catch((err) => logger.warn('ats_audit offer.update:', err?.message || err));
+    }
   }
 
   return getOfferById(offer._id);
@@ -1347,6 +1467,17 @@ const deleteOfferById = async (id, currentUser) => {
   }
 
   await offer.deleteOne();
+  writeAtsAudit(
+    String(currentUser?._id || currentUser?.id),
+    {
+      action: ActivityActions.OFFER_DELETE,
+      entityType: EntityTypes.OFFER,
+      entityId: String(id),
+      metadata: {},
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit offer.delete:', err?.message || err));
   return offer;
 };
 
@@ -1390,7 +1521,7 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   await Offer.findByIdAndUpdate(id, updateOp);
 
   const candidateIdForCompensation = resolveOfferCandidateId(fresh);
-  const employeeSnapshot = buildCompensationSnapshotFromOffer(fresh);
+  const employeeSnapshot = buildEmploymentSnapshotFromOffer(fresh);
   if (fresh.joiningDate) employeeSnapshot.joiningDate = fresh.joiningDate;
 
   // When transitioning Draft → Accepted via letter save, create the Placement record
@@ -1459,6 +1590,18 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   // Persist letter history after a successful Save letter (generate-letter).
   const actorId = currentUser?._id ?? currentUser?.id ?? null;
   await appendLetterVersion(id, finalOffer, actorId);
+
+  writeAtsAudit(
+    String(actorId || 'system'),
+    {
+      action: ActivityActions.OFFER_LETTER_GENERATE,
+      entityType: EntityTypes.OFFER,
+      entityId: String(id),
+      metadata: { transitionToAccepted },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit offer.letter.generate:', err?.message || err));
 
   return getOfferById(id, currentUser);
 };
@@ -1549,6 +1692,17 @@ const shareOfferWithCandidate = async (id, currentUser, payload = {}) => {
     cc: payload.cc,
     bcc: payload.bcc,
   });
+  writeAtsAudit(
+    String(currentUser?._id || currentUser?.id),
+    {
+      action: ActivityActions.OFFER_SHARE,
+      entityType: EntityTypes.OFFER,
+      entityId: String(id),
+      metadata: { sharedTo: to },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit offer.share:', err?.message || err));
   return { sharedTo: to };
 };
 

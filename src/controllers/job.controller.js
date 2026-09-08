@@ -25,8 +25,11 @@ import {
   listJobBookmarks,
   addJobBookmark,
   deleteJobBookmark,
+  getBookmarkedJobIdsForUser,
+  deleteMyJobBookmarks,
   getJobStats,
 } from '../services/job.service.js';
+import { getJobAlertForUser, updateJobAlertForUser } from '../services/jobAlert.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
 import { mintJobOpenReferralRefWithAudit } from '../services/referralAttribution.service.js';
@@ -36,7 +39,10 @@ import { userHasRecruiterRole, userCanViewAllJobsForListing } from '../utils/rol
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import * as activityLogService from '../services/activityLog.service.js';
+import { persistAtsAudit, writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+
+const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 // Job CRUD
 const create = catchAsync(async (req, res) => {
@@ -57,13 +63,16 @@ const create = catchAsync(async (req, res) => {
 
   const jid = job._id ?? job.id;
   if (jid) {
-    await activityLogService.createActivityLog(
+    await writeAtsAudit(
       String(createdById),
-      ActivityActions.JOB_CREATE,
-      EntityTypes.JOB,
-      String(jid),
-      { title: job.title, status: job.status },
-      req
+      {
+        action: ActivityActions.JOB_CREATE,
+        entityType: EntityTypes.JOB,
+        entityId: String(jid),
+        metadata: { title: job.title, status: job.status },
+      },
+      req,
+      { editContext: { staffEdit: true } }
     );
   }
 
@@ -138,26 +147,32 @@ const get = catchAsync(async (req, res) => {
 const update = catchAsync(async (req, res) => {
   const job = await updateJobById(req.params.jobId, req.body, req.user);
   const jid = job?._id ?? job?.id ?? req.params.jobId;
-  await activityLogService.createActivityLog(
-    String(req.user.id || req.user._id),
-    ActivityActions.JOB_UPDATE,
-    EntityTypes.JOB,
-    String(jid),
-    {},
-    req
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_UPDATE,
+      entityType: EntityTypes.JOB,
+      entityId: String(jid),
+      metadata: { fieldsUpdated: Object.keys(req.body || {}) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   res.send(job);
 });
 
 const remove = catchAsync(async (req, res) => {
   await deleteJobById(req.params.jobId, req.user);
-  await activityLogService.createActivityLog(
-    String(req.user.id || req.user._id),
-    ActivityActions.JOB_DELETE,
-    EntityTypes.JOB,
-    req.params.jobId,
-    {},
-    req
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_DELETE,
+      entityType: EntityTypes.JOB,
+      entityId: req.params.jobId,
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   res.status(httpStatus.NO_CONTENT).send();
 });
@@ -190,6 +205,18 @@ const exportExcel = catchAsync(async (req, res) => {
   filter.platformSuperUser = req.user.platformSuperUser;
 
   const { buffer, capped, totalResults, exportMax } = await exportJobsToExcel(filter);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_EXPORT,
+      entityType: EntityTypes.JOB,
+      entityId: 'bulk',
+      metadata: { export: { format: 'xlsx', rowCount: totalResults, capped, exportMax } },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
 
   res.setHeader(
     'Content-Type',
@@ -224,6 +251,20 @@ const importExcel = catchAsync(async (req, res) => {
   const createdById = req.user.id || req.user._id;
   const result = await importJobsFromExcel(req.file.buffer, createdById);
 
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_IMPORT,
+      entityType: EntityTypes.JOB,
+      entityId: 'bulk',
+      metadata: {
+        batch: { successful: result.summary?.successful ?? 0, failed: result.summary?.failed ?? 0 },
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
+
   if (result.summary.failed === 0) {
     res.status(httpStatus.CREATED).send({
       message: 'All jobs imported successfully',
@@ -246,6 +287,17 @@ const importExcel = catchAsync(async (req, res) => {
 const createTemplate = catchAsync(async (req, res) => {
   const createdById = req.user.id || req.user._id;
   const template = await createJobTemplate(createdById, req.body);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_TEMPLATE_CREATE,
+      entityType: EntityTypes.JOB,
+      entityId: String(template._id || template.id),
+      metadata: { title: template.title },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.CREATED).send(template);
 });
 
@@ -277,11 +329,33 @@ const getTemplate = catchAsync(async (req, res) => {
 
 const updateTemplate = catchAsync(async (req, res) => {
   const template = await updateJobTemplateById(req.params.templateId, req.body, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_TEMPLATE_UPDATE,
+      entityType: EntityTypes.JOB,
+      entityId: String(req.params.templateId),
+      metadata: { fieldsUpdated: Object.keys(req.body || {}) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.send(template);
 });
 
 const removeTemplate = catchAsync(async (req, res) => {
   await deleteJobTemplateById(req.params.templateId, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_TEMPLATE_DELETE,
+      entityType: EntityTypes.JOB,
+      entityId: String(req.params.templateId),
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -289,7 +363,26 @@ const removeTemplate = catchAsync(async (req, res) => {
 const createFromTemplate = catchAsync(async (req, res) => {
   const createdById = req.user.id || req.user._id;
   const { templateId } = req.params;
+  const template = await getJobTemplateById(templateId);
   const job = await createJobFromTemplate(templateId, createdById, req.body, req.user);
+  const jid = job?._id ?? job?.id;
+  if (jid) {
+    await writeAtsAudit(
+      auditActorId(req),
+      {
+        action: ActivityActions.JOB_CREATE_FROM_TEMPLATE,
+        entityType: EntityTypes.JOB,
+        entityId: String(jid),
+        metadata: {
+          fromTemplateId: String(templateId),
+          templateName: template?.name ?? null,
+          title: job.title ?? null,
+        },
+      },
+      req,
+      { editContext: { staffEdit: true } }
+    );
+  }
   res.status(httpStatus.CREATED).send(job);
 });
 
@@ -321,18 +414,21 @@ const shareJobEmail = catchAsync(async (req, res) => {
     sharerName: req.user.name || 'Dharwin team',
     publicJobUrl: jobPublicUrl,
   });
-  await activityLogService.createActivityLog(
-    String(req.user.id || req.user._id),
-    ActivityActions.JOB_SHARE,
-    EntityTypes.JOB,
-    String(job._id || job.id),
+  await writeAtsAudit(
+    auditActorId(req),
     {
-      jobTitle: job.title,
-      recipient: to,
-      deliveryMethod: 'email',
-      hasCustomMessage: Boolean(message && String(message).trim()),
+      action: ActivityActions.JOB_SHARE,
+      entityType: EntityTypes.JOB,
+      entityId: String(job._id || job.id),
+      metadata: {
+        jobTitle: job.title,
+        recipient: to,
+        deliveryMethod: 'email',
+        hasCustomMessage: Boolean(message && String(message).trim()),
+      },
     },
-    req
+    req,
+    { editContext: { staffEdit: true } }
   );
   const { notifyByEmail } = await import('../services/notification.service.js');
   notifyByEmail(to, {
@@ -392,7 +488,7 @@ const browseApply = catchAsync(async (req, res) => {
 });
 
 const browseJobs = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'jobType', 'location', 'experienceLevel', 'search', 'jobOrigin']);
+  const filter = pick(req.query, ['title', 'jobType', 'jobTypes', 'location', 'experienceLevel', 'search', 'jobOrigin']);
   filter.status = 'Active';
   filter.forCandidates = true;
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
@@ -413,7 +509,7 @@ const browseJobById = catchAsync(async (req, res) => {
 
 // Public job controllers (no auth required)
 const listPublicJobs = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['title', 'location', 'jobType', 'experienceLevel', 'search', 'jobOrigin']);
+  const filter = pick(req.query, ['title', 'location', 'jobType', 'jobTypes', 'experienceLevel', 'search', 'jobOrigin']);
   // Only show Active jobs publicly; same candidate-facing set as /jobs/browse
   filter.status = 'Active';
   filter.forCandidates = true;
@@ -433,6 +529,7 @@ const listPublicJobs = catchAsync(async (req, res) => {
     salaryRange: job.salaryRange,
     experienceLevel: job.experienceLevel,
     createdAt: job.createdAt,
+    applicationDeadline: job.applicationDeadline,
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
@@ -470,6 +567,7 @@ const getPublicJob = catchAsync(async (req, res) => {
     salaryRange: job.salaryRange,
     experienceLevel: job.experienceLevel,
     createdAt: job.createdAt,
+    applicationDeadline: job.applicationDeadline,
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
@@ -505,12 +603,58 @@ const listBookmarks = catchAsync(async (req, res) => {
 const addBookmark = catchAsync(async (req, res) => {
   const userId = req.user.id || req.user._id;
   const created = await addJobBookmark(req.params.jobId, userId, req.body);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_BOOKMARK_ADD,
+      entityType: EntityTypes.JOB,
+      entityId: String(req.params.jobId),
+      metadata: { bookmarkId: String(created?._id || created?.id || '') },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.CREATED).send(created);
 });
 
 const deleteBookmark = catchAsync(async (req, res) => {
   await deleteJobBookmark(req.params.jobId, req.params.bookmarkId, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.JOB_BOOKMARK_DELETE,
+      entityType: EntityTypes.JOB,
+      entityId: String(req.params.jobId),
+      metadata: { bookmarkId: String(req.params.bookmarkId) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
+});
+
+const listBookmarkedJobIds = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const ids = await getBookmarkedJobIdsForUser(userId);
+  res.send({ ids });
+});
+
+const deleteMyBookmarks = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const result = await deleteMyJobBookmarks(req.params.jobId, userId);
+  res.send(result);
+});
+
+const getJobAlert = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const pref = await getJobAlertForUser(userId);
+  res.send(pref);
+});
+
+const patchJobAlert = catchAsync(async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const pref = await updateJobAlertForUser(userId, req.body);
+  res.send(pref);
 });
 
 const jobStats = catchAsync(async (req, res) => {
@@ -547,5 +691,9 @@ export {
   listBookmarks,
   addBookmark,
   deleteBookmark,
+  listBookmarkedJobIds,
+  deleteMyBookmarks,
+  getJobAlert,
+  patchJobAlert,
   jobStats,
 };

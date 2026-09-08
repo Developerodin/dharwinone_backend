@@ -211,9 +211,15 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
   }
 
   const uid = String(promoteUid);
-  const user = await User.findById(promoteUid).select('roleIds email name').lean();
+  const user = await User.findById(promoteUid).select('roleIds email name status').lean();
   if (!user?.roleIds?.length) {
     noopInfo('USER_HAS_NO_ROLE_IDS');
+    return false;
+  }
+
+  // Admin (or offboarding) disabled/deleted the login — never force status back to active.
+  if (user.status === 'disabled' || user.status === 'deleted') {
+    noopInfo('USER_STATUS_DISABLED_OR_DELETED', `(status=${user.status})`);
     return false;
   }
 
@@ -223,27 +229,23 @@ export async function promoteCandidateOwnerToEmployeeRole(ownerUserId, options =
   const empRoleId = String(employeeRole._id);
   const hasEmployee = user.roleIds.some((id) => String(id) === empRoleId);
 
-  // Already using Employee role; drop legacy Candidate if both are present.
+  // Already Employee: promotion is done. Only leftover work is stripping a legacy
+  // dual Candidate+Employee role pair. Pure Employees must not be written every tick.
   if (hasEmployee) {
-    // User already holds HR Employee role: ensure their profile has an employeeId regardless of whether
-    // the duplicate-Candidate cleanup runs (covers users promoted earlier when ID gen was off).
-    await ensureEmployeeIdForOwner(promoteUid, { employeeDocId: emp._id });
-    await User.updateOne(
-      { _id: promoteUid },
-      { $set: { status: 'active', isEmailVerified: true } }
-    );
-    if (hasCandidate && candId) {
-      await User.updateOne({ _id: promoteUid }, { $pull: { roleIds: candId } });
-      const Student = (await import('../models/student.model.js')).default;
-      await Student.updateMany({ user: promoteUid }, { $set: { joiningDate: emp.joiningDate } });
-      logger.info(`[employeeRolePromotion] Removed duplicate Candidate role for user ${uid}`);
-      return true;
+    if (!hasCandidate || !candId) {
+      noopInfo(
+        'ALREADY_HAS_HR_EMPLOYEE_ROLE_NO_APPLICANT_CANDIDATE_ROLE',
+        `(owner=${user.email ?? uid} candidateProfile=<${emp.email ?? '?'}>; already Employee — promotion cron skips)`
+      );
+      return false;
     }
-    noopInfo(
-      'ALREADY_HAS_HR_EMPLOYEE_ROLE_NO_APPLICANT_CANDIDATE_ROLE',
-      `(owner=${user.email ?? uid} candidateProfile=<${emp.email ?? '?'}>; User.roleIds already includes HR Employee role; no Role named Candidate to remove)`
-    );
-    return false;
+    // Legacy dual-role cleanup only (Candidate still attached after an older promote).
+    await ensureEmployeeIdForOwner(promoteUid, { employeeDocId: emp._id });
+    await User.updateOne({ _id: promoteUid }, { $pull: { roleIds: candId } });
+    const Student = (await import('../models/student.model.js')).default;
+    await Student.updateMany({ user: promoteUid }, { $set: { joiningDate: emp.joiningDate } });
+    logger.info(`[employeeRolePromotion] Removed duplicate Candidate role for user ${uid}`);
+    return true;
   }
 
   if (!hasCandidate || !candId) {
@@ -320,13 +322,15 @@ async function syncJoiningDatesFromOnboardingPlacements(candidateIds) {
 
 /**
  * Batch (scheduler): promote Candidate → Employee for ATS Onboarding pipeline
- * (`Placement.status` Onboarding or Joined), joining date calendar-eligible (UTC). Each row delegates to
- * {@link promoteCandidateOwnerToEmployeeRole} (resolves login via employee email when owner is stale).
+ * (`Placement.status` Onboarding or Joined), joining date calendar-eligible (UTC).
+ * Users who already hold only the HR Employee role are skipped inside
+ * {@link promoteCandidateOwnerToEmployeeRole} (no writes). Joined placements remain
+ * in the scan set for date sync / leftover dual-role cleanup only.
  *
  * @returns {Promise<number>} number of users updated this run
  */
 export async function promoteAllEligibleCandidateOwnersFromScheduler() {
-  const { employeeRole } = await resolveCandidateAndEmployeeRoles();
+  const { candidateRole, employeeRole } = await resolveCandidateAndEmployeeRoles();
   if (!employeeRole) {
     logger.warn('[scheduler] Candidate→Employee promotion skipped: Employee role missing (seed roles)');
     return 0;
@@ -374,10 +378,35 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
 
   const eligibleByDate = rows.filter((row) => joinCalendarDayHasArrived(row.joiningDate));
 
+  // Skip owners who already have Employee and no Candidate — no need to enter promote().
+  const empRoleId = String(employeeRole._id);
+  const candRoleId = candidateRole?._id != null ? String(candidateRole._id) : '';
+  const ownerIds = [
+    ...new Set(eligibleByDate.map((r) => (r.owner != null ? String(r.owner) : '')).filter(Boolean)),
+  ];
+  const alreadyEmployeeOnlyOwners = new Set();
+  if (ownerIds.length) {
+    const owners = await User.find({ _id: { $in: ownerIds } })
+      .select('roleIds')
+      .lean();
+    for (const u of owners) {
+      const ids = (u.roleIds || []).map((id) => String(id));
+      const hasEmp = ids.includes(empRoleId);
+      const hasCand = candRoleId ? ids.includes(candRoleId) : false;
+      if (hasEmp && !hasCand) alreadyEmployeeOnlyOwners.add(String(u._id));
+    }
+  }
+
   let updated = 0;
   let promotionAttempted = 0;
+  let skippedAlreadyEmployee = 0;
 
   for (const row of eligibleByDate) {
+    const ownerKey = row.owner != null ? String(row.owner) : '';
+    if (ownerKey && alreadyEmployeeOnlyOwners.has(ownerKey)) {
+      skippedAlreadyEmployee += 1;
+      continue;
+    }
     promotionAttempted += 1;
     // eslint-disable-next-line no-await-in-loop
     const did = await promoteCandidateOwnerToEmployeeRole(row.owner ?? null, {
@@ -391,7 +420,8 @@ export async function promoteAllEligibleCandidateOwnersFromScheduler() {
     `[scheduler] Candidate→Employee scan (onboarding pipeline): distinctCandidates=${joinedCandidateRefs.length} hrmsVisibleCandidates=${onboardingEmployeeIds.length}` +
       (excludedFromUi > 0 ? ` excludedFromHrmsList=${excludedFromUi}` : '') +
       (datesSynced > 0 ? ` joiningDatesSynced=${datesSynced}` : '') +
-      ` mongoRows=${rows.length} calendarEligible=${eligibleByDate.length} promotionAttempts=${promotionAttempted} promoted=${updated}`
+      ` mongoRows=${rows.length} calendarEligible=${eligibleByDate.length}` +
+      ` skippedAlreadyEmployee=${skippedAlreadyEmployee} promotionAttempts=${promotionAttempted} promoted=${updated}`
   );
   return updated;
 }

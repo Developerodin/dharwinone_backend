@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
-import { COMPENSATION_TYPES, COMPENSATION_SOURCES } from '../constants/atsPipeline.js';
+import { COMPENSATION_TYPES, COMPENSATION_SOURCES, EMPLOYMENT_TYPES } from '../constants/atsPipeline.js';
 import logger from '../config/logger.js';
 import { detectDirectIdentityWrite } from '../utils/identityFields.js';
 
@@ -221,6 +221,25 @@ const employeeSchema = new mongoose.Schema(
       type: String,
       enum: [...COMPENSATION_SOURCES],
       default: 'jobTypeDerived',
+    },
+    /**
+     * Employment category from the accepted offer (see offerJobTypeToEmploymentType).
+     * Orthogonal to compensationType: a Freelance hire may be paid or unpaid, and an
+     * Internship is always unpaid — one field cannot express both.
+     *
+     * Defaults to null, not 'Full-time': every employee predating this field, and everyone
+     * created directly rather than through an offer, genuinely has no known category, and a
+     * default would fabricate one for all of them.
+     *
+     * // ponytail: no compensationSource-style provenance field. Follows the `designation`
+     * precedent — an offer-letter save overwrites whatever the employee form set. Upgrade path
+     * if that bites: mirror the compensationSource / compensationOverride machinery.
+     */
+    employmentType: {
+      type: String,
+      enum: [...EMPLOYMENT_TYPES],
+      default: null,
+      index: true,
     },
     // Position (ref to Position - Java Developer, Data Analyst, etc.) - used during onboarding
     position: { type: mongoose.Schema.Types.ObjectId, ref: 'Position', default: null, index: true },

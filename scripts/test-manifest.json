@@ -287,6 +287,7 @@
   "src/services/__tests__/callSync.convergence.test.js",
   "src/services/__tests__/externalJobAutoFetch.service.test.js",
   "src/services/__tests__/job.appendFilterClause.test.js",
+  "src/services/__tests__/job.bookmarks.test.js",
   "src/services/__tests__/plivo.sdkAnswerIntent.test.js",
   "src/services/chatAssistant/__tests__/referralLeadIntents.test.js",
   "src/services/chatAssistant/__tests__/roleRegistry.test.js",
@@ -296,6 +297,10 @@
   "./src/services/__tests__/candidateCompensationWrite.test.js",
   "./src/services/__tests__/offerCompensationSync.test.js",
   "./src/utils/__tests__/auditMetadata.helper.test.js",
+  "./src/constants/__tests__/auditSource.test.js",
+  "./src/utils/__tests__/atsAudit.helpers.test.js",
+  "./src/services/__tests__/atsAudit.service.test.js",
+  "./src/controllers/__tests__/employee.update.audit.integration.test.js",
   "./src/services/__tests__/offerCompensationGate.test.js",
   "./src/__tests__/routes/upload.route.permissions.test.js",
   "src/services/__tests__/activityLog.entityNames.test.js"

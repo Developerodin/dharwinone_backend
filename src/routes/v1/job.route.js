@@ -63,6 +63,15 @@ router
   );
 
 router
+  .route('/bookmarked-ids')
+  .get(auth(), requirePermissions('jobs.read'), jobController.listBookmarkedJobIds);
+
+router
+  .route('/job-alerts/me')
+  .get(auth(), jobController.getJobAlert)
+  .patch(auth(), validate(jobValidation.updateJobAlert), jobController.patchJobAlert);
+
+router
   .route('/browse')
   .get(jobsBrowseLimiter, optionalAuth(), validate(jobValidation.browseJobs), jobController.browseJobs);
 
@@ -86,6 +95,10 @@ router
   .route('/:jobId/bookmarks')
   .get(auth(), requirePermissions('jobs.read'), validate(jobValidation.listBookmarks), jobController.listBookmarks)
   .post(auth(), requirePermissions('jobs.read'), validate(jobValidation.addBookmark), jobController.addBookmark);
+
+router
+  .route('/:jobId/bookmarks/me')
+  .delete(auth(), requirePermissions('jobs.read'), validate(jobValidation.deleteMyBookmarks), jobController.deleteMyBookmarks);
 
 router
   .route('/:jobId/bookmarks/:bookmarkId')

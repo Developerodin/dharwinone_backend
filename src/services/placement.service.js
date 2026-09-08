@@ -6,6 +6,8 @@ import { isOwnerOrAdmin } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { assertAgentCanReadPlacement, stripPlacementPlain } from '../utils/placementAccess.util.js';
 import { recordPlacementAudit } from './placementAudit.service.js';
+import { writeAtsAudit } from './atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
@@ -171,6 +173,37 @@ const mergeTaskList = (existing, updates) => {
     byId.set(id, cur);
   }
   return Array.from(byId.values());
+};
+
+/** Build field-level audit rows for checklist task patches (pre-boarding / onboarding). */
+const buildPlacementTaskChanges = (beforeList, afterList, patches) => {
+  const changes = [];
+  for (const patch of patches || []) {
+    if (!patch?._id) continue;
+    const id = String(patch._id);
+    const before = (beforeList || []).find((t) => String(t._id) === id);
+    const after = (afterList || []).find((t) => String(t._id) === id);
+    if (!after) continue;
+    const label = after.title || before?.title || `Task ${id}`;
+    if (patch.done !== undefined && Boolean(before?.done) !== Boolean(after.done)) {
+      changes.push({
+        field: label,
+        from: before?.done ? 'done' : 'pending',
+        to: after.done ? 'done' : 'pending',
+      });
+    }
+    if (patch.title !== undefined && before?.title !== after.title) {
+      changes.push({ field: `${label} (title)`, from: before?.title ?? null, to: after.title ?? null });
+    }
+    if (patch.required !== undefined && before?.required !== after.required) {
+      changes.push({
+        field: `${label} (required)`,
+        from: before?.required ?? null,
+        to: after.required ?? null,
+      });
+    }
+  }
+  return changes;
 };
 
 /**
@@ -677,6 +710,10 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
 
   const previousStatus = placement.status;
   const actorId = currentUser?.id ?? currentUser?._id;
+  const tasksBefore = {
+    preBoardingTasks: JSON.parse(JSON.stringify(placement.preBoardingTasks || [])),
+    onboardingTasks: JSON.parse(JSON.stringify(placement.onboardingTasks || [])),
+  };
   let joiningDateChangedForNotify = false;
 
   if (updateBody.status) {
@@ -923,6 +960,40 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
       fromValue: String(previousStatus),
       toValue: String(updateBody.status),
     });
+  }
+
+  const taskChanges = [
+    ...(Array.isArray(updateBody.preBoardingTasks)
+      ? buildPlacementTaskChanges(
+          tasksBefore.preBoardingTasks,
+          placement.preBoardingTasks,
+          updateBody.preBoardingTasks
+        )
+      : []),
+    ...(Array.isArray(updateBody.onboardingTasks)
+      ? buildPlacementTaskChanges(
+          tasksBefore.onboardingTasks,
+          placement.onboardingTasks,
+          updateBody.onboardingTasks
+        )
+      : []),
+  ];
+  if (taskChanges.length && actorId) {
+    writeAtsAudit(
+      String(actorId),
+      {
+        action: ActivityActions.PLACEMENT_TASK_UPDATE,
+        entityType: EntityTypes.PLACEMENT,
+        entityId: String(placement._id),
+        metadata: {
+          changes: taskChanges,
+          stage: Array.isArray(updateBody.onboardingTasks) ? 'onboarding' : 'preBoarding',
+          candidateId: placement.candidate ? String(placement.candidate) : null,
+        },
+      },
+      null,
+      { editContext: { staffEdit: true } }
+    ).catch((err) => logger.warn('ats_audit placement.task.update:', err?.message || err));
   }
 
   if (placement.status === 'Joined' && previousStatus !== 'Joined') {

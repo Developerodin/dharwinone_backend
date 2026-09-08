@@ -25,6 +25,8 @@ const notificationPreferencesSchema = Joi.object({
   supportTicketUpdatesInApp: Joi.boolean(),
   placementUpdates: Joi.boolean(),
   placementUpdatesInApp: Joi.boolean(),
+  jobAlerts: Joi.boolean(),
+  jobAlertsInApp: Joi.boolean(),
   chatMessagesInApp: Joi.boolean(),
   assignmentUpdatesInApp: Joi.boolean(),
   projectUpdatesInApp: Joi.boolean(),
@@ -77,8 +79,8 @@ const password = (value, helpers) => {
   if (value.length < 8) {
     return helpers.message('password must be at least 8 characters');
   }
-  if (!value.match(/\d/) || !value.match(/[a-zA-Z]/)) {
-    return helpers.message('password must contain at least 1 letter and 1 number');
+  if (!value.match(/\d/) || !value.match(/[A-Z]/)) {
+    return helpers.message('password must contain at least 1 capital letter and 1 number');
   }
   return value;
 };

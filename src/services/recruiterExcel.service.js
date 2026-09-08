@@ -105,9 +105,9 @@ const importRecruitersFromExcel = async (fileBuffer) => {
       }
       if (
         passwordProvided &&
-        (password.length < 8 || !/\d/.test(password) || !/[a-zA-Z]/.test(password))
+        (password.length < 8 || !/\d/.test(password) || !/[A-Z]/.test(password))
       ) {
-        throw new Error('Password must be at least 8 characters with 1 letter and 1 number');
+        throw new Error('Password must be at least 8 characters with 1 capital letter and 1 number');
       }
       const summaryTrimmed = profileSummary ? profileSummary.toString().trim() : '';
       if (summaryTrimmed.length > 4000) {

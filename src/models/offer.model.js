@@ -1,7 +1,12 @@
 import mongoose from 'mongoose';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
-import { OFFER_STATUSES, COMPENSATION_TYPES, COMPENSATION_SOURCES } from '../constants/atsPipeline.js';
+import {
+  OFFER_STATUSES,
+  COMPENSATION_TYPES,
+  COMPENSATION_SOURCES,
+  OFFER_JOB_TYPE_VALUES,
+} from '../constants/atsPipeline.js';
 
 const ctcBreakdownSchema = new mongoose.Schema(
   {
@@ -71,11 +76,13 @@ const offerSchema = new mongoose.Schema(
     /** When set, overrides job title in the letter */
     positionTitle: { type: String, trim: true },
     /**
-     * FT_40: Full time 40 hrs | PT_25: Part time 25 hrs | INTERN_UNPAID: unpaid training internship
+     * See JOB_TYPES in constants/atsPipeline.js for the full list and the pay each implies.
+     * Freelance carries its compensation in the value itself (FREELANCE_PAID / FREELANCE_UNPAID)
+     * so compensationType below can always be derived rather than chosen.
      */
     jobType: {
       type: String,
-      enum: ['FT_40', 'PT_25', 'INTERN_UNPAID'],
+      enum: [...OFFER_JOB_TYPE_VALUES],
     },
     /**
      * DERIVED from jobType (see compensationTypeForJobType) on every write —
@@ -135,7 +142,7 @@ const offerSchema = new mongoose.Schema(
               letterFullName: { type: String, trim: true },
               letterAddress: { type: String, trim: true },
               positionTitle: { type: String, trim: true },
-              jobType: { type: String, enum: ['FT_40', 'PT_25', 'INTERN_UNPAID'] },
+              jobType: { type: String, enum: [...OFFER_JOB_TYPE_VALUES] },
               weeklyHours: { type: Number },
               workLocation: { type: String, trim: true },
               roleResponsibilities: [{ type: String, trim: true }],

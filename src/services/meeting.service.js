@@ -14,6 +14,7 @@ import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { isExistingEmployee, isResignedEmployee } from '../utils/employeeStatus.js';
 import { createActivityLog } from './activityLog.service.js';
+import { writeAtsAudit } from './atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
 import logger from '../config/logger.js';

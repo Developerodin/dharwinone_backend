@@ -105,6 +105,57 @@ test('reports an unresolvable candidate', async () => {
   assert.equal(outcome, 'skipped:no-candidate');
 });
 
+test('writes the employment category alongside compensation', async () => {
+  const candidate = await seedCandidate();
+
+  const outcome = await syncCompensationFromOfferToEmployee(
+    offerLike({ candidate: candidate._id, jobType: 'CONTRACT' })
+  );
+
+  assert.equal(outcome, 'synced');
+  const after = await Employee.findById(candidate._id).lean();
+  assert.equal(after.employmentType, 'Contract');
+  assert.equal(after.compensationType, 'paid');
+});
+
+test('freelance carries its category and its pay independently', async () => {
+  // The whole reason employmentType exists: 'Freelance' alone cannot say whether it is paid, and
+  // 'unpaid' alone cannot say whether it is an internship. Both freelance values share a
+  // category while differing in compensation.
+  const paid = await seedCandidate();
+  const unpaid = await seedCandidate();
+
+  await syncCompensationFromOfferToEmployee(
+    offerLike({ candidate: paid._id, jobType: 'FREELANCE_PAID' })
+  );
+  await syncCompensationFromOfferToEmployee(
+    offerLike({ candidate: unpaid._id, jobType: 'FREELANCE_UNPAID' })
+  );
+
+  const afterPaid = await Employee.findById(paid._id).lean();
+  const afterUnpaid = await Employee.findById(unpaid._id).lean();
+
+  assert.equal(afterPaid.employmentType, 'Freelance');
+  assert.equal(afterPaid.compensationType, 'paid');
+  assert.equal(afterUnpaid.employmentType, 'Freelance');
+  assert.equal(afterUnpaid.compensationType, 'unpaid');
+});
+
+test('an unrecognised job type leaves an existing category alone', async () => {
+  const candidate = await seedCandidate();
+  await Employee.findByIdAndUpdate(candidate._id, { employmentType: 'Contract' });
+
+  // The snapshot omits employmentType rather than nulling it, so a value that was already
+  // correct survives a job type the mapper does not know.
+  const outcome = await syncCompensationFromOfferToEmployee(
+    offerLike({ candidate: candidate._id, jobType: 'NOT_A_JOB_TYPE' })
+  );
+
+  assert.equal(outcome, 'synced');
+  const after = await Employee.findById(candidate._id).lean();
+  assert.equal(after.employmentType, 'Contract');
+});
+
 test('a Draft offer is a normal skip, not a fault', async () => {
   // Draft and Rejected offers are deliberately not mirrored. This must stay distinguishable from
   // the failure outcomes above so monitoring does not cry wolf.

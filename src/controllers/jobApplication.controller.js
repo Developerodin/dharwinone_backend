@@ -14,6 +14,7 @@ import {
   deleteJobApplication,
 } from '../services/jobApplication.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
+import { writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
 import { serializeCandidateApplication } from '../serializers/candidateApplication.serializer.js';
@@ -41,19 +42,32 @@ const get = catchAsync(async (req, res) => {
 });
 
 const updateStatus = catchAsync(async (req, res) => {
+  const before = await getJobApplicationById(req.params.applicationId);
   const application = await updateJobApplicationStatus(
     req.params.applicationId,
     req.body,
     req.user
   );
   const aid = application?._id ?? application?.id ?? req.params.applicationId;
-  await activityLogService.createActivityLog(
+  const statusBefore = before?.status ?? null;
+  const statusAfter = application?.status ?? null;
+  await writeAtsAudit(
     String(req.user.id || req.user._id),
-    ActivityActions.JOB_APPLICATION_UPDATE,
-    EntityTypes.JOB_APPLICATION,
-    String(aid),
-    { status: application?.status },
-    req
+    {
+      action: ActivityActions.JOB_APPLICATION_UPDATE,
+      entityType: EntityTypes.JOB_APPLICATION,
+      entityId: String(aid),
+      metadata: {
+        statusBefore,
+        statusAfter,
+        related: {
+          jobId: application?.job ? String(application.job._id || application.job) : undefined,
+          candidateId: application?.candidate ? String(application.candidate._id || application.candidate) : undefined,
+        },
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   res.send(application);
 });
@@ -64,6 +78,7 @@ const list = catchAsync(async (req, res) => {
     'candidateId',
     'recruiterId',
     'status',
+    'statuses',
     'q',
     'department',
     'dateFrom',

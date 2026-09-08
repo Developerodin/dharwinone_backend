@@ -9,6 +9,15 @@ const RELAY_EMAIL_RE = /(\.noreply@dharwin\.offers\.local$)|(\.(local|internal|i
 
 const truthy = (v) => v === true || v === 'true' || v === 1 || v === '1';
 
+const parseStringList = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
+
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const emptyPaginated = (options = {}) => {
@@ -31,7 +40,9 @@ const buildApplicantQuery = async (filter = {}, currentUser = {}) => {
     query.job = { $in: filter.jobIds };
   }
   if (filter.candidateId) query.candidate = filter.candidateId;
-  if (filter.status) query.status = filter.status;
+  const statusValues = parseStringList(filter.statuses ?? filter.status);
+  if (statusValues.length === 1) query.status = statusValues[0];
+  else if (statusValues.length > 1) query.status = { $in: statusValues };
   if (filter.recruiterId) query.appliedBy = filter.recruiterId;
 
   if (truthy(filter.excludeInternal)) {

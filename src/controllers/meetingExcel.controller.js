@@ -2,6 +2,10 @@ import catchAsync from '../utils/catchAsync.js';
 import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
 import * as meetingExcelService from '../services/meetingExcel.service.js';
+import { writeAtsAudit } from '../services/atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+
+const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 const MEETINGS_EXPORT_CAP = 100000;
 
@@ -19,6 +23,17 @@ export const exportExcel = catchAsync(async (req, res) => {
     req.user
   );
   const buf = meetingExcelService.buildMeetingsExportBuffer(result.results || []);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_EXPORT,
+      entityType: EntityTypes.MEETING,
+      entityId: 'bulk',
+      metadata: { export: { format: 'xlsx', rowCount: result.results?.length ?? 0 } },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   const date = new Date().toISOString().slice(0, 10);
   res.setHeader(
     'Content-Type',

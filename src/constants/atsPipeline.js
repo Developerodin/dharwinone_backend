@@ -105,18 +105,85 @@ export const isAllowedTransition = (workflow, from, to) => {
 };
 
 /**
+ * Employment categories. Shared vocabulary between `Job.jobType` (what was posted) and
+ * `Employee.employmentType` (what someone was hired as). The offer sits between them with a
+ * finer-grained enum, because an offer must also pin down paid vs unpaid.
+ */
+export const EMPLOYMENT_TYPES = freezeList([
+  'Full-time',
+  'Part-time',
+  'Contract',
+  'Temporary',
+  'Internship',
+  'Freelance',
+]);
+
+/**
  * Offer letter job types. `compensationType` is DERIVED from `value` — never stored
  * or selected manually — so paid/unpaid can never contradict the chosen job type.
+ *
+ * Where a category is genuinely ambiguous about pay it gets one value per outcome
+ * (`FREELANCE_PAID` / `FREELANCE_UNPAID`) rather than a separate selectable field. That keeps
+ * `compensationTypeForJobType` a total function: there is no state in which the letter body and
+ * the paid/unpaid badge can disagree. Internship is unpaid-only by policy — "Training" IS the
+ * unpaid internship — so it needs no pair.
  */
 export const JOB_TYPES = freezeList([
   Object.freeze({ value: 'FT_40', label: 'Full time — 40 hours/week', compensationType: 'paid' }),
   Object.freeze({ value: 'PT_25', label: 'Part time — 20 hours/week', compensationType: 'paid' }),
+  Object.freeze({ value: 'CONTRACT', label: 'Contract', compensationType: 'paid' }),
+  Object.freeze({ value: 'TEMPORARY', label: 'Temporary', compensationType: 'paid' }),
   Object.freeze({
     value: 'INTERN_UNPAID',
     label: 'Training / Unpaid Internship (Full Time)',
     compensationType: 'unpaid',
   }),
+  Object.freeze({ value: 'FREELANCE_PAID', label: 'Freelance (Paid)', compensationType: 'paid' }),
+  Object.freeze({
+    value: 'FREELANCE_UNPAID',
+    label: 'Freelance (Unpaid)',
+    compensationType: 'unpaid',
+  }),
 ]);
+
+/**
+ * The enum values themselves. Derived from JOB_TYPES so the model, the letter-version snapshot
+ * and the Joi schema cannot drift apart — adding a job type above is the only edit required.
+ */
+export const OFFER_JOB_TYPE_VALUES = freezeList(JOB_TYPES.map((t) => t.value));
+
+/** Offer job type → employment category. Total over JOB_TYPES. */
+const OFFER_JOB_TYPE_TO_EMPLOYMENT_TYPE = Object.freeze({
+  FT_40: 'Full-time',
+  PT_25: 'Part-time',
+  CONTRACT: 'Contract',
+  TEMPORARY: 'Temporary',
+  INTERN_UNPAID: 'Internship',
+  FREELANCE_PAID: 'Freelance',
+  FREELANCE_UNPAID: 'Freelance',
+});
+
+/**
+ * Employment category → the offer job type to preselect. Freelance defaults to paid; the offer
+ * form lets the user flip it. This is a DEFAULT, not a constraint — terms are renegotiable
+ * between posting a job and writing the offer, so nothing validates the pair afterwards.
+ */
+const EMPLOYMENT_TYPE_TO_OFFER_JOB_TYPE = Object.freeze({
+  'Full-time': 'FT_40',
+  'Part-time': 'PT_25',
+  Contract: 'CONTRACT',
+  Temporary: 'TEMPORARY',
+  Internship: 'INTERN_UNPAID',
+  Freelance: 'FREELANCE_PAID',
+});
+
+/** Offer job type → Employee/Job employment category. Unknown/missing → null, never a guess. */
+export const offerJobTypeToEmploymentType = (offerJobType) =>
+  OFFER_JOB_TYPE_TO_EMPLOYMENT_TYPE[offerJobType] ?? null;
+
+/** Job/Employee employment category → suggested offer job type. Unknown/missing → null. */
+export const jobTypeToOfferJobType = (employmentType) =>
+  EMPLOYMENT_TYPE_TO_OFFER_JOB_TYPE[employmentType] ?? null;
 
 export const COMPENSATION_TYPES = freezeList(['paid', 'unpaid']);
 

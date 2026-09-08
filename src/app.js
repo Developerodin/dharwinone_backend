@@ -121,6 +121,8 @@ const corsOptions = {
     /** PM assistant task apply + other idempotent writes from the browser */
     'Idempotency-Key',
     'idempotency-key',
+    /** ATS mutation screen context (apiClient request interceptor) */
+    'x-audit-source',
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
   // Let the browser read export metadata on cross-origin .xlsx/file downloads.

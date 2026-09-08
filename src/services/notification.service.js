@@ -23,6 +23,7 @@ export const NOTIFICATION_PREF_KEYS = {
   recruiter:        { email: 'recruiterUpdates',      inApp: 'recruiterUpdatesInApp' },
   support_ticket:   { email: 'supportTicketUpdates',  inApp: 'supportTicketUpdatesInApp' },
   placement_update: { email: 'placementUpdates', inApp: 'placementUpdatesInApp' },
+  job_alert: { email: 'jobAlerts', inApp: 'jobAlertsInApp' },
   chat_message:     { inApp: 'chatMessagesInApp' },
   assignment:       { inApp: 'assignmentUpdatesInApp' },
   project:          { inApp: 'projectUpdatesInApp' },

@@ -86,6 +86,8 @@ const jobSchema = new mongoose.Schema(
       enum: ['Draft', 'Active', 'Closed', 'Archived'],
       default: 'Active',
     },
+    /** Optional last date to accept applications; shown on browse listings when set. */
+    applicationDeadline: { type: Date, default: null },
 
     // Template Reference (if created from template)
     templateId: {

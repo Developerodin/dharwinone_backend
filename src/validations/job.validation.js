@@ -1,6 +1,29 @@
 import Joi from 'joi';
 import { objectId, boundedLimit } from './custom.validation.js';
 
+const JOB_TYPE_VALUES = ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'];
+
+/**
+ * Multi job-type list, e.g. "Internship,Part-time". Single values still validate via
+ * {@link commaSeparatedJobTypes} or the array branch; service splits via parseStringList.
+ */
+const commaSeparatedJobTypes = Joi.string().custom((value, helpers) => {
+  const parts = String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (!JOB_TYPE_VALUES.includes(part)) return helpers.error('any.invalid');
+  }
+  return value;
+}, 'comma-separated job types');
+
+const jobTypeListQuery = Joi.alternatives().try(
+  Joi.array().items(Joi.string().valid(...JOB_TYPE_VALUES)),
+  Joi.string().valid(...JOB_TYPE_VALUES),
+  commaSeparatedJobTypes
+);
+
 const stringListQuery = Joi.alternatives().try(
   Joi.array().items(Joi.string().trim().min(1)),
   Joi.string().trim().min(1)
@@ -66,6 +89,7 @@ const createJob = {
     minExperience: Joi.number().min(0).max(80).optional().allow(null),
     maxExperience: Joi.number().min(0).max(80).optional().allow(null),
     vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
+    applicationDeadline: Joi.date().iso().optional().allow(null),
     status: Joi.string()
       .valid('Draft', 'Active', 'Closed', 'Archived')
       .optional()
@@ -153,6 +177,7 @@ const updateJob = {
       minExperience: Joi.number().min(0).max(80).optional().allow(null),
       maxExperience: Joi.number().min(0).max(80).optional().allow(null),
       vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
+      applicationDeadline: Joi.date().iso().optional().allow(null),
       status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
       templateId: Joi.string().custom(objectId).optional(),
     })
@@ -321,8 +346,9 @@ const browseJobs = {
   query: Joi.object().keys({
     title: Joi.string().optional(),
     jobType: Joi.string()
-      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+      .valid(...JOB_TYPE_VALUES)
       .optional(),
+    jobTypes: jobTypeListQuery.optional(),
     location: Joi.string().optional().trim(),
     experienceLevel: Joi.string()
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
@@ -348,8 +374,9 @@ const listPublicJobs = {
     search: Joi.string().optional().trim(),
     location: Joi.string().optional().trim(),
     jobType: Joi.string()
-      .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+      .valid(...JOB_TYPE_VALUES)
       .optional(),
+    jobTypes: jobTypeListQuery.optional(),
     experienceLevel: Joi.string()
       .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive')
       .optional(),
@@ -419,6 +446,35 @@ const deleteBookmark = {
   }),
 };
 
+const deleteMyBookmarks = {
+  params: Joi.object().keys({ jobId: Joi.string().custom(objectId).required() }),
+};
+
+const updateJobAlert = {
+  body: Joi.object()
+    .keys({
+      enabled: Joi.boolean().optional(),
+      criteria: Joi.object()
+        .keys({
+          jobTypes: Joi.array().items(Joi.string().valid(...JOB_TYPE_VALUES)).optional(),
+          location: Joi.string().trim().allow('').optional(),
+          experienceLevel: Joi.string()
+            .valid('Entry Level', 'Mid Level', 'Senior Level', 'Executive', '')
+            .optional(),
+          jobOrigin: Joi.string().valid('internal', 'external', '').optional(),
+          search: Joi.string().trim().allow('').optional(),
+        })
+        .optional(),
+      channels: Joi.object()
+        .keys({
+          email: Joi.boolean().optional(),
+          inApp: Joi.boolean().optional(),
+        })
+        .optional(),
+    })
+    .min(1),
+};
+
 const getJobStats = {
   params: Joi.object().keys({ jobId: Joi.string().custom(objectId).required() }),
 };
@@ -449,5 +505,7 @@ export {
   listBookmarks,
   addBookmark,
   deleteBookmark,
+  deleteMyBookmarks,
+  updateJobAlert,
   getJobStats,
 };

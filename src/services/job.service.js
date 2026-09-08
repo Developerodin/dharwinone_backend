@@ -406,6 +406,10 @@ const createJob = async (createdById, payload) => {
     createdBy: createdById,
     ...payload,
   });
+  if (job.status === 'Active') {
+    const { notifyJobAlertSubscribersForJob } = await import('./jobAlert.service.js');
+    notifyJobAlertSubscribersForJob(job).catch(() => {});
+  }
   return job;
 };
 
@@ -449,6 +453,13 @@ const buildJobListFilter = async (filter) => {
 
   const postingDate = filter.postingDate;
   delete filter.postingDate;
+
+  const jobTypes = parseStringList(filter.jobTypes);
+  const jobTypeSingle = filter.jobType;
+  delete filter.jobType;
+  delete filter.jobTypes;
+  const resolvedJobType = jobTypes.length ? { $in: jobTypes } : jobTypeSingle || null;
+  if (resolvedJobType) filter.jobType = resolvedJobType;
 
   const statusRaw = filter.status;
   if (statusRaw === 'all') {
@@ -605,8 +616,14 @@ const updateJobById = async (id, updateBody, currentUser) => {
   if (updateBody.location != null) {
     applyLocationMetaToPayload(updateBody);
   }
+  const prevStatus = job.status;
   Object.assign(job, updateBody);
   await job.save();
+
+  if (job.status === 'Active' && prevStatus !== 'Active') {
+    const { notifyJobAlertSubscribersForJob } = await import('./jobAlert.service.js');
+    notifyJobAlertSubscribersForJob(job).catch(() => {});
+  }
 
   await job.populate([
     { path: 'createdBy', select: 'name email' },
@@ -1165,6 +1182,17 @@ const syncReferralPipelineAfterJobApplication = async (_jobId, candidateId, _job
   await syncReferralPipelineStatusForCandidate(candidateId);
 };
 
+/** Inclusive through 23:59:59.999 UTC on the deadline calendar day (matches browse UI). */
+const isApplicationDeadlinePast = (deadline) => {
+  if (!deadline) return false;
+  const d = new Date(deadline);
+  if (Number.isNaN(d.getTime())) return false;
+  const endOfDeadlineDayUtc = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999)
+  );
+  return Date.now() > endOfDeadlineDayUtc.getTime();
+};
+
 const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser) => {
   const job = await getJobById(jobId);
   if (!job) {
@@ -1172,6 +1200,9 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
   }
   if (job.status !== 'Active') {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot apply to a job that is not active');
+  }
+  if (isApplicationDeadlinePast(job.applicationDeadline)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Application deadline has passed');
   }
   const canAccessJob = await isOwnerOrAdmin(currentUser, job);
   const candidate = await Employee.findById(candidateId);
@@ -1760,6 +1791,21 @@ async function deleteJobBookmark(jobId, bookmarkId, user) {
   return { ok: true };
 }
 
+async function getBookmarkedJobIdsForUser(userId) {
+  const rows = await Job.find({ 'bookmarks.user': userId }, { _id: 1 }).lean();
+  return rows.map((r) => String(r._id));
+}
+
+async function deleteMyJobBookmarks(jobId, userId) {
+  const job = await Job.findById(jobId).select('bookmarks');
+  if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  const uid = String(userId);
+  const mine = (job.bookmarks || []).filter((b) => String(b.user) === uid);
+  if (!mine.length) return { removed: 0 };
+  await Job.updateOne({ _id: jobId }, { $pull: { bookmarks: { user: userId } } });
+  return { removed: mine.length };
+}
+
 async function getJobStats(jobId, currentUser = {}) {
   const job = await Job.findById(jobId).select('title status createdAt').lean();
   if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
@@ -1825,5 +1871,7 @@ export {
   listJobBookmarks,
   addJobBookmark,
   deleteJobBookmark,
+  getBookmarkedJobIdsForUser,
+  deleteMyJobBookmarks,
   getJobStats,
 };

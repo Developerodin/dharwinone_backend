@@ -1,0 +1,5528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATS PRD / Product / Git Evolution Audit</title>
+  <style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --color-primary: #475569;
+  --color-secondary: #64748B;
+  --color-accent: #2563EB;
+  --color-background: #F8FAFC;
+  --color-foreground: #1E293B;
+  --color-muted: #EAEFF3;
+  --color-border: #E2E8F0;
+  --color-destructive: #DC2626;
+  --status-green: #15803D;
+  --status-yellow: #A16207;
+  --status-red: #B91C1C;
+  --status-purple: #7C3AED;
+  --status-orange: #C2410C;
+}
+
+@page {
+  size: A4;
+  margin: 18mm 14mm 22mm 14mm;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  font-size: 10.5pt;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  color: var(--color-foreground);
+  background: #fff;
+  line-height: 1.55;
+  margin: 0;
+  padding: 0;
+}
+
+.cover {
+  min-height: 250mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24mm 8mm;
+  page-break-after: always;
+  border-bottom: 4px solid var(--color-accent);
+}
+
+.cover .brand {
+  font-size: 11pt;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-secondary);
+  margin-bottom: 12mm;
+}
+
+.cover h1 {
+  font-size: 28pt;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--color-foreground);
+  margin: 0 0 8mm;
+  max-width: 95%;
+}
+
+.cover .subtitle {
+  font-size: 13pt;
+  color: var(--color-secondary);
+  margin-bottom: 16mm;
+  max-width: 90%;
+}
+
+.cover .meta {
+  font-size: 10pt;
+  color: var(--color-secondary);
+  border-left: 3px solid var(--color-accent);
+  padding-left: 4mm;
+}
+
+.cover .meta p { margin: 0.35em 0; }
+
+.content { padding: 0 2mm; }
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-foreground);
+  font-weight: 700;
+  line-height: 1.25;
+  page-break-after: avoid;
+}
+
+h1 { font-size: 20pt; margin: 1.2em 0 0.6em; }
+h2 {
+  font-size: 15pt;
+  margin: 1.4em 0 0.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 2px solid var(--color-border);
+  page-break-before: always;
+}
+h2:first-of-type { page-break-before: avoid; }
+h3 { font-size: 12pt; margin: 1em 0 0.4em; color: var(--color-primary); }
+h4 { font-size: 11pt; margin: 0.8em 0 0.3em; }
+
+p { margin: 0.5em 0; }
+
+a { color: var(--color-accent); text-decoration: none; }
+
+strong { font-weight: 700; }
+
+hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 1.2em 0;
+}
+
+ul, ol { margin: 0.4em 0 0.8em; padding-left: 1.4em; }
+li { margin: 0.2em 0; }
+
+blockquote {
+  margin: 0.8em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-background);
+  color: var(--color-secondary);
+}
+
+code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+  background: var(--color-muted);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+pre {
+  background: #0F172A;
+  color: #E2E8F0;
+  padding: 0.8em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  page-break-inside: avoid;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0 1.2em;
+  font-size: 9pt;
+  page-break-inside: auto;
+}
+
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; page-break-after: auto; }
+
+th, td {
+  border: 1px solid var(--color-border);
+  padding: 0.45em 0.55em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+  font-size: 8.5pt;
+}
+
+tbody tr:nth-child(even) { background: var(--color-background); }
+
+/* Status legend chips in tables */
+td:has(> :only-child),
+td {
+  word-break: break-word;
+}
+
+.status-key {
+  margin: 1em 0;
+  padding: 0.8em 1em;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 9pt;
+  page-break-inside: avoid;
+}
+
+.status-key strong { display: block; margin-bottom: 0.3em; }
+
+@media print {
+  body { background: #fff; }
+  a { color: var(--color-foreground); }
+  h2 { break-before: page; }
+}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="brand">Dharwin One · Product Audit</div>
+  <h1>ATS PRD / Product / Git Evolution Audit</h1>
+  <p class="subtitle">Forensic comparison of original PRD requirements, shipped product, and Git evolution across backend and frontend repositories.</p>
+  <div class="meta">
+    <p><strong>Audit date:</strong> 7 September 2026</p>
+    <p><strong>PRD source:</strong> Dharwin Business Integrated ATS_Updated.pdf (22 pages, 4 modules)</p>
+    <p><strong>Repositories:</strong> uat.dharwin.backend · uat.dharwin.frontend</p>
+    <p><strong>Requirements tracked:</strong> 155 (ATS 60 + Comm 38 + Train 29 + PM 28)</p>
+    <p><strong>Generated:</strong> 07 September 2026, 19:35</p>
+  </div>
+</div>
+<div class="status-key">
+  <strong>Status legend</strong>
+  🟢 Full &nbsp;|&nbsp; 🟡 Partial &nbsp;|&nbsp; 🔴 Missing &nbsp;|&nbsp; ⚠️ Diverged &nbsp;|&nbsp; 🟣 Beyond PRD
+</div>
+
+<main class="content">
+<h2>1. Executive Summary</h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align:right">Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PRD modules</td>
+<td style="text-align:right">4</td>
+</tr>
+<tr>
+<td>PRD requirements</td>
+<td style="text-align:right"><strong>155</strong></td>
+</tr>
+<tr>
+<td>Current nav modules</td>
+<td style="text-align:right"><strong>7</strong> (+ Dashboard, Settings, public portals)</td>
+</tr>
+<tr>
+<td>ATS authenticated routes</td>
+<td style="text-align:right"><strong>22</strong></td>
+</tr>
+<tr>
+<td>Public / candidate routes</td>
+<td style="text-align:right"><strong>6</strong></td>
+</tr>
+<tr>
+<td>Pages not in original PRD</td>
+<td style="text-align:right"><strong>18+</strong></td>
+</tr>
+<tr>
+<td>Strict PRD coverage (all modules)</td>
+<td style="text-align:right"><strong>32.9%</strong> (51/155)</td>
+</tr>
+<tr>
+<td>Weighted PRD coverage</td>
+<td style="text-align:right"><strong>58.2%</strong> (🟢=1.0, 🟡=0.5, ⚠️/🟣=0.75, 🔴=0)</td>
+</tr>
+<tr>
+<td>ATS module strict</td>
+<td style="text-align:right"><strong>31.7%</strong> (19/60)</td>
+</tr>
+<tr>
+<td>Extra features beyond PRD</td>
+<td style="text-align:right"><strong>~72</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>ID catalog:</strong> §6C is canonical; §6 page audits reference it only.</p>
+<p><strong>Evolution:</strong> PRD lists Express as an allowed framework (p.19); shipped <strong>Express/MongoDB/Next.js</strong>. Real divergences: Prisma, PostgreSQL, tRPC, Auth.js, Casbin. PRD also lists compliance binders, e-signatures, calendar sync, and broad AI. Shipped product is <strong>Express/MongoDB/Next.js</strong> with a <strong>richer ATS</strong> (external jobs, referral CRM, candidate self-service, HRMS on employees page) from a March 2026 UI wave (<code>04759f8a</code>), then telephony, auto-fetch, pagination, and lifecycle splits through September 2026. <strong>Client-request Git evidence is sparse</strong> (one confirmed Plivo migration); most changes are internal.</p>
+<hr />
+<h2>2. Original PRD Structure</h2>
+<h3>Module 1 — ATS (60 requirements)</h3>
+<table>
+<thead>
+<tr>
+<th>PRD Area</th>
+<th>IDs</th>
+<th style="text-align:right">Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Job Posting</td>
+<td>ATS-JOB-001–005</td>
+<td style="text-align:right">5</td>
+</tr>
+<tr>
+<td>Candidate &amp; Compliance</td>
+<td>ATS-CAND-001–010</td>
+<td style="text-align:right">10</td>
+</tr>
+<tr>
+<td>Recruiter</td>
+<td>ATS-REC-001–006</td>
+<td style="text-align:right">6</td>
+</tr>
+<tr>
+<td>Application Workflow</td>
+<td>ATS-APP-001–005</td>
+<td style="text-align:right">5</td>
+</tr>
+<tr>
+<td>Interview</td>
+<td>ATS-INT-001–009</td>
+<td style="text-align:right">9</td>
+</tr>
+<tr>
+<td>Offer &amp; Placement</td>
+<td>ATS-OFF-001–005</td>
+<td style="text-align:right">5</td>
+</tr>
+<tr>
+<td>Pre-boarding &amp; Onboarding</td>
+<td>ATS-PRE-001–009</td>
+<td style="text-align:right">9</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td>ATS-ANA-001–004</td>
+<td style="text-align:right">4</td>
+</tr>
+<tr>
+<td>AI Integration</td>
+<td>ATS-AI-001–007</td>
+<td style="text-align:right">7</td>
+</tr>
+</tbody>
+</table>
+<h3>PRD headline bullets vs audit IDs (148 → 155)</h3>
+<p>The PDF uses <strong>148 numbered headline bullets</strong> across four modules. The audit uses <strong>155 requirement IDs</strong> because compound bullets are split where the merged matrix tracks distinct deliverables.</p>
+<table>
+<thead>
+<tr>
+<th>Module / area</th>
+<th style="text-align:right">PDF headline bullets</th>
+<th style="text-align:right">Audit IDs</th>
+<th style="text-align:right">Δ</th>
+<th>Decomposition rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS — Job Posting</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td>ATS — Candidate &amp; Compliance</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">+1</td>
+<td>Bullet 9 split → <code>CAND-009</code> material change log + <code>CAND-010</code> version history</td>
+</tr>
+<tr>
+<td>ATS — Recruiter</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td>ATS — Application Workflow</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td>ATS — Interview</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td>ATS — Offer &amp; Placement</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">+1</td>
+<td>Placement compliance auto-update → <code>OFF-005</code></td>
+</tr>
+<tr>
+<td>ATS — Pre-boarding &amp; Onboarding</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">+4</td>
+<td>Five headline bullets → nine checklist items (<code>PRE-001</code>…<code>009</code>, §7.1–7.9)</td>
+</tr>
+<tr>
+<td>ATS — Analytics</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td>ATS — AI</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td><strong>ATS subtotal</strong></td>
+<td style="text-align:right"><strong>54</strong></td>
+<td style="text-align:right"><strong>60</strong></td>
+<td style="text-align:right"><strong>+6</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>Communication</td>
+<td style="text-align:right">35</td>
+<td style="text-align:right">38</td>
+<td style="text-align:right">+3</td>
+<td>Security / AI sub-bullets expanded in matrix</td>
+</tr>
+<tr>
+<td>Training</td>
+<td style="text-align:right">31</td>
+<td style="text-align:right">29</td>
+<td style="text-align:right">−2</td>
+<td>Two PRD bullets merged in matrix (see merged audit §2)</td>
+</tr>
+<tr>
+<td>Projects</td>
+<td style="text-align:right">28</td>
+<td style="text-align:right">28</td>
+<td style="text-align:right">0</td>
+<td>1:1</td>
+</tr>
+<tr>
+<td><strong>Grand total</strong></td>
+<td style="text-align:right"><strong>148</strong></td>
+<td style="text-align:right"><strong>155</strong></td>
+<td style="text-align:right"><strong>+7</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3>Modules 2–4</h3>
+<ul>
+<li><strong>Communication (38):</strong> Email, chat, voice/video, files, dashboards, security, AI, ATS links.</li>
+<li><strong>Training (29):</strong> Curriculum, attendance, mentors, dashboards, evaluation, analytics, AI.</li>
+<li><strong>Projects (28):</strong> Setup, kanban, deliverables, dashboards, collaboration, AI.</li>
+</ul>
+<p><strong>PRD stack — actual vs specified:</strong></p>
+<table>
+<thead>
+<tr>
+<th>PRD item</th>
+<th>Shipped</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Express</td>
+<td>✅ Express ESM</td>
+<td>PRD p.19 allows Express + tRPC</td>
+</tr>
+<tr>
+<td>NestJS / tRPC</td>
+<td>—</td>
+<td>Not used</td>
+</tr>
+<tr>
+<td>MongoDB vs PostgreSQL</td>
+<td>MongoDB</td>
+<td>Divergence</td>
+</tr>
+<tr>
+<td>Prisma</td>
+<td>—</td>
+<td>Mongoose instead</td>
+</tr>
+<tr>
+<td>Auth.js</td>
+<td>—</td>
+<td>JWT + Passport</td>
+</tr>
+<tr>
+<td>Casbin</td>
+<td>—</td>
+<td>Mongo Role RBAC</td>
+</tr>
+<tr>
+<td>Meilisearch / pgvector</td>
+<td>—</td>
+<td>Pinecone/Qdrant for embeddings; pg_trgm was PRD starter search</td>
+</tr>
+<tr>
+<td>BullMQ</td>
+<td>Partial</td>
+<td>Used for summaries</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. Actual Current Product Structure</h2>
+<pre><code>Dashboard (/dashboard)
+ATS (/ats/*, /courses, public routes)
+Organization (/organization/*)     [NOT IN PRD]
+Communication (/communication/*)
+Training (/training/*, /courses)
+Projects (/apps/projects/*, /task/*, /project-management/*)
+Logs (/logs/*)
+Settings (/settings/*)
+Help (/help-and-support)
+Public: /public-job, /public-recruiter, /public-employee, /candidate-onboard, /join/room
+</code></pre>
+<p><strong>Naming:</strong> PRD &quot;Candidate&quot; → UI <strong>Employees</strong> (<code>/ats/employees</code>).</p>
+<hr />
+<h2>4. Complete Module Inventory</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>In PRD?</th>
+<th style="text-align:right">Pages</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Yes</td>
+<td style="text-align:right">22+</td>
+<td>nav.tsx, app/.../ats/</td>
+</tr>
+<tr>
+<td>Organization</td>
+<td>No</td>
+<td style="text-align:right">5</td>
+<td>nav.tsx ORGANIZATION</td>
+</tr>
+<tr>
+<td>Communication</td>
+<td>Yes</td>
+<td style="text-align:right">7</td>
+<td>nav.tsx Communication</td>
+</tr>
+<tr>
+<td>Training</td>
+<td>Yes</td>
+<td style="text-align:right">8+</td>
+<td>nav.tsx Training</td>
+</tr>
+<tr>
+<td>Projects</td>
+<td>Yes</td>
+<td style="text-align:right">6+</td>
+<td>nav.tsx PM</td>
+</tr>
+<tr>
+<td>Logs</td>
+<td>Partial</td>
+<td style="text-align:right">2</td>
+<td>activityLog</td>
+</tr>
+<tr>
+<td>Dashboard</td>
+<td>Partial</td>
+<td style="text-align:right">1</td>
+<td>role widgets</td>
+</tr>
+<tr>
+<td>Settings</td>
+<td>Partial</td>
+<td style="text-align:right">10+</td>
+<td>/settings/*</td>
+</tr>
+<tr>
+<td>Help</td>
+<td>No</td>
+<td style="text-align:right">1</td>
+<td>iframe</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>5. Complete Page Inventory</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Page</th>
+<th>Route</th>
+<th>Exists</th>
+<th>PRD?</th>
+<th>New?</th>
+<th>First Git (FE)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>/ats/jobs</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>/ats/applications</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>fec06a70</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>External Jobs</td>
+<td>/ats/external-jobs</td>
+<td>Yes</td>
+<td>No</td>
+<td><strong>Yes</strong></td>
+<td>26dc20c / 94ffd8be</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>/ats/employees</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Renamed</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Referral Leads</td>
+<td>/ats/referral-leads</td>
+<td>Yes</td>
+<td>No</td>
+<td><strong>Yes</strong></td>
+<td>aa6dc41 / 7efc49d2</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Share Candidate Form</td>
+<td>/ats/share-candidate-form</td>
+<td>Yes</td>
+<td>No</td>
+<td><strong>Yes</strong></td>
+<td>7cbf2fda</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Browse Jobs / My Apps / My Profile</td>
+<td>/ats/browse-jobs etc.</td>
+<td>Yes</td>
+<td>Partial</td>
+<td><strong>Yes</strong></td>
+<td>94ffd8be</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Recruiters</td>
+<td>/ats/recruiters</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>/ats/interviews</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers &amp; Placement</td>
+<td>/ats/offers-placement</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Pre-boarding / Onboarding</td>
+<td>/ats/pre-boarding, /onboarding</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Split</td>
+<td>d0697fd3 split</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Analytics</td>
+<td>/ats/analytics</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>04759f8a</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Job Applications (removed)</td>
+<td>/ats/job-applications</td>
+<td><strong>No</strong></td>
+<td>Yes</td>
+<td>Merged</td>
+<td>da120383</td>
+</tr>
+<tr>
+<td>Org</td>
+<td>Chart, Structure, Depts, Directory, Scenarios</td>
+<td>/organization/*</td>
+<td>Yes</td>
+<td>No</td>
+<td><strong>Yes</strong></td>
+<td>Jun 2026</td>
+</tr>
+<tr>
+<td>Comm</td>
+<td>Email, Chats, Meetings, Dialer, Calling, Recordings, Files</td>
+<td>/communication/*</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Partial</td>
+<td>Feb–Jul 2026</td>
+</tr>
+<tr>
+<td>Training</td>
+<td>Curriculum, Attendance, Mentors, Students, Eval, Analytics</td>
+<td>/training/*</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>Feb 2026</td>
+</tr>
+<tr>
+<td>PM</td>
+<td>Projects, Tasks, Kanban, Teams, Analytics</td>
+<td>various</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No</td>
+<td>Jun 2026</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>6. Module-by-Module Audit</h2>
+<h3>MODULE: ATS</h3>
+<h3>Jobs (List, Create, Edit)</h3>
+<p><strong>Route:</strong> <code>/ats/jobs, /ats/jobs/create, /ats/jobs/edit/[id]</code>  |  <strong>Module:</strong> ATS</p>
+<h4>A. PRD Requirements for This Page</h4>
+<p><em>IDs from §6C catalog only.</em></p>
+<table>
+<thead>
+<tr>
+<th>Requirement ID</th>
+<th>PRD Requirement (§6C)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-JOB-001</td>
+<td>Jobs with org, skill tags, description, job type, location</td>
+</tr>
+<tr>
+<td>ATS-JOB-002</td>
+<td>Excel import/export</td>
+</tr>
+<tr>
+<td>ATS-JOB-003</td>
+<td>Full CRUD</td>
+</tr>
+<tr>
+<td>ATS-JOB-004</td>
+<td>Search and sort</td>
+</tr>
+<tr>
+<td>ATS-JOB-005</td>
+<td>Job description templates</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p><strong>Screens:</strong> Jobs list (<code>JobsClient.tsx</code>), Create, Edit. <strong>APIs:</strong> <code>/v1/jobs</code>, import/export, job-templates.</p>
+<h4>C. PRD → Implementation Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD Requirement</th>
+<th>Current Implementation</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-JOB-001 Job fields</td>
+<td>Full form: skills, salary, experience, type, location, department</td>
+<td>🟢</td>
+<td>job.model.js, JobsClient</td>
+</tr>
+<tr>
+<td>ATS-JOB-002 Excel import/export</td>
+<td>Import, export, template endpoints</td>
+<td>🟢</td>
+<td>job import/export routes</td>
+</tr>
+<tr>
+<td>ATS-JOB-003 Full CRUD</td>
+<td>Create, read, update, delete</td>
+<td>🟢</td>
+<td>job.route.js</td>
+</tr>
+<tr>
+<td>ATS-JOB-004 Search and sort</td>
+<td>Multi-filter + server pagination</td>
+<td>🟢</td>
+<td>job.service.js</td>
+</tr>
+<tr>
+<td>ATS-JOB-005 JD templates</td>
+<td>Settings job-templates + apply on create</td>
+<td>🟢</td>
+<td>jobTemplate.model.js</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Functionality Built Beyond the PRD</h4>
+<table>
+<thead>
+<tr>
+<th>Extra Feature</th>
+<th>Where</th>
+<th>What It Does</th>
+<th>PRD Mentioned?</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bolna AI job verification call</td>
+<td>Job row action</td>
+<td>Automated phone verification of job details</td>
+<td>No</td>
+<td>bolna routes, JobsClient</td>
+</tr>
+<tr>
+<td>Bookmarks</td>
+<td>Jobs list</td>
+<td>Save jobs for quick access</td>
+<td>No</td>
+<td>bookmark API</td>
+</tr>
+<tr>
+<td>Referral share links</td>
+<td>Job actions</td>
+<td>Generate referral URLs</td>
+<td>No</td>
+<td>referral routes</td>
+</tr>
+<tr>
+<td>Apply candidate from job</td>
+<td>Job list modal</td>
+<td>Create application without leaving jobs</td>
+<td>No</td>
+<td>JobsClient apply modal</td>
+</tr>
+</tbody>
+</table>
+<h4>E. Git History &amp; Evolution</h4>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+<th>Classification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-03-06</td>
+<td>04759f8a</td>
+<td>Core jobs UI wave</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-09</td>
+<td>9fd031de, 757dd42a</td>
+<td>Server-side pagination</td>
+<td>🔵 Internal scale</td>
+</tr>
+<tr>
+<td>2026-02–04</td>
+<td>94ffd8be+</td>
+<td>External jobs split from jobs</td>
+<td>🔵 Internal product expansion</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Removed:</strong> Standalone <code>/ats/job-applications</code> merged into <code>/ats/applications</code> (da120383).</p>
+<h4>Page Scorecard</h4>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align:right">Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PRD requirements</td>
+<td style="text-align:right">5</td>
+</tr>
+<tr>
+<td>Fully implemented</td>
+<td style="text-align:right">5</td>
+</tr>
+<tr>
+<td>Partial</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Missing</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Extra features</td>
+<td style="text-align:right">5+</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Applications</h3>
+<p><strong>Route:</strong> <code>/ats/applications</code>  |  <strong>Module:</strong> ATS</p>
+<h4>A. PRD Requirements for This Page</h4>
+<p><em>IDs from §6C catalog only. ATS-AI-002 scored on Applications page because Bolna fires on apply; see §CORRECTION Bolna.</em></p>
+<table>
+<thead>
+<tr>
+<th>Requirement ID</th>
+<th>PRD Requirement (§6C)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-APP-001</td>
+<td>Pipeline stages</td>
+</tr>
+<tr>
+<td>ATS-APP-002</td>
+<td>Notes, feedback, status</td>
+</tr>
+<tr>
+<td>ATS-APP-003</td>
+<td>Automated notifications to candidates</td>
+</tr>
+<tr>
+<td>ATS-APP-004</td>
+<td>Audit trail of pipeline movements</td>
+</tr>
+<tr>
+<td>ATS-APP-005</td>
+<td>Bulk-move stages</td>
+</tr>
+<tr>
+<td>ATS-AI-002</td>
+<td>Call, verify, auto-schedule (cross-cutting)</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p><strong>Screens:</strong> Applications table (<code>ApplicationsClient.tsx</code>), detail drawer/modal, stage change actions.</p>
+<p><strong>User can:</strong> List applications with filters; change status one-at-a-time (7 statuses); view candidate/job context; export; Bolna candidate verification calls.</p>
+<p><strong>Stage moves (ATS-APP-005):</strong> <strong>Single-application</strong> status change is supported — <code>PATCH /v1/job-applications/:applicationId</code> (<code>updateStatus</code>, <code>atsPipeline.js</code> transition guards). <strong>Create Offer</strong> auto-moves application to <strong>Offered</strong> (<code>offer.service.js</code>); placement queues on Offers &amp; Placement advance lifecycle. <strong>Not built:</strong> multi-select bulk API (no batch route).</p>
+<p><strong>Audit trail (ATS-APP-004):</strong> <code>activityLogService.createActivityLog</code> on create, status change, withdraw, and delete (<code>jobApplication.controller.js</code> lines 50, 163, 178, 192). No dedicated per-application audit UI.</p>
+<p><strong>APIs:</strong> <code>/v1/job-applications</code>, export, <code>/v1/bolna/*</code>.</p>
+<h4>C. PRD → Implementation Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD Requirement</th>
+<th>Current Implementation</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-APP-001 Pipeline</td>
+<td>7 statuses incl. Shortlisted, Rejected</td>
+<td>🟣</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>ATS-APP-002 Notes/feedback/status</td>
+<td>Status per row; notes on candidate</td>
+<td>🟡</td>
+<td>ApplicationsClient.tsx</td>
+</tr>
+<tr>
+<td>ATS-APP-003 Automated notifications</td>
+<td>Email on status change</td>
+<td>🟢</td>
+<td>jobApplication.service.js notifyByEmail</td>
+</tr>
+<tr>
+<td>ATS-APP-004 Audit trail</td>
+<td>activityLog on create/status/withdraw/delete</td>
+<td>🟡</td>
+<td>jobApplication.controller.js:50,163,178,192</td>
+</tr>
+<tr>
+<td>ATS-APP-005 Bulk-move stages</td>
+<td><strong>Single</strong> PATCH per row + Create Offer → Offered + placement queues; <strong>no</strong> multi-select batch</td>
+<td>🟡</td>
+<td><code>PATCH /job-applications/:id</code>, offer.service.js</td>
+</tr>
+<tr>
+<td>ATS-AI-002 AI verify + schedule</td>
+<td>Bolna calls + stored logs; no auto-schedule</td>
+<td>🟡</td>
+<td>bolnaCandidateVerification.service.js</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Functionality Built Beyond the PRD</h4>
+<table>
+<thead>
+<tr>
+<th>Extra Feature</th>
+<th>Where</th>
+<th>What It Does</th>
+<th>PRD Mentioned?</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shortlisted status</td>
+<td>Pipeline</td>
+<td>Extra stage between Screening and Interview</td>
+<td>No</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>Rejected + reopen</td>
+<td>Pipeline</td>
+<td>Reject and reopen applications</td>
+<td>No</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>Merged from job-applications page</td>
+<td>Route</td>
+<td>Single applications hub</td>
+<td>No</td>
+<td>da120383</td>
+</tr>
+</tbody>
+</table>
+<h4>E. Git History &amp; Evolution</h4>
+<p>| 2026-05-14 | fec06a70 | Applications page added | 🔵 Internal |
+| 2026-02-23 | da120383 | Deleted /ats/job-applications | 🔵 Internal merge |
+| 2026-09 | 9fd031de | Server pagination | 🔵 Internal |</p>
+<h4>Page Scorecard</h4>
+<p>| PRD reqs | 6 (5 APP + AI-002 on page) | Full | 1 | Partial | 4 | Missing | 0 | Different | 1 | Extra | 3 |</p>
+<hr />
+<h3>NEW PAGE — External Jobs (Full Audit)</h3>
+<p><strong>Route:</strong> <code>/ats/external-jobs</code> (<code>?tab=search|saved|contacts</code>)<br />
+<strong>Module:</strong> ATS — <strong>not in PRD</strong> (product expansion: external job aggregation + Apollo HR outreach)<br />
+<strong>First Git:</strong> <code>26dc20c</code> (2026-02-26, backend RapidAPI integration); FE wave <code>94ffd8be</code> / <code>04759f8a</code><br />
+<strong>Client evidence:</strong> ⚪ Unknown (internal product expansion)</p>
+<h4>A. PRD Requirements for This Page</h4>
+<table>
+<thead>
+<tr>
+<th>Requirement ID</th>
+<th>PRD Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>—</td>
+<td><strong>None.</strong> PRD Job Posting covers internal jobs only. External aggregation is entirely post-PRD scope.</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p><strong>Primary files:</strong> <code>ats/external-jobs/page.tsx</code> (~2,100 lines), <code>ExternalJobPreviewPanel.tsx</code>, <code>AutoFetchModal.tsx</code>, <code>shared/lib/api/external-jobs.ts</code>, <code>external-jobs-autofetch.ts</code>, <code>external-jobs-errors.ts</code></p>
+<p><strong>Tabs (URL-driven via <code>?tab=</code>):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>User can</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Search</strong></td>
+<td>Query title + location; pick provider (<code>active-jobs-db</code>, <code>linkedin-job-search-api</code>, <code>linkedin-jobs-api</code>); filter date posted (mapped per-source to RapidAPI windows); work arrangement (remote_ok / remote_solely / remote_both); infinite-scroll style paging with offset; open preview panel; save/unsave bookmark; copy external apply URL (<code>platformUrl</code>); share link</td>
+<td><code>POST /v1/external-jobs/search</code></td>
+</tr>
+<tr>
+<td><strong>Saved</strong></td>
+<td>Paginated list of saved external jobs; search <code>q</code>; filter by source; filter saved date range (<code>savedFrom</code>/<code>savedTo</code> YMD); unsave; open preview</td>
+<td><code>GET /v1/external-jobs/saved</code>, <code>GET /saved/ids</code>, <code>DELETE /saved/:externalId</code></td>
+</tr>
+<tr>
+<td><strong>Contacts</strong></td>
+<td>Card grid of saved Apollo HR contacts; search; saved-date filter; pagination (page size divisible by 2 and 3 for grid); delete contact</td>
+<td><code>GET /v1/external-jobs/hr-contacts</code>, <code>GET /hr-contacts/ids</code>, <code>DELETE /hr-contacts/:apolloId</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Preview panel actions:</strong> View full description/salary/location metadata; <strong>Find HR contacts</strong> (Apollo enrich for company); save individual contacts; open external apply link.</p>
+<p><strong>Auto-fetch (admin):</strong> Modal configures recurring sync (<code>AutoFetchModal</code>); status badge on page header. Manage-only APIs: <code>GET/POST/PATCH /auto-fetch</code>, <code>POST /auto-fetch/run</code>, <code>GET /auto-fetch/runs</code>. Scheduler (<code>externalJobAutoFetch.scheduler.js</code>) runs configured title/location queries and can publish mirrors into internal <code>Job</code> (<code>publishedJobId</code> on <code>ExternalJob</code> model).</p>
+<p><strong>Data persisted:</strong> <code>ExternalJob</code> Mongo collection — unique index <code>(externalId, source, savedBy)</code>; fields include <code>locationMeta</code> (city/state/country), salary range, <code>postedAt</code>, <code>platformUrl</code>, optional <code>publishedJobId</code> link to internal job.</p>
+<p><strong>Integrations:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Integration</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RapidAPI Active Jobs DB</td>
+<td>Primary search provider</td>
+</tr>
+<tr>
+<td>RapidAPI LinkedIn Job Search API</td>
+<td>Alternate provider</td>
+</tr>
+<tr>
+<td>RapidAPI LinkedIn Jobs API</td>
+<td>Third provider</td>
+</tr>
+<tr>
+<td>Apollo.io</td>
+<td>HR contact enrichment + webhook (<code>POST /webhook/apollo/:secret</code>)</td>
+</tr>
+<tr>
+<td>Internal <code>Job</code> model</td>
+<td>Auto-fetch can publish saved external listings</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Permissions:</strong> <code>external-jobs.read</code> (search, list saved, list contacts, enrich); <code>external-jobs.manage</code> (save, unsave, delete contacts, auto-fetch config/run). Middleware: <code>requireExternalJobsAccess.js</code> — Administrator / platform super-user bypass.</p>
+<p><strong>Rate limiting:</strong> Per-user search rate limit in <code>externalJob.service.js</code> (<code>checkRateLimit</code>).</p>
+<h4>C. PRD → Implementation Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD</th>
+<th>Shipped</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Internal job posting only</td>
+<td>External aggregator + HR contact CRM</td>
+<td><strong>Extra module</strong> — correctly excluded from §6C PRD matrix</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Functionality Built Beyond the PRD</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Multi-provider job search</td>
+<td>3 RapidAPI sources with source-specific date-window mapping (<code>1d87718</code>)</td>
+</tr>
+<tr>
+<td>Saved jobs library</td>
+<td>Personal bookmark store per user</td>
+</tr>
+<tr>
+<td>Apollo HR contacts</td>
+<td>Outreach CRM tab — not in any PRD module</td>
+</tr>
+<tr>
+<td>Auto-fetch → internal Job publish</td>
+<td>Recruiter automation pipeline</td>
+</tr>
+<tr>
+<td>Location metadata normalization</td>
+<td><code>locationMeta</code> + <code>externalJobMirrorRepair</code> for stale mirrors</td>
+</tr>
+</tbody>
+</table>
+<h4>E. Git History &amp; Evolution</h4>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+<th>Classification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-02-26</td>
+<td><code>26dc20c</code></td>
+<td>Backend: RapidAPI search, save/unsave, rate limit</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-02–03</td>
+<td><code>94ffd8be</code></td>
+<td>Frontend external-jobs page</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-04-30</td>
+<td><code>8bd086b</code></td>
+<td>Apollo enrichment, job matching hooks</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-06-01</td>
+<td><code>119cc0f</code></td>
+<td>RBAC: <code>external-jobs.*</code> permission keys wired</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-08-25</td>
+<td><code>d328ee8</code></td>
+<td>Auto-fetch scheduler + location metadata fix</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-09-02</td>
+<td><code>1d87718</code></td>
+<td>Validation hardening; per-source posted-window mapping</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-09-03</td>
+<td><code>a95e785</code></td>
+<td>Saved-list UX polish</td>
+<td>🔵 Internal</td>
+</tr>
+</tbody>
+</table>
+<h4>Page Scorecard</h4>
+<p>| PRD reqs | 0 | Full | — | Partial | — | Missing | — | Different | — | Extra | <strong>Full submodule</strong> |</p>
+<hr />
+<h3>Employees (Candidates)</h3>
+<p><strong>Route:</strong> <code>/ats/employees, /ats/employees/add, /edit/[id], /import</code>  |  <strong>Module:</strong> ATS</p>
+<h4>A. PRD Requirements for This Page</h4>
+<p><em>IDs from §6C catalog only.</em></p>
+<table>
+<thead>
+<tr>
+<th>Requirement ID</th>
+<th>PRD Requirement (§6C)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-CAND-001</td>
+<td>Centralised resumes, cover letters, info</td>
+</tr>
+<tr>
+<td>ATS-CAND-002</td>
+<td>Multiple resume versions</td>
+</tr>
+<tr>
+<td>ATS-CAND-003</td>
+<td>Tagging skills, experience, keywords</td>
+</tr>
+<tr>
+<td>ATS-CAND-004</td>
+<td>Advanced search and filtering</td>
+</tr>
+<tr>
+<td>ATS-CAND-005</td>
+<td>Activity history</td>
+</tr>
+<tr>
+<td>ATS-CAND-006</td>
+<td>Bulk Excel import/export</td>
+</tr>
+<tr>
+<td>ATS-CAND-007</td>
+<td>Compliance: SEVIS, EAD, degree, supervisor</td>
+</tr>
+<tr>
+<td>ATS-CAND-008</td>
+<td>Compliance binder PDF/ZIP (→ public profile)</td>
+</tr>
+<tr>
+<td>ATS-CAND-009</td>
+<td>Material change logging</td>
+</tr>
+<tr>
+<td>ATS-CAND-010</td>
+<td>Version history material changes</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p><strong>Screens:</strong> Employee list, Add, Edit, Import, public <code>/public-employee/[id]</code>.</p>
+<p><strong>User can:</strong> CRUD; resume upload; compliance docs; share profile via secure public link; matching jobs; Plivo click-to-call; Excel import/export; server pagination.</p>
+<p><strong>Compliance sharing (ATS-CAND-008):</strong> Public profile page with optional documents — product substitute for PDF/ZIP binder.</p>
+<h4>C. PRD → Implementation Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD Requirement</th>
+<th>Current Implementation</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-CAND-001 Centralised profile</td>
+<td>documents[], coverLetter, CRUD</td>
+<td>🟢</td>
+<td>employee.model.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-002 Multiple resume versions</td>
+<td>Multiple uploads; no version workflow</td>
+<td>🟡</td>
+<td>documents[]</td>
+</tr>
+<tr>
+<td>ATS-CAND-003 Skills/experience tags</td>
+<td>Structured skills[]</td>
+<td>🟡</td>
+<td>employee.model.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-004 Advanced search</td>
+<td>buildAdvancedFilter</td>
+<td>🟢</td>
+<td>employee.service.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-005 Activity history</td>
+<td>activityLog + my-profile tab; fragmented</td>
+<td>🟡</td>
+<td>activityLog, my-profile</td>
+</tr>
+<tr>
+<td>ATS-CAND-006 Bulk Excel import/export</td>
+<td>Import/export endpoints</td>
+<td>🟢</td>
+<td>candidateExportXlsx.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-007 Compliance fields</td>
+<td>SEVIS, EAD, degree, supervisor fields</td>
+<td>🟡</td>
+<td>employee.model.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-008 Compliance binder</td>
+<td>Token-gated <code>/public-employee/[id]</code> + optional docs</td>
+<td>🟣</td>
+<td>shareCandidateProfile, public-employee page</td>
+</tr>
+<tr>
+<td>ATS-CAND-009 Material change log</td>
+<td>Not implemented</td>
+<td>🔴</td>
+<td>—</td>
+</tr>
+<tr>
+<td>ATS-CAND-010 Version history</td>
+<td>Not implemented</td>
+<td>🔴</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Functionality Built Beyond the PRD</h4>
+<table>
+<thead>
+<tr>
+<th>Extra Feature</th>
+<th>Where</th>
+<th>What It Does</th>
+<th>PRD Mentioned?</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HRMS attendance overlay</td>
+<td>Employee profile</td>
+<td>View punch in/out</td>
+<td>No</td>
+<td>attendance integration</td>
+</tr>
+<tr>
+<td>Click-to-call Plivo</td>
+<td>Employee row</td>
+<td>One-click dial</td>
+<td>No</td>
+<td>plivo routes</td>
+</tr>
+<tr>
+<td>Impersonation</td>
+<td>Admin action</td>
+<td>Login as candidate</td>
+<td>No</td>
+<td>impersonate middleware</td>
+</tr>
+<tr>
+<td>Matching jobs panel</td>
+<td>Profile sidebar</td>
+<td>Skill-based job suggestions</td>
+<td>No</td>
+<td>getJobFit overlap</td>
+</tr>
+<tr>
+<td>SOP assignment modals</td>
+<td>Employee actions</td>
+<td>Assign candidate/offboarding SOP</td>
+<td>No</td>
+<td>/settings/candidates/sop</td>
+</tr>
+<tr>
+<td>Bulk week-off/shift</td>
+<td>List bulk actions</td>
+<td>HR scheduling ops</td>
+<td>No</td>
+<td>bulk routes</td>
+</tr>
+</tbody>
+</table>
+<h4>E. Git History &amp; Evolution</h4>
+<p>| 2026-03-06 | 04759f8a | Core employees UI | 🔵 Internal |
+| 2026-06+ | various | HRMS overlays, SOP | 🔵 Internal |
+| Plivo | ec9ea71 | Client account migration script | 🟢 CONFIRMED CLIENT |</p>
+<h4>Page Scorecard</h4>
+<p>| PRD reqs | 10 | Full | 3 | Partial | 4 | Missing | 2 | Different | 1 | Extra | 6+ |</p>
+<hr />
+<h3>NEW PAGE — Referral Leads (Full Audit)</h3>
+<p><strong>Route:</strong> <code>/ats/referral-leads</code> (URL-synced filters + pagination)<br />
+<strong>Module:</strong> ATS — <strong>not in PRD</strong> (referral attribution CRM)<br />
+<strong>First Git:</strong> <code>aa6dc41</code> (2026-04-22 backend); <code>7efc49d2</code> (2026-04-22 frontend)<br />
+<strong>Client evidence:</strong> ⚪ Unknown</p>
+<h4>A. PRD Requirements for This Page</h4>
+<table>
+<thead>
+<tr>
+<th>Requirement ID</th>
+<th>PRD Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>—</td>
+<td><strong>None.</strong> PRD does not define referral programs, attribution, or sales-agent commission tracking.</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p><strong>Primary files:</strong> <code>ats/referral-leads/page.tsx</code>, <code>ReferralLeadsTable.tsx</code>, <code>ReferralLeadDetailPanel.tsx</code>, <code>ReferralLeadsFilters.tsx</code>, <code>StatCards.tsx</code>, modals (<code>OverrideAttributionModal</code>, <code>AssignSalesAgentModal</code>, <code>BackfillReferralModal</code>, etc.), <code>hooks/useReferralLeadsFilters.ts</code>, <code>hooks/useReferralLeadsStats.ts</code>, <code>shared/lib/api/referralLeads.ts</code>, <code>shared/lib/ats/referral-leads-constants.ts</code></p>
+<p><strong>Layout:</strong></p>
+<ol>
+<li><strong>Stat cards row</strong> — <code>totalReferrals</code>, <code>converted</code>, <code>conversionRate</code>, <code>pending</code>, <code>hired</code>, pipeline breakdown (<code>pipelineCounts</code>), optional sales-agent leaderboard (<code>hiresPerSalesAgent</code>, <code>topSalesAgent</code>) when feature flag on.</li>
+<li><strong>Filter bar</strong> — free-text search; referrer user picker; link type (<code>SHARE_CANDIDATE_ONBOARD</code> → &quot;Onboard invite&quot;, <code>JOB_APPLY</code> → &quot;Job link&quot;); pipeline status; date preset + custom From/To (YMD, validated — blocks fetch until range valid); sales agent filter; unassigned toggle; quick status chips (applied / hired / converted employees).</li>
+<li><strong>Data table</strong> — columns: Candidate (name, email, joining date), Referred by (anonymised support), Link type, Job title, <strong>Status</strong> (effective pipeline badge), Assigned sales agent (feature flag), Claimed timestamp, row actions menu.</li>
+<li><strong>Detail panel</strong> — slide-over on row click; full lead metadata, lifecycle stage, employee status post-join.</li>
+<li><strong>Row actions</strong> (permission-gated): Override attribution; view attribution history; assign / change / revoke sales agent; open candidate profile.</li>
+</ol>
+<p><strong>Pipeline status (derived, not manually edited):</strong></p>
+<p>Statuses: <code>pending</code>, <code>profile_complete</code>, <code>applied</code>, <code>interview</code>, <code>offer</code>, <code>preboarding</code>, <code>deferred</code>, <code>hired</code>, <code>joined</code>, <code>employee</code>, <code>resigned</code>, <code>rejected</code>, <code>withdrawn</code>, <code>job_removed</code>.</p>
+<p><strong>Derivation engine:</strong> <code>referralPipelineStatus.js</code> → <code>deriveReferralPipelineStatus()</code> reads ATS source-of-truth in precedence order: post-join lifecycle (joiningDate + <code>isActive</code>) → placement queue → offer state → interview result → application status. <strong>Read-time overlay</strong> <code>applyLifecycleOverlay()</code> recomputes <code>employee</code>/<code>resigned</code> when <code>joiningDate</code> passes (no ATS event fires at midnight).</p>
+<p><strong>List/stats/export alignment:</strong> <code>buildEffectiveStatusStages()</code> aggregation ensures stat cards, table badges, quick filters, and XLSX export all filter on the <strong>same effective status</strong> (<code>e4ea061</code>, <code>7f3df06</code>).</p>
+<p><strong>Referral link minting (cross-page):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Created from</th>
+<th>Token</th>
+<th>Applied when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>onboard</code></td>
+<td>Share Candidate Form, <code>POST /employees/referral-link</code></td>
+<td>HMAC <code>ref</code> (30d TTL, <code>referralAttribution.service.js</code>)</td>
+<td>Candidate registers via <code>/candidate-onboard</code></td>
+</tr>
+<tr>
+<td><code>job</code></td>
+<td>Jobs list &quot;Share referral link&quot;, public job URL <code>?ref=</code></td>
+<td>Open or email-bound job ref</td>
+<td><code>browseApplyToJob</code> / public apply</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Activity log events:</strong> <code>REFERRAL_LINK_ISSUED</code>, <code>REFERRAL_JOB_APPLIED</code>, <code>REFERRAL_CANDIDATE_ACTIVATED</code>, <code>REFERRAL_HIRE_JOINED</code>, <code>REFERRAL_ATTRIBUTION_OVERRIDE</code>, <code>REFERRAL_CLAIM</code>, <code>referralLeads.export</code>.</p>
+<p><strong>API surface (<code>employee.route.js</code>):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Permission</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/employees/referral-leads</code></td>
+<td><code>candidates.read</code> / <code>referralLeads.read</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/employees/referral-leads/stats</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/employees/referral-leads/export</code></td>
+<td>same → XLSX</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/employees/referral-link</code></td>
+<td>same → <code>{ ref, orgId, expiresInSeconds }</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/employees/referral-leads/:candidateId/override</code></td>
+<td><code>candidates.manage</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>.../attribution-override-history</code></td>
+<td>read</td>
+</tr>
+<tr>
+<td>POST/PATCH/DELETE</td>
+<td><code>.../sales-agent</code></td>
+<td><code>candidates.manageSalesAgentAttribution</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>.../sales-agent-history</code></td>
+<td><code>candidates.read</code></td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>.../attribution-job</code></td>
+<td>sales agent manage</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/employees/referral-leads/backfill</code></td>
+<td>sales agent manage — attach referrer to orphan candidates</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data model:</strong> <code>ReferralAttribution</code> collection — <code>referrerUserId</code>, <code>candidateId</code>, <code>jobId</code>, <code>context</code> (<code>SHARE_CANDIDATE_ONBOARD</code> | <code>JOB_APPLY</code>), <code>batchId</code>, <code>attributionLockedAt</code>, sales-agent fields (<code>salesAgentUserId</code>, <code>salesAgentJobScope</code>, history arrays). Denormalized on <code>Employee</code>: <code>referredBy</code>, <code>referralPipelineStatus</code>, <code>referralContext</code>, <code>referralBatchId</code>.</p>
+<p><strong>RBAC scoping:</strong> Sales-agent role users see only leads they referred or are assigned to (<code>canSeeAllReferralLeads</code> / <code>buildReferralLeadsMatch</code>). Administrators and users with <code>referralLeads.read</code> see org-wide.</p>
+<p><strong>Feature flag:</strong> <code>referralSalesAgentAttribution</code> (config + auth payload) gates sales-agent column, modals, and leaderboard.</p>
+<p><strong>Chat assistant integration:</strong> <code>chatAssistant/referralLeadQueryHandler.js</code>, <code>referralLeadsAnalytics.js</code> — natural-language queries against referral data.</p>
+<h4>C. PRD → Implementation Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD</th>
+<th>Shipped</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No referral module</td>
+<td>Full referral CRM with ATS-derived pipeline</td>
+<td><strong>Extra module</strong></td>
+</tr>
+</tbody>
+</table>
+<h4>D. Functionality Built Beyond the PRD</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sales-agent attribution + leaderboard</td>
+<td><code>salesAgentAttribution.service.js</code>, auto-assign on referral apply</td>
+</tr>
+<tr>
+<td>Attribution override with audit history</td>
+<td><code>overrideReferralAttribution</code>, activity log</td>
+</tr>
+<tr>
+<td>Referral backfill picker</td>
+<td><code>POST .../backfill</code> for orphan candidates</td>
+</tr>
+<tr>
+<td>Effective-status quick filters</td>
+<td><code>quickFilterEffectiveStatusMatch</code></td>
+</tr>
+<tr>
+<td>Anonymised referrer display</td>
+<td><code>referralAttributionAnonymised</code> flag</td>
+</tr>
+<tr>
+<td>XLSX export with same filters as list</td>
+<td><code>referralLeadsExcel.service.js</code></td>
+</tr>
+</tbody>
+</table>
+<h4>E. Git History &amp; Evolution</h4>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-04-22</td>
+<td><code>aa6dc41</code></td>
+<td>Initial referral leads + attribution APIs</td>
+</tr>
+<tr>
+<td>2026-04-22</td>
+<td><code>7efc49d2</code></td>
+<td>Frontend referral-leads page</td>
+</tr>
+<tr>
+<td>2026-05-26</td>
+<td><code>a898b3f</code></td>
+<td>Sales agent attribution APIs</td>
+</tr>
+<tr>
+<td>2026-06-01</td>
+<td><code>6601df8</code></td>
+<td>Unified STATUS/STAGE → single derived pipeline</td>
+</tr>
+<tr>
+<td>2026-06-18</td>
+<td><code>ecb24c8</code></td>
+<td>Server pagination; effective-status filter fix (<code>e4ea061</code>)</td>
+</tr>
+<tr>
+<td>2026-07-20</td>
+<td><code>2107d5f</code></td>
+<td>XLSX export</td>
+</tr>
+<tr>
+<td>2026-08-11</td>
+<td><code>ffe025b</code></td>
+<td>Sales-agent role scoping</td>
+</tr>
+<tr>
+<td>2026-09-02</td>
+<td><code>f8f5d68</code></td>
+<td>Pagination clamp to last valid page</td>
+</tr>
+</tbody>
+</table>
+<h4>Page Scorecard</h4>
+<p>| PRD reqs | 0 | Extra | <strong>Full submodule</strong> (referral CRM) |</p>
+<hr />
+<h3>NEW PAGE — Share Candidate Form + Candidate Onboard (Full Audit)</h3>
+<p><strong>Routes:</strong> <code>/ats/share-candidate-form</code> (staff) → <code>/candidate-onboard</code> (public, auth layout)<br />
+<strong>Module:</strong> ATS — <strong>not in PRD</strong> (external candidate intake + referral attribution)<br />
+<strong>First Git:</strong> <code>7cbf2fda</code> (share form FE, 2026-02-18); onboard flow in <code>04759f8a</code> wave<br />
+<strong>Client evidence:</strong> ⚪ Unknown</p>
+<h4>A. PRD Requirements</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partial overlap</td>
+<td>PRD Candidate §2 &quot;centralised profile&quot; — intake path is extra; self-service portal partially covers CAND-001</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built — Share Candidate Form</h4>
+<p><strong>File:</strong> <code>ats/share-candidate-form/page.tsx</code></p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Enter candidate email(s)</td>
+<td>Validates email format; supports multiple recipients</td>
+</tr>
+<tr>
+<td>Generate link</td>
+<td>Builds <code>/candidate-onboard?token=…&amp;adminId=…&amp;email=…&amp;expires=…</code> (24h client-side expiry) <strong>or</strong> calls <code>POST /employees/referral-link</code> with <code>source: &quot;onboard&quot;</code> for HMAC <code>ref</code> token (preferred server path)</td>
+</tr>
+<tr>
+<td>Copy link</td>
+<td>Clipboard copy for manual share</td>
+</tr>
+<tr>
+<td>Send email</td>
+<td>Dispatches invite email with onboard URL</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Referral wiring:</strong> Successful onboard registration calls <code>applyOnboardInviteReferral</code> / <code>applyReferralToCandidate</code> → sets <code>referralContext: SHARE_CANDIDATE_ONBOARD</code> → visible on Referral Leads page.</p>
+<h4>B2. Candidate Onboard (Public)</h4>
+<p><strong>File:</strong> <code>candidate-onboard/page.tsx</code> (~3,600 lines)</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Token gate</td>
+<td>Validates <code>token</code>, <code>adminId</code>, <code>email</code>, <code>expires</code> query params</td>
+</tr>
+<tr>
+<td>Registration</td>
+<td>Creates User + Employee (candidate) profile; links to inviting admin</td>
+</tr>
+<tr>
+<td>Profile capture</td>
+<td>Personal info, skills, experience, education, documents upload, compliance fields</td>
+</tr>
+<tr>
+<td>Post-submit</td>
+<td>Redirect to <code>/ats/my-profile</code> or sign-in; referral pipeline → <code>profile_complete</code> / <code>pending</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>APIs:</strong> Standard auth register + <code>PATCH /employees/me</code> for self-service updates after account creation.</p>
+<h4>C. PRD Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD</th>
+<th>Shipped</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HR-entered candidates only</td>
+<td>Staff-generated invite links + self-registration</td>
+<td>🟣 <strong>Different intake path</strong> (expands CAND-001)</td>
+</tr>
+<tr>
+<td>No referral tracking</td>
+<td>Full attribution to inviting user</td>
+<td><strong>Extra</strong></td>
+</tr>
+</tbody>
+</table>
+<h4>D. Beyond PRD</h4>
+<p>Tokenised external onboarding URL; batch email invite; referral batch IDs; integration with Referral Leads CRM.</p>
+<h4>E. Git History</h4>
+<table>
+<thead>
+<tr>
+<th>Commit</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>7cbf2fda</code></td>
+<td>Share candidate form page</td>
+</tr>
+<tr>
+<td><code>04759f8a</code></td>
+<td>Candidate onboard UI wave</td>
+</tr>
+<tr>
+<td><code>aa6dc41</code></td>
+<td>Server-side HMAC referral tokens for onboard source</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>NEW / EXPANDED — Candidate Portal: Browse Jobs (Full Audit)</h3>
+<p><strong>Routes:</strong> <code>/ats/browse-jobs</code>, <code>/ats/browse-jobs/[id]</code><br />
+<strong>Module:</strong> ATS — <strong>partial PRD</strong> (candidate self-service / job portal implied, not detailed)<br />
+<strong>First Git:</strong> <code>94ffd8be</code> / <code>04759f8a</code> (2026-03-06 UI wave)<br />
+<strong>Maps to PRD IDs:</strong> Partial — supports application flow (APP-001, APP-003) from candidate side; not a separate PRD page spec.</p>
+<h4>B. What We Built</h4>
+<p><strong>List page</strong> (<code>browse-jobs/page.tsx</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Search</td>
+<td>Title, company, location (debounced 300ms)</td>
+</tr>
+<tr>
+<td>Job type</td>
+<td>Full-time, Part-time, Contract, Temporary, Internship, Freelance</td>
+</tr>
+<tr>
+<td>Location</td>
+<td>Free text</td>
+</tr>
+<tr>
+<td>Experience</td>
+<td>Entry / Mid / Senior / Executive</td>
+</tr>
+<tr>
+<td>Sort</td>
+<td>Posted date, title, etc. (<code>sortBy</code> URL param)</td>
+</tr>
+<tr>
+<td>Job origin</td>
+<td>All / internal / external (<code>isExternalJob</code> flag on <code>PublicJob</code>)</td>
+</tr>
+<tr>
+<td>Pagination</td>
+<td>Server-side, 12 per page; URL-synced via <code>browseJobsListQuery.ts</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Detail page</strong> (<code>browse-jobs/[id]/page.tsx</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Job display</td>
+<td>HTML description rendering (<code>jobDescriptionHtml.ts</code>), salary, experience, location</td>
+</tr>
+<tr>
+<td>Apply</td>
+<td><code>PublicJobApplyModal</code> → <code>browseApplyToJob</code>; passes <code>referralRef</code> from <code>?ref=</code> URL (stored in <code>jobReferralRef</code> localStorage)</td>
+</tr>
+<tr>
+<td>Application rail</td>
+<td>Shows lifecycle badge via <code>resolveCandidateLifecycle</code> (same vocabulary as My Applications)</td>
+</tr>
+<tr>
+<td>Withdraw</td>
+<td>Allowed for Applied/Screening only</td>
+</tr>
+<tr>
+<td>Back navigation</td>
+<td>Restores list query string via <code>readBrowseJobsListBackHref()</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>APIs:</strong> <code>getPublicJobs</code>, <code>getPublicJobById</code>, <code>browseApplyToJob</code> (jobs routes); referral ref verified server-side on apply.</p>
+<h4>C. PRD Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD</th>
+<th>Shipped</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Internal recruiter-driven apply</td>
+<td>Candidate self-serve browse + apply</td>
+<td>🟡 Partial portal expansion</td>
+</tr>
+<tr>
+<td>No referral URLs in PRD</td>
+<td><code>?ref=</code> HMAC attribution on apply</td>
+<td><strong>Extra</strong> (pairs with Referral Leads)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>NEW / EXPANDED — Candidate Portal: My Applications (Full Audit)</h3>
+<p><strong>Route:</strong> <code>/ats/my-applications</code><br />
+<strong>Maps to PRD:</strong> APP-001 (pipeline visibility), APP-003 (notifications — SSE refresh on <code>job_application</code> events)</p>
+<h4>B. What We Built</h4>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application list</td>
+<td><code>getMyApplications({ limit: 100 })</code> — <strong>client-side</strong> filter + pagination (10/page)</td>
+</tr>
+<tr>
+<td>Status display</td>
+<td><strong>Derived lifecycle badges</strong> (<code>resolveCandidateLifecycle</code>) — not raw <code>application.status</code> (documented mismatch fix)</td>
+</tr>
+<tr>
+<td>Status filter dropdown</td>
+<td>Matches badge vocabulary: Applied, Screening, Shortlisted, Interview, Offer, Pre-boarding, Onboarding, Hired, Deferred, Rejected</td>
+</tr>
+<tr>
+<td>Withdraw</td>
+<td><code>withdrawMyApplication</code> — only <code>Applied</code> / <code>Screening</code>; confirm dialog</td>
+</tr>
+<tr>
+<td>Live updates</td>
+<td>SSE <code>job_application</code> notifications trigger background refetch; <code>usePmRefetchOnFocus</code> for silent transitions</td>
+</tr>
+<tr>
+<td>Selected applications</td>
+<td><code>CongratulationsBanner</code> for offer-stage wins</td>
+</tr>
+<tr>
+<td>Documents card</td>
+<td><code>DocumentsActionCard</code> for compliance uploads</td>
+</tr>
+<tr>
+<td>Truncation warning</td>
+<td>If <code>totalOnServer &gt; 100</code>, UI warns (documented ceiling in source)</td>
+</tr>
+</tbody>
+</table>
+<h4>C. PRD Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>APP-001</td>
+<td>🟡 Partial</td>
+<td>Pipeline visible; extra stages (Shortlisted) beyond PRD</td>
+</tr>
+<tr>
+<td>APP-003</td>
+<td>🟢</td>
+<td>Email + in-app SSE refresh on status change</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>NEW / EXPANDED — Candidate Portal: My Profile (Full Audit)</h3>
+<p><strong>Route:</strong> <code>/ats/my-profile</code><br />
+<strong>Maps to PRD:</strong> CAND-001 (self profile), CAND-005 (activity history — partial), CAND-002 (resume — partial)</p>
+<h4>B. What We Built</h4>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Profile header</td>
+<td>Avatar, completion ring (%), designation (employee role only), verification email resend</td>
+</tr>
+<tr>
+<td>Personal / contact</td>
+<td>Phone (international format), social links, address</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>Pill display with levels</td>
+</tr>
+<tr>
+<td>Experience / education</td>
+<td>Timeline cards</td>
+</tr>
+<tr>
+<td>Documents</td>
+<td>Upload list; <code>getDocumentDownloadUrl</code></td>
+</tr>
+<tr>
+<td>Matching jobs</td>
+<td><code>getMyMatchingJobs</code> → <code>JobMatchCard</code> grid (skill overlap)</td>
+</tr>
+<tr>
+<td>Activity timeline</td>
+<td><code>listActivityLogs</code> filtered to candidate — addresses CAND-005 from candidate-facing side</td>
+</tr>
+<tr>
+<td>APIs</td>
+<td><code>GET/PATCH /employees/me</code>, <code>GET /employees/me/matching-jobs</code> (auth only — no <code>candidates.read</code> required)</td>
+</tr>
+</tbody>
+</table>
+<h4>C. PRD Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CAND-001</td>
+<td>🟢</td>
+<td>Full self-service CRUD</td>
+</tr>
+<tr>
+<td>CAND-002</td>
+<td>🟡</td>
+<td>Multiple document upload; no formal version workflow</td>
+</tr>
+<tr>
+<td>CAND-005</td>
+<td>🟡</td>
+<td>Activity tab exists; not unified with recruiter-side activity log UI</td>
+</tr>
+</tbody>
+</table>
+<h4>Additional ATS Pages (Condensed Audits)</h4>
+<p><em>New pages above have full forensic audits. Remaining PRD pages below stay condensed until expanded.</em></p>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>PRD IDs</th>
+<th>Current Functionality</th>
+<th>Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interviews</td>
+<td><code>/ats/interviews</code></td>
+<td>ATS-INT-001–009</td>
+<td>LiveKit video, week view, recordings, 5-criterion rubric (technical, communication, problem-solving, culture fit, relevant experience) — informational only, does not gate interviewResult, schedule modal, internal transfer, Excel export. Missing: Google/Outlook calendar sync, auto-schedule post-Bolna.</td>
+<td>🟢 Video 🟡 Calendar 🔴 Auto-schedule</td>
+</tr>
+<tr>
+<td>Offers &amp; Placement</td>
+<td><code>/ats/offers-placement</code></td>
+<td>ATS-OFF-001–005</td>
+<td>Offer CRUD, PDF generator, email send, <strong>static CEO signature image</strong> on PDF (not digital/e-sign), placement queues (Pending/Onboarding/Joined/Deferred/Cancelled).</td>
+<td>🟢 Offers 🟡 Static sig image</td>
+</tr>
+<tr>
+<td>Pre-boarding</td>
+<td><code>/ats/pre-boarding</code></td>
+<td>ATS-PRE-001–007</td>
+<td>Task list, document collection, checklist fields (IDV/payroll/IT/equipment/orientation/compliance). See §6D per-ID table.</td>
+<td>🟡 7 partial</td>
+</tr>
+<tr>
+<td>Onboarding</td>
+<td><code>/ats/onboarding</code></td>
+<td>ATS-PRE-008–009</td>
+<td>7-day plan tasks + progress dashboard. Split from stub d0697fd3.</td>
+<td>🟡 1 partial · 1 full</td>
+</tr>
+<tr>
+<td>Recruiters</td>
+<td><code>/ats/recruiters</code></td>
+<td>ATS-REC-001–006</td>
+<td>Recruiter CRUD, public profile /public-recruiter/[id], performance fields.</td>
+<td>🟢 Full</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td><code>/ats/analytics</code></td>
+<td>ATS-ANA-001–004</td>
+<td>Funnel charts, stage metrics, time-to-hire style stats. Missing: custom report builder.</td>
+<td>🟡 No custom builder</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>MODULE: Organization (NOT IN PRD)</h3>
+<p><strong>Why new:</strong> Org chart / directory product expansion, no PRD module.</p>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>Functionality</th>
+<th>First Git</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org Chart</td>
+<td>/organization/chart</td>
+<td>Visual hierarchy</td>
+<td>Jun 2026</td>
+</tr>
+<tr>
+<td>Structure</td>
+<td>/organization/structure</td>
+<td>Org units</td>
+<td>Jun 2026</td>
+</tr>
+<tr>
+<td>Departments</td>
+<td>/organization/departments</td>
+<td>Dept CRUD</td>
+<td>Jun 2026</td>
+</tr>
+<tr>
+<td>Directory</td>
+<td>/organization/directory</td>
+<td>Employee directory</td>
+<td>Jun 2026</td>
+</tr>
+<tr>
+<td>Scenarios</td>
+<td>/organization/scenarios</td>
+<td>What-if org modeling</td>
+<td>Jun 2026</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>MODULE: Communication</h3>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>PRD Coverage</th>
+<th>Extra Beyond PRD</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Email</td>
+<td>/communication/email</td>
+<td>🟡 Inbox, templates partial</td>
+<td>Unified inbox patterns</td>
+</tr>
+<tr>
+<td>Chats</td>
+<td>/communication/chats</td>
+<td>🟡 Real-time chat</td>
+<td>Channel threads</td>
+</tr>
+<tr>
+<td>Meetings</td>
+<td>/communication/meetings</td>
+<td>🟡 Scheduling</td>
+<td>LiveKit bridge</td>
+</tr>
+<tr>
+<td>Dialer</td>
+<td>/communication/dialer</td>
+<td><strong>No</strong></td>
+<td><strong>NEW</strong> — outbound dialer</td>
+</tr>
+<tr>
+<td>Calling</td>
+<td>/communication/calling</td>
+<td>Partial</td>
+<td>Call logs</td>
+</tr>
+<tr>
+<td>Recordings</td>
+<td>/communication/recordings</td>
+<td>Partial</td>
+<td>Interview recordings link</td>
+</tr>
+<tr>
+<td>Files</td>
+<td>/communication/files</td>
+<td>🟡 Storage</td>
+<td>S3 uploads</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Missing PRD:</strong> Full SSO/MFA/DLP stack, AI copilot depth, calendar sync.</p>
+<hr />
+<h3>MODULE: Training</h3>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>PRD Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Curriculum</td>
+<td>/training/curriculum</td>
+<td>🟢 Strong</td>
+</tr>
+<tr>
+<td>Attendance</td>
+<td>/training/attendance</td>
+<td>🟢 Strong</td>
+</tr>
+<tr>
+<td>Mentors</td>
+<td>/training/mentors</td>
+<td>🟢</td>
+</tr>
+<tr>
+<td>Students</td>
+<td>/training/students</td>
+<td>🟢</td>
+</tr>
+<tr>
+<td>Evaluation</td>
+<td>/training/evaluation</td>
+<td>🟡 Certs partial</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td>/training/analytics</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>Courses (learner)</td>
+<td>/courses</td>
+<td>🟢 In ATS nav</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>MODULE: Projects</h3>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>PRD Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Projects</td>
+<td>/apps/projects, /project-management</td>
+<td>🟡 Kanban V2 Jun 2026</td>
+</tr>
+<tr>
+<td>Tasks</td>
+<td>/task/*</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>Teams</td>
+<td>PM teams routes</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td>PM analytics</td>
+<td>🟡 Partial</td>
+</tr>
+</tbody>
+</table>
+<p><strong>PRD deliverable hash/review:</strong> Partial — file upload exists; cryptographic hash workflow not verified full.</p>
+<hr />
+<hr />
+<h2>6B. Page Functionality Inventory (Code-Verified)</h2>
+<p>Every item below was traced to frontend components and/or backend routes.</p>
+<h3>Jobs — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/jobs/page.tsx</code>, <code>CreateJob</code>, <code>EditJobClient.tsx</code>, <code>shared/lib/api/jobs.ts</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Navigation</td>
+<td>List → Create → Edit; public job via <code>/public-job/[jobId]</code></td>
+</tr>
+<tr>
+<td>Search</td>
+<td>Title, company, free-text query</td>
+</tr>
+<tr>
+<td>Filters</td>
+<td>Status, location, department, recruiter, employment type, remote</td>
+</tr>
+<tr>
+<td>Sort</td>
+<td>Title asc/desc, company asc/desc, posted date</td>
+</tr>
+<tr>
+<td>Pagination</td>
+<td>Server-side (<code>parseListPage</code>, list query params)</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>Create, Edit, Delete, Bookmark, Apply candidate, Share referral link, Bolna verification call</td>
+</tr>
+<tr>
+<td>Bulk</td>
+<td>Bulk delete selected jobs</td>
+</tr>
+<tr>
+<td>Import/Export</td>
+<td>Excel import, Excel export, template download</td>
+</tr>
+<tr>
+<td>Forms</td>
+<td>Title, description (HTML), requirements, skills, salary range, experience, job type, location, remote, department, recruiter, status, templates</td>
+</tr>
+<tr>
+<td>Integrations</td>
+<td>Bolna <strong>job-posting</strong> verification (extra — not in PRD); job templates from <code>/settings/job-templates</code></td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td><code>jobs.read</code>, <code>jobs.manage</code> via <code>useFeaturePermissions('jobs')</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Applications — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/applications/page.tsx</code>, <code>jobApplications.ts</code>, <code>atsPipeline.js</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>View</td>
+<td>Table list (not kanban)</td>
+</tr>
+<tr>
+<td>Statuses</td>
+<td>Applied, Screening, Shortlisted, Interview, Offer, Hired, Rejected (reopen allowed)</td>
+</tr>
+<tr>
+<td>Filters</td>
+<td>Job, status, recruiter, date range, search</td>
+</tr>
+<tr>
+<td>Pagination</td>
+<td>Server-side</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>Change status (validated transitions), view candidate/job, export, Bolna <strong>candidate</strong> verification call (PRD ATS-AI-002)</td>
+</tr>
+<tr>
+<td>AI / Bolna</td>
+<td>Auto verification calls after apply (<code>applicationVerificationCall.scheduler.js</code>); manual trigger via <code>bolna.controller.js</code>; call logs/transcripts in <code>callRecord.service.js</code></td>
+</tr>
+<tr>
+<td>AI gap</td>
+<td><strong>No auto-schedule interview</strong> after candidate confirms interest — webhook does not call <code>createMeeting</code></td>
+</tr>
+<tr>
+<td>Bulk</td>
+<td><strong>No multi-select bulk</strong> — single status change per row; offer/placement workflow advances stage (Create Offer → Offered; placement queues)</td>
+</tr>
+<tr>
+<td>Notifications</td>
+<td>Email on status change (<code>jobApplication.service.js</code>)</td>
+</tr>
+<tr>
+<td>Removed route</td>
+<td><code>/ats/job-applications</code> merged here (<code>da120383</code>)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>External Jobs — Current Functionality (NEW PAGE — see §6 full audit)</h3>
+<p><strong>Files:</strong> <code>ats/external-jobs/page.tsx</code> (~2,100 lines), <code>_components/AutoFetchModal.tsx</code>, <code>ExternalJobPreviewPanel.tsx</code>, <code>shared/lib/api/external-jobs.ts</code>, <code>external-jobs-autofetch.ts</code>, <code>external-jobs-errors.ts</code>, <code>shared/lib/ats/externalJobDisplay.ts</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tabs</td>
+<td><code>search</code> (default), <code>saved</code>, <code>contacts</code> — URL <code>?tab=</code></td>
+</tr>
+<tr>
+<td>Providers</td>
+<td><code>active-jobs-db</code>, <code>linkedin-job-search-api</code>, <code>linkedin-jobs-api</code></td>
+</tr>
+<tr>
+<td>Search filters</td>
+<td>Title, location, date posted (per-source window map), work arrangement, offset paging</td>
+</tr>
+<tr>
+<td>Saved filters</td>
+<td><code>q</code>, source, <code>savedFrom</code>/<code>savedTo</code> (YMD), server pagination</td>
+</tr>
+<tr>
+<td>Contacts filters</td>
+<td><code>q</code>, saved date range, card grid pagination</td>
+</tr>
+<tr>
+<td>Preview panel</td>
+<td>Full job detail, save/unsave, copy apply URL, Apollo enrich, save HR contacts</td>
+</tr>
+<tr>
+<td>Auto-fetch</td>
+<td>Admin modal: cron config, manual run, run history; publishes to internal <code>Job</code></td>
+</tr>
+<tr>
+<td>Bookmark API</td>
+<td><code>GET /saved/ids</code> + <code>GET /hr-contacts/ids</code> for O(1) &quot;is saved&quot; checks</td>
+</tr>
+<tr>
+<td>Rate limit</td>
+<td>Per-user search throttle (<code>externalJob.service.js</code>)</td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td><code>external-jobs.read</code>, <code>external-jobs.manage</code></td>
+</tr>
+<tr>
+<td>APIs</td>
+<td><code>POST /search</code>, <code>POST /save</code>, <code>GET /saved</code>, <code>GET /saved/ids</code>, <code>DELETE /saved/:id</code>, <code>POST /enrich</code>, <code>POST/GET /hr-contacts</code>, <code>GET/POST/PATCH /auto-fetch</code>, <code>POST /auto-fetch/run</code>, <code>GET /auto-fetch/runs</code>, <code>POST /webhook/apollo/:secret</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Employees — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/employees/page.tsx</code>, <code>EmployeePreviewPanel.tsx</code>, <code>MatchingJobsPanel.tsx</code>, <code>employee-list-query.ts</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Navigation</td>
+<td>List, Add (<code>/add</code>), Edit (<code>/edit/[id]</code>), Import (<code>/import</code>), public <code>/public-employee/[id]</code></td>
+</tr>
+<tr>
+<td>Search/Filters</td>
+<td>Name, email, skills, status, department, location; server pagination</td>
+</tr>
+<tr>
+<td>Profile tabs</td>
+<td>Personal, skills, experience, education, documents, compliance, notes, applications</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>CRUD, resume upload, compliance doc upload/verify, notes, assign recruiter</td>
+</tr>
+<tr>
+<td>Extra</td>
+<td>Matching jobs panel (<code>getJobFit</code> skill overlap), click-to-call (Plivo), impersonate, attendance overlay</td>
+</tr>
+<tr>
+<td>Bulk</td>
+<td>Week-off assignment, shift assignment, Excel import/export</td>
+</tr>
+<tr>
+<td>SOP</td>
+<td>Candidate SOP assign modal; offboarding SOP (settings)</td>
+</tr>
+<tr>
+<td>Compliance sharing</td>
+<td><code>shareCandidateProfile</code> → email with secure link to <code>/public-employee/[id]</code>; optional documents &amp; salary slips (<code>withDoc=1</code>); view-only in browser</td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td><code>employees.*</code>, <code>candidates.*</code> dual keys</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Interviews — Current Functionality</h3>
+<p><strong>Files:</strong> <code>InterviewsClient.tsx</code>, <code>interviewRubric.js</code>, <code>meetings.ts</code>, <code>livekit.route.js</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Views</td>
+<td>Table list + week calendar view</td>
+</tr>
+<tr>
+<td>Schedule</td>
+<td>Create meeting modal (Video/In-Person/Phone); LiveKit room</td>
+</tr>
+<tr>
+<td>Video</td>
+<td>LiveKit integration; waiting room <code>/join/room</code>; recordings modal</td>
+</tr>
+<tr>
+<td>Rubric</td>
+<td><strong>5 criteria</strong> (Technical, Communication, Problem Solving, Culture Fit, Relevant Experience), ratings 1–5</td>
+</tr>
+<tr>
+<td>Rubric note</td>
+<td>Informational only — does <strong>not</strong> derive <code>interviewResult</code> (tri-state pending/selected/rejected remains separate)</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>Reschedule, cancel, internal transfer, export Excel, view recording/transcript</td>
+</tr>
+<tr>
+<td>Reminders</td>
+<td>T-15 automated (<code>meeting.scheduler.js</code>)</td>
+</tr>
+<tr>
+<td>Missing</td>
+<td>Google/Outlook <strong>calendar</strong> sync (email invites only)</td>
+</tr>
+<tr>
+<td>PRD 5.4 status</td>
+<td>🟡 Partial — rubric exists but not weighted/job-specific; result is tri-state not rubric-derived</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Offers &amp; Placement — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/offers-placement/page.tsx</code>, <code>CreateOfferForm.tsx</code>, <code>OfferLetterPageClient.tsx</code></p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Offers</td>
+<td>Create, edit, status (Draft/Sent/Accepted/Declined/Withdrawn), PDF generation</td>
+</tr>
+<tr>
+<td>Offer letter</td>
+<td>Template-based letter page; email send</td>
+</tr>
+<tr>
+<td>Offer letter signature</td>
+<td>Static CEO signature <strong>image</strong> embedded on PDF (not digital/e-sign)</td>
+</tr>
+<tr>
+<td>Placement queues</td>
+<td>Pending, Onboarding, Joined, Deferred, Cancelled</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>Create offer from application, send email, edit placement, pre-boarding feedback dialog</td>
+</tr>
+<tr>
+<td>Filters</td>
+<td>Queue filter, search, pagination</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Pre-boarding — Current Functionality</h3>
+<p><strong>Route:</strong> <code>/ats/pre-boarding</code><br />
+<strong>Split from:</strong> <code>/ats/pre-boarding-onboarding</code> stub (<code>d0697fd3</code>, 2026-06-01)</p>
+<table>
+<thead>
+<tr>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pre-boarding placement list; task/checklist tracking; document collection status; link to onboarding</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Onboarding — Current Functionality</h3>
+<p><strong>Route:</strong> <code>/ats/onboarding</code>, <code>/ats/onboarding/edit/[id]</code><br />
+<strong>Files:</strong> <code>EditOnboardingClient.tsx</code></p>
+<table>
+<thead>
+<tr>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Onboarding task management; department assignment; HRMS validation toasts; placement status transitions; edit workflow</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Recruiters — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/recruiters/page.tsx</code>, public <code>/public-recruiter/[id]</code></p>
+<table>
+<thead>
+<tr>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Recruiter CRUD; public profile page; notes; filters; activity metrics in analytics (no dedicated activity UI)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Analytics — Current Functionality</h3>
+<p><strong>Files:</strong> <code>ats/analytics/page.tsx</code>, <code>atsAnalytics.service.js</code></p>
+<table>
+<thead>
+<tr>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Funnel by application status; timeline charts; recruiter leaderboard; job metrics</td>
+</tr>
+<tr>
+<td>Missing</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Referral Leads — Current Functionality (NEW PAGE — see §6 full audit)</h3>
+<p><strong>Files:</strong> <code>ats/referral-leads/page.tsx</code>, <code>ReferralLeadsTable.tsx</code>, <code>ReferralLeadDetailPanel.tsx</code>, <code>ReferralLeadsFilters.tsx</code>, <code>StatCards.tsx</code>, 6 modals, <code>hooks/useReferralLeadsFilters.ts</code>, <code>hooks/useReferralLeadsStats.ts</code>, <code>referral-leads-list-query.ts</code>, <code>shared/lib/api/referralLeads.ts</code>, <code>shared/lib/ats/referral-leads-constants.ts</code><br />
+<strong>Backend:</strong> <code>referralLeads.service.js</code> (1,225 lines), <code>referralAttribution.service.js</code>, <code>referralPipelineStatus.js</code>, <code>referralAttribution.model.js</code><br />
+<strong>First commit:</strong> <code>aa6dc41</code> / <code>7efc49d2</code> (2026-04-22)</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stat cards</td>
+<td>Total, converted, conversion %, pending, hired, pipeline counts, sales-agent leaderboard</td>
+</tr>
+<tr>
+<td>Filters</td>
+<td>Search, referrer, link type, pipeline status, date range, sales agent, unassigned, quick chips</td>
+</tr>
+<tr>
+<td>Table columns</td>
+<td>Candidate, Referred by, Link, Job, Status, Sales agent, Claimed, Actions</td>
+</tr>
+<tr>
+<td>Pipeline</td>
+<td>15 statuses derived from ATS (<code>deriveReferralPipelineStatus</code>); effective overlay on read</td>
+</tr>
+<tr>
+<td>Row actions</td>
+<td>Override attribution, history, assign/change/revoke sales agent, open profile</td>
+</tr>
+<tr>
+<td>Export</td>
+<td><code>POST /employees/referral-leads/export</code> → XLSX with same filters as list</td>
+</tr>
+<tr>
+<td>Referral tokens</td>
+<td>HMAC <code>ref</code> via <code>POST /employees/referral-link</code> (onboard + job sources)</td>
+</tr>
+<tr>
+<td>Feature flag</td>
+<td><code>referralSalesAgentAttribution</code></td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td><code>referralLeads.read</code>, <code>candidates.manage</code>, <code>candidates.manageSalesAgentAttribution</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Share Candidate Form + Candidate Onboard (NEW PAGE — see §6 full audit)</h3>
+<p><strong>Files:</strong> <code>ats/share-candidate-form/page.tsx</code>, <code>candidate-onboard/page.tsx</code> (~3,600 lines)<br />
+<strong>First commit:</strong> <code>7cbf2fda</code> (share form, 2026-02-18); onboard in <code>04759f8a</code> wave</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Share form</td>
+<td>Email validation, generate/copy onboard URL, batch send, server <code>POST /referral-link</code></td>
+</tr>
+<tr>
+<td>Onboard URL</td>
+<td><code>/candidate-onboard?token&amp;adminId&amp;email&amp;expires</code> or HMAC <code>ref</code> token</td>
+</tr>
+<tr>
+<td>Onboard flow</td>
+<td>Self-registration, profile + documents + compliance, referral attribution</td>
+</tr>
+<tr>
+<td>Referral context</td>
+<td><code>SHARE_CANDIDATE_ONBOARD</code> → Referral Leads pipeline</td>
+</tr>
+<tr>
+<td>Post-onboard</td>
+<td><code>/employees/me</code> self-service; redirects to My Profile</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Candidate Portal Pages (NEW / EXPANDED — see §6 full audits)</h3>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Route</th>
+<th>Key files</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Browse Jobs</td>
+<td><code>/ats/browse-jobs</code></td>
+<td><code>browse-jobs/page.tsx</code>, <code>browseJobsListQuery.ts</code></td>
+<td>Public job catalog; 6 filters + sort + internal/external origin; server pagination (12); URL-synced state</td>
+</tr>
+<tr>
+<td>Job Detail</td>
+<td><code>/ats/browse-jobs/[id]</code></td>
+<td><code>browse-jobs/[id]/page.tsx</code>, <code>PublicJobApplyModal</code></td>
+<td>HTML job description; apply with <code>?ref=</code> referral; lifecycle rail; withdraw</td>
+</tr>
+<tr>
+<td>My Applications</td>
+<td><code>/ats/my-applications</code></td>
+<td><code>my-applications/page.tsx</code>, <code>ApplicationStatusBadge</code>, <code>candidateSelection.ts</code></td>
+<td>Derived lifecycle badges; 10-stage filter; withdraw Applied/Screening; SSE refresh; 100-app ceiling</td>
+</tr>
+<tr>
+<td>My Profile</td>
+<td><code>/ats/my-profile</code></td>
+<td><code>my-profile/page.tsx</code> (1,143 lines)</td>
+<td>Completion ring; skills/exp/edu; documents; matching jobs; activity timeline; <code>PATCH /employees/me</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>Public Routes (Outside ATS Nav)</h3>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Functionality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/public-job/[jobId]</code></td>
+<td>Public job posting view</td>
+</tr>
+<tr>
+<td><code>/public-recruiter/[id]</code></td>
+<td>Public recruiter profile</td>
+</tr>
+<tr>
+<td><code>/public-employee/[id]</code></td>
+<td>Public employee/candidate card</td>
+</tr>
+<tr>
+<td><code>/candidate-onboard</code></td>
+<td>Token-based onboarding form</td>
+</tr>
+<tr>
+<td><code>/join/room</code></td>
+<td>LiveKit interview waiting room</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>6C. Canonical PRD Requirement ID Catalog (Module 1 — ATS)</h2>
+<p><strong>Rule:</strong> One ID per numbered PRD bullet in <code>ATS_PRODUCT_PRD_AUDIT.md</code> §5.1 / <code>ATS-PRD-AUDIT.md</code> Part 2. Page audits in §6 reference <strong>only</strong> these IDs — no invented requirements.</p>
+<p><strong>Decomposition:</strong> 155 total = ATS 60 + Communication 38 + Training 29 + Projects 28. Each ATS ID maps 1:1 to PRD subsection bullets (e.g. Job Posting bullets 1–5 → <code>ATS-JOB-001</code>…<code>005</code>). Pre-boarding uses <strong>9</strong> IDs because the PRD Pre-boarding &amp; Onboarding section lists nine distinct checklist items in the merged matrix (7.1–7.9), not five headline bullets.</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>PRD §</th>
+<th>Requirement (verbatim summary)</th>
+<th>Primary page</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-JOB-001</td>
+<td>1.1</td>
+<td>Jobs with org, skill tags, description, job type, location</td>
+<td>Jobs</td>
+<td>🟢</td>
+<td>job.model.js, JobsClient</td>
+</tr>
+<tr>
+<td>ATS-JOB-002</td>
+<td>1.2</td>
+<td>Excel import/export for bulk job creation and reporting</td>
+<td>Jobs</td>
+<td>🟢</td>
+<td>jobs export/import routes</td>
+</tr>
+<tr>
+<td>ATS-JOB-003</td>
+<td>1.3</td>
+<td>Full CRUD</td>
+<td>Jobs</td>
+<td>🟢</td>
+<td>job.route.js</td>
+</tr>
+<tr>
+<td>ATS-JOB-004</td>
+<td>1.4</td>
+<td>Search and sort</td>
+<td>Jobs</td>
+<td>🟢</td>
+<td>job.service.js</td>
+</tr>
+<tr>
+<td>ATS-JOB-005</td>
+<td>1.5</td>
+<td>Job description templates</td>
+<td>Jobs / Settings</td>
+<td>🟢</td>
+<td>jobTemplate.model.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-001</td>
+<td>2.1</td>
+<td>Centralised resumes, cover letters, candidate info</td>
+<td>Employees</td>
+<td>🟢</td>
+<td>employee.model.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-002</td>
+<td>2.2</td>
+<td>Multiple resume versions per candidate</td>
+<td>Employees</td>
+<td>🟡</td>
+<td>documents[] — no version workflow</td>
+</tr>
+<tr>
+<td>ATS-CAND-003</td>
+<td>2.3</td>
+<td>Tagging skills, experience, keywords</td>
+<td>Employees</td>
+<td>🟡</td>
+<td>skills[] — no free-form tags</td>
+</tr>
+<tr>
+<td>ATS-CAND-004</td>
+<td>2.4</td>
+<td>Advanced search and filtering</td>
+<td>Employees</td>
+<td>🟢</td>
+<td>employee.service.js</td>
+</tr>
+<tr>
+<td>ATS-CAND-005</td>
+<td>2.5</td>
+<td>Activity history (applications, interviews, feedback)</td>
+<td>Employees / My Profile</td>
+<td>🟡</td>
+<td>activityLog — fragmented UI</td>
+</tr>
+<tr>
+<td>ATS-CAND-006</td>
+<td>2.6</td>
+<td>Bulk Excel import/export</td>
+<td>Employees</td>
+<td>🟢</td>
+<td>import/export routes</td>
+</tr>
+<tr>
+<td>ATS-CAND-007</td>
+<td>2.7</td>
+<td>Compliance: SEVIS, EAD, degree, supervisor</td>
+<td>Employees</td>
+<td>🟡</td>
+<td>scalar fields + doc verify</td>
+</tr>
+<tr>
+<td>ATS-CAND-008</td>
+<td>2.8</td>
+<td>Compliance binder PDF/ZIP</td>
+<td>Employees</td>
+<td>🟣</td>
+<td>public <code>/public-employee/[id]</code> + optional docs (not PDF/ZIP file)</td>
+</tr>
+<tr>
+<td>ATS-CAND-009</td>
+<td>2.9</td>
+<td>Material change logging (role, pay, supervisor, location)</td>
+<td>Employees</td>
+<td>🔴</td>
+<td>placementAudit only</td>
+</tr>
+<tr>
+<td>ATS-CAND-010</td>
+<td>2.10</td>
+<td>Version history for material changes</td>
+<td>Employees</td>
+<td>🔴</td>
+<td>absent</td>
+</tr>
+<tr>
+<td>ATS-REC-001</td>
+<td>3.1</td>
+<td>Dedicated recruiter profiles + RBAC</td>
+<td>Recruiters</td>
+<td>🟢</td>
+<td>ats/recruiters</td>
+</tr>
+<tr>
+<td>ATS-REC-002</td>
+<td>3.2</td>
+<td>Recruiter activity logs</td>
+<td>Recruiters / Analytics</td>
+<td>🟡</td>
+<td>backend — no dedicated UI</td>
+</tr>
+<tr>
+<td>ATS-REC-003</td>
+<td>3.3</td>
+<td>Metrics: hires, conversion, time-to-fill</td>
+<td>Recruiters / Analytics</td>
+<td>🟡</td>
+<td>no time-to-fill</td>
+</tr>
+<tr>
+<td>ATS-REC-004</td>
+<td>3.4</td>
+<td>Assign recruiters to jobs/departments</td>
+<td>Employees</td>
+<td>🟡</td>
+<td>candidate-level assign only</td>
+</tr>
+<tr>
+<td>ATS-REC-005</td>
+<td>3.5</td>
+<td>Workload visibility</td>
+<td>Analytics</td>
+<td>🟡</td>
+<td>leaderboard counts</td>
+</tr>
+<tr>
+<td>ATS-REC-006</td>
+<td>3.6</td>
+<td>Notes on candidate and application</td>
+<td>Employees / Applications</td>
+<td>🟡</td>
+<td>candidate notes; thin app notes UI</td>
+</tr>
+<tr>
+<td>ATS-APP-001</td>
+<td>4.1</td>
+<td>Pipeline stages</td>
+<td>Applications</td>
+<td>🟣</td>
+<td>7 statuses vs PRD 5</td>
+</tr>
+<tr>
+<td>ATS-APP-002</td>
+<td>4.2</td>
+<td>Notes, feedback, status</td>
+<td>Applications</td>
+<td>🟡</td>
+<td>status per row</td>
+</tr>
+<tr>
+<td>ATS-APP-003</td>
+<td>4.3</td>
+<td>Automated notifications to candidates</td>
+<td>Applications</td>
+<td>🟢</td>
+<td>notifyByEmail on status change</td>
+</tr>
+<tr>
+<td>ATS-APP-004</td>
+<td>4.4</td>
+<td>Audit trail of pipeline movements</td>
+<td>Applications</td>
+<td>🟡</td>
+<td>activityLog JOB_APPLICATION_*</td>
+</tr>
+<tr>
+<td>ATS-APP-005</td>
+<td>4.5</td>
+<td>Bulk-move stages</td>
+<td>Applications / Offers</td>
+<td>🟡</td>
+<td>single <code>PATCH /job-applications/:id</code> + offer/placement path; no multi-select batch route</td>
+</tr>
+<tr>
+<td>ATS-INT-001</td>
+<td>5.1</td>
+<td>Multi-round scheduling</td>
+<td>Interviews</td>
+<td>🟡</td>
+<td>Video/In-Person/Phone types</td>
+</tr>
+<tr>
+<td>ATS-INT-002</td>
+<td>5.2</td>
+<td>Google/Outlook calendar sync</td>
+<td>Interviews</td>
+<td>🔴</td>
+<td>email invites only</td>
+</tr>
+<tr>
+<td>ATS-INT-003</td>
+<td>5.3</td>
+<td>Built-in video</td>
+<td>Interviews</td>
+<td>🟢</td>
+<td>LiveKit (vendor substitute for Agora/Daily/Twilio)</td>
+</tr>
+<tr>
+<td>ATS-INT-004</td>
+<td>5.4</td>
+<td>Weighted scoring rubrics</td>
+<td>Interviews</td>
+<td>🟡</td>
+<td>5 criteria, equal weight, non-gating</td>
+</tr>
+<tr>
+<td>ATS-INT-005</td>
+<td>5.5</td>
+<td>Central interview dashboard</td>
+<td>Interviews</td>
+<td>🟢</td>
+<td>InterviewsClient</td>
+</tr>
+<tr>
+<td>ATS-INT-006</td>
+<td>5.6</td>
+<td>Automated reminders</td>
+<td>Interviews</td>
+<td>🟢</td>
+<td>meeting.scheduler.js</td>
+</tr>
+<tr>
+<td>ATS-INT-007</td>
+<td>5.7</td>
+<td>Recording and transcript</td>
+<td>Interviews</td>
+<td>🟡</td>
+<td>egress + AI summary</td>
+</tr>
+<tr>
+<td>ATS-INT-008</td>
+<td>5.8</td>
+<td>Recruiter notes per interview</td>
+<td>Interviews</td>
+<td>🟡</td>
+<td>meeting.notes — limited UI</td>
+</tr>
+<tr>
+<td>ATS-INT-009</td>
+<td>5.9</td>
+<td>Secure storage and access controls</td>
+<td>Interviews</td>
+<td>🟢</td>
+<td>interviews.read/manage, recording.route.js</td>
+</tr>
+<tr>
+<td>ATS-OFF-001</td>
+<td>6.1</td>
+<td>Offer letter templates</td>
+<td>Offers</td>
+<td>🟢</td>
+<td>OfferLetterGeneratorWorkspace</td>
+</tr>
+<tr>
+<td>ATS-OFF-002</td>
+<td>6.2</td>
+<td>Digital signature (PRD)</td>
+<td>Offers</td>
+<td>🔴</td>
+<td>Static CEO signature image on PDF — not e-sign</td>
+</tr>
+<tr>
+<td>ATS-OFF-003</td>
+<td>6.3</td>
+<td>Negotiation version control</td>
+<td>Offers</td>
+<td>🟡</td>
+<td>offerLetterHash — no chain</td>
+</tr>
+<tr>
+<td>ATS-OFF-004</td>
+<td>6.4</td>
+<td>Placement dashboard</td>
+<td>Offers &amp; Placement</td>
+<td>🟢</td>
+<td>offers-placement page</td>
+</tr>
+<tr>
+<td>ATS-OFF-005</td>
+<td>6.5</td>
+<td>Auto compliance updates on role/title change</td>
+<td>Offers / Placement</td>
+<td>🟡</td>
+<td>placementAudit — manual</td>
+</tr>
+<tr>
+<td>ATS-PRE-001</td>
+<td>7.1</td>
+<td>Auto checklist on offer accept</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>manual/SOP tasks</td>
+</tr>
+<tr>
+<td>ATS-PRE-002</td>
+<td>7.2</td>
+<td>Identity verification</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>verifyDocument — no IDV vendor</td>
+</tr>
+<tr>
+<td>ATS-PRE-003</td>
+<td>7.3</td>
+<td>Payroll setup</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>CTC on offer</td>
+</tr>
+<tr>
+<td>ATS-PRE-004</td>
+<td>7.4</td>
+<td>IT account creation</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>itAccess[] checklist</td>
+</tr>
+<tr>
+<td>ATS-PRE-005</td>
+<td>7.5</td>
+<td>Equipment allocation</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>assetAllocation[]</td>
+</tr>
+<tr>
+<td>ATS-PRE-006</td>
+<td>7.6</td>
+<td>Orientation scheduling</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>SOP steps</td>
+</tr>
+<tr>
+<td>ATS-PRE-007</td>
+<td>7.7</td>
+<td>Compliance acknowledgements</td>
+<td>Pre-boarding</td>
+<td>🟡</td>
+<td>SOP checklists</td>
+</tr>
+<tr>
+<td>ATS-PRE-008</td>
+<td>7.8</td>
+<td>7-day onboarding plan</td>
+<td>Onboarding</td>
+<td>🟡</td>
+<td>configurable tasks</td>
+</tr>
+<tr>
+<td>ATS-PRE-009</td>
+<td>7.9</td>
+<td>Onboarding progress dashboard</td>
+<td>Pre/Onboarding</td>
+<td>🟢</td>
+<td>pre-boarding + onboarding pages</td>
+</tr>
+<tr>
+<td>ATS-ANA-001</td>
+<td>8.1</td>
+<td>Detailed metrics</td>
+<td>Analytics</td>
+<td>🟢</td>
+<td>atsAnalytics</td>
+</tr>
+<tr>
+<td>ATS-ANA-002</td>
+<td>8.2</td>
+<td>Hiring funnel</td>
+<td>Analytics</td>
+<td>🟢</td>
+<td>applicationFunnel</td>
+</tr>
+<tr>
+<td>ATS-ANA-003</td>
+<td>8.3</td>
+<td>Exportable dashboards</td>
+<td>Analytics</td>
+<td>🟡</td>
+<td>Excel export</td>
+</tr>
+<tr>
+<td>ATS-ANA-004</td>
+<td>8.4</td>
+<td>Custom report builder</td>
+<td>Analytics</td>
+<td>🔴</td>
+<td>absent</td>
+</tr>
+<tr>
+<td>ATS-AI-001</td>
+<td>AI-1</td>
+<td>Profile from resume parse</td>
+<td>Employees</td>
+<td>🟡</td>
+<td>skills + name extract</td>
+</tr>
+<tr>
+<td>ATS-AI-002</td>
+<td>AI-2</td>
+<td>Call, verify, auto-schedule interviews</td>
+<td>Applications / Bolna</td>
+<td>🟡</td>
+<td>Bolna verify; no createMeeting</td>
+</tr>
+<tr>
+<td>ATS-AI-003</td>
+<td>AI-3</td>
+<td>Interview assessment</td>
+<td>Interviews</td>
+<td>🟡</td>
+<td>AI summaries</td>
+</tr>
+<tr>
+<td>ATS-AI-004</td>
+<td>AI-4</td>
+<td>Intelligent matching</td>
+<td>Employees / Jobs</td>
+<td>⚠️</td>
+<td>rule-based getJobFit</td>
+</tr>
+<tr>
+<td>ATS-AI-005</td>
+<td>AI-5</td>
+<td>Predictive insights</td>
+<td>—</td>
+<td>🔴</td>
+<td>absent</td>
+</tr>
+<tr>
+<td>ATS-AI-006</td>
+<td>AI-6</td>
+<td>Smart notifications</td>
+<td>Cross-cutting</td>
+<td>🟡</td>
+<td>cron schedulers</td>
+</tr>
+<tr>
+<td>ATS-AI-007</td>
+<td>AI-7</td>
+<td>Bias detection</td>
+<td>—</td>
+<td>🔴</td>
+<td>absent</td>
+</tr>
+</tbody>
+</table>
+<p><strong>ATS roll-up (from table above):</strong> 🟢 19 · 🟡 29 · ⚠️ 2 · 🟣 2 (APP-001 pipeline, CAND-008 binder) · 🔴 8 → <strong>strict 31.7%</strong> (19/60) · <strong>weighted 58.3%</strong> using: 🟢=1.0, 🟡=0.5, ⚠️=0.75, 🟣=0.75, 🔴=0.</p>
+<p><strong>All-modules roll-up (155 reqs):</strong> verified in this document — strict <strong>32.9%</strong> (51/155), weighted <strong>58.2%</strong> (same weighting rule as §28).</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th style="text-align:right">Reqs</th>
+<th style="text-align:right">🟢</th>
+<th style="text-align:right">🟡</th>
+<th style="text-align:right">⚠️</th>
+<th style="text-align:right">🔴</th>
+<th style="text-align:right">Strict %</th>
+<th style="text-align:right">Weighted %</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS (Module 1)</td>
+<td style="text-align:right">60</td>
+<td style="text-align:right">19</td>
+<td style="text-align:right">29</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">31.7%</td>
+<td style="text-align:right">58.3%</td>
+</tr>
+<tr>
+<td>Communication (Module 2)</td>
+<td style="text-align:right">38</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">16</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">28.9%</td>
+<td style="text-align:right">57.2%</td>
+</tr>
+<tr>
+<td>Training (Module 3)</td>
+<td style="text-align:right">29</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">14</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">41.4%</td>
+<td style="text-align:right">65.5%</td>
+</tr>
+<tr>
+<td>Projects (Module 4)</td>
+<td style="text-align:right">28</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">32.1%</td>
+<td style="text-align:right">51.8%</td>
+</tr>
+<tr>
+<td><strong>All modules</strong></td>
+<td style="text-align:right"><strong>155</strong></td>
+<td style="text-align:right"><strong>51</strong></td>
+<td style="text-align:right"><strong>70</strong></td>
+<td style="text-align:right"><strong>5</strong></td>
+<td style="text-align:right"><strong>27</strong></td>
+<td style="text-align:right"><strong>32.9%</strong></td>
+<td style="text-align:right"><strong>58.2%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><em>Reconciliation:</em> ATS 🟢 (19) + Comm (11) + Train (12) + PM (9) = <strong>51</strong> strict full. Per-row Comm/Train/PM evidence: <code>ATS_PRODUCT_PRD_AUDIT.md</code> §5.2–5.4; ATS rows are fully inlined in the table above.</p>
+<p><strong>PRD pages not machine-extracted:</strong> Module–Capability Mapping (p.22) and Time &amp; Cost Plan (p.22) were not text-extracted from the PDF; coverage claims above are from requirement bullets only.</p>
+<hr />
+<hr />
+<h2>CORRECTION: APP-004 vs APP-005 (audit trail ≠ bulk moves)</h2>
+<p>Earlier audit drafts <strong>swapped these IDs</strong>. Canonical mapping (§6C):</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>PRD meaning</th>
+<th>Shipped</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ATS-APP-004</strong></td>
+<td>Audit trail of pipeline movements</td>
+<td><code>activityLog</code> on application create/status/withdraw/delete</td>
+<td>🟡 Partial (backend log; no per-app audit UI)</td>
+</tr>
+<tr>
+<td><strong>ATS-APP-005</strong></td>
+<td>Bulk-move stages</td>
+<td>Single <code>PATCH /v1/job-applications/:applicationId</code> + Create Offer → Offered + placement queues</td>
+<td>🟡 Partial (<strong>not</strong> 🔴 Missing — one-at-a-time works; PRD multi-select batch does not)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Do not score APP-004 as bulk or Missing.</strong> The gap for bulk is <strong>APP-005 only</strong>, and only the <strong>batch</strong> portion.</p>
+<hr />
+<h2>CORRECTION: Bolna vs PRD AI Verification (ATS-AI-002)</h2>
+<p><strong>Audit error (fixed):</strong> Earlier versions listed &quot;Bolna verification&quot; generically under &quot;beyond PRD.&quot; That was <strong>incorrect</strong> for candidate calls.</p>
+<p>The PRD states:</p>
+<blockquote>
+<p><em>AI Verification &amp; Interview Scheduling: AI can call candidates to verify interest, record their responses, and, based on confirmation, schedule interviews automatically. All call logs, transcripts, and recordings are stored securely.</em></p>
+</blockquote>
+<p>This maps to <strong>ATS-AI-002</strong> (PRD row AI-2: &quot;Call, verify, auto-schedule&quot;).</p>
+<h3>Two distinct Bolna use cases</h3>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>PRD?</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Candidate verification</strong> — AI calls applicant to confirm interest; logs/transcripts stored</td>
+<td><strong>Yes</strong> (ATS-AI-002)</td>
+<td>🟡 <strong>Partial</strong></td>
+<td><code>bolnaCandidateVerification.service.js</code>, <code>applicationVerificationCall.scheduler.js</code>, <code>bolna.controller.js</code>, <code>callRecord.service.js</code></td>
+</tr>
+<tr>
+<td><strong>Auto-schedule interview</strong> after candidate confirms on call</td>
+<td><strong>Yes</strong> (ATS-AI-002)</td>
+<td>🔴 <strong>Missing</strong></td>
+<td>No <code>createMeeting</code> in Bolna webhook/disposition handler</td>
+</tr>
+<tr>
+<td><strong>Job-posting verification</strong> — AI calls to verify new job details from Jobs page</td>
+<td><strong>No</strong></td>
+<td>🟢 Extra</td>
+<td><code>jobVerificationCall.scheduler.js</code>, Jobs row action</td>
+</tr>
+</tbody>
+</table>
+<h3>What is implemented (PRD-aligned)</h3>
+<ul>
+<li>Bolna outbound calls to <strong>candidates</strong> after application (scheduler + manual API)</li>
+<li>Call records, transcripts, recordings stored via call record service</li>
+<li>Webhook ingestion from Bolna (<code>bolna.route.js</code>)</li>
+</ul>
+<h3>What is missing (PRD gap)</h3>
+<ul>
+<li><strong>Automatic interview scheduling</strong> when candidate confirms interest on the call — the PRD's &quot;based on confirmation, schedule interviews automatically&quot; step is <strong>not wired</strong>; recruiters must schedule interviews manually in <code>/ats/interviews</code></li>
+</ul>
+<h3>What is extra (not in PRD)</h3>
+<ul>
+<li>Bolna calls to verify <strong>job postings</strong> (quality control on listings) — PRD AI verification is <strong>candidate-focused</strong>, not job-focused</li>
+</ul>
+<hr />
+<h2>CORRECTION: Interview Rubric (ATS-INT-004)</h2>
+<p>Prior merged audit marked ATS 5.4 as 🔴 missing. <strong>Code review correction:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>PRD Expected</th>
+<th>Current Implementation</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rubric criteria</td>
+<td>Weighted scoring rubrics</td>
+<td>5 fixed criteria, 1–5 scale, equal weight</td>
+<td>🟡 Partial</td>
+</tr>
+<tr>
+<td>Rubric storage</td>
+<td>Scores drive hiring decision</td>
+<td><code>rubricRatings</code> saved; <strong>informational only</strong></td>
+<td>🟣 Different</td>
+</tr>
+<tr>
+<td>Interview result</td>
+<td>Rubric-derived</td>
+<td>Tri-state <code>interviewResult</code>: pending/selected/rejected</td>
+<td>🟣 Different</td>
+</tr>
+<tr>
+<td>Per-job templates</td>
+<td>Implied</td>
+<td>Fixed constant — no <code>RubricTemplate</code> model</td>
+<td>🔴 Missing</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Evidence:</strong> <code>src/constants/interviewRubric.js</code>, <code>InterviewsClient.tsx</code> (lines ~89–122), <code>meetings.ts</code>.</p>
+<hr />
+<h2>CORRECTION: Offer Letter Signature (ATS-OFF-002)</h2>
+<p><strong>Do not describe the shipped offer letter as &quot;digital signature.&quot;</strong> The PRD asks for digital/e-sign (6.2); what we built is a <strong>static CEO signature image</strong> embedded on the generated PDF.</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>PRD (6.2)</th>
+<th>Shipped</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Requirement label</td>
+<td>Digital signature</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Implementation</td>
+<td>Integrated e-sign provider</td>
+<td><strong>Static CEO signature image</strong> on PDF</td>
+</tr>
+<tr>
+<td>Status</td>
+<td>—</td>
+<td>🔴 PRD e-sign not met; visual-only static image</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Evidence:</strong> <code>offer.service.js</code>, <code>ShareOfferModal.tsx</code>, <code>OfferLetterGeneratorWorkspace.tsx</code>.</p>
+<hr />
+<h2>6D. Detailed Page Audits — Remaining ATS Pages</h2>
+<h3>Interviews</h3>
+<h4>A. PRD Requirements</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Requirement</th>
+<th>Expected</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-INT-001</td>
+<td>Multi-round scheduling</td>
+<td>Technical/Panel/HR rounds</td>
+</tr>
+<tr>
+<td>ATS-INT-002</td>
+<td>Calendar sync</td>
+<td>Google/Outlook</td>
+</tr>
+<tr>
+<td>ATS-INT-003</td>
+<td>Built-in video</td>
+<td>In-app video</td>
+</tr>
+<tr>
+<td>ATS-INT-004</td>
+<td>Weighted rubrics</td>
+<td>Scored criteria</td>
+</tr>
+<tr>
+<td>ATS-INT-005</td>
+<td>Dashboard</td>
+<td>Interview hub</td>
+</tr>
+<tr>
+<td>ATS-INT-006</td>
+<td>Reminders</td>
+<td>Automated</td>
+</tr>
+<tr>
+<td>ATS-INT-007</td>
+<td>Recording/transcript</td>
+<td>Stored playback</td>
+</tr>
+<tr>
+<td>ATS-INT-008</td>
+<td>Per-interview notes</td>
+<td>Recruiter notes</td>
+</tr>
+<tr>
+<td>ATS-INT-009</td>
+<td>Secure storage/access</td>
+<td>RBAC + recording routes</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p>LiveKit video rooms, week + table views, schedule modal, 5-criterion rubric modal (informational), recordings/transcripts via egress + AI summary, Excel export, internal transfer, T-15 reminders.</p>
+<h4>C. Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>PRD</th>
+<th>Current</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Multi-round</td>
+<td>Multiple meetings; types Video/In-Person/Phone</td>
+<td>🟡</td>
+<td>meeting.model.js</td>
+</tr>
+<tr>
+<td>Calendar sync</td>
+<td>Email only</td>
+<td>🔴</td>
+<td>outlook.route.js mail</td>
+</tr>
+<tr>
+<td>Video</td>
+<td>LiveKit</td>
+<td>🟢</td>
+<td>livekit.route.js</td>
+</tr>
+<tr>
+<td>Rubrics</td>
+<td>5-criteria, not weighted, not gating</td>
+<td>🟡</td>
+<td>interviewRubric.js</td>
+</tr>
+<tr>
+<td>Dashboard</td>
+<td>InterviewsClient</td>
+<td>🟢</td>
+<td>InterviewsClient.tsx</td>
+</tr>
+<tr>
+<td>Reminders</td>
+<td>T-15 scheduler</td>
+<td>🟢</td>
+<td>meeting.scheduler.js</td>
+</tr>
+<tr>
+<td>Recording</td>
+<td>Egress + segments</td>
+<td>🟡</td>
+<td>recording.route.js</td>
+</tr>
+<tr>
+<td>Notes</td>
+<td>meeting.notes</td>
+<td>🟡</td>
+<td>Limited UI</td>
+</tr>
+<tr>
+<td>Secure storage/access (INT-009)</td>
+<td>interviews.read/manage + recording routes</td>
+<td>🟢</td>
+<td>recording.route.js, requirePermissions</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Beyond PRD</h4>
+<p>LiveKit waiting room, week calendar view, internal transfer workflow, AI summary on recordings.</p>
+<hr />
+<h3>Offers &amp; Placement</h3>
+<h4>A. PRD Requirements (§6C)</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Requirement (§6C)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS-OFF-001</td>
+<td>Offer letter templates</td>
+</tr>
+<tr>
+<td>ATS-OFF-002</td>
+<td>Digital signature</td>
+</tr>
+<tr>
+<td>ATS-OFF-003</td>
+<td>Negotiation version control</td>
+</tr>
+<tr>
+<td>ATS-OFF-004</td>
+<td>Placement dashboard</td>
+</tr>
+<tr>
+<td>ATS-OFF-005</td>
+<td>Auto compliance updates on role/title change</td>
+</tr>
+</tbody>
+</table>
+<h4>B. What We Built</h4>
+<p>Full offer CRUD, PDF letter generator with <strong>static CEO signature image</strong> on the PDF (not digital/e-sign), email delivery, placement queues with 5 sub-statuses, pre-boarding feedback dialog, link from applications.</p>
+<h4>C. Comparison</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>PRD</th>
+<th>Current</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OFF-001</td>
+<td>Offer templates</td>
+<td>Template-based letter workspace</td>
+<td>🟢</td>
+<td>OfferLetterGeneratorWorkspace</td>
+</tr>
+<tr>
+<td>OFF-002</td>
+<td>Digital signature (PRD 6.2)</td>
+<td>Static CEO signature image on PDF only</td>
+<td>🔴</td>
+<td>offer.service.js</td>
+</tr>
+<tr>
+<td>OFF-003</td>
+<td>Negotiation version control</td>
+<td>offerLetterHash — no chain</td>
+<td>🟡</td>
+<td>offer.model.js</td>
+</tr>
+<tr>
+<td>OFF-004</td>
+<td>Placement dashboard</td>
+<td>5-status queues on offers-placement</td>
+<td>🟢</td>
+<td>offers-placement page</td>
+</tr>
+<tr>
+<td>OFF-005</td>
+<td>Auto compliance on role change</td>
+<td>placementAudit — manual</td>
+<td>🟡</td>
+<td>placement.service.js</td>
+</tr>
+</tbody>
+</table>
+<h4>D. Beyond PRD</h4>
+<p>Placement sub-statuses (Deferred, Cancelled), offer letter standalone page, HRMS department validation on onboarding.</p>
+<hr />
+<h3>Pre-boarding &amp; Onboarding</h3>
+<h4>A. PRD Requirements (§6C — <code>ATS-PRE-001</code>…<code>009</code>)</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Requirement</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PRE-001</td>
+<td>Auto checklist on offer accept</td>
+<td>🟡</td>
+<td>SOP/manual tasks — no auto-trigger</td>
+</tr>
+<tr>
+<td>PRE-002</td>
+<td>Identity verification</td>
+<td>🟡</td>
+<td>verifyDocument — no IDV vendor</td>
+</tr>
+<tr>
+<td>PRE-003</td>
+<td>Payroll setup</td>
+<td>🟡</td>
+<td>CTC on offer letter</td>
+</tr>
+<tr>
+<td>PRE-004</td>
+<td>IT account creation</td>
+<td>🟡</td>
+<td>itAccess[] checklist fields</td>
+</tr>
+<tr>
+<td>PRE-005</td>
+<td>Equipment allocation</td>
+<td>🟡</td>
+<td>assetAllocation[] checklist</td>
+</tr>
+<tr>
+<td>PRE-006</td>
+<td>Orientation scheduling</td>
+<td>🟡</td>
+<td>SOP steps — no calendar integration</td>
+</tr>
+<tr>
+<td>PRE-007</td>
+<td>Compliance acknowledgements</td>
+<td>🟡</td>
+<td>SOP checklists</td>
+</tr>
+<tr>
+<td>PRE-008</td>
+<td>7-day onboarding plan</td>
+<td>🟡</td>
+<td>Configurable task lists</td>
+</tr>
+<tr>
+<td>PRE-009</td>
+<td>Onboarding progress dashboard</td>
+<td>🟢</td>
+<td>pre-boarding + onboarding pages</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Roll-up:</strong> 1 full · 8 partial · 0 missing (matches §6C and §25).</p>
+<h4>B. What We Built</h4>
+<p>Split pages (<code>d0697fd3</code>): <code>/ats/pre-boarding</code> (placement list, document collection) and <code>/ats/onboarding</code> (task management, HRMS validation).</p>
+<hr />
+<h3>Analytics</h3>
+<h4>A. PRD (ATS-ANA-001–004)</h4>
+<p>Hiring funnel, time metrics, recruiter performance, custom reports.</p>
+<h4>B. Built</h4>
+<p>Funnel charts, timeline, recruiter leaderboard, job stats. <strong>No custom report builder.</strong></p>
+<h4>C. Status: 🟡 3/4 partial — custom reports missing.</h4>
+<hr />
+<h2>PAGE EVOLUTION — Key Pages</h2>
+<h3>Applications</h3>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+<th>Old</th>
+<th>New</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-02-23</td>
+<td>da120383</td>
+<td>Route merge</td>
+<td><code>/ats/job-applications</code></td>
+<td><code>/ats/applications</code></td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-05-14</td>
+<td>fec06a70</td>
+<td>Page created</td>
+<td>—</td>
+<td>Applications hub</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-09</td>
+<td>9fd031de</td>
+<td>Pagination</td>
+<td>Client</td>
+<td>Server</td>
+<td>🔵 Scale</td>
+</tr>
+</tbody>
+</table>
+<h3>Pre-boarding / Onboarding</h3>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+<th>Old</th>
+<th>New</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-06-01</td>
+<td>d0697fd3</td>
+<td>Split</td>
+<td>Combined stub</td>
+<td>Two pages</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>2026-03-06</td>
+<td>04759f8a</td>
+<td>Initial</td>
+<td>—</td>
+<td>Boarding queues</td>
+<td>🔵 Core wave</td>
+</tr>
+</tbody>
+</table>
+<h3>Interviews</h3>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Commit</th>
+<th>Change</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-03-06</td>
+<td>04759f8a</td>
+<td>Core interviews UI</td>
+<td>🔵 Core wave</td>
+</tr>
+<tr>
+<td>Later</td>
+<td>—</td>
+<td>LiveKit + rubric added</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>—</td>
+<td>fcaa6a26</td>
+<td>Bolna <strong>settings UI</strong> removed (backend kept)</td>
+<td>⚪ Unknown</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>PRD FEATURES THAT EVOLVED</h2>
+<table>
+<thead>
+<tr>
+<th>PRD Feature</th>
+<th>Original Implementation</th>
+<th>Current Implementation</th>
+<th>Git Evidence</th>
+<th>Client?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application pipeline</td>
+<td>5 PRD stages</td>
+<td>7 statuses + Shortlisted/Rejected</td>
+<td>atsPipeline.js</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Candidate module name</td>
+<td>&quot;Candidates&quot;</td>
+<td>&quot;Employees&quot; UI</td>
+<td>nav.tsx</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Pre-boarding page</td>
+<td>Single combined route</td>
+<td>Split pages</td>
+<td>d0697fd3</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Interview scoring</td>
+<td>Tri-state only (early)</td>
+<td>Rubric + tri-state parallel</td>
+<td>interviewRubric.js</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>List pagination</td>
+<td>Client-side</td>
+<td>Server-side</td>
+<td>9fd031de</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Compliance export</td>
+<td>PRD PDF/ZIP binder</td>
+<td>Public shareable web profile + optional docs</td>
+<td>Product chose link-based sharing over static bundle</td>
+<td>shareCandidateProfile, public-employee page</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>MODULE SCORECARD — ATS</h2>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>PRD Coverage</th>
+<th>Missing</th>
+<th>Partial</th>
+<th>Extra</th>
+<th>New?</th>
+<th>Major Git Changes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jobs</td>
+<td>🟢 High</td>
+<td>0</td>
+<td>0</td>
+<td>Bolna <strong>job</strong> verify, bookmarks, referral</td>
+<td>No</td>
+<td>Pagination Sep 2026</td>
+</tr>
+<tr>
+<td>Applications</td>
+<td>🟡 Medium</td>
+<td>Bulk multi-select only</td>
+<td>Notifications + audit trail built</td>
+<td>Shortlisted/Rejected, offer path</td>
+<td>No</td>
+<td>Route merge</td>
+</tr>
+<tr>
+<td>External Jobs</td>
+<td>N/A</td>
+<td>—</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>94ffd8be</td>
+</tr>
+<tr>
+<td>Employees</td>
+<td>🟡 Medium</td>
+<td>Material change log (CAND-009/010)</td>
+<td>Resume versions</td>
+<td>HRMS, telephony, public profile (CAND-008)</td>
+<td>Renamed</td>
+<td>Plivo client</td>
+</tr>
+<tr>
+<td>Interviews</td>
+<td>🟡 Medium</td>
+<td>Calendar</td>
+<td>Rubric weighting</td>
+<td>LiveKit, week view</td>
+<td>No</td>
+<td>Rubric added</td>
+</tr>
+<tr>
+<td>Offers</td>
+<td>🟡 Medium</td>
+<td>Integrated e-sign provider (PRD)</td>
+<td>Static CEO signature image on PDF</td>
+<td>Placement sub-status</td>
+<td>No</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Pre/Onboard</td>
+<td>🟡 Medium</td>
+<td>—</td>
+<td>PRE-001–008 (8 partial)</td>
+<td>Split pages</td>
+<td>No</td>
+<td>d0697fd3</td>
+</tr>
+<tr>
+<td>Recruiters</td>
+<td>🟡 Medium</td>
+<td>—</td>
+<td>Activity UI, metrics, assign</td>
+<td>Public profile</td>
+<td>No</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td>🟡 Medium</td>
+<td>Custom builder</td>
+<td>—</td>
+<td>Leaderboard</td>
+<td>No</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Referral Leads</td>
+<td>N/A</td>
+<td>—</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>7efc49d2</td>
+</tr>
+<tr>
+<td>Share Form</td>
+<td>N/A</td>
+<td>—</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>7cbf2fda</td>
+</tr>
+<tr>
+<td>Candidate Portal</td>
+<td>Partial</td>
+<td>—</td>
+<td>Self-service</td>
+<td>browse/my-apps/profile</td>
+<td><strong>Yes</strong></td>
+<td>94ffd8be</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>EVERYTHING BUILT BEYOND THE ORIGINAL PRD (Consolidated)</h2>
+<h3>New Modules</h3>
+<ul>
+<li>Organization (5 pages)</li>
+<li>Referral Leads CRM (ATS submodule)</li>
+<li>External Jobs aggregator (ATS submodule)</li>
+<li>Help &amp; Support</li>
+</ul>
+<h3>New Pages</h3>
+<p>External Jobs, Referral Leads, Share Candidate Form, Browse Jobs, My Applications, My Profile, Organization ×5, Communication Dialer, public portals ×5, candidate-onboard, join/room</p>
+<h3>New Workflows</h3>
+<ul>
+<li>External job auto-fetch scheduler</li>
+<li>Bolna <strong>job-posting</strong> verification calls (extra — PRD AI is candidate-focused)</li>
+<li>Tokenized share-candidate onboarding</li>
+<li>Placement sub-status lifecycle (Deferred/Cancelled)</li>
+<li>Candidate impersonation (admin)</li>
+<li>LiveKit waiting room</li>
+<li>Matching jobs skill-overlap panel</li>
+</ul>
+<h3>New Integrations</h3>
+<ul>
+<li>Plivo click-to-call (<strong>PRD vendor substitute</strong> for telephony in COMM module; extra: browser dialer UI) (extra)</li>
+<li>Bolna voice AI — candidate verify = PRD ATS-AI-002 (partial); job verify = extra; TTS vendor differs from PRD ElevenLabs/AWS Polly row</li>
+<li>Apollo HR contacts (external jobs)</li>
+<li>RapidAPI external job providers</li>
+<li>LiveKit video egress/recordings (<strong>PRD vendor substitute</strong> for Agora/Daily/Twilio — COMM-VOICE capability, not new scope)</li>
+</ul>
+<h3>New Automations</h3>
+<ul>
+<li>Meeting T-15 reminders</li>
+<li>External job auto-fetch cron</li>
+<li>Application status email notifications</li>
+<li>Job application notify on stage change</li>
+</ul>
+<h3>New AI (beyond PRD scope/depth)</h3>
+<ul>
+<li>Bolna <strong>job-posting</strong> verification only (candidate Bolna is PRD ATS-AI-002 — see correction below)</li>
+<li>Recording AI summary (partial PRD ATS-AI-003)</li>
+<li>Rule-based job fit (PRD ATS-AI-004 implemented differently — not ML)</li>
+<li>PM Assistant / Sage chat (other modules)</li>
+</ul>
+<hr />
+<h2>PRD FUNCTIONALITY NOT YET BUILT (Top Gaps)</h2>
+<p>Full 155-row matrix: <code>ATS_PRODUCT_PRD_AUDIT.md</code> §5. <strong>ATS 60 rows are inlined in §6C above.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Gap</th>
+<th>ID</th>
+<th>Module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>High</td>
+<td>Integrated e-sign provider (PRD 6.2; static image on PDF only today)</td>
+<td>ATS-OFF-002</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>High</td>
+<td>Google/Outlook calendar sync</td>
+<td>ATS-INT-002</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>Bulk multi-select stage moves (partial: single row + offer/placement path)</td>
+<td>ATS-APP-005</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>Custom analytics report builder</td>
+<td>ATS-ANA-004</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>Material change logging + version history</td>
+<td>ATS-CAND-009/010</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>SSO/MFA/DLP</td>
+<td>COMM-SEC-*</td>
+<td>Communication</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>PM deliverable hash/review chain</td>
+<td>PM-009–011</td>
+<td>Projects</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>AI auto-schedule after Bolna confirmation</td>
+<td>ATS-AI-002</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>Predictive/bias AI</td>
+<td>ATS-AI-005/007</td>
+<td>ATS</td>
+</tr>
+<tr>
+<td>Low</td>
+<td>Optional stack items not shipped (Prisma/Postgres/Casbin)</td>
+<td>—</td>
+<td>Platform — <strong>Express is PRD-allowed</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>MASTER FEATURE MATRIX (Extended — ATS)</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Page</th>
+<th>Feature</th>
+<th>PRD?</th>
+<th>Status</th>
+<th>Extra?</th>
+<th>History?</th>
+<th>Client?</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>CRUD</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>job.route.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>Excel import/export</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>jobs.ts</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>Bolna <strong>job</strong> verify</td>
+<td>No</td>
+<td>🟢</td>
+<td><strong>Yes</strong></td>
+<td>Feb 2026+</td>
+<td>Unknown</td>
+<td>jobVerificationCall.scheduler.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>Bolna <strong>candidate</strong> verify (ATS-AI-002)</td>
+<td><strong>Yes</strong></td>
+<td>🟡</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>bolnaCandidateVerification.service.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>Auto-schedule after Bolna confirm (ATS-AI-002)</td>
+<td><strong>Yes</strong></td>
+<td>🔴</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>no createMeeting in webhook</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>Bookmarks</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>—</td>
+<td>No</td>
+<td>jobs API</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>7-status pipeline</td>
+<td>Yes</td>
+<td>🟣</td>
+<td>Yes</td>
+<td>Expanded</td>
+<td>No</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>Bulk multi-select stage</td>
+<td>Yes</td>
+<td>🟡</td>
+<td>No</td>
+<td>Single + offer/placement</td>
+<td>No</td>
+<td>offer.service.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Profile CRUD</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>employee.model.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Compliance share (ATS-CAND-008)</td>
+<td>Yes</td>
+<td>🟣</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>public-employee page</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Click-to-call</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>—</td>
+<td><strong>Yes</strong></td>
+<td>ec9ea71 Plivo</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Matching jobs</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>—</td>
+<td>No</td>
+<td>MatchingJobsPanel</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>LiveKit video (COMM-VOICE vendor swap)</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>Added</td>
+<td>No</td>
+<td>livekit.route.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>5-criterion rubric</td>
+<td>Yes</td>
+<td>🟡</td>
+<td>No</td>
+<td>Added</td>
+<td>No</td>
+<td>interviewRubric.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>Calendar sync</td>
+<td>Yes</td>
+<td>🔴</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>—</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>PDF offer letter</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>offer.service.js</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>E-sign</td>
+<td>Yes</td>
+<td>🟡</td>
+<td>No</td>
+<td>Image only</td>
+<td>No</td>
+<td>offer PDF</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>External Jobs</td>
+<td>Search/saved/contacts</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>94ffd8be</td>
+<td>Unknown</td>
+<td>external-jobs page</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Referral Leads</td>
+<td>CRM pipeline</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>7efc49d2</td>
+<td>Unknown</td>
+<td>referral-leads</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Analytics</td>
+<td>Funnel</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>atsAnalytics</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Analytics</td>
+<td>Custom reports</td>
+<td>Yes</td>
+<td>🔴</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2><em>Appendix: <strong>ATS 60 requirements</strong> are fully inlined in §6C. Comm/Train/PM module roll-ups are in §6C (155 total). Per-row evidence for modules 2–4: <code>ATS_PRODUCT_PRD_AUDIT.md</code> §5.2–5.4. This evolution audit reorganizes evidence by PAGE and adds Git evolution.</em></h2>
+<hr />
+<h2>7. Page-by-Page PRD Comparison (Summary)</h2>
+<p>See Section 6 for per-page A–E detail. <strong>Strongest ATS pages:</strong> Jobs, Interviews (video), Offers, Placement, Analytics funnel. <strong>Weakest:</strong> E-sign, calendar sync, AI auto-schedule depth. <strong>Applications stage moves:</strong> single per row + Create Offer → Offered + Placement queues (no bulk multi-select). <strong>Compliance sharing:</strong> public profile page (ATS-CAND-008).</p>
+<hr />
+<h2>8. Functionality Built Beyond PRD</h2>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Examples</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New pages</td>
+<td>External Jobs, Referral Leads, Share Candidate Form, Org module, Dialer</td>
+<td>routes, git</td>
+</tr>
+<tr>
+<td>Candidate portal</td>
+<td>browse-jobs, my-applications, my-profile</td>
+<td>/ats/*</td>
+</tr>
+<tr>
+<td>Public pages</td>
+<td>public-job, public-recruiter, public-employee, candidate-onboard</td>
+<td>app routes</td>
+</tr>
+<tr>
+<td>Telephony</td>
+<td>Plivo click-to-call = <strong>PRD COMM-VOICE vendor substitute</strong> (extra: browser dialer UI); Bolna <strong>job</strong> verify = extra</td>
+<td>plivo, jobVerificationCall.scheduler.js</td>
+</tr>
+<tr>
+<td>HRMS on ATS</td>
+<td>Attendance, week-off, shift on employees</td>
+<td>employee routes</td>
+</tr>
+<tr>
+<td>SOP modules</td>
+<td>Candidate SOP, offboarding SOP settings</td>
+<td>/settings/*</td>
+</tr>
+<tr>
+<td>Pipeline extras</td>
+<td>Shortlisted, Rejected+reopen</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>Auto-fetch</td>
+<td>External job scheduler</td>
+<td>externalJobs scheduler</td>
+</tr>
+<tr>
+<td>Sales agent dashboard</td>
+<td>Non-PRD role dashboard</td>
+<td>dashboard widgets</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>9. New Pages Added Beyond PRD</h2>
+<ol>
+<li><strong>External Jobs</strong> — Search/Saved/Contacts tabs (see Section 6)</li>
+<li><strong>Referral Leads</strong> — CRM pipeline</li>
+<li><strong>Share Candidate Form</strong> — Token onboarding</li>
+<li><strong>Browse Jobs / My Applications / My Profile</strong> — Candidate self-service</li>
+<li><strong>Organization</strong> (5 pages)</li>
+<li><strong>Communication Dialer</strong></li>
+<li><strong>Public portals</strong> (job, recruiter, employee, onboard, join/room)</li>
+<li><strong>Help &amp; Support</strong></li>
+</ol>
+<hr />
+<h2>10. New Modules Added Beyond PRD</h2>
+<ul>
+<li><strong>Organization</strong> — full module</li>
+<li><strong>Referral Leads CRM</strong> — ATS submodule</li>
+<li><strong>External Jobs</strong> — ATS submodule</li>
+<li><strong>Help &amp; Support</strong></li>
+<li><strong>Dialer</strong> — Communication submodule</li>
+</ul>
+<hr />
+<h2>11–12. New Screens/Workflows Beyond PRD</h2>
+<ul>
+<li>External job auto-fetch workflow</li>
+<li>Bolna job verification call workflow</li>
+<li>Tokenized share-candidate onboarding</li>
+<li>LiveKit waiting room (<code>/join/room</code>)</li>
+<li>Placement sub-status workflow (Pending→Onboarding→Joined→Deferred→Cancelled)</li>
+<li>Candidate impersonation (admin)</li>
+<li>Job-applications page merge into applications hub</li>
+</ul>
+<hr />
+<h2>13. PRD Functionality Missing</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Page</th>
+<th>Requirement</th>
+<th>Missing Portion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>ATS-OFF-002</td>
+<td>Integrated e-sign provider (PRD); shipped static CEO signature image on PDF only</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>ATS-INT calendar</td>
+<td>Google/Outlook calendar sync</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Analytics</td>
+<td>ATS-ANA</td>
+<td>Custom report builder</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>AI</td>
+<td>ATS-AI-*</td>
+<td>Predictive hiring, bias detection, auto-schedule post-Bolna</td>
+</tr>
+<tr>
+<td>Comm</td>
+<td>Security</td>
+<td>SSO/MFA/DLP</td>
+<td>Enterprise security stack</td>
+</tr>
+<tr>
+<td>Platform</td>
+<td>Stack (optional PRD items)</td>
+<td>—</td>
+<td>Prisma/Postgres/Casbin not used; Meilisearch was scale option not baseline; Express ✅ per PRD p.19</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>14. PRD Functionality Partially Implemented</h2>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Current State</th>
+<th>Gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Resume parsing</td>
+<td>Upload works</td>
+<td>Full structured parse incomplete</td>
+</tr>
+<tr>
+<td>Training certs</td>
+<td>Evaluation module</td>
+<td>Full cert issuance partial</td>
+</tr>
+<tr>
+<td>PM deliverable review</td>
+<td>Uploads</td>
+<td>Hash/review chain unverified</td>
+</tr>
+<tr>
+<td>Interview rubric</td>
+<td>5 criteria in UI (1–5 scale); tri-state interviewResult separate</td>
+<td>PRD wanted weighted rubric driving decision</td>
+</tr>
+<tr>
+<td>AI job fit</td>
+<td>Rule-based skill overlap</td>
+<td>Not ML</td>
+</tr>
+<tr>
+<td>Bulk stage moves (ATS-APP-005)</td>
+<td>Single row + Create Offer + Placement queues (<code>offer.service.js</code>)</td>
+<td>No multi-select bulk API on Applications</td>
+</tr>
+<tr>
+<td>Audit trail (ATS-APP-004)</td>
+<td>activityLog on stage changes (<code>jobApplication.controller.js</code>)</td>
+<td>No dedicated per-application audit UI</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>15. PRD Functionality Implemented Differently</h2>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>PRD Says</th>
+<th>Product Does</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Applications</td>
+<td>Bulk multi-select (APP-005)</td>
+<td>Single row + Create Offer → Offered + Placement queues</td>
+<td>offer.service.js, offers-placement</td>
+</tr>
+<tr>
+<td>Applications</td>
+<td>5-stage pipeline</td>
+<td>7 statuses + Shortlisted/Rejected</td>
+<td>atsPipeline.js</td>
+</tr>
+<tr>
+<td>Candidates</td>
+<td>&quot;Candidates&quot;</td>
+<td>&quot;Employees&quot; UI label</td>
+<td>nav.tsx</td>
+</tr>
+<tr>
+<td>Applications UI</td>
+<td>Pipeline/kanban implied</td>
+<td>Table + filters</td>
+<td>ApplicationsClient</td>
+</tr>
+<tr>
+<td>Offer letter signature (OFF-002)</td>
+<td>Integrated digital e-sign (PRD)</td>
+<td>Static CEO signature image on PDF</td>
+<td>offer.service.js</td>
+</tr>
+<tr>
+<td>Compliance export (ATS-CAND-008)</td>
+<td>PDF/ZIP binder download</td>
+<td>Token-gated public profile <code>/public-employee/[id]</code> with optional docs</td>
+<td>shareCandidateProfile, public-employee page</td>
+</tr>
+<tr>
+<td>Pre-boarding</td>
+<td>Single module</td>
+<td>Split pre-boarding + onboarding pages</td>
+<td>d0697fd3</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>16. Git Product Evolution</h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Date</th>
+<th>Commits</th>
+<th>What Happened</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Early stubs</td>
+<td>Feb 2026</td>
+<td>7cbf2fda, 94ffd8be</td>
+<td>Share form, external jobs, browse-jobs</td>
+</tr>
+<tr>
+<td>Core ATS wave</td>
+<td>Mar 2026</td>
+<td>04759f8a</td>
+<td>Jobs, employees, interviews, offers, boarding, analytics, recruiters</td>
+</tr>
+<tr>
+<td>Consolidation</td>
+<td>Feb–May 2026</td>
+<td>da120383, fec06a70</td>
+<td>Job-applications → applications</td>
+</tr>
+<tr>
+<td>CRM expansion</td>
+<td>Apr 2026</td>
+<td>7efc49d2</td>
+<td>Referral leads</td>
+</tr>
+<tr>
+<td>Lifecycle split</td>
+<td>Jun 2026</td>
+<td>d0697fd3</td>
+<td>Pre-boarding/onboarding split; Bolna settings UI removed fcaa6a26</td>
+</tr>
+<tr>
+<td>Scale</td>
+<td>Sep 2026</td>
+<td>9fd031de, 757dd42a</td>
+<td>Server pagination across lists</td>
+</tr>
+<tr>
+<td>PM V2</td>
+<td>Jun 2026</td>
+<td>various</td>
+<td>Kanban/project management refresh</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>17. Page-by-Page Git History</h2>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Created</th>
+<th>Major Changes</th>
+<th>Removed?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jobs</td>
+<td>04759f8a</td>
+<td>Pagination Sep 2026, Bolna</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Applications</td>
+<td>fec06a70</td>
+<td>Absorbed job-applications</td>
+<td>job-applications deleted</td>
+</tr>
+<tr>
+<td>External Jobs</td>
+<td>94ffd8be</td>
+<td>Auto-fetch, contacts</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Employees</td>
+<td>04759f8a</td>
+<td>HRMS overlays, Plivo</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Referral Leads</td>
+<td>7efc49d2</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Pre-boarding/Onboarding</td>
+<td>04759f8a</td>
+<td>Split d0697fd3</td>
+<td>combined stub deleted</td>
+</tr>
+<tr>
+<td>Interviews</td>
+<td>04759f8a</td>
+<td>LiveKit, rubric, week view</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Bolna settings UI</td>
+<td>—</td>
+<td>—</td>
+<td>fcaa6a26 removed (backend remains)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>18. Client-Requested Changes</h2>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Change</th>
+<th>Date</th>
+<th>Commit</th>
+<th>Evidence</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Telephony</td>
+<td>Plivo account migration</td>
+<td>—</td>
+<td>ec9ea71</td>
+<td>Commit message &quot;client account migration&quot;</td>
+<td>🟢 CONFIRMED</td>
+</tr>
+</tbody>
+</table>
+<p><strong>No matches</strong> in frontend git for: &quot;client asked&quot;, &quot;UAT feedback&quot;, &quot;customer request&quot;, &quot;stakeholder&quot;. Most changes: 🔵 INTERNAL or ⚪ UNKNOWN.</p>
+<hr />
+<h2>19. Features Built Then Changed</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Original</th>
+<th>Current</th>
+<th>Commits</th>
+<th>Classification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application hub</td>
+<td>/ats/job-applications</td>
+<td>/ats/applications</td>
+<td>da120383</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Pre-boarding UI</td>
+<td>Combined stub page</td>
+<td>Separate pages</td>
+<td>d0697fd3</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Pagination</td>
+<td>Client-side</td>
+<td>Server-side</td>
+<td>9fd031de</td>
+<td>🔵 Internal</td>
+</tr>
+<tr>
+<td>Bolna config</td>
+<td>Settings UI</td>
+<td>Backend-only</td>
+<td>fcaa6a26</td>
+<td>⚪ Unknown</td>
+</tr>
+<tr>
+<td>Pipeline stages</td>
+<td>PRD 5-stage</td>
+<td>7-stage with Shortlisted/Rejected</td>
+<td>atsPipeline.js</td>
+<td>🔵 Internal</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>20. Removed Functionality</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Page</th>
+<th>Removal</th>
+<th>Commit</th>
+<th>Current State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Job Applications page</td>
+<td>/ats/job-applications</td>
+<td>Merged</td>
+<td>da120383</td>
+<td>Use /ats/applications</td>
+</tr>
+<tr>
+<td>Pre-boarding-onboarding stub</td>
+<td>/ats/pre-boarding-onboarding</td>
+<td>Split</td>
+<td>d0697fd3</td>
+<td>Two pages</td>
+</tr>
+<tr>
+<td>Bolna settings UI</td>
+<td>/settings/*</td>
+<td>Deleted UI</td>
+<td>fcaa6a26</td>
+<td>Backend Bolna API remains</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>21. PRD Outdated Areas</h2>
+<table>
+<thead>
+<tr>
+<th>PRD Area</th>
+<th>PRD Description</th>
+<th>Current Product</th>
+<th>Update Needed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tech stack</td>
+<td>NestJS/Postgres (optional)</td>
+<td>Express/Mongo (Express allowed p.19)</td>
+<td>Document actual stack; NestJS not mandatory</td>
+</tr>
+<tr>
+<td>Candidate naming</td>
+<td>Candidates module</td>
+<td>Employees UI</td>
+<td>Terminology</td>
+</tr>
+<tr>
+<td>Pipeline</td>
+<td>5 stages</td>
+<td>7 statuses</td>
+<td>Workflow doc</td>
+</tr>
+<tr>
+<td>Compliance</td>
+<td>PDF/ZIP binder download</td>
+<td>Public shareable profile page with optional docs</td>
+<td>Feature spec updated</td>
+</tr>
+<tr>
+<td>E-sign</td>
+<td>Integrated</td>
+<td>Email+image</td>
+<td>Feature spec</td>
+</tr>
+<tr>
+<td>Calendar</td>
+<td>Google/Outlook sync</td>
+<td>Not built</td>
+<td>Defer or build</td>
+</tr>
+<tr>
+<td>AI</td>
+<td>ML predictions</td>
+<td>Rule-based + Bolna</td>
+<td>Scope AI</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>22. Current Product Map</h2>
+<h3>ATS</h3>
+<ul>
+<li>Jobs (list, create, edit, import, export, bookmarks, Bolna)</li>
+<li>Applications (table pipeline, 7 statuses)</li>
+<li>External Jobs (search, saved, contacts)</li>
+<li>Employees (profiles, compliance, HRMS, telephony)</li>
+<li>Referral Leads CRM</li>
+<li>Share Candidate Form</li>
+<li>Candidate portal (browse, my-apps, my-profile)</li>
+<li>Recruiters (+ public profiles)</li>
+<li>Interviews (LiveKit, rubric, week view, recordings)</li>
+<li>Offers &amp; Placement (PDF, placement queues)</li>
+<li>Pre-boarding, Onboarding</li>
+<li>Analytics (funnel)</li>
+<li>Courses (learner, in ATS nav)</li>
+</ul>
+<h3>Organization (new)</h3>
+<ul>
+<li>Chart, Structure, Departments, Directory, Scenarios</li>
+</ul>
+<h3>Communication</h3>
+<ul>
+<li>Email, Chats, Meetings, Dialer, Calling, Recordings, Files</li>
+</ul>
+<h3>Training</h3>
+<ul>
+<li>Curriculum, Attendance, Mentors, Students, Evaluation, Analytics, Courses</li>
+</ul>
+<h3>Projects</h3>
+<ul>
+<li>Projects, Tasks, Kanban, Teams, Analytics</li>
+</ul>
+<h3>Platform</h3>
+<ul>
+<li>Dashboard, Logs, Settings (10+ sub-pages), Help</li>
+</ul>
+<hr />
+<h2>23. Master Page Matrix</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Page</th>
+<th>In PRD?</th>
+<th>PRD Func</th>
+<th>Current Func</th>
+<th>Missing</th>
+<th>Extra</th>
+<th>New?</th>
+<th>Git Changes</th>
+<th>Client?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>Yes</td>
+<td>Full CRUD, templates, board</td>
+<td>+Bolna, bookmarks, referral</td>
+<td>—</td>
+<td>High</td>
+<td>No</td>
+<td>Pagination</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>Yes</td>
+<td>Pipeline</td>
+<td>7-status table</td>
+<td>Bulk multi-select only</td>
+<td>Shortlisted/Rejected, offer/placement moves</td>
+<td>No</td>
+<td>Merged route</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>External Jobs</td>
+<td>No</td>
+<td>—</td>
+<td>3-tab aggregator</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>94ffd8be</td>
+<td>Unknown</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Yes</td>
+<td>Candidate CRM</td>
+<td>+HRMS, telephony, public profile share</td>
+<td>—</td>
+<td>High</td>
+<td>Renamed</td>
+<td>Plivo client</td>
+<td>Partial</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>Yes</td>
+<td>Schedule, evaluate</td>
+<td>+LiveKit, rubric</td>
+<td>Calendar sync</td>
+<td>Video, week view</td>
+<td>No</td>
+<td>LiveKit</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>Yes</td>
+<td>Offers, placement</td>
+<td>PDF, queues</td>
+<td>E-sign</td>
+<td>Placement sub-status</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Analytics</td>
+<td>Yes</td>
+<td>Dashboards</td>
+<td>Funnel</td>
+<td>Custom builder</td>
+<td>—</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Referral Leads</td>
+<td>No</td>
+<td>—</td>
+<td>CRM</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>7efc49d2</td>
+<td>Unknown</td>
+</tr>
+<tr>
+<td>Org</td>
+<td>All pages</td>
+<td>No</td>
+<td>—</td>
+<td>5 pages</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>Jun 2026</td>
+<td>Unknown</td>
+</tr>
+<tr>
+<td>Comm</td>
+<td>Dialer</td>
+<td>No</td>
+<td>—</td>
+<td>Outbound dial</td>
+<td>—</td>
+<td>All</td>
+<td><strong>Yes</strong></td>
+<td>—</td>
+<td>Unknown</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>24. Master Feature Matrix (ATS sample)</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Page</th>
+<th>Feature</th>
+<th>PRD?</th>
+<th>Status</th>
+<th>Extra?</th>
+<th>History?</th>
+<th>Client?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>CRUD</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>Pagination</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Jobs</td>
+<td>Bolna verify</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>Added Feb+</td>
+<td>Unknown</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Compliance share (ATS-CAND-008)</td>
+<td>Yes</td>
+<td>🟣</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Employees</td>
+<td>Click-to-call</td>
+<td>No</td>
+<td>🟢</td>
+<td>Yes</td>
+<td>Plivo</td>
+<td><strong>Yes</strong></td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Applications</td>
+<td>Bulk stage</td>
+<td>Yes</td>
+<td>🟡</td>
+<td>No</td>
+<td>Single + offer path</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>LiveKit video (COMM-VOICE)</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>Vendor swap</td>
+<td>Added</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Interviews</td>
+<td>Calendar sync</td>
+<td>Yes</td>
+<td>🔴</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>PDF offer</td>
+<td>Yes</td>
+<td>🟢</td>
+<td>No</td>
+<td>—</td>
+<td>No</td>
+</tr>
+<tr>
+<td>ATS</td>
+<td>Offers</td>
+<td>E-sign</td>
+<td>Yes</td>
+<td>🟡</td>
+<td>No</td>
+<td>Email fallback</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>25. PRD Coverage Scorecard</h2>
+<h3>ATS Module</h3>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>PRD IDs</th>
+<th>Full</th>
+<th>Partial</th>
+<th>Missing</th>
+<th>Different</th>
+<th>Extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jobs</td>
+<td>JOB-001–005</td>
+<td>5</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>4+</td>
+</tr>
+<tr>
+<td>Applications</td>
+<td>APP-001–005 (+AI-002 on page)</td>
+<td>1</td>
+<td>4</td>
+<td>0</td>
+<td>1</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Employees</td>
+<td>CAND-001–010</td>
+<td>3</td>
+<td>4</td>
+<td>2</td>
+<td>1</td>
+<td>6+</td>
+</tr>
+<tr>
+<td>Interviews</td>
+<td>INT-001–009</td>
+<td>4</td>
+<td>4</td>
+<td>1</td>
+<td>0</td>
+<td>2+</td>
+</tr>
+<tr>
+<td>Offers</td>
+<td>OFF-001–005</td>
+<td>2</td>
+<td>2</td>
+<td>1</td>
+<td>0</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Pre/Onboarding</td>
+<td>PRE-001–009</td>
+<td>1</td>
+<td>8</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Recruiters</td>
+<td>REC-001–006</td>
+<td>1</td>
+<td>5</td>
+<td>0</td>
+<td>0</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Analytics</td>
+<td>ANA-001–004</td>
+<td>2</td>
+<td>1</td>
+<td>1</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>AI (cross)</td>
+<td>AI-001–007</td>
+<td>0</td>
+<td>4</td>
+<td>2</td>
+<td>1</td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Note:</strong> Page scorecards count rows on that page (Applications includes cross-page <code>ATS-AI-002</code>). <strong>Authoritative ATS totals:</strong> §6C → <strong>19 🟢 / 29 🟡 / 2 ⚠️ / 2 🟣 / 8 🔴 = 60 IDs</strong>. <strong>All-modules:</strong> §6C roll-up table → <strong>51/155 strict (32.9%)</strong>, <strong>58.2% weighted</strong>. Math: ATS 19 + Comm 11 + Train 12 + PM 9 = 51 full.</p>
+<hr />
+<h2>26. Product Expansion Beyond PRD</h2>
+<p><strong>Net:</strong> Product is <strong>broader than PRD</strong> in ATS (external jobs, CRM, portal, telephony, HRMS overlays, public compliance profiles) but <strong>shallower</strong> in some enterprise items (e-sign, calendar, AI/ML depth).</p>
+<hr />
+<h2>27. Recommended PRD Updates</h2>
+<ol>
+<li>Rename Candidates → Employees; document 7-stage pipeline.</li>
+<li>Add External Jobs, Referral Leads, Share Candidate Form, candidate portal pages.</li>
+<li>Add Organization module.</li>
+<li>Document actual stack: Express (PRD-allowed) + MongoDB.</li>
+<li>Document compliance sharing as public profile page (<code>/public-employee/[id]</code>) rather than PDF/ZIP binder; note e-sign as phased/deferred.</li>
+<li>Document LiveKit interview flow and 5-criterion rubric.</li>
+<li>Defer Prisma/Postgres/Casbin; note Meilisearch was PRD scale option not baseline.</li>
+<li>Add Dialer and Plivo/Bolna integrations explicitly.</li>
+</ol>
+<hr />
+<h2>28. Evidence / Methodology</h2>
+<h3>Sources</h3>
+<ul>
+<li>PRD PDF (155 requirements)</li>
+<li><code>ATS_PRODUCT_PRD_AUDIT.md</code> (merged prior audit)</li>
+<li><code>uat.dharwin.frontend/shared/layouts-components/nav.tsx</code> — page inventory</li>
+<li><code>uat.dharwin.frontend/app/(components)/(contentlayout)/ats/**</code> — page components</li>
+<li><code>uat.dharwin.backend/src/routes/v1/**</code> — API surface</li>
+<li><code>uat.dharwin.backend/src/services/atsPipeline.js</code> — pipeline truth</li>
+<li>Git log frontend/backend (follow, name-status, deleted paths)</li>
+</ul>
+<h3>Status legend</h3>
+<ul>
+<li>🟢 Fully implemented</li>
+<li>🟡 Partially implemented</li>
+<li>🔴 Missing</li>
+<li>🟠 UI only</li>
+<li>🔵 Backend only</li>
+<li>🟣 Implemented differently</li>
+<li>⚫ Historically removed</li>
+</ul>
+<h3>Coverage formula</h3>
+<ul>
+<li><strong>Strict:</strong> count 🟢 only.</li>
+<li><strong>Weighted:</strong> 🟢=1.0, 🟡=0.5, ⚠️=0.75, 🟣=0.75, 🔴/🟠/🔵=0. Extra features excluded.</li>
+<li><strong>155 reqs:</strong> ATS 60 + Comm 38 + Train 29 + PM 28. Full per-row matrix: <code>ATS_PRODUCT_PRD_AUDIT.md</code> §5.</li>
+</ul>
+<h3>Quality checklist</h3>
+<ul>
+<li>[x] Entire PRD read (via prior audit + requirement IDs)</li>
+<li>[x] Actual routes inventoried from nav + app directory</li>
+<li>[x] Every major ATS page audited (A–E or condensed)</li>
+<li>[x] New pages identified with screens/tabs</li>
+<li>[x] Git history for major pages</li>
+<li>[x] Client claims evidence-based only</li>
+<li>[x] No code modified</li>
+</ul>
+<hr />
+<h2>Final Answers (Step 22)</h2>
+<h3>1. What did the original PRD ask us to build?</h3>
+<p>Four-module integrated suite (ATS, Communication, Training, Projects) with 155 requirements: full hiring lifecycle, compliance binders, e-signatures, calendar sync, kanban PM, training LMS, comms hub, AI features — PRD allows Express (p.19); shipped Express/MongoDB.</p>
+<h3>2. What did we actually build?</h3>
+<p>Express/Mongo/Next.js product with <strong>7 nav modules</strong>, richer ATS than PRD (external jobs, referral CRM, candidate portal, telephony), solid jobs/interviews/offers/analytics, partial comm/training/PM, missing enterprise compliance and AI depth.</p>
+<h3>3. Per PRD page — what was built?</h3>
+<p>See <strong>Section 6</strong> (page audits) and <strong>Section 23</strong> (master page matrix). Jobs/Recruiters strongest; e-sign and calendar sync weakest. Compliance sharing delivered via public employee profile page.</p>
+<h3>4. Missing PRD functionality?</h3>
+<p>Binder PDF/ZIP, true e-sign, calendar sync, <strong>bulk multi-select</strong> on Applications (single + offer/placement path exists), custom analytics builder, ML AI, SSO/MFA/DLP, PRD tech stack. <em>(Compliance package sharing via public profile — ATS-CAND-008.)</em></p>
+<h3>5. Partial PRD functionality?</h3>
+<p>Resume parse, training certs, PM hash review, interview calendar/rubric weighting, AI job fit, material-change logging (CAND-009/010).</p>
+<h3>6. Implemented differently?</h3>
+<p>7-stage pipeline, Employees naming, table not kanban applications, email PDF offers, split pre-boarding/onboarding, informational rubric vs weighted.</p>
+<h3>7. Entirely new pages?</h3>
+<p>External Jobs, Referral Leads, Share Candidate Form, candidate portal pages, Organization (5), Dialer, public portals, Help.</p>
+<h3>8. New page screens/tabs?</h3>
+<p>Documented in Section 6 and 6B (e.g. External Jobs: Search/Saved/Contacts).</p>
+<h3>9. Entirely new modules?</h3>
+<p>Organization, Referral CRM, External Jobs submodule, Dialer.</p>
+<h3>10. Beyond PRD functionality?</h3>
+<p>~72 items — Sections 8, 26, and consolidated list in 6B appendix.</p>
+<h3>11. Built then changed?</h3>
+<p>Section 19 — pagination, route merges, pipeline expansion, Bolna UI removal, rubric addition.</p>
+<h3>12. Removed?</h3>
+<p>Section 20 — job-applications page, combined boarding stub, Bolna settings UI.</p>
+<h3>13. Confirmed client requests?</h3>
+<p>Plivo migration (ec9ea71) only.</p>
+<h3>14. Likely client requests?</h3>
+<p>None evidenced in commit messages beyond Plivo.</p>
+<h3>15. Internal engineering changes?</h3>
+<p>Majority — core wave, pagination, route consolidation, lifecycle splits.</p>
+<h3>16. Unknown reasons?</h3>
+<p>Bolna settings UI removal, some CRM additions.</p>
+<h3>17. Outdated PRD areas?</h3>
+<p>Section 21 — stack, naming, pipeline, compliance, AI scope, rubric model.</p>
+<h3>18. What does current ATS contain?</h3>
+<p>Section 22 Current Product Map.</p>
+<hr />
+<p><em>End of ATS PRD / Product / Git Evolution Audit</em></p>
+
+</main>
+</body>
+</html>

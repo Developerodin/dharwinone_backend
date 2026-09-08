@@ -40,8 +40,8 @@ const userSchema = mongoose.Schema(
       trim: true,
       minlength: 8,
       validate(value) {
-        if (!value.match(/\d/) || !value.match(/[a-zA-Z]/)) {
-          throw new Error('Password must contain at least one letter and one number');
+        if (!value.match(/\d/) || !value.match(/[A-Z]/)) {
+          throw new Error('Password must contain at least one capital letter and one number');
         }
       },
       private: true, // used by the toJSON plugin
@@ -113,6 +113,8 @@ const userSchema = mongoose.Schema(
       supportTicketUpdatesInApp: { type: Boolean, default: true },
       placementUpdates: { type: Boolean, default: true },
       placementUpdatesInApp: { type: Boolean, default: true },
+      jobAlerts: { type: Boolean, default: true },
+      jobAlertsInApp: { type: Boolean, default: true },
       chatMessagesInApp: { type: Boolean, default: true },
       assignmentUpdatesInApp: { type: Boolean, default: true },
       projectUpdatesInApp: { type: Boolean, default: true },

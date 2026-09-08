@@ -16,6 +16,7 @@ import {
 import * as jobService from '../services/job.service.js';
 import Placement from '../models/placement.model.js';
 import { evaluateCompensationChange } from '../services/offerCompensationGate.js';
+import { jobTypeToOfferJobType } from '../constants/atsPipeline.js';
 import { enhanceOfferLetterRoles } from '../services/moduleOpenAI.service.js';
 
 // Forward authContext onto req.user so service-layer pipeline-perm bypass can read permissions.
@@ -101,6 +102,11 @@ const letterDefaults = catchAsync(async (req, res) => {
     if (derived.length) base.roleResponsibilities = derived;
     const jobDesc = typeof job?.jobDescription === 'string' ? job.jobDescription.trim() : '';
     if (jobDesc) base.positionOverviewHtml = jobDesc;
+    // The job the candidate applied to already says Contract / Internship / Freelance; without
+    // this the offer form always opened on Full time. A suggestion only — the offer, not the
+    // posting, is where terms are finally agreed, so nothing enforces the pair afterwards.
+    const suggested = jobTypeToOfferJobType(job?.jobType);
+    if (suggested) base.suggestedJobType = suggested;
   }
   res.send(base);
 });

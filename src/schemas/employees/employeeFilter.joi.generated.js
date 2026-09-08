@@ -8,6 +8,7 @@ import Joi from 'joi';
 const employeeFilterSchema = Joi.object().keys({
   employmentStatus: Joi.string().valid('current', 'resigned', 'all'),
   compensationType: Joi.string().valid('paid', 'unpaid'),
+  employmentType: Joi.string().valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'),
   search: Joi.string(),
   fullName: Joi.string(),
   email: Joi.string(),

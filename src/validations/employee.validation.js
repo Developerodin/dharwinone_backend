@@ -1,5 +1,6 @@
 import Joi from 'joi';
 import { objectId, password as passwordValidator } from './custom.validation.js';
+import { EMPLOYMENT_TYPES } from '../constants/atsPipeline.js';
 
 const document = Joi.object({
   type: Joi.string()
@@ -126,6 +127,10 @@ const singleCandidateSchema = Joi.object().keys({
   companyAssignedEmail: Joi.string().email().allow('', null),
   companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
   compensationType: Joi.string().valid('paid', 'unpaid').optional(),
+  employmentType: Joi.string()
+    .valid(...EMPLOYMENT_TYPES)
+    .allow(null, '')
+    .optional(),
 });
 
 const createCandidate = {
@@ -170,6 +175,10 @@ const listCandidatesQueryKeys = {
   skillMatchMode: Joi.string().valid('all', 'any').default('any'),
   employmentStatus: Joi.string().valid('current', 'resigned', 'all').allow(''),
   compensationType: Joi.string().valid('paid', 'unpaid').allow(''),
+  /** Employment category filter. Empty string means "no filter", matching the others here. */
+  employmentType: Joi.string()
+    .valid(...EMPLOYMENT_TYPES)
+    .allow(''),
   /** When true, each list row includes openSopCount (extra DB work per candidate). */
   includeOpenSopCount: Joi.string().valid('true', 'false', '1', '0').optional(),
   /** When true, only employees without an existing referrer (referral backfill picker). */
@@ -268,6 +277,14 @@ const updateCandidateBodyBase = {
   companyAssignedEmail: Joi.string().email().allow('', null),
   companyEmailProvider: Joi.string().valid('gmail', 'outlook', 'unknown', '').allow('', null),
   compensationType: Joi.string().valid('paid', 'unpaid').optional(),
+  /**
+   * No override flag alongside this one, unlike compensationType. There is no provenance field
+   * to corrupt, so restating the current value on a whole-body PATCH is harmless.
+   */
+  employmentType: Joi.string()
+    .valid(...EMPLOYMENT_TYPES)
+    .allow(null, '')
+    .optional(),
   /**
    * Explicit intent to change an offer-derived compensation snapshot. Not stored — the service
    * strips it. Required because the employee form PATCHes its whole body on every save, so

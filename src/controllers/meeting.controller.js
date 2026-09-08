@@ -4,6 +4,10 @@ import catchAsync from '../utils/catchAsync.js';
 import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
 import recordingService from '../services/recording.service.js';
+import { writeAtsAudit } from '../services/atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+
+const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 const create = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
@@ -35,33 +39,73 @@ const get = catchAsync(async (req, res) => {
 const update = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
   const result = await meetingService.updateMeetingById(req.params.id, req.body, userId, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_UPDATE,
+      entityType: EntityTypes.MEETING,
+      entityId: String(req.params.id),
+      metadata: { fieldsUpdated: Object.keys(req.body || {}) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.send(result);
 });
 
 const remove = catchAsync(async (req, res) => {
   await meetingService.deleteMeetingById(req.params.id, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_DELETE,
+      entityType: EntityTypes.MEETING,
+      entityId: String(req.params.id),
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
 const resendInvitations = catchAsync(async (req, res) => {
   const result = await meetingService.resendMeetingInvitations(req.params.id, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_INVITATION_RESEND,
+      entityType: EntityTypes.MEETING,
+      entityId: String(req.params.id),
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.send(result);
 });
 
 const getRecordings = catchAsync(async (req, res) => {
-  // Scope check: only return recordings if the caller may see the parent meeting
-  // (getMeetingById enforces tenant/ownership scope and returns null otherwise).
   const meeting = await meetingService.getMeetingById(req.params.id, req.user);
   if (!meeting) {
     return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
   }
   const list = await recordingService.listByMeetingId(req.params.id);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_RECORDING_VIEW,
+      entityType: EntityTypes.MEETING,
+      entityId: String(req.params.id),
+      metadata: { recordingCount: list?.length ?? 0 },
+    },
+    req
+  );
   res.send(list);
 });
 
 const endMeetingByRoomPublic = catchAsync(async (req, res) => {
   const { roomName } = req.body;
-  // Host identity from the authenticated session, not a spoofable body email. Route requires auth().
   const hostEmail = req.user?.email;
   if (!hostEmail) {
     return res.status(httpStatus.UNAUTHORIZED).send({ message: 'Authentication required for host actions' });
@@ -73,6 +117,17 @@ const endMeetingByRoomPublic = catchAsync(async (req, res) => {
 const moveToPreboarding = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
   const result = await meetingService.moveMeetingToPreboarding(req.params.id, userId, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.INTERVIEW_MOVE_TO_PREBOARDING,
+      entityType: EntityTypes.MEETING,
+      entityId: String(req.params.id),
+      metadata: {},
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.send(result);
 });
 

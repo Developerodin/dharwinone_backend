@@ -20,6 +20,7 @@ export const EMPLOYEE_RECORD_ALLOWLIST = new Set([
   'resignationDate', // mapEntityQueryEmployeeRecord legacy resign field
   'employmentState',
   'compensationType',
+  'employmentType',
   'department',
   'designation',
   'position', // mapEntityQueryEmployeeRecord department fallback

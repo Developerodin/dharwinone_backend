@@ -191,6 +191,10 @@ const envVarsSchema = Joi.object()
 
     /** When > 0, MongoDB TTL index deletes ActivityLog documents `expireAfterSeconds` after createdAt (monitor runs ~60s). 0 = disabled. */
     ACTIVITY_LOG_TTL_SECONDS: Joi.number().integer().min(0).optional().default(0),
+    /** When true, persistAtsAudit also writes RecruiterActivityLog legacy mirror rows. */
+    ATS_AUDIT_DUAL_WRITE_RECRUITER: Joi.boolean().optional().default(false),
+    /** When true, persistAtsAudit also writes Placement AuditEvent legacy mirror rows. */
+    ATS_AUDIT_DUAL_WRITE_PLACEMENT: Joi.boolean().optional().default(false),
 
     /** Candidate scheduler (`employee.scheduler.js`): resign auto-deactivate, joining reminders, role promotion, offer expiry. Default 5 min. */
     CANDIDATE_SCHEDULER_INTERVAL_MINUTES: Joi.number().integer().min(1).max(1440).optional().default(1),
@@ -608,6 +612,10 @@ const config = {
   notifySopReminders: process.env.NOTIFY_SOP_REMINDERS !== '0' && process.env.NOTIFY_SOP_REMINDERS !== 'false',
   activityLog: {
     ttlSeconds: envVars.ACTIVITY_LOG_TTL_SECONDS ?? 0,
+  },
+  atsAudit: {
+    dualWriteRecruiter: Boolean(envVars.ATS_AUDIT_DUAL_WRITE_RECRUITER),
+    dualWritePlacement: Boolean(envVars.ATS_AUDIT_DUAL_WRITE_PLACEMENT),
   },
   designatedSuperadminEmails,
   isDesignatedSuperadminEmail,

@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { objectId } from './custom.validation.js';
-import { OFFER_STATUSES } from '../constants/atsPipeline.js';
+import { OFFER_STATUSES, OFFER_JOB_TYPE_VALUES } from '../constants/atsPipeline.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
 
@@ -13,7 +13,8 @@ const ctcBreakdown = Joi.object({
   currency: Joi.string().optional().trim().default('USD'),
 });
 
-const jobTypeLetter = Joi.string().valid('FT_40', 'PT_25', 'INTERN_UNPAID');
+/** Widening this means adding to JOB_TYPES in constants/atsPipeline.js — not editing here. */
+const jobTypeLetter = Joi.string().valid(...OFFER_JOB_TYPE_VALUES);
 
 const supervisor = Joi.object({
   firstName: Joi.string().trim().allow(''),

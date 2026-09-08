@@ -17,6 +17,7 @@
       "properties": {
         "employmentStatus": { "enum": ["current", "resigned", "all"] },
         "compensationType": { "enum": ["paid", "unpaid"] },
+        "employmentType": { "enum": ["Full-time", "Part-time", "Contract", "Temporary", "Internship", "Freelance"], "description": "Employment category from the accepted offer; orthogonal to compensationType" },
         "search": { "type": "string" },
         "fullName": { "type": "string" },
         "email": { "type": "string" },

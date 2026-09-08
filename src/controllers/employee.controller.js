@@ -84,8 +84,11 @@ import {
   listSopOpenOverviewForManage,
 } from '../services/sopChecklist.service.js';
 import * as activityLogService from '../services/activityLog.service.js';
+import { persistAtsAudit, writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { buildEmployeeUpdateAuditEnvelope, describeCompensationChange } from '../utils/auditMetadata.helper.js';
+
+const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 /** PR2: legacy candidates.manage OR employees.manage (employee record CRUD). */
 export const canManageCandidates = (req) => {
@@ -249,6 +252,7 @@ const list = catchAsync(async (req, res) => {
     'skillMatchMode',
     'includeOpenSopCount',
     'compensationType',
+    'employmentType',
     'withoutReferrer',
     'ownerUserRole',
   ]);
@@ -355,6 +359,17 @@ const postSalesAgentAssignHandler = catchAsync(async (req, res) => {
     { candidateId: req.params.candidateId, ...req.body },
     { actor: req.user }
   );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.REFERRAL_SALES_AGENT_ASSIGN,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(req.params.candidateId),
+      metadata: { salesAgentUserId: req.body?.salesAgentUserId },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
   res.status(httpStatus.CREATED).json({ attribution, lead });
 });
@@ -364,6 +379,20 @@ const patchSalesAgentChangeHandler = catchAsync(async (req, res) => {
     { candidateId: req.params.candidateId, ...req.body },
     { actor: req.user }
   );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.REFERRAL_SALES_AGENT_CHANGE,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(req.params.candidateId),
+      metadata: {
+        salesAgentUserId: req.body?.salesAgentUserId,
+        previousSalesAgentUserId: previousAttribution?.salesAgentUserId,
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
   res.json({ attribution, previousAttribution, lead });
 });
@@ -372,6 +401,17 @@ const deleteSalesAgentHandler = catchAsync(async (req, res) => {
   const { revokedAttribution } = await revokeSalesAgent(
     { candidateId: req.params.candidateId, ...req.body },
     { actor: req.user }
+  );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.REFERRAL_SALES_AGENT_REVOKE,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(req.params.candidateId),
+      metadata: { reason: req.body?.reason },
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   const lead = await getReferralLeadById(req.params.candidateId, { tenantId: req.user.tenantId });
   res.json({ revokedAttribution, lead });
@@ -393,6 +433,17 @@ const patchAttributionJobHandler = catchAsync(async (req, res) => {
 
 const postReferralBackfillHandler = catchAsync(async (req, res) => {
   const { attribution, employeeId } = await backfillReferralLead(req.body, { actor: req.user });
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.REFERRAL_BACKFILL,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(employeeId),
+      metadata: { batch: { count: 1 } },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   await syncReferralPipelineStatusForCandidate(employeeId);
   const lead = await getReferralLeadById(employeeId, { tenantId: req.user.tenantId });
   res.status(httpStatus.CREATED).json({ attribution, lead });
@@ -478,7 +529,7 @@ const update = catchAsync(async (req, res) => {
     EMPLOYEE: EntityTypes.EMPLOYEE,
     CANDIDATE: EntityTypes.CANDIDATE,
   });
-  await activityLogService.persistActivityLogFailSoft(actor, auditEnvelope, req);
+  await persistAtsAudit(actor, auditEnvelope, req, { editContext: { staffEdit: true } });
 
   // Audit every compensation movement — value or provenance, whoever made it. The previous
   // condition also required an admin actor, a locked record and a changed VALUE, so a bulk form
@@ -486,17 +537,20 @@ const update = catchAsync(async (req, res) => {
   // real revert went unnoticed until a support ticket.
   const compensationChange = describeCompensationChange(beforeCandidate, candidate);
   if (compensationChange) {
-    await activityLogService.createActivityLog(
+    await writeAtsAudit(
       actor,
-      ActivityActions.CANDIDATE_COMPENSATION_OVERRIDE,
-      EntityTypes.EMPLOYEE,
-      String(cid),
       {
-        ...compensationChange,
-        locked: compWasLocked,
-        deliberate: req.body?.compensationOverride === true,
+        action: ActivityActions.CANDIDATE_COMPENSATION_OVERRIDE,
+        entityType: EntityTypes.EMPLOYEE,
+        entityId: String(cid),
+        metadata: {
+          ...compensationChange,
+          locked: compWasLocked,
+          deliberate: req.body?.compensationOverride === true,
+        },
       },
-      req
+      req,
+      { editContext: { staffEdit: true } }
     );
   }
   res.send(candidate);
@@ -537,14 +591,14 @@ const updateMyCandidate = catchAsync(async (req, res) => {
   }
   const updated = await updateCandidateById(candidate._id || candidate.id, req.body, req.user);
   const cid = updated?._id ?? updated?.id ?? candidate._id ?? candidate.id;
-  await activityLogService.createActivityLog(
-    String(req.user.id || req.user._id),
-    ActivityActions.CANDIDATE_UPDATE,
-    EntityTypes.CANDIDATE,
-    String(cid),
-    { selfService: true },
-    req
-  );
+  const actor = auditActorId(req);
+  const auditEnvelope = buildEmployeeUpdateAuditEnvelope(candidate, updated, req.body, cid, {
+    EMPLOYEE_DEPARTMENT_ASSIGN: ActivityActions.EMPLOYEE_DEPARTMENT_ASSIGN,
+    CANDIDATE_UPDATE: ActivityActions.CANDIDATE_UPDATE,
+    EMPLOYEE: EntityTypes.EMPLOYEE,
+    CANDIDATE: EntityTypes.CANDIDATE,
+  });
+  await persistAtsAudit(actor, auditEnvelope, req, { editContext: { selfService: true } });
   res.send(updated);
 });
 
@@ -615,6 +669,17 @@ const exportProfile = catchAsync(async (req, res) => {
     ...candidate.socialLinks.map((s, i) => `  ${i + 1}. ${s.platform}: ${s.url}`),
   ].filter(Boolean);
   await sendEmail(email, subject, lines.join('\n'));
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.CANDIDATE_EXPORT,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(req.params.candidateId),
+      metadata: { export: { format: 'email', rowCount: 1 }, fullName: candidate.fullName },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.NO_CONTENT).send();
 });
 
@@ -636,6 +701,7 @@ const exportAll = catchAsync(async (req, res) => {
     'agentIds',
     'employmentStatus',
     'compensationType',
+    'employmentType',
     'skills',
     'skillLevel',
     'experienceLevel',
@@ -660,6 +726,24 @@ const exportAll = catchAsync(async (req, res) => {
   const exportData = await exportAllCandidates(listFilter, queryOptions);
 
   const wantsCsv = String(req.query.format || '').toLowerCase() === 'csv';
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.CANDIDATE_EXPORT,
+      entityType: EntityTypes.ORG_STRUCTURE,
+      entityId: 'bulk',
+      metadata: {
+        export: {
+          format: wantsCsv ? 'csv' : 'xlsx',
+          rowCount: exportData.totalCandidates,
+          deliveryMethod: email ? 'email' : 'download',
+        },
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
+
   const dateStamp = new Date().toISOString().split('T')[0];
 
   if (email) {
@@ -719,6 +803,17 @@ export { exportProfile, exportAll };
 const addSalarySlip = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canManageCandidates(req);
   const candidate = await addSalarySlipToCandidate(req.params.candidateId, req.body, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_SALARY_SLIP_ADD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { period: req.body?.period },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send(candidate);
 });
 
@@ -730,6 +825,17 @@ const updateSalarySlip = catchAsync(async (req, res) => {
     req.body,
     req.user
   );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_SALARY_SLIP_UPDATE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { salarySlipIndex: req.params.salarySlipIndex },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send(candidate);
 });
 
@@ -739,6 +845,17 @@ const deleteSalarySlip = catchAsync(async (req, res) => {
     req.params.candidateId,
     req.params.salarySlipIndex,
     req.user
+  );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_SALARY_SLIP_DELETE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { salarySlipIndex: req.params.salarySlipIndex },
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   res.status(httpStatus.OK).send(candidate);
 });
@@ -753,6 +870,17 @@ const verifyDocumentStatus = catchAsync(async (req, res) => {
     req.params.documentIndex,
     req.body,
     req.user
+  );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_VERIFY,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { documentIndex: req.params.documentIndex, status: req.body?.status },
+    },
+    req,
+    { editContext: { staffEdit: true } }
   );
   res.status(httpStatus.OK).send({
     success: true,
@@ -787,6 +915,17 @@ const downloadDocument = catchAsync(async (req, res) => {
   req.user.canManageCandidates = userCanViewPreBoardingDocs(authContext?.permissions);
 
   const documentData = await getDocumentDownloadUrl(candidateId, parseInt(documentIndex, 10), req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_DOWNLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { documentIndex, fileName: documentData.fileName },
+    },
+    req
+  );
   
   // Check if client wants JSON response (for programmatic access)
   const acceptsJson = req.headers.accept && req.headers.accept.includes('application/json');
@@ -817,6 +956,16 @@ const downloadSalarySlip = catchAsync(async (req, res) => {
     || false;
 
   const data = await getSalarySlipDownloadUrl(candidateId, parseInt(salarySlipIndex, 10), req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_SALARY_SLIP_DOWNLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { salarySlipIndex, fileName: data.fileName },
+    },
+    req
+  );
   const acceptsJson = req.headers.accept && req.headers.accept.includes('application/json');
 
   if (acceptsJson) {
@@ -830,6 +979,17 @@ const downloadSalarySlip = catchAsync(async (req, res) => {
 const requestDocument = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canRequestPreBoardingDocs(req);
   const created = await requestDocumentFromCandidate(req.params.candidateId, req.body, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_REQUEST,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { documentType: req.body?.type },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.CREATED).send({ success: true, data: created });
 });
 
@@ -848,12 +1008,34 @@ const getMyDocRequests = catchAsync(async (req, res) => {
 const fulfillDocRequest = catchAsync(async (req, res) => {
   const userId = req.user._id || req.user.id;
   const result = await fulfillDocumentRequest(userId, req.params.requestIndex, req.file);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(result?.candidateId || userId),
+      metadata: { selfService: true, requestIndex: req.params.requestIndex },
+    },
+    req,
+    { editContext: { selfService: true } }
+  );
   res.status(httpStatus.OK).send({ success: true, data: result });
 });
 
 const replaceMyRejectedDoc = catchAsync(async (req, res) => {
   const userId = req.user._id || req.user.id;
   const replaced = await replaceMyRejectedDocument(userId, req.params.documentIndex, req.file);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(replaced?.candidateId || userId),
+      metadata: { documentIndex: req.params.documentIndex, replaced: true },
+    },
+    req,
+    { editContext: { selfService: true } }
+  );
   res.status(httpStatus.OK).send({ success: true, data: replaced });
 });
 
@@ -865,12 +1047,34 @@ const adminUploadDocument = catchAsync(async (req, res) => {
     { type: req.body?.type, label: req.body?.label },
     req.user
   );
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { type: req.body?.type, label: req.body?.label },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.CREATED).send({ success: true, data: created });
 });
 
 const deleteDocumentController = catchAsync(async (req, res) => {
   req.user.canManageCandidates = canDeletePreBoardingDocs(req);
   const result = await deleteCandidateDocument(req.params.candidateId, req.params.documentIndex, req.user);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_DELETE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: { documentIndex: req.params.documentIndex },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send({ success: true, data: result });
 });
 
@@ -920,6 +1124,18 @@ const shareProfile = catchAsync(async (req, res) => {
     message: `${candidateData.candidateName} was shared by ${req.user.name}.`,
     link: shareResult.publicUrl,
   }).catch(() => {});
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.CANDIDATE_PROFILE_SHARE,
+      entityType: EntityTypes.CANDIDATE,
+      entityId: String(candidateId),
+      metadata: { fullName: candidate.fullName, withDoc: Boolean(withDoc), recipientCount: 1 },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
 
   res.status(httpStatus.OK).send({
     success: true,
@@ -1639,6 +1855,17 @@ const addNote = catchAsync(async (req, res) => {
   const { note } = req.body;
   const recruiterId = req.user._id || req.user.id;
   const candidate = await addRecruiterNote(candidateId, note, recruiterId);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_NOTE_ADD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { noteLength: note?.length },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   if (await userHasRecruiterRole(req.user)) {
     await logActivity(recruiterId, 'note_added', {
       candidateId,
@@ -1655,6 +1882,17 @@ const addFeedback = catchAsync(async (req, res) => {
   const { feedback, rating } = req.body;
   const recruiterId = req.user._id || req.user.id;
   const candidate = await addRecruiterFeedback(candidateId, feedback, rating, recruiterId);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_FEEDBACK_ADD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { rating },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   if (await userHasRecruiterRole(req.user)) {
     await logActivity(recruiterId, 'feedback_added', {
       candidateId,
@@ -1674,6 +1912,17 @@ const assignRecruiter = catchAsync(async (req, res) => {
   const { recruiterId } = req.body;
   const assignedBy = req.user._id || req.user.id;
   const candidate = await assignRecruiterToCandidate(candidateId, recruiterId);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_RECRUITER_ASSIGN,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { assignedRecruiterId: String(recruiterId) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   if (await userHasRecruiterRole(req.user)) {
     await logActivity(assignedBy, 'candidate_screened', {
       candidateId,
@@ -1718,6 +1967,17 @@ const assignAgent = catchAsync(async (req, res) => {
   const { candidateId } = req.params;
   const { agentId } = req.body;
   const candidate = await assignAgentToCandidate(candidateId, agentId);
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_AGENT_ASSIGN,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { agentId: String(agentId) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   res.status(httpStatus.OK).send(candidate);
 });
 
@@ -1794,6 +2054,18 @@ const updateJoining = catchAsync(async (req, res) => {
   const { joiningDate } = req.body;
 
   const candidate = await updateJoiningDate(candidateId, joiningDate, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_JOINING_DATE_UPDATE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { joiningDate },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   
   res.status(httpStatus.OK).send({
     success: true,
@@ -1812,6 +2084,18 @@ const updateResign = catchAsync(async (req, res) => {
   const { resignDate } = req.body;
 
   const candidate = await updateResignDate(candidateId, resignDate, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_RESIGN_DATE_UPDATE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: { resignDate: resignDate || null },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   
   // Determine message based on whether resign date was cleared or set
   let message = 'Resign date updated successfully.';
@@ -1845,6 +2129,18 @@ const updateWeekOff = catchAsync(async (req, res) => {
   const { candidateIds, weekOff } = req.body;
 
   const result = await updateWeekOffForCandidates(candidateIds, weekOff, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_WEEK_OFF_UPDATE,
+      entityType: EntityTypes.ORG_STRUCTURE,
+      entityId: 'bulk',
+      metadata: { batch: { count: candidateIds?.length || 0 } },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   
   res.status(httpStatus.OK).send(result);
 });
@@ -1871,6 +2167,18 @@ const assignShift = catchAsync(async (req, res) => {
   const { candidateIds, shiftId } = req.body;
 
   const result = await assignShiftToCandidates(candidateIds, shiftId, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_SHIFT_ASSIGN,
+      entityType: EntityTypes.ORG_STRUCTURE,
+      entityId: 'bulk',
+      metadata: { batch: { count: candidateIds?.length || 0 }, shiftId: String(shiftId) },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
   
   res.status(httpStatus.OK).send(result);
 });
@@ -1900,6 +2208,23 @@ const importExcel = catchAsync(async (req, res) => {
     logger.debug('Starting import...');
     const result = await importCandidatesFromExcel(req.file.buffer, createdBy);
     logger.debug('Import result:', result.summary);
+
+    await writeAtsAudit(
+      auditActorId(req),
+      {
+        action: ActivityActions.CANDIDATE_IMPORT,
+        entityType: EntityTypes.ORG_STRUCTURE,
+        entityId: 'bulk',
+        metadata: {
+          batch: {
+            successful: result.summary?.successful ?? 0,
+            failed: result.summary?.failed ?? 0,
+          },
+        },
+      },
+      req,
+      { editContext: { staffEdit: true } }
+    );
     
     if (result.summary.failed === 0) {
       res.status(httpStatus.CREATED).send({

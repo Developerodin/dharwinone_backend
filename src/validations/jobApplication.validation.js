@@ -4,6 +4,27 @@ import { APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
 
+/**
+ * Multi-status list, e.g. "Applied,Screening". Single values still validate; service
+ * splits via parseStringList in applicantQuery.service.js.
+ */
+const commaSeparatedApplicationStatuses = Joi.string().custom((value, helpers) => {
+  const parts = String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (!STATUS_VALUES.includes(part)) return helpers.error('any.invalid');
+  }
+  return value;
+}, 'comma-separated application statuses');
+
+const statusListQuery = Joi.alternatives().try(
+  Joi.array().items(Joi.string().valid(...STATUS_VALUES)),
+  Joi.string().valid(...STATUS_VALUES),
+  commaSeparatedApplicationStatuses
+);
+
 const createJobApplication = {
   body: Joi.object()
     .keys({
@@ -58,9 +79,8 @@ const getJobApplications = {
     jobId: Joi.string().custom(objectId).optional(),
     candidateId: Joi.string().custom(objectId).optional(),
     recruiterId: Joi.string().custom(objectId).optional(),
-    status: Joi.string()
-      .valid(...STATUS_VALUES)
-      .optional(),
+    status: statusListQuery.optional(),
+    statuses: statusListQuery.optional(),
     q: Joi.string().trim().allow('').optional(),
     department: Joi.string().trim().allow('').optional(),
     dateFrom: Joi.date().iso().optional(),

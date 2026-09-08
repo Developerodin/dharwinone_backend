@@ -10,6 +10,7 @@ import Token from '../models/token.model.js';
 import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
 import { syncJoiningDateFromAcceptedOfferToPlacementAndEmployee } from './offer.service.js';
+import { EMPLOYMENT_TYPES } from '../constants/atsPipeline.js';
 import { createUser, getUserByEmail, updateUserById, getUserById } from './user.service.js';
 import { generateVerifyEmailToken } from './token.service.js';
 import { sendVerificationEmail } from './email.service.js';
@@ -822,6 +823,12 @@ const buildEmployeeListMongoFilter = async (filterInput) => {
   const baseMongoFilterForCompensation = { ...mongoFilter };
   if (filter.compensationType === 'paid' || filter.compensationType === 'unpaid') {
     mongoFilter.compensationType = filter.compensationType;
+  }
+  // Applied after baseMongoFilterForCompensation is captured, like compensationType above: the
+  // paid/unpaid breakdown counts stay relative to the set before either is narrowed.
+  // Membership-checked so an unrecognised query value cannot reach the mongo filter.
+  if (EMPLOYMENT_TYPES.includes(filter.employmentType)) {
+    mongoFilter.employmentType = filter.employmentType;
   }
 
   return { mongoFilter, baseMongoFilterForCompensation, filter };
