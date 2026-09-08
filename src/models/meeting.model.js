@@ -3,6 +3,11 @@ import crypto from 'crypto';
 import toJSON from './plugins/toJSON.plugin.js';
 import paginate from './plugins/paginate.plugin.js';
 import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
+import {
+  RUBRIC_CRITERION_IDS,
+  RUBRIC_RATING_MIN,
+  RUBRIC_RATING_MAX,
+} from '../constants/interviewRubric.js';
 
 const meetingSchema = mongoose.Schema(
   {
@@ -167,6 +172,29 @@ const meetingSchema = mongoose.Schema(
       type: String,
       enum: INTERVIEW_RESULTS,
       default: 'pending',
+    },
+    /**
+     * Interview rubric scores (PRD 5.4). Fixed criteria, equal weight, informational only —
+     * nothing here gates or derives `interviewResult`.
+     *
+     * One score set per interview: whoever saves last owns it, and `scoredBy`/`scoredAt`
+     * record that authorship for later readers. Partial scoring is allowed — a criterion the
+     * scorer skipped is simply absent from `ratings`, it is not stored as 0.
+     *
+     * ponytail: no per-interviewer panels. Add a `scores: [{ user, ratings }]` array if
+     * independent panel scoring is ever needed.
+     */
+    interviewScorecard: {
+      ratings: [
+        {
+          _id: false,
+          criterion: { type: String, enum: RUBRIC_CRITERION_IDS, required: true },
+          rating: { type: Number, min: RUBRIC_RATING_MIN, max: RUBRIC_RATING_MAX, required: true },
+        },
+      ],
+      comment: { type: String, default: '', trim: true },
+      scoredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      scoredAt: { type: Date, default: null },
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

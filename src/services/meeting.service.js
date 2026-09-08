@@ -654,7 +654,9 @@ const queryMeetings = async (filter, options, currentUser = null) => {
   }
   const result = await Meeting.paginate(scopedFilter, {
     ...options,
-    populate: 'createdBy',
+    // Array form, not the comma string: the paginate plugin splits a string on '.' into a nested
+    // populate, which would try to populate `interviewScorecard` itself (not a ref) and throw.
+    populate: ['createdBy', { path: 'interviewScorecard.scoredBy', select: 'name email' }],
     sort: options.sortBy || '-createdAt',
   });
   result.results = (result.results || []).map((m) => {
@@ -674,7 +676,9 @@ const getMeetingById = async (id, currentUser = null) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) return null;
   await assertMeetingInScope(meeting, currentUser);
-  const populated = await Meeting.findById(meeting._id).populate('createdBy');
+  const populated = await Meeting.findById(meeting._id)
+    .populate('createdBy')
+    .populate({ path: 'interviewScorecard.scoredBy', select: 'name email' });
   if (!populated) return null;
   const doc = populated.toJSON();
   doc.publicMeetingUrl = getPublicMeetingUrl(populated.meetingId);
@@ -965,6 +969,16 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
     safeBody.durationMinutes = dur;
   } else if ('durationMinutes' in safeBody) {
     delete safeBody.durationMinutes;
+  }
+  // Rubric authorship is server-owned: a client can send ratings/comment, never who scored or when.
+  // Stamped on every scorecard write so a later reader sees who owns the score set currently stored.
+  if (safeBody.interviewScorecard) {
+    safeBody.interviewScorecard = {
+      ratings: safeBody.interviewScorecard.ratings || [],
+      comment: safeBody.interviewScorecard.comment || '',
+      scoredBy: userId || meeting.createdBy || null,
+      scoredAt: new Date(),
+    };
   }
   Object.assign(meeting, safeBody);
   await meeting.save();

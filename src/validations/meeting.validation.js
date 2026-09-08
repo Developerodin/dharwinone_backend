@@ -2,6 +2,28 @@ import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 import { normalizeTimezone, isValidTimezone } from '../utils/timezone.js';
 import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
+import {
+  RUBRIC_CRITERION_IDS,
+  RUBRIC_RATING_MIN,
+  RUBRIC_RATING_MAX,
+} from '../constants/interviewRubric.js';
+
+// Interview rubric (PRD 5.4). Clients send ratings + comment only; `scoredBy`/`scoredAt`
+// are stamped server-side in meeting.service.js and are rejected here if a client sends them.
+const interviewScorecardSchema = Joi.object({
+  ratings: Joi.array()
+    .items(
+      Joi.object({
+        criterion: Joi.string()
+          .valid(...RUBRIC_CRITERION_IDS)
+          .required(),
+        rating: Joi.number().integer().min(RUBRIC_RATING_MIN).max(RUBRIC_RATING_MAX).required(),
+      })
+    )
+    .max(RUBRIC_CRITERION_IDS.length)
+    .unique('criterion'),
+  comment: Joi.string().allow('', null).trim().max(2000),
+});
 
 const hostSchema = Joi.object({
   nameOrRole: Joi.string().allow('', null).trim(),
@@ -197,6 +219,7 @@ const updateMeeting = {
       notes: Joi.string().allow('', null).trim(),
       status: Joi.string().valid(...INTERVIEW_STATUSES),
       interviewResult: Joi.string().valid(...INTERVIEW_RESULTS),
+      interviewScorecard: interviewScorecardSchema,
     })
     .min(1),
 };
