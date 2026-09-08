@@ -34,7 +34,11 @@ import {
 
 const REMINDER_MAX_ATTEMPTS = 3;
 const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
-const reminderWindowEndMin = () => Number(process.env.REMINDER_WINDOW_END_MIN) || 20;
+// Ten minutes wide against a five-minute scheduler tick, so a meeting is eligible for two
+// passes. At the old five-minute width a meeting was eligible for exactly one, which made
+// the retry lease and REMINDER_MAX_ATTEMPTS unreachable and left a permanently unreminded
+// band whenever a restart landed more than one tick after the previous pass.
+const reminderWindowEndMin = () => Number(process.env.REMINDER_WINDOW_END_MIN) || 25;
 const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 600000;
 
 /** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
@@ -980,7 +984,27 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
       scoredAt: new Date(),
     };
   }
+  const previousScheduledAt = meeting.scheduledAt;
   Object.assign(meeting, safeBody);
+  // A moved meeting needs a fresh reminder. Without this the old T-15 already fired for a
+  // time that no longer exists, and the new time is never reminded at all, because
+  // reminderSentAt is the only thing the scheduler checks.
+  const movedTo = meeting.scheduledAt;
+  if (
+    previousScheduledAt &&
+    movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime()
+  ) {
+    meeting.reminderSentAt = null;
+    meeting.reminderRetry = {
+      attempts: 0,
+      claimedAt: null,
+      lastError: null,
+      lastErrorAt: null,
+      lastErrorCategory: null,
+      failedAt: null,
+    };
+  }
   await meeting.save();
 
   // Email ONLY the newly-added invitees/participants (decision: no re-spam on edit).

@@ -926,31 +926,45 @@ const sendMeetingInvitationEmail = async (to, payload) => {
   );
 };
 
-const buildMeetingReminderEmail = ({ title, scheduledAt, timezone, publicMeetingUrl, inviteeName }) => {
-  const subject = `Reminder: ${title || 'Interview'} starts soon`;
+/**
+ * @param {Object} payload
+ * @param {'interview'|'meeting'} [payload.kindLabel] - noun used in the copy. The exact lead
+ *   time is deliberately not stated: the scheduler window spans two ticks, so "in about 15
+ *   minutes" was wrong for anyone reminded on the earlier pass.
+ */
+const buildMeetingReminderEmail = ({
+  title,
+  scheduledAt,
+  timezone,
+  publicMeetingUrl,
+  inviteeName,
+  kindLabel = 'interview',
+}) => {
+  const noun = kindLabel === 'meeting' ? 'Meeting' : 'Interview';
+  const subject = `Reminder: ${title || noun} starts soon`;
   const scheduled = formatDateTime(scheduledAt, timezone);
-  const introLines = [`Your interview "${title || 'Interview'}" is starting in about 15 minutes.`];
+  const introLines = [`Your ${kindLabel} "${title || noun}" is starting shortly.`];
   const detailRows = [
-    { label: 'Meeting', value: title || 'Interview' },
+    { label: 'Meeting', value: title || noun },
     { label: 'Scheduled time', value: scheduled },
     { label: 'Timezone', value: timezone || 'UTC' },
   ];
-  const primaryAction = { label: 'Join interview', href: publicMeetingUrl };
+  const primaryAction = { label: `Join ${kindLabel}`, href: publicMeetingUrl };
   const text = buildPlainTextEmail({
-    title: 'Interview reminder',
+    title: `${noun} reminder`,
     greeting: inviteeName || 'there',
     introLines,
     detailRows,
     primaryAction,
   });
   const html = buildEmailHTML({
-    badgeText: 'Interview reminder',
-    title: title || 'Interview reminder',
+    badgeText: `${noun} reminder`,
+    title: title || `${noun} reminder`,
     greeting: inviteeName || 'there',
     introLines,
     detailRows,
     primaryAction,
-    preheader: `Your interview starts soon — ${scheduled}`,
+    preheader: `Your ${kindLabel} starts soon — ${scheduled}`,
   });
   return { subject, text, html };
 };
