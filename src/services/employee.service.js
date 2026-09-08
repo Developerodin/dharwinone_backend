@@ -3789,9 +3789,18 @@ async function matchJobsForCandidate(candidateId, { limit = 10, minScore = 0 } =
 
   const employeeSkillMap = new Map(skills.map((s) => [String(s.name).toLowerCase(), s]));
 
-  const jobs = await Job.find({ status: 'Active' })
-    .select('title organisation location jobType skillRequirements skillTags experienceLevel')
-    .lean();
+  // ponytail: score at most SCAN_CEILING active jobs with skill data; raise if orgs exceed this.
+  const SCAN_CEILING = 500;
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+  const safeMinScore = Math.min(Math.max(Number(minScore) || 0, 0), 100);
+
+  const jobs = await Job.find({
+    status: 'Active',
+    $or: [{ 'skillRequirements.0': { $exists: true } }, { 'skillTags.0': { $exists: true } }],
+  })
+    .select('title organisation.name location jobType skillRequirements skillTags experienceLevel')
+    .lean()
+    .limit(SCAN_CEILING);
 
   const scored = [];
   for (const job of jobs) {
@@ -3820,7 +3829,7 @@ async function matchJobsForCandidate(candidateId, { limit = 10, minScore = 0 } =
     const requiredMatched = matchedSkills.filter((s) => s.required && s.meetsLevel).length;
     const fitScore = requiredTotal > 0 ? Math.round((requiredMatched / requiredTotal) * 100) : 100;
 
-    if (fitScore < minScore) continue;
+    if (fitScore < safeMinScore) continue;
 
     let fitLabel = 'Poor fit';
     if (fitScore >= 80) fitLabel = 'Strong fit';
@@ -3842,6 +3851,6 @@ async function matchJobsForCandidate(candidateId, { limit = 10, minScore = 0 } =
   }
 
   scored.sort((a, b) => b.fitScore - a.fitScore);
-  return { matches: scored.slice(0, limit), candidateSkillCount: skills.length, totalJobsScored: scored.length };
+  return { matches: scored.slice(0, safeLimit), candidateSkillCount: skills.length, totalJobsScored: scored.length };
 }
 

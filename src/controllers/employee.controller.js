@@ -1951,3 +1951,24 @@ const getMyMatchingJobsHandler = catchAsync(async (req, res) => {
 
 export { getMyMatchingJobsHandler };
 
+const getCandidateMatchingJobsHandler = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canManageCandidates(req);
+  const candidate = await getCandidateById(req.params.candidateId);
+  if (!candidate) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  }
+  if (
+    !canViewAllEmployees(req)
+    && !canViewPreBoardingDocs(req)
+    && String(candidate.owner) !== String(req.user._id)
+  ) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+  }
+  const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+  const minScore = parseInt(req.query.minScore, 10) || 0;
+  const result = await matchJobsForCandidate(candidate._id ?? candidate.id, { limit, minScore });
+  res.send(result);
+});
+
+export { getCandidateMatchingJobsHandler };
+

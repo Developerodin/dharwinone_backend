@@ -753,6 +753,21 @@ const patchAttributionJob = {
   }),
 };
 
+/** Matching jobs query — caps mirror controller Math.min(..., 50). */
+const matchingJobsQuery = Joi.object({
+  limit: Joi.number().integer().min(1).max(50).default(10),
+  minScore: Joi.number().integer().min(0).max(100).default(0),
+});
+
+const getMyMatchingJobs = {
+  query: matchingJobsQuery,
+};
+
+const getCandidateMatchingJobs = {
+  params: Joi.object({ candidateId: Joi.string().custom(objectId).required() }),
+  query: matchingJobsQuery,
+};
+
 export {
   createCandidate,
   getCandidates,
@@ -801,4 +816,6 @@ export {
   updateWeekOff,
   getWeekOff,
   assignShift,
+  getMyMatchingJobs,
+  getCandidateMatchingJobs,
 };
