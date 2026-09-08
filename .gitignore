@@ -51,6 +51,21 @@ src/services/__tests__/helpers/
 !src/services/meeting.service.test.js
 !src/services/offer.service.test.js
 
+# Meeting reminder repair (2026-09-08) — these guard a production delivery failure.
+# Parent dirs re-included first (git cannot re-include a file whose parent dir is excluded).
+!src/models/__tests__/
+!src/models/__tests__/notification.relatedEntity.test.js
+!src/services/__tests__/notification.channelIsolation.test.js
+!src/services/__tests__/reminderDispatcher.test.js
+!src/services/__tests__/meeting.conclusionRecipients.test.js
+!src/services/__tests__/meeting.reminders.test.js
+!src/services/__tests__/internalMeeting.reminders.test.js
+!src/services/__tests__/meeting.rescheduleResetsReminder.test.js
+!scripts/migrations/
+scripts/migrations/*
+!scripts/migrations/__tests__/
+!scripts/migrations/__tests__/2026-09-08-backfill-meeting-reminder-retry.test.js
+
 # editor plans and CI config stay local â€” never pushed
 .cursor/
 .github/
