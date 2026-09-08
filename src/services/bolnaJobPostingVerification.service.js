@@ -1,14 +1,21 @@
-import crypto from 'node:crypto';
 import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhone } from '../utils/phone.js';
-import { runSerializedForBolnaAgent } from '../utils/bolnaAgentRunSerialized.js';
-import { bolnaJobContextFromDoc } from '../utils/jobBolnaContext.js';
-import { buildJobPostingVerificationPromptPackage } from './jobPostingVerificationPrompt.service.js';
+import { ensureAgentPrompt } from '../utils/bolnaAgentTemplateSync.js';
+import {
+  buildJobPostingAgentPromptTemplate,
+  buildJobPostingAgentTemplateVars,
+  JOB_WELCOME_TEMPLATE,
+} from './jobPostingAgentTemplate.service.js';
 
 /**
- * Patch the job-posting Bolna agent prompt, then dial the organisation phone
- * stored on the Job document.
+ * Sync the STATIC job-posting prompt template onto the agent (once per process), then dial
+ * the organisation phone stored on the Job document with this job's values in `user_data`.
+ *
+ * Nothing job-specific is written to the agent. The agent's prompt is shared state across
+ * every process on the Bolna account — production and staging included — so a per-call
+ * prompt meant whichever process PATCHed last owned the call. See
+ * jobPostingAgentTemplate.service.js for the incident this replaced.
  *
  * @param {Object} p
  * @param {string} p.agentId          - BOLNA_AGENT_ID (job-posting agent)
@@ -34,60 +41,46 @@ export async function initiateJobPostingVerificationCall({ agentId, job, contact
     };
   }
 
-  // ── Context & prompt ──────────────────────────────────────────────────────
-  const orgName = job.organisation?.name || '';
-  const label = (contactLabel && String(contactLabel).trim()) || orgName || 'Organisation contact';
+  // ── Static template + per-call values ────────────────────────────────────
+  const { vars } = buildJobPostingAgentTemplateVars(job);
+  const label =
+    (contactLabel && String(contactLabel).trim()) ||
+    (vars.listing_organisation_name !== 'the hiring organisation' ? vars.listing_organisation_name : '') ||
+    'Organisation contact';
 
-  const { systemPrompt, userData: richUserData, openingGreeting } =
-    buildJobPostingVerificationPromptPackage(job);
-
-  const promptHash = crypto
-    .createHash('sha256')
-    .update(systemPrompt)
-    .digest('hex')
-    .slice(0, 12);
-
-  const jobCtx = bolnaJobContextFromDoc(job);
-
-  return runSerializedForBolnaAgent(agentId, async () => {
-    // PATCH agent system prompt + welcome message
-    const patchResult = await bolnaService.updateAgentPrompt(agentId, systemPrompt, {
-      agentWelcomeMessage: openingGreeting,
-    });
-
-    if (!patchResult.success) {
-      logger.error(
-        `[Bolna] Job-posting prompt patch failed (promptHash=${promptHash}): ${patchResult.error}`
-      );
-    } else {
-      logger.info(
-        `[Bolna] Job-posting agent prompt updated (promptHash=${promptHash}) jobId=${job._id}`
-      );
-    }
-
-    // ── Build clean userData — no camelCase key bleed, no duplicates ────────
-    // Do NOT set generic Bolna keys like `organisation` for this flow: providers often bind
-    // `organisation` / `name` to assistant identity and the employer must stay third-party only.
-    const userData = {
-      ...richUserData,
-      platform_name: 'Dharwin',
-      assistant_identity:
-        'You are the Dharwin platform automated listing-verification assistant. You do not work for the employer below.',
-      listing_employer_name: orgName,
-      contact_label: label,
-      job_title: job.title || '',
-      job_type: jobCtx.jobType || '',
-      job_location: jobCtx.location || '',
-      experience_level: jobCtx.experienceLevel || '',
-      salary_range: jobCtx.salaryRange || '',
+  const prepared = await ensureAgentPrompt(
+    bolnaService,
+    agentId,
+    buildJobPostingAgentPromptTemplate(),
+    JOB_WELCOME_TEMPLATE
+  );
+  if (!prepared.ok) {
+    // Do NOT dial on an unverified prompt: the agent may still hold a previous fully
+    // resolved prompt naming a different job, possibly from another environment.
+    return {
+      success: false,
+      error: `Bolna agent could not be prepared before the call: ${prepared.error}`,
     };
+  }
 
-    return bolnaService.initiateCall({
-      phone,
-      candidateName: label,   // Bolna uses this as the recipient display name
-      agentId,
-      fromPhoneNumber,
-      userData,
-    });
+  // Everything the agent says comes from here, and it travels atomically with the call.
+  // `contact_label` / `candidate_name` are what Bolna shows as the recipient display name.
+  const userData = {
+    ...vars,
+    contact_label: label,
+    assistant_identity:
+      'You are the Dharwin platform automated listing-verification assistant. You do not work for the employer below.',
+  };
+
+  logger.info(
+    `[Bolna] job-posting call jobId=${job._id} agent=${agentId} templateCached=${prepared.cached === true} userDataBytes=${Buffer.byteLength(JSON.stringify(userData))}`
+  );
+
+  return bolnaService.initiateCall({
+    phone,
+    candidateName: label,
+    agentId,
+    fromPhoneNumber,
+    userData,
   });
 }

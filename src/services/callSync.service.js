@@ -133,6 +133,35 @@ function canonicalSource(source) {
   return 'legacy';
 }
 
+/** Bolna reports the agent on the payload; the normalizer may also have lifted it. */
+export function resolveAgentId(payload, norm = {}) {
+  const raw =
+    payload?.agent_id ??
+    payload?.agentId ??
+    payload?.data?.agent_id ??
+    payload?.execution?.agent_id ??
+    norm.agentId ??
+    '';
+  return String(raw || '').trim();
+}
+
+/**
+ * True when the execution belongs to an agent this environment owns.
+ *
+ * Unknown-agent payloads are ACCEPTED when this environment has no agent ids configured at
+ * all — otherwise a deployment that has not set BOLNA_AGENT_ID would silently discard every
+ * call record instead of failing visibly. A payload with no agent id is also accepted: the
+ * reconciliation and backfill paths address Bolna per agent already, so the id is only
+ * genuinely absent on older webhook shapes we still want to ingest.
+ */
+export function isOwnAgent(payload, norm = {}) {
+  const ours = Array.isArray(config.bolna?.allAgentIds) ? config.bolna.allAgentIds : [];
+  if (!ours.length) return true;
+  const agentId = resolveAgentId(payload, norm);
+  if (!agentId) return true;
+  return ours.includes(agentId);
+}
+
 /**
  * Apply a Bolna state change to CallRecord.
  *
@@ -154,6 +183,18 @@ export async function applyEvent(payload, source, meta = {}) {
   if (!executionId) {
     logger.warn(`[callSync] event missing executionId source=${source}`);
     return { record: null, applied: false, reason: 'no_execution_id' };
+  }
+
+  // Production and staging share ONE Bolna account, and Bolna authenticates its webhooks by
+  // SOURCE IP — it never sends a secret, so `verifyBolnaSecret` returns true whenever none is
+  // configured. Nothing else here checks whose agent the execution belongs to, so a webhook
+  // URL pointed at the wrong environment writes another environment's calls straight into
+  // this database. Drop anything that is not one of OUR agents.
+  if (!isOwnAgent(payload, norm)) {
+    logger.warn(
+      `[callSync] rejecting event for foreign agent=${resolveAgentId(payload, norm) || 'unknown'} executionId=${executionId} source=${source}`
+    );
+    return { record: null, applied: false, reason: 'foreign_agent' };
   }
 
   const status = normalizeStatus(norm.status);
@@ -504,4 +545,6 @@ export default {
   backfillFromAgentList,
   verifyBolnaSecret,
   normalizeStatus,
+  isOwnAgent,
+  resolveAgentId,
 };
