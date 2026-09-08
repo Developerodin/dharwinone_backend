@@ -1524,6 +1524,34 @@ const CONCLUSION_MAX_ATTEMPTS = 3;
 const conclusionDelayMin = () => Number(process.env.CONCLUSION_DELAY_MIN) || 15;
 
 /**
+ * Conclusion recipients. `recruiter.id` and `agents[].id` are free-form Strings on the
+ * model — external/mock ids like "1" are legal — so anything that is not an ObjectId is
+ * dropped from the in-app list rather than handed to User.findById, which would throw a
+ * CastError and burn all three delivery attempts.
+ * @param {Object} meeting
+ * @returns {Array<{kind:'email', email:string}|{kind:'inApp', userId:string}>}
+ */
+export const buildConclusionRecipients = (meeting) => {
+  const emails = new Set();
+  const userIds = new Set();
+  const addUser = (id) => {
+    const s = id == null ? '' : String(id);
+    if (mongoose.Types.ObjectId.isValid(s)) userIds.add(s);
+  };
+  if (meeting.recruiter?.email) emails.add(String(meeting.recruiter.email).trim().toLowerCase());
+  addUser(meeting.recruiter?.id);
+  for (const a of meeting.agents || []) {
+    if (a?.email) emails.add(String(a.email).trim().toLowerCase());
+    addUser(a?.id);
+  }
+  addUser(meeting.createdBy);
+  return [
+    ...[...emails].map((email) => ({ kind: 'email', email })),
+    ...[...userIds].map((userId) => ({ kind: 'inApp', userId })),
+  ];
+};
+
+/**
  * Conclusion reminder pass. For every ended interview whose result is still
  * pending and whose anchor plus the delay has passed, notify the recruiter side.
  * @returns {Promise<{sent:number, retried:number, failed:number, staleRecovered:number}>}
@@ -1572,20 +1600,7 @@ export const sendInterviewConclusionNotifications = async () => {
     const link = getPublicMeetingUrl(m.meetingId);
     const message = `The interview "${title}" has ended — please record the result.`;
 
-    const emailRecipients = [];
-    const inAppUserIds = new Set();
-    if (m.recruiter?.email) emailRecipients.push(m.recruiter.email.trim().toLowerCase());
-    if (m.recruiter?.id) inAppUserIds.add(String(m.recruiter.id));
-    for (const a of m.agents || []) {
-      if (a?.email) emailRecipients.push(String(a.email).trim().toLowerCase());
-      if (a?.id) inAppUserIds.add(String(a.id));
-    }
-    if (m.createdBy) inAppUserIds.add(String(m.createdBy));
-
-    const recipients = [
-      ...[...new Set(emailRecipients)].map((email) => ({ kind: 'email', email })),
-      ...[...inAppUserIds].map((userId) => ({ kind: 'inApp', userId })),
-    ];
+    const recipients = buildConclusionRecipients(m);
 
     const result = await dispatchReminder({
       kind: 'conclusion',
