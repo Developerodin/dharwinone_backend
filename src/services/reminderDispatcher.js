@@ -74,13 +74,17 @@ const runPool = async (items, worker, limit) => {
  * @param {Object} job
  * @param {string} job.kind - 'interviewT15' | 'conclusion'
  * @param {Array}  job.recipients - opaque recipient descriptors
- * @param {(recipient:any)=>Promise<void>} job.deliver - sends to one recipient; throws on failure
- * @returns {Promise<{ok:boolean, delivered:number, errorCategory?:string, error?:string}>}
+ * @param {(recipient:any)=>Promise<void>} job.deliver - sends to one recipient; throws on failure, returns false when deliberately suppressed
+ * @returns {Promise<{ok:boolean, delivered:number, skipped:number, errorCategory?:string, error?:string}>}
  */
 export const dispatchReminder = async ({ kind, recipients = [], deliver }) => {
-  if (!recipients.length) return { ok: true, delivered: 0 };
+  if (!recipients.length) {
+    logger.warn(`[reminderDispatcher] ${kind} had no recipients — nothing was sent`);
+    return { ok: true, delivered: 0, skipped: 0 };
+  }
 
   let delivered = 0;
+  let skipped = 0;
   let firstError = null;
   let firstCategory = null;
 
@@ -88,8 +92,12 @@ export const dispatchReminder = async ({ kind, recipients = [], deliver }) => {
     recipients,
     async (recipient) => {
       try {
-        await withTimeout(() => deliver(recipient), timeoutMs());
-        delivered += 1;
+        // `false` means the send was deliberately suppressed (recipient opted out).
+        // Booking that as a delivery is what let an opted-out interview report `sent`
+        // with nothing actually sent.
+        const result = await withTimeout(() => deliver(recipient), timeoutMs());
+        if (result === false) skipped += 1;
+        else delivered += 1;
       } catch (err) {
         const category = classifyError(err);
         if (!firstError) {
@@ -102,6 +110,7 @@ export const dispatchReminder = async ({ kind, recipients = [], deliver }) => {
     concurrency()
   );
 
-  if (delivered > 0) return { ok: true, delivered };
-  return { ok: false, delivered: 0, errorCategory: firstCategory, error: firstError };
+  // An opt-out is a final answer, not a transient failure — do not retry it.
+  if (delivered > 0 || skipped > 0) return { ok: true, delivered, skipped };
+  return { ok: false, delivered: 0, skipped: 0, errorCategory: firstCategory, error: firstError };
 };

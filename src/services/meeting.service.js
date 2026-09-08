@@ -1433,7 +1433,9 @@ export const sendUpcomingMeetingReminders = async () => {
     .limit(200)
     .lean();
 
-  const stats = { sent: 0, retried: 0, failed: 0, staleRecovered: 0 };
+  // `skipped` counts meetings marked reminded with nothing actually sent — every recipient
+  // opted out, or the meeting had no resolvable address at all.
+  const stats = { sent: 0, skipped: 0, retried: 0, failed: 0, staleRecovered: 0 };
   if (!meetings.length) return stats;
 
   const { notify } = await import('./notification.service.js');
@@ -1470,6 +1472,7 @@ export const sendUpcomingMeetingReminders = async () => {
         })
           .select('_id')
           .lean();
+        let notified = false;
         if (user?._id) {
           try {
             await notify(user._id, {
@@ -1478,17 +1481,21 @@ export const sendUpcomingMeetingReminders = async () => {
               message,
               ...interviewMeetingNotificationFields(m, { name: inviteName, email }),
             });
+            notified = true;
           } catch (err) {
             logger.warn(`T-15 in-app notify failed for ${email}: ${err?.message || err}`);
           }
         }
-        await sendMeetingReminderEmail(email, {
+        const emailed = await sendMeetingReminderEmail(email, {
           title,
           scheduledAt: m.scheduledAt,
           timezone: m.timezone || 'UTC',
           publicMeetingUrl: link,
           inviteeName: inviteName,
         });
+        // false only when both channels declined: the recipient has no account and has
+        // opted out of reminder email. Reported as skipped, never as delivered.
+        return emailed || notified;
       },
     });
 
@@ -1497,7 +1504,8 @@ export const sendUpcomingMeetingReminders = async () => {
         { _id: m._id },
         { $set: { reminderSentAt: now, 'reminderRetry.claimedAt': null } }
       );
-      stats.sent += 1;
+      if (result.delivered > 0) stats.sent += 1;
+      else stats.skipped += 1;
     } else {
       const retryable = isRetryableCategory(result.errorCategory);
       const exhausted = (claim.reminderRetry?.attempts || 0) >= REMINDER_MAX_ATTEMPTS;

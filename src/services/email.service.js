@@ -955,14 +955,19 @@ const buildMeetingReminderEmail = ({ title, scheduledAt, timezone, publicMeeting
   return { subject, text, html };
 };
 
+/**
+ * @returns {Promise<boolean>} false when the recipient has opted out of reminder email —
+ * the caller must not book that as a delivery.
+ */
 const sendMeetingReminderEmail = async (to, payload) => {
   const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
   if (!(await shouldSendNotificationEmailToAddress(to, 'meeting_reminder'))) {
-    logger.debug(`Skipping meeting reminder email to ${to} (notification preferences)`);
-    return;
+    logger.info(`Skipping meeting reminder email to ${to} (notification preferences)`);
+    return false;
   }
   const { subject, text, html } = buildMeetingReminderEmail(payload);
   await sendEmail(to, subject, text, html, 'meeting_reminder');
+  return true;
 };
 
 /**
