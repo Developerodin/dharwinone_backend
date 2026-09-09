@@ -1373,6 +1373,7 @@ export async function listLabels(account) {
  * `users.labels.list` does not include counts — each label must be fetched individually.
  */
 const GMAIL_FOLDER_LABELS = {
+  all: 'UNREAD',
   inbox: 'INBOX',
   sent: 'SENT',
   draft: 'DRAFT',
