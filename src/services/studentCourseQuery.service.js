@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import TrainingModule from '../models/trainingModule.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
+import Mentor from '../models/mentor.model.js';
+import User from '../models/user.model.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
 import { refreshTrainingModuleCoverImages } from '../utils/trainingCoverImageUrl.js';
@@ -18,6 +20,109 @@ const defaultProgressFields = {
   completedAt: null,
   status: 'enrolled',
   certificate: { issued: false, issuedAt: null, certificateId: null, certificateUrl: null },
+};
+
+/**
+ * Mentor display label: user.name, else user.email.
+ * @param {{ name?: string, email?: string } | null | undefined} user
+ * @returns {string | null}
+ */
+const mentorUserDisplayLabel = (user) => {
+  const name = user?.name?.trim();
+  if (name) return name;
+  const email = user?.email?.trim();
+  if (email) return email;
+  return null;
+};
+
+/**
+ * Display label for the first assigned mentor on a course card.
+ * @param {Array<{ user?: { name?: string, email?: string } }>} mentorsAssigned
+ * @returns {string}
+ */
+const primaryInstructorLabel = (mentorsAssigned) => {
+  for (const mentor of mentorsAssigned || []) {
+    const label = mentorUserDisplayLabel(mentor?.user);
+    if (label) return label;
+  }
+  return 'Instructor';
+};
+
+/**
+ * Distinct mentor labels for instructor filter facets (all mentors, deduped per course).
+ * @param {Array<{ user?: { name?: string, email?: string } }>} mentorsAssigned
+ * @returns {string[]}
+ */
+const collectInstructorFacetLabels = (mentorsAssigned) => {
+  const labels = new Set();
+  for (const mentor of mentorsAssigned || []) {
+    const label = mentorUserDisplayLabel(mentor?.user);
+    if (label) labels.add(label);
+  }
+  return [...labels];
+};
+
+/**
+ * Mentor ids whose linked user display label matches the instructor chip.
+ * @param {string} instructor
+ * @returns {Promise<import('mongoose').Types.ObjectId[]>}
+ */
+const mentorIdsForInstructorLabel = async (instructor) => {
+  const label = String(instructor || '').trim();
+  if (!label) return [];
+  const users = await User.find({
+    $or: [{ name: label }, { email: label }],
+  })
+    .select('_id')
+    .lean();
+  if (!users.length) return [];
+  const mentors = await Mentor.find({ user: { $in: users.map((u) => u._id) } })
+    .select('_id')
+    .lean();
+  return mentors.map((m) => m._id);
+};
+
+/** Aggregation expression: first mentor display label, or fallback. */
+const instructorNameExpr = {
+  $ifNull: [{ $arrayElemAt: ['$mentors.userName', 0] }, 'Instructor'],
+};
+
+/** $lookup mentors + users so instructorNameExpr can resolve mentor display labels. */
+const mentorUserNameLookupStage = {
+  $lookup: {
+    from: 'mentors',
+    localField: 'mentorsAssigned',
+    foreignField: '_id',
+    as: 'mentors',
+    pipeline: [
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'user',
+          pipeline: [{ $project: { name: 1, email: 1 } }],
+        },
+      },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          userName: {
+            $let: {
+              vars: { trimmedName: { $trim: { input: { $ifNull: ['$user.name', ''] } } } },
+              in: {
+                $cond: {
+                  if: { $gt: [{ $strLenCP: '$$trimmedName' }, 0] },
+                  then: '$$trimmedName',
+                  else: { $ifNull: ['$user.email', 'Instructor'] },
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
 };
 
 /**
@@ -57,9 +162,6 @@ const buildPostJoinMatch = (filter) => {
   }
   if (filter.category) {
     clauses.push({ 'categories.name': filter.category });
-  }
-  if (filter.instructor) {
-    clauses.push({ instructorName: filter.instructor });
   }
   const q = filter.search?.trim();
   if (q) {
@@ -116,6 +218,7 @@ const mapCatalogRow = (row) => {
       shortDescription: row.shortDescription,
       coverImage: row.coverImage,
       categories,
+      instructor: row.instructorName,
       status: row.status,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -131,33 +234,24 @@ const mapCatalogRow = (row) => {
  * @returns {Promise<{ categories: string[], instructors: string[] }>}
  */
 const loadCatalogFacets = async (studentOid) => {
-  const rows = await TrainingModule.aggregate([
-    { $match: { students: studentOid } },
-    {
-      $lookup: {
-        from: 'categories',
-        localField: 'categories',
-        foreignField: '_id',
-        as: 'categories',
-        pipeline: [{ $project: { name: 1 } }],
-      },
-    },
-    {
-      $project: {
-        names: '$categories.name',
-        instructorName: {
-          $ifNull: [{ $arrayElemAt: ['$categories.name', 0] }, 'Instructor'],
-        },
-      },
-    },
-  ]);
+  const docs = await TrainingModule.find({ students: studentOid })
+    .select('categories mentorsAssigned')
+    .populate('categories', 'name')
+    .populate({
+      path: 'mentorsAssigned',
+      select: 'user',
+      populate: { path: 'user', select: 'name email' },
+    })
+    .lean();
   const categorySet = new Set();
   const instructorSet = new Set();
-  for (const row of rows) {
-    for (const name of row.names || []) {
-      if (name) categorySet.add(name);
+  for (const doc of docs) {
+    for (const cat of doc.categories || []) {
+      if (cat?.name) categorySet.add(cat.name);
     }
-    if (row.instructorName) instructorSet.add(row.instructorName);
+    for (const label of collectInstructorFacetLabels(doc.mentorsAssigned)) {
+      instructorSet.add(label);
+    }
   }
   return {
     categories: [...categorySet].sort((a, b) => a.localeCompare(b)),
@@ -179,14 +273,27 @@ const queryStudentCourses = async (studentId, filter, options) => {
   const sort = mongoSortForCatalog(options.sortBy);
   const progressColl = StudentCourseProgress.collection.name;
 
-  const pipeline = [
-    { $match: { students: studentOid } },
+  const pipeline = [{ $match: { students: studentOid } }];
+
+  if (filter.instructor) {
+    const mentorIds = await mentorIdsForInstructorLabel(filter.instructor);
+    pipeline.push({
+      $match: {
+        mentorsAssigned: {
+          $in: mentorIds.length ? mentorIds : [new mongoose.Types.ObjectId()],
+        },
+      },
+    });
+  }
+
+  pipeline.push(
     {
       $project: {
         moduleName: 1,
         shortDescription: 1,
         coverImage: 1,
         categories: 1,
+        mentorsAssigned: 1,
         status: 1,
         createdAt: 1,
         updatedAt: 1,
@@ -229,12 +336,11 @@ const queryStudentCourses = async (studentId, filter, options) => {
         as: 'progressDoc',
       },
     },
+    mentorUserNameLookupStage,
     {
       $addFields: {
         progressDoc: { $arrayElemAt: ['$progressDoc', 0] },
-        instructorName: {
-          $ifNull: [{ $arrayElemAt: ['$categories.name', 0] }, 'Instructor'],
-        },
+        instructorName: instructorNameExpr,
       },
     },
     {
@@ -246,8 +352,8 @@ const queryStudentCourses = async (studentId, filter, options) => {
         },
         sortEnrolled: { $ifNull: ['$progressDoc.enrolledAt', '$createdAt'] },
       },
-    },
-  ];
+    }
+  );
 
   const postMatch = buildPostJoinMatch(filter);
   if (postMatch) pipeline.push({ $match: postMatch });
@@ -284,4 +390,9 @@ const queryStudentCourses = async (studentId, filter, options) => {
   };
 };
 
-export { queryStudentCourses };
+export {
+  queryStudentCourses,
+  primaryInstructorLabel,
+  mentorUserDisplayLabel,
+  collectInstructorFacetLabels,
+};

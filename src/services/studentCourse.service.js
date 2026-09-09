@@ -146,6 +146,7 @@ const getStudentCourse = async (studentId, moduleId) => {
       coverImage: module.coverImage,
       categories,
       playlist: playlistWithProgress,
+      learnerCount: (module.students || []).length,
       status: module.status,
       createdAt: module.createdAt,
       updatedAt: module.updatedAt,
