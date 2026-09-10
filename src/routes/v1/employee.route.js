@@ -317,6 +317,19 @@ router
   .get(...canReadCandidateDocuments, validate(employeeValidation.getDocuments), employeeController.getCandidateDocuments);
 
 router
+  .route('/documents/:candidateId/versions/:slot')
+  .get(auth(), validate(employeeValidation.listDocumentVersions), employeeController.listDocumentVersions)
+  .post(auth(), validate(employeeValidation.addDocumentVersion), employeeController.addDocumentVersion);
+
+router
+  .route('/documents/:candidateId/versions/:slot/:version/download')
+  .get(auth(), validate(employeeValidation.downloadDocumentVersion), employeeController.downloadDocumentVersion);
+
+router
+  .route('/documents/:candidateId/versions/:slot/:version')
+  .delete(auth(), validate(employeeValidation.deleteDocumentVersion), employeeController.deleteDocumentVersion);
+
+router
   .route('/documents/:candidateId/:documentIndex/download')
   .get(documentAuth, employeeController.downloadDocument);
 

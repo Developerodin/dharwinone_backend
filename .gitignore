@@ -114,3 +114,5 @@ attendance-status-backfill.*.journal.json
 # Parent dirs are re-included above; these two files ship, the rest of the dirs stay ignored.
 !src/services/__tests__/backdatedAttendanceRequest.approve.test.js
 !scripts/migrations/2026-09-10-collapse-backdated-duplicate-days.js
+!scripts/migrations/2026-09-10-backfill-document-versions.js
+!scripts/migrations/__tests__/2026-09-10-backfill-document-versions.test.js

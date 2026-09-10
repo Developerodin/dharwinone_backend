@@ -50,6 +50,10 @@ import {
   replaceMyRejectedDocument,
   adminUploadDocumentForCandidate,
   deleteCandidateDocument,
+  listCandidateDocumentVersions,
+  addCandidateDocumentVersion,
+  getCandidateDocumentVersionDownloadUrl,
+  deleteCandidateDocumentVersion,
 } from '../services/employee.service.js';
 import {
   listReferralLeads,
@@ -115,6 +119,18 @@ export const canDeletePreBoardingDocs = (req) => {
   const p = req.authContext?.permissions;
   if (!p) return false;
   return canManageCandidates(req) || p.has('pre-boarding.delete') || p.has('pre-boarding.manage');
+};
+
+/** Resume/cover-letter version delete — employees.edit or pre-boarding.delete (plus legacy manage keys). */
+export const canDeleteDocumentVersion = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return (
+    canManageCandidates(req)
+    || p.has('employees.edit')
+    || p.has('pre-boarding.delete')
+    || p.has('pre-boarding.manage')
+  );
 };
 
 /** Pre-boarding Documents modal: list, status, preview, and documentRequests on GET /employees/:id. */
@@ -809,7 +825,11 @@ const addSalarySlip = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_SALARY_SLIP_ADD,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(req.params.candidateId),
-      metadata: { period: req.body?.period },
+      metadata: {
+        month: req.body?.month,
+        year: req.body?.year,
+        fileName: req.body?.originalName || null,
+      },
     },
     req,
     { editContext: { staffEdit: true } }
@@ -831,7 +851,12 @@ const updateSalarySlip = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_SALARY_SLIP_UPDATE,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(req.params.candidateId),
-      metadata: { salarySlipIndex: req.params.salarySlipIndex },
+      metadata: {
+        salarySlipIndex: req.params.salarySlipIndex,
+        month: req.body?.month,
+        year: req.body?.year,
+        fileName: req.body?.originalName || null,
+      },
     },
     req,
     { editContext: { staffEdit: true } }
@@ -947,6 +972,106 @@ const downloadDocument = catchAsync(async (req, res) => {
   }
 });
 
+const listDocumentVersions = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canViewPreBoardingDocs(req);
+  const data = await listCandidateDocumentVersions(req.params.candidateId, req.params.slot, req.user);
+  res.status(httpStatus.OK).send({ success: true, data });
+});
+
+const addDocumentVersion = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canMutatePreBoardingDocs(req);
+  const data = await addCandidateDocumentVersion(req.params.candidateId, req.params.slot, req.body, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_VERSION_ADD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: {
+        slot: data?.slot || req.params.slot,
+        version: data?.currentVersion ?? null,
+        fileName: data?.version?.originalName || data?.version?.label || null,
+        created: Boolean(data?.created),
+      },
+    },
+    req,
+    { editContext: { selfService: !req.user.canManageCandidates, staffEdit: req.user.canManageCandidates } }
+  );
+
+  res.status(data?.created ? httpStatus.CREATED : httpStatus.OK).send({ success: true, data });
+});
+
+const downloadDocumentVersion = catchAsync(async (req, res) => {
+  const { candidateId, slot, version } = req.params;
+  req.user.canManageCandidates = canViewPreBoardingDocs(req);
+  const data = await getCandidateDocumentVersionDownloadUrl(candidateId, slot, version, req.user);
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_VERSION_DOWNLOAD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(candidateId),
+      metadata: {
+        slot: data?.slot || slot,
+        version: data?.version ?? Number(version),
+        fileName: data?.fileName || null,
+      },
+    },
+    req
+  );
+
+  const acceptsJson = req.headers.accept && req.headers.accept.includes('application/json');
+  if (acceptsJson) {
+    res.status(httpStatus.OK).json({
+      success: true,
+      data: {
+        slot: data.slot,
+        version: data.version,
+        url: data.url,
+        fileName: data.fileName,
+        mimeType: data.mimeType,
+        size: data.size,
+      },
+    });
+    return;
+  }
+
+  res.redirect(data.url);
+});
+
+const deleteDocumentVersion = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canDeleteDocumentVersion(req);
+  const data = await deleteCandidateDocumentVersion(
+    req.params.candidateId,
+    req.params.slot,
+    req.params.version,
+    req.user
+  );
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_VERSION_DELETE,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: {
+        slot: data?.slot || req.params.slot,
+        version: data?.deletedVersion ?? Number(req.params.version),
+        fileName: data?.fileName || null,
+        wasCurrent: Boolean(data?.wasCurrent),
+        promotedVersion: data?.promotedVersion ?? null,
+        currentVersion: data?.currentVersion ?? null,
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
+
+  res.status(httpStatus.OK).send({ success: true, data });
+});
+
 const downloadSalarySlip = catchAsync(async (req, res) => {
   const { candidateId, salarySlipIndex } = req.params;
   const authContext = await getUserPermissionContext(req.user);
@@ -1014,7 +1139,14 @@ const fulfillDocRequest = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(result?.candidateId || userId),
-      metadata: { selfService: true, requestIndex: req.params.requestIndex },
+      metadata: {
+        selfService: true,
+        requestIndex: req.params.requestIndex,
+        documentIndex: result?.documentIndex,
+        fileName: result?.request?.label || null,
+        slot: result?.version?.slot || null,
+        version: result?.version?.version ?? null,
+      },
     },
     req,
     { editContext: { selfService: true } }
@@ -1031,7 +1163,13 @@ const replaceMyRejectedDoc = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(replaced?.candidateId || userId),
-      metadata: { documentIndex: req.params.documentIndex, replaced: true },
+      metadata: {
+        documentIndex: req.params.documentIndex,
+        replaced: true,
+        fileName: replaced?.originalName || replaced?.label || null,
+        slot: replaced?.version?.slot || null,
+        version: replaced?.version?.version ?? null,
+      },
     },
     req,
     { editContext: { selfService: true } }
@@ -1053,7 +1191,13 @@ const adminUploadDocument = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_DOCUMENT_UPLOAD,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(req.params.candidateId),
-      metadata: { type: req.body?.type, label: req.body?.label },
+      metadata: {
+        type: req.body?.type,
+        label: req.body?.label,
+        fileName: created?.originalName || created?.label || null,
+        slot: created?.logicalSlot || null,
+        version: created?.slotVersion ?? null,
+      },
     },
     req,
     { editContext: { staffEdit: true } }
@@ -1070,7 +1214,12 @@ const deleteDocumentController = catchAsync(async (req, res) => {
       action: ActivityActions.EMPLOYEE_DOCUMENT_DELETE,
       entityType: EntityTypes.EMPLOYEE,
       entityId: String(req.params.candidateId),
-      metadata: { documentIndex: req.params.documentIndex },
+      metadata: {
+        documentIndex: req.params.documentIndex,
+        fileName: result?.fileName || null,
+        slot: result?.logicalSlot || null,
+        version: result?.slotVersion ?? null,
+      },
     },
     req,
     { editContext: { staffEdit: true } }
@@ -1083,6 +1232,10 @@ export {
   getCandidateDocumentStatus,
   getCandidateDocuments,
   downloadDocument,
+  listDocumentVersions,
+  addDocumentVersion,
+  downloadDocumentVersion,
+  deleteDocumentVersion,
   downloadSalarySlip,
   requestDocument,
   cancelDocumentRequestController,

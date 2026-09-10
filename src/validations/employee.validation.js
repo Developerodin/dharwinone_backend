@@ -71,6 +71,7 @@ const salarySlip = Joi.object({
   size: Joi.number().optional().integer().min(0),
   mimeType: Joi.string().optional().trim(),
 });
+const documentVersionSlot = Joi.string().valid('resume', 'cover-letter').required();
 
 const singleCandidateSchema = Joi.object().keys({
   owner: Joi.string().custom(objectId),
@@ -453,6 +454,45 @@ const getDocuments = {
   }),
 };
 
+const listDocumentVersions = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    slot: documentVersionSlot,
+  }),
+};
+
+const addDocumentVersion = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    slot: documentVersionSlot,
+  }),
+  body: Joi.object().keys({
+    type: Joi.string().trim().optional(),
+    label: Joi.string().trim().optional(),
+    documentUrl: Joi.string().uri().optional(),
+    key: Joi.string().trim().optional(),
+    originalName: Joi.string().trim().optional(),
+    size: Joi.number().integer().min(0).optional(),
+    mimeType: Joi.string().trim().optional(),
+  }).or('documentUrl', 'key'),
+};
+
+const downloadDocumentVersion = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    slot: documentVersionSlot,
+    version: Joi.number().integer().min(1).required(),
+  }),
+};
+
+const deleteDocumentVersion = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    slot: documentVersionSlot,
+    version: Joi.number().integer().min(1).required(),
+  }),
+};
+
 const shareCandidateProfile = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
@@ -816,6 +856,10 @@ export {
   verifyDocument,
   getDocumentStatus,
   getDocuments,
+  listDocumentVersions,
+  addDocumentVersion,
+  downloadDocumentVersion,
+  deleteDocumentVersion,
   shareCandidateProfile,
   resendVerificationEmail,
   addRecruiterNote,

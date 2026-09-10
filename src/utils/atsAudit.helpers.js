@@ -23,6 +23,9 @@ export const normalizeChangesArray = (changes) => {
   if (Array.isArray(changes)) return changes;
   return Object.entries(changes).map(([field, val]) => {
     if (val === '[changed]') return { field, changed: true };
+    if (val && typeof val === 'object' && ('added' in val || 'removed' in val)) {
+      return { field, added: val.added, removed: val.removed };
+    }
     if (val && typeof val === 'object' && ('from' in val || 'to' in val)) {
       return { field, from: val.from, to: val.to };
     }

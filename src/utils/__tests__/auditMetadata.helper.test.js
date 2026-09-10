@@ -4,6 +4,7 @@ import {
   buildUpdateAuditMetadata,
   describeCompensationChange,
   buildFieldChangeLog,
+  buildEmployeeUpdateAuditEnvelope,
   idStr,
 } from '../auditMetadata.helper.js';
 
@@ -88,6 +89,60 @@ test('buildFieldChangeLog returns null when nothing actually moved', () => {
   assert.equal(buildFieldChangeLog({ fullName: 'Same' }, { fullName: 'Same' }, { fullName: 'Same' }), null);
 });
 
+test('buildFieldChangeLog treats null and empty string as equivalent', () => {
+  assert.equal(
+    buildFieldChangeLog({ shortBio: null }, { shortBio: '' }, { shortBio: '' }),
+    null
+  );
+  assert.equal(
+    buildFieldChangeLog({ companyAssignedEmail: '' }, { companyAssignedEmail: null }, { companyAssignedEmail: null }),
+    null
+  );
+});
+
+test('buildFieldChangeLog records document add/remove by name without inlining blobs', () => {
+  const changes = buildFieldChangeLog(
+    { documents: [{ key: 'a', originalName: 'resume.pdf', url: 'https://signed/a' }] },
+    {
+      documents: [
+        { key: 'b', originalName: 'passport.pdf', url: 'https://signed/b' },
+        { key: 'a', originalName: 'resume.pdf', url: 'https://signed/a' },
+      ],
+    },
+    { documents: [] }
+  );
+  assert.deepEqual(changes, {
+    documents: { added: ['passport.pdf'], removed: [] },
+  });
+});
+
+test('buildFieldChangeLog records salary slip add/remove by name', () => {
+  const changes = buildFieldChangeLog(
+    { salarySlips: [{ key: 'slip1', originalName: 'Jan-2024.pdf', month: 'Jan', year: 2024 }] },
+    { salarySlips: [{ key: 'slip2', originalName: 'Feb-2024.pdf', month: 'Feb', year: 2024 }] },
+    { salarySlips: [] }
+  );
+  assert.deepEqual(changes, {
+    salarySlips: { added: ['Feb-2024.pdf'], removed: ['Jan-2024.pdf'] },
+  });
+});
+
+test('buildEmployeeUpdateAuditEnvelope skips candidate.update when only normalization noise differs', () => {
+  const envelope = buildEmployeeUpdateAuditEnvelope(
+    { fullName: 'Jane', shortBio: null },
+    { fullName: 'Jane', shortBio: '' },
+    { fullName: 'Jane', shortBio: '' },
+    'emp123',
+    {
+      EMPLOYEE_DEPARTMENT_ASSIGN: 'employee.department.assign',
+      CANDIDATE_UPDATE: 'candidate.update',
+      EMPLOYEE: 'employee',
+      CANDIDATE: 'candidate',
+    }
+  );
+  assert.equal(envelope.audit, null);
+});
+
 test('buildFieldChangeLog omits bulky fields rather than inlining blobs', () => {
   // documents/salarySlips/profilePicture carry base64 and signed URLs. Recording that they
   // changed is useful; pasting them into every audit row is not.
@@ -97,7 +152,7 @@ test('buildFieldChangeLog omits bulky fields rather than inlining blobs', () => 
     { documents: [], profilePicture: {}, fullName: 'New' }
   );
   assert.deepEqual(changes.fullName, { from: 'Old', to: 'New' });
-  assert.equal(changes.documents, '[changed]');
+  assert.deepEqual(changes.documents, { added: ['b', 'c'], removed: ['a'] });
   assert.equal(changes.profilePicture, '[changed]');
 });
 

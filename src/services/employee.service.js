@@ -104,6 +104,184 @@ const mergeSalarySlipsPreserveKeys = (existing = [], incoming = []) => {
   });
 };
 
+const DOCUMENT_VERSION_SLOTS = Object.freeze({
+  RESUME: 'resume',
+  COVER_LETTER: 'cover-letter',
+});
+
+const DOCUMENT_VERSION_SLOT_VALUES = new Set(Object.values(DOCUMENT_VERSION_SLOTS));
+
+const normalizeVersionSlot = (raw) => {
+  if (raw == null) return null;
+  const slot = String(raw).trim().toLowerCase();
+  if (!slot) return null;
+  if (slot === 'resume' || slot === 'cv' || slot === 'cv/resume') return DOCUMENT_VERSION_SLOTS.RESUME;
+  if (slot === 'cover-letter' || slot === 'cover_letter' || slot === 'coverletter' || slot === 'cover letter') {
+    return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
+  }
+  return null;
+};
+
+const inferVersionSlotFromDocument = (doc) => {
+  if (!doc || typeof doc !== 'object') return null;
+  const explicit = normalizeVersionSlot(doc.logicalSlot);
+  if (explicit) return explicit;
+  const type = String(doc.type || '').trim().toLowerCase();
+  if (type === 'cv/resume' || type === 'resume') return DOCUMENT_VERSION_SLOTS.RESUME;
+  if (type === 'cover letter') return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
+  const label = String(doc.label || '').trim().toLowerCase();
+  if (label === 'cover letter' || label === 'cover-letter') return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
+  return null;
+};
+
+const canonicalDocumentDefaultsForSlot = (slot) =>
+  slot === DOCUMENT_VERSION_SLOTS.RESUME
+    ? { type: 'CV/Resume', label: 'CV/Resume' }
+    : { type: 'Other', label: 'Cover Letter' };
+
+const normalizeVersionPayloadFile = (row = {}) => {
+  const key = String(row.key || '').trim();
+  const documentUrl = String(row.documentUrl || row.url || '').trim();
+  if (!key && !documentUrl) return null;
+  const originalName = String(row.originalName || row.fileName || '').trim();
+  const size = Number(row.size);
+  return {
+    key: key || '',
+    documentUrl: documentUrl || '',
+    originalName,
+    size: Number.isFinite(size) && size >= 0 ? size : undefined,
+    mimeType: row.mimeType ? String(row.mimeType).trim() : undefined,
+  };
+};
+
+const versionFileIdentity = (row = {}) => {
+  const key = String(row.key || '').trim();
+  if (key) return `key:${key}`;
+  const url = String(row.documentUrl || row.url || '').trim();
+  const name = String(row.originalName || row.fileName || '').trim();
+  return `url:${url}|name:${name}`;
+};
+
+const latestVersionForSlot = (documentVersions = [], slot) => {
+  let latest = null;
+  for (const row of documentVersions || []) {
+    if (normalizeVersionSlot(row?.slot) !== slot) continue;
+    if (!latest || Number(row.version) > Number(latest.version)) latest = row;
+  }
+  return latest;
+};
+
+const nextVersionForSlot = (documentVersions = [], slot) => {
+  const latest = latestVersionForSlot(documentVersions, slot);
+  return latest ? Number(latest.version) + 1 : 1;
+};
+
+const findLatestSlotDocumentIndex = (documents = [], slot) => {
+  for (let i = (documents || []).length - 1; i >= 0; i -= 1) {
+    if (inferVersionSlotFromDocument(documents[i]) === slot) return i;
+  }
+  return -1;
+};
+
+const asObjectIdOrNull = (raw) => {
+  if (!raw) return null;
+  const id = String(raw);
+  return mongoose.isValidObjectId(id) ? new mongoose.Types.ObjectId(id) : null;
+};
+
+const appendVersionFromDocumentRow = (candidate, doc, actorId, opts = {}) => {
+  const slot = normalizeVersionSlot(opts.slot) || inferVersionSlotFromDocument(doc);
+  if (!slot) return null;
+  const meta = normalizeVersionPayloadFile(doc);
+  if (!meta) return null;
+  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+  const latest = latestVersionForSlot(candidate.documentVersions, slot);
+  const latestIdentity = latest ? versionFileIdentity(latest) : null;
+  const currentIdentity = versionFileIdentity(meta);
+  const fallback = canonicalDocumentDefaultsForSlot(slot);
+
+  let versionNumber = latest ? Number(latest.version) : 0;
+  let created = false;
+  if (!latest || latestIdentity !== currentIdentity) {
+    versionNumber = nextVersionForSlot(candidate.documentVersions, slot);
+    candidate.documentVersions.push({
+      slot,
+      version: versionNumber,
+      type: String(doc?.type || opts.type || fallback.type).trim(),
+      label: String(doc?.label || opts.label || fallback.label).trim(),
+      documentUrl: meta.documentUrl,
+      key: meta.key,
+      originalName: meta.originalName,
+      size: meta.size,
+      mimeType: meta.mimeType,
+      createdAt: opts.createdAt || new Date(),
+      ...(asObjectIdOrNull(actorId) ? { createdBy: asObjectIdOrNull(actorId) } : {}),
+    });
+    created = true;
+  }
+
+  doc.logicalSlot = slot;
+  doc.slotVersion = versionNumber;
+  return { slot, version: versionNumber, created };
+};
+
+const syncVersionedDocumentsOnCandidate = (candidate, actorId) => {
+  if (!Array.isArray(candidate?.documents) || candidate.documents.length === 0) return [];
+  const changes = [];
+  for (const doc of candidate.documents) {
+    const out = appendVersionFromDocumentRow(candidate, doc, actorId);
+    if (out?.created) changes.push(out);
+  }
+  if (changes.length > 0) candidate.markModified('documentVersions');
+  return changes;
+};
+
+const upsertLatestSlotDocumentFromVersion = (candidate, slot, versionRow) => {
+  candidate.documents = Array.isArray(candidate.documents) ? candidate.documents : [];
+  const idx = findLatestSlotDocumentIndex(candidate.documents, slot);
+  const fallback = canonicalDocumentDefaultsForSlot(slot);
+  const nextDoc = resetDocumentVerification({
+    ...(idx >= 0 ? (candidate.documents[idx]?.toObject ? candidate.documents[idx].toObject() : candidate.documents[idx]) : {}),
+    type: String(versionRow.type || fallback.type || 'Other'),
+    label: String(versionRow.label || fallback.label || ''),
+    logicalSlot: slot,
+    slotVersion: Number(versionRow.version),
+    url: versionRow.documentUrl || '',
+    key: versionRow.key || '',
+    originalName: versionRow.originalName || '',
+    size: versionRow.size,
+    mimeType: versionRow.mimeType,
+  });
+  if (idx >= 0) {
+    candidate.documents[idx] = nextDoc;
+  } else {
+    candidate.documents.push(nextDoc);
+  }
+  candidate.markModified('documents');
+};
+
+const removeLatestSlotDocument = (candidate, slot) => {
+  candidate.documents = Array.isArray(candidate.documents) ? candidate.documents : [];
+  const idx = findLatestSlotDocumentIndex(candidate.documents, slot);
+  if (idx >= 0) {
+    candidate.documents.splice(idx, 1);
+    candidate.markModified('documents');
+  }
+};
+
+const buildDocumentVersionResponse = (row) => ({
+  slot: normalizeVersionSlot(row?.slot),
+  version: Number(row?.version || 0),
+  type: row?.type || null,
+  label: row?.label || null,
+  key: row?.key || null,
+  documentUrl: row?.documentUrl || null,
+  originalName: row?.originalName || null,
+  size: typeof row?.size === 'number' ? row.size : null,
+  mimeType: row?.mimeType || null,
+  createdAt: row?.createdAt || null,
+});
+
 /** User may have canManageCandidates set by controller (from candidates.manage permission). */
 const isOwnerOrAdmin = (user, candidate) => {
   if (!candidate) return false;
@@ -1490,6 +1668,10 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
 
   // Update the candidate with new data
   Object.assign(candidate, sanitized);
+  if (Object.prototype.hasOwnProperty.call(sanitized, 'documents')) {
+    syncVersionedDocumentsOnCandidate(candidate, currentUser?.id || currentUser?._id || null);
+    candidate.markModified('documents');
+  }
 
   // Automatically recalculate profile completion percentage and completion status
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
@@ -1801,6 +1983,25 @@ const exportAllCandidates = async (listFilter = {}, queryOptions = {}) => {
   };
 };
 
+const normalizeSalarySlipInput = (raw = {}) => {
+  const month = String(raw.month || '').trim();
+  const yearRaw = raw.year;
+  const parsedYear = Number(yearRaw);
+  const year = Number.isFinite(parsedYear) ? Math.trunc(parsedYear) : undefined;
+  return {
+    ...(month ? { month } : {}),
+    ...(year !== undefined ? { year } : {}),
+    ...(raw.documentUrl != null ? { documentUrl: String(raw.documentUrl).trim() } : {}),
+    ...(raw.key != null ? { key: String(raw.key).trim() } : {}),
+    ...(raw.originalName != null ? { originalName: String(raw.originalName).trim() } : {}),
+    ...(raw.size != null && Number.isFinite(Number(raw.size)) ? { size: Number(raw.size) } : {}),
+    ...(raw.mimeType != null ? { mimeType: String(raw.mimeType).trim() } : {}),
+  };
+};
+
+const salarySlipPeriodKey = (raw = {}) =>
+  `${String(raw.month || '').trim().toLowerCase()}|${String(raw.year ?? '').trim()}`;
+
 // Salary slip management methods
 const addSalarySlipToCandidate = async (candidateId, salarySlipData, currentUser) => {
   const candidate = await getCandidateById(candidateId);
@@ -1811,7 +2012,23 @@ const addSalarySlipToCandidate = async (candidateId, salarySlipData, currentUser
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
-  candidate.salarySlips.push(salarySlipData);
+  const normalized = normalizeSalarySlipInput(salarySlipData);
+  const period = salarySlipPeriodKey(normalized);
+  candidate.salarySlips = Array.isArray(candidate.salarySlips) ? candidate.salarySlips : [];
+  const existingIndex =
+    period && !period.startsWith('|')
+      ? candidate.salarySlips.findIndex((s) => salarySlipPeriodKey(s) === period)
+      : -1;
+
+  if (existingIndex >= 0) {
+    const prev = candidate.salarySlips[existingIndex]?.toObject
+      ? candidate.salarySlips[existingIndex].toObject()
+      : candidate.salarySlips[existingIndex];
+    candidate.salarySlips[existingIndex] = { ...prev, ...normalized };
+    candidate.markModified('salarySlips');
+  } else {
+    candidate.salarySlips.push(normalized);
+  }
   
   // Recalculate profile completion
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
@@ -1829,12 +2046,26 @@ const updateSalarySlipInCandidate = async (candidateId, salarySlipIndex, updateD
   if (!isOwnerOrAdmin(currentUser, candidate)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
-  if (salarySlipIndex < 0 || salarySlipIndex >= candidate.salarySlips.length) {
+  const idx = Number(salarySlipIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= candidate.salarySlips.length) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid salary slip index');
   }
 
+  const normalized = normalizeSalarySlipInput(updateData);
+  const current = candidate.salarySlips[idx];
+  const nextMonth = normalized.month ?? current.month;
+  const nextYear = normalized.year ?? current.year;
+  const nextPeriod = salarySlipPeriodKey({ month: nextMonth, year: nextYear });
+  const duplicateIndex = candidate.salarySlips.findIndex(
+    (s, i) => i !== idx && salarySlipPeriodKey(s) === nextPeriod
+  );
+  if (duplicateIndex >= 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Salary slip already exists for this month and year');
+  }
+
   // Update the salary slip
-  Object.assign(candidate.salarySlips[salarySlipIndex], updateData);
+  Object.assign(candidate.salarySlips[idx], normalized);
+  candidate.markModified('salarySlips');
   
   // Recalculate profile completion
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
@@ -1852,12 +2083,13 @@ const deleteSalarySlipFromCandidate = async (candidateId, salarySlipIndex, curre
   if (!isOwnerOrAdmin(currentUser, candidate)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
-  if (salarySlipIndex < 0 || salarySlipIndex >= candidate.salarySlips.length) {
+  const idx = Number(salarySlipIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= candidate.salarySlips.length) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid salary slip index');
   }
 
   // Remove the salary slip
-  candidate.salarySlips.splice(salarySlipIndex, 1);
+  candidate.salarySlips.splice(idx, 1);
   
   // Recalculate profile completion
   candidate.isProfileCompleted = calculateProfileCompletion(candidate);
@@ -3430,6 +3662,9 @@ const updateUserAndCandidateForMe = async (userId, body) => {
     if (candidatePayload.documents !== undefined) candidate.markModified('documents');
     if (candidatePayload.salarySlips !== undefined) candidate.markModified('salarySlips');
     if (candidatePayload.skills !== undefined) candidate.markModified('skills');
+    if (candidatePayload.documents !== undefined) {
+      syncVersionedDocumentsOnCandidate(candidate, userId);
+    }
     candidate.isProfileCompleted = calculateProfileCompletion(candidate);
     candidate.isCompleted = candidate.isProfileCompleted === 100;
     await candidate.save();
@@ -3541,13 +3776,18 @@ const fulfillDocumentRequest = async (userId, requestIndex, file) => {
     status: 0,
   });
   const newDocIndex = candidate.documents.length - 1;
+  const docVersion = appendVersionFromDocumentRow(candidate, candidate.documents[newDocIndex], userId, {
+    type: req.type || 'Other',
+    label: req.label,
+  });
   req.status = 'fulfilled';
   req.fulfilledAt = new Date();
   req.fulfilledDocIndex = newDocIndex;
   candidate.markModified('documents');
+  if (docVersion?.created) candidate.markModified('documentVersions');
   candidate.markModified('documentRequests');
   await candidate.save();
-  return { request: req, documentIndex: newDocIndex };
+  return { candidateId: String(candidate._id), request: req, documentIndex: newDocIndex, version: docVersion };
 };
 
 const replaceMyRejectedDocument = async (userId, documentIndex, file) => {
@@ -3572,9 +3812,18 @@ const replaceMyRejectedDocument = async (userId, documentIndex, file) => {
   candidate.documents[idx].adminNotes = undefined;
   candidate.documents[idx].verifiedAt = undefined;
   candidate.documents[idx].verifiedBy = undefined;
+  const docVersion = appendVersionFromDocumentRow(candidate, candidate.documents[idx], userId, {
+    type: candidate.documents[idx].type,
+    label: candidate.documents[idx].label,
+  });
   candidate.markModified('documents');
+  if (docVersion?.created) candidate.markModified('documentVersions');
   await candidate.save();
-  return candidate.documents[idx];
+  return {
+    candidateId: String(candidate._id),
+    ...(candidate.documents[idx]?.toObject ? candidate.documents[idx].toObject() : candidate.documents[idx]),
+    version: docVersion,
+  };
 };
 
 /** Admin uploads a document on behalf of a candidate (Pre-boarding modal, etc.).
@@ -3597,9 +3846,15 @@ const adminUploadDocumentForCandidate = async (candidateId, file, payload, user)
       ...uploaded,
     })
   );
+  const createdIndex = candidate.documents.length - 1;
+  const docVersion = appendVersionFromDocumentRow(candidate, candidate.documents[createdIndex], user?._id || user?.id || null, {
+    type: type || 'Other',
+    label: trimmedLabel,
+  });
   candidate.markModified('documents');
+  if (docVersion?.created) candidate.markModified('documentVersions');
   await candidate.save();
-  return candidate.documents[candidate.documents.length - 1];
+  return candidate.documents[createdIndex];
 };
 
 /** Delete a document from a candidate's profile. Gated by pre-boarding.delete OR candidates.manage.
@@ -3642,7 +3897,209 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
       // already logged inside helper
     }
   }
-  return { deletedIndex: idx };
+  return {
+    deletedIndex: idx,
+    fileName: removedDoc?.originalName || removedDoc?.label || null,
+    logicalSlot: normalizeVersionSlot(removedDoc?.logicalSlot),
+    slotVersion: Number.isFinite(Number(removedDoc?.slotVersion)) ? Number(removedDoc.slotVersion) : null,
+  };
+};
+
+const listCandidateDocumentVersions = async (candidateId, slotRaw, user) => {
+  const slot = normalizeVersionSlot(slotRaw);
+  if (!slot) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document slot. Use resume or cover-letter.');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  const rows = (candidate.documentVersions || [])
+    .filter((row) => normalizeVersionSlot(row?.slot) === slot)
+    .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))
+    .map((row) => buildDocumentVersionResponse(row));
+
+  return {
+    slot,
+    currentVersion: rows.length > 0 ? rows[0].version : null,
+    versions: rows,
+  };
+};
+
+const addCandidateDocumentVersion = async (candidateId, slotRaw, payload, user) => {
+  const slot = normalizeVersionSlot(slotRaw);
+  if (!slot) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document slot. Use resume or cover-letter.');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  const meta = normalizeVersionPayloadFile(payload || {});
+  if (!meta) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Version payload must include key or documentUrl');
+  }
+
+  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+  const latest = latestVersionForSlot(candidate.documentVersions, slot);
+  const sameAsLatest = latest && versionFileIdentity(latest) === versionFileIdentity(meta);
+  const fallback = canonicalDocumentDefaultsForSlot(slot);
+
+  let versionRow = latest;
+  let created = false;
+
+  if (!sameAsLatest) {
+    const versionNumber = nextVersionForSlot(candidate.documentVersions, slot);
+    versionRow = {
+      slot,
+      version: versionNumber,
+      type: String(payload?.type || fallback.type).trim(),
+      label: String(payload?.label || fallback.label).trim(),
+      documentUrl: meta.documentUrl,
+      key: meta.key,
+      originalName: meta.originalName,
+      size: meta.size,
+      mimeType: meta.mimeType,
+      createdAt: new Date(),
+      ...(asObjectIdOrNull(user?._id || user?.id) ? { createdBy: asObjectIdOrNull(user?._id || user?.id) } : {}),
+    };
+    candidate.documentVersions.push(versionRow);
+    candidate.markModified('documentVersions');
+    created = true;
+  }
+
+  if (!versionRow) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Unable to create or resolve version row');
+  }
+
+  upsertLatestSlotDocumentFromVersion(candidate, slot, versionRow);
+  candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+  candidate.isCompleted = candidate.isProfileCompleted === 100;
+  await candidate.save();
+
+  return {
+    slot,
+    created,
+    currentVersion: Number(versionRow.version),
+    version: buildDocumentVersionResponse(versionRow),
+  };
+};
+
+const getCandidateDocumentVersionDownloadUrl = async (candidateId, slotRaw, versionRaw, user) => {
+  const slot = normalizeVersionSlot(slotRaw);
+  if (!slot) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document slot. Use resume or cover-letter.');
+  }
+  const versionNumber = Number(versionRaw);
+  if (!Number.isInteger(versionNumber) || versionNumber < 1) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid version number');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  const row = (candidate.documentVersions || []).find(
+    (v) => normalizeVersionSlot(v?.slot) === slot && Number(v?.version) === versionNumber
+  );
+  if (!row) throw new ApiError(httpStatus.NOT_FOUND, 'Document version not found');
+
+  let key = String(row.key || '').trim();
+  if (!key && row.documentUrl) {
+    key = extractS3KeyFromUrlString(String(row.documentUrl).trim()) || '';
+  }
+
+  if (key) {
+    try {
+      return {
+        slot,
+        version: versionNumber,
+        url: await generatePresignedDownloadUrl(key, 7 * 24 * 3600),
+        fileName: row.originalName || `${slot}-v${versionNumber}`,
+        mimeType: row.mimeType || 'application/octet-stream',
+        size: typeof row.size === 'number' ? row.size : 0,
+      };
+    } catch (e) {
+      logger.warn(`Failed to generate presigned URL for document version: ${e?.message}`);
+    }
+  }
+
+  if (!row.documentUrl) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'File not found for this version');
+  }
+
+  return {
+    slot,
+    version: versionNumber,
+    url: row.documentUrl,
+    fileName: row.originalName || `${slot}-v${versionNumber}`,
+    mimeType: row.mimeType || 'application/octet-stream',
+    size: typeof row.size === 'number' ? row.size : 0,
+  };
+};
+
+/** Delete one resume/cover-letter version. If the current (latest) version is removed, promote the
+ *  previous version into candidate.documents or clear the slot when no versions remain. */
+const deleteCandidateDocumentVersion = async (candidateId, slotRaw, versionRaw, user) => {
+  const slot = normalizeVersionSlot(slotRaw);
+  if (!slot) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document slot. Use resume or cover-letter.');
+  }
+  const versionNumber = Number(versionRaw);
+  if (!Number.isInteger(versionNumber) || versionNumber < 1) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid version number');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+  const rowIndex = candidate.documentVersions.findIndex(
+    (v) => normalizeVersionSlot(v?.slot) === slot && Number(v?.version) === versionNumber
+  );
+  if (rowIndex < 0) throw new ApiError(httpStatus.NOT_FOUND, 'Document version not found');
+
+  const currentLatest = latestVersionForSlot(candidate.documentVersions, slot);
+  const wasCurrent = Boolean(currentLatest && Number(currentLatest.version) === versionNumber);
+  const removedRow = candidate.documentVersions[rowIndex];
+
+  candidate.documentVersions.splice(rowIndex, 1);
+  candidate.markModified('documentVersions');
+
+  let promotedVersion = null;
+  if (wasCurrent) {
+    const nextLatest = latestVersionForSlot(candidate.documentVersions, slot);
+    if (nextLatest) {
+      upsertLatestSlotDocumentFromVersion(candidate, slot, nextLatest);
+      promotedVersion = Number(nextLatest.version);
+    } else {
+      removeLatestSlotDocument(candidate, slot);
+    }
+  }
+
+  candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+  candidate.isCompleted = candidate.isProfileCompleted === 100;
+  await candidate.save();
+
+  const removedKey = String(removedRow.key || '').trim();
+  const keyToDelete =
+    removedKey || (removedRow.documentUrl ? extractS3KeyFromUrlString(String(removedRow.documentUrl).trim()) : '');
+  if (keyToDelete) {
+    try {
+      const { deleteFileFromS3 } = await import('./upload.service.js');
+      await deleteFileFromS3(keyToDelete);
+    } catch {
+      // already logged inside helper
+    }
+  }
+
+  return {
+    slot,
+    deletedVersion: versionNumber,
+    currentVersion: latestVersionForSlot(candidate.documentVersions, slot)?.version ?? null,
+    promotedVersion,
+    fileName: removedRow.originalName || removedRow.label || null,
+    wasCurrent,
+  };
 };
 
 export {
@@ -3675,6 +4132,10 @@ export {
   replaceMyRejectedDocument,
   adminUploadDocumentForCandidate,
   deleteCandidateDocument,
+  listCandidateDocumentVersions,
+  addCandidateDocumentVersion,
+  getCandidateDocumentVersionDownloadUrl,
+  deleteCandidateDocumentVersion,
   getSalarySlipDownloadUrl,
   getDocumentApiUrl,
   // Profile sharing

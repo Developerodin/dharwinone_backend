@@ -51,6 +51,10 @@ const documentSchema = new mongoose.Schema(
   {
     type: { type: String, enum: DOCUMENT_TYPES, default: 'Other', trim: true },
     label: { type: String, trim: true },
+    /** Stable logical slot for versioned assets (resume / cover letter). */
+    logicalSlot: { type: String, enum: ['resume', 'cover-letter'], trim: true },
+    /** Latest version number for `logicalSlot`; mirrors documentVersions for compatibility reads. */
+    slotVersion: { type: Number, min: 1 },
     url: { type: String, trim: true },
     key: { type: String, trim: true },
     originalName: { type: String, trim: true },
@@ -60,6 +64,23 @@ const documentSchema = new mongoose.Schema(
     adminNotes: { type: String, trim: true },
     verifiedAt: { type: Date },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  },
+  { _id: false }
+);
+
+const documentVersionSchema = new mongoose.Schema(
+  {
+    slot: { type: String, enum: ['resume', 'cover-letter'], required: true, index: true },
+    version: { type: Number, required: true, min: 1 },
+    type: { type: String, enum: [...DOCUMENT_TYPES, 'Cover Letter'], default: 'Other', trim: true },
+    label: { type: String, trim: true },
+    documentUrl: { type: String, trim: true },
+    key: { type: String, trim: true },
+    originalName: { type: String, trim: true },
+    size: { type: Number },
+    mimeType: { type: String, trim: true },
+    createdAt: { type: Date, default: Date.now },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { _id: false }
 );
@@ -162,6 +183,8 @@ const employeeSchema = new mongoose.Schema(
     qualifications: { type: [qualificationSchema], default: [] },
     experiences: { type: [experienceSchema], default: [] },
     documents: { type: [documentSchema], default: [] },
+    /** Resume / cover-letter history keyed by stable slot. */
+    documentVersions: { type: [documentVersionSchema], default: [] },
     documentRequests: { type: [documentRequestSchema], default: [] },
     skills: { type: [skillSchema], default: [] },
     socialLinks: { type: [socialLinkSchema], default: [] },

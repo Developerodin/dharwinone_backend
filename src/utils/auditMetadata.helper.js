@@ -163,18 +163,93 @@ export const describeCompensationChange = (before, after) => {
 const NEVER_LOGGED = new Set(['password', 'confirmPassword']);
 
 /**
+ * Named add/remove diff for bulky arrays where filenames carry the signal without inlining blobs.
+ */
+const LOGGED_AS_NAMED_ARRAY_DIFF = new Set(['documents', 'salarySlips']);
+
+/**
  * Recorded as `[changed]` instead of by value: base64 payloads, signed URLs and long arrays that
  * would bury the signal and bloat every audit row.
  */
 const LOGGED_AS_CHANGED_ONLY = new Set([
-  'documents',
-  'salarySlips',
   'profilePicture',
   'qualifications',
   'experiences',
   'skills',
   'socialLinks',
 ]);
+
+/** Treat null, undefined, and "" as equivalent empty values. */
+const normalizeEmpty = (v) => (v == null || v === '' ? null : v);
+
+/**
+ * @param {unknown} item
+ * @returns {string}
+ */
+const documentDisplayName = (item) => {
+  if (!item || typeof item !== 'object') return '(unknown)';
+  const o = /** @type {Record<string, unknown>} */ (item);
+  const name = o.originalName ?? o.name ?? o.fileName;
+  if (name != null && name !== '') return String(name);
+  const url = o.url ?? o.documentUrl ?? o.key;
+  if (url != null && url !== '') return String(url);
+  return '(unknown)';
+};
+
+/**
+ * Stable identity for a document-like row: id/key first, then name, then url, else index.
+ *
+ * @param {unknown} item
+ * @param {number} index
+ * @param {string} [fieldKey]
+ */
+const documentEntryKey = (item, index, fieldKey = 'documents') => {
+  if (!item || typeof item !== 'object') return `__idx_${index}`;
+  const o = /** @type {Record<string, unknown>} */ (item);
+  const id = o._id ?? o.id ?? o.key;
+  if (id != null && id !== '') return String(id);
+  const name = o.originalName ?? o.name ?? o.fileName;
+  if (name != null && name !== '') return String(name);
+  const url = o.url ?? o.documentUrl;
+  if (url != null && url !== '') return String(url);
+  if (fieldKey === 'salarySlips') {
+    const month = o.month != null && o.month !== '' ? String(o.month) : '';
+    const year = o.year != null && o.year !== '' ? String(o.year) : '';
+    if (month || year) return `slip:${year}-${month}:${index}`;
+  }
+  return `__idx_${index}`;
+};
+
+/**
+ * @param {unknown} beforeArr
+ * @param {unknown} afterArr
+ * @param {string} fieldKey
+ * @returns {{ added: string[], removed: string[] }|null}
+ */
+const buildNamedArrayDiff = (beforeArr, afterArr, fieldKey) => {
+  const before = Array.isArray(beforeArr) ? beforeArr : [];
+  const after = Array.isArray(afterArr) ? afterArr : [];
+  const beforeByKey = new Map();
+  before.forEach((item, index) => {
+    beforeByKey.set(documentEntryKey(item, index, fieldKey), documentDisplayName(item));
+  });
+  const afterByKey = new Map();
+  after.forEach((item, index) => {
+    afterByKey.set(documentEntryKey(item, index, fieldKey), documentDisplayName(item));
+  });
+
+  const removed = [];
+  for (const [key, name] of beforeByKey) {
+    if (!afterByKey.has(key)) removed.push(name);
+  }
+  const added = [];
+  for (const [key, name] of afterByKey) {
+    if (!beforeByKey.has(key)) added.push(name);
+  }
+
+  if (!added.length && !removed.length) return null;
+  return { added, removed };
+};
 
 /**
  * Compare by value: ObjectIds and Dates are never === each other and would otherwise report a
@@ -185,13 +260,14 @@ const LOGGED_AS_CHANGED_ONLY = new Set([
  * a structural comparison.
  */
 const comparable = (v) => {
-  if (v == null) return null;
-  if (v instanceof Date) return v.toISOString();
-  if (typeof v === 'object') {
-    const asString = String(v);
-    return asString === '[object Object]' ? JSON.stringify(v) : asString;
+  const normalized = normalizeEmpty(v);
+  if (normalized === null) return null;
+  if (normalized instanceof Date) return normalized.toISOString();
+  if (typeof normalized === 'object') {
+    const asString = String(normalized);
+    return asString === '[object Object]' ? JSON.stringify(normalized) : asString;
   }
-  return v;
+  return normalized;
 };
 
 /**
@@ -211,6 +287,12 @@ export const buildFieldChangeLog = (before, after, body) => {
   for (const key of Object.keys(body || {})) {
     if (NEVER_LOGGED.has(key)) continue;
     if (body[key] === undefined) continue;
+
+    if (LOGGED_AS_NAMED_ARRAY_DIFF.has(key)) {
+      const diff = buildNamedArrayDiff(before?.[key], after?.[key], key);
+      if (diff) changes[key] = diff;
+      continue;
+    }
 
     const from = comparable(before?.[key]);
     const to = comparable(after?.[key]);
@@ -262,15 +344,15 @@ export const buildEmployeeUpdateAuditEnvelope = (beforeCandidate, afterCandidate
   // The form submits every field on every save, so the two are very different questions — and the
   // second is the one you need when reconstructing who changed a value and when.
   const changes = buildFieldChangeLog(beforeCandidate, afterCandidate, body);
+  if (!changes) return { audit: null };
+
   return {
-    audit: fieldsUpdated.length
-      ? {
-          action: actions.CANDIDATE_UPDATE,
-          entityType: actions.CANDIDATE,
-          entityId: String(entityId),
-          metadata: { ...(personName ? { fullName: personName } : {}), fieldsUpdated, ...(changes ? { changes } : {}) },
-          occurredAt: new Date(),
-        }
-      : null,
+    audit: {
+      action: actions.CANDIDATE_UPDATE,
+      entityType: actions.CANDIDATE,
+      entityId: String(entityId),
+      metadata: { ...(personName ? { fullName: personName } : {}), fieldsUpdated, changes },
+      occurredAt: new Date(),
+    },
   };
 };

@@ -8,6 +8,7 @@
   "./scripts/migrations/__tests__/2026-06-17-fix-orphaned-cancelled-placements.test.js",
   "./scripts/migrations/__tests__/2026-07-01-contacts-permission-row.test.js",
   "./scripts/migrations/__tests__/2026-08-10-attendance-status-backfill.test.js",
+  "./scripts/migrations/__tests__/2026-09-10-backfill-document-versions.test.js",
   "./scripts/migrations/__tests__/2026-09-08-backfill-meeting-reminder-retry.test.js",
   "./src/__tests__/employee.controller.helpers.test.js",
   "./src/__tests__/permission.service.employees.test.js",
