@@ -108,3 +108,9 @@ attendance-status-backfill.*.journal.json
 !src/utils/__tests__/
 !src/utils/__tests__/auditMetadata.helper.test.js
 !src/services/__tests__/offerCompensationGate.test.js
+
+# Backdated attendance day-collapse (2026-09-10) — guards a production data-corruption bug
+# (approve left leftover punch sessions on the day, double-counting the calendar total).
+# Parent dirs are re-included above; these two files ship, the rest of the dirs stay ignored.
+!src/services/__tests__/backdatedAttendanceRequest.approve.test.js
+!scripts/migrations/2026-09-10-collapse-backdated-duplicate-days.js

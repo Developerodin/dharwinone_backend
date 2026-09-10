@@ -253,6 +253,43 @@ const requestIdentity = (request) => ({
 });
 
 /**
+ * Days that already carry punched sessions.
+ *
+ * Approving replaces the whole day (see writeAttendanceForEntry), so a real punch is
+ * discarded without the reviewer ever seeing it existed. Reported as a `dayConflicts`
+ * entry alongside the holiday/leave/week-off ones so the approve dialog can name it.
+ *
+ * Holiday and Leave rows are excluded — findBlockedAttendanceDays already reports those,
+ * and a day must not appear in the list twice.
+ */
+const findDaysWithRecordedAttendance = async ({ studentId, userId, dates }) => {
+  if (!Array.isArray(dates) || dates.length === 0) return [];
+  const owner = studentId ? { student: studentId } : userId ? { user: userId } : null;
+  if (!owner) return [];
+
+  const rows = await Attendance.find({
+    ...owner,
+    date: { $in: dates },
+    isActive: true,
+    status: { $nin: ['Holiday', 'Leave'] },
+  })
+    .select('date')
+    .lean();
+
+  const countByDay = new Map();
+  for (const r of rows) {
+    const key = new Date(r.date).getTime();
+    countByDay.set(key, (countByDay.get(key) || 0) + 1);
+  }
+
+  return [...countByDay.entries()].map(([timestamp, count]) => ({
+    date: new Date(timestamp).toISOString().slice(0, 10),
+    kind: 'attendance',
+    label: count === 1 ? '1 recorded session' : `${count} recorded sessions`,
+  }));
+};
+
+/**
  * Reject a second pending request for a day that already has one.
  * ponytail: find-then-insert, not a unique index — Attendance's (student, date) indexes are
  * shared with punch-in and cannot be made unique without touching that path. Two simultaneous
@@ -414,15 +451,37 @@ const getBackdatedAttendanceRequestById = async (id, user) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
-  const dayConflicts =
-    request.status === 'pending'
-      ? await findBlockedAttendanceDays({ ...requestIdentity(request), dates: requestDates(request) })
-      : [];
+  let dayConflicts = [];
+  if (request.status === 'pending') {
+    const identity = requestIdentity(request);
+    const dates = requestDates(request);
+    const blocked = await findBlockedAttendanceDays({ ...identity, dates });
+    const blockedDays = new Set(blocked.map((c) => c.date));
+    const recorded = (await findDaysWithRecordedAttendance({ ...identity, dates })).filter(
+      (c) => !blockedDays.has(c.date)
+    );
+    dayConflicts = [...blocked, ...recorded];
+  }
 
   return { ...request.toJSON(), dayConflicts };
 };
 
-/** Create or update the single Attendance row one request entry maps to. */
+/**
+ * Replace the whole day with the single Attendance row this request entry describes.
+ *
+ * A day is not one row. `punchIn` files every completed session as its own record, so an
+ * 8h regularization landing on a day that already had a session used to leave that session
+ * in place: the calendar sums sessions per day, so an approved 09:00–17:00 request could
+ * render as 16h (and did, clamped by the client to a flat "14h 0m"). One `findOne` patched
+ * one arbitrary row and silently orphaned the rest.
+ *
+ * Now every row for the day is claimed: the first is rewritten, the others are deactivated.
+ * `isActive: false` already drops a row from every read path (listByStudent, getStatistics,
+ * getTrackList, getTrackHistory) while keeping the superseded punch for audit.
+ *
+ * ponytail: deactivate, don't delete — a wrong approval is recoverable by flipping the flag
+ * back. Switch to a hard delete only if these rows ever start costing something.
+ */
 const writeAttendanceForEntry = async (request, entry) => {
   const normalizedDate = new Date(entry.date);
   normalizedDate.setUTCHours(0, 0, 0, 0);
@@ -434,7 +493,14 @@ const writeAttendanceForEntry = async (request, entry) => {
     ? { user: request.user?._id ?? request.user }
     : { student: request.student?._id ?? request.student };
 
-  let attendance = await Attendance.findOne({ ...owner, date: { $gte: normalizedDate, $lt: nextDay } });
+  // Active rows first so a re-approval reuses the live record rather than resurrecting one it
+  // superseded earlier; earliest punch-in breaks the tie so the choice is deterministic.
+  const existing = await Attendance.find({ ...owner, date: { $gte: normalizedDate, $lt: nextDay } }).sort({
+    isActive: -1,
+    punchIn: 1,
+  });
+
+  let attendance = existing[0];
   if (!attendance) {
     attendance = new Attendance({ ...owner, date: normalizedDate });
     attendance.studentEmail = isUserBased ? request.userEmail || request.user?.email || '' : request.studentEmail;
@@ -448,8 +514,16 @@ const writeAttendanceForEntry = async (request, entry) => {
   attendance.notes = request.notes || '';
   attendance.duration = entry.punchOut ? entry.punchOut.getTime() - entry.punchIn.getTime() : 0;
   attendance.status = 'Present';
+  // The kept row may have been a Leave the reviewer chose to overwrite; leaveType must not
+  // survive the status change or the day reads as Present with a leave type still attached.
+  attendance.leaveType = null;
   attendance.isActive = true;
   await attendance.save();
+
+  const supersededIds = existing.slice(1).map((r) => r._id);
+  if (supersededIds.length > 0) {
+    await Attendance.updateMany({ _id: { $in: supersededIds } }, { $set: { isActive: false } });
+  }
 
   return isUserBased ? attendance : attendance.populate('student', 'user');
 };
@@ -587,7 +661,7 @@ const updateBackdatedAttendanceRequest = async (requestId, updateData, user) => 
     throw new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to update backdated attendance requests');
   }
 
-  const existing = await BackdatedAttendanceRequest.findById(requestId).select('status');
+  const existing = await BackdatedAttendanceRequest.findById(requestId).select('status student user');
   if (!existing) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Backdated attendance request not found');
   }
@@ -601,7 +675,11 @@ const updateBackdatedAttendanceRequest = async (requestId, updateData, user) => 
   const updatePayload = {};
 
   if (updateData.attendanceEntries !== undefined) {
-    updatePayload.attendanceEntries = normalizeEntries(updateData.attendanceEntries).entries;
+    const { entries, dates } = normalizeEntries(updateData.attendanceEntries);
+    // Create runs this; update used to skip it, so a reviewer could move a pending request
+    // onto a holiday, a recorded leave or a week-off and then approve it.
+    await assertDaysAreRequestable({ ...requestIdentity(existing), dates });
+    updatePayload.attendanceEntries = entries;
   }
 
   if (updateData.notes !== undefined) {
