@@ -59,6 +59,10 @@ const envVarsSchema = Joi.object()
     BOLNA_WEBHOOK_SECRET: Joi.string().optional().allow('').description('Shared secret for Bolna webhook requests'),
     /** Default true; set to false only for dev SMTP with self-signed certs */
     SMTP_TLS_REJECT_UNAUTHORIZED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    /** Background schedulers. Unset = on in production only. See config.schedulersEnabled. */
+    SCHEDULERS_ENABLED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    /** Non-production only: divert every outgoing email to this address. See config.email.redirectTo. */
+    EMAIL_REDIRECT_TO: Joi.string().email().optional().allow(null, '').empty(''),
     FRONTEND_BASE_URL: Joi.string().optional().description('Frontend base URL for email links'),
     BACKEND_PUBLIC_URL: Joi.string().optional().description('Backend public URL for share links (e.g. https://api.example.com)'),
 
@@ -426,10 +430,23 @@ const config = {
     smtp: smtpTransport,
     from: envVars.EMAIL_FROM,
     replyTo: envVars.EMAIL_REPLY_TO,
+    // Non-production catch-all. Every message is delivered here instead of its real
+    // recipient, while EmailLog keeps recording who it was addressed to. Ignored in
+    // production so a stray value can never silently swallow live mail.
+    redirectTo: envVars.NODE_ENV === 'production' ? null : envVars.EMAIL_REDIRECT_TO || null,
   },
   corsOrigin: envVars.CORS_ORIGIN?.trim()
     ? envVars.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
     : true,
+  // Background schedulers: meeting reminders, verification calls (Bolna dials real numbers),
+  // retention enforcement, mailbox pollers. Default ON in production only — a dev box shares
+  // staging's database, so an ungated local `npm run dev` mails real invitees, places real
+  // calls and enforces retention against live records. Set SCHEDULERS_ENABLED=true locally
+  // only while deliberately testing a scheduler.
+  schedulersEnabled:
+    envVars.SCHEDULERS_ENABLED === undefined || envVars.SCHEDULERS_ENABLED === null
+      ? envVars.NODE_ENV === 'production'
+      : ['true', '1'].includes(String(envVars.SCHEDULERS_ENABLED).toLowerCase()),
   // Email/share links: use public URLs. In production set FRONTEND_BASE_URL and BACKEND_PUBLIC_URL.
   // Fallbacks: SITE_URL/APP_URL for frontend; RENDER_EXTERNAL_URL, VERCEL_URL, RAILWAY_PUBLIC_DOMAIN for backend.
   frontendBaseUrl: (
@@ -762,14 +779,47 @@ config.bolna.allFromNumbers = [
   ...new Set([config.bolna.fromPhoneNumber, ...config.bolna.additionalFromNumbers].filter(Boolean)),
 ];
 
-// Production: warn if email/share links would use localhost or SMTP is incomplete
+// Non-production pointed at a remote database is the shape that mails real people from a dev
+// box: the records are live, the SMTP account is live, only the intent is not. Say so at boot.
+if (config.env !== 'production' && config.env !== 'test') {
+  const remoteDb = !/localhost|127\.0\.0\.1/.test(config.mongoose.url || '');
+  if (remoteDb && !config.email.redirectTo) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[Config] Non-production server on a REMOTE database with no EMAIL_REDIRECT_TO. ' +
+        'Any email this process sends goes to its real recipient. ' +
+        'Set EMAIL_REDIRECT_TO=<your address> to divert it.'
+    );
+  }
+  if (remoteDb && config.schedulersEnabled) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[Config] SCHEDULERS_ENABLED=true on a non-production server using a REMOTE database. ' +
+        'This process will send reminders, place verification calls and enforce retention ' +
+        'against shared data, competing with the deployed environment.'
+    );
+  }
+}
+
+// Production: refuse to start on localhost email/share links, warn if SMTP is incomplete.
+// frontendBaseUrl falls back to http://localhost:3001 when FRONTEND_BASE_URL/SITE_URL/APP_URL
+// are all unset, and meeting invites build their join link from it with no request context to
+// fall back on — so an unset var silently mails real invitees a link only the server can open.
+// A warning was not enough: nobody reads a startup console.warn. Failing here is loud and the
+// fix is one env var. Ceiling: a host that sets FRONTEND_BASE_URL to a wrong-but-public URL
+// still passes; only the localhost default is caught.
 if (config.env === 'production') {
   const f = config.frontendBaseUrl || '';
   const b = config.backendPublicUrl || '';
-  if (f.includes('localhost') || b.includes('localhost')) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[Config] Email and share links will use localhost. Set FRONTEND_BASE_URL and BACKEND_PUBLIC_URL in your deployment env.'
+  const localhostLinks = [
+    ['FRONTEND_BASE_URL', f],
+    ['BACKEND_PUBLIC_URL', b],
+  ].filter(([, url]) => url.includes('localhost') || url.includes('127.0.0.1'));
+  if (localhostLinks.length) {
+    throw new Error(
+      `[Config] Email and share links would use localhost (${localhostLinks
+        .map(([key, url]) => `${key}=${url}`)
+        .join(', ')}). Set them to the public URLs of this environment before starting.`
     );
   }
   const missingSmtp = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'EMAIL_FROM'].filter(

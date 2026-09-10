@@ -76,33 +76,47 @@ mongoose
         if (!redisFeaturesEnabled) {
           logger.warn('[Startup] Redis unavailable or disabled. Continuing without Redis-dependent workers/queues.');
         }
-        startAttendanceScheduler();
-        const candidateSchedulerMinutes = Math.min(
-          1440,
-          Math.max(1, Number(config.candidate?.schedulerIntervalMinutes) || 1)
-        );
-        candidateSchedulerId = startCandidateScheduler(candidateSchedulerMinutes);
-        jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
-        callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
-        externalJobAutoFetchSchedulerId = startExternalJobAutoFetchScheduler();
-        applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(1);
-        startMeetingScheduler();
-        startRecordingScheduler(getEgressClient());
-        recordingDiscoverySchedulerId = startRecordingDiscoveryScheduler();
+        // Request-path only (embeds on write), so it runs regardless of the scheduler gate.
         registerEmbeddingHooks();
-        runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
-        startMemorySweepScheduler({ intervalHours: 24 });
-        if (redisFeaturesEnabled) {
-          startSummaryWorker();
+        // Everything below acts on its own: it writes to the database, sends mail, dials
+        // numbers and deletes records with no user in the loop. Local dev shares staging's
+        // database, so an ungated dev server does all of that to live data — see
+        // config.schedulersEnabled.
+        if (!config.schedulersEnabled) {
+          logger.warn(
+            '[Startup] Background schedulers OFF (default outside production). ' +
+              'Reminders, verification calls, retention and pollers will not run here. ' +
+              'Set SCHEDULERS_ENABLED=true to run them in this process.'
+          );
+        } else {
+          logger.info('[Startup] Background schedulers ON');
+          startAttendanceScheduler();
+          const candidateSchedulerMinutes = Math.min(
+            1440,
+            Math.max(1, Number(config.candidate?.schedulerIntervalMinutes) || 1)
+          );
+          candidateSchedulerId = startCandidateScheduler(candidateSchedulerMinutes);
+          jobVerificationSchedulerId = startJobVerificationCallScheduler(1);
+          callRecordSyncSchedulerId = startCallRecordSyncScheduler(1);
+          externalJobAutoFetchSchedulerId = startExternalJobAutoFetchScheduler();
+          applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(1);
+          startMeetingScheduler();
+          startRecordingScheduler(getEgressClient());
+          recordingDiscoverySchedulerId = startRecordingDiscoveryScheduler();
+          runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
+          startMemorySweepScheduler({ intervalHours: 24 });
+          if (redisFeaturesEnabled) {
+            startSummaryWorker();
+          }
+          startStuckDispatchSweeper();
+          if (redisFeaturesEnabled) {
+            startStuckFinalizeSweeper();
+          }
+          startRetentionEnforcer();
+          startWorkforceReconciliationScheduler({ intervalHours: 24 });
+          startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
+          startEmailNotificationPoller();
         }
-        startStuckDispatchSweeper();
-        if (redisFeaturesEnabled) {
-          startStuckFinalizeSweeper();
-        }
-        startRetentionEnforcer();
-        startWorkforceReconciliationScheduler({ intervalHours: 24 });
-        startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
-        startEmailNotificationPoller();
       }
     });
   })

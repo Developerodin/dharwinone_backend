@@ -36,7 +36,8 @@ test('moving an interview clears its sent marker so the new time is reminded', a
     meetingId: id,
     roomName: id,
     title: 'RESCHED_TEST_interview',
-    scheduledAt: minutesFromNow(17),
+    scheduledAt: minutesFromNow(10),
+    remindAt: minutesFromNow(-0.5),
     durationMinutes: 60,
     status: 'scheduled',
     hosts: [{ email: 'host@example.com' }],
@@ -59,7 +60,8 @@ test('editing an interview without moving it keeps the sent marker', async () =>
     meetingId: id,
     roomName: id,
     title: 'RESCHED_TEST_notes_only',
-    scheduledAt: minutesFromNow(17),
+    scheduledAt: minutesFromNow(10),
+    remindAt: minutesFromNow(-0.5),
     durationMinutes: 60,
     status: 'scheduled',
     hosts: [{ email: 'host@example.com' }],
@@ -73,13 +75,14 @@ test('editing an interview without moving it keeps the sent marker', async () =>
   assert.ok(after.reminderSentAt, 'an unrelated edit must not re-arm the reminder');
 });
 
-test('moving an internal meeting clears every window it already claimed', async () => {
+test('moving an internal meeting re-materialises its reminders for the new time', async () => {
   const id = rid();
   const m = await InternalMeeting.create({
     meetingId: id,
     roomName: id,
     title: 'RESCHED_TEST_internal',
-    scheduledAt: minutesFromNow(17),
+    scheduledAt: minutesFromNow(10),
+    reminders: [{ leadMinutes: 10, dueAt: minutesFromNow(-0.5), sentAt: new Date() }],
     durationMinutes: 30,
     status: 'scheduled',
     hosts: [{ email: 'host@example.com' }],
@@ -96,4 +99,11 @@ test('moving an internal meeting clears every window it already claimed', async 
   const after = await InternalMeeting.findById(m._id).lean();
   assert.equal(after.reminderSentAt, null);
   assert.deepEqual(after.reminderState || {}, {});
+  // The old entry referred to a start time that no longer exists; the new schedule is
+  // rebuilt from the new one and is unsent, so the moved meeting gets reminded again.
+  assert.ok(after.reminders.length > 0, 'a moved meeting must have a fresh reminder schedule');
+  assert.ok(
+    after.reminders.every((r) => r.sentAt === null && r.dueAt > new Date()),
+    'every re-materialised reminder is unsent and still in the future'
+  );
 });

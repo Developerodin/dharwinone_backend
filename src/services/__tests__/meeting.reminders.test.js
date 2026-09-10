@@ -31,14 +31,14 @@ test.before(async () => {
     {
       name: 'Host',
       email: HOST_EMAIL,
-      password: 'password1',
+      password: 'Password1',
       role: 'user',
       notificationPreferences: optedOutPrefs,
     },
     {
       name: 'Cand',
       email: CAND_EMAIL,
-      password: 'password1',
+      password: 'Password1',
       role: 'user',
       notificationPreferences: optedOutPrefs,
     },
@@ -51,12 +51,14 @@ test.after(async () => {
   await mongoose.disconnect();
 });
 
+/** An interview 10 minutes out whose reminder came due 30 seconds ago. */
 const makeMeeting = (overrides) =>
   Meeting.create({
     meetingId: `rem_${Math.random().toString(16).slice(2)}`,
     roomName: `rem_${Math.random().toString(16).slice(2)}`,
     title: 'REMINDER_TEST_base',
-    scheduledAt: minutesFromNow(17),
+    scheduledAt: minutesFromNow(10),
+    remindAt: minutesFromNow(-0.5),
     durationMinutes: 60,
     status: 'scheduled',
     hosts: [{ email: HOST_EMAIL }],
@@ -65,15 +67,19 @@ const makeMeeting = (overrides) =>
     ...overrides,
   });
 
-test('a meeting inside the T-15 window is marked reminderSentAt', async () => {
+test('a meeting whose remindAt has come due is marked reminderSentAt', async () => {
   const m = await makeMeeting({ title: 'REMINDER_TEST_window' });
   await meetingService.sendUpcomingMeetingReminders();
   const after = await Meeting.findById(m._id).lean();
   assert.ok(after.reminderSentAt instanceof Date);
 });
 
-test('a meeting outside the window is left untouched', async () => {
-  const m = await makeMeeting({ title: 'REMINDER_TEST_early', scheduledAt: minutesFromNow(120) });
+test('a meeting whose remindAt is still in the future is left untouched', async () => {
+  const m = await makeMeeting({
+    title: 'REMINDER_TEST_early',
+    scheduledAt: minutesFromNow(120),
+    remindAt: minutesFromNow(110),
+  });
   await meetingService.sendUpcomingMeetingReminders();
   const after = await Meeting.findById(m._id).lean();
   assert.equal(after.reminderSentAt, null);
@@ -114,16 +120,38 @@ test('a meeting with attempts already at 3 is not retried', async () => {
   assert.equal(after.reminderSentAt, null);
 });
 
-test('a meeting 23 minutes out is inside the window', async () => {
-  const m = await makeMeeting({ title: 'REMINDER_TEST_wide', scheduledAt: minutesFromNow(23) });
+test('a reminder long overdue is still picked up — a late tick cannot lose it', async () => {
+  const m = await makeMeeting({ title: 'REMINDER_TEST_overdue', remindAt: minutesFromNow(-45) });
   await meetingService.sendUpcomingMeetingReminders();
   const after = await Meeting.findById(m._id).lean();
-  assert.equal(after.reminderRetry?.attempts, 1, 'a widened window must cover two scheduler ticks');
+  assert.equal(after.reminderRetry?.attempts, 1, 'due means due, however late the pass runs');
 });
 
-test('a meeting 30 minutes out is still outside the window', async () => {
-  const m = await makeMeeting({ title: 'REMINDER_TEST_far', scheduledAt: minutesFromNow(30) });
+test('a meeting with no remindAt is never reminded', async () => {
+  const m = await makeMeeting({ title: 'REMINDER_TEST_null', remindAt: null });
   await meetingService.sendUpcomingMeetingReminders();
   const after = await Meeting.findById(m._id).lean();
+  assert.equal(after.reminderSentAt, null);
   assert.equal(after.reminderRetry?.attempts ?? 0, 0);
+});
+
+test('a reminder whose interview already started is retired without sending', async () => {
+  const m = await makeMeeting({
+    title: 'REMINDER_TEST_started',
+    scheduledAt: minutesFromNow(-5),
+    remindAt: minutesFromNow(-15),
+  });
+  await meetingService.sendUpcomingMeetingReminders();
+  const after = await Meeting.findById(m._id).lean();
+  assert.ok(after.reminderSentAt instanceof Date, 'a stale reminder is retired, not retried forever');
+});
+
+test('computeRemindAt drops a lead time that is already past at booking', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z');
+  assert.equal(
+    meetingService.computeRemindAt(new Date('2026-01-01T12:30:00.000Z'), now).toISOString(),
+    '2026-01-01T12:20:00.000Z'
+  );
+  assert.equal(meetingService.computeRemindAt(new Date('2026-01-01T12:05:00.000Z'), now), null);
+  assert.equal(meetingService.computeRemindAt(null), null);
 });

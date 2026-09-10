@@ -14,7 +14,7 @@ import {
   seriesMaterializationFloor,
 } from '../utils/recurrence.util.js';
 import { sendMeetingInvitationEmail } from './email.service.js';
-import { getInternalMeetingById } from './internalMeeting.service.js';
+import { getInternalMeetingById, buildReminderSchedule } from './internalMeeting.service.js';
 
 /**
  * Recurring meeting series. A MeetingSeries holds the recurrence rule + a shared
@@ -326,6 +326,9 @@ export const materializeSeries = async (series, { now = new Date() } = {}) => {
         seriesVersion: series.seriesVersion,
         recurrenceSummary: summary,
         createdBy: series.createdBy,
+        // Occurrences are materialised ahead of time, so their reminders are too — the
+        // scheduler selects on due time and never re-derives it from config.
+        reminders: buildReminderSchedule(o.at),
       });
       created += 1;
       series.lastOccurrenceIndex = Math.max(series.lastOccurrenceIndex ?? -1, o.index);

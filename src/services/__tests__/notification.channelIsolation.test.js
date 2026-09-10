@@ -44,7 +44,7 @@ test('an unwritable in-app notification does not suppress the email', async () =
   const user = await User.create({
     name: 'Channel Isolation',
     email,
-    password: 'password1',
+    password: 'Password1',
     role: 'user',
   });
 

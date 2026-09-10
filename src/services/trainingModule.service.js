@@ -10,6 +10,7 @@ import * as studentService from './student.service.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
+import { buildCourseSearchRegexes } from '../utils/courseSearch.util.js';
 import logger from '../config/logger.js';
 import { hasApiPermissionFromContext } from '../utils/permissionCheck.js';
 
@@ -105,13 +106,15 @@ const mentorIdsMatchingSearch = async (trimmed) => {
 };
 
 /**
- * Category and instructor labels for the agent curriculum toolbar (all assigned modules).
+ * Category, instructor, and title labels for the agent curriculum toolbar (all
+ * assigned modules). `titles` feeds the search typeahead and costs nothing extra —
+ * this query already loads every assigned module, it was just discarding moduleName.
  * @param {object} assignmentFilter
- * @returns {Promise<{ categories: string[], instructors: string[] }>}
+ * @returns {Promise<{ categories: string[], instructors: string[], titles: string[] }>}
  */
 const loadMineCatalogFacets = async (assignmentFilter) => {
   const docs = await TrainingModule.find(assignmentFilter)
-    .select('categories mentorsAssigned')
+    .select('moduleName categories mentorsAssigned')
     .populate('categories', 'name')
     .populate({
       path: 'mentorsAssigned',
@@ -120,6 +123,7 @@ const loadMineCatalogFacets = async (assignmentFilter) => {
     });
   const categorySet = new Set();
   const instructorSet = new Set();
+  const titleSet = new Set();
   for (const doc of docs) {
     for (const cat of doc.categories || []) {
       if (cat?.name) categorySet.add(cat.name);
@@ -127,10 +131,13 @@ const loadMineCatalogFacets = async (assignmentFilter) => {
     for (const label of collectInstructorFacetLabels(doc.mentorsAssigned)) {
       instructorSet.add(label);
     }
+    const title = doc.moduleName?.trim();
+    if (title) titleSet.add(title);
   }
   return {
     categories: [...categorySet].sort((a, b) => a.localeCompare(b)),
     instructors: [...instructorSet].sort((a, b) => a.localeCompare(b)),
+    titles: [...titleSet].sort((a, b) => a.localeCompare(b)),
   };
 };
 
@@ -433,15 +440,24 @@ const queryTrainingModules = async (filter, options, currentUser) => {
     const trimmed = search.trim();
     const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const prefix = new RegExp('^' + escaped, 'i');
-    const anywhere = new RegExp(escaped, 'i');
+    // Substring rule, plus the initials rule that makes "ML" find "Machine Learning".
+    const searchRegexes = buildCourseSearchRegexes(trimmed);
     const mentorIds = await mentorIdsMatchingSearch(trimmed);
     const searchOr = [
       { moduleName: prefix },
-      { moduleName: anywhere },
-      { shortDescription: anywhere },
+      ...searchRegexes.map((rx) => ({ moduleName: rx })),
+      ...searchRegexes.map((rx) => ({ shortDescription: rx })),
     ];
     if (mentorIds.length) searchOr.push({ mentorsAssigned: { $in: mentorIds } });
-    const isTextSafe = !isMine && trimmed.length >= 3 && /^[\p{L}\p{N}\s'-]+$/u.test(trimmed);
+    // $text stems but cannot expand abbreviations, so an abbreviation-shaped query
+    // (2-5 letters, which is exactly when searchRegexes carries an initials regex)
+    // must take the regex branch instead.
+    // ponytail: that branch is an unanchored regex scan. Fine at current catalog size;
+    // if the admin catalog grows past a few thousand modules, move short-query search
+    // to Atlas Search rather than widening this.
+    const isAbbreviationQuery = searchRegexes.length > 1;
+    const isTextSafe =
+      !isMine && !isAbbreviationQuery && trimmed.length >= 3 && /^[\p{L}\p{N}\s'-]+$/u.test(trimmed);
     if (isTextSafe) {
       mongoFilter.$text = { $search: trimmed };
     } else if (Array.isArray(mongoFilter.$or)) {

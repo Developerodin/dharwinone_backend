@@ -304,5 +304,6 @@
   "./src/controllers/__tests__/employee.update.audit.integration.test.js",
   "./src/services/__tests__/offerCompensationGate.test.js",
   "./src/__tests__/routes/upload.route.permissions.test.js",
-  "src/services/__tests__/activityLog.entityNames.test.js"
+  "src/services/__tests__/activityLog.entityNames.test.js",
+  "./src/utils/__tests__/courseSearch.util.test.js"
 ]

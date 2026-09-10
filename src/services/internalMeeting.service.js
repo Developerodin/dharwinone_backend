@@ -158,6 +158,7 @@ const createInternalMeeting = async (body, userId) => {
     meetingId,
     roomName: meetingId,
     createdBy: userId,
+    reminders: buildReminderSchedule(body.scheduledAt),
   });
 
   const meetingObj = meeting.toJSON();
@@ -244,6 +245,7 @@ const updateInternalMeetingById = async (id, updateBody) => {
   ) {
     meeting.reminderSentAt = null;
     meeting.reminderState = new Map();
+    meeting.reminders = buildReminderSchedule(movedTo);
   }
   if (previousStatus !== 'ended' && meeting.status === 'ended') {
     meeting.endedAt = new Date();
@@ -375,10 +377,10 @@ const autoEndExpiredInternalMeetings = async () => {
 };
 
 /**
- * Config-driven reminder windows (lead minutes before each meeting). Override via
- * env INTERNAL_MEETING_REMINDER_WINDOWS="60,15". Adding a window (e.g. "1440,240,60,15"
- * for 24h/4h/1h/15m) needs no code change. Each window dedups independently via the
- * reminderState map keyed by lead-minutes.
+ * Reminder lead times, in minutes before the start. Override via
+ * env INTERNAL_MEETING_REMINDER_WINDOWS="60,10". A value added here is materialised onto
+ * meetings created afterwards; meetings that already exist keep the schedule they were
+ * created with, so changing this never retro-fires and never duplicates an existing one.
  */
 export const REMINDER_WINDOWS = (() => {
   const raw = process.env.INTERNAL_MEETING_REMINDER_WINDOWS;
@@ -387,45 +389,72 @@ export const REMINDER_WINDOWS = (() => {
         .split(',')
         .map((s) => parseInt(s.trim(), 10))
         .filter((n) => Number.isInteger(n) && n > 0)
-    : [60, 15];
-  const label = (m) => (m % 60 === 0 ? `${m / 60} hour${m / 60 > 1 ? 's' : ''}` : `${m} minutes`);
-  return mins.map((m) => ({ minutes: m, label: label(m) }));
+    : [60, 10];
+  return [...new Set(mins)].sort((a, b) => b - a);
 })();
 
-// Half-width of the match window (minutes). With a 5-min scheduler tick a ~±5
-// window guarantees each meeting is caught once; reminderState prevents double-fire.
-const WINDOW_PAD_MIN = Math.max(2, Number(process.env.INTERNAL_MEETING_REMINDER_PAD_MIN) || 5);
+export const formatLeadLabel = (m) => (m % 60 === 0 ? `${m / 60} hour${m / 60 > 1 ? 's' : ''}` : `${m} minutes`);
 
-const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
-  const now = new Date();
-  const center = now.getTime() + minutes * 60 * 1000;
-  const windowStart = new Date(center - WINDOW_PAD_MIN * 60 * 1000);
-  const windowEnd = new Date(center + WINDOW_PAD_MIN * 60 * 1000);
-  const stateField = `reminderState.${minutes}`;
+/**
+ * Materialise the reminder schedule for a start time: one entry per configured lead time,
+ * each with the exact moment it becomes due.
+ *
+ * Entries already past at this moment are dropped. A meeting booked inside its own lead
+ * time has no earlier moment left to fire — the invitation going out right now is the
+ * notice — and creating one anyway is what made a reminder land seconds after booking.
+ *
+ * @param {Date|string} scheduledAt
+ * @param {Date} [now]
+ * @returns {Array<{leadMinutes:number, dueAt:Date, sentAt:null}>}
+ */
+export const buildReminderSchedule = (scheduledAt, now = new Date()) => {
+  if (!scheduledAt) return [];
+  const start = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(start)) return [];
+  return REMINDER_WINDOWS.map((leadMinutes) => ({
+    leadMinutes,
+    dueAt: new Date(start - leadMinutes * 60000),
+    sentAt: null,
+  })).filter((r) => r.dueAt.getTime() > now.getTime());
+};
 
-  const filter = {
-    status: 'scheduled',
-    scheduledAt: { $gte: windowStart, $lte: windowEnd },
-    [stateField]: { $exists: false },
+/**
+ * Send one due reminder entry. The entry is claimed before delivery, so two schedulers
+ * racing the same meeting settle it in the database rather than both mailing.
+ */
+const sendDueInternalMeetingReminder = async (m, entry, now) => {
+  const minutes = entry.leadMinutes;
+  const label = formatLeadLabel(minutes);
+  const claimFilter = {
+    _id: m._id,
+    reminders: { $elemMatch: { leadMinutes: minutes, sentAt: null } },
+    // Refuse a window the previous band-matching code already sent. Backfilled meetings
+    // carry unsent entries whose due moment may pass while the old code is still deployed:
+    // it reminds via reminderState, and without this the new pass would remind again.
+    [`reminderState.${minutes}`]: { $exists: false },
   };
-  // Back-compat: pre-existing one-off meetings used `reminderSentAt` for the 15-min mark.
-  if (minutes === 15) filter.reminderSentAt = null;
-  const meetings = await InternalMeeting.find(filter).lean();
-  if (!meetings.length) return;
+  // The legacy dedup fields are written alongside the claim so a process still running the
+  // previous band-matching code treats this meeting as already reminded mid-rollout.
+  const claimSet = {
+    'reminders.$.sentAt': now,
+    [`reminderState.${minutes}`]: now,
+    reminderSentAt: now,
+  };
+  const result = await InternalMeeting.updateOne(claimFilter, { $set: claimSet });
+  if (result.modifiedCount === 0) return; // another tick or process claimed it
+
+  // A reminder for a meeting that already started is not worth sending: a scheduler that
+  // was down should not deliver "starts soon" after the fact. The claim above retires it.
+  if (new Date(m.scheduledAt).getTime() <= now.getTime()) {
+    logger.info(
+      `[internalMeetingReminders] ${m.meetingId} ${minutes}m suppressed — meeting already started`
+    );
+    return;
+  }
 
   const User = (await import('../models/user.model.js')).default;
   const { notify } = await import('./notification.service.js');
-  const { sendMeetingReminderEmail } = await import('./email.service.js');
-
-  for (const m of meetings) {
-    const claimFilter = { _id: m._id, [stateField]: { $exists: false } };
-    const claimSet = { [stateField]: now };
-    if (minutes === 15) {
-      claimFilter.reminderSentAt = null;
-      claimSet.reminderSentAt = now;
-    }
-    const result = await InternalMeeting.updateOne(claimFilter, { $set: claimSet });
-    if (result.modifiedCount === 0) continue; // another tick/process claimed it
+  const { sendMeetingReminderEmail, buildMeetingReminderEmail } = await import('./email.service.js');
 
     let delivered = 0;
     const emails = getInvitationEmails(m);
@@ -450,10 +479,18 @@ const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
             title: 'Meeting reminder',
             message,
             ...internalMeetingNotificationFields(m, { name: inviteName, email }),
-            email: {
-              subject: `Reminder: ${title} starts soon`,
-              text: `${message}\n\n${publicUrl}`,
-            },
+            // Same builder the guest branch uses, so an invitee with an account and one
+            // without receive the identical templated mail. Passing only `text` here is
+            // what produced the bare, unstyled reminder: notify() sends `html` only when
+            // it is given one.
+            email: buildMeetingReminderEmail({
+              title,
+              scheduledAt: m.scheduledAt,
+              timezone: m.timezone || 'UTC',
+              publicMeetingUrl: publicUrl,
+              inviteeName: inviteName,
+              kindLabel: 'meeting',
+            }),
           });
           delivered += 1;
         } catch (err) {
@@ -484,31 +521,52 @@ const sendInternalMeetingRemindersForWindow = async ({ minutes, label }) => {
       }
     }
 
-    if (delivered === 0) {
-      // Nothing reached anyone, so give the claim back and let the next tick try again —
-      // the window is two ticks wide. Ceiling: a process killed between the claim and the
-      // send still loses this reminder. Closing that needs the claimedAt lease + attempts
-      // counter the ATS T-15 pass already carries; lift it here if that starts biting.
-      const release = { $unset: { [stateField]: '' } };
-      if (minutes === 15) release.$set = { reminderSentAt: null };
-      // eslint-disable-next-line no-await-in-loop
-      await InternalMeeting.updateOne({ _id: m._id }, release);
-      logger.warn(
-        `[internalMeetingReminders] ${m.meetingId} ${minutes}m reached nobody (${emails.length} invitee(s)) — claim released`
-      );
-    }
+  if (delivered === 0) {
+    // Nothing reached anyone, so hand the entry back: it stays due and the next tick retries
+    // it. There is no window to fall out of any more, so a transient SMTP failure no longer
+    // loses the reminder outright. Ceiling: a process killed between claim and send still
+    // loses this one — closing that needs the claimedAt lease the ATS pass carries.
+    await InternalMeeting.updateOne(
+      { _id: m._id, reminders: { $elemMatch: { leadMinutes: minutes, sentAt: now } } },
+      {
+        $set: { 'reminders.$.sentAt': null, reminderSentAt: null },
+        $unset: { [`reminderState.${minutes}`]: '' },
+      }
+    );
+    logger.warn(
+      `[internalMeetingReminders] ${m.meetingId} ${minutes}m reached nobody (${emails.length} invitee(s)) — claim released`
+    );
   }
 };
 
-export { sendInternalMeetingRemindersForWindow };
+export { sendDueInternalMeetingReminder };
 
+/**
+ * One pass over every reminder that has come due. Selection is by due time, not by matching
+ * the start time against a moving band, so a reminder cannot be missed by a late tick.
+ */
 export const sendUpcomingInternalMeetingReminders = async () => {
-  for (const w of REMINDER_WINDOWS) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await sendInternalMeetingRemindersForWindow(w);
-    } catch (err) {
-      logger.warn(`[internalMeetingReminders] window ${w.minutes}m failed: ${err?.message || err}`);
+  const now = new Date();
+  const meetings = await InternalMeeting.find({
+    status: 'scheduled',
+    reminders: { $elemMatch: { sentAt: null, dueAt: { $lte: now } } },
+  })
+    .limit(200)
+    .lean();
+
+  for (const m of meetings) {
+    const due = (m.reminders || []).filter(
+      (r) => !r.sentAt && new Date(r.dueAt).getTime() <= now.getTime()
+    );
+    for (const entry of due) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await sendDueInternalMeetingReminder(m, entry, now);
+      } catch (err) {
+        logger.warn(
+          `[internalMeetingReminders] ${m.meetingId} ${entry.leadMinutes}m failed: ${err?.message || err}`
+        );
+      }
     }
   }
 };

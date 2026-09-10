@@ -6,6 +6,7 @@ import User from '../models/user.model.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
 import { refreshTrainingModuleCoverImages } from '../utils/trainingCoverImageUrl.js';
+import { buildCourseSearchRegexes } from '../utils/courseSearch.util.js';
 import logger from '../config/logger.js';
 
 const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
@@ -163,12 +164,13 @@ const buildPostJoinMatch = (filter) => {
   if (filter.category) {
     clauses.push({ 'categories.name': filter.category });
   }
-  const q = filter.search?.trim();
-  if (q) {
-    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rx = new RegExp(escaped, 'i');
+  const searchRegexes = buildCourseSearchRegexes(filter.search);
+  if (searchRegexes.length) {
+    // `mentors.userName` (not `instructorName`) so search reaches every assigned
+    // mentor, matching what the instructor filter chip already offers.
+    const fields = ['moduleName', 'shortDescription', 'categories.name', 'mentors.userName'];
     clauses.push({
-      $or: [{ moduleName: rx }, { instructorName: rx }],
+      $or: fields.flatMap((field) => searchRegexes.map((rx) => ({ [field]: rx }))),
     });
   }
   const band = filter.progress;
@@ -228,14 +230,18 @@ const mapCatalogRow = (row) => {
 };
 
 /**
- * Distinct category / instructor labels for assigned modules (unfiltered) so
- * catalog dropdowns are not limited to the current page.
+ * Distinct category / instructor / title labels for assigned modules (unfiltered)
+ * so catalog dropdowns and the search typeahead are not limited to the current page.
+ *
+ * `titles` is free here: this query already loads every assigned module, it was just
+ * discarding moduleName. ponytail: fine while a student has tens of courses; if that
+ * ever reaches thousands, move the typeahead to its own paged endpoint.
  * @param {mongoose.Types.ObjectId} studentOid
- * @returns {Promise<{ categories: string[], instructors: string[] }>}
+ * @returns {Promise<{ categories: string[], instructors: string[], titles: string[] }>}
  */
 const loadCatalogFacets = async (studentOid) => {
   const docs = await TrainingModule.find({ students: studentOid })
-    .select('categories mentorsAssigned')
+    .select('moduleName categories mentorsAssigned')
     .populate('categories', 'name')
     .populate({
       path: 'mentorsAssigned',
@@ -245,6 +251,7 @@ const loadCatalogFacets = async (studentOid) => {
     .lean();
   const categorySet = new Set();
   const instructorSet = new Set();
+  const titleSet = new Set();
   for (const doc of docs) {
     for (const cat of doc.categories || []) {
       if (cat?.name) categorySet.add(cat.name);
@@ -252,10 +259,13 @@ const loadCatalogFacets = async (studentOid) => {
     for (const label of collectInstructorFacetLabels(doc.mentorsAssigned)) {
       instructorSet.add(label);
     }
+    const title = doc.moduleName?.trim();
+    if (title) titleSet.add(title);
   }
   return {
     categories: [...categorySet].sort((a, b) => a.localeCompare(b)),
     instructors: [...instructorSet].sort((a, b) => a.localeCompare(b)),
+    titles: [...titleSet].sort((a, b) => a.localeCompare(b)),
   };
 };
 
@@ -392,6 +402,7 @@ const queryStudentCourses = async (studentId, filter, options) => {
 
 export {
   queryStudentCourses,
+  buildPostJoinMatch,
   primaryInstructorLabel,
   mentorUserDisplayLabel,
   collectInstructorFacetLabels,

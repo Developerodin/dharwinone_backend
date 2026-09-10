@@ -361,14 +361,24 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
     logger.warn(`[SMTP] sendEmail skipped: empty recipient (original to=${String(to || '')})`);
     throw err;
   }
+  // Non-production catch-all: deliver to the tester, not the real invitee. Dev shares
+  // staging's database, so real candidates and staff sit one `npm run dev` away from a
+  // reminder or invitation nobody meant to send. The log below still records the intended
+  // recipient — redirection changes who receives it, never the audit trail.
+  const intendedTo = String(deliveryTo).trim().toLowerCase();
+  const redirectTo = config.email.redirectTo;
+  const isRedirected = Boolean(redirectTo) && redirectTo.toLowerCase() !== intendedTo;
+  const envelopeTo = isRedirected ? redirectTo : deliveryTo;
+  const envelopeSubject = isRedirected ? `[dev → ${intendedTo}] ${subject}` : subject;
+
   let logEntry = null;
   try {
     logEntry = await EmailLog.create({
-      to: String(deliveryTo).trim().toLowerCase(),
+      to: intendedTo,
       subject,
       templateName: templateName || null,
       status: 'pending',
-      metadata,
+      metadata: isRedirected ? { ...metadata, redirectedTo: redirectTo } : metadata,
     });
   } catch (logErr) {
     logger.warn(`EmailLog create failed: ${logErr?.message || logErr}`);
@@ -384,8 +394,8 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
   const msg = {
     from,
     replyTo,
-    to: deliveryTo,
-    subject,
+    to: envelopeTo,
+    subject: envelopeSubject,
     text,
     ...(html && { html }),
     ...extra,
@@ -408,7 +418,7 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
     } catch (err) {
       lastErr = err;
       if (attempt === maxAttempts - 1) {
-        logSmtpFailure(`sendMail to ${deliveryTo}`, err);
+        logSmtpFailure(`sendMail to ${envelopeTo}`, err);
       }
       if (attempt < maxAttempts - 1) {
         await delay(backoffMs[attempt]);

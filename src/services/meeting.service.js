@@ -34,12 +34,27 @@ import {
 } from '../constants/atsPipeline.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
-const reminderWindowStartMin = () => Number(process.env.REMINDER_WINDOW_START_MIN) || 15;
-// Ten minutes wide against a five-minute scheduler tick, so a meeting is eligible for two
-// passes. At the old five-minute width a meeting was eligible for exactly one, which made
-// the retry lease and REMINDER_MAX_ATTEMPTS unreachable and left a permanently unreminded
-// band whenever a restart landed more than one tick after the previous pass.
-const reminderWindowEndMin = () => Number(process.env.REMINDER_WINDOW_END_MIN) || 25;
+/** Minutes before the start that an interview reminder becomes due. */
+export const reminderLeadMin = () => Number(process.env.INTERVIEW_REMINDER_LEAD_MIN) || 10;
+
+/**
+ * The moment an interview's reminder becomes due, or null when there is none to send.
+ *
+ * Null for an interview booked inside its own lead time: the invitation going out right now
+ * is the notice, and materialising an already-past reminder is what made one arrive seconds
+ * after booking.
+ *
+ * @param {Date|string} scheduledAt
+ * @param {Date} [now]
+ * @returns {Date|null}
+ */
+export const computeRemindAt = (scheduledAt, now = new Date()) => {
+  if (!scheduledAt) return null;
+  const start = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(start)) return null;
+  const due = new Date(start - reminderLeadMin() * 60000);
+  return due.getTime() > now.getTime() ? due : null;
+};
 const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 600000;
 
 /** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
@@ -474,6 +489,7 @@ const createMeeting = async (body, userId) => {
     roomName: meetingId, // same as meetingId for LiveKit; satisfies legacy index roomName_1
     createdBy: userId,
     tenantId,
+    remindAt: computeRemindAt(body.scheduledAt),
   });
 
   const meetingObj = meeting.toJSON();
@@ -997,6 +1013,7 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
     new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime()
   ) {
     meeting.reminderSentAt = null;
+    meeting.remindAt = computeRemindAt(movedTo);
     meeting.reminderRetry = {
       attempts: 0,
       claimedAt: null,
@@ -1437,21 +1454,21 @@ const autoEndExpiredMeetings = async () => {
 };
 
 /**
- * T-15 reminder pass. For every scheduled interview starting within the
- * configured window, lease-claim it, deliver email + in-app reminders through
- * the dispatcher, and record success / retry / failure.
+ * Reminder pass. For every scheduled interview whose remindAt has come due,
+ * lease-claim it, deliver email + in-app reminders through the dispatcher, and
+ * record success / retry / failure. A failed send stays due, so the retry lease
+ * and REMINDER_MAX_ATTEMPTS are reachable — under the old band a send that failed
+ * near the window's edge was simply lost.
  * @returns {Promise<{sent:number, retried:number, failed:number, staleRecovered:number}>}
  */
 export const sendUpcomingMeetingReminders = async () => {
   const now = new Date();
-  const windowStart = new Date(now.getTime() + reminderWindowStartMin() * 60000);
-  const windowEnd = new Date(now.getTime() + reminderWindowEndMin() * 60000);
   const leaseFloor = new Date(now.getTime() - reminderLeaseTtlMs());
 
   const meetings = await Meeting.find({
     status: 'scheduled',
     reminderSentAt: null,
-    scheduledAt: { $gte: windowStart, $lte: windowEnd },
+    remindAt: { $ne: null, $lte: now },
     'reminderRetry.attempts': { $lt: REMINDER_MAX_ATTEMPTS },
     $or: [{ 'reminderRetry.claimedAt': null }, { 'reminderRetry.claimedAt': { $lt: leaseFloor } }],
   })
@@ -1481,6 +1498,20 @@ export const sendUpcomingMeetingReminders = async () => {
     if (!claim) continue;
     if (m.reminderRetry?.claimedAt) stats.staleRecovered += 1;
 
+    // A reminder for an interview that already started is not worth sending: a scheduler
+    // that was down should not deliver "starts soon" after the fact. The claim retires it.
+    if (new Date(m.scheduledAt).getTime() <= now.getTime()) {
+      // eslint-disable-next-line no-await-in-loop
+      await Meeting.updateOne(
+        { _id: m._id },
+        { $set: { reminderSentAt: now, 'reminderRetry.claimedAt': null } }
+      );
+      stats.skipped += 1;
+      logger.info(`Reminder suppressed for ${m.meetingId}: interview already started`);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
     const title = m.title || 'Interview';
     const message = `Your interview "${title}" starts soon.`;
     const emails = getInvitationEmails(m);
@@ -1508,7 +1539,7 @@ export const sendUpcomingMeetingReminders = async () => {
             });
             notified = true;
           } catch (err) {
-            logger.warn(`T-15 in-app notify failed for ${email}: ${err?.message || err}`);
+            logger.warn(`T-10 in-app notify failed for ${email}: ${err?.message || err}`);
           }
         }
         const emailed = await sendMeetingReminderEmail(email, {

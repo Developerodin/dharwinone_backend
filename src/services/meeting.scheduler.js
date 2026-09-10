@@ -35,7 +35,7 @@ const runUpcomingMeetingReminders = async () => {
     ]);
     if (stats && (stats.sent || stats.skipped || stats.retried || stats.failed || stats.staleRecovered)) {
       logger.info(
-        `[Meeting scheduler] T-15 pass — sent:${stats.sent} skipped:${stats.skipped} ` +
+        `[Meeting scheduler] T-10 pass — sent:${stats.sent} skipped:${stats.skipped} ` +
           `retried:${stats.retried} failed:${stats.failed} staleRecovered:${stats.staleRecovered}`
       );
     }

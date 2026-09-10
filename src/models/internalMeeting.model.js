@@ -103,9 +103,25 @@ const internalMeetingSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
-    // Per-window reminder dedup, keyed by lead-minutes (e.g. { '60': Date, '15': Date }).
-    // Drives the config-driven reminder windows in internalMeeting.service.js so adding
-    // a window needs no schema change. `reminderSentAt` above is kept for back-compat.
+    // Materialised reminder schedule: one entry per configured lead time, with dueAt
+    // computed from scheduledAt at create and on reschedule. Selecting on dueAt instead of
+    // matching scheduledAt against a moving band means a reminder fires at its real lead
+    // time, survives a missed tick instead of falling out of a window, and cannot be
+    // double-sent by two processes configured with different lead times — the entry, not
+    // the config, is the unit of work. Entries already past at booking are never created:
+    // for a meeting booked inside its own lead time the invitation is the notice.
+    reminders: [
+      {
+        _id: false,
+        leadMinutes: { type: Number, required: true },
+        dueAt: { type: Date, required: true },
+        sentAt: { type: Date, default: null },
+      },
+    ],
+    // Legacy per-window dedup, keyed by lead-minutes (e.g. { '60': Date, '15': Date }).
+    // Still written when a reminder is sent so a process running the previous band-matching
+    // code does not re-send the same reminder during a rollout. `reminderSentAt` above is
+    // kept for the same reason. Both are read-only for the current pass.
     reminderState: {
       type: Map,
       of: Date,
@@ -151,6 +167,9 @@ internalMeetingSchema.plugin(paginate);
  * index. It needs a deliberate index-creation step on deploy.
  */
 internalMeetingSchema.index({ scheduledAt: 1 });
+// Reminder pass: due, unsent entries on scheduled meetings. Both keys live in the same
+// array, so this stays a legal compound multikey index.
+internalMeetingSchema.index({ status: 1, 'reminders.dueAt': 1, 'reminders.sentAt': 1 });
 
 const InternalMeeting = mongoose.model('InternalMeeting', internalMeetingSchema);
 export default InternalMeeting;

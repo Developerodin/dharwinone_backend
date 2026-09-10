@@ -131,6 +131,19 @@ const meetingSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
+    /**
+     * The exact moment this interview's reminder becomes due, computed from scheduledAt at
+     * create and on reschedule. The pass selects on it instead of matching scheduledAt
+     * against a moving band, so a reminder fires at its real lead time, stays due through a
+     * missed tick or a failed send instead of falling out of a window, and cannot be
+     * duplicated by two processes configured with different lead times.
+     * Null for interviews booked inside their own lead time — there is no earlier moment
+     * left to fire and the invitation is the notice — and for rows predating this field.
+     */
+    remindAt: {
+      type: Date,
+      default: null,
+    },
     /** Success marker for the post-interview "Conclusion of Meeting" reminder. */
     conclusionNotifiedAt: {
       type: Date,
@@ -141,7 +154,7 @@ const meetingSchema = mongoose.Schema(
       type: Date,
       default: null,
     },
-    /** Lease + retry + observability metadata for the T-15 reminder. */
+    /** Lease + retry + observability metadata for the T-10 reminder. */
     reminderRetry: {
       attempts: { type: Number, default: 0 },
       claimedAt: { type: Date, default: null },
@@ -214,6 +227,8 @@ meetingSchema.plugin(paginate);
 
 // Scheduler query indexes (see meeting.service.js reminder passes).
 meetingSchema.index({ status: 1, reminderSentAt: 1, scheduledAt: 1 });
+// Reminder pass: due, unsent interviews.
+meetingSchema.index({ status: 1, reminderSentAt: 1, remindAt: 1 });
 meetingSchema.index({ status: 1, conclusionNotifiedAt: 1, scheduledAt: 1 });
 meetingSchema.index({ 'candidate.id': 1 });
 

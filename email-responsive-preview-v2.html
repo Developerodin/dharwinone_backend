@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Dharwin Email - Responsive Master-Detail Preview</title>
+  <style>
+    :root {
+      --primary: #845adf; --primary-hover: #6f48c9; --primary-mist: rgba(132, 90, 223, 0.1);
+      --mail-paper: #faf8f5; --mail-elevated: #ffffff; --mail-ink: #1c1917; --mail-ink-soft: #57534e;
+      --mail-ink-faint: #a8a29e; --mail-accent: #c2410c; --mail-accent-mist: rgba(194, 65, 12, 0.08);
+      --border: rgba(28, 25, 23, 0.08); --radius: 14px; --radius-sm: 10px;
+      --shadow: 0 2px 8px rgba(28, 25, 23, 0.04), 0 12px 40px rgba(28, 25, 23, 0.06);
+      --folders-w: 16rem; --list-w: 24rem;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: linear-gradient(135deg, #f3f0ff, #faf8f5 50%, #fff7ed); color: var(--mail-ink); min-height: 100vh; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--primary); }
+    .subtitle { font-size: 0.875rem; color: var(--mail-ink-soft); margin-bottom: 1.25rem; max-width: 58rem; line-height: 1.5; }
+    .device-tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .device-tabs button { min-height: 44px; padding: 0 1rem; border-radius: 999px; border: 1px solid var(--border); background: var(--mail-elevated); font-size: 0.8125rem; font-weight: 600; cursor: pointer; }
+    .device-tabs button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .breakpoint-note { font-size: 0.75rem; color: var(--mail-ink-faint); margin-bottom: 1rem; max-width: 58rem; }
+    .showcase { overflow-x: auto; padding-bottom: 0.5rem; }
+    .device-frame { display: none; margin: 0 auto; background: var(--mail-elevated); border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
+    .device-frame.active { display: block; }
+    .device-meta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
+    .device-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mail-ink-faint); }
+    .state-hint { font-size: 0.8125rem; color: var(--primary-hover); text-align: right; flex: 1; }
+    .phone-shell { border-radius: 28px; border: 8px solid #1c1917; background: #1c1917; }
+    .phone-notch { height: 28px; background: #1c1917; display: flex; align-items: center; justify-content: center; }
+    .phone-notch span { width: 80px; height: 6px; border-radius: 999px; background: #333; }
+    .browser-chrome { background: #e7e5e4; padding: 0.5rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border); }
+    .browser-dots { display: flex; gap: 0.35rem; }
+    .browser-dots span { width: 10px; height: 10px; border-radius: 50%; }
+    .browser-dots span:nth-child(1) { background: #f87171; }
+    .browser-dots span:nth-child(2) { background: #fbbf24; }
+    .browser-dots span:nth-child(3) { background: #4ade80; }
+    .browser-url { flex: 1; font-size: 0.7rem; color: var(--mail-ink-soft); background: #fff; border-radius: 6px; padding: 0.25rem 0.5rem; }
+    .app-shell { background: var(--mail-paper); display: flex; flex-direction: column; overflow: hidden; }
+    .app-topbar { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: var(--primary); color: #fff; }
+    .app-topbar .logo { width: 28px; height: 28px; border-radius: 8px; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.75rem; }
+    .app-topbar h2 { font-size: 0.95rem; font-weight: 600; flex: 1; }
+    .mail-container { flex: 1; min-height: 0; display: flex; gap: 0.5rem; padding: 0.5rem; position: relative; }
+    .col-folders, .col-list, .col-detail { background: var(--mail-elevated); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+    .col-folders { width: 0; opacity: 0; pointer-events: none; flex-shrink: 0; }
+    .col-list { flex: 1; min-width: 0; }
+    .col-detail { width: 0; opacity: 0; pointer-events: none; flex-shrink: 0; }
+    .folder-rail { display: none; flex-direction: column; align-items: center; gap: 0.35rem; width: 3rem; flex-shrink: 0; padding: 0.5rem 0.25rem; background: var(--mail-elevated); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+    .folder-rail button { width: 2.25rem; height: 2.25rem; border: none; border-radius: 8px; background: transparent; cursor: pointer; font-size: 1rem; }
+    .folder-rail button.active { background: var(--mail-accent-mist); }
+    .nav-profile { background: linear-gradient(145deg, #292524, #1c1917); margin: 0.75rem; padding: 0.875rem; border-radius: var(--radius-sm); color: #fafaf9; font-size: 0.8rem; }
+    .folder-item { display: flex; align-items: center; justify-content: space-between; padding: 0.65rem 1rem; font-size: 0.8125rem; cursor: pointer; min-height: 44px; border: none; background: transparent; width: 100%; text-align: left; }
+    .folder-item.active { background: var(--mail-accent-mist); color: var(--mail-accent); font-weight: 600; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.45rem; border-radius: 999px; background: var(--primary-mist); color: var(--primary); }
+    .list-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.875rem 1rem; border-bottom: 1px solid var(--border); }
+    .list-header h3 { flex: 1; font-size: 1rem; font-weight: 700; }
+    .icon-btn { width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--border); background: var(--mail-elevated); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .compose-btn { margin: 0.75rem; padding: 0.75rem; border: none; border-radius: var(--radius-sm); background: linear-gradient(135deg, var(--mail-accent), #ea580c); color: #fff; font-weight: 600; min-height: 44px; cursor: pointer; width: calc(100% - 1.5rem); }
+    .thread-list { flex: 1; overflow-y: auto; }
+    .thread-row { padding: 0.875rem 1rem; border-bottom: 1px solid var(--border); cursor: pointer; min-height: 72px; }
+    .thread-row.unread { border-left: 3px solid var(--mail-accent); }
+    .thread-row.selected { background: var(--primary-mist); }
+    .thread-row .top { display: flex; justify-content: space-between; margin-bottom: 0.25rem; }
+    .thread-row .sender { font-weight: 600; font-size: 0.875rem; }
+    .thread-row .date { font-size: 0.7rem; color: var(--mail-ink-faint); }
+    .thread-row .preview { font-size: 0.8125rem; color: var(--mail-ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .detail-header { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+    .back-btn { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.75rem; border-radius: 999px; border: 1px solid var(--border); background: var(--mail-elevated); color: var(--primary); font-weight: 600; cursor: pointer; margin-bottom: 0.75rem; }
+    .detail-body { flex: 1; overflow-y: auto; padding: 1.25rem 1rem; font-size: 0.875rem; line-height: 1.6; }
+    .detail-body h5 { margin-bottom: 0.75rem; }
+    .master-detail[data-view="folders"] .col-folders { width: 100%; opacity: 1; pointer-events: auto; z-index: 2; }
+    .master-detail[data-view="folders"] .col-list, .master-detail[data-view="folders"] .col-detail { width: 0; opacity: 0; pointer-events: none; position: absolute; }
+    .master-detail[data-view="list"] .col-list { flex: 1; opacity: 1; pointer-events: auto; width: auto; }
+    .master-detail[data-view="list"] .col-folders, .master-detail[data-view="list"] .col-detail { width: 0; opacity: 0; pointer-events: none; position: absolute; }
+    .master-detail[data-view="detail"] .col-detail { flex: 1; opacity: 1; pointer-events: auto; width: 100%; }
+    .master-detail[data-view="detail"] .col-list, .master-detail[data-view="detail"] .col-folders { width: 0; opacity: 0; pointer-events: none; position: absolute; }
+    #frame-phone { width: 375px; max-width: 100%; } #frame-phone .app-shell { height: 640px; }
+    #frame-tablet { width: 768px; max-width: 100%; border-radius: 16px; } #frame-tablet .app-shell { height: 560px; }
+    #frame-small-desktop { width: 1280px; max-width: 100%; border-radius: 12px; } #frame-small-desktop .app-shell { height: 520px; }
+    #frame-small-desktop .folder-rail { display: flex; }
+    #frame-small-desktop[data-view="folders"] .folder-rail { display: none; }
+    #frame-desktop { width: 1440px; max-width: 100%; border-radius: 12px; } #frame-desktop .app-shell { height: 560px; }
+    #frame-desktop .col-folders { width: var(--folders-w); opacity: 1; pointer-events: auto; }
+    #frame-desktop .col-list { width: var(--list-w); flex: none; opacity: 1; pointer-events: auto; }
+    #frame-desktop .col-detail { flex: 1; opacity: 1; pointer-events: auto; width: auto; }
+    #frame-desktop .back-btn { display: none; }
+    .legend { margin-top: 2rem; padding: 1rem 1.25rem; background: var(--mail-elevated); border-radius: var(--radius); border: 1px solid var(--border); font-size: 0.8125rem; max-width: 58rem; line-height: 1.65; }
+    .legend h2 { font-size: 0.9rem; margin-bottom: 0.75rem; color: var(--primary); }
+    .legend ul { padding-left: 1.25rem; } .legend li { margin-bottom: 0.5rem; }
+    .legend code { font-size: 0.75rem; background: var(--primary-mist); padding: 0.1rem 0.35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Dharwin Email — Responsive Master-Detail Preview</h1>
+  <p class="subtitle">Standalone concept demo for <code>/communication/email</code>. Tap ☰ for folders, tap a thread for detail, Back returns to list.</p>
+  <div class="device-tabs" role="tablist">
+    <button type="button" class="active" data-device="phone">Phone (375)</button>
+    <button type="button" data-device="tablet">Tablet (768)</button>
+    <button type="button" data-device="small-desktop">Small desktop (1280)</button>
+    <button type="button" data-device="desktop">Desktop (1440)</button>
+  </div>
+  <p class="breakpoint-note" id="breakpointNote"></p>
+  <div class="showcase">
+    <div class="device-meta" data-for="phone"><span class="device-label">Phone · 375px · &lt;576px</span><span class="state-hint" data-hint="phone"></span></div>
+    <div class="device-frame phone-shell active master-detail" id="frame-phone" data-device="phone" data-view="list">
+      <div class="phone-notch"><span></span></div>
+      <div class="app-shell"><header class="app-topbar"><div class="logo">D</div><h2>Email</h2></header>
+        <div class="mail-container">
+          <aside class="col-folders"><button class="compose-btn" data-go="list">New message</button><div class="nav-profile"><strong>Priya Sharma</strong><br>priya@dharwinone.com</div><button class="folder-item active" data-go="list">Inbox <span class="badge">12</span></button><button class="folder-item" data-go="list">Sent</button></aside>
+          <section class="col-list"><div class="list-header"><button class="icon-btn" data-go="folders">☰</button><h3>Inbox</h3></div><div class="thread-list"><div class="thread-row unread" data-go="detail"><div class="top"><span class="sender">HR Team</span><span class="date">10:42</span></div><div class="preview">Offer letter — final review</div></div><div class="thread-row" data-go="detail"><div class="top"><span class="sender">Rajesh Kumar</span><span class="date">Yesterday</span></div><div class="preview">Interview schedule</div></div></div></section>
+          <article class="col-detail"><div class="detail-header"><button class="back-btn" data-go="list">← Back</button><strong>HR Team</strong></div><div class="detail-body"><h5>Offer letter — final review</h5><p>Please review the attached offer letter before EOD.</p></div></article>
+        </div></div></div>
+    <div class="device-meta" data-for="tablet" hidden><span class="device-label">Tablet · 768px · 576–991px</span><span class="state-hint" data-hint="tablet"></span></div>
+    <div class="device-frame master-detail" id="frame-tablet" data-device="tablet" data-view="list" hidden>
+      <div class="browser-chrome"><div class="browser-dots"><span></span><span></span><span></span></div><div class="browser-url">dharwinone.com/communication/email</div></div>
+      <div class="app-shell"><header class="app-topbar"><div class="logo">D</div><h2>Email</h2></header>
+        <div class="mail-container">
+          <aside class="col-folders"><button class="compose-btn" data-go="list">New message</button><div class="nav-profile"><strong>Priya Sharma</strong></div><button class="folder-item active" data-go="list">Inbox <span class="badge">12</span></button><button class="folder-item" data-go="list">Sent</button></aside>
+          <section class="col-list"><div class="list-header"><button class="icon-btn" data-go="folders">☰</button><h3>Inbox</h3></div><div class="thread-list"><div class="thread-row unread" data-go="detail"><div class="top"><span class="sender">HR Team</span><span class="date">10:42</span></div><div class="preview">Offer letter — final review</div></div><div class="thread-row" data-go="detail"><div class="top"><span class="sender">Rajesh Kumar</span><span class="date">Yesterday</span></div><div class="preview">Interview schedule</div></div></div></section>
+          <article class="col-detail"><div class="detail-header"><button class="back-btn" data-go="list">← Back to inbox</button><strong>HR Team</strong></div><div class="detail-body"><h5>Offer letter — final review</h5><p>Please review the attached offer letter before EOD.</p></div></article>
+        </div></div></div>
+    <div class="device-meta" data-for="small-desktop" hidden><span class="device-label">Small desktop · 1280px · 992–1399px</span><span class="state-hint" data-hint="small-desktop"></span></div>
+    <div class="device-frame master-detail" id="frame-small-desktop" data-device="small-desktop" data-view="list" hidden>
+      <div class="browser-chrome"><div class="browser-dots"><span></span><span></span><span></span></div><div class="browser-url">dharwinone.com/communication/email</div></div>
+      <div class="app-shell"><header class="app-topbar"><div class="logo">D</div><h2>Email</h2></header>
+        <div class="mail-container">
+          <nav class="folder-rail"><button class="active" title="Inbox">📥</button><button title="Sent">📤</button><button data-go="folders" title="All folders">☰</button></nav>
+          <aside class="col-folders"><button class="compose-btn" data-go="list">New message</button><button class="folder-item active" data-go="list">Inbox <span class="badge">12</span></button><button class="folder-item" data-go="list">Sent</button></aside>
+          <section class="col-list"><div class="list-header"><button class="icon-btn" data-go="folders">☰</button><h3>Inbox</h3></div><div class="thread-list"><div class="thread-row unread" data-go="detail"><div class="top"><span class="sender">HR Team</span><span class="date">10:42</span></div><div class="preview">Offer letter — final review</div></div><div class="thread-row" data-go="detail"><div class="top"><span class="sender">Rajesh Kumar</span><span class="date">Yesterday</span></div><div class="preview">Interview schedule</div></div></div></section>
+          <article class="col-detail"><div class="detail-header"><button class="back-btn" data-go="list">← Back to inbox</button><strong>HR Team</strong></div><div class="detail-body"><h5>Offer letter — final review</h5><p>Please review the attached offer letter before EOD.</p></div></article>
+        </div></div></div>
+    <div class="device-meta" data-for="desktop" hidden><span class="device-label">Desktop · 1440px · ≥1400px</span><span class="state-hint" data-hint="desktop"></span></div>
+    <div class="device-frame" id="frame-desktop" data-device="desktop" hidden>
+      <div class="browser-chrome"><div class="browser-dots"><span></span><span></span><span></span></div><div class="browser-url">dharwinone.com/communication/email</div></div>
+      <div class="app-shell"><header class="app-topbar"><div class="logo">D</div><h2>Email</h2></header>
+        <div class="mail-container">
+          <aside class="col-folders"><button class="compose-btn">New message</button><button class="folder-item active">Inbox <span class="badge">12</span></button><button class="folder-item">Sent</button></aside>
+          <section class="col-list"><div class="list-header"><h3>Inbox</h3></div><div class="thread-list"><div class="thread-row unread selected"><div class="top"><span class="sender">HR Team</span><span class="date">10:42</span></div><div class="preview">Offer letter — final review</div></div><div class="thread-row"><div class="top"><span class="sender">Rajesh Kumar</span><span class="date">Yesterday</span></div><div class="preview">Interview schedule</div></div></div></section>
+          <article class="col-detail"><div class="detail-header"><strong>HR Team</strong></div><div class="detail-body"><h5>Offer letter — final review</h5><p>All three columns visible at ≥1400px.</p></div></article>
+        </div></div></div>
+  </div>
+  <div class="legend"><h2>Breakpoint behavior</h2><ul>
+    <li><strong>Phone (&lt;576px)</strong> — No mailbox rail. One pane: list ↔ detail. ☰ = folders overlay.</li>
+    <li><strong>Tablet (576–991px)</strong> — Same master-detail as phone. Folders via ☰ overlay only.</li>
+    <li><strong>Small desktop (992–1399px)</strong> — Master-detail; collapsed folder rail (48px) + ☰ for full panel.</li>
+    <li><strong>Desktop (≥1400px)</strong> — 3 columns: folders <code>16rem</code> + list <code>24rem</code> + detail flex.</li>
+  </ul></div>
+  <script>
+    const NOTES={phone:"Breakpoint: <576px — single-pane list ↔ detail; folders overlay.",tablet:"Breakpoint: 576–991px — folders overlay; list ↔ detail.", "small-desktop":"Breakpoint: 992–1399px — folder rail + master-detail.","desktop":"Breakpoint: ≥1400px — 3-column persistent."};
+    const HINTS={list:"<strong>List</strong> — tap thread",detail:"<strong>Detail</strong> — tap Back",folders:"<strong>Folders</strong> — pick folder",all:"<strong>3-column</strong> — all panes visible"};
+    const frames={phone:document.getElementById("frame-phone"),tablet:document.getElementById("frame-tablet"),"small-desktop":document.getElementById("frame-small-desktop"),desktop:document.getElementById("frame-desktop")};
+    function setDevice(d){document.querySelectorAll(".device-tabs button").forEach(b=>{const on=b.dataset.device===d;b.classList.toggle("active",on);});Object.entries(frames).forEach(([k,f])=>{const show=k===d;f.classList.toggle("active",show);f.hidden=!show;document.querySelector(`.device-meta[data-for="${k}"]`).hidden=!show;});document.getElementById("breakpointNote").textContent=NOTES[d];document.querySelector(`[data-hint="${d}"]`).innerHTML=HINTS[frames[d].dataset.view||"all"];}
+    function setView(f,v){if(f.dataset.device==="desktop")return;f.dataset.view=v;document.querySelector(`[data-hint="${f.dataset.device}"]`).innerHTML=HINTS[v];}
+    document.querySelectorAll(".device-tabs button").forEach(b=>b.addEventListener("click",()=>setDevice(b.dataset.device)));
+    document.querySelectorAll(".master-detail").forEach(f=>f.addEventListener("click",e=>{const t=e.target.closest("[data-go]");if(t&&f.contains(t))setView(f,t.dataset.go);}));
+    document.querySelectorAll("#frame-desktop .thread-row").forEach(r=>r.addEventListener("click",()=>{document.querySelectorAll("#frame-desktop .thread-row").forEach(x=>x.classList.remove("selected"));r.classList.add("selected");}));
+    setDevice("phone");
+  </script>
+</body>
+</html>

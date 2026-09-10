@@ -18,6 +18,24 @@ const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 
 const isTruthyQueryFlag = (v) => v === true || v === 'true' || v === '1' || v === 1;
 
+/** Mirrors paginate.plugin sortBy parsing (`dueDate:asc,_id:asc` → `dueDate _id`). */
+const parseMongoSort = (sortBy, fallback = '-createdAt') => {
+  if (!sortBy || typeof sortBy !== 'string') return fallback;
+  const trimmed = sortBy.trim();
+  if (!trimmed) return fallback;
+  if (!trimmed.includes(':')) return trimmed;
+  const parts = trimmed
+    .split(',')
+    .map((sortOption) => {
+      const [key, order] = sortOption.split(':');
+      const field = key?.trim();
+      if (!field) return '';
+      return `${order?.trim() === 'desc' ? '-' : ''}${field}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(' ') : fallback;
+};
+
 const parseCommaList = (value) =>
   String(value || '')
     .split(',')
@@ -401,7 +419,7 @@ const queryTasks = async (filter, options) => {
     };
   }
 
-  const sort = options.sortBy || '-createdAt';
+  const sort = parseMongoSort(options.sortBy, '-createdAt');
   const limit = options.limit && parseInt(options.limit, 10) > 0
     ? Math.min(TASK_LIST_LIMIT_MAX, parseInt(options.limit, 10))
     : 100;
