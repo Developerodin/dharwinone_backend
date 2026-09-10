@@ -58,6 +58,7 @@ const updateStatus = catchAsync(async (req, res) => {
       entityType: EntityTypes.JOB_APPLICATION,
       entityId: String(aid),
       metadata: {
+        source: 'manual',
         statusBefore,
         statusAfter,
         related: {
@@ -87,6 +88,8 @@ const list = catchAsync(async (req, res) => {
     'excludeInternal',
     'includeDuplicates',
     'debug',
+    'scheduleEligible',
+    'distinctCandidates',
   ]);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobApplications(filter, options, req.user);

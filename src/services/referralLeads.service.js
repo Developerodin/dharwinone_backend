@@ -39,9 +39,10 @@ import { getOwnerIdsWithApplicantCandidateRoleOnly } from './role.service.js';
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const APP_STAGE_RANK = {
-  Hired: 6,
-  Offered: 5,
-  Interview: 4,
+  Hired: 7,
+  Offered: 6,
+  Interview: 5,
+  Shortlisted: 4,
   Screening: 3,
   Applied: 2,
   Rejected: 1,

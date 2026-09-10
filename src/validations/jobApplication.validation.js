@@ -101,9 +101,39 @@ const getJobApplications = {
     debug: Joi.alternatives()
       .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
       .optional(),
+    /** When true, return only schedule-eligible applications; requires jobId or candidateId unless distinctCandidates is true. */
+    scheduleEligible: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
+    /** When true with scheduleEligible, return one application per distinct candidate (no jobId/candidateId required). */
+    distinctCandidates: Joi.alternatives()
+      .try(Joi.boolean(), Joi.string().valid('true', 'false', '1', '0'))
+      .optional(),
     sortBy: Joi.string().optional(),
     limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
+  }).custom((value, helpers) => {
+    const scheduleEligible =
+      value.scheduleEligible === true ||
+      value.scheduleEligible === 'true' ||
+      value.scheduleEligible === 1 ||
+      value.scheduleEligible === '1';
+    const distinctCandidates =
+      value.distinctCandidates === true ||
+      value.distinctCandidates === 'true' ||
+      value.distinctCandidates === 1 ||
+      value.distinctCandidates === '1';
+    if (scheduleEligible && !value.jobId && !value.candidateId && !distinctCandidates) {
+      return helpers.message({
+        custom: 'jobId or candidateId is required when scheduleEligible is true',
+      });
+    }
+    if (distinctCandidates && !scheduleEligible) {
+      return helpers.message({
+        custom: 'scheduleEligible is required when distinctCandidates is true',
+      });
+    }
+    return value;
   }),
 };
 

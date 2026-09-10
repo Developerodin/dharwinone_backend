@@ -2,6 +2,7 @@ import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import Job from '../models/job.model.js';
 import User from '../models/user.model.js';
+import { INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES } from '../constants/atsPipeline.js';
 import { applicationScope } from './visibilityScope.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 
@@ -31,18 +32,53 @@ const mergeScopedQuery = (scopeFilter = {}, query = {}) => {
   return { $and: [scopeFilter, query] };
 };
 
+/** Narrow application query to jobs that still exist with status Active. */
+const applyActiveJobsOnlyFilter = async (query) => {
+  const rows = await Job.find({ status: 'Active' }).select('_id').lean();
+  const activeIds = rows.map((r) => r._id);
+  if (activeIds.length === 0) return false;
+
+  const allowed = new Set(activeIds.map((id) => String(id)));
+
+  if (query.job == null) {
+    query.job = { $in: activeIds };
+    return true;
+  }
+
+  const j = query.job;
+  if (j && typeof j === 'object' && Array.isArray(j.$in)) {
+    const narrowed = j.$in.filter((jid) => allowed.has(String(jid)));
+    if (narrowed.length === 0) return false;
+    query.job = { $in: narrowed };
+    return true;
+  }
+
+  return allowed.has(String(j));
+};
+
 const buildApplicantQuery = async (filter = {}, currentUser = {}) => {
   const query = {};
   const { filter: scopeFilter, scopeDebug } = await applicationScope(currentUser, 'read');
+
+  if (truthy(filter.scheduleEligible)) {
+    if (!filter.jobId && !filter.candidateId && !truthy(filter.distinctCandidates)) {
+      return { query: { _id: { $in: [] } }, scopeDebug };
+    }
+    filter.activeJobsOnly = true;
+    filter.excludeInternal = true;
+    query.status = { $in: [...INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES] };
+  }
 
   if (filter.jobId) query.job = filter.jobId;
   else if (Array.isArray(filter.jobIds) && filter.jobIds.length) {
     query.job = { $in: filter.jobIds };
   }
   if (filter.candidateId) query.candidate = filter.candidateId;
-  const statusValues = parseStringList(filter.statuses ?? filter.status);
-  if (statusValues.length === 1) query.status = statusValues[0];
-  else if (statusValues.length > 1) query.status = { $in: statusValues };
+  if (!truthy(filter.scheduleEligible)) {
+    const statusValues = parseStringList(filter.statuses ?? filter.status);
+    if (statusValues.length === 1) query.status = statusValues[0];
+    else if (statusValues.length > 1) query.status = { $in: statusValues };
+  }
   if (filter.recruiterId) query.appliedBy = filter.recruiterId;
 
   if (truthy(filter.excludeInternal)) {
@@ -103,14 +139,38 @@ const buildApplicantQuery = async (filter = {}, currentUser = {}) => {
 
   if (filter.q && filter.q.trim()) {
     const qRegex = new RegExp(escapeRegex(filter.q.trim()), 'i');
-    const [candRows, jobRows] = await Promise.all([
-      Employee.find({ $or: [{ fullName: qRegex }, { email: qRegex }] }, { _id: 1 }).lean(),
-      Job.find({ title: qRegex }, { _id: 1 }).lean(),
-    ]);
-    const candIds = candRows.map((r) => r._id);
-    const jobIds = jobRows.map((r) => r._id);
-    if (!candIds.length && !jobIds.length) return { query: { _id: { $in: [] } }, scopeDebug };
-    query.$or = [{ candidate: { $in: candIds } }, { job: { $in: jobIds } }];
+    if (truthy(filter.scheduleEligible) && (filter.jobId || filter.candidateId)) {
+      const candRows = await Employee.find(
+        { $or: [{ fullName: qRegex }, { email: qRegex }] },
+        { _id: 1 }
+      ).lean();
+      const candIds = candRows.map((r) => r._id);
+      if (!candIds.length) return { query: { _id: { $in: [] } }, scopeDebug };
+      if (query.candidate == null) {
+        query.candidate = { $in: candIds };
+      } else if (typeof query.candidate === 'object' && Array.isArray(query.candidate.$in)) {
+        const allowed = new Set(candIds.map(String));
+        const intersected = query.candidate.$in.filter((id) => allowed.has(String(id)));
+        if (!intersected.length) return { query: { _id: { $in: [] } }, scopeDebug };
+        query.candidate = { $in: intersected };
+      } else if (!candIds.some((id) => String(id) === String(query.candidate))) {
+        return { query: { _id: { $in: [] } }, scopeDebug };
+      }
+    } else {
+      const [candRows, jobRows] = await Promise.all([
+        Employee.find({ $or: [{ fullName: qRegex }, { email: qRegex }] }, { _id: 1 }).lean(),
+        Job.find({ title: qRegex }, { _id: 1 }).lean(),
+      ]);
+      const candIds = candRows.map((r) => r._id);
+      const jobIds = jobRows.map((r) => r._id);
+      if (!candIds.length && !jobIds.length) return { query: { _id: { $in: [] } }, scopeDebug };
+      query.$or = [{ candidate: { $in: candIds } }, { job: { $in: jobIds } }];
+    }
+  }
+
+  if (truthy(filter.activeJobsOnly)) {
+    const hasMatchingJobs = await applyActiveJobsOnlyFilter(query);
+    if (!hasMatchingJobs) return { query: { _id: { $in: [] } }, scopeDebug };
   }
 
   return { query: mergeScopedQuery(scopeFilter, query), scopeDebug };
@@ -132,12 +192,13 @@ const applyDedupeIfRequested = async (query, filter = {}) => {
 
   const seen = new Set();
   const uniqueIds = [];
+  const dedupeByCandidateOnly = truthy(filter.distinctCandidates) && truthy(filter.scheduleEligible);
   for (const d of candDocs) {
     const applicantUserKey = d.applicantUser ? String(d.applicantUser) : null;
     const applicantKey = applicantUserKey || String(d.candidate);
-    const composite = `${String(d.job ?? '')}::${applicantKey}`;
-    if (seen.has(composite)) continue;
-    seen.add(composite);
+    const dedupeKey = dedupeByCandidateOnly ? applicantKey : `${String(d.job ?? '')}::${applicantKey}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     uniqueIds.push(d._id);
   }
   if (!uniqueIds.length) return { ...query, _id: { $in: [] } };
@@ -217,7 +278,7 @@ const aggregateApplicantsByStatus = async (filter = {}, currentUser = {}) => {
   return Object.entries(counts).map(([status, count]) => ({ status, count }));
 };
 
-const STATUS_BREAKDOWN_KEYS = ['Applied', 'Screening', 'Interview', 'Offered', 'Hired', 'Rejected'];
+const STATUS_BREAKDOWN_KEYS = ['Applied', 'Screening', 'Shortlisted', 'Interview', 'Offered', 'Hired', 'Rejected'];
 
 const emptyStatusBreakdown = () =>
   Object.fromEntries(STATUS_BREAKDOWN_KEYS.map((key) => [key, 0]));

@@ -38,8 +38,8 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     Shortlisted: ['Offered', 'Rejected'],
     Offered: ['Hired', 'Rejected'],
     Hired: [],
-    // Rejected is terminal for scheduling but may be reopened manually to any live stage except Interview.
-    Rejected: ['Applied', 'Screening', 'Shortlisted', 'Offered'],
+    // Rejected is terminal for scheduling but may be reopened manually to early pipeline stages only.
+    Rejected: ['Applied', 'Screening', 'Shortlisted'],
   }),
   interviewResult: freezeTransitions({
     pending: ['selected', 'rejected'],
@@ -93,14 +93,79 @@ export const CANDIDATE_STATUS_MAP = Object.freeze({
   }),
 });
 
+/** Application statuses eligible for scheduling a new interview (Option A). */
+export const INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES = freezeList([
+  'Applied',
+  'Screening',
+  'Shortlisted',
+  'Interview',
+]);
+
+/** User-facing reason when interview scheduling is blocked for this application status, or null when allowed. */
+export const getInterviewSchedulingBlockReason = (applicationStatus) => {
+  if (!applicationStatus) return null;
+  if (applicationStatus === 'Rejected') {
+    return 'Cannot schedule an interview for a rejected application. Change the application status first.';
+  }
+  if (applicationStatus === 'Offered') {
+    return 'Cannot schedule an interview for an application that has already received an offer.';
+  }
+  if (applicationStatus === 'Hired') {
+    return 'Cannot schedule an interview for a hired application.';
+  }
+  if (!INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES.includes(applicationStatus)) {
+    return `Cannot schedule an interview for an application in "${applicationStatus}" status.`;
+  }
+  return null;
+};
+
 /** Application statuses that block scheduling a new interview. */
-export const isInterviewSchedulingBlocked = (applicationStatus) => applicationStatus === 'Rejected';
+export const isInterviewSchedulingBlocked = (applicationStatus) =>
+  Boolean(getInterviewSchedulingBlockReason(applicationStatus));
 
 export const isAllowedTransition = (workflow, from, to) => {
   if (!workflow || !from || !to) return false;
   if (from === to) return true;
   const transitions = ALLOWED_TRANSITIONS[workflow];
   if (!transitions) return false;
+  return Array.isArray(transitions[from]) && transitions[from].includes(to);
+};
+
+/** Application statuses recruiters must not set via manual PATCH. */
+export const SYSTEM_ONLY_APPLICATION_STATUSES = freezeList(['Interview', 'Offered', 'Hired']);
+
+/**
+ * Manual recruiter transitions (Option B). System services bypass this graph via direct writes.
+ * Targets are Applied, Screening, Shortlisted, and Rejected only (+ valid reopen from Rejected).
+ */
+export const MANUAL_APPLICATION_TRANSITIONS = freezeTransitions({
+  Applied: ['Screening', 'Rejected'],
+  Screening: ['Shortlisted', 'Rejected'],
+  Interview: ['Shortlisted', 'Rejected'],
+  Shortlisted: ['Rejected'],
+  Offered: ['Rejected'],
+  Hired: [],
+  Rejected: ['Applied', 'Screening', 'Shortlisted'],
+});
+
+export const getManualApplicationTransitionBlockReason = (to) => {
+  if (to === 'Interview') {
+    return 'Interview status is set automatically when an interview is scheduled.';
+  }
+  if (to === 'Offered') {
+    return 'Application becomes Offered through the offer workflow.';
+  }
+  if (to === 'Hired') {
+    return 'Application becomes Hired through the offer/lifecycle workflow.';
+  }
+  return null;
+};
+
+export const isManualApplicationTransition = (from, to) => {
+  if (!from || !to) return false;
+  if (from === to) return true;
+  if (SYSTEM_ONLY_APPLICATION_STATUSES.includes(to)) return false;
+  const transitions = MANUAL_APPLICATION_TRANSITIONS;
   return Array.isArray(transitions[from]) && transitions[from].includes(to);
 };
 

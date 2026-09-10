@@ -1052,7 +1052,7 @@ const ROUTING_TOOLS = [
           applicantName: { type: 'string', description: 'Candidate name (partial match) — fetches that candidate\'s applications.' },
           applicantUserId: { type: 'string', description: 'Resolved User _id for the applicant — preferred over name-only lookup.' },
           applicantEmail: { type: 'string', description: 'Applicant email — used with applicantUserId to find all candidate Employee rows.' },
-          status:        { type: 'string', description: 'Filter by status: Applied, Screening, Interview, Offered, Hired, Rejected' },
+          status:        { type: 'string', description: 'Filter by status: Applied, Screening, Shortlisted, Interview, Offered, Hired, Rejected' },
           limit:         { type: 'number', description: 'Max records to return (default 50, max 200)' },
         },
         required: [],
@@ -4754,8 +4754,8 @@ function summarizeData(fetchedData) {
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
       const baseTotal = data?.baseTotal ?? total;
-      const bd = data?.breakdown || { Applied: 0, Screening: 0, Interview: 0, Offered: 0, Hired: 0, Rejected: 0 };
-      const breakdownStr = `Applied: ${bd.Applied}, Screening: ${bd.Screening}, Interview: ${bd.Interview}, Offered: ${bd.Offered}, Hired: ${bd.Hired}, Rejected: ${bd.Rejected}`;
+      const bd = data?.breakdown || { Applied: 0, Screening: 0, Shortlisted: 0, Interview: 0, Offered: 0, Hired: 0, Rejected: 0 };
+      const breakdownStr = `Applied: ${bd.Applied}, Screening: ${bd.Screening}, Shortlisted: ${bd.Shortlisted}, Interview: ${bd.Interview}, Offered: ${bd.Offered}, Hired: ${bd.Hired}, Rejected: ${bd.Rejected}`;
       const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
       const lines = [
         `--- job applications (showing ${records.length} of ${total} matching | AUTHORITATIVE_TOTAL: ${baseTotal} all-applications — ${breakdownStr}${filterTag} | scoped jobs: ${data?.scopedJobIds || 0} — ENTITY_TYPE: candidate) ---`,

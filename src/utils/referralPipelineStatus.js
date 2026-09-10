@@ -14,9 +14,10 @@ const PLACEMENT_RANK = {
 };
 
 const APP_RANK = {
-  Hired: 6,
-  Offered: 5,
-  Interview: 4,
+  Hired: 7,
+  Offered: 6,
+  Interview: 5,
+  Shortlisted: 4,
   Screening: 3,
   Applied: 2,
   Rejected: 1,

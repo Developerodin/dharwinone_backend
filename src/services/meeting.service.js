@@ -30,7 +30,7 @@ import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
 import {
   APPLICATION_STATUSES,
   isAllowedTransition,
-  isInterviewSchedulingBlocked,
+  getInterviewSchedulingBlockReason,
 } from '../constants/atsPipeline.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
@@ -95,11 +95,16 @@ const assertInterviewSchedulingAllowed = async (candidateId, jobPosition) => {
     .select('status')
     .lean();
 
-  if (application && isInterviewSchedulingBlocked(application.status)) {
+  if (!application) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      'Cannot schedule an interview for a rejected application. Change the application status first.'
+      'No job application found for this candidate and position.'
     );
+  }
+
+  const blockReason = getInterviewSchedulingBlockReason(application.status);
+  if (blockReason) {
+    throw new ApiError(httpStatus.BAD_REQUEST, blockReason);
   }
 };
 
@@ -532,17 +537,40 @@ const createMeeting = async (body, userId) => {
     }
     if (jobObjId) {
       try {
-        const ur = await JobApplication.updateOne(
-          {
-            candidate: new mongoose.Types.ObjectId(candId),
-            job: jobObjId,
-            status: { $in: ['Applied', 'Screening'] },
-          },
-          { status: 'Interview' }
-        );
-        if (ur.modifiedCount > 0) {
+        const application = await JobApplication.findOne({
+          candidate: new mongoose.Types.ObjectId(candId),
+          job: jobObjId,
+          status: { $in: ['Applied', 'Screening'] },
+        });
+        if (application) {
+          const statusBefore = application.status;
+          application.status = 'Interview';
+          await application.save();
           await syncReferralPipelineStatusForCandidate(candId).catch((err) =>
             logger.warn('referral pipeline sync after interview schedule:', err?.message || err)
+          );
+          writeAtsAudit(
+            String(userId),
+            {
+              action: ActivityActions.JOB_APPLICATION_UPDATE,
+              entityType: EntityTypes.JOB_APPLICATION,
+              entityId: String(application._id),
+              metadata: {
+                source: 'system',
+                trigger: 'interview_scheduled',
+                statusBefore,
+                statusAfter: 'Interview',
+                related: {
+                  jobId: String(jobObjId),
+                  candidateId: String(candId),
+                  meetingId: String(meeting._id),
+                },
+              },
+            },
+            null,
+            { editContext: { staffEdit: true } }
+          ).catch((err) =>
+            logger.warn('ats_audit jobApplication.interview_scheduled:', err?.message || err)
           );
         }
       } catch (err) {

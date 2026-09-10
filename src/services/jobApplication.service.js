@@ -4,7 +4,7 @@ import Employee from '../models/employee.model.js';
 import { getJobById, isOwnerOrAdmin } from './job.service.js';
 import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import ApiError from '../utils/ApiError.js';
-import { APPLICATION_STATUSES, isAllowedTransition } from '../constants/atsPipeline.js';
+import { APPLICATION_STATUSES, getManualApplicationTransitionBlockReason, isManualApplicationTransition } from '../constants/atsPipeline.js';
 import { queryApplicants as queryApplicantsScoped } from './applicantQuery.service.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
@@ -165,16 +165,11 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
     }
     const fromStatus = application.status;
     if (status !== fromStatus) {
-      // Interview is reachable ONLY by scheduling a meeting (meeting.service.js sets it via
-      // updateOne, bypassing this path). The manual dropdown must not jump straight to Interview.
-      if (status === 'Interview') {
-        throw new ApiError(
-          httpStatus.BAD_REQUEST,
-          'Interview status is set automatically when you schedule an interview. Use the Schedule Interview action.'
-        );
+      const blockReason = getManualApplicationTransitionBlockReason(status);
+      if (blockReason) {
+        throw new ApiError(httpStatus.BAD_REQUEST, blockReason);
       }
-      // Enforce the forward-only pipeline graph — blocks Applied→Hired and other arbitrary jumps.
-      if (!isAllowedTransition('application', fromStatus, status)) {
+      if (!isManualApplicationTransition(fromStatus, status)) {
         throw new ApiError(
           httpStatus.BAD_REQUEST,
           `Cannot move an application from ${fromStatus} to ${status}.`

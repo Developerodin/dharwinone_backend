@@ -697,6 +697,8 @@ const createOfferCore = async (applicationId, payload, userId) => {
     compensationSource: 'jobTypeDerived',
   });
 
+  const applicationStatusBefore = application.status;
+
   await application.updateOne({ status: 'Offered' });
   await syncReferralPipelineStatusForCandidate(candRefId);
 
@@ -711,6 +713,12 @@ const createOfferCore = async (applicationId, payload, userId) => {
           jobApplicationId: String(applicationId),
           candidateId: String(candRefId),
           jobId: String(jobRefId),
+        },
+        jobApplicationStatusChange: {
+          source: 'system',
+          trigger: 'offer_create',
+          statusBefore: applicationStatusBefore,
+          statusAfter: 'Offered',
         },
       },
     },
@@ -1014,6 +1022,11 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
       throw new ApiError(httpStatus.BAD_REQUEST, `Status must be one of: ${STATUS_VALUES.join(', ')}`);
     }
     const oldStatus = offer.status;
+    let applicationStatusBefore = null;
+    if (newStatus === 'Accepted' && offer.jobApplication) {
+      const appDoc = await JobApplication.findById(offer.jobApplication).select('status').lean();
+      applicationStatusBefore = appDoc?.status ?? null;
+    }
     offer.status = newStatus;
     if (newStatus === 'Sent' && oldStatus === 'Draft') {
       offer.sentAt = new Date();
@@ -1218,7 +1231,21 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           action: ActivityActions.OFFER_STATUS_CHANGE,
           entityType: EntityTypes.OFFER,
           entityId: String(offer._id),
-          metadata: { statusBefore: oldStatus, statusAfter: newStatus, legacyRecruiterType: 'offer_accepted' },
+          metadata: {
+            statusBefore: oldStatus,
+            statusAfter: newStatus,
+            legacyRecruiterType: 'offer_accepted',
+            ...(applicationStatusBefore != null && offer.jobApplication
+              ? {
+                  jobApplicationStatusChange: {
+                    source: 'system',
+                    trigger: 'offer_accepted',
+                    statusBefore: applicationStatusBefore,
+                    statusAfter: 'Hired',
+                  },
+                }
+              : {}),
+          },
         },
         null,
         { editContext: { staffEdit: true } }
