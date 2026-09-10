@@ -208,7 +208,11 @@ async function main() {
   console.log(`\n${repairs.length} regularized day(s) still carry leftover sessions:\n`);
   for (const r of repairs) {
     console.log(`  ${r.label}  ${r.totalHours}h across ${r.supersede.length + 1} rows -> ${r.keptHours}h on 1 row`);
+    // The undo list. Deactivation is only reversible if the operator knows which rows moved,
+    // so the ids are printed before anything is written, dry run included.
+    console.log(`      deactivates: ${r.supersede.join(', ')}`);
   }
+  console.log('\nUndo: db.attendances.updateMany({_id:{$in:[<ids above>]}}, {$set:{isActive:true}})');
 
   if (!APPLY) {
     console.log('\nDry run — pass --apply to deactivate the leftover rows.');

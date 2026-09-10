@@ -82,7 +82,7 @@ const update = catchAsync(async (req, res) => {
 
 const list = catchAsync(async (req, res) => {
   withAuthContext(req);
-  const filter = pick(req.query, ['jobId', 'candidateId', 'status']);
+  const filter = pick(req.query, ['jobId', 'candidateId', 'createdBy', 'status', 'stage', 'search']);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryOffers(filter, options, req.user);
   res.send(result);

@@ -1,8 +1,25 @@
 import Joi from 'joi';
-import { objectId } from './custom.validation.js';
+import { objectId, boundedLimit } from './custom.validation.js';
 import { OFFER_STATUSES, OFFER_JOB_TYPE_VALUES } from '../constants/atsPipeline.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
+const STATUS_SET = new Set(STATUS_VALUES);
+
+const commaSeparatedObjectIds = Joi.string()
+  .optional()
+  .custom((value, helpers) => {
+    if (value == null || value === '') return value;
+    const parts = String(value)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const p of parts) {
+      if (!p.match(/^[0-9a-fA-F]{24}$/)) {
+        return helpers.message('"{{#label}}" must be a valid mongo id');
+      }
+    }
+    return value;
+  });
 
 const ctcBreakdown = Joi.object({
   base: Joi.number().optional().min(0),
@@ -137,11 +154,42 @@ const generateLetter = {
 const getOffers = {
   query: Joi.object().keys({
     jobId: Joi.string().custom(objectId).optional(),
-    candidateId: Joi.string().custom(objectId).optional(),
-    status: Joi.string().valid(...STATUS_VALUES).optional(),
+    candidateId: commaSeparatedObjectIds,
+    createdBy: commaSeparatedObjectIds,
+    status: Joi.string()
+      .optional()
+      .custom((value, helpers) => {
+        if (value == null || value === '') return value;
+        const parts = String(value)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const p of parts) {
+          if (!STATUS_SET.has(p)) {
+            return helpers.error('any.invalid');
+          }
+        }
+        return value;
+      }),
+    stage: Joi.string()
+      .optional()
+      .custom((value, helpers) => {
+        if (value == null || value === '') return value;
+        const parts = String(value)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const p of parts) {
+          if (p !== 'preBoarding' && p !== 'onboarding') {
+            return helpers.error('any.invalid');
+          }
+        }
+        return value;
+      }),
+    search: Joi.string().trim().allow('').max(120).optional(),
     sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().optional(),
-    page: Joi.number().integer().optional(),
+    limit: boundedLimit(100).optional(),
+    page: Joi.number().integer().min(1).optional(),
   }),
 };
 

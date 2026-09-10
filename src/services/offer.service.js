@@ -30,8 +30,71 @@ import {
   applicationHasSelectedInterview,
   ensureInterviewSelectedForOfferBypass,
 } from './offerInterviewBypass.service.js';
+import { refreshProfilePictureInPlace } from '../utils/profilePicture.util.js';
+import { collationForSortBy } from '../utils/mongoCollation.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
+
+const OFFER_SORT_ALLOWLIST = new Set([
+  'createdAt:desc',
+  'createdAt:asc',
+  'joiningDate:asc',
+  'joiningDate:desc',
+  'candidate.fullName:asc',
+  'candidate.fullName:desc',
+]);
+
+const LIST_OFFERS_POPULATE = [
+  { path: 'job', select: 'title organisation status' },
+  {
+    path: 'candidate',
+    select:
+      'fullName email phoneNumber address profilePicture employeeId department designation reportingManager',
+  },
+  { path: 'createdBy', select: 'name email profilePicture' },
+];
+
+const resolveOfferSortBy = (sortBy) => {
+  if (!sortBy || typeof sortBy !== 'string') return 'createdAt:desc';
+  const normalized = sortBy.trim();
+  return OFFER_SORT_ALLOWLIST.has(normalized) ? normalized : 'createdAt:desc';
+};
+
+const isCandidateNameSort = (sortBy) =>
+  sortBy === 'candidate.fullName:asc' || sortBy === 'candidate.fullName:desc';
+
+const paginateOffersByCandidateName = async (query, options, sortBy) => {
+  const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
+  const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
+  const skip = (page - 1) * limit;
+  const sortDir = sortBy.endsWith(':desc') ? -1 : 1;
+
+  const [totalResults, rawResults] = await Promise.all([
+    Offer.countDocuments(query).exec(),
+    Offer.aggregate([
+      { $match: query },
+      {
+        $lookup: {
+          from: Employee.collection.name,
+          localField: 'candidate',
+          foreignField: '_id',
+          as: '_sortCandidate',
+        },
+      },
+      { $unwind: { path: '$_sortCandidate', preserveNullAndEmptyArrays: true } },
+      { $sort: { '_sortCandidate.fullName': sortDir } },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: { _sortCandidate: 0 } },
+    ])
+      .collation({ locale: 'en', strength: 2 })
+      .exec(),
+  ]);
+
+  const results = await Offer.populate(rawResults, LIST_OFFERS_POPULATE);
+  const totalPages = Math.ceil(totalResults / limit) || 0;
+  return { results, page, limit, totalPages, totalResults };
+};
 
 const DEFAULT_SUPERVISOR = {
   firstName: 'Jason',
@@ -1340,6 +1403,86 @@ const applyOfferLetterPatchForGenerate = async (offer, rawBody, actorId = null) 
   }
 };
 
+const emptyPaginateResult = (options) => {
+  const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
+  const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
+  return {
+    results: [],
+    page,
+    limit,
+    totalPages: 0,
+    totalResults: 0,
+  };
+};
+
+/** Compose AND-clauses without clobbering an existing $or (access-control uses one). */
+const pushAnd = (query, clause) => {
+  query.$and = (query.$and || []).concat([clause]);
+};
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseCommaSeparatedObjectIds = (raw) => {
+  if (raw == null || raw === '') return [];
+  return String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => mongoose.Types.ObjectId.isValid(s))
+    .map((s) => new mongoose.Types.ObjectId(s));
+};
+
+const applyMultiValueObjectIdFilter = (query, field, raw) => {
+  const ids = parseCommaSeparatedObjectIds(raw);
+  if (ids.length === 1) query[field] = ids[0];
+  else if (ids.length > 1) query[field] = { $in: ids };
+};
+
+const applyMultiStatusFilter = (query, rawStatus) => {
+  const raw = String(rawStatus);
+  if (raw.includes(',')) {
+    const parts = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => STATUS_VALUES.includes(s));
+    if (parts.length === 1) query.status = parts[0];
+    else if (parts.length > 1) query.status = { $in: parts };
+  } else {
+    query.status = rawStatus;
+  }
+};
+
+const PRE_BOARDING_QUEUE_STATUSES = ['Pending', 'Deferred', 'Cancelled'];
+const ONBOARDING_ACTIVE_STATUSES = ['Onboarding', 'Joined'];
+const STAGE_OFFRAMP_STATUSES = ['Deferred', 'Cancelled'];
+
+const buildPlacementStageQuery = (stage) => {
+  const q = { offerStatus: 'Accepted' };
+  if (stage === 'preBoarding') {
+    q.enteredOnboardingAt = null;
+    q.status = { $in: PRE_BOARDING_QUEUE_STATUSES };
+    return q;
+  }
+  if (stage === 'onboarding') {
+    q.$or = [
+      { status: { $in: ONBOARDING_ACTIVE_STATUSES } },
+      { status: { $in: STAGE_OFFRAMP_STATUSES }, enteredOnboardingAt: { $ne: null } },
+    ];
+  }
+  return q;
+};
+
+const resolveOfferIdsForStages = async (stages) => {
+  const ids = new Set();
+  for (const stage of stages) {
+    if (stage !== 'preBoarding' && stage !== 'onboarding') continue;
+    const placements = await Placement.find(buildPlacementStageQuery(stage)).select('offer').lean();
+    placements.forEach((p) => {
+      if (p.offer) ids.add(String(p.offer));
+    });
+  }
+  return [...ids];
+};
+
 /**
  * Query offers with filter
  */
@@ -1348,8 +1491,22 @@ const queryOffers = async (filter, options, currentUser) => {
   const query = {};
 
   if (filter.jobId) query.job = filter.jobId;
-  if (filter.candidateId) query.candidate = filter.candidateId;
-  if (filter.status) query.status = filter.status;
+  if (filter.candidateId) applyMultiValueObjectIdFilter(query, 'candidate', filter.candidateId);
+  if (filter.createdBy) applyMultiValueObjectIdFilter(query, 'createdBy', filter.createdBy);
+  if (filter.status) applyMultiStatusFilter(query, filter.status);
+
+  const stageRaw = filter.stage != null ? String(filter.stage).trim() : '';
+  if (stageRaw) {
+    const stages = stageRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s === 'preBoarding' || s === 'onboarding');
+    if (stages.length) {
+      const offerIds = await resolveOfferIdsForStages(stages);
+      if (!offerIds.length) return emptyPaginateResult(options);
+      pushAnd(query, { _id: { $in: offerIds.map((id) => new mongoose.Types.ObjectId(id)) } });
+    }
+  }
 
   const isAdmin = await checkAdmin(currentUser);
   const rawUserId = currentUser?.id ?? currentUser?._id;
@@ -1378,17 +1535,42 @@ const queryOffers = async (filter, options, currentUser) => {
     }
   }
 
-  const result = await Offer.paginate(query, {
+  const searchTerm = filter.search != null ? String(filter.search).trim() : '';
+  if (searchTerm) {
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
+    const employeeMatch = {
+      $or: [{ fullName: searchRegex }, { email: searchRegex }, { employeeId: searchRegex }],
+    };
+    if (query.candidate) employeeMatch._id = query.candidate;
+    const [matchingEmployees, jobRefs] = await Promise.all([
+      Employee.find(employeeMatch).select('_id').lean(),
+      Offer.distinct('job', query),
+    ]);
+    const matchingJobs = jobRefs.length
+      ? await Job.find({ _id: { $in: jobRefs }, title: searchRegex }).select('_id').lean()
+      : [];
+    pushAnd(query, {
+      $or: [
+        { candidate: { $in: matchingEmployees.map((e) => e._id) } },
+        { job: { $in: matchingJobs.map((j) => j._id) } },
+        { offerCode: searchRegex },
+      ],
+    });
+  }
+
+  const resolvedSort = resolveOfferSortBy(options?.sortBy);
+  const paginateOpts = {
     ...options,
-    sortBy: options.sortBy || 'createdAt:desc',
+    sortBy: resolvedSort,
     // ponytail: list never needs version HTML blobs — keep payloads lean.
     select: options.select || '-letterVersions',
-    populate: [
-      { path: 'job', select: 'title organisation status' },
-      { path: 'candidate', select: 'fullName email phoneNumber address profilePicture employeeId department designation reportingManager' },
-      { path: 'createdBy', select: 'name email' },
-    ],
-  });
+    populate: LIST_OFFERS_POPULATE,
+    collation: collationForSortBy(resolvedSort, ['joiningDate']),
+  };
+
+  const result = isCandidateNameSort(resolvedSort)
+    ? await paginateOffersByCandidateName(query, paginateOpts, resolvedSort)
+    : await Offer.paginate(query, paginateOpts);
 
   // Attach placement data for Accepted offers (Pre-boarding/Onboarding: status, preBoardingStatus, BGV, assets, IT access)
   // Must convert to plain objects so placement fields survive JSON serialization (toJSON only includes schema paths)
@@ -1427,6 +1609,17 @@ const queryOffers = async (filter, options, currentUser) => {
     }
     return plain;
   });
+
+  await Promise.all(
+    result.results.map(async (offer) => {
+      if (offer.candidate?.profilePicture) {
+        await refreshProfilePictureInPlace(offer.candidate.profilePicture);
+      }
+      if (offer.createdBy?.profilePicture) {
+        await refreshProfilePictureInPlace(offer.createdBy.profilePicture);
+      }
+    })
+  );
 
   return result;
 };
