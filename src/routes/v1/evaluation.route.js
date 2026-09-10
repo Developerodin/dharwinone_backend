@@ -4,6 +4,7 @@ import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import * as evaluationController from '../../controllers/evaluation.controller.js';
 import * as evaluationEssayValidation from '../../validations/evaluationEssay.validation.js';
+import * as evaluationQuizValidation from '../../validations/evaluationQuiz.validation.js';
 
 const router = express.Router();
 
@@ -35,6 +36,22 @@ router.patch(
   requirePermissions('evaluation.manage'),
   validate(evaluationEssayValidation.gradeEssayAttempt),
   evaluationController.default.gradeEssayAttempt
+);
+
+router.get(
+  '/students/:studentId/courses/:moduleId/quiz-attempts',
+  auth(),
+  requirePermissions('evaluation.read'),
+  validate(evaluationQuizValidation.listStudentQuizAttempts),
+  evaluationController.default.listStudentQuizAttempts
+);
+
+router.patch(
+  '/quiz-attempts/:attemptId',
+  auth(),
+  requirePermissions('evaluation.manage'),
+  validate(evaluationQuizValidation.gradeQuizAttempt),
+  evaluationController.default.gradeQuizAttempt
 );
 
 export default router;

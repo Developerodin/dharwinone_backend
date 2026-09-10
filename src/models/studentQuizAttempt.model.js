@@ -91,6 +91,16 @@ const studentQuizAttemptSchema = mongoose.Schema(
       enum: ['in-progress', 'submitted', 'graded'],
       default: 'in-progress',
     },
+    /** Trainer overall feedback on the attempt (optional). */
+    feedback: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
   },
   {
     timestamps: true,

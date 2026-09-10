@@ -40,14 +40,45 @@ const resolveCategoryId = async (category) => {
 };
 
 /**
- * Mentor ids whose linked user name equals the instructor chip label.
+ * Mentor display label: user.name, else user.email.
+ * @param {{ name?: string, email?: string } | null | undefined} user
+ * @returns {string | null}
+ */
+const mentorUserDisplayLabel = (user) => {
+  const name = user?.name?.trim();
+  if (name) return name;
+  const email = user?.email?.trim();
+  if (email) return email;
+  return null;
+};
+
+/**
+ * Distinct mentor labels for instructor filter facets (all mentors, deduped per module).
+ * @param {Array<{ user?: { name?: string, email?: string } }>} mentorsAssigned
+ * @returns {string[]}
+ */
+const collectInstructorFacetLabels = (mentorsAssigned) => {
+  const labels = new Set();
+  for (const mentor of mentorsAssigned || []) {
+    const label = mentorUserDisplayLabel(mentor?.user);
+    if (label) labels.add(label);
+  }
+  return [...labels];
+};
+
+/**
+ * Mentor ids whose linked user display label matches the instructor chip.
  * @param {string} instructor
  * @returns {Promise<import('mongoose').Types.ObjectId[]>}
  */
 const mentorIdsForInstructorName = async (instructor) => {
-  const name = String(instructor || '').trim();
-  if (!name) return [];
-  const users = await User.find({ name }).select('_id').lean();
+  const label = String(instructor || '').trim();
+  if (!label) return [];
+  const users = await User.find({
+    $or: [{ name: label }, { email: label }],
+  })
+    .select('_id')
+    .lean();
   if (!users.length) return [];
   const mentors = await Mentor.find({ user: { $in: users.map((u) => u._id) } })
     .select('_id')
@@ -82,16 +113,20 @@ const loadMineCatalogFacets = async (assignmentFilter) => {
   const docs = await TrainingModule.find(assignmentFilter)
     .select('categories mentorsAssigned')
     .populate('categories', 'name')
-    .populate({ path: 'mentorsAssigned', select: 'user', populate: { path: 'user', select: 'name' } })
-    .lean();
+    .populate({
+      path: 'mentorsAssigned',
+      select: 'user',
+      populate: { path: 'user', select: 'name email' },
+    });
   const categorySet = new Set();
   const instructorSet = new Set();
   for (const doc of docs) {
     for (const cat of doc.categories || []) {
       if (cat?.name) categorySet.add(cat.name);
     }
-    const mentorName = doc.mentorsAssigned?.[0]?.user?.name;
-    instructorSet.add(mentorName || 'Instructor');
+    for (const label of collectInstructorFacetLabels(doc.mentorsAssigned)) {
+      instructorSet.add(label);
+    }
   }
   return {
     categories: [...categorySet].sort((a, b) => a.localeCompare(b)),

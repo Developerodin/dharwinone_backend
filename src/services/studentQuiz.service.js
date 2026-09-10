@@ -422,6 +422,7 @@ const getQuizResults = async (studentId, moduleId, playlistItemId) => {
       score: latestAttempt.score,
       submittedAt: latestAttempt.submittedAt,
       timeSpent: latestAttempt.timeSpent,
+      feedback: latestAttempt.feedback || undefined,
     },
   };
 };
