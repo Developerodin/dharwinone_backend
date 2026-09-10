@@ -46,15 +46,34 @@ export function workedMs(row) {
 }
 
 /**
- * Pure: order rows the way the service picks a survivor — active first, then earliest punch-in.
+ * Pure: the row approve actually wrote, identified by the punch times the request asked for.
+ *
+ * Do NOT guess the survivor. An earlier draft sorted by punch-in and kept the earliest, which
+ * on a day carrying an `assignHolidays` duplicate picks the Holiday row — created with
+ * punchIn at UTC midnight, so it always sorts first — and would have deactivated the real
+ * work row. The request records the exact instants approve stored, so match on those and
+ * refuse the day when nothing matches.
+ *
  * @param {Array<Object>} rows
- * @returns {Array<Object>} a new array; rows[0] is the one to keep
+ * @param {{punchIn: Date, punchOut: Date|null}} expected
+ * @returns {{keep: Object, supersede: Array<Object>} | null} null when no row matches
  */
-export function orderBySurvivor(rows) {
-  return [...rows].sort((a, b) => {
-    if (Boolean(b.isActive) !== Boolean(a.isActive)) return Number(Boolean(b.isActive)) - Number(Boolean(a.isActive));
-    return new Date(a.punchIn ?? 0).getTime() - new Date(b.punchIn ?? 0).getTime();
-  });
+export function pickWrittenRow(rows, expected) {
+  const at = (v) => (v == null ? null : new Date(v).getTime());
+  const wantIn = at(expected?.punchIn);
+  if (wantIn == null) return null;
+  const wantOut = at(expected?.punchOut);
+
+  const matches = rows.filter((r) => at(r.punchIn) === wantIn && (wantOut == null || at(r.punchOut) === wantOut));
+  if (matches.length === 0) return null;
+
+  const keep = matches[0];
+  return { keep, supersede: rows.filter((r) => r !== keep) };
+}
+
+/** A day carrying a Holiday or Leave row is a different bug (assignHolidays) — never touch it. */
+export function hasHolidayOrLeave(rows) {
+  return rows.some((r) => r.status === 'Holiday' || r.status === 'Leave');
 }
 
 /** UTC midnight for a stored attendance date. */
@@ -70,12 +89,15 @@ async function main() {
   const requests = db.collection('backdatedattendancerequests');
   const attendances = db.collection('attendances');
 
+  // Oldest first: when two approved requests name the same day, the later approval is the one
+  // whose times are on the row, so it must be the entry that survives in the map.
   const approved = await requests
     .find({ status: 'approved' })
-    .project({ student: 1, user: 1, 'attendanceEntries.date': 1 })
+    .project({ student: 1, user: 1, reviewedAt: 1, attendanceEntries: 1 })
+    .sort({ reviewedAt: 1 })
     .toArray();
 
-  // Every (owner, day) an approved request claims. Deduped: two requests can name one day.
+  // Every (owner, day) an approved request claims, with the punch times approve wrote there.
   const claimed = new Map();
   for (const req of approved) {
     const owner = req.user != null ? { field: 'user', id: req.user } : { field: 'student', id: req.student };
@@ -83,46 +105,109 @@ async function main() {
     for (const entry of req.attendanceEntries ?? []) {
       if (!entry?.date) continue;
       const day = dayKey(entry.date);
-      claimed.set(`${owner.field}:${owner.id}:${day.getTime()}`, { owner, day });
+      claimed.set(`${owner.field}:${owner.id}:${day.getTime()}`, {
+        owner,
+        day,
+        punchIn: entry.punchIn,
+        punchOut: entry.punchOut ?? null,
+      });
     }
   }
 
   console.log(`${approved.length} approved request(s) covering ${claimed.size} regularized day(s)`);
 
-  const repairs = [];
-  for (const { owner, day } of claimed.values()) {
-    const nextDay = new Date(day);
-    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-    const rows = await attendances
-      .find({ [owner.field]: owner.id, date: { $gte: day, $lt: nextDay }, isActive: true })
-      .project({ date: 1, punchIn: 1, punchOut: 1, duration: 1, status: 1, isActive: 1 })
-      .toArray();
-    if (rows.length < 2) continue;
+  // One aggregation, not one query per day. Group every active row on those calendar dates by
+  // (owner, day) and keep only the groups holding more than one row; the claimed-set filter
+  // then drops days belonging to people who were never regularized.
+  //
+  // ponytail: `$in` on exact UTC midnights, matching how the app stores and queries the day
+  // (findBlockedAttendanceDays does the same) and letting the {student,date}/{user,date}
+  // indexes serve it. A legacy row whose `date` carries a time component would be missed —
+  // widen to a range match plus $dateToString grouping if such rows ever turn up.
+  const distinctDates = [...new Set([...claimed.values()].map(({ day }) => day.getTime()))].map((t) => new Date(t));
+  console.log(`scanning ${distinctDates.length} distinct calendar date(s)…`);
 
-    const ordered = orderBySurvivor(rows);
-    const totalHours = rows.reduce((sum, r) => sum + workedMs(r), 0) / HOUR_MS;
-    const keptHours = workedMs(ordered[0]) / HOUR_MS;
+  const groups = await attendances
+    .aggregate(
+      [
+        { $match: { isActive: true, date: { $in: distinctDates } } },
+        {
+          $group: {
+            _id: { student: '$student', user: '$user', date: '$date' },
+            rows: {
+              $push: { _id: '$_id', punchIn: '$punchIn', punchOut: '$punchOut', duration: '$duration', status: '$status', isActive: '$isActive' },
+            },
+            n: { $sum: 1 },
+          },
+        },
+        { $match: { n: { $gte: 2 } } },
+      ],
+      { allowDiskUse: true }
+    )
+    .toArray();
+
+  const repairs = [];
+  const holidayCollisions = [];
+  const unmatched = [];
+  for (const group of groups) {
+    const owner = group._id.user != null ? { field: 'user', id: group._id.user } : { field: 'student', id: group._id.student };
+    if (owner.id == null) continue;
+    const day = dayKey(group._id.date);
+    // Only days an approved backdated request actually named. A day with several punch
+    // sessions is normal; the leftovers are only leftovers where approve rewrote the day.
+    const expected = claimed.get(`${owner.field}:${owner.id}:${day.getTime()}`);
+    if (!expected) continue;
+
+    const totalHours = Math.round((group.rows.reduce((sum, r) => sum + workedMs(r), 0) / HOUR_MS) * 100) / 100;
+    const label = `${day.toISOString().slice(0, 10)}  ${owner.field}=${owner.id}`;
+
+    // A Holiday or Leave row beside a worked row is assignHolidays inserting a duplicate, not
+    // an approve leftover. Which one should win is a policy call — report, never touch.
+    if (hasHolidayOrLeave(group.rows)) {
+      holidayCollisions.push({ label, rows: group.rows.length, totalHours });
+      continue;
+    }
+
+    const picked = pickWrittenRow(group.rows, expected);
+    if (!picked) {
+      unmatched.push({ label, rows: group.rows.length, totalHours });
+      continue;
+    }
+
     repairs.push({
-      owner,
+      label,
       day,
-      supersede: ordered.slice(1).map((r) => r._id),
-      totalHours: Math.round(totalHours * 100) / 100,
-      keptHours: Math.round(keptHours * 100) / 100,
+      supersede: picked.supersede.map((r) => r._id),
+      totalHours,
+      keptHours: Math.round((workedMs(picked.keep) / HOUR_MS) * 100) / 100,
     });
+  }
+  repairs.sort((a, b) => a.day - b.day);
+
+  if (holidayCollisions.length > 0) {
+    console.log(
+      `\n${holidayCollisions.length} day(s) carry a Holiday/Leave row beside a worked row — NOT touched.` +
+        `\nThat is the assignHolidays duplicate-insert bug; deciding which row wins is a policy call.\n`
+    );
+    for (const c of holidayCollisions) console.log(`  ${c.label}  ${c.totalHours}h across ${c.rows} rows`);
+  }
+
+  if (unmatched.length > 0) {
+    console.log(
+      `\n${unmatched.length} day(s) have extra rows but none matching the approved punch times — NOT touched.\n`
+    );
+    for (const u of unmatched) console.log(`  ${u.label}  ${u.totalHours}h across ${u.rows} rows`);
   }
 
   if (repairs.length === 0) {
-    console.log('No regularized day carries leftover sessions. Nothing to do.');
+    console.log('\nNo regularized day carries an attributable leftover session. Nothing to do.');
     await mongoose.disconnect();
     return;
   }
 
   console.log(`\n${repairs.length} regularized day(s) still carry leftover sessions:\n`);
   for (const r of repairs) {
-    console.log(
-      `  ${r.day.toISOString().slice(0, 10)}  ${r.owner.field}=${r.owner.id}  ` +
-        `${r.totalHours}h across ${r.supersede.length + 1} rows -> ${r.keptHours}h on 1 row`
-    );
+    console.log(`  ${r.label}  ${r.totalHours}h across ${r.supersede.length + 1} rows -> ${r.keptHours}h on 1 row`);
   }
 
   if (!APPLY) {
