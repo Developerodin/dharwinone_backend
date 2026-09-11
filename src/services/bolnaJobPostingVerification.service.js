@@ -73,7 +73,7 @@ export async function initiateJobPostingVerificationCall({ agentId, job, contact
   };
 
   logger.info(
-    `[Bolna] job-posting call jobId=${job._id} agent=${agentId} templateCached=${prepared.cached === true} userDataBytes=${Buffer.byteLength(JSON.stringify(userData))}`
+    `[Bolna] job-posting call jobId=${job._id} agent=${agentId} promptToken=${prepared.renderToken} userDataBytes=${Buffer.byteLength(JSON.stringify(userData))}`
   );
 
   return bolnaService.initiateCall({

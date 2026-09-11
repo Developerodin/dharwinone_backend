@@ -1,7 +1,5 @@
-import crypto from 'crypto';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
-import bolnaService from '../services/bolna.service.js';
 
 export function normalizeBolnaAgentId(id) {
   return String(id ?? '').trim();
@@ -31,72 +29,10 @@ export function missingTemplateVars(template, vars, { allowEmpty = [] } = {}) {
   });
 }
 
-/** agentId -> fingerprint of the prompt+greeting last known to be live on that agent. */
-const patchedByAgent = new Map();
-
-/**
- * Put the static prompt on the agent, but only when it is not already there.
- *
- * The prompt is byte-identical on every call now that per-call data travels in
- * `user_data`, so PATCHing before each dial spent ~1.1s rewriting bytes the agent
- * already had, on the mandatory path of every call.
- *
- * A failure is usually NOT fatal — but only once we have seen this process patch the
- * agent successfully at least once. After that the prompt is a constant the agent
- * already holds, so refusing to dial over a failed rewrite of unchanged bytes trades a
- * working call for no call.
- *
- * Before that first success the assumption does not hold. On the first call after a
- * deploy the agent may still carry the OLD fully-resolved prompt, with a previous
- * candidate's name baked in and no {placeholders} for user_data to fill. Dialling then
- * reproduces exactly the wrong-candidate bug this refactor exists to remove, so a
- * failure in that window is reported as `fatal` and the caller must not dial.
- *
- * ponytail: per-process memo. A hand edit in the Bolna canvas is repaired on the next
- * deploy or restart rather than the next call. Restart to force it.
- *
- * @returns {Promise<{ patched: boolean, fatal?: boolean, error?: string }>}
- */
-export async function ensureAgentPrompt({ agentId, systemPrompt, welcomeMessage = '' }) {
-  if (!agentId) {
-    // Without this, every mis-configured caller shares one `undefined` memo slot and the
-    // first success would mark all of them clean.
-    return { patched: false, fatal: true, error: 'ensureAgentPrompt called without an agentId' };
-  }
-
-  const fingerprint = crypto
-    .createHash('sha1')
-    .update(systemPrompt, 'utf8')
-    .update(' ')
-    .update(welcomeMessage, 'utf8')
-    .digest('hex');
-
-  if (patchedByAgent.get(agentId) === fingerprint) return { patched: false };
-
-  const res = await bolnaService.updateAgentPrompt(agentId, systemPrompt, {
-    agentWelcomeMessage: welcomeMessage,
-  });
-
-  if (!res.success) {
-    const neverPatched = !patchedByAgent.has(agentId);
-    if (neverPatched) {
-      logger.error(
-        `[Bolna] agent ${agentId} prompt sync failed and this process has never patched it: ${res.error}. ` +
-          'Not dialling — the agent may still hold a previous prompt with another candidate baked in.'
-      );
-      return { patched: false, fatal: true, error: res.error };
-    }
-    logger.warn(
-      `[Bolna] agent ${agentId} prompt sync failed: ${res.error}. ` +
-        'Dialling anyway — this process already put the current prompt on the agent. ' +
-        'Will retry on the next call.'
-    );
-    return { patched: false, error: res.error };
-  }
-
-  patchedByAgent.set(agentId, fingerprint);
-  return { patched: true };
-}
+// The prompt-sync helper that lived here is gone. It memoised a byte-identical PATCH per
+// process, which is precisely what let Bolna serve a cached RESOLVED prompt and read out a
+// previous candidate's data. Both flows now share the token-verified implementation in
+// utils/bolnaAgentTemplateSync.js.
 
 /** True when job-posting and applicant flows would use the same Bolna agent (unsafe with dynamic applicant prompts). */
 export function bolnaJobAndCandidateAgentsCollide() {

@@ -259,6 +259,7 @@
   "./src/services/offer.service.test.js",
   "./src/utils/__tests__/activityLogExcel.service.test.js",
   "./src/utils/__tests__/callRecordAccess.util.test.js",
+  "./src/utils/__tests__/bolnaAgentTemplateSync.test.js",
   "./src/utils/__tests__/callSource.test.js",
   "./src/utils/__tests__/candidateApplicationInterviewResult.test.js",
   "./src/utils/__tests__/candidateExportCsv.docs.test.js",

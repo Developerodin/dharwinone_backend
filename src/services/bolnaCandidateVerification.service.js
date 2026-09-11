@@ -2,9 +2,9 @@ import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import {
   bolnaJobAndCandidateAgentsCollide,
-  ensureAgentPrompt,
   missingTemplateVars,
 } from '../utils/bolnaAgentConfig.js';
+import { ensureAgentPrompt } from '../utils/bolnaAgentTemplateSync.js';
 import { getBolnaCandidateAgentSettingsForPrompt } from './bolnaCandidateAgentSettings.service.js';
 import {
   buildCandidateAgentPromptTemplate,
@@ -94,14 +94,15 @@ export async function initiateCandidateVerificationCall({
     raw: true,
   });
 
-  // Identical bytes on every call, so concurrent callers cannot corrupt each other and
-  // no cross-process lock is needed. ensureAgentPrompt skips the PATCH entirely once the
-  // agent already holds this prompt, and never blocks the dial if the sync fails.
-  const sync = await ensureAgentPrompt({ agentId, systemPrompt, welcomeMessage });
-  if (sync.fatal) {
-    // Only when this process has never landed the prompt — the agent could still hold a
-    // previous candidate's baked prompt, so dialling would call the right person and read
-    // the wrong data. A later call retries the PATCH.
+  // The template is static and per-call data rides in user_data, but that alone is not
+  // enough: Bolna caches the RESOLVED prompt per agent, keyed on prompt content, so
+  // byte-identical bytes get a byte-identical cache hit and the agent keeps reading out
+  // whoever it resolved for first. ensureAgentPrompt appends a unique token per call to
+  // defeat that, and polls until the agent hands the token back.
+  const sync = await ensureAgentPrompt(bolnaService, agentId, systemPrompt, welcomeMessage);
+  if (!sync.ok) {
+    // Never dial on an unverified prompt: the agent may still be resolving a previous
+    // candidate, so the call would reach the right person and read out the wrong data.
     return { success: false, error: `Bolna agent could not be prepared before the call: ${sync.error}` };
   }
 
