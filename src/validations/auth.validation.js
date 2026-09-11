@@ -360,6 +360,11 @@ const updateMeWithCandidate = {
             .optional()
             .default('Other'),
           label: Joi.string().optional().trim(),
+          // Server-owned slot stamps. Accepted because GET /auth/me/with-candidate returns them and
+          // a client echoing a document row back would otherwise 400 the whole save (validate.js
+          // sets no allowUnknown). syncVersionedDocumentsOnCandidate recomputes both.
+          logicalSlot: Joi.string().valid('resume', 'cover-letter').optional().allow(null, ''),
+          slotVersion: Joi.number().integer().min(1).optional().allow(null),
           url: Joi.string().trim().optional().allow(''),
           key: Joi.string().optional().trim(),
           originalName: Joi.string().optional().trim(),

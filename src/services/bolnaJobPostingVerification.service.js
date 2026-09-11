@@ -1,7 +1,8 @@
 import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhone } from '../utils/phone.js';
-import { ensureAgentPrompt } from '../utils/bolnaAgentTemplateSync.js';
+import { prepareAgentPromptForCall } from '../utils/bolnaAgentTemplateSync.js';
+import { assertUserDataWithinLimit, missingTemplateVars } from '../utils/bolnaAgentConfig.js';
 import {
   buildJobPostingAgentPromptTemplate,
   buildJobPostingAgentTemplateVars,
@@ -48,19 +49,14 @@ export async function initiateJobPostingVerificationCall({ agentId, job, contact
     (vars.listing_organisation_name !== 'the hiring organisation' ? vars.listing_organisation_name : '') ||
     'Organisation contact';
 
-  const prepared = await ensureAgentPrompt(
-    bolnaService,
-    agentId,
-    buildJobPostingAgentPromptTemplate(),
-    JOB_WELCOME_TEMPLATE
-  );
-  if (!prepared.ok) {
-    // Do NOT dial on an unverified prompt: the agent may still hold a previous fully
-    // resolved prompt naming a different job, possibly from another environment.
-    return {
-      success: false,
-      error: `Bolna agent could not be prepared before the call: ${prepared.error}`,
-    };
+  const systemPrompt = buildJobPostingAgentPromptTemplate();
+  const missing = missingTemplateVars(systemPrompt, vars);
+  const welcomeMissing = missingTemplateVars(JOB_WELCOME_TEMPLATE, vars);
+  const allMissing = [...new Set([...missing, ...welcomeMissing])];
+  if (allMissing.length) {
+    const errMsg = `Bolna prompt template has unsupplied placeholders: ${allMissing.join(', ')}`;
+    logger.error(`[Bolna] ${errMsg}`);
+    return { success: false, error: errMsg };
   }
 
   // Everything the agent says comes from here, and it travels atomically with the call.
@@ -72,15 +68,39 @@ export async function initiateJobPostingVerificationCall({ agentId, job, contact
       'You are the Dharwin platform automated listing-verification assistant. You do not work for the employer below.',
   };
 
-  logger.info(
-    `[Bolna] job-posting call jobId=${job._id} agent=${agentId} promptToken=${prepared.renderToken} userDataBytes=${Buffer.byteLength(JSON.stringify(userData))}`
-  );
+  const payloadCheck = assertUserDataWithinLimit(userData);
+  if (!payloadCheck.ok) {
+    logger.error(`[Bolna] ${payloadCheck.error}`);
+    return { success: false, error: payloadCheck.error };
+  }
 
-  return bolnaService.initiateCall({
-    phone,
-    candidateName: label,
+  const prepared = await prepareAgentPromptForCall(
+    bolnaService,
     agentId,
-    fromPhoneNumber,
-    userData,
-  });
+    systemPrompt,
+    JOB_WELCOME_TEMPLATE,
+    {},
+    async ({ renderToken }) => {
+      logger.info(
+        `[Bolna] job-posting call jobId=${job._id} agent=${agentId} promptToken=${renderToken} userDataBytes=${payloadCheck.bytes}`
+      );
+      return bolnaService.initiateCall({
+        phone,
+        candidateName: label,
+        agentId,
+        fromPhoneNumber,
+        userData,
+      });
+    }
+  );
+  if (!prepared.ok) {
+    // Do NOT dial on an unverified prompt: the agent may still hold a previous fully
+    // resolved prompt naming a different job, possibly from another environment.
+    return {
+      success: false,
+      error: `Bolna agent could not be prepared before the call: ${prepared.error}`,
+    };
+  }
+
+  return prepared.dialResult;
 }

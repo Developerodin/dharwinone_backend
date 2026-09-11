@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import logger from '../config/logger.js';
+import { withBolnaAgentPromptLock } from './bolnaAgentPromptLock.js';
+import { runSerializedForBolnaAgent } from './bolnaAgentRunSerialized.js';
 
 /**
  * Push a prompt template onto a Bolna agent and prove the agent is serving THAT copy.
@@ -69,6 +71,12 @@ export async function ensureAgentPrompt(deps, agentId, template, welcomeTemplate
   const id = String(agentId || '').trim();
   if (!id) return { ok: false, error: 'agentId is required.' };
   if (!template) return { ok: false, error: 'template is required.' };
+  if (typeof deps?.updateAgentPrompt !== 'function') {
+    return { ok: false, error: 'Bolna client is missing updateAgentPrompt; cannot sync prompt.' };
+  }
+  if (typeof deps?.getAgent !== 'function') {
+    return { ok: false, error: 'Bolna client is missing getAgent; cannot verify prompt sync.' };
+  }
 
   // Appended, not interpolated: the template's own {placeholders} stay untouched, and an
   // HTML comment is inert to the model. Its only job is to make the bytes unique.
@@ -103,4 +111,88 @@ export async function ensureAgentPrompt(deps, agentId, template, welcomeTemplate
       `(token=${renderToken}); refusing to dial on an unverified prompt`
   );
   return { ok: false, error: 'Patched prompt did not become live in time.' };
+}
+
+/**
+ * One final read-back immediately before dial. Another writer may have PATCHed
+ * between our poll loop and initiateCall even when we hold the Mongo lease.
+ */
+export async function verifyAgentPromptLive(deps, agentId, renderToken) {
+  const id = String(agentId || '').trim();
+  const token = String(renderToken || '').trim();
+  if (!id) return { ok: false, error: 'agentId is required.' };
+  if (!token) return { ok: false, error: 'renderToken is required.' };
+  if (typeof deps?.getAgent !== 'function') {
+    return { ok: false, error: 'Bolna client is missing getAgent; cannot verify prompt before dial.' };
+  }
+
+  const got = await deps.getAgent(id);
+  if (!got.success) {
+    return { ok: false, error: got.error || 'Failed to read agent before dial.' };
+  }
+  if (!extractSystemPrompts(got.agent).some((p) => p.includes(token))) {
+    logger.error(
+      `[Bolna] prompt token missing on agent ${id} immediately before dial (token=${token}); aborting call`
+    );
+    return { ok: false, error: 'Agent prompt changed before dial.' };
+  }
+  return { ok: true };
+}
+
+/**
+ * PATCH, poll until live, optionally dial — all under per-process + cross-process locks.
+ * When `dialFn` is supplied it runs BEFORE the lock is released so no other writer can
+ * PATCH between verify and POST /call.
+ *
+ * Callers MUST NOT dial when `{ ok: false }`.
+ *
+ * @param {Object} deps
+ * @param {string} agentId
+ * @param {string} template
+ * @param {string} [welcomeTemplate]
+ * @param {Object} [lockOpts]
+ * @param {(ctx: { renderToken: string }) => Promise<*>} [dialFn]
+ */
+export async function prepareAgentPromptForCall(
+  deps,
+  agentId,
+  template,
+  welcomeTemplate,
+  lockOpts = {},
+  dialFn = null
+) {
+  const id = String(agentId || '').trim();
+  if (!id) return { ok: false, error: 'agentId is required.' };
+
+  return runSerializedForBolnaAgent(id, async () => {
+    const locked = await withBolnaAgentPromptLock(id, async (lease) => {
+      const sync = await ensureAgentPrompt(deps, id, template, welcomeTemplate);
+      if (!sync.ok) return sync;
+
+      const lostAfterSync = lease.unhealthyResult();
+      if (lostAfterSync) return lostAfterSync;
+
+      const live = await verifyAgentPromptLive(deps, id, sync.renderToken);
+      if (!live.ok) {
+        return { ok: false, error: live.error || 'Agent prompt was not live immediately before dial.' };
+      }
+
+      const lostBeforeDial = lease.unhealthyResult();
+      if (lostBeforeDial) return lostBeforeDial;
+
+      if (typeof dialFn === 'function') {
+        const dialResult = await dialFn({ renderToken: sync.renderToken });
+        const lostAfterDial = lease.unhealthyResult();
+        if (lostAfterDial) return lostAfterDial;
+        return { ok: true, renderToken: sync.renderToken, dialResult };
+      }
+
+      return { ok: true, renderToken: sync.renderToken };
+    }, lockOpts);
+
+    if (locked && typeof locked === 'object' && locked.ok === false && !locked.renderToken) {
+      return locked;
+    }
+    return locked;
+  });
 }

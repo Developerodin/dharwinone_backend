@@ -14,8 +14,8 @@ import * as userController from '../../controllers/user.controller.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
 import * as twilioVoiceController from '../../controllers/twilioVoice.controller.js';
 import { verifyTwilioWebhook } from '../../middlewares/verifyTwilioWebhook.js';
-import { uploadJobApplicationFiles } from '../../middlewares/upload.js';
-import { publicRegistrationLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
+import { uploadJobApplicationFiles, uploadPublicResumeParse } from '../../middlewares/upload.js';
+import { publicRegistrationLimiter, publicResumeParseLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
 import { verifyCaptcha } from '../../middlewares/verifyCaptcha.js';
 
 const router = express.Router();
@@ -151,6 +151,20 @@ router.get(
   '/recruiters/:recruiterId',
   validate(userValidation.getPublicRecruiter),
   userController.getPublicRecruiter
+);
+
+/**
+ * POST /v1/public/jobs/:jobId/parse-resume
+ * Public resume parse for apply-form prefill (no auth). PDF/DOCX only; does not store the file.
+ * Rate-limited and captcha-gated when CAPTCHA_PROVIDER + CAPTCHA_SECRET are configured.
+ */
+router.post(
+  '/jobs/:jobId/parse-resume',
+  publicResumeParseLimiter,
+  verifyCaptcha,
+  uploadPublicResumeParse,
+  validate(jobValidation.parsePublicResume),
+  jobController.parsePublicResume
 );
 
 /**

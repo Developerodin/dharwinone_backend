@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ensureAgentPrompt } from '../bolnaAgentTemplateSync.js';
+import {
+  ensureAgentPrompt,
+  prepareAgentPromptForCall,
+  verifyAgentPromptLive,
+} from '../bolnaAgentTemplateSync.js';
+import { resetBolnaAgentPromptLocks } from '../bolnaAgentPromptLock.js';
+import { resetBolnaAgentRunSerialization } from '../bolnaAgentRunSerialized.js';
 
 /**
  * The bug these cover: Bolna caches the RESOLVED system prompt per agent, keyed on prompt
@@ -91,4 +97,151 @@ test('rejects a missing agentId instead of dialling on an unknown prompt', async
 
   assert.equal(res.ok, false);
   assert.equal(a.state.patches.length, 0);
+});
+
+test('refuses when deps.getAgent is missing instead of throwing', async () => {
+  const res = await ensureAgentPrompt(
+    { async updateAgentPrompt() { return { success: true }; } },
+    'agent-1',
+    TEMPLATE,
+    WELCOME
+  );
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /getAgent/i);
+});
+
+test('refuses when deps.updateAgentPrompt is missing instead of throwing', async () => {
+  const res = await ensureAgentPrompt(
+    { async getAgent() { return { success: true, agent: {} }; } },
+    'agent-1',
+    TEMPLATE,
+    WELCOME
+  );
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /updateAgentPrompt/i);
+});
+
+test('verifyAgentPromptLive refuses when the token is no longer on the agent', async () => {
+  const a = fakeBolna({ goesLiveOnAttempt: 1 });
+  const sync = await ensureAgentPrompt(a.deps, 'agent-1', TEMPLATE, WELCOME);
+  a.state.stored = 'SOMEONE ELSE PATCHED OVER US';
+
+  const res = await verifyAgentPromptLive(a.deps, 'agent-1', sync.renderToken);
+  assert.equal(res.ok, false);
+  assert.match(res.error, /changed before dial/i);
+});
+
+test('prepareAgentPromptForCall aborts when the lock cannot be acquired', async () => {
+  resetBolnaAgentPromptLocks();
+  resetBolnaAgentRunSerialization();
+
+  const { acquireBolnaAgentPromptLock, releaseBolnaAgentPromptLock } = await import(
+    '../bolnaAgentPromptLock.js'
+  );
+  const held = await acquireBolnaAgentPromptLock('agent-1', { leaseMs: 5000 });
+  assert.equal(held.acquired, true);
+
+  const a = fakeBolna();
+  const res = await prepareAgentPromptForCall(a.deps, 'agent-1', TEMPLATE, WELCOME, {
+    maxWaitMs: 50,
+    pollMs: 10,
+  });
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /lock/i);
+  await releaseBolnaAgentPromptLock('agent-1', held.holder);
+});
+
+test('prepareAgentPromptForCall returns renderToken only after live verification', async () => {
+  resetBolnaAgentPromptLocks();
+  resetBolnaAgentRunSerialization();
+
+  const a = fakeBolna({ goesLiveOnAttempt: 2 });
+  const res = await prepareAgentPromptForCall(a.deps, 'agent-1', TEMPLATE, WELCOME, {
+    maxWaitMs: 5000,
+    pollMs: 20,
+  });
+
+  assert.equal(res.ok, true);
+  assert.ok(res.renderToken);
+  assert.ok(a.state.getCalls >= 2);
+});
+
+test('dialFn runs before the prompt lock is released', async () => {
+  resetBolnaAgentPromptLocks();
+  resetBolnaAgentRunSerialization();
+
+  const { acquireBolnaAgentPromptLock } = await import('../bolnaAgentPromptLock.js');
+  const a = fakeBolna({ goesLiveOnAttempt: 1 });
+  let lockHeldDuringDial = false;
+
+  const res = await prepareAgentPromptForCall(
+    a.deps,
+    'agent-1',
+    TEMPLATE,
+    WELCOME,
+    {},
+    async () => {
+      const probe = await acquireBolnaAgentPromptLock('agent-1', { maxWaitMs: 30, pollMs: 5 });
+      lockHeldDuringDial = !probe.acquired;
+      return { success: true, executionId: 'exec-1' };
+    }
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(lockHeldDuringDial, true);
+  assert.deepEqual(res.dialResult, { success: true, executionId: 'exec-1' });
+});
+
+test('dialFn is skipped when prompt preparation fails', async () => {
+  resetBolnaAgentPromptLocks();
+  resetBolnaAgentRunSerialization();
+
+  const a = fakeBolna({ patchFails: true });
+  let dialCalled = false;
+
+  const res = await prepareAgentPromptForCall(
+    a.deps,
+    'agent-1',
+    TEMPLATE,
+    WELCOME,
+    {},
+    async () => {
+      dialCalled = true;
+      return { success: true };
+    }
+  );
+
+  assert.equal(res.ok, false);
+  assert.equal(dialCalled, false);
+});
+
+test('dialFn is skipped when keepalive reports lease loss before dial', async () => {
+  resetBolnaAgentPromptLocks();
+  resetBolnaAgentRunSerialization();
+
+  const a = fakeBolna({ goesLiveOnAttempt: 1 });
+  let dialCalled = false;
+
+  const res = await prepareAgentPromptForCall(
+    a.deps,
+    'agent-1',
+    TEMPLATE,
+    WELCOME,
+    {
+      leaseMs: 100,
+      keepaliveMs: 5,
+      renewFn: async () => false,
+    },
+    async () => {
+      dialCalled = true;
+      return { success: true, executionId: 'exec-1' };
+    }
+  );
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /renew|lease/i);
+  assert.equal(dialCalled, false);
 });

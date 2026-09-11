@@ -393,6 +393,12 @@ const getPublicJob = {
   }),
 };
 
+const parsePublicResume = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+  }),
+};
+
 const publicApplyToJob = {
   params: Joi.object().keys({
     jobId: Joi.string().custom(objectId).required(),
@@ -424,6 +430,18 @@ const publicApplyToJob = {
     coverLetter: Joi.string().optional().trim().allow('', null),
     /** HMAC v1 `ref` from job share URL ?ref= (must match job id in token for job-sourced links). */
     ref: Joi.string().trim().allow('', null).optional(),
+    /**
+     * How the candidate filled the form. `manual` never triggers backend resume skill extraction;
+     * `ai` allows parsed skills and server-side fallback when skills are empty.
+     * Omitted by older clients — treated as `manual` (safe default).
+     */
+    entryMode: Joi.string().valid('manual', 'ai').optional().default('manual'),
+    /** JSON string array from client-side resume parse prefill; skips re-extraction when valid. */
+    skills: Joi.string().trim().allow('', null).optional(),
+    /** JSON string arrays from client-side resume parse prefill (experiences, qualifications, socialLinks). */
+    experiences: Joi.string().trim().allow('', null).optional(),
+    qualifications: Joi.string().trim().allow('', null).optional(),
+    socialLinks: Joi.string().trim().allow('', null).optional(),
     // Multipart parsers can surface file field names on req.body while the files
     // themselves are available on req.files via multer.
     resume: Joi.any().optional(),
@@ -505,6 +523,7 @@ export {
   browseJob,
   listPublicJobs,
   getPublicJob,
+  parsePublicResume,
   publicApplyToJob,
   listBookmarks,
   addBookmark,

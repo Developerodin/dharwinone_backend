@@ -38,6 +38,7 @@ function getConfig() {
     agentId: config.bolna.agentId || '',
     apiBase: config.bolna.apiBase || 'https://api.bolna.ai',
     maxCallDurationSeconds: config.bolna.maxCallDurationSeconds,
+    executionContext: config.bolna.executionContext || '',
   };
 }
 
@@ -145,6 +146,15 @@ async function initiateCall(params) {
   // Merge any extra user_data fields (for rich candidate/job context)
   if (extraUserData && typeof extraUserData === 'object') {
     Object.assign(userData, extraUserData);
+  }
+
+  // Stamp every execution with this backend's context so webhook/sync ingest can
+  // reject foreign-environment payloads even when agent IDs overlap.
+  const { executionContext } = getConfig();
+  const ctxMarker = String(executionContext || '').trim().toLowerCase();
+  if (ctxMarker) {
+    userData.dharwin_execution_context = ctxMarker;
+    userData.dharwin_execution_origin = 'dharwin_backend';
   }
 
   // Job-posting verification lists use employer fields under organisation_name / listing_employer_name.
@@ -387,6 +397,50 @@ async function getAgentExecutions(options = {}) {
 }
 
 /**
+ * Fetch a Bolna agent by ID (GET /v2/agent/:id).
+ * Used by ensureAgentPrompt to poll until a patched prompt is live.
+ * @param {string} agentId
+ * @returns {Promise<{ success: boolean, agent?: Object, error?: string }>}
+ */
+async function getAgent(agentId) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) {
+    return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  }
+  if (!agentId) {
+    return { success: false, error: 'agentId is required.' };
+  }
+
+  try {
+    const { res, text } = await bolnaFetch(`${apiBase}/v2/agent/${agentId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error)) || text || res.statusText;
+      logger.error(`Bolna GET agent error (${res.status}): ${message}`);
+      return { success: false, error: message };
+    }
+
+    return { success: true, agent: data };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Bolna GET agent exception: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Update an agent's system prompt via the Bolna PATCH API.
  * @param {string} agentId
  * @param {string} systemPrompt - The full prompt text (variables already interpolated)
@@ -551,6 +605,7 @@ export default {
   getExecutionFull,
   getAgentExecutions,
   getConfig,
+  getAgent,
   updateAgentPrompt,
   verifyExecutionExistsInBolna,
   listDispositions,

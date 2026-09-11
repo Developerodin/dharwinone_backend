@@ -18,6 +18,26 @@ export function normalizeBolnaAgentId(id) {
  * that is only `additional_instructions` (empty on 60/60 applications; the job flow has
  * none). Anything else rendering empty is a bug we want to hear about before dialling.
  */
+/** Largest user_data payload known to work on this Bolna account (~4.2 KB). */
+export const MAX_BOLNA_USER_DATA_BYTES = 8000;
+
+/**
+ * Refuse to dial when user_data is oversized — Bolna renders every placeholder empty.
+ * @param {Object} userData
+ * @returns {{ ok: boolean, bytes?: number, error?: string }}
+ */
+export function assertUserDataWithinLimit(userData) {
+  const bytes = Buffer.byteLength(JSON.stringify(userData ?? {}));
+  if (bytes > MAX_BOLNA_USER_DATA_BYTES) {
+    return {
+      ok: false,
+      bytes,
+      error: `Bolna user_data payload is too large (${bytes} bytes; limit ${MAX_BOLNA_USER_DATA_BYTES}).`,
+    };
+  }
+  return { ok: true, bytes };
+}
+
 export function missingTemplateVars(template, vars, { allowEmpty = [] } = {}) {
   const optional = new Set(allowEmpty);
   const needed = new Set();

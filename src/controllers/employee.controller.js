@@ -133,6 +133,12 @@ export const canDeleteDocumentVersion = (req) => {
   );
 };
 
+/** Resume/cover-letter version add. Deliberately the same set as canDeleteDocumentVersion: adding a
+ *  version is the lesser act, so whoever may delete one must be able to upload one. Reusing the
+ *  pre-boarding mutate gate here locked `employees.edit` out of replacing a resume it could already
+ *  delete, and the resulting 403 surfaced in the slot card as a file-type error. */
+export const canMutateDocumentVersion = (req) => canDeleteDocumentVersion(req);
+
 /** Pre-boarding Documents modal: list, status, preview, and documentRequests on GET /employees/:id. */
 export const userCanViewPreBoardingDocs = (permissions) => {
   if (!permissions) return false;
@@ -148,6 +154,16 @@ export const userCanViewPreBoardingDocs = (permissions) => {
 };
 
 export const canViewPreBoardingDocs = (req) => userCanViewPreBoardingDocs(req.authContext?.permissions);
+
+/** Resume/cover-letter version read — the same set that may read the document list itself
+ *  (see canReadCandidateDocuments in employee.route.js). A recruiter holding only candidates.read
+ *  could list the documents but not their history, and the card showed a bare
+ *  "Could not load version history." with no reason. */
+export const canViewDocumentVersions = (req) => {
+  const p = req.authContext?.permissions;
+  if (!p) return false;
+  return canViewPreBoardingDocs(req) || p.has('candidates.read') || p.has('employees.read');
+};
 
 /** PR3: list/read-all — employees.read or legacy candidates.read (view matrix checkbox). */
 export const canViewAllEmployees = (req) => {
@@ -973,13 +989,13 @@ const downloadDocument = catchAsync(async (req, res) => {
 });
 
 const listDocumentVersions = catchAsync(async (req, res) => {
-  req.user.canManageCandidates = canViewPreBoardingDocs(req);
+  req.user.canManageCandidates = canViewDocumentVersions(req);
   const data = await listCandidateDocumentVersions(req.params.candidateId, req.params.slot, req.user);
   res.status(httpStatus.OK).send({ success: true, data });
 });
 
 const addDocumentVersion = catchAsync(async (req, res) => {
-  req.user.canManageCandidates = canMutatePreBoardingDocs(req);
+  req.user.canManageCandidates = canMutateDocumentVersion(req);
   const data = await addCandidateDocumentVersion(req.params.candidateId, req.params.slot, req.body, req.user);
 
   await writeAtsAudit(
@@ -1004,7 +1020,7 @@ const addDocumentVersion = catchAsync(async (req, res) => {
 
 const downloadDocumentVersion = catchAsync(async (req, res) => {
   const { candidateId, slot, version } = req.params;
-  req.user.canManageCandidates = canViewPreBoardingDocs(req);
+  req.user.canManageCandidates = canViewDocumentVersions(req);
   const data = await getCandidateDocumentVersionDownloadUrl(candidateId, slot, version, req.user);
 
   await writeAtsAudit(

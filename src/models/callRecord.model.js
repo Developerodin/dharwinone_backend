@@ -124,6 +124,8 @@ const callRecordSchema = mongoose.Schema(
      * their grace window are candidates for ghost-cleanup.
      */
     bolnaVerifiedAt: { type: Date, default: null, index: true },
+    /** App-stamped Bolna user_data context marker (BOLNA_EXECUTION_CONTEXT). */
+    executionContext: { type: String, default: null, trim: true, index: true },
     status: {
       type: String,
       default: 'unknown',

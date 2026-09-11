@@ -1,10 +1,11 @@
 import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import {
+  assertUserDataWithinLimit,
   bolnaJobAndCandidateAgentsCollide,
   missingTemplateVars,
 } from '../utils/bolnaAgentConfig.js';
-import { ensureAgentPrompt } from '../utils/bolnaAgentTemplateSync.js';
+import { prepareAgentPromptForCall } from '../utils/bolnaAgentTemplateSync.js';
 import { getBolnaCandidateAgentSettingsForPrompt } from './bolnaCandidateAgentSettings.service.js';
 import {
   buildCandidateAgentPromptTemplate,
@@ -99,11 +100,13 @@ export async function initiateCandidateVerificationCall({
   // byte-identical bytes get a byte-identical cache hit and the agent keeps reading out
   // whoever it resolved for first. ensureAgentPrompt appends a unique token per call to
   // defeat that, and polls until the agent hands the token back.
-  const sync = await ensureAgentPrompt(bolnaService, agentId, systemPrompt, welcomeMessage);
-  if (!sync.ok) {
-    // Never dial on an unverified prompt: the agent may still be resolving a previous
-    // candidate, so the call would reach the right person and read out the wrong data.
-    return { success: false, error: `Bolna agent could not be prepared before the call: ${sync.error}` };
+  const welcomeMissing = missingTemplateVars(welcomeMessage, templateVars, {
+    allowEmpty: ['additional_instructions'],
+  });
+  if (welcomeMissing.length) {
+    const errMsg = `Bolna welcome template has unsupplied placeholders: ${welcomeMissing.join(', ')}`;
+    logger.error(`[Bolna] ${errMsg}`);
+    return { success: false, error: errMsg };
   }
 
   const userData = {
@@ -123,17 +126,42 @@ export async function initiateCandidateVerificationCall({
     ...templateVars,
   };
 
-  return bolnaService.initiateCall({
-    phone: formattedPhone,
-    // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
-    // `candidate_name` on user_data, and providers commonly bind a generic `name` key to
-    // the assistant's own identity. promptContext.candidate_name has already been through
-    // promptSafe(); passing candidate.fullName here would put the raw value back.
-    candidateName: promptContext.candidate_name,
+  const payloadCheck = assertUserDataWithinLimit(userData);
+  if (!payloadCheck.ok) {
+    logger.error(`[Bolna] ${payloadCheck.error}`);
+    return { success: false, error: payloadCheck.error };
+  }
+
+  const prepared = await prepareAgentPromptForCall(
+    bolnaService,
     agentId,
-    jobTitle: promptContext.job_title,
-    organisation: promptContext.company_name,
-    userData,
-    ...initiateExtras,
-  });
+    systemPrompt,
+    welcomeMessage,
+    {},
+    async ({ renderToken }) => {
+      logger.info(
+        `[Bolna] candidate call agent=${agentId} promptToken=${renderToken} userDataBytes=${payloadCheck.bytes}`
+      );
+      return bolnaService.initiateCall({
+        phone: formattedPhone,
+        // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
+        // `candidate_name` on user_data, and providers commonly bind a generic `name` key to
+        // the assistant's own identity. promptContext.candidate_name has already been through
+        // promptSafe(); passing candidate.fullName here would put the raw value back.
+        candidateName: promptContext.candidate_name,
+        agentId,
+        jobTitle: promptContext.job_title,
+        organisation: promptContext.company_name,
+        userData,
+        ...initiateExtras,
+      });
+    }
+  );
+  if (!prepared.ok) {
+    // Never dial on an unverified prompt: the agent may still be resolving a previous
+    // candidate, so the call would reach the right person and read out the wrong data.
+    return { success: false, error: `Bolna agent could not be prepared before the call: ${prepared.error}` };
+  }
+
+  return prepared.dialResult;
 }

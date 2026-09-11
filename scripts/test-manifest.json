@@ -105,6 +105,9 @@
   "./src/services/__tests__/holiday.queryHolidays.test.js",
   "./src/services/__tests__/internalMeeting.reminders.test.js",
   "./src/services/__tests__/job.applicationNotification.test.js",
+  "./src/services/__tests__/publicApplyEntryMode.test.js",
+  "./src/services/__tests__/publicApplyRollback.test.js",
+  "./src/services/__tests__/publicApplyPhoneNormalize.test.js",
   "./src/services/__tests__/job.exportExcel.test.js",
   "./src/services/__tests__/job.queryJobs.caseInsensitiveFilter.test.js",
   "./src/services/__tests__/job.serverPagination.test.js",
@@ -266,6 +269,7 @@
   "./src/utils/__tests__/candidateExportXlsx.test.js",
   "./src/utils/__tests__/candidateExtraction.test.js",
   "./src/utils/__tests__/documentVerificationMerge.test.js",
+  "./src/utils/__tests__/documentVersionSlot.test.js",
   "./src/utils/__tests__/employeeStatus.test.js",
   "./src/utils/__tests__/featureFlags.test.js",
   "./src/utils/__tests__/identityFields.test.js",
@@ -304,6 +308,7 @@
   "src/validations/__tests__/externalJob.validation.test.js",
   "src/services/__tests__/externalJob.postedWindow.test.js",
   "./src/services/__tests__/candidateCompensationWrite.test.js",
+  "./src/services/__tests__/candidateDocumentDeleteS3Guard.test.js",
   "./src/services/__tests__/offerCompensationSync.test.js",
   "./src/utils/__tests__/auditMetadata.helper.test.js",
   "./src/constants/__tests__/auditSource.test.js",
@@ -316,5 +321,8 @@
   "./src/utils/__tests__/courseSearch.util.test.js",
   "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js",
   "./src/utils/__tests__/chatSendRate.test.js",
-  "./src/services/__tests__/chat.unreadScopes.test.js"
+  "./src/services/__tests__/chat.unreadScopes.test.js",
+  "./src/services/__tests__/bolnaVerificationGuards.test.js",
+  "./src/services/__tests__/callSync.executionContext.test.js",
+  "./src/utils/__tests__/bolnaAgentPromptLock.test.js"
 ]
