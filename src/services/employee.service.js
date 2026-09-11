@@ -38,6 +38,19 @@ import {
   mergeDocumentsPreserveKeys,
   resetDocumentVerification,
 } from '../utils/documentVerificationMerge.js';
+import {
+  DOCUMENT_VERSION_SLOTS,
+  DOCUMENT_VERSION_SLOT_VALUES,
+  normalizeVersionSlot,
+  inferVersionSlotFromDocument,
+  canonicalDocumentDefaultsForSlot,
+  normalizeVersionPayloadFile,
+  versionFileIdentity,
+  latestVersionForSlot,
+  nextVersionForSlot,
+  findLatestSlotDocumentIndex,
+  findGenericVersionedSlotBypass,
+} from '../utils/documentVersionSlot.js';
 import { buildEmployeeMirrorPatch, pickMirrorEmployee } from '../utils/identityFields.js';
 
 /** Max rows per bulk CSV export (same filter scope as list). */
@@ -73,6 +86,21 @@ const extractS3KeyFromUrlString = (url) => {
   return null;
 };
 
+/** S3 keys still referenced by document/version rows (explicit key or derived from documentUrl). */
+const collectStillReferencedS3Keys = (rows = []) => {
+  const stillReferenced = new Set();
+  for (const row of rows) {
+    const key = String(row?.key || '').trim();
+    if (key) stillReferenced.add(key);
+    const url = String(row?.documentUrl || row?.url || '').trim();
+    if (url) {
+      const derived = extractS3KeyFromUrlString(url);
+      if (derived) stillReferenced.add(derived);
+    }
+  }
+  return stillReferenced;
+};
+
 /** Same merge idea for salary slips (match month + year). */
 const mergeSalarySlipsPreserveKeys = (existing = [], incoming = []) => {
   if (!Array.isArray(incoming)) return existing;
@@ -102,85 +130,6 @@ const mergeSalarySlipsPreserveKeys = (existing = [], incoming = []) => {
     }
     return out;
   });
-};
-
-const DOCUMENT_VERSION_SLOTS = Object.freeze({
-  RESUME: 'resume',
-  COVER_LETTER: 'cover-letter',
-});
-
-const DOCUMENT_VERSION_SLOT_VALUES = new Set(Object.values(DOCUMENT_VERSION_SLOTS));
-
-const normalizeVersionSlot = (raw) => {
-  if (raw == null) return null;
-  const slot = String(raw).trim().toLowerCase();
-  if (!slot) return null;
-  if (slot === 'resume' || slot === 'cv' || slot === 'cv/resume') return DOCUMENT_VERSION_SLOTS.RESUME;
-  if (slot === 'cover-letter' || slot === 'cover_letter' || slot === 'coverletter' || slot === 'cover letter') {
-    return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
-  }
-  return null;
-};
-
-const inferVersionSlotFromDocument = (doc) => {
-  if (!doc || typeof doc !== 'object') return null;
-  const explicit = normalizeVersionSlot(doc.logicalSlot);
-  if (explicit) return explicit;
-  const type = String(doc.type || '').trim().toLowerCase();
-  if (type === 'cv/resume' || type === 'resume') return DOCUMENT_VERSION_SLOTS.RESUME;
-  if (type === 'cover letter') return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
-  const label = String(doc.label || '').trim().toLowerCase();
-  if (label === 'cover letter' || label === 'cover-letter') return DOCUMENT_VERSION_SLOTS.COVER_LETTER;
-  return null;
-};
-
-const canonicalDocumentDefaultsForSlot = (slot) =>
-  slot === DOCUMENT_VERSION_SLOTS.RESUME
-    ? { type: 'CV/Resume', label: 'CV/Resume' }
-    : { type: 'Other', label: 'Cover Letter' };
-
-const normalizeVersionPayloadFile = (row = {}) => {
-  const key = String(row.key || '').trim();
-  const documentUrl = String(row.documentUrl || row.url || '').trim();
-  if (!key && !documentUrl) return null;
-  const originalName = String(row.originalName || row.fileName || '').trim();
-  const size = Number(row.size);
-  return {
-    key: key || '',
-    documentUrl: documentUrl || '',
-    originalName,
-    size: Number.isFinite(size) && size >= 0 ? size : undefined,
-    mimeType: row.mimeType ? String(row.mimeType).trim() : undefined,
-  };
-};
-
-const versionFileIdentity = (row = {}) => {
-  const key = String(row.key || '').trim();
-  if (key) return `key:${key}`;
-  const url = String(row.documentUrl || row.url || '').trim();
-  const name = String(row.originalName || row.fileName || '').trim();
-  return `url:${url}|name:${name}`;
-};
-
-const latestVersionForSlot = (documentVersions = [], slot) => {
-  let latest = null;
-  for (const row of documentVersions || []) {
-    if (normalizeVersionSlot(row?.slot) !== slot) continue;
-    if (!latest || Number(row.version) > Number(latest.version)) latest = row;
-  }
-  return latest;
-};
-
-const nextVersionForSlot = (documentVersions = [], slot) => {
-  const latest = latestVersionForSlot(documentVersions, slot);
-  return latest ? Number(latest.version) + 1 : 1;
-};
-
-const findLatestSlotDocumentIndex = (documents = [], slot) => {
-  for (let i = (documents || []).length - 1; i >= 0; i -= 1) {
-    if (inferVersionSlotFromDocument(documents[i]) === slot) return i;
-  }
-  return -1;
 };
 
 const asObjectIdOrNull = (raw) => {
@@ -228,12 +177,76 @@ const appendVersionFromDocumentRow = (candidate, doc, actorId, opts = {}) => {
 const syncVersionedDocumentsOnCandidate = (candidate, actorId) => {
   if (!Array.isArray(candidate?.documents) || candidate.documents.length === 0) return [];
   const changes = [];
-  for (const doc of candidate.documents) {
-    const out = appendVersionFromDocumentRow(candidate, doc, actorId);
+  // Only the row that currently *represents* each slot defines its version. Walking every row
+  // instead numbered history by array position, so a legacy profile carrying two resume rows
+  // recorded the older file as the newer version.
+  for (const slot of DOCUMENT_VERSION_SLOT_VALUES) {
+    const idx = findLatestSlotDocumentIndex(candidate.documents, slot);
+    if (idx < 0) continue;
+    const out = appendVersionFromDocumentRow(candidate, candidate.documents[idx], actorId, { slot });
     if (out?.created) changes.push(out);
   }
   if (changes.length > 0) candidate.markModified('documentVersions');
   return changes;
+};
+
+/**
+ * Capture the file already sitting in `documents[]` for `slot` as a version, so the first
+ * replacement does not destroy it.
+ *
+ * Version history used to begin at the *replacement*: `addCandidateDocumentVersion` wrote the new
+ * file as v1 and `upsertLatestSlotDocumentFromVersion` overwrote the row in place, leaving the
+ * previous resume referenced by nothing. The employee edit form hid this because it PATCHes
+ * `documents` on every save, which backfilled through `syncVersionedDocumentsOnCandidate`; the
+ * self-service wizard only sends `documents` when that step is dirty, so it never did.
+ */
+const backfillSlotVersionFromDocuments = (candidate, slot) => {
+  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+  if (latestVersionForSlot(candidate.documentVersions, slot)) return null;
+  const idx = findLatestSlotDocumentIndex(candidate.documents || [], slot);
+  if (idx < 0) return null;
+  // No actor: whoever uploaded the original file is not recorded on the documents row.
+  const out = appendVersionFromDocumentRow(candidate, candidate.documents[idx], null, { slot });
+  if (out?.created) {
+    candidate.markModified('documentVersions');
+    candidate.markModified('documents');
+  }
+  return out;
+};
+
+/**
+ * Append `meta` as the next version of `slot` and re-point `documents[]` at it.
+ * Shared by POST /employees/documents/:id/versions/:slot and every admin/self-service upload that
+ * resolves to a slot, so those paths replace the slot row instead of appending a duplicate.
+ */
+const applySlotVersionUpload = (candidate, slot, meta, { type, label } = {}, actorId) => {
+  backfillSlotVersionFromDocuments(candidate, slot);
+
+  const latest = latestVersionForSlot(candidate.documentVersions, slot);
+  const fallback = canonicalDocumentDefaultsForSlot(slot);
+  let versionRow = latest;
+  let created = false;
+
+  if (!latest || versionFileIdentity(latest) !== versionFileIdentity(meta)) {
+    versionRow = {
+      slot,
+      version: nextVersionForSlot(candidate.documentVersions, slot),
+      type: String(type || fallback.type).trim(),
+      label: String(label || fallback.label).trim(),
+      documentUrl: meta.documentUrl,
+      key: meta.key,
+      originalName: meta.originalName,
+      size: meta.size,
+      mimeType: meta.mimeType,
+      createdAt: new Date(),
+      ...(asObjectIdOrNull(actorId) ? { createdBy: asObjectIdOrNull(actorId) } : {}),
+    };
+    candidate.documentVersions.push(versionRow);
+    candidate.markModified('documentVersions');
+    created = true;
+  }
+
+  return { versionRow, created };
 };
 
 const upsertLatestSlotDocumentFromVersion = (candidate, slot, versionRow) => {
@@ -242,8 +255,13 @@ const upsertLatestSlotDocumentFromVersion = (candidate, slot, versionRow) => {
   const fallback = canonicalDocumentDefaultsForSlot(slot);
   const nextDoc = resetDocumentVerification({
     ...(idx >= 0 ? (candidate.documents[idx]?.toObject ? candidate.documents[idx].toObject() : candidate.documents[idx]) : {}),
-    type: String(versionRow.type || fallback.type || 'Other'),
-    label: String(versionRow.label || fallback.label || ''),
+    // The slot decides the mirror row's type and label, not the version's.
+    // `type` because documentSchema's enum is narrower than documentVersionSchema's ('Cover Letter'
+    // is valid for a version and invalid for a document), and `label` because mergeDocumentsPreserveKeys
+    // pairs incoming rows to stored ones by label — a user-chosen version name would unpair them and
+    // the next PATCH would append a duplicate. The custom name lives on the version row.
+    type: String(fallback.type || 'Other'),
+    label: String(fallback.label || ''),
     logicalSlot: slot,
     slotVersion: Number(versionRow.version),
     url: versionRow.documentUrl || '',
@@ -269,18 +287,27 @@ const removeLatestSlotDocument = (candidate, slot) => {
   }
 };
 
-const buildDocumentVersionResponse = (row) => ({
-  slot: normalizeVersionSlot(row?.slot),
-  version: Number(row?.version || 0),
-  type: row?.type || null,
-  label: row?.label || null,
-  key: row?.key || null,
-  documentUrl: row?.documentUrl || null,
-  originalName: row?.originalName || null,
-  size: typeof row?.size === 'number' ? row.size : null,
-  mimeType: row?.mimeType || null,
-  createdAt: row?.createdAt || null,
-});
+const buildDocumentVersionResponse = (row) => {
+  // createdBy is an ObjectId normally, a populated User when the caller asked for the name.
+  const actor = row?.createdBy;
+  const actorName = actor && typeof actor === 'object' && actor.name ? String(actor.name) : null;
+  const actorId = actor ? String(actor?._id || actor) : null;
+  return {
+    slot: normalizeVersionSlot(row?.slot),
+    version: Number(row?.version || 0),
+    type: row?.type || null,
+    label: row?.label || null,
+    key: row?.key || null,
+    documentUrl: row?.documentUrl || null,
+    originalName: row?.originalName || null,
+    size: typeof row?.size === 'number' ? row.size : null,
+    mimeType: row?.mimeType || null,
+    createdAt: row?.createdAt || null,
+    createdBy: actorId,
+    // Null for versions backfilled from a pre-existing documents row — that upload has no recorded actor.
+    createdByName: actorName,
+  };
+};
 
 /** User may have canManageCandidates set by controller (from candidates.manage permission). */
 const isOwnerOrAdmin = (user, candidate) => {
@@ -1608,6 +1635,8 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   }
 
   if (sanitized.documents !== undefined) {
+    const slotBypass = findGenericVersionedSlotBypass(candidate.documents || [], sanitized.documents);
+    if (slotBypass) throw new ApiError(httpStatus.BAD_REQUEST, slotBypass);
     sanitized.documents = mergeDocumentsPreserveKeys(candidate.documents || [], sanitized.documents);
   }
   if (sanitized.salarySlips !== undefined) {
@@ -2223,7 +2252,13 @@ const getDocuments = async (candidateId, user) => {
       
       return {
         index,
+        // `type` is what resolves a row to the resume / cover-letter slot. Omitting it made the
+        // employee edit form post the resume back as an untyped 'Other', which stopped matching the
+        // slot and caused the next version upload to append a second resume row.
+        type: doc.type,
         label: doc.label,
+        logicalSlot: doc.logicalSlot,
+        slotVersion: doc.slotVersion,
         originalName: doc.originalName,
         url,
         key: doc.key,
@@ -3653,6 +3688,8 @@ const updateUserAndCandidateForMe = async (userId, body) => {
 
   if (Object.keys(candidatePayload).length > 0) {
     if (candidatePayload.documents !== undefined) {
+      const slotBypass = findGenericVersionedSlotBypass(candidate.documents || [], candidatePayload.documents);
+      if (slotBypass) throw new ApiError(httpStatus.BAD_REQUEST, slotBypass);
       candidatePayload.documents = mergeDocumentsPreserveKeys(candidate.documents || [], candidatePayload.documents);
     }
     if (candidatePayload.salarySlips !== undefined) {
@@ -3769,17 +3806,36 @@ const fulfillDocumentRequest = async (userId, requestIndex, file) => {
   }
   const uploaded = await uploadFileForCandidate(file, userId, 'candidate-documents');
   candidate.documents = candidate.documents || [];
-  candidate.documents.push({
-    type: req.type || 'Other',
-    label: req.label,
-    ...uploaded,
-    status: 0,
-  });
-  const newDocIndex = candidate.documents.length - 1;
-  const docVersion = appendVersionFromDocumentRow(candidate, candidate.documents[newDocIndex], userId, {
-    type: req.type || 'Other',
-    label: req.label,
-  });
+
+  // A request for a CV/Resume must replace the resume, not sit beside it as a second copy.
+  const slot = inferVersionSlotFromDocument({ type: req.type, label: req.label });
+  let newDocIndex;
+  let docVersion = null;
+  if (slot) {
+    const meta = normalizeVersionPayloadFile(uploaded);
+    const { versionRow, created } = applySlotVersionUpload(
+      candidate,
+      slot,
+      meta,
+      { type: req.type, label: req.label },
+      userId
+    );
+    upsertLatestSlotDocumentFromVersion(candidate, slot, versionRow);
+    newDocIndex = findLatestSlotDocumentIndex(candidate.documents, slot);
+    docVersion = { slot, version: Number(versionRow.version), created };
+  } else {
+    candidate.documents.push({
+      type: req.type || 'Other',
+      label: req.label,
+      ...uploaded,
+      status: 0,
+    });
+    newDocIndex = candidate.documents.length - 1;
+    docVersion = appendVersionFromDocumentRow(candidate, candidate.documents[newDocIndex], userId, {
+      type: req.type || 'Other',
+      label: req.label,
+    });
+  }
   req.status = 'fulfilled';
   req.fulfilledAt = new Date();
   req.fulfilledDocIndex = newDocIndex;
@@ -3802,6 +3858,10 @@ const replaceMyRejectedDocument = async (userId, documentIndex, file) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Only rejected documents can be replaced via this endpoint');
   }
   const uploaded = await uploadFileForCandidate(file, userId, 'candidate-documents');
+  // Capture the file being replaced first — once the row is overwritten below its metadata is gone
+  // and the version history would start at the replacement, losing the original.
+  const rejectedSlot = inferVersionSlotFromDocument(existing);
+  if (rejectedSlot) backfillSlotVersionFromDocuments(candidate, rejectedSlot);
   // Replace in place — preserves type/label. Reset verification fields.
   candidate.documents[idx].url = uploaded.url;
   candidate.documents[idx].key = uploaded.key;
@@ -3839,6 +3899,24 @@ const adminUploadDocumentForCandidate = async (candidateId, file, payload, user)
   if (!trimmedLabel) throw new ApiError(httpStatus.BAD_REQUEST, 'label is required');
   const uploaded = await uploadFileForCandidate(file, candidate.owner || candidateId, 'candidate-documents');
   candidate.documents = candidate.documents || [];
+
+  // An admin uploading a CV/Resume from the Pre-boarding modal is replacing the resume, not adding
+  // a second one. Route it through the same version upsert the slot card uses.
+  const slot = inferVersionSlotFromDocument({ type, label: trimmedLabel });
+  if (slot) {
+    const meta = normalizeVersionPayloadFile(uploaded);
+    const { versionRow } = applySlotVersionUpload(
+      candidate,
+      slot,
+      meta,
+      { type, label: trimmedLabel },
+      user?._id || user?.id || null
+    );
+    upsertLatestSlotDocumentFromVersion(candidate, slot, versionRow);
+    await candidate.save();
+    return candidate.documents[findLatestSlotDocumentIndex(candidate.documents, slot)];
+  }
+
   candidate.documents.push(
     resetDocumentVerification({
       type: type || 'Other',
@@ -3872,8 +3950,36 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document index');
   }
   const removedDoc = candidate.documents[idx];
-  const removedKey = removedDoc?.key;
+  const removedSlot = inferVersionSlotFromDocument(removedDoc);
+  const keysToDelete = new Set();
+  if (removedDoc?.key) keysToDelete.add(String(removedDoc.key).trim());
   candidate.documents.splice(idx, 1);
+
+  // Cascade through documentVersions. Deleting the row that represents a slot deletes that slot's
+  // history with it: the latest version row shares the document's S3 key, so removing the document
+  // and its object while the history survived left every listed version pointing at a deleted file —
+  // the slot card still offered Download and it silently opened nothing.
+  if (removedSlot) {
+    candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+    const kept = [];
+    for (const row of candidate.documentVersions) {
+      if (normalizeVersionSlot(row?.slot) === removedSlot) {
+        const rowKey = String(row?.key || '').trim();
+        if (rowKey) keysToDelete.add(rowKey);
+        else if (row?.documentUrl) {
+          const derived = extractS3KeyFromUrlString(String(row.documentUrl).trim());
+          if (derived) keysToDelete.add(derived);
+        }
+        continue;
+      }
+      kept.push(row);
+    }
+    if (kept.length !== candidate.documentVersions.length) {
+      candidate.documentVersions = kept;
+      candidate.markModified('documentVersions');
+    }
+  }
+
   // Cascade through documentRequests:
   //   - request that was fulfilled by this exact doc → remove the request entry
   //   - request fulfilled by a later doc → re-index downwards
@@ -3888,11 +3994,22 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
   }
   candidate.markModified('documents');
   await candidate.save();
+
+  // Never delete an object another surviving row still points at — a version and its document row
+  // share one S3 key, and so can two duplicate rows on a legacy profile.
+  const stillReferenced = collectStillReferencedS3Keys([
+    ...(candidate.documents || []),
+    ...(candidate.documentVersions || []),
+  ]);
+
   // S3 cleanup — best-effort, after DB save so a transient S3 failure doesn't block the user.
-  if (removedKey) {
+  for (const key of keysToDelete) {
+    if (!key || stillReferenced.has(key)) continue;
     try {
+      // eslint-disable-next-line no-await-in-loop -- a document has at most a handful of versions
       const { deleteFileFromS3 } = await import('./upload.service.js');
-      await deleteFileFromS3(removedKey);
+      // eslint-disable-next-line no-await-in-loop
+      await deleteFileFromS3(key);
     } catch (err) {
       // already logged inside helper
     }
@@ -3900,7 +4017,7 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
   return {
     deletedIndex: idx,
     fileName: removedDoc?.originalName || removedDoc?.label || null,
-    logicalSlot: normalizeVersionSlot(removedDoc?.logicalSlot),
+    logicalSlot: removedSlot,
     slotVersion: Number.isFinite(Number(removedDoc?.slotVersion)) ? Number(removedDoc.slotVersion) : null,
   };
 };
@@ -3913,6 +4030,13 @@ const listCandidateDocumentVersions = async (candidateId, slotRaw, user) => {
   const candidate = await Employee.findById(candidateId);
   if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
   if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  // Resolve the uploader's name so the history can say who replaced the file.
+  try {
+    await candidate.populate({ path: 'documentVersions.createdBy', select: 'name' });
+  } catch (e) {
+    logger.warn(`Could not populate document version authors for ${candidateId}: ${e?.message}`);
+  }
 
   const rows = (candidate.documentVersions || [])
     .filter((row) => normalizeVersionSlot(row?.slot) === slot)
@@ -3940,33 +4064,13 @@ const addCandidateDocumentVersion = async (candidateId, slotRaw, payload, user) 
     throw new ApiError(httpStatus.BAD_REQUEST, 'Version payload must include key or documentUrl');
   }
 
-  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
-  const latest = latestVersionForSlot(candidate.documentVersions, slot);
-  const sameAsLatest = latest && versionFileIdentity(latest) === versionFileIdentity(meta);
-  const fallback = canonicalDocumentDefaultsForSlot(slot);
-
-  let versionRow = latest;
-  let created = false;
-
-  if (!sameAsLatest) {
-    const versionNumber = nextVersionForSlot(candidate.documentVersions, slot);
-    versionRow = {
-      slot,
-      version: versionNumber,
-      type: String(payload?.type || fallback.type).trim(),
-      label: String(payload?.label || fallback.label).trim(),
-      documentUrl: meta.documentUrl,
-      key: meta.key,
-      originalName: meta.originalName,
-      size: meta.size,
-      mimeType: meta.mimeType,
-      createdAt: new Date(),
-      ...(asObjectIdOrNull(user?._id || user?.id) ? { createdBy: asObjectIdOrNull(user?._id || user?.id) } : {}),
-    };
-    candidate.documentVersions.push(versionRow);
-    candidate.markModified('documentVersions');
-    created = true;
-  }
+  const { versionRow, created } = applySlotVersionUpload(
+    candidate,
+    slot,
+    meta,
+    { type: payload?.type, label: payload?.label },
+    user?._id || user?.id
+  );
 
   if (!versionRow) {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Unable to create or resolve version row');
@@ -4084,11 +4188,17 @@ const deleteCandidateDocumentVersion = async (candidateId, slotRaw, versionRaw, 
   const keyToDelete =
     removedKey || (removedRow.documentUrl ? extractS3KeyFromUrlString(String(removedRow.documentUrl).trim()) : '');
   if (keyToDelete) {
-    try {
-      const { deleteFileFromS3 } = await import('./upload.service.js');
-      await deleteFileFromS3(keyToDelete);
-    } catch {
-      // already logged inside helper
+    const stillReferenced = collectStillReferencedS3Keys([
+      ...(candidate.documents || []),
+      ...(candidate.documentVersions || []),
+    ]);
+    if (!stillReferenced.has(keyToDelete)) {
+      try {
+        const { deleteFileFromS3 } = await import('./upload.service.js');
+        await deleteFileFromS3(keyToDelete);
+      } catch {
+        // already logged inside helper
+      }
     }
   }
 

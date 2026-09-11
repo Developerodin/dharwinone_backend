@@ -585,6 +585,31 @@ const publicApplyToJob = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(result);
 });
 
+/**
+ * POST /v1/public/jobs/:jobId/parse-resume — AI prefill for public apply (no auth).
+ * Does not persist raw resume text or upload the file.
+ */
+const parsePublicResume = catchAsync(async (req, res) => {
+  const job = await getJobById(req.params.jobId);
+  if (!job || job.status !== 'Active') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'resume is required (multipart field name: resume)');
+  }
+
+  const { parseResumeForPublicApply } = await import('../services/resumeSkillsExtract.service.js');
+  const result = await parseResumeForPublicApply(
+    file.buffer,
+    file.mimetype || 'application/octet-stream',
+    file.originalname || 'resume.pdf'
+  );
+
+  res.send(result);
+});
+
 // Lightweight existence check for the public apply form: lets the UI show a friendly
 // "log in to apply" hint before the user fills the whole form. Returns only a boolean
 // (no account details) and is rate-limited at the route to limit enumeration.
@@ -687,6 +712,7 @@ export {
   listPublicJobs,
   getPublicJob,
   publicApplyToJob,
+  parsePublicResume,
   checkPublicEmail,
   listBookmarks,
   addBookmark,

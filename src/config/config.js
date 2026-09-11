@@ -57,6 +57,25 @@ const envVarsSchema = Joi.object()
     }),
     /** When set, Bolna webhooks must send matching `X-Bolna-Webhook-Secret`. Required behavior in production (see verifyWebhook middleware). */
     BOLNA_WEBHOOK_SECRET: Joi.string().optional().allow('').description('Shared secret for Bolna webhook requests'),
+    /** Comma-separated source IPs allowed to POST the Bolna webhooks. Defaults to Bolna's documented egress IPs. */
+    BOLNA_WEBHOOK_ALLOWED_IPS: Joi.string()
+      .optional()
+      .allow('')
+      .description('Bolna webhook source IP allowlist (comma-separated). Bolna authenticates by IP, not a shared secret.'),
+    /** Escape hatch for local webhook testing. Never set this outside a developer machine. */
+    BOLNA_WEBHOOK_ALLOW_INSECURE: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    /** Captcha provider for the public apply form. Verification is enforced as soon as provider + secret are both set. */
+    // lowercase() normalises BEFORE valid() runs — otherwise CAPTCHA_PROVIDER=Turnstile
+    // fails schema validation and takes down app boot for the whole service.
+    CAPTCHA_PROVIDER: Joi.string()
+      .lowercase()
+      .valid('turnstile', 'hcaptcha', 'recaptcha', '')
+      .optional()
+      .allow(null)
+      .empty(''),
+    CAPTCHA_SECRET: Joi.string().optional().allow('').description('Server-side secret for the captcha provider'),
+    /** Legacy flag: demand a token be present without verifying it. Superseded by CAPTCHA_PROVIDER. */
+    CAPTCHA_REQUIRED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     /** Default true; set to false only for dev SMTP with self-signed certs */
     SMTP_TLS_REJECT_UNAUTHORIZED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
     /** Background schedulers. Unset = on in production only. See config.schedulersEnabled. */
@@ -116,6 +135,11 @@ const envVarsSchema = Joi.object()
       ),
     CALLER_ID: Joi.string().optional().description('Fallback caller ID for AddOn compatibility'),
     BOLNA_API_BASE: Joi.string().optional().default('https://api.bolna.ai').description('Bolna API base URL'),
+    BOLNA_EXECUTION_CONTEXT: Joi.string()
+      .optional()
+      .description(
+        'Stamp on every outbound Bolna user_data (dharwin_execution_context) so webhook/sync can reject foreign-environment payloads when agent IDs overlap'
+      ),
     BOLNA_MAX_CALL_DURATION_SECONDS: Joi.number()
       .integer()
       .min(0)
@@ -178,6 +202,9 @@ const envVarsSchema = Joi.object()
     /** Other unauthenticated POSTs under /v1/public (LiveKit, recording, meetings). */
     RATE_LIMIT_PUBLIC_WRITE_MAX: Joi.number().integer().min(10).optional().default(120),
     RATE_LIMIT_PUBLIC_WRITE_WINDOW_MINUTES: Joi.number().integer().min(1).optional().default(15),
+    /** POST /v1/public/jobs/:jobId/parse-resume — each call hits OpenAI (per IP). */
+    RATE_LIMIT_PUBLIC_RESUME_PARSE_MAX: Joi.number().integer().min(1).optional().default(15),
+    RATE_LIMIT_PUBLIC_RESUME_PARSE_WINDOW_MINUTES: Joi.number().integer().min(1).optional().default(60),
 
     // Reverse proxy: Express req.ip / X-Forwarded-For (activity logs geo, rate limits, secure cookies)
     TRUST_PROXY_HOPS: Joi.number()
@@ -572,6 +599,10 @@ const config = {
     apiBase: envVars.BOLNA_API_BASE || 'https://api.bolna.ai',
     /** Applied to every outbound call; mirror in Bolna dashboard Call tab for each agent. */
     maxCallDurationSeconds: envVars.BOLNA_MAX_CALL_DURATION_SECONDS,
+    /** Stamped on user_data so ingest can reject foreign-environment executions. */
+    executionContext: String(
+      envVars.BOLNA_EXECUTION_CONTEXT || (envVars.NODE_ENV === 'production' ? 'production' : 'staging')
+    ).trim(),
   },
   plivo: {
     authId: envVars.PLIVO_AUTH_ID || '',
@@ -620,6 +651,8 @@ const config = {
     publicRegistrationWindowMinutes: envVars.RATE_LIMIT_PUBLIC_REGISTRATION_WINDOW_MINUTES ?? 60,
     publicWriteMax: envVars.RATE_LIMIT_PUBLIC_WRITE_MAX ?? 120,
     publicWriteWindowMinutes: envVars.RATE_LIMIT_PUBLIC_WRITE_WINDOW_MINUTES ?? 15,
+    publicResumeParseMax: envVars.RATE_LIMIT_PUBLIC_RESUME_PARSE_MAX ?? 15,
+    publicResumeParseWindowMinutes: envVars.RATE_LIMIT_PUBLIC_RESUME_PARSE_WINDOW_MINUTES ?? 60,
   },
   /** Express `trust proxy` hop count; 0 leaves default (do not trust X-Forwarded-For). Takes precedence over `trustProxy`. */
   trustProxyHops: envVars.TRUST_PROXY_HOPS ?? 0,
@@ -671,6 +704,30 @@ const config = {
   },
   webhooks: {
     bolnaSecret: (envVars.BOLNA_WEBHOOK_SECRET || '').trim(),
+    /**
+     * Bolna authenticates outbound webhooks by SOURCE IP and never sends a shared
+     * secret, so the IP allowlist — not `bolnaSecret` — is the real control here.
+     * Documented egress IPs, overridable when Bolna changes them.
+     */
+    bolnaAllowedIps: String(
+      envVars.BOLNA_WEBHOOK_ALLOWED_IPS || '13.203.39.153,13.126.9.249,13.202.133.53'
+    )
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    /** Local-dev only: accept unverified webhook callers. Never enable on a shared host. */
+    bolnaAllowInsecure: ['true', '1'].includes(
+      String(envVars.BOLNA_WEBHOOK_ALLOW_INSECURE || '').trim().toLowerCase()
+    ),
+  },
+  captcha: {
+    /** '' disables verification. Set BOTH provider and secret to enforce. */
+    provider: String(envVars.CAPTCHA_PROVIDER || '').trim().toLowerCase(),
+    secret: String(envVars.CAPTCHA_SECRET || '').trim(),
+    /** Legacy: require a token to be PRESENT even with no provider configured. */
+    requireTokenOnly: ['true', '1'].includes(
+      String(envVars.CAPTCHA_REQUIRED || '').trim().toLowerCase()
+    ),
   },
   auth: {
     returnTokensInJson:

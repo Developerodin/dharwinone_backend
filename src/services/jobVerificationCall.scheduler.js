@@ -17,6 +17,8 @@ const ELIGIBILITY_WINDOW_MS = 2 * 60 * 60 * 1000;
 /** A claim older than this is treated as abandoned and may be retried. */
 const CLAIM_RETRY_MS = 15 * 60 * 1000;
 
+let inFlight = false;
+
 async function runJobVerificationCalls() {
   try {
     const now = Date.now();
@@ -89,6 +91,9 @@ async function runJobVerificationCalls() {
         logger.info(`Job verification call initiated for job ${job._id}, executionId ${result.executionId}`);
       } else {
         logger.warn(`Job verification call failed for job ${job._id}: ${result.error || 'unknown'}`);
+        // Record terminal failure so find() above (verificationCallExecutionId in [null,''])
+        // stops re-selecting this job on the 15-minute claim-retry cadence.
+        await Job.updateOne({ _id: job._id }, { $set: { verificationCallExecutionId: 'failed' } });
       }
     }
   } catch (e) {
@@ -100,12 +105,11 @@ async function syncCallRecordsFromBolna() {
   try {
     // Only sync records that belong to job-posting verification calls.
     // Candidate call records are synced by the application verification scheduler.
-    const records = await callRecordService.findRecordsNeedingSync(10);
-    const jobRecords = records.filter(
-      (r) => !r.purpose || r.purpose.toLowerCase().includes('job_posting_verification') || r.purpose.toLowerCase().includes('job_verification')
-    );
+    const records = await callRecordService.findRecordsNeedingSync(10, {
+      purpose: { $in: [null, '', 'job_posting_verification', 'job_verification'] },
+    });
 
-    for (const rec of jobRecords) {
+    for (const rec of records) {
       const executionId = rec.executionId;
       if (!executionId) continue;
       const result = await bolnaService.getExecutionDetails(executionId);
@@ -136,8 +140,17 @@ async function syncCallRecordsFromBolna() {
 }
 
 async function run() {
-  await runJobVerificationCalls();
-  await syncCallRecordsFromBolna();
+  if (inFlight) {
+    logger.info('[jobVerificationCall] previous tick still running; skipping');
+    return;
+  }
+  inFlight = true;
+  try {
+    await runJobVerificationCalls();
+    await syncCallRecordsFromBolna();
+  } finally {
+    inFlight = false;
+  }
 }
 
 const startJobVerificationCallScheduler = (intervalMinutes = 1) => {

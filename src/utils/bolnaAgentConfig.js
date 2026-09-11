@@ -5,6 +5,55 @@ export function normalizeBolnaAgentId(id) {
   return String(id ?? '').trim();
 }
 
+/**
+ * Names every {placeholder} the template expects but user_data does not usefully supply.
+ *
+ * Bolna renders an unresolved single-brace {var} as EMPTY, silently — a missing
+ * candidate name turns Question 1 into a blank line the agent then improvises around.
+ * An EMPTY value renders identically, so a key that merely exists is not enough: both
+ * flows build template and vars in the same module, so a presence-only check could never
+ * fire for the failure it was written to catch.
+ *
+ * `allowEmpty` names the keys that are legitimately blank — measured against live data,
+ * that is only `additional_instructions` (empty on 60/60 applications; the job flow has
+ * none). Anything else rendering empty is a bug we want to hear about before dialling.
+ */
+/** Largest user_data payload known to work on this Bolna account (~4.2 KB). */
+export const MAX_BOLNA_USER_DATA_BYTES = 8000;
+
+/**
+ * Refuse to dial when user_data is oversized — Bolna renders every placeholder empty.
+ * @param {Object} userData
+ * @returns {{ ok: boolean, bytes?: number, error?: string }}
+ */
+export function assertUserDataWithinLimit(userData) {
+  const bytes = Buffer.byteLength(JSON.stringify(userData ?? {}));
+  if (bytes > MAX_BOLNA_USER_DATA_BYTES) {
+    return {
+      ok: false,
+      bytes,
+      error: `Bolna user_data payload is too large (${bytes} bytes; limit ${MAX_BOLNA_USER_DATA_BYTES}).`,
+    };
+  }
+  return { ok: true, bytes };
+}
+
+export function missingTemplateVars(template, vars, { allowEmpty = [] } = {}) {
+  const optional = new Set(allowEmpty);
+  const needed = new Set();
+  for (const m of String(template).matchAll(/\{(\w+)\}/g)) needed.add(m[1]);
+  return [...needed].filter((k) => {
+    if (!(k in vars)) return true;
+    if (optional.has(k)) return false;
+    return String(vars[k] ?? '') === '';
+  });
+}
+
+// The prompt-sync helper that lived here is gone. It memoised a byte-identical PATCH per
+// process, which is precisely what let Bolna serve a cached RESOLVED prompt and read out a
+// previous candidate's data. Both flows now share the token-verified implementation in
+// utils/bolnaAgentTemplateSync.js.
+
 /** True when job-posting and applicant flows would use the same Bolna agent (unsafe with dynamic applicant prompts). */
 export function bolnaJobAndCandidateAgentsCollide() {
   const jobId = normalizeBolnaAgentId(config.bolna.agentId);

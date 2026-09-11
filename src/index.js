@@ -129,7 +129,7 @@ mongoose
     process.exit(1);
   });
 
-const exitHandler = () => {
+const exitHandler = (exitCode = 1) => {
   if (server) {
     server.close(() => {
       logger.info('Server closed');
@@ -154,10 +154,10 @@ const exitHandler = () => {
       stopWorkforceReconciliationScheduler();
       stopSalesAgentCacheReconcilerScheduler();
       stopEmailNotificationPoller();
-      process.exit(1);
+      process.exit(exitCode);
     });
   } else {
-    process.exit(1);
+    process.exit(exitCode);
   }
 };
 
@@ -171,7 +171,5 @@ process.on('unhandledRejection', unexpectedErrorHandler);
 
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received');
-  if (server) {
-    server.close();
-  }
+  exitHandler(0);
 });

@@ -38,6 +38,14 @@ const messageSchema = new mongoose.Schema(
         at: { type: Date, default: Date.now },
       },
     ],
+    /**
+     * Conversation-wide pin (everyone sees it), not per-user. Cleared on delete-for-everyone.
+     * ponytail: no dedicated index — the pinned list is always scoped to one conversation, so
+     * the existing { conversation, createdAt } index narrows it enough. Add a partial index on
+     * { conversation: 1, pinnedAt: -1 } only if a conversation ever gets large enough to notice.
+     */
+    pinnedAt: { type: Date, default: null },
+    pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     deletedAt: { type: Date, default: null },
     deletedFor: { type: String, enum: ['me', 'everyone'], default: null },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

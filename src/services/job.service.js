@@ -1375,7 +1375,17 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     throw new ApiError(httpStatus.BAD_REQUEST, 'This job is no longer accepting applications');
   }
 
-  const { fullName, email, password, phoneNumber, countryCode, coverLetter, ref: referralRef } = applicationData;
+  const {
+    fullName,
+    email,
+    password,
+    phoneNumber,
+    countryCode,
+    coverLetter,
+    ref: referralRef,
+    entryMode: entryModeRaw,
+  } = applicationData;
+  const entryMode = String(entryModeRaw || 'manual').toLowerCase() === 'ai' ? 'ai' : 'manual';
   const emailNormalized = String(email || '').toLowerCase().trim();
 
   // Check if user with this email already exists
@@ -1418,12 +1428,68 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     status: 'pending',
   });
 
+  let candidate = null;
+  let application = null;
+  let candidateWasNewlyCreated = false;
+  const rollbackPublicApplyArtifacts = async (err) => {
+    try {
+      if (application?._id) {
+        await JobApplication.deleteOne({ _id: application._id });
+      }
+      if (candidateWasNewlyCreated && candidate?._id) {
+        await Employee.deleteOne({ _id: candidate._id });
+      }
+      await User.deleteOne({ _id: user._id });
+      logger.warn('Rolled back public apply artifacts after failure', {
+        userId: user._id,
+        candidateId: candidate?._id,
+        applicationId: application?._id,
+        candidateWasNewlyCreated,
+        message: err?.message,
+      });
+    } catch (rollbackErr) {
+      logger.error('Failed to roll back public apply artifacts', {
+        userId: user._id,
+        candidateId: candidate?._id,
+        applicationId: application?._id,
+        message: rollbackErr?.message,
+      });
+    }
+  };
+
+  try {
   // Handle file uploads to S3 and build candidate.documents entries that match documentSchema.
   // Earlier shape ({ name, url } and uploadResult.fileUrl) silently dropped the resume because
   // uploadFileToS3 returns `url` (not fileUrl) and the candidate doc schema uses `label`, not `name`.
   let resumeDoc = null;
   let resumeSkills = [];
+  let resumeExperiences = [];
+  let resumeQualifications = [];
+  let resumeSocialLinks = [];
   const documentDocs = [];
+
+  const {
+    normalizePublicApplySkills,
+    normalizePublicApplyExperiences,
+    normalizePublicApplyQualifications,
+    normalizePublicApplySocialLinks,
+    mergePublicApplyExperiences,
+    mergePublicApplyQualifications,
+    mergePublicApplySocialLinks,
+  } = await import('./resumeSkillsExtract.service.js');
+
+  if (applicationData.skills && String(applicationData.skills).trim()) {
+    resumeSkills = normalizePublicApplySkills(applicationData.skills);
+  }
+  if (applicationData.experiences && String(applicationData.experiences).trim()) {
+    resumeExperiences = normalizePublicApplyExperiences(applicationData.experiences);
+  }
+  if (applicationData.qualifications && String(applicationData.qualifications).trim()) {
+    resumeQualifications = normalizePublicApplyQualifications(applicationData.qualifications);
+  }
+  if (applicationData.socialLinks && String(applicationData.socialLinks).trim()) {
+    resumeSocialLinks = normalizePublicApplySocialLinks(applicationData.socialLinks);
+  }
 
   if (files?.resume && files.resume[0]) {
     const { uploadFileToS3 } = await import('./upload.service.js');
@@ -1439,20 +1505,20 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       mimeType: r.mimeType,
       status: 0,
     };
-    // Auto-extract skills from the resume — same engine the Personal Information page uses.
-    // Best-effort: a slow/failed OpenAI call must NEVER block the public application, so swallow
-    // errors and fall back to no skills (recruiter/candidate can still add them manually).
-    try {
-      const { extractSkillsFromResumeBuffer } = await import('./resumeSkillsExtract.service.js');
-      const out = await extractSkillsFromResumeBuffer(
-        resumeFile.buffer,
-        resumeFile.mimetype || r.mimeType || 'application/octet-stream',
-        resumeFile.originalname || r.originalName || 'resume.pdf'
-      );
-      resumeSkills = Array.isArray(out?.skills) ? out.skills : [];
-      logger.info('✅ Resume skills extracted on apply:', { count: resumeSkills.length });
-    } catch (e) {
-      logger.warn('Resume skill extraction skipped (application continues):', { message: e?.message });
+    // AI entry mode only: fallback extraction when the client did not supply parse-prefill skills.
+    if (entryMode === 'ai' && resumeSkills.length === 0) {
+      try {
+        const { extractSkillsFromResumeBuffer } = await import('./resumeSkillsExtract.service.js');
+        const out = await extractSkillsFromResumeBuffer(
+          resumeFile.buffer,
+          resumeFile.mimetype || r.mimeType || 'application/octet-stream',
+          resumeFile.originalname || r.originalName || 'resume.pdf'
+        );
+        resumeSkills = Array.isArray(out?.skills) ? out.skills : [];
+        logger.info('✅ Resume skills extracted on apply:', { count: resumeSkills.length, entryMode });
+      } catch (e) {
+        logger.warn('Resume skill extraction skipped (application continues):', { message: e?.message });
+      }
     }
   }
 
@@ -1478,7 +1544,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   const jobCreatorId = job.createdBy || job.owner;
   
   // Check if candidate with this email already exists (unique index on email)
-  let candidate = await Employee.findOne({ email: emailNormalized });
+  candidate = await Employee.findOne({ email: emailNormalized });
 
   if (!candidate) {
     const candidateData = {
@@ -1488,11 +1554,10 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       email: emailNormalized,
       phoneNumber,
       countryCode,
-      // Default empty arrays for required fields
-      qualifications: [],
-      experiences: [],
+      qualifications: resumeQualifications,
+      experiences: resumeExperiences,
       skills: resumeSkills,
-      socialLinks: [],
+      socialLinks: resumeSocialLinks,
     };
 
     const newDocs = [...(resumeDoc ? [resumeDoc] : []), ...documentDocs];
@@ -1502,12 +1567,16 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
 
     try {
       candidate = await Employee.create(candidateData);
+      candidateWasNewlyCreated = true;
       logger.info('✅ New candidate created:', { _id: candidate._id, fullName: candidate.fullName, email: candidate.email });
     } catch (createErr) {
       if (createErr.code === 11000) {
         candidate = await Employee.findOne({ email: emailNormalized });
       }
-      if (!candidate) throw createErr;
+      if (!candidate) {
+        await rollbackPublicApplyArtifacts(createErr);
+        throw createErr;
+      }
       logger.info('✅ Existing candidate reused after duplicate-key race:', {
         _id: candidate._id,
         fullName: candidate.fullName,
@@ -1533,8 +1602,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       logger.info('✅ Candidate documents updated');
     }
 
-    // Merge resume-extracted skills, but never clobber manually-entered ones (dedupe by name).
-    if (resumeSkills.length > 0) {
+    // Merge resume-extracted skills (AI mode only), but never clobber manually-entered ones (dedupe by name).
+    if (entryMode === 'ai' && resumeSkills.length > 0) {
       const have = new Set((candidate.skills || []).map((s) => String(s.name || '').toLowerCase()));
       const fresh = resumeSkills.filter((s) => s?.name && !have.has(String(s.name).toLowerCase()));
       if (fresh.length > 0) {
@@ -1543,10 +1612,42 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
         logger.info('✅ Candidate skills updated from resume:', { added: fresh.length });
       }
     }
+
+    // Append-only merge for profile arrays — preserves recruiter-entered rows.
+    let profileUpdated = false;
+    if (resumeExperiences.length > 0) {
+      const merged = mergePublicApplyExperiences(candidate.experiences, resumeExperiences);
+      if (merged !== candidate.experiences) {
+        candidate.experiences = merged;
+        profileUpdated = true;
+      }
+    }
+    if (resumeQualifications.length > 0) {
+      const merged = mergePublicApplyQualifications(candidate.qualifications, resumeQualifications);
+      if (merged !== candidate.qualifications) {
+        candidate.qualifications = merged;
+        profileUpdated = true;
+      }
+    }
+    if (resumeSocialLinks.length > 0) {
+      const merged = mergePublicApplySocialLinks(candidate.socialLinks, resumeSocialLinks);
+      if (merged !== candidate.socialLinks) {
+        candidate.socialLinks = merged;
+        profileUpdated = true;
+      }
+    }
+    if (profileUpdated) {
+      await candidate.save();
+      logger.info('✅ Candidate profile arrays updated from public apply:', {
+        experiences: candidate.experiences?.length || 0,
+        qualifications: candidate.qualifications?.length || 0,
+        socialLinks: candidate.socialLinks?.length || 0,
+      });
+    }
   }
 
   // Create job application
-  const application = await JobApplication.create({
+  application = await JobApplication.create({
     job: jobId,
     candidate: candidate._id,
     appliedBy: user._id,
@@ -1735,6 +1836,10 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     message:
       'Application received. Check your email to verify your address; after verification you can sign in.',
   };
+  } catch (applyErr) {
+    await rollbackPublicApplyArtifacts(applyErr);
+    throw applyErr;
+  }
 };
 
 async function listJobBookmarks(jobId, userId) {

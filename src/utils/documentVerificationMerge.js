@@ -4,6 +4,18 @@ const documentS3KeysMatch = (a, b) => {
   return Boolean(ka && kb && ka === kb);
 };
 
+/**
+ * Reads hand the client a presigned URL in `url` (see getCandidateByOwnerForMe), and a form that
+ * PATCHes the row back echoes it. Persisting it replaces the canonical S3 URL with one that expires,
+ * so anything reading `documents[].url` directly breaks a week later. Drop the signature.
+ */
+const stripPresignedQuery = (url) => {
+  const raw = String(url || '').trim();
+  if (!raw || !/[?&]X-Amz-(Signature|Credential)=/i.test(raw)) return raw;
+  const cut = raw.indexOf('?');
+  return cut > 0 ? raw.slice(0, cut) : raw;
+};
+
 /** New uploads and file replacements must re-enter the verification queue. */
 const resetDocumentVerification = (doc) => ({
   ...doc,
@@ -43,7 +55,10 @@ const mergeDocumentsPreserveKeys = (existingDocs = [], incomingDocs = []) => {
     if (pi === -1) {
       pi = pool.findIndex((p) => !p._merged && (p.label || '').trim() === incLabel);
     }
-    if (pi === -1) return resetDocumentVerification(inc);
+    // No stored counterpart: still drop an echoed signature rather than persisting an expiring URL.
+    if (pi === -1) {
+      return resetDocumentVerification(inc.url ? { ...inc, url: stripPresignedQuery(inc.url) } : inc);
+    }
     const prev = pool[pi];
     pool[pi] = { ...prev, _merged: true };
     const out = { ...inc };
@@ -54,10 +69,21 @@ const mergeDocumentsPreserveKeys = (existingDocs = [], incomingDocs = []) => {
     if (!(out.size > 0) && prev.size) out.size = prev.size;
     if (!out.mimeType && prev.mimeType) out.mimeType = prev.mimeType;
     if (!out.type && prev.type) out.type = prev.type;
-    if (prev.url && (!inc.url || /localhost|127\.0\.0\.1/i.test(String(inc.url)))) {
+    const sameObject = documentS3KeysMatch(out.key, prev.key);
+    // Same object → the stored URL is authoritative. The incoming one is whatever the client was
+    // last handed, which for self-service forms is a presigned URL that expires.
+    if (prev.url && (!inc.url || sameObject || /localhost|127\.0\.0\.1/i.test(String(inc.url)))) {
       out.url = prev.url;
+    } else {
+      out.url = stripPresignedQuery(out.url);
     }
-    if (documentS3KeysMatch(out.key, prev.key)) {
+    // Slot stamps live on the server. A client that omits them (every current caller does) must not
+    // silently un-slot the resume row — that is what made the next upload append a duplicate.
+    if (sameObject) {
+      if (prev.logicalSlot && !out.logicalSlot) out.logicalSlot = prev.logicalSlot;
+      if (prev.slotVersion && !out.slotVersion) out.slotVersion = prev.slotVersion;
+    }
+    if (sameObject) {
       return carryDocumentVerification(out, prev);
     }
     return resetDocumentVerification(out);

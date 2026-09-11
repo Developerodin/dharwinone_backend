@@ -105,21 +105,6 @@ function eventTimestamp(payload) {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-/** Verify Bolna webhook secret (header). Mirrors verifyBolnaWebhook middleware. */
-export function verifyBolnaSecret(headerSecret) {
-  const expected = (config.webhooks?.bolnaSecret || '').trim();
-  if (!expected) return true;
-  if (!headerSecret) return false;
-  try {
-    const a = Buffer.from(String(headerSecret), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Map applyEvent source values to the canonical `source` enum stored on
  * CallRecord. Webhook + webhook_candidate collapse to 'webhook' since they
@@ -162,6 +147,46 @@ export function isOwnAgent(payload, norm = {}) {
   return ours.includes(agentId);
 }
 
+export function normalizeExecutionContext(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/**
+ * Execution context marker stamped by this backend in bolna.service.initiateCall.
+ * Used to drop foreign-environment payloads when a Bolna account is shared.
+ */
+export function resolveExecutionContext(payload, norm = {}) {
+  const data =
+    payload?.data && typeof payload.data === 'object'
+      ? payload.data
+      : payload?.execution && typeof payload.execution === 'object'
+        ? payload.execution
+        : {};
+  const userData =
+    payload?.user_data && typeof payload.user_data === 'object'
+      ? payload.user_data
+      : data?.user_data && typeof data.user_data === 'object'
+        ? data.user_data
+        : norm?.raw?.user_data && typeof norm.raw.user_data === 'object'
+          ? norm.raw.user_data
+          : {};
+  return normalizeExecutionContext(userData?.dharwin_execution_context);
+}
+
+/**
+ * Reject only explicit foreign context. Legacy/unmarked payloads stay accepted.
+ */
+export function shouldAcceptExecutionContext(payload, norm = {}) {
+  const expected = normalizeExecutionContext(config.bolna?.executionContext);
+  if (!expected) return { ok: true };
+
+  const actual = resolveExecutionContext(payload, norm);
+  if (!actual) return { ok: true };
+
+  if (actual === expected) return { ok: true };
+  return { ok: false, reason: 'foreign_execution_context', actual, expected };
+}
+
 /**
  * Apply a Bolna state change to CallRecord.
  *
@@ -195,6 +220,14 @@ export async function applyEvent(payload, source, meta = {}) {
       `[callSync] rejecting event for foreign agent=${resolveAgentId(payload, norm) || 'unknown'} executionId=${executionId} source=${source}`
     );
     return { record: null, applied: false, reason: 'foreign_agent' };
+  }
+
+  const contextGate = shouldAcceptExecutionContext(payload, norm);
+  if (!contextGate.ok) {
+    logger.warn(
+      `[callSync] rejecting ${source} for executionId=${executionId} reason=${contextGate.reason} expected=${contextGate.expected || ''} actual=${contextGate.actual || ''}`
+    );
+    return { record: null, applied: false, reason: contextGate.reason };
   }
 
   const status = normalizeStatus(norm.status);
@@ -360,6 +393,10 @@ export async function applyEvent(payload, source, meta = {}) {
 
     // Race-safe via executionId unique index — losing race re-checks.
     try {
+      const stubExecutionContext =
+        resolveExecutionContext(payload, norm) ||
+        normalizeExecutionContext(config.bolna?.executionContext) ||
+        null;
       const stub = await CallRecord.create({
         ...set,
         executionId,
@@ -368,6 +405,7 @@ export async function applyEvent(payload, source, meta = {}) {
         purpose: norm.purpose || null,
         agentId: norm.agentId || null,
         businessName: norm.businessName || null,
+        executionContext: stubExecutionContext,
         source: canonicalSource(source),
         createdBy: null,
         requestId: meta.requestId || null,
@@ -424,6 +462,8 @@ export async function seedRecord({
 }) {
   if (!executionId) throw new Error('seedRecord: executionId required');
 
+  const executionContext = normalizeExecutionContext(config.bolna?.executionContext) || null;
+
   const onInsert = {
     executionId: String(executionId),
     status: 'initiated',
@@ -437,6 +477,7 @@ export async function seedRecord({
     toPhoneNumber: recipientPhone || null,
     phone: recipientPhone || null,
     businessName: businessName || null,
+    executionContext,
     // Provenance — initiate is the trusted path. Bolna POST /call already
     // returned this executionId so we don't need a second verify hit.
     source: 'initiate',
@@ -464,7 +505,11 @@ export async function seedRecord({
     }
   }
   if (Object.keys(patch).length) {
-    await CallRecord.updateOne(filter, { $set: patch }).catch(() => {});
+    await CallRecord.updateOne(filter, { $set: patch }).catch((err) => {
+      logger.warn(
+        `[callSync] failed to link stub record executionId=${onInsert.executionId}: ${err?.message || err}`
+      );
+    });
   }
 
   // Idempotent seed-event log
@@ -543,8 +588,10 @@ export default {
   applyEvent,
   seedRecord,
   backfillFromAgentList,
-  verifyBolnaSecret,
   normalizeStatus,
   isOwnAgent,
   resolveAgentId,
+  normalizeExecutionContext,
+  resolveExecutionContext,
+  shouldAcceptExecutionContext,
 };

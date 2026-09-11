@@ -1092,19 +1092,21 @@ async function deleteCallRecord(id) {
   return record;
 }
 
-async function findRecordsNeedingSync(limit = 20) {
+async function findRecordsNeedingSync(limit = 20, { purpose } = {}) {
   // Terminal statuses are off-limits for re-poll. Including 'completed' here
   // matters: a completed call without recording/transcript would otherwise be
   // re-polled by syncMissingData → updateFromExecutionDetails (raw $set, no
   // rank guard). If Bolna ages the execution out and 404s, we'd regress
   // completed (rank 10) → unknown (rank 0); the cron reconciler then escalates
   // unknown → expired. End state: recently-completed call shows as 'expired'.
-  const list = await CallRecord.find({
+  const filter = {
     executionId: { $exists: true, $nin: [null, ''] },
     status: { $nin: TERMINAL_STATUSES },
     'telephonyData.provider': { $ne: 'twilio' },
     $or: [{ transcript: { $in: [null, ''] } }, { recordingUrl: { $in: [null, ''] } }],
-  })
+  };
+  if (purpose) filter.purpose = purpose;
+  const list = await CallRecord.find(filter)
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();

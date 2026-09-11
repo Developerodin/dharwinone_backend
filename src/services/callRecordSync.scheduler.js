@@ -29,6 +29,8 @@ const STUB_GHOST_GRACE_MS = 60 * 60 * 1000; // 1 hour
 const NOT_FOUND_GHOST_GRACE_MS = 30 * 60 * 1000; // 30 minutes
 const GHOST_CLEANUP_BATCH = 50;
 
+let inFlight = false;
+
 async function reconcileStuckRecords() {
   const stuckCutoff = new Date(Date.now() - STUCK_THRESHOLD_MS);
   const lookbackCutoff = new Date(Date.now() - RECONCILE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
@@ -241,6 +243,11 @@ export async function cleanupGhostCalls() {
 }
 
 export async function runCallHistorySync() {
+  if (inFlight) {
+    logger.info('[callRecordSync] previous tick still running; skipping');
+    return;
+  }
+  inFlight = true;
   try {
     const reconcile = await reconcileStuckRecords();
     const backfill = await reconcileBackfillFromAgentList();
@@ -271,6 +278,8 @@ export async function runCallHistorySync() {
     }
   } catch (err) {
     logger.error(`[callSync cron] tick failed: ${err.message}`);
+  } finally {
+    inFlight = false;
   }
 }
 

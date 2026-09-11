@@ -42,27 +42,60 @@ const uploadSingle = (fieldName = 'file') => (req, res, next) => {
   });
 };
 
-// Resume and document upload for job applications
-const resumeFileFilter = (req, file, cb) => {
+/** Public apply resume + parse-resume: PDF/DOCX only (no legacy .doc). */
+function isPublicResumeFile(file) {
+  const mime = file.mimetype || '';
+  const lower = (file.originalname || '').toLowerCase();
+  const okMime =
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const okExt = lower.endsWith('.pdf') || lower.endsWith('.docx');
+  const unlabeledMime = !mime || mime === 'application/octet-stream';
+  return okMime || (unlabeledMime && okExt);
+}
+
+const publicResumeFileFilter = (req, file, cb) => {
+  if (isPublicResumeFile(file)) {
+    cb(null, true);
+    return;
+  }
+  cb(
+    new ApiError(httpStatus.BAD_REQUEST, 'Resume must be a PDF or DOCX file.'),
+    false
+  );
+};
+
+// Additional documents on job applications (resume field uses publicResumeFileFilter).
+const jobApplicationDocumentFileFilter = (req, file, cb) => {
   const allowedMimeTypes = [
     'application/pdf',
-    'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'image/jpeg',
     'image/jpg',
     'image/png',
   ];
-  if (allowedMimeTypes.includes(file.mimetype)) {
+  const lower = (file.originalname || '').toLowerCase();
+  const okExt = ['.pdf', '.docx', '.jpg', '.jpeg', '.png'].some((ext) => lower.endsWith(ext));
+  const mime = file.mimetype || '';
+  const unlabeledMime = !mime || mime === 'application/octet-stream';
+  if (allowedMimeTypes.includes(mime) || (unlabeledMime && okExt)) {
     cb(null, true);
   } else {
     cb(
       new ApiError(
         httpStatus.BAD_REQUEST,
-        `File type ${file.mimetype} is not allowed. Use PDF, DOC, DOCX, JPG, or PNG files`
+        `File type ${mime || 'unknown'} is not allowed. Use PDF, DOCX, JPG, or PNG files`
       ),
       false
     );
   }
+};
+
+const resumeFileFilter = (req, file, cb) => {
+  if (file.fieldname === 'resume') {
+    return publicResumeFileFilter(req, file, cb);
+  }
+  return jobApplicationDocumentFileFilter(req, file, cb);
 };
 
 const jobApplicationUpload = multer({
@@ -70,6 +103,27 @@ const jobApplicationUpload = multer({
   fileFilter: resumeFileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
 });
+
+/** Single resume upload for public parse-resume (PDF/DOCX, 10MB). */
+const publicResumeParseUpload = multer({
+  storage,
+  fileFilter: publicResumeFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+const uploadPublicResumeParse = (req, res, next) => {
+  publicResumeParseUpload.single('resume')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return next(new ApiError(httpStatus.BAD_REQUEST, 'File size too large. Maximum 10MB.'));
+        }
+      }
+      return next(err);
+    }
+    next();
+  });
+};
 
 const uploadJobApplicationFiles = (req, res, next) => {
   jobApplicationUpload.fields([
@@ -272,4 +326,13 @@ const uploadDocumentFile = (req, res, next) => {
   });
 };
 
-export { uploadSingle, uploadJobApplicationFiles, uploadImagesVideos, studentProfileImageUpload, chatAttachmentsUpload, uploadChatAttachments, uploadDocumentFile };
+export {
+  uploadSingle,
+  uploadJobApplicationFiles,
+  uploadPublicResumeParse,
+  uploadImagesVideos,
+  studentProfileImageUpload,
+  chatAttachmentsUpload,
+  uploadChatAttachments,
+  uploadDocumentFile,
+};

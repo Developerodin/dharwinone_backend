@@ -63,6 +63,14 @@ src/services/__tests__/helpers/
 !src/services/__tests__/meeting.rescheduleResetsReminder.test.js
 !src/services/__tests__/meetingIcs.test.js
 !src/services/__tests__/meetingSeries.inviteOnAdd.test.js
+# Guards the Bolna render-cache bleed. The previous copy of this test was untracked and
+# vanished; the bug it covers reached a live call, so this one ships.
+!src/utils/__tests__/
+!src/utils/__tests__/bolnaAgentTemplateSync.test.js
+# Guards the chat message-send cap — the socket send path had no limit at all.
+!src/utils/__tests__/chatSendRate.test.js
+# Guards the unread aggregate's per-participant read cursor.
+!src/services/__tests__/chat.unreadScopes.test.js
 !scripts/migrations/
 scripts/migrations/*
 !scripts/migrations/__tests__/

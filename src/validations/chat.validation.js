@@ -182,6 +182,26 @@ const reactToMessage = {
   }),
 };
 
+const searchMessages = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    q: Joi.string().trim().min(1).max(200).required(),
+    limit: Joi.number().integer().min(1).max(50),
+  }),
+};
+
+const setMessagePinned = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+    msgId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    pinned: Joi.boolean().required(),
+  }),
+};
+
 const searchUsers = {
   query: Joi.object().keys({
     search: Joi.string().trim().min(1).max(100),
@@ -273,6 +293,8 @@ export {
   getConversationMessage,
   forwardMessage,
   reactToMessage,
+  setMessagePinned,
+  searchMessages,
   listConversations,
   createConversation,
   getMessages,

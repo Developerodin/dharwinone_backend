@@ -32,6 +32,33 @@ const publicRegistrationLimiter = rateLimit({
   message: { message: 'Too many registration attempts. Please try again later.' },
 });
 
+/**
+ * Provider webhooks. Generous, because a real burst of call-completion callbacks is
+ * legitimate — this exists to bound a forged flood, not to shape normal traffic.
+ * The IP allowlist in verifyWebhook is the actual authentication; this is layer two.
+ */
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  skipSuccessfulRequests: false,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many webhook requests.' },
+});
+
+/**
+ * Public resume parse (AI). Tighter than apply — each call hits OpenAI.
+ * Per-IP; in-memory store (same caveat as other limiters in this file).
+ */
+const publicResumeParseLimiter = rateLimit({
+  windowMs: (config.rateLimit?.publicResumeParseWindowMinutes ?? 60) * 60 * 1000,
+  max: config.rateLimit?.publicResumeParseMax ?? 15,
+  skipSuccessfulRequests: false,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many resume parse attempts. Please try again later.' },
+});
+
 /** Other unauthenticated POSTs under /v1/public (LiveKit, meetings, job apply, etc.). */
 const publicWriteLimiter = rateLimit({
   windowMs: (config.rateLimit?.publicWriteWindowMinutes ?? 15) * 60 * 1000,
@@ -88,6 +115,20 @@ const teamsExport = rateLimit({
 });
 
 /**
+ * Chat reactions. Route middleware is enough here, unlike message sending: reacting has no
+ * Socket.IO path to leak through, so there is nothing for a service-level cap to catch that
+ * this does not. Generous, because rapid emoji toggling is normal use, not abuse.
+ */
+const chatReactLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many reactions. Please try again in a minute.' },
+});
+
+/**
  * Exact-email contact lookup. TWO independent limiters, both applied. Spec §6.
  * A per-user limit alone is insufficient: a compromised account can distribute requests across
  * IPs, and multiple accounts can sit behind one source.
@@ -118,10 +159,13 @@ export {
   authLoginLimiter,
   authStrictFlowLimiter,
   publicRegistrationLimiter,
+  publicResumeParseLimiter,
   publicWriteLimiter,
+  webhookLimiter,
   attendancePunchLimiter,
   jobsBrowseLimiter,
   chatAssistantLimiter,
+  chatReactLimiter,
   teamsImport,
   teamsExport,
   emailLookupLimiterByUser,

@@ -23,6 +23,11 @@ const document = Joi.object({
     .optional()
     .default('Other'),
   label: Joi.string().optional().trim(),
+  // Server-owned slot stamps. Accepted because reads return them and a client that echoes a
+  // document row back would otherwise 400 the entire save (validate.js sets no allowUnknown).
+  // syncVersionedDocumentsOnCandidate recomputes both, so an incoming value is never trusted.
+  logicalSlot: Joi.string().valid('resume', 'cover-letter').optional().allow(null, ''),
+  slotVersion: Joi.number().integer().min(1).optional().allow(null),
   url: Joi.string().uri().optional(),
   key: Joi.string().optional().trim(),
   originalName: Joi.string().optional().trim(),
@@ -467,8 +472,29 @@ const addDocumentVersion = {
     slot: documentVersionSlot,
   }),
   body: Joi.object().keys({
-    type: Joi.string().trim().optional(),
-    label: Joi.string().trim().optional(),
+    // Must stay inside documentVersionSchema's enum — a free-form string passed Joi and then threw
+    // a Mongoose ValidationError on save, answering 500 where the request deserved a 400.
+    type: Joi.string()
+      .valid(
+        'Aadhar',
+        'PAN',
+        'Bank',
+        'Passport',
+        'CV/Resume',
+        'Marksheet',
+        'Degree Certificate',
+        'Experience Letter',
+        'Offer Letter',
+        'Visa',
+        'EAD Card',
+        'I-765 Receipt',
+        'I-983 Form-only',
+        'Cover Letter',
+        'Other'
+      )
+      .optional(),
+    /** Display name for this version. Free text so a user can name the file they are uploading. */
+    label: Joi.string().trim().max(120).optional(),
     documentUrl: Joi.string().uri().optional(),
     key: Joi.string().trim().optional(),
     originalName: Joi.string().trim().optional(),

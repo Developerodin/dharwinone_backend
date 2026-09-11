@@ -4,7 +4,7 @@ import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import { uploadChatAttachments } from '../../middlewares/upload.js';
-import { emailLookupLimiterByUser, emailLookupLimiterByIp } from '../../middlewares/rateLimiter.js';
+import { emailLookupLimiterByUser, emailLookupLimiterByIp, chatReactLimiter } from '../../middlewares/rateLimiter.js';
 import * as chatValidation from '../../validations/chat.validation.js';
 import * as chatController from '../../controllers/chat.controller.js';
 
@@ -108,14 +108,30 @@ router.post(
 );
 router.post(
   '/conversations/:id/messages/:msgId/react',
+  chatReactLimiter,
   validate(chatValidation.reactToMessage),
   chatController.reactToMessage
+);
+router.get(
+  '/conversations/:id/search',
+  validate(chatValidation.searchMessages),
+  chatController.searchMessages
 );
 router.post(
   '/conversations/:id/messages/upload',
   validate(chatValidation.conversationIdParam),
   uploadChatAttachments,
   chatController.uploadAndSendMessage
+);
+router.get(
+  '/conversations/:id/pinned',
+  validate(chatValidation.conversationIdParam),
+  chatController.listPinnedMessages
+);
+router.post(
+  '/conversations/:id/messages/:msgId/pin',
+  validate(chatValidation.setMessagePinned),
+  chatController.setMessagePinned
 );
 router.patch(
   '/conversations/:id/delivered',

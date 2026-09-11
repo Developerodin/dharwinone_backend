@@ -22,7 +22,12 @@ import { isTerminal } from '../models/callRecord.model.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { normalizePhone, validatePhonePlausible, isPlaceholderPhone } from '../utils/phone.js';
-import { authHasPermission, sanitizeCallRecord, sanitizeCallRecords } from '../utils/callRecordAccess.util.js';
+import {
+  authHasPermission,
+  sanitizeBolnaExecution,
+  sanitizeCallRecord,
+  sanitizeCallRecords,
+} from '../utils/callRecordAccess.util.js';
 
 /** Field-level access flags for the Call Transcripts / Call AI role toggles. */
 function callRecordAccessFlags(req) {
@@ -258,18 +263,6 @@ const getBolnaDiagnostics = catchAsync(async (req, res) => {
     },
     agent: agentCheck,
     candidateAgent: candidateAgentCheck,
-  });
-});
-
-const getCallStatus = catchAsync(async (req, res) => {
-  const { executionId } = req.params;
-  const result = await bolnaService.getExecutionDetails(executionId);
-  if (!result.success) {
-    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to fetch call status');
-  }
-  res.status(httpStatus.OK).send({
-    success: true,
-    details: result.details,
   });
 });
 
@@ -704,7 +697,6 @@ const receiveCandidateWebhook = catchAsync(async (req, res) => {
 export {
   initiateCall,
   initiateCandidateCall,
-  getCallStatus,
   getCallRecords,
   getCallRecord,
   refreshCallRecord,
