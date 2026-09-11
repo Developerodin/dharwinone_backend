@@ -253,10 +253,11 @@ export async function buildCandidateVerificationPromptContext({
   );
 
   // Every field below is substituted into the shared system prompt, so all of them
-  // pass through promptSafe(). See its comment for why.
+  // pass through promptSafe(). See its comment for why. Email uses the RFC 5321 length
+  // ceiling; candidate_email_spoken is derived from the sanitised value, not the raw doc.
   const promptContext = {
     candidate_name: promptSafe(candidate.fullName),
-    candidate_email: candidate.email || '',
+    candidate_email: promptSafe(candidate.email, 254),
     candidate_phone: formattedPhone,
     candidate_location: promptSafe(
       candidate.address

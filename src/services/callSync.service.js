@@ -449,7 +449,11 @@ export async function seedRecord({
     }
   }
   if (Object.keys(patch).length) {
-    await CallRecord.updateOne(filter, { $set: patch }).catch(() => {});
+    await CallRecord.updateOne(filter, { $set: patch }).catch((err) => {
+      logger.warn(
+        `[callSync] failed to link stub record executionId=${onInsert.executionId}: ${err?.message || err}`
+      );
+    });
   }
 
   // Idempotent seed-event log
