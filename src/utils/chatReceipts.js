@@ -29,3 +29,18 @@ export function receiptAt(entry) {
   const at = entry.at || entry.readAt || entry.deliveredAt;
   return at ? new Date(at).toISOString() : null;
 }
+
+/**
+ * One wire shape for receipts. The DB holds two — legacy bare ObjectIds in `readBy` alongside
+ * newer { user, at } entries — because readBy is Mixed and predates the timestamped form.
+ * Clients should never have to branch on that, so every read goes through here and comes back
+ * as { user, at }, with `at` null for legacy entries that never carried one.
+ */
+export function normalizeReceipts(list) {
+  return (list || [])
+    .map((entry) => {
+      const user = receiptUserId(entry);
+      return user ? { user, at: receiptAt(entry) } : null;
+    })
+    .filter(Boolean);
+}

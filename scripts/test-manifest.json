@@ -315,5 +315,6 @@
   "src/services/__tests__/activityLog.entityNames.test.js",
   "./src/utils/__tests__/courseSearch.util.test.js",
   "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js",
-  "./src/utils/__tests__/chatSendRate.test.js"
+  "./src/utils/__tests__/chatSendRate.test.js",
+  "./src/services/__tests__/chat.unreadScopes.test.js"
 ]

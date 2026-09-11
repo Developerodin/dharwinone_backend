@@ -69,6 +69,8 @@ src/services/__tests__/helpers/
 !src/utils/__tests__/bolnaAgentTemplateSync.test.js
 # Guards the chat message-send cap — the socket send path had no limit at all.
 !src/utils/__tests__/chatSendRate.test.js
+# Guards the unread aggregate's per-participant read cursor.
+!src/services/__tests__/chat.unreadScopes.test.js
 !scripts/migrations/
 scripts/migrations/*
 !scripts/migrations/__tests__/

@@ -20,7 +20,16 @@ import { generatePresignedDownloadUrl } from '../config/s3.js';
 let io = null;
 
 /** userId -> Set<socketId> */
+/**
+ * ponytail: presence is per process. Every EC2 environment currently runs a single Node
+ * process, so this is correct today — but the moment the backend runs behind more than one
+ * instance, each one only knows its own sockets and online/offline goes wrong. The upgrade is
+ * a shared store (socket.io Redis adapter plus a presence key), not a bigger Map.
+ */
 const onlineUsers = new Map();
+
+/** Typing is a keystroke-rate event; one broadcast per conversation per this window is plenty. */
+const TYPING_EMIT_THROTTLE_MS = 2000;
 
 const initSocket = (httpServer) => {
   // Reuse the same allowed origins as the Express app (config.corsOrigin, from CORS_ORIGIN).
@@ -144,15 +153,22 @@ const initSocket = (httpServer) => {
       }
     });
 
+    // Clients emit on every keystroke. Unthrottled, a busy group turns one person typing into
+    // a per-character broadcast to every other member. State lives on the socket so it is freed
+    // on disconnect.
+    socket.typingLastEmitAt = new Map();
     socket.on('typing', (data) => {
       const { conversationId } = data || {};
-      if (conversationId) {
-        socket.to(`conversation:${conversationId}`).emit('user_typing', {
-          conversationId,
-          userId,
-          userName: socket.userName,
-        });
-      }
+      if (!conversationId) return;
+      const now = Date.now();
+      const last = socket.typingLastEmitAt.get(conversationId) || 0;
+      if (now - last < TYPING_EMIT_THROTTLE_MS) return;
+      socket.typingLastEmitAt.set(conversationId, now);
+      socket.to(`conversation:${conversationId}`).emit('user_typing', {
+        conversationId,
+        userId,
+        userName: socket.userName,
+      });
     });
 
     socket.on('message_read', async (data) => {
@@ -170,6 +186,7 @@ const initSocket = (httpServer) => {
             conversationId,
             userId,
             readAt: result.readAt || new Date().toISOString(),
+            messageIds: result.messageIds || [],
           };
           // Conversation room (open threads) + each other participant's user room
           // so senders get realtime blue ticks even if they left the thread.

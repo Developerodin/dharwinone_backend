@@ -14,7 +14,7 @@ import {
   defaultAttachmentContent,
   isGenericAttachmentPlaceholder,
 } from '../utils/chatMessagePreview.js';
-import { userHasReceipt } from '../utils/chatReceipts.js';
+import { userHasReceipt, normalizeReceipts } from '../utils/chatReceipts.js';
 import { formatMentionsForClient, normalizeMentions } from '../utils/chatMentions.js';
 import { assertChatSendAllowed } from '../utils/chatSendRate.js';
 import { assertCanInitiateWith, lookupExactEmail } from './communicationAccess.service.js';
@@ -204,6 +204,10 @@ const presentMessageForUser = (msg, userId) => {
   }
   // hiddenFor is server-side only — never needed by clients.
   delete presented.hiddenFor;
+  // Collapse the two stored receipt shapes into one before anything leaves the server, so no
+  // client has to branch on legacy bare ObjectIds vs { user, at }.
+  presented.readBy = normalizeReceipts(presented.readBy);
+  presented.deliveredTo = normalizeReceipts(presented.deliveredTo);
   presented.mentions = formatMentionsForClient(presented.mentions);
   return presented;
 };
@@ -345,6 +349,21 @@ const enrichCallForViewer = (call, viewerUserId) => {
   return { direction, peer };
 };
 
+/**
+ * One clause per conversation for the unread aggregate: the read cursor is per participant, so
+ * it cannot be expressed as a single shared filter. A conversation the viewer has never opened
+ * has no cursor and counts everything.
+ */
+const buildUnreadScopes = (convs, userId) =>
+  (convs || []).map((c) => {
+    const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === String(userId));
+    const scope = { conversation: c._id };
+    if (myParticipant?.lastReadAt) {
+      scope.createdAt = { $gt: myParticipant.lastReadAt };
+    }
+    return scope;
+  });
+
 const listConversations = async (userId, { page = 1, limit = 20, type } = {}) => {
   const skip = (page - 1) * limit;
   const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -466,24 +485,28 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
     ])
   );
 
-  const unreadPairs = await Promise.all(
-    dedupedConvs.map(async (c) => {
-      const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === userId);
-      // Same visibility rules as the list preview: a message this user deleted for themselves,
-      // or one deleted for everyone, is not something they can still go and read.
-      const query = {
-        conversation: c._id,
-        sender: { $ne: userObjectId },
-        ...messagePreviewVisibilityFilter(userId),
-      };
-      if (myParticipant?.lastReadAt) {
-        query.createdAt = { $gt: myParticipant.lastReadAt };
-      }
-      const count = await Message.countDocuments(query);
-      return [c._id.toString(), count];
-    })
-  );
-  const unreadMap = new Map(unreadPairs);
+  // One aggregate for the whole page rather than a countDocuments per conversation. The cursor
+  // is per-conversation, so the page becomes an $or of at most `limit` clauses — each one a
+  // { conversation, createdAt } index prefix.
+  //
+  // Same visibility rules as the list preview: a message this user deleted for themselves, or
+  // one deleted for everyone, is not something they can still go and read.
+  const unreadScopes = buildUnreadScopes(dedupedConvs, userId);
+  const unreadCounts = unreadScopes.length
+    ? await Message.aggregate([
+        {
+          $match: {
+            $and: [
+              { $or: unreadScopes },
+              { sender: { $ne: userObjectId } },
+              messagePreviewVisibilityFilter(userId),
+            ],
+          },
+        },
+        { $group: { _id: '$conversation', count: { $sum: 1 } } },
+      ])
+    : [];
+  const unreadMap = new Map(unreadCounts.map((row) => [row._id.toString(), row.count]));
 
   const result = dedupedConvs.map((c) => {
     const cid = c._id.toString();
@@ -1047,6 +1070,45 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
 };
 
 /**
+ * In-conversation message search.
+ *
+ * ponytail: an escaped case-insensitive regex, no text index. The query is always pinned to one
+ * conversation, so the existing { conversation, createdAt } index picks the candidate set and
+ * the regex only filters it — good enough until a single thread gets big enough to feel the
+ * scan. Upgrading means a $text index, which does NOT build itself in production
+ * (autoIndex is off there), so it is a deploy step, not a code change.
+ */
+const SEARCH_MAX_LIMIT = 50;
+
+/** Escape every regex metacharacter — the query is raw user input. */
+const REGEX_METACHARS = new Set(['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
+const escapeRegex = (value) =>
+  Array.from(String(value))
+    .map((ch) => (REGEX_METACHARS.has(ch) ? `\\${ch}` : ch))
+    .join('');
+
+const searchMessages = async (conversationId, userId, { q, limit = 20 } = {}) => {
+  await ensureParticipant(conversationId, userId);
+  const term = String(q || '').trim();
+  if (!term) return { results: [], q: '' };
+
+  const take = Math.min(Math.max(Number(limit) || 20, 1), SEARCH_MAX_LIMIT);
+  const docs = await Message.find({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    content: { $regex: escapeRegex(term), $options: 'i' },
+    // Deleted and personally hidden messages must not be findable.
+    ...messagePreviewVisibilityFilter(userId),
+  })
+    .sort({ createdAt: -1 })
+    .limit(take)
+    .populate('sender', 'name email')
+    .populate('mentions.user', 'name email')
+    .lean();
+
+  return { results: docs.map((m) => presentMessageForUser(m, userId)), q: term };
+};
+
+/**
  * Conversation-wide message pins.
  *
  * Who may pin: group admins only, either party in a direct chat — the same split
@@ -1273,7 +1335,14 @@ const markAsRead = async (conversationId, userId) => {
   if (bulk.length) {
     await Message.bulkWrite(bulk, { ordered: false });
   }
-  return { success: true, readAt: now.toISOString() };
+  // messageIds is what lets a client patch the exact messages that flipped. Without it the only
+  // option is to re-scan the loaded thread and guess, which is why clients ended up matching on
+  // the raw receipt array. markConversationDelivered already returns the same field.
+  return {
+    success: true,
+    readAt: now.toISOString(),
+    messageIds: unread.map((msg) => String(msg._id)),
+  };
 };
 
 /**
@@ -1310,26 +1379,26 @@ const markMessageDelivered = async (conversationId, messageId, userId) => {
  */
 const markConversationDelivered = async (conversationId, userId) => {
   await ensureParticipant(conversationId, userId);
+  // Only messages still missing this user's receipt, matched server-side. One clause, unlike
+  // markAsRead: deliveredTo is a typed subdocument array, so it never holds the legacy bare
+  // ObjectId form that readBy does.
+  const userObjectId = new mongoose.Types.ObjectId(userId);
   const pending = await Message.find({
     conversation: conversationId,
     sender: { $ne: userId },
+    'deliveredTo.user': { $ne: userObjectId },
   })
-    .select('_id deliveredTo')
+    .select('_id')
     .lean();
 
   const at = new Date();
-  const bulk = [];
-  const markedIds = [];
-  for (const msg of pending) {
-    if (userHasReceipt(msg.deliveredTo, userId)) continue;
-    bulk.push({
-      updateOne: {
-        filter: { _id: msg._id },
-        update: { $push: { deliveredTo: { user: userId, at } } },
-      },
-    });
-    markedIds.push(String(msg._id));
-  }
+  const markedIds = pending.map((msg) => String(msg._id));
+  const bulk = pending.map((msg) => ({
+    updateOne: {
+      filter: { _id: msg._id },
+      update: { $push: { deliveredTo: { user: userId, at } } },
+    },
+  }));
   if (bulk.length) {
     await Message.bulkWrite(bulk, { ordered: false });
   }
@@ -1885,6 +1954,7 @@ const deleteConversation = async (conversationId, userId) => {
 
 export {
   listConversations,
+  buildUnreadScopes,
   listConversationPreferences,
   createConversation,
   getConversation,
@@ -1902,6 +1972,7 @@ export {
   reactToMessage,
   setMessagePinned,
   listPinnedMessages,
+  searchMessages,
   markAsRead,
   markMessageDelivered,
   markConversationDelivered,

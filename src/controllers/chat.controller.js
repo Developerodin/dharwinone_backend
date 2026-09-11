@@ -197,6 +197,15 @@ const reactToMessage = catchAsync(async (req, res) => {
   res.send(msg);
 });
 
+const searchMessages = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const result = await chatService.searchMessages(req.params.id, userId, {
+    q: req.query.q,
+    limit: req.query.limit,
+  });
+  res.send(result);
+});
+
 const setMessagePinned = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const { pinned } = req.body || {};
@@ -250,6 +259,7 @@ const markAsRead = catchAsync(async (req, res) => {
         conversationId,
         userId: String(userId),
         readAt: result.readAt || new Date().toISOString(),
+        messageIds: result.messageIds || [],
       };
       io.to(`conversation:${conversationId}`).emit('messages_read', payload);
       const participantIds = await chatService.getConversationParticipantIds(conversationId);
@@ -263,7 +273,7 @@ const markAsRead = catchAsync(async (req, res) => {
     logger.warn(`markAsRead notify failed: ${err.message}`);
   }
 
-  res.send({ success: true, readAt: result.readAt });
+  res.send({ success: true, readAt: result.readAt, messageIds: result.messageIds || [] });
 });
 
 const listCalls = catchAsync(async (req, res) => {
@@ -563,6 +573,7 @@ export {
   deleteMessage,
   forwardMessage,
   reactToMessage,
+  searchMessages,
   setMessagePinned,
   listPinnedMessages,
   markAsDelivered,
