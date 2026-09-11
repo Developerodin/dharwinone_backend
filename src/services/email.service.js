@@ -344,6 +344,33 @@ const buildPlainTextEmail = ({
 };
 
 /**
+ * Record an email the recipient's notification preferences blocked. Suppression used to
+ * return early with only a debug log, so a muted invitee left no trace anywhere: no EmailLog
+ * row, no warning, and the caller booked it as delivered. A row here is what makes
+ * "the portal says invited but nothing arrived" answerable.
+ * @param {string} to
+ * @param {string} subject
+ * @param {string} templateName
+ * @param {Object} [metadata]
+ */
+const logSuppressedEmail = async (to, subject, templateName, metadata = {}) => {
+  const intendedTo = String(to || '').trim().toLowerCase();
+  logger.info(`[email] ${templateName} to ${intendedTo} suppressed by notification preferences`);
+  try {
+    await EmailLog.create({
+      to: intendedTo,
+      subject,
+      templateName,
+      status: 'suppressed',
+      error: 'Recipient notification preferences disable this email',
+      metadata,
+    });
+  } catch (err) {
+    logger.warn(`EmailLog suppressed-row create failed: ${err?.message || err}`);
+  }
+};
+
+/**
  * Send an email and log to EmailLog for audit.
  * @param {string} to
  * @param {string} subject
@@ -740,8 +767,60 @@ const sendCandidateAccountActivationEmail = async (to, options = {}) => {
  * @param {Object} ev - { uid, title, description, location, startAt, durationMinutes, rrule?, organizerEmail? }
  * @returns {string} VCALENDAR content
  */
+/**
+ * Fold one ICS content line per RFC 5545 §3.1: no line may exceed 75 octets, and a long line
+ * is continued on the next line prefixed with a single space. Parsers rejoin by stripping
+ * CRLF + the leading whitespace, so folding changes the wire format, never the value.
+ *
+ * This matters because the ICS travels inside an email. Anything in the path that re-wraps a
+ * long line — an MTA enforcing RFC 5322's 998-octet line cap, a gateway re-encoding the part —
+ * inserts a CRLF *without* the continuation space, which silently corrupts the calendar body.
+ * Our LOCATION and DESCRIPTION carry the join URL and run well past 75 octets, so they are the
+ * lines at risk. Folding up front means the line breaks are ours and correctly marked.
+ *
+ * The limit is octets, not characters: a fold landing inside a multi-byte UTF-8 sequence
+ * corrupts that character, so the split point backs off to a sequence boundary.
+ *
+ * @param {string} line
+ * @returns {string} the line, folded with CRLF + space where needed
+ */
+const foldIcsLine = (line) => {
+  const bytes = Buffer.from(String(line), 'utf8');
+  if (bytes.length <= 75) return String(line);
+  const parts = [];
+  let start = 0;
+  // The first line may use all 75 octets; every continuation line spends one on its leading
+  // space, leaving 74 for content.
+  let limit = 75;
+  while (start < bytes.length) {
+    let end = Math.min(start + limit, bytes.length);
+    // 0x80-0xBF is the UTF-8 continuation-byte range (10xxxxxx) — landing on one means the
+    // split is mid-character. A character is at most 4 octets, so this backs off at most 3
+    // and cannot reach `start`.
+    const isContinuation = (i) => bytes[i] >= 0x80 && bytes[i] <= 0xbf;
+    while (end > start && end < bytes.length && isContinuation(end)) end -= 1;
+    parts.push(bytes.subarray(start, end).toString('utf8'));
+    start = end;
+    limit = 74;
+  }
+  return parts.join('\r\n ');
+};
+
 const buildIcsEvent = (ev) => {
-  const { uid, title, description, location, startAt, durationMinutes = 60, rrule, organizerEmail } = ev;
+  const {
+    uid,
+    title,
+    description,
+    location,
+    startAt,
+    durationMinutes = 60,
+    rrule,
+    organizerEmail,
+    attendeeEmail,
+    method = 'REQUEST',
+    sequence = 0,
+    status = 'CONFIRMED',
+  } = ev;
   const toIcsUtc = (d) =>
     new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); // YYYYMMDDTHHMMSSZ
   const esc = (s) =>
@@ -757,9 +836,10 @@ const buildIcsEvent = (ev) => {
     'VERSION:2.0',
     'PRODID:-//Dharwin Business Solutions//Meetings//EN',
     'CALSCALE:GREGORIAN',
-    'METHOD:REQUEST',
+    `METHOD:${method}`,
     'BEGIN:VEVENT',
     `UID:${uid}`,
+    `SEQUENCE:${sequence}`,
     `DTSTAMP:${toIcsUtc(new Date())}`,
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
@@ -768,10 +848,16 @@ const buildIcsEvent = (ev) => {
     location ? `LOCATION:${esc(location)}` : null,
     rrule ? `RRULE:${rrule}` : null,
     organizerEmail ? `ORGANIZER:mailto:${organizerEmail}` : null,
+    // Outlook treats a METHOD:REQUEST with no ATTENDEE as malformed and silently declines to
+    // surface Accept/Decline, so the recipient is always listed explicitly.
+    attendeeEmail
+      ? `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendeeEmail}`
+      : null,
+    `STATUS:${status}`,
     'END:VEVENT',
     'END:VCALENDAR',
   ].filter(Boolean);
-  return lines.join('\r\n');
+  return lines.map(foldIcsLine).join('\r\n');
 };
 
 /**
@@ -791,6 +877,49 @@ const buildSeriesIcs = async (series, location) => {
     durationMinutes: series.durationMinutes,
     rrule: buildRRuleString(series),
     organizerEmail: series.hosts?.[0]?.email,
+  });
+};
+
+/** Bare address out of an RFC5322 From header ("Name <a@b>" -> "a@b"). */
+const bareAddress = (value) => {
+  const m = String(value || '').match(/<([^>]+)>/);
+  return (m ? m[1] : String(value || '')).trim();
+};
+
+/**
+ * Per-meeting calendar attachment. One VEVENT, no RRULE: a recurring .ics breaks Outlook
+ * delivery (see meetingSeries.service.js), and each series occurrence is its own meeting row
+ * here anyway, so each one carries its own single event.
+ *
+ * ORGANIZER is the sending mailbox, not the host — Outlook flags a REQUEST whose organizer
+ * does not match the envelope sender, and RSVPs are routed by replyTo regardless.
+ *
+ * The UID is derived from the meeting id, so re-sending (resend invitations, a reschedule)
+ * updates the existing calendar entry instead of creating a duplicate.
+ *
+ * ponytail: SEQUENCE is always 0. Outlook accepts a same-SEQUENCE update in practice but the
+ * spec wants it bumped per revision; if reschedules stop updating attendees' calendars, store
+ * a revision counter on the meeting and pass it here.
+ *
+ * @param {Object} m - { id, title, description, scheduledAt, durationMinutes, meetingType }
+ * @param {string} joinUrl - personal join link, used as LOCATION
+ * @param {string} attendeeEmail - the recipient
+ * @returns {string} VCALENDAR content
+ */
+const buildMeetingIcs = (m, joinUrl, attendeeEmail) => {
+  if (!m?.id || !m?.scheduledAt) return '';
+  const organizerEmail = bareAddress(config.email.from);
+  return buildIcsEvent({
+    uid: `meeting-${m.id}@dharwin`,
+    title: m.title || 'Meeting',
+    // The join link belongs in the body too: Outlook renders LOCATION as plain text in some
+    // views, and a calendar entry nobody can click through from is half an invite.
+    description: [m.description, joinUrl ? `Join: ${joinUrl}` : ''].filter(Boolean).join('\n\n'),
+    location: joinUrl || '',
+    startAt: m.scheduledAt,
+    durationMinutes: m.durationMinutes || 60,
+    organizerEmail,
+    attendeeEmail,
   });
 };
 
@@ -906,34 +1035,30 @@ const buildMeetingInvitationEmail = ({
  */
 const sendMeetingInvitationEmail = async (to, payload) => {
   const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
-  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
-    logger.debug(`Skipping meeting invitation email to ${to} (notification preferences)`);
-    return;
-  }
   const { icsContent, ...contentPayload } = payload;
   const { subject, text, html, isVideoMeeting, joinUrl } = buildMeetingInvitationEmail(contentPayload);
+  const metadata = compactMetadata({
+    title: contentPayload.title,
+    scheduled: formatDateTime(contentPayload.scheduledAt, contentPayload.timezone),
+    timezone: contentPayload.timezone,
+    hostName: contentPayload.hostName,
+    interviewType: contentPayload.interviewType,
+    jobPosition: contentPayload.jobPosition,
+  });
+  // Content is built before the gate so a suppressed invite logs the same subject and
+  // metadata a delivered one would — the audit row is comparable either way.
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    await logSuppressedEmail(to, subject, 'meetingInvitation', metadata);
+    return false;
+  }
   if (isVideoMeeting && !joinUrl) {
     logger.warn(`Meeting invitation to ${to} missing join URL for "${contentPayload.title || 'Meeting'}"`);
   }
   const extra = icsContent
     ? { icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: icsContent } }
     : {};
-  await sendEmail(
-    to,
-    subject,
-    text,
-    html,
-    'meetingInvitation',
-    compactMetadata({
-      title: contentPayload.title,
-      scheduled: formatDateTime(contentPayload.scheduledAt, contentPayload.timezone),
-      timezone: contentPayload.timezone,
-      hostName: contentPayload.hostName,
-      interviewType: contentPayload.interviewType,
-      jobPosition: contentPayload.jobPosition,
-    }),
-    extra
-  );
+  await sendEmail(to, subject, text, html, 'meetingInvitation', metadata, extra);
+  return true;
 };
 
 /**
@@ -985,11 +1110,11 @@ const buildMeetingReminderEmail = ({
  */
 const sendMeetingReminderEmail = async (to, payload) => {
   const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  const { subject, text, html } = buildMeetingReminderEmail(payload);
   if (!(await shouldSendNotificationEmailToAddress(to, 'meeting_reminder'))) {
-    logger.info(`Skipping meeting reminder email to ${to} (notification preferences)`);
+    await logSuppressedEmail(to, subject, 'meeting_reminder');
     return false;
   }
-  const { subject, text, html } = buildMeetingReminderEmail(payload);
   await sendEmail(to, subject, text, html, 'meeting_reminder');
   return true;
 };
@@ -1018,12 +1143,13 @@ const buildInterviewConclusionEmail = ({ title, scheduledAt, timezone, candidate
  */
 const sendInterviewConclusionEmail = async (to, payload) => {
   const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
-  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
-    logger.debug(`Skipping interview conclusion email to ${to} (notification preferences)`);
-    return;
-  }
   const { subject, text, html } = buildInterviewConclusionEmail(payload);
-  return sendEmail(to, subject, text, html, 'interview_conclusion');
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    await logSuppressedEmail(to, subject, 'interview_conclusion');
+    return false;
+  }
+  await sendEmail(to, subject, text, html, 'interview_conclusion');
+  return true;
 };
 
 /**
@@ -1587,6 +1713,7 @@ export {
   buildMeetingJoiningPolicyTips,
   buildIcsEvent,
   buildSeriesIcs,
+  buildMeetingIcs,
   buildMeetingReminderEmail,
   sendMeetingReminderEmail,
   buildInterviewConclusionEmail,

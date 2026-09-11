@@ -13,7 +13,7 @@ import {
   clampSeriesStartAt,
   seriesMaterializationFloor,
 } from '../utils/recurrence.util.js';
-import { sendMeetingInvitationEmail } from './email.service.js';
+import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
 import { getInternalMeetingById, buildReminderSchedule } from './internalMeeting.service.js';
 
 /**
@@ -146,11 +146,12 @@ const isOccurrenceInviteDue = async (series, meeting, now = new Date()) => {
  * (new invitees on an already-invited occurrence) skip the claim.
  */
 const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {}) => {
-  let recipients = getInvitationEmails(series);
-  if (onlyEmails?.length) {
-    const allow = new Set(onlyEmails.map((e) => String(e).trim().toLowerCase()));
-    recipients = recipients.filter((e) => allow.has(e));
-  }
+  // An explicit list is taken as-is, not intersected with the series template: callers pass a
+  // computed diff, and a detached occurrence can carry invitees the template never had —
+  // intersecting would silently drop exactly the people who still need the invite.
+  const recipients = onlyEmails?.length
+    ? [...new Set(onlyEmails.map((e) => String(e).trim().toLowerCase()).filter(Boolean))]
+    : getInvitationEmails(series);
   if (!recipients.length) return false;
 
   const meetingId = meeting._id || meeting.id;
@@ -174,8 +175,12 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
     const inviteName = resolveInviteeDisplayName(series, to);
     const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
     try {
+      // `false` means the recipient's notification preferences suppressed the send. Booking
+      // that as a delivery is what let an occurrence stamp invitationSentAt — and so never
+      // retry or report — while a muted invitee received nothing. Same rule the reminder
+      // dispatcher already applies; the invitation path never got it.
       // eslint-disable-next-line no-await-in-loop
-      await sendMeetingInvitationEmail(to, {
+      const delivered = await sendMeetingInvitationEmail(to, {
         title: meeting.title,
         scheduledAt: meeting.scheduledAt,
         timezone: series.timezone,
@@ -188,8 +193,19 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
         publicMeetingUrl: personalUrl,
         allowGuestJoin: meeting.allowGuestJoin ?? series.allowGuestJoin,
         requireApproval: meeting.requireApproval ?? series.requireApproval,
+        icsContent: buildMeetingIcs(
+          {
+            id: meeting.meetingId,
+            title: meeting.title,
+            description: meeting.description,
+            scheduledAt: meeting.scheduledAt,
+            durationMinutes: meeting.durationMinutes,
+          },
+          personalUrl,
+          to
+        ),
       });
-      anyDelivered = true;
+      if (delivered !== false) anyDelivered = true;
     } catch (err) {
       logger.warn(`[sendOccurrenceInvites] invite to ${to} failed: ${err?.message || err}`);
     }
@@ -455,6 +471,12 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
   const series = await MeetingSeries.findById(meeting.seriesId);
   if (!series) throw new ApiError(httpStatus.NOT_FOUND, 'Meeting series not found');
 
+  // Snapshot the invite list up front — every branch below mutates `series`/`meeting` in
+  // place, so a later snapshot would already contain the people this edit just added and
+  // would email nobody. Emailing only the diff is what keeps an edit from re-spamming
+  // everyone already invited.
+  const seriesEmailsBefore = new Set(getInvitationEmails(series));
+
   // ---- single: edit just this occurrence; detach so series regen skips it ----
   if (mode === 'single') {
     const safe = { ...body };
@@ -462,8 +484,15 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
     if (!(Number.isInteger(dur) && dur >= 1 && dur <= 480)) delete safe.durationMinutes;
     delete safe.recurrence;
     delete safe.end;
+    // Snapshot before the assign so only genuinely new people are emailed — an edit must
+    // never re-spam everyone already on the invite list.
+    const beforeEmails = new Set(getInvitationEmails(meeting));
     Object.assign(meeting, safe, { detached: true });
     await meeting.save();
+    // A detached occurrence carries its own invite list, so invite against the occurrence
+    // rather than the series template.
+    const added = getInvitationEmails(meeting).filter((e) => !beforeEmails.has(e));
+    if (added.length) await sendOccurrenceInvites(series, meeting, { emails: added });
     return getInternalMeetingById(meeting._id.toString());
   }
 
@@ -484,6 +513,13 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
         $set: { ...tpl, recurrenceSummary: recurrenceLabel(series.recurrence) },
       });
     }
+    // Adding a participant to a recurring meeting is a content-only change, so this was the
+    // branch that ran — and it emailed nobody. The new invitee was written to every future
+    // occurrence and showed under Participants & Invitees while never being told the meeting
+    // existed. Only the re-anchor path below ever sent, which is why one-off meetings worked
+    // and recurring ones silently did not.
+    const added = getInvitationEmails(series).filter((e) => !seriesEmailsBefore.has(e));
+    await sendInvitesToNewRecipients(series, added);
     const refreshed = await MeetingSeries.findById(series._id);
     return refreshed.toJSON();
   }
@@ -503,7 +539,6 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
 
   if (mode === 'series') {
     // Re-anchor the whole series and regenerate from index 0.
-    const beforeEmails = new Set(getInvitationEmails(series));
     await purgeForwardOccurrences(series._id, 0);
     series.recurrence = newRecurrence;
     series.startAt = newStartAt;
@@ -516,7 +551,7 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
     await series.save();
     await materializeSeries(series);
     await sendDueOccurrenceInvites();
-    const added = getInvitationEmails(series).filter((e) => !beforeEmails.has(e));
+    const added = getInvitationEmails(series).filter((e) => !seriesEmailsBefore.has(e));
     await sendInvitesToNewRecipients(series, added);
     const refreshed = await MeetingSeries.findById(series._id);
     return refreshed.toJSON();

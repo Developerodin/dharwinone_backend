@@ -24,7 +24,10 @@ const emailLogSchema = mongoose.Schema(
     // the same single-field index twice and emit the "Duplicate schema index" warning.
     status: {
       type: String,
-      enum: ['pending', 'sent', 'failed'],
+      // 'suppressed': the recipient's notification preferences blocked this email, so it was
+      // never handed to SMTP. Logged rather than dropped silently — "I never got the invite"
+      // has to be answerable from the audit trail, not from guesswork.
+      enum: ['pending', 'sent', 'failed', 'suppressed'],
       default: 'pending',
     },
     error: {

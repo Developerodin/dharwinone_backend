@@ -16,7 +16,7 @@ import { isExistingEmployee, isResignedEmployee } from '../utils/employeeStatus.
 import { createActivityLog } from './activityLog.service.js';
 import { writeAtsAudit } from './atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
-import { sendMeetingInvitationEmail } from './email.service.js';
+import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
@@ -459,6 +459,17 @@ const sendInvitationEmails = async (meeting, emails) => {
       publicMeetingUrl: personalUrl,
       allowGuestJoin: meeting.allowGuestJoin,
       requireApproval: meeting.requireApproval,
+      icsContent: buildMeetingIcs(
+        {
+          id: meeting.meetingId,
+          title: meeting.title,
+          description: meeting.description,
+          scheduledAt: meeting.scheduledAt,
+          durationMinutes: meeting.durationMinutes,
+        },
+        personalUrl,
+        to
+      ),
     };
     sendMeetingInvitationEmail(to, payload).catch((err) => {
       logger.warn(`Failed to send meeting invitation to ${to}:`, err?.message || err);
@@ -1195,8 +1206,10 @@ const resendMeetingInvitations = async (id, currentUser = null) => {
         requireApproval: meeting.requireApproval,
       };
       return sendMeetingInvitationEmail(to, payload)
-        .then(() => {
-          sent += 1;
+        .then((delivered) => {
+          // `false` means notification preferences suppressed it. Counting that as sent is
+          // what made "Invitations resent" report success to someone who received nothing.
+          if (delivered !== false) sent += 1;
         })
         .catch((err) => {
           logger.warn(`Failed to send meeting invitation to ${to}:`, err?.message || err);

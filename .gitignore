@@ -61,6 +61,8 @@ src/services/__tests__/helpers/
 !src/services/__tests__/meeting.reminders.test.js
 !src/services/__tests__/internalMeeting.reminders.test.js
 !src/services/__tests__/meeting.rescheduleResetsReminder.test.js
+!src/services/__tests__/meetingIcs.test.js
+!src/services/__tests__/meetingSeries.inviteOnAdd.test.js
 !scripts/migrations/
 scripts/migrations/*
 !scripts/migrations/__tests__/

@@ -1,7 +1,7 @@
 import InternalMeeting from '../models/internalMeeting.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { sendMeetingInvitationEmail } from './email.service.js';
+import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
@@ -119,6 +119,17 @@ const sendInvitationEmails = (meeting, emails) => {
       publicMeetingUrl: personalUrl,
       allowGuestJoin: meeting.allowGuestJoin,
       requireApproval: meeting.requireApproval,
+      icsContent: buildMeetingIcs(
+        {
+          id: meeting.meetingId,
+          title: meeting.title,
+          description: meeting.description,
+          scheduledAt: meeting.scheduledAt,
+          durationMinutes: meeting.durationMinutes,
+        },
+        personalUrl,
+        to
+      ),
     };
     sendMeetingInvitationEmail(to, payload).catch((err) => {
       logger.warn(`Failed to send internal meeting invitation to ${to}:`, err?.message || err);
@@ -300,8 +311,9 @@ const resendInternalMeetingInvitations = async (id) => {
         requireApproval: meeting.requireApproval,
       };
       return sendMeetingInvitationEmail(to, payload)
-        .then(() => {
-          sent += 1;
+        .then((delivered) => {
+          // `false` means notification preferences suppressed it — not a delivery.
+          if (delivered !== false) sent += 1;
         })
         .catch((err) => {
           logger.warn(`Failed to resend internal meeting invitation to ${to}:`, err?.message || err);
