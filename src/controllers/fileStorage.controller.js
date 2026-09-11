@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import * as fileStorageService from '../services/fileStorage.service.js';
+import { emitNewMessage } from '../services/chatSocket.service.js';
 
 /**
  * Decode a URI-encoded key once, rejecting malformed encodings.
@@ -89,4 +90,29 @@ const createFolder = catchAsync(async (req, res) => {
   });
 });
 
-export { list, upload, download, deleteObject, createFolder };
+const sendToChat = catchAsync(async (req, res) => {
+  const userId = req.user?.id || req.user?._id;
+  if (!userId) {
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'User information missing');
+  }
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  const conversationIds = req.body?.conversationIds;
+  const originalName = typeof req.body?.originalName === 'string' ? req.body.originalName.trim() : '';
+  const results = await fileStorageService.sendFileToConversations(userId, key, conversationIds, originalName);
+  for (const item of results) {
+    // eslint-disable-next-line no-await-in-loop
+    await emitNewMessage(item.conversationId, item.message);
+  }
+  const count = results.length;
+  res.status(httpStatus.CREATED).send({
+    success: true,
+    data: {
+      count,
+      messages: results.map((item) => item.message),
+    },
+    message:
+      count === 1 ? 'File sent to chat' : `File sent to ${count} chats`,
+  });
+});
+
+export { list, upload, download, deleteObject, createFolder, sendToChat };

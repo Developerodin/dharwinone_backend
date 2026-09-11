@@ -13,6 +13,8 @@ import { sendPushToUser } from './push.service.js';
 import * as chatCallService from './chatCall.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { buildChatMessagePreview } from '../utils/chatMessagePreview.js';
+import { mentionedUserIds } from '../utils/chatMentions.js';
+import { buildChatNotifyCopy } from '../utils/chatNotifyCopy.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 
 let io = null;
@@ -124,11 +126,17 @@ const initSocket = (httpServer) => {
 
     socket.on('send_message', async (data, cb) => {
       try {
-        const { conversationId, content, type, attachments, replyTo } = data || {};
+        const { conversationId, content, type, attachments, replyTo, mentions } = data || {};
         if (!conversationId || (content == null && (!attachments || !attachments.length))) {
           return cb?.({ error: 'conversationId and content (or attachments) required' });
         }
-        const msg = await chatService.createMessage(conversationId, userId, { content, type, attachments, replyTo });
+        const msg = await chatService.createMessage(conversationId, userId, {
+          content,
+          type,
+          attachments,
+          replyTo,
+          mentions,
+        });
         await emitNewMessage(conversationId, msg);
         cb?.({ success: true, message: msg });
       } catch (err) {
@@ -422,11 +430,22 @@ const emitNewMessage = async (conversationId, message) => {
   if (payload._id && !payload.id) payload.id = payload._id.toString();
   if (!payload.createdAt && message.createdAt) payload.createdAt = message.createdAt;
 
+  let notifyState = { type: 'direct', name: '', participants: [] };
+  try {
+    notifyState = await chatService.getConversationParticipantNotifyStates(conversationId);
+  } catch (err) {
+    logger.warn(`conversation notify state failed: ${err.message}`);
+  }
+  const isGroup = notifyState.type === 'group';
+  const groupName = isGroup ? notifyState.name : '';
+  payload.conversationType = notifyState.type || 'direct';
+  if (isGroup && groupName) payload.conversationName = groupName;
+
   // Emit to conversation room (users actively viewing the conversation)
   io.to(`conversation:${conversationId}`).emit('new_message', payload);
 
   try {
-    const participantStates = await chatService.getConversationParticipantNotifyStates(conversationId);
+    const participantStates = notifyState.participants || [];
     const participantIds = participantStates.map((p) => p.id);
     const mutedIds = new Set(participantStates.filter((p) => p.muted).map((p) => p.id));
     if (participantIds.length) {
@@ -446,6 +465,7 @@ const emitNewMessage = async (conversationId, message) => {
           logger.warn(`chat notify image URL failed: ${err.message}`);
         }
       }
+      const mentionedIds = new Set(mentionedUserIds(payload.mentions));
 
       for (const uid of participantIds) {
         const uidStr = String(uid);
@@ -461,24 +481,42 @@ const emitNewMessage = async (conversationId, message) => {
         });
         // new_message to non-sender user rooms — fires toast even when recipient not on chat page
         if (uidStr !== senderStr) {
-          io.to(`user:${uidStr}`).emit('new_message', payload);
+          io.to(`user:${uidStr}`).emit('new_message', {
+            ...payload,
+            conversationName: isGroup ? groupName : undefined,
+            conversationType: notifyState.type,
+            suppressInAppNotify: mutedIds.has(uidStr),
+          });
           // Persist to Notification collection unless recipient is actively viewing this conversation
           const sockets = io.sockets;
           const room = sockets.adapter.rooms.get(`conversation:${conversationId}`);
           const isActive = room && [...room].some(
             (sid) => sockets.sockets.get(sid)?.data?.userId === uidStr
           );
+          const isMentioned = mentionedIds.has(uidStr);
+          // Muted conversations do not notify — including @mentions (WhatsApp-style).
           if (!isActive && chatPermittedIds.has(uidStr) && !mutedIds.has(uidStr)) {
+            const copy = buildChatNotifyCopy({
+              isGroup,
+              groupName,
+              senderName: payload.sender?.name,
+              preview: preview.text,
+              isMentioned,
+            });
             notify(uid, {
               type: 'chat_message',
-              title: payload.sender?.name || 'New message',
-              message: preview.text.slice(0, 120),
+              title: copy.title,
+              message: copy.message,
+              subtitle: copy.subtitle,
               link: `/communication/chats?conv=${conversationId}`,
               triggeredBy: payload.sender?._id || payload.sender?.id,
               relatedEntity: { type: 'conversation', id: conversationId },
               metadata: {
                 messageId: payload.id ?? payload._id,
                 messageType: preview.kind,
+                conversationName: copy.title,
+                ...(isGroup ? { conversationType: 'group' } : {}),
+                ...(isMentioned ? { mentioned: true } : {}),
                 ...(preview.attachmentName ? { attachmentName: preview.attachmentName } : {}),
                 ...(preview.documentType ? { documentType: preview.documentType } : {}),
                 ...(imageUrl ? { imageUrl } : {}),

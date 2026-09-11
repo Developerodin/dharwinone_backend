@@ -140,12 +140,21 @@ const uploadAndSendMessage = catchAsync(async (req, res) => {
   const msgType = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio' : 'file';
   const content = req.body?.content || req.body?.text || '';
   const replyTo = req.body?.replyTo || undefined;
+  let mentions = req.body?.mentions;
+  if (typeof mentions === 'string') {
+    try {
+      mentions = JSON.parse(mentions);
+    } catch {
+      mentions = undefined;
+    }
+  }
 
   const msg = await chatService.createMessage(req.params.id, userId, {
     content,
     type: msgType,
     attachments,
     replyTo,
+    mentions,
   });
   await emitNewMessage(req.params.id, msg);
   res.status(httpStatus.CREATED).send(msg);
@@ -180,7 +189,8 @@ const reactToMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const { emoji } = req.body || {};
   const msg = await chatService.reactToMessage(req.params.id, req.params.msgId, userId, {
-    emoji: emoji || '👍',
+    // `??` keeps "" as a remove. `||` would coerce remove into 👍 and re-add it.
+    emoji: emoji ?? '👍',
   });
   emitMessageReacted(req.params.id, msg);
   res.send(msg);

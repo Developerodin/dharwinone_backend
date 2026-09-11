@@ -39,4 +39,13 @@ router
   .route('/folder')
   .post(auth(), requirePermissions('files-storage.manage'), validate(fileStorageValidation.createFolder), fileStorageController.createFolder);
 
+router
+  .route('/send-to-chat')
+  .post(
+    auth(),
+    requirePermissions('files-storage.read', 'chats.read'),
+    validate(fileStorageValidation.sendToChat),
+    fileStorageController.sendToChat
+  );
+
 export default router;

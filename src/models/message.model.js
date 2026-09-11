@@ -20,6 +20,15 @@ const messageSchema = new mongoose.Schema(
     type: { type: String, enum: ['text', 'image', 'file', 'audio', 'video'], default: 'text' },
     attachments: [attachmentSchema],
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' },
+    /** Group @mentions selected from the composer. Content still contains the @Name text. */
+    mentions: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        displayName: { type: String, trim: true, maxlength: 80, default: '' },
+      },
+    ],
+    /** True only on copies created by forward. Omitted on normal and legacy messages. */
+    forwarded: { type: Boolean },
     reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, emoji: { type: String, trim: true } }],
     /** Legacy ObjectId[] and newer { user, at } entries are both supported at runtime. */
     readBy: [{ type: mongoose.Schema.Types.Mixed }],

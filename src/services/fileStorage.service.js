@@ -9,6 +9,8 @@ import { s3Client } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
+import { uploadFileToS3 } from './upload.service.js';
+import { assertFileMatchesCategory } from '../utils/fileStorageCategory.js';
 
 const FILE_STORAGE_PREFIX = 'file-storage';
 const MAX_KEY_LENGTH = 1024;
@@ -44,6 +46,8 @@ const ALLOWED_MIME_TYPES = new Set([
   'audio/wav',
   'audio/ogg',
   'audio/mp4',
+  'audio/aac',
+  'audio/x-aac',
   'video/mp4',
   'video/webm',
   'video/quicktime',
@@ -56,7 +60,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'txt', 'csv', 'html', 'htm', 'xml', 'json', 'rtf',
   'zip', 'rar', '7z', 'tar', 'gz',
-  'mp3', 'wav', 'ogg', 'm4a',
+  'mp3', 'wav', 'ogg', 'm4a', 'aac',
   'mp4', 'webm', 'mov', 'avi', 'mkv',
 ]);
 
@@ -84,6 +88,8 @@ const MIME_EXTENSION_MAP = {
   'audio/wav': ['wav'],
   'audio/ogg': ['ogg'],
   'audio/mp4': ['m4a'],
+  'audio/aac': ['aac'],
+  'audio/x-aac': ['aac'],
   'video/mp4': ['mp4'],
   'video/webm': ['webm'],
   'video/quicktime': ['mov'],
@@ -306,6 +312,7 @@ const uploadFile = async (userId, file, folderPath = '') => {
   }
 
   validateFileType(file);
+  assertFileMatchesCategory(file, folderPath);
 
   const safeFolder = normalizeFolderPath(folderPath);
   const ext = (file.originalname && file.originalname.split('.').pop()) || 'bin';
@@ -415,6 +422,110 @@ const createFolder = async (userId, folderPath) => {
   return { name: safePath.replace(/\/$/, '').split('/').pop(), prefix: key };
 };
 
+const fileNameFromKey = (key) => {
+  const parts = String(key || '')
+    .split('/')
+    .filter(Boolean);
+  return parts[parts.length - 1] || 'file';
+};
+
+const inferChatMessageType = (mimeType = '', name = '') => {
+  const mime = String(mimeType).toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'aac', 'm4a', 'ogg', 'flac', 'wma'].includes(ext)) return 'audio';
+  return 'file';
+};
+
+/**
+ * Load a file the caller owns so it can be copied into chat-attachments.
+ */
+const getOwnedObjectForShare = async (userId, key) => {
+  if (!isKeyAllowed(key, userId)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Access denied to this object');
+  }
+  const bucket = config.aws?.bucketName;
+  if (!bucket) {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'S3 bucket not configured');
+  }
+
+  let res;
+  try {
+    res = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  } catch (err) {
+    const status = err?.$metadata?.httpStatusCode;
+    if (status === 404 || err?.name === 'NoSuchKey' || err?.Code === 'NoSuchKey') {
+      throw new ApiError(httpStatus.NOT_FOUND, 'File not found');
+    }
+    throw err;
+  }
+  if (!res.Body) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'File not found');
+  }
+
+  const bytes = await res.Body.transformToByteArray();
+  const originalName =
+    res.Metadata?.originalname || res.Metadata?.originalName || fileNameFromKey(key);
+  return {
+    buffer: Buffer.from(bytes),
+    mimeType: res.ContentType || 'application/octet-stream',
+    originalName,
+    size: bytes.length,
+  };
+};
+
+/**
+ * Copy a stored file into chat-attachments and post it to one or more conversations.
+ * Recipients receive the file in chat without the sender downloading it locally.
+ */
+const sendFileToConversations = async (userId, key, conversationIds, displayName) => {
+  const rawIds = Array.isArray(conversationIds) ? conversationIds : [];
+  const targetIds = [...new Set(rawIds.map((id) => String(id)).filter(Boolean))];
+  if (!targetIds.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Select at least one chat');
+  }
+  if (targetIds.length > 25) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'You can send to at most 25 chats at once');
+  }
+
+  const { ensureParticipant, createMessage } = await import('./chat.service.js');
+
+  for (const conversationId of targetIds) {
+    // eslint-disable-next-line no-await-in-loop
+    await ensureParticipant(conversationId, userId);
+  }
+
+  const object = await getOwnedObjectForShare(userId, key);
+  const originalName = (typeof displayName === 'string' && displayName.trim()) || object.originalName;
+  const attachment = await uploadFileToS3(
+    {
+      buffer: object.buffer,
+      originalname: originalName,
+      mimetype: object.mimeType,
+      size: object.size,
+    },
+    userId,
+    'chat-attachments',
+  );
+  const msgType = inferChatMessageType(attachment.mimeType, attachment.originalName);
+
+  const created = [];
+  for (const conversationId of targetIds) {
+    // eslint-disable-next-line no-await-in-loop
+    const message = await createMessage(conversationId, userId, {
+      content: '',
+      type: msgType,
+      attachments: [attachment],
+    });
+    created.push({ conversationId, message });
+  }
+  return created;
+};
+
 const isFileStorageObjectKey = (key) => {
   if (typeof key !== 'string' || key.length > MAX_KEY_LENGTH) return false;
   if (!key.startsWith(`${FILE_STORAGE_PREFIX}/`)) return false;
@@ -454,4 +565,5 @@ export {
   isKeyAllowed,
   getObjectBufferByKey,
   isFileStorageObjectKey,
+  sendFileToConversations,
 };

@@ -115,6 +115,7 @@ function buildExpoPushMessage(
   _platform,
   {
     title,
+    subtitle,
     body,
     data = {},
     channelId,
@@ -139,6 +140,7 @@ function buildExpoPushMessage(
       ...(categoryId ? { categoryId } : {}),
       ...(resolvedChannelId ? { channelId: resolvedChannelId } : {}),
     },
+    ...(subtitle ? { subtitle: String(subtitle) } : {}),
     ...(resolvedChannelId ? { channelId: resolvedChannelId } : {}),
     ...(categoryId ? { categoryId } : {}),
     ...(richContent?.image ? { richContent: { image: richContent.image } } : {}),
@@ -161,7 +163,7 @@ function buildExpoPushMessage(
  */
 export async function sendPushToUser(
   userId,
-  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+  { title, subtitle, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
 ) {
   const rows = await PushToken.find({
     user: userId,
@@ -170,7 +172,7 @@ export async function sendPushToUser(
     .select('token platform soundEnabled vibrationEnabled notificationsEnabled')
     .lean();
   if (!rows.length) return { sent: 0 };
-  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId, richContent, mutableContent });
+  return sendPushToTokenRows(rows, { title, subtitle, body, data, channelId, categoryId, richContent, mutableContent });
 }
 
 /**
@@ -179,7 +181,7 @@ export async function sendPushToUser(
  */
 export async function sendPushToTokens(
   tokens,
-  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+  { title, subtitle, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
 ) {
   const rows = tokens.map((token) => ({
     token,
@@ -187,12 +189,12 @@ export async function sendPushToTokens(
     soundEnabled: true,
     vibrationEnabled: true,
   }));
-  return sendPushToTokenRows(rows, { title, body, data, channelId, categoryId, richContent, mutableContent });
+  return sendPushToTokenRows(rows, { title, subtitle, body, data, channelId, categoryId, richContent, mutableContent });
 }
 
 async function sendPushToTokenRows(
   rows,
-  { title, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
+  { title, subtitle, body, data = {}, channelId, categoryId, richContent, mutableContent } = {},
 ) {
   const messages = [];
   for (const row of rows) {
@@ -201,6 +203,7 @@ async function sendPushToTokenRows(
     messages.push(
       buildExpoPushMessage(token, row.platform, {
         title,
+        subtitle,
         body,
         data,
         channelId,

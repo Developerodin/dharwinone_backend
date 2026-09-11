@@ -95,6 +95,14 @@ const sendMessage = {
       type: Joi.string().valid('text', 'image', 'file', 'audio', 'video'),
       attachments: Joi.array().items(attachmentItem).min(1).max(10),
       replyTo: Joi.string().custom(objectId),
+      mentions: Joi.array()
+        .items(
+          Joi.object().keys({
+            userId: Joi.string().custom(objectId).required(),
+            displayName: Joi.string().trim().max(80).allow(''),
+          })
+        )
+        .max(20),
     })
     .or('content', 'attachments'),
 };
@@ -168,7 +176,9 @@ const reactToMessage = {
     msgId: Joi.string().custom(objectId).required(),
   }),
   body: Joi.object().keys({
-    emoji: Joi.string().trim().max(10).default('👍'),
+    // Empty string removes the caller's reaction. Omitted emoji still defaults to 👍
+    // so older clients that omit the field keep working.
+    emoji: Joi.string().trim().max(10).allow('').default('👍'),
   }),
 };
 

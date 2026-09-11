@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { objectId } from './custom.validation.js';
 
 const MAX_PREFIX_LEN = 500;
 const MAX_KEY_LEN = 1024;
@@ -60,4 +61,12 @@ const createFolder = {
   }),
 };
 
-export { list, upload, getDownload, deleteObject, createFolder };
+const sendToChat = {
+  body: Joi.object().keys({
+    key: Joi.string().required().max(MAX_KEY_LEN),
+    conversationIds: Joi.array().items(Joi.string().custom(objectId)).min(1).max(25).required(),
+    originalName: Joi.string().trim().max(500).optional(),
+  }),
+};
+
+export { list, upload, getDownload, deleteObject, createFolder, sendToChat };

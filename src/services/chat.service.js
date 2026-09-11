@@ -15,6 +15,7 @@ import {
   isGenericAttachmentPlaceholder,
 } from '../utils/chatMessagePreview.js';
 import { userHasReceipt } from '../utils/chatReceipts.js';
+import { formatMentionsForClient, normalizeMentions } from '../utils/chatMentions.js';
 import { assertCanInitiateWith, lookupExactEmail } from './communicationAccess.service.js';
 
 /** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
@@ -202,6 +203,7 @@ const presentMessageForUser = (msg, userId) => {
   }
   // hiddenFor is server-side only — never needed by clients.
   delete presented.hiddenFor;
+  presented.mentions = formatMentionsForClient(presented.mentions);
   return presented;
 };
 
@@ -251,12 +253,18 @@ const getCallNotifyParticipantIds = async (call) => {
 
 /** Participant ids plus per-user mute, used when deciding whether to notify. */
 const getConversationParticipantNotifyStates = async (conversationId) => {
-  const conv = await Conversation.findById(conversationId).select('participants').lean();
-  if (!conv) return [];
-  return (conv.participants || []).map((p) => ({
-    id: p.user.toString(),
-    muted: Boolean(p.muted),
-  }));
+  const conv = await Conversation.findById(conversationId).select('participants type name').lean();
+  if (!conv) {
+    return { type: 'direct', name: '', participants: [] };
+  }
+  return {
+    type: conv.type || 'direct',
+    name: conv.type === 'group' ? conv.name || 'Group' : '',
+    participants: (conv.participants || []).map((p) => ({
+      id: p.user.toString(),
+      muted: Boolean(p.muted),
+    })),
+  };
 };
 
 /** Normalize Mongo id / populated user / string for comparisons */
@@ -699,6 +707,7 @@ const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender createdAt', populate: { path: 'sender', select: 'name' } })
     .populate('reactions.user', 'name')
+    .populate('mentions.user', 'name email')
     .lean();
   const reversed = messages.reverse();
   // Regenerate presigned URLs for attachments (expire after 1h; old messages need fresh URLs)
@@ -761,6 +770,7 @@ const getConversationMessage = async (conversationId, messageId, userId) => {
       populate: { path: 'sender', select: 'name' },
     })
     .populate('reactions.user', 'name')
+    .populate('mentions.user', 'name email')
     .lean();
 
   if (!msg) {
@@ -813,6 +823,7 @@ const getConversationTimeline = async (
         populate: { path: 'sender', select: 'name' },
       })
       .populate('reactions.user', 'name')
+      .populate('mentions.user', 'name email')
       .lean(),
     ChatCall.find(callFilter)
       .sort({ createdAt: -1, _id: -1 })
@@ -893,8 +904,8 @@ const getConversationTimeline = async (
   };
 };
 
-const createMessage = async (conversationId, userId, { content, type, attachments, replyTo }) => {
-  await ensureParticipant(conversationId, userId);
+const createMessage = async (conversationId, userId, { content, type, attachments, replyTo, forwarded, mentions }) => {
+  const conv = await ensureParticipant(conversationId, userId);
 
   const msgType = type || (attachments?.length ? 'file' : 'text');
   let trimmed = (content || '').trim();
@@ -908,6 +919,10 @@ const createMessage = async (conversationId, userId, { content, type, attachment
     content: trimmed,
     type: msgType,
   };
+  // Only the forward path should set this. REST/socket send do not pass it, so clients cannot spoof.
+  if (forwarded === true) {
+    msgData.forwarded = true;
+  }
 
   if (replyTo) {
     const replyMsg = await Message.findOne({ _id: replyTo, conversation: conversationId });
@@ -926,14 +941,21 @@ const createMessage = async (conversationId, userId, { content, type, attachment
     }
   }
 
+  const normalizedMentions = normalizeMentions(mentions, conv, userId);
+  if (normalizedMentions.length) {
+    msgData.mentions = normalizedMentions;
+  }
+
   const msg = await Message.create(msgData);
   await Conversation.findByIdAndUpdate(conversationId, { lastMessageAt: new Date() });
   const populated = await msg.populate([
     { path: 'sender', select: 'name email' },
     { path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } },
+    { path: 'mentions.user', select: 'name email' },
   ]);
   const result = populated.toObject();
   result.id = result._id?.toString();
+  result.mentions = formatMentionsForClient(result.mentions);
   return result;
 };
 
@@ -1011,6 +1033,7 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
   const updated = await Message.findById(messageId)
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
+    .populate('mentions.user', 'name email')
     .lean();
   return presentMessageForUser(updated, userId);
 };
@@ -1035,9 +1058,10 @@ const forwardMessage = async (conversationId, messageId, userId, options = {}) =
   }
 
   await ensureParticipant(conversationId, userId);
+  const targetConvs = [];
   for (const targetId of targetIds) {
     // eslint-disable-next-line no-await-in-loop
-    await ensureParticipant(targetId, userId);
+    targetConvs.push(await ensureParticipant(targetId, userId));
   }
 
   const source = await Message.findOne({ _id: messageId, conversation: conversationId }).lean();
@@ -1080,12 +1104,16 @@ const forwardMessage = async (conversationId, messageId, userId, options = {}) =
   }
 
   const created = [];
-  for (const targetId of targetIds) {
+  for (const targetConv of targetConvs) {
+    const targetId = String(targetConv._id);
+    const mentions = normalizeMentions(source.mentions, targetConv, userId);
     // eslint-disable-next-line no-await-in-loop
     const msg = await createMessage(targetId, userId, {
       content: caption,
       type: msgType,
       attachments: hasMedia ? attachments : undefined,
+      mentions: mentions.length ? mentions : undefined,
+      forwarded: true,
     });
     created.push({ conversationId: targetId, message: msg });
   }
@@ -1096,9 +1124,14 @@ const reactToMessage = async (conversationId, messageId, userId, { emoji }) => {
   await ensureParticipant(conversationId, userId);
   const msg = await Message.findOne({ _id: messageId, conversation: conversationId });
   if (!msg) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
-  const reactions = (msg.reactions || []).filter((r) => r.user.toString() !== userId);
-  if (emoji) {
-    reactions.push({ user: userId, emoji: emoji || '👍' });
+  const nextEmoji = typeof emoji === 'string' ? emoji.trim() : '';
+  const uid = String(userId);
+  const reactions = (msg.reactions || []).filter((r) => {
+    const rid = r.user?._id ?? r.user?.id ?? r.user;
+    return String(rid) !== uid;
+  });
+  if (nextEmoji) {
+    reactions.push({ user: userId, emoji: nextEmoji });
   }
   msg.reactions = reactions;
   await msg.save();
@@ -1106,8 +1139,14 @@ const reactToMessage = async (conversationId, messageId, userId, { emoji }) => {
     .populate('sender', 'name email')
     .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
     .populate('reactions.user', 'name')
+    .populate('mentions.user', 'name email')
     .lean();
-  const result = { ...populated, id: populated._id?.toString() };
+  const result = {
+    ...populated,
+    id: populated._id?.toString(),
+    reactions: populated.reactions || [],
+    mentions: formatMentionsForClient(populated.mentions),
+  };
   return result;
 };
 

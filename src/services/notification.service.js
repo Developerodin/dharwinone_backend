@@ -126,6 +126,7 @@ export const createNotification = async (userId, options) => {
     type = 'general',
     title,
     message,
+    subtitle,
     link = null,
     triggeredBy = null,
     relatedEntity = null,
@@ -164,6 +165,7 @@ export const createNotification = async (userId, options) => {
   sendPushToUser(userId, {
     title: title || 'Notification',
     body: message || '',
+    ...(subtitle ? { subtitle: String(subtitle) } : {}),
     data: {
       // Mobile router keys off `type`. Keep `notification` for generic bell items,
       // but chat pushes use `chat_message` so action handlers match category taps.
@@ -171,12 +173,17 @@ export const createNotification = async (userId, options) => {
       notificationType: type,
       link: finalLink,
       notificationId: String(doc._id),
+      ...(title ? { title: String(title) } : {}),
+      ...(message ? { body: String(message) } : {}),
       ...(relatedEntityId ? { relatedEntityId } : {}),
       ...(isChat && relatedEntityId ? { conversationId: relatedEntityId } : {}),
       ...(metadata?.messageId ? { messageId: String(metadata.messageId) } : {}),
       ...(metadata?.messageType ? { messageType: String(metadata.messageType) } : {}),
       ...(metadata?.attachmentName ? { attachmentName: String(metadata.attachmentName) } : {}),
       ...(metadata?.documentType ? { documentType: String(metadata.documentType) } : {}),
+      ...(metadata?.mentioned ? { mentioned: 'true' } : {}),
+      ...(metadata?.conversationName ? { conversationName: String(metadata.conversationName) } : {}),
+      ...(metadata?.conversationType ? { conversationType: String(metadata.conversationType) } : {}),
       ...(imageUrl ? { imageUrl: String(imageUrl) } : {}),
     },
     ...(isChat ? { channelId: 'messages', categoryId: 'chat_message' } : {}),
@@ -318,6 +325,7 @@ export const notify = async (userId, options) => {
     metadata,
     triggeredBy,
     richContent,
+    subtitle,
     email: emailOptions,
   } = options;
   const user = await User.findById(userId).select('email notificationPreferences').lean();
@@ -334,6 +342,7 @@ export const notify = async (userId, options) => {
         metadata,
         triggeredBy,
         richContent,
+        subtitle,
       });
     } catch (err) {
       // In-app and email are independent channels. A malformed in-app payload must not
