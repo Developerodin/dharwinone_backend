@@ -128,3 +128,23 @@ test('buildIcsEvent still supports a recurring RRULE for callers that want one',
   });
   assert.match(ics, /RRULE:FREQ=DAILY;INTERVAL=1/);
 });
+
+/**
+ * A reschedule re-sends the same UID. Outlook and Google only replace the entry they already
+ * hold when SEQUENCE rises, so a same-SEQUENCE resend would leave attendees on the old slot.
+ */
+test('buildMeetingIcs raises SEQUENCE with the meeting revision', () => {
+  const first = buildMeetingIcs({ ...MEETING, updatedAt: new Date('2026-09-11T10:00:00.000Z') }, JOIN_URL, ATTENDEE);
+  const moved = buildMeetingIcs({ ...MEETING, updatedAt: new Date('2026-09-11T11:00:00.000Z') }, JOIN_URL, ATTENDEE);
+  const seq = (ics) => Number(unfold(ics).match(/SEQUENCE:(\d+)/)[1]);
+  // Same event, so the calendar updates in place rather than duplicating.
+  assert.match(first, /UID:meeting-meeting_abc@dharwin/);
+  assert.match(moved, /UID:meeting-meeting_abc@dharwin/);
+  assert.ok(seq(moved) > seq(first), 'a later revision must outrank the copy already delivered');
+  // Two sends of one revision (invite, then resend) must agree, or they race.
+  assert.equal(seq(buildMeetingIcs({ ...MEETING, updatedAt: new Date('2026-09-11T11:00:00.000Z') }, JOIN_URL, ATTENDEE)), seq(moved));
+});
+
+test('buildMeetingIcs falls back to SEQUENCE 0 when the doc carries no updatedAt', () => {
+  assert.match(buildMeetingIcs(MEETING, JOIN_URL, ATTENDEE), /SEQUENCE:0/);
+});

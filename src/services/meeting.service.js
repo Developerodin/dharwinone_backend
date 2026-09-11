@@ -435,12 +435,14 @@ const getInvitationEmails = (meeting) => {
 
 /**
  * Send the interview invitation email + in-app notification to each recipient.
- * Shared by create (all recipients) and update (only newly-added recipients) so
- * the two paths stay in sync.
+ * Shared by create (all recipients), update (newly-added recipients, or every
+ * existing one when the start time moved) and resend, so the paths stay in sync.
  * @param {Object} meeting - Meeting document
  * @param {string[]} emails - lowercased recipient emails
+ * @param {Object} [opts]
+ * @param {boolean} [opts.rescheduled] - word the mail as a time change, not a first invite
  */
-const sendInvitationEmails = async (meeting, emails) => {
+const sendInvitationEmails = async (meeting, emails, { rescheduled = false } = {}) => {
   const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
   const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
   emails.forEach((to) => {
@@ -459,6 +461,7 @@ const sendInvitationEmails = async (meeting, emails) => {
       publicMeetingUrl: personalUrl,
       allowGuestJoin: meeting.allowGuestJoin,
       requireApproval: meeting.requireApproval,
+      rescheduled,
       icsContent: buildMeetingIcs(
         {
           id: meeting.meetingId,
@@ -466,6 +469,7 @@ const sendInvitationEmails = async (meeting, emails) => {
           description: meeting.description,
           scheduledAt: meeting.scheduledAt,
           durationMinutes: meeting.durationMinutes,
+          updatedAt: meeting.updatedAt,
         },
         personalUrl,
         to
@@ -1046,11 +1050,11 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   // time that no longer exists, and the new time is never reminded at all, because
   // reminderSentAt is the only thing the scheduler checks.
   const movedTo = meeting.scheduledAt;
-  if (
-    previousScheduledAt &&
-    movedTo &&
-    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime()
-  ) {
+  const timeMoved =
+    !!previousScheduledAt &&
+    !!movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime();
+  if (timeMoved) {
     meeting.reminderSentAt = null;
     meeting.remindAt = computeRemindAt(movedTo);
     meeting.reminderRetry = {
@@ -1064,12 +1068,24 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   }
   await meeting.save();
 
-  // Email ONLY the newly-added invitees/participants (decision: no re-spam on edit).
-  const newlyAddedEmails = getInvitationEmails(meeting).filter((e) => !beforeInviteEmails.has(e));
+  // No re-spam on edit: newly-added invitees get a first invitation, everyone else stays quiet.
+  const afterInviteEmails = getInvitationEmails(meeting);
+  const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
   if (newlyAddedEmails.length) {
     sendInvitationEmails(meeting, newlyAddedEmails).catch((err) => {
       logger.warn('sendInvitationEmails failed:', err?.message || err);
     });
+  }
+  // A moved start time is the one edit existing invitees must hear about: their calendar still
+  // holds the old slot and nothing else in the app corrects it. Same ICS UID with a higher
+  // SEQUENCE, so this updates that entry instead of adding a second one.
+  if (timeMoved) {
+    const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
+    if (existingEmails.length) {
+      sendInvitationEmails(meeting, existingEmails, { rescheduled: true }).catch((err) => {
+        logger.warn('sendInvitationEmails (reschedule) failed:', err?.message || err);
+      });
+    }
   }
 
   // If admin flips status -> 'ended' via PATCH, mirror endMeetingByRoomPublic:
@@ -1204,6 +1220,18 @@ const resendMeetingInvitations = async (id, currentUser = null) => {
         publicMeetingUrl: personalUrl,
         allowGuestJoin: meeting.allowGuestJoin,
         requireApproval: meeting.requireApproval,
+        icsContent: buildMeetingIcs(
+          {
+            id: meeting.meetingId,
+            title: meeting.title,
+            description: meeting.description,
+            scheduledAt: meeting.scheduledAt,
+            durationMinutes: meeting.durationMinutes,
+            updatedAt: meeting.updatedAt,
+          },
+          personalUrl,
+          to
+        ),
       };
       return sendMeetingInvitationEmail(to, payload)
         .then((delivered) => {

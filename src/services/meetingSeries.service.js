@@ -200,6 +200,7 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
             description: meeting.description,
             scheduledAt: meeting.scheduledAt,
             durationMinutes: meeting.durationMinutes,
+            updatedAt: meeting.updatedAt,
           },
           personalUrl,
           to

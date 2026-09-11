@@ -897,15 +897,30 @@ const bareAddress = (value) => {
  * The UID is derived from the meeting id, so re-sending (resend invitations, a reschedule)
  * updates the existing calendar entry instead of creating a duplicate.
  *
- * ponytail: SEQUENCE is always 0. Outlook accepts a same-SEQUENCE update in practice but the
- * spec wants it bumped per revision; if reschedules stop updating attendees' calendars, store
- * a revision counter on the meeting and pass it here.
+ * SEQUENCE comes from the document's updatedAt, so a reschedule outranks the copy already in
+ * the attendee's calendar (see icsSequence).
  *
- * @param {Object} m - { id, title, description, scheduledAt, durationMinutes, meetingType }
+ * @param {Object} m - { id, title, description, scheduledAt, durationMinutes, updatedAt }
  * @param {string} joinUrl - personal join link, used as LOCATION
  * @param {string} attendeeEmail - the recipient
  * @returns {string} VCALENDAR content
  */
+/**
+ * Outlook and Google only replace an existing calendar entry when the incoming REQUEST carries
+ * a SEQUENCE higher than the copy they hold. Derived from updatedAt in whole seconds rather
+ * than a stored counter: it rises on every save, needs no schema field, and two sends of the
+ * same revision (invite + resend) agree on the number instead of racing.
+ *
+ * ponytail: two saves inside the same second reuse a SEQUENCE, so the later one would not
+ * update calendars. Add a revision counter to the meeting if that ever shows up in practice.
+ * @param {Date|string} [updatedAt]
+ * @returns {number}
+ */
+const icsSequence = (updatedAt) => {
+  const t = updatedAt ? new Date(updatedAt).getTime() : NaN;
+  return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+};
+
 const buildMeetingIcs = (m, joinUrl, attendeeEmail) => {
   if (!m?.id || !m?.scheduledAt) return '';
   const organizerEmail = bareAddress(config.email.from);
@@ -920,6 +935,7 @@ const buildMeetingIcs = (m, joinUrl, attendeeEmail) => {
     durationMinutes: m.durationMinutes || 60,
     organizerEmail,
     attendeeEmail,
+    sequence: icsSequence(m.updatedAt),
   });
 };
 
@@ -969,14 +985,20 @@ const buildMeetingInvitationEmail = ({
   description,
   allowGuestJoin,
   requireApproval,
+  rescheduled = false,
 }) => {
   const joinUrl = typeof publicMeetingUrl === 'string' ? publicMeetingUrl.trim() : '';
   const isVideoMeeting = !interviewType || /^video$/i.test(String(interviewType).trim());
-  const subject = `Meeting invitation: ${title || 'Dharwin meeting'}`;
+  const noun = rescheduled ? 'Meeting updated' : 'Meeting invitation';
+  const subject = rescheduled
+    ? `Updated time: ${title || 'Dharwin meeting'}`
+    : `Meeting invitation: ${title || 'Dharwin meeting'}`;
   const scheduled = formatDateTime(scheduledAt, timezone);
   const duration = durationMinutes ? `${durationMinutes} minutes` : '';
   const introLines = [
-    'You have been invited to join a scheduled meeting on Dharwin.',
+    rescheduled
+      ? 'A meeting you are invited to has been rescheduled. The new time is below — your existing calendar entry will be updated.'
+      : 'You have been invited to join a scheduled meeting on Dharwin.',
     hostName ? `${hostName} is listed as the host for this meeting.` : '',
   ];
   const detailRows = [
@@ -1007,7 +1029,7 @@ const buildMeetingInvitationEmail = ({
   ].filter(Boolean);
   const primaryAction = isVideoMeeting && joinUrl ? { label: 'Join meeting', href: joinUrl } : null;
   const text = buildPlainTextEmail({
-    title: 'Meeting invitation',
+    title: noun,
     greeting: inviteeName || 'there',
     introLines,
     detailRows,
@@ -1015,14 +1037,14 @@ const buildMeetingInvitationEmail = ({
     primaryAction,
   });
   const html = buildEmailHTML({
-    badgeText: 'Meeting invitation',
-    title: title || 'Meeting invitation',
+    badgeText: noun,
+    title: title || noun,
     greeting: inviteeName || 'there',
     introLines,
     detailRows,
     sections,
     primaryAction,
-    preheader: `Meeting scheduled for ${scheduled}.`,
+    preheader: rescheduled ? `New time: ${scheduled}.` : `Meeting scheduled for ${scheduled}.`,
   });
   return { subject, text, html, isVideoMeeting, joinUrl };
 };
@@ -1030,7 +1052,7 @@ const buildMeetingInvitationEmail = ({
 /**
  * Send meeting invitation email
  * @param {string} to - Recipient email
- * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl, icsContent? }
+ * @param {Object} payload - { title, scheduledAt, durationMinutes, publicMeetingUrl, icsContent?, rescheduled? }
  * @returns {Promise}
  */
 const sendMeetingInvitationEmail = async (to, payload) => {

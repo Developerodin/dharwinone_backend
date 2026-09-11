@@ -96,11 +96,14 @@ const resolveInternalByIdOrMeetingId = async (id) => {
 
 /**
  * Send the meeting invitation email + in-app notification to each recipient.
- * Shared by create (all recipients) and update (only newly-added recipients).
+ * Shared by create (all recipients) and update (newly-added recipients, or every
+ * existing one when the start time moved).
  * @param {Object} meeting - InternalMeeting document
  * @param {string[]} emails - lowercased recipient emails
+ * @param {Object} [opts]
+ * @param {boolean} [opts.rescheduled] - word the mail as a time change, not a first invite
  */
-const sendInvitationEmails = (meeting, emails) => {
+const sendInvitationEmails = (meeting, emails, { rescheduled = false } = {}) => {
   const scheduled = formatMeetingScheduledLocal(meeting.scheduledAt, meeting.timezone);
   const hostName = meeting.hosts?.[0]?.nameOrRole || '';
   emails.forEach((to) => {
@@ -119,6 +122,7 @@ const sendInvitationEmails = (meeting, emails) => {
       publicMeetingUrl: personalUrl,
       allowGuestJoin: meeting.allowGuestJoin,
       requireApproval: meeting.requireApproval,
+      rescheduled,
       icsContent: buildMeetingIcs(
         {
           id: meeting.meetingId,
@@ -126,6 +130,7 @@ const sendInvitationEmails = (meeting, emails) => {
           description: meeting.description,
           scheduledAt: meeting.scheduledAt,
           durationMinutes: meeting.durationMinutes,
+          updatedAt: meeting.updatedAt,
         },
         personalUrl,
         to
@@ -249,11 +254,11 @@ const updateInternalMeetingById = async (id, updateBody) => {
   // Same reasoning as updateMeetingById: every claimed reminder window refers to the old
   // start time, so clear them all and let the scheduler re-catch the new one.
   const movedTo = meeting.scheduledAt;
-  if (
-    previousScheduledAt &&
-    movedTo &&
-    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime()
-  ) {
+  const timeMoved =
+    !!previousScheduledAt &&
+    !!movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime();
+  if (timeMoved) {
     meeting.reminderSentAt = null;
     meeting.reminderState = new Map();
     meeting.reminders = buildReminderSchedule(movedTo);
@@ -265,9 +270,17 @@ const updateInternalMeetingById = async (id, updateBody) => {
   }
   await meeting.save();
 
-  // Email ONLY the newly-added invitees/participants (no re-spam on edit).
-  const newlyAddedEmails = getInvitationEmails(meeting).filter((e) => !beforeInviteEmails.has(e));
+  // No re-spam on edit: newly-added invitees get a first invitation, everyone else stays quiet.
+  const afterInviteEmails = getInvitationEmails(meeting);
+  const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
   if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
+  // Same reasoning as updateMeetingById: a moved start time is the one edit existing invitees
+  // must hear about, and the ICS carries the same UID with a higher SEQUENCE so their calendar
+  // entry moves rather than duplicating.
+  if (timeMoved) {
+    const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
+    if (existingEmails.length) sendInvitationEmails(meeting, existingEmails, { rescheduled: true });
+  }
 
   return getInternalMeetingById(meeting._id.toString());
 };
@@ -309,6 +322,18 @@ const resendInternalMeetingInvitations = async (id) => {
         publicMeetingUrl: personalUrl,
         allowGuestJoin: meeting.allowGuestJoin,
         requireApproval: meeting.requireApproval,
+        icsContent: buildMeetingIcs(
+          {
+            id: meeting.meetingId,
+            title: meeting.title,
+            description: meeting.description,
+            scheduledAt: meeting.scheduledAt,
+            durationMinutes: meeting.durationMinutes,
+            updatedAt: meeting.updatedAt,
+          },
+          personalUrl,
+          to
+        ),
       };
       return sendMeetingInvitationEmail(to, payload)
         .then((delivered) => {
