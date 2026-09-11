@@ -67,6 +67,8 @@ src/services/__tests__/helpers/
 # vanished; the bug it covers reached a live call, so this one ships.
 !src/utils/__tests__/
 !src/utils/__tests__/bolnaAgentTemplateSync.test.js
+# Guards the chat message-send cap — the socket send path had no limit at all.
+!src/utils/__tests__/chatSendRate.test.js
 !scripts/migrations/
 scripts/migrations/*
 !scripts/migrations/__tests__/

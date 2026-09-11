@@ -9,6 +9,7 @@ import {
   emitCallDeclined,
   emitMessageDeleted,
   emitMessageReacted,
+  emitMessagePinned,
   emitConversationUpdated,
   emitConversationDeleted,
   emitConversationDelivered,
@@ -194,6 +195,20 @@ const reactToMessage = catchAsync(async (req, res) => {
   });
   emitMessageReacted(req.params.id, msg);
   res.send(msg);
+});
+
+const setMessagePinned = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const { pinned } = req.body || {};
+  const msg = await chatService.setMessagePinned(req.params.id, req.params.msgId, userId, { pinned });
+  emitMessagePinned(req.params.id, req.params.msgId, pinned, msg);
+  res.send(msg);
+});
+
+const listPinnedMessages = catchAsync(async (req, res) => {
+  const userId = getUserId(req);
+  const results = await chatService.listPinnedMessages(req.params.id, userId);
+  res.send({ results });
 });
 
 const markAsDelivered = catchAsync(async (req, res) => {
@@ -548,6 +563,8 @@ export {
   deleteMessage,
   forwardMessage,
   reactToMessage,
+  setMessagePinned,
+  listPinnedMessages,
   markAsDelivered,
   markAsRead,
   listCalls,

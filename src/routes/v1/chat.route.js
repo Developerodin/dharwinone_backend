@@ -117,6 +117,16 @@ router.post(
   uploadChatAttachments,
   chatController.uploadAndSendMessage
 );
+router.get(
+  '/conversations/:id/pinned',
+  validate(chatValidation.conversationIdParam),
+  chatController.listPinnedMessages
+);
+router.post(
+  '/conversations/:id/messages/:msgId/pin',
+  validate(chatValidation.setMessagePinned),
+  chatController.setMessagePinned
+);
 router.patch(
   '/conversations/:id/delivered',
   validate(chatValidation.conversationIdParam),

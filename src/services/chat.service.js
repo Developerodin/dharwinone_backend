@@ -16,6 +16,7 @@ import {
 } from '../utils/chatMessagePreview.js';
 import { userHasReceipt } from '../utils/chatReceipts.js';
 import { formatMentionsForClient, normalizeMentions } from '../utils/chatMentions.js';
+import { assertChatSendAllowed } from '../utils/chatSendRate.js';
 import { assertCanInitiateWith, lookupExactEmail } from './communicationAccess.service.js';
 
 /** Same presigned TTL as user profilePicture (auth.controller, employee.service). */
@@ -468,9 +469,12 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
   const unreadPairs = await Promise.all(
     dedupedConvs.map(async (c) => {
       const myParticipant = c.participants?.find((p) => p?.user?._id?.toString() === userId);
+      // Same visibility rules as the list preview: a message this user deleted for themselves,
+      // or one deleted for everyone, is not something they can still go and read.
       const query = {
         conversation: c._id,
         sender: { $ne: userObjectId },
+        ...messagePreviewVisibilityFilter(userId),
       };
       if (myParticipant?.lastReadAt) {
         query.createdAt = { $gt: myParticipant.lastReadAt };
@@ -905,6 +909,7 @@ const getConversationTimeline = async (
 };
 
 const createMessage = async (conversationId, userId, { content, type, attachments, replyTo, forwarded, mentions }) => {
+  assertChatSendAllowed(userId);
   const conv = await ensureParticipant(conversationId, userId);
 
   const msgType = type || (attachments?.length ? 'file' : 'text');
@@ -1014,6 +1019,9 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
         deletedAt: new Date(),
         deletedFor: 'everyone',
         deletedBy: userId,
+        // A pinned tombstone would sit at the top of the thread forever.
+        pinnedAt: null,
+        pinnedBy: null,
       },
     });
 
@@ -1036,6 +1044,90 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
     .populate('mentions.user', 'name email')
     .lean();
   return presentMessageForUser(updated, userId);
+};
+
+/**
+ * Conversation-wide message pins.
+ *
+ * Who may pin: group admins only, either party in a direct chat — the same split
+ * updateGroupName and setGroupConversationAvatar already use for group-wide state, so pinning
+ * introduces no new permission concept. Relax to all members by dropping the ensureAdmin call.
+ */
+const MAX_PINNED_PER_CONVERSATION = 5;
+
+const ensureCanPin = async (conversationId, userId) => {
+  const conv = await ensureParticipant(conversationId, userId);
+  if (conv.type === 'group') return ensureAdmin(conversationId, userId);
+  return conv;
+};
+
+const setMessagePinned = async (conversationId, messageId, userId, { pinned }) => {
+  await ensureCanPin(conversationId, userId);
+  const msg = await Message.findOne({ _id: messageId, conversation: conversationId })
+    .select('_id pinnedAt deletedAt deletedFor')
+    .lean();
+  if (!msg) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+
+  const alreadyPinned = msg.pinnedAt != null;
+  if (pinned === alreadyPinned) {
+    return getPinnedMessage(conversationId, messageId, userId);
+  }
+
+  if (pinned) {
+    if (msg.deletedAt && msg.deletedFor === 'everyone') {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'This message was deleted and cannot be pinned');
+    }
+    // ponytail: count-then-write, so two admins pinning at the same instant can land a 6th.
+    // listPinnedMessages caps its own read at the same number, so the overflow is invisible
+    // rather than harmful — take a transaction here only if the cap ever has to be exact.
+    const pinnedCount = await Message.countDocuments({
+      conversation: new mongoose.Types.ObjectId(conversationId),
+      pinnedAt: { $ne: null },
+    });
+    if (pinnedCount >= MAX_PINNED_PER_CONVERSATION) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        `Only ${MAX_PINNED_PER_CONVERSATION} messages can be pinned at a time. Unpin one first.`
+      );
+    }
+    await Message.updateOne({ _id: messageId }, { $set: { pinnedAt: new Date(), pinnedBy: userId } });
+  } else {
+    await Message.updateOne({ _id: messageId }, { $set: { pinnedAt: null, pinnedBy: null } });
+  }
+
+  return getPinnedMessage(conversationId, messageId, userId);
+};
+
+const PINNED_POPULATE = [
+  { path: 'sender', select: 'name email' },
+  { path: 'pinnedBy', select: 'name' },
+  { path: 'mentions.user', select: 'name email' },
+];
+
+const getPinnedMessage = async (conversationId, messageId, userId) => {
+  const doc = await Message.findOne({ _id: messageId, conversation: conversationId })
+    .populate(PINNED_POPULATE)
+    .lean();
+  return doc ? presentMessageForUser(doc, userId) : null;
+};
+
+/**
+ * Pinned messages for a conversation, newest pin first. Messages the viewer deleted for
+ * themselves stay hidden from them even while pinned for everyone else.
+ */
+const listPinnedMessages = async (conversationId, userId) => {
+  await ensureParticipant(conversationId, userId);
+  const docs = await Message.find({
+    conversation: new mongoose.Types.ObjectId(conversationId),
+    pinnedAt: { $ne: null },
+    ...messageVisibilityFilter(userId),
+  })
+    .sort({ pinnedAt: -1 })
+    .limit(MAX_PINNED_PER_CONVERSATION)
+    .populate(PINNED_POPULATE)
+    .lean();
+  const hydrated = await hydrateMessageAttachments(docs);
+  return hydrated.map((m) => presentMessageForUser(m, userId));
 };
 
 /**
@@ -1158,25 +1250,26 @@ const markAsRead = async (conversationId, userId) => {
     { $set: { 'participants.$.lastReadAt': now } }
   );
 
+  // Only messages still missing this user's receipt. Both clauses are required because readBy
+  // holds two shapes: legacy bare ObjectIds and newer { user, at } entries. Matching server-side
+  // keeps re-reads of an already-read thread at zero documents instead of loading its history.
+  const userObjectId = new mongoose.Types.ObjectId(userId);
   const unread = await Message.find({
     conversation: conversationId,
     sender: { $ne: userId },
+    $and: [{ readBy: { $ne: userObjectId } }, { 'readBy.user': { $ne: userObjectId } }],
   })
-    .select('_id readBy')
+    .select('_id')
     .lean();
 
-  const bulk = [];
-  for (const msg of unread) {
-    // Only record read here. Delivery timestamps come from message_delivered /
-    // join_conversation so delivered/read times stay distinct.
-    if (userHasReceipt(msg.readBy, userId)) continue;
-    bulk.push({
-      updateOne: {
-        filter: { _id: msg._id },
-        update: { $push: { readBy: { user: userId, at: now } } },
-      },
-    });
-  }
+  // Only record read here. Delivery timestamps come from message_delivered /
+  // join_conversation so delivered/read times stay distinct.
+  const bulk = unread.map((msg) => ({
+    updateOne: {
+      filter: { _id: msg._id },
+      update: { $push: { readBy: { user: userId, at: now } } },
+    },
+  }));
   if (bulk.length) {
     await Message.bulkWrite(bulk, { ordered: false });
   }
@@ -1807,6 +1900,8 @@ export {
   getLastVisibleMessageForUser,
   forwardMessage,
   reactToMessage,
+  setMessagePinned,
+  listPinnedMessages,
   markAsRead,
   markMessageDelivered,
   markConversationDelivered,

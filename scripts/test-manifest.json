@@ -314,5 +314,6 @@
   "./src/__tests__/routes/upload.route.permissions.test.js",
   "src/services/__tests__/activityLog.entityNames.test.js",
   "./src/utils/__tests__/courseSearch.util.test.js",
-  "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js"
+  "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js",
+  "./src/utils/__tests__/chatSendRate.test.js"
 ]

@@ -393,6 +393,9 @@ const initSocket = (httpServer) => {
                   emitCallEnded(String(call.conversation), call.livekitRoom);
                 } else {
                   const participantIds = await chatService.getCallNotifyParticipantIds(call);
+                  // `io` is module scope and assigned once in initSocket, never per iteration,
+                  // so the closure cannot capture a stale binding the way the rule assumes.
+                  // eslint-disable-next-line no-loop-func
                   participantIds.forEach((pid) => {
                     io.to(`user:${String(pid)}`).emit('call_ended', {
                       callId: String(call._id),
@@ -734,6 +737,21 @@ const emitMessageReacted = (conversationId, message) => {
   io.to(`conversation:${conversationId}`).emit('message_reacted', { conversationId, message });
 };
 
+/**
+ * Pins are conversation-wide, so the room broadcast is the whole story — unlike new_message
+ * there is no per-user fan-out to do, and a client not in the room refetches the pinned list
+ * when it next opens the conversation.
+ */
+const emitMessagePinned = (conversationId, messageId, pinned, message) => {
+  if (!io) return;
+  io.to(`conversation:${conversationId}`).emit('message_pinned', {
+    conversationId: String(conversationId),
+    messageId: String(messageId),
+    pinned: Boolean(pinned),
+    message: message || null,
+  });
+};
+
 const emitConversationUpdated = async (conversationId) => {
   if (!io) return;
   io.to(`conversation:${conversationId}`).emit('conversation_updated', { conversationId });
@@ -816,6 +834,7 @@ export {
   emitCallDeclined,
   emitMessageDeleted,
   emitMessageReacted,
+  emitMessagePinned,
   emitConversationUpdated,
   emitConversationDeleted,
   emitConversationDelivered,

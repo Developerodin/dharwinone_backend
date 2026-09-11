@@ -182,6 +182,16 @@ const reactToMessage = {
   }),
 };
 
+const setMessagePinned = {
+  params: Joi.object().keys({
+    id: Joi.string().custom(objectId).required(),
+    msgId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    pinned: Joi.boolean().required(),
+  }),
+};
+
 const searchUsers = {
   query: Joi.object().keys({
     search: Joi.string().trim().min(1).max(100),
@@ -273,6 +283,7 @@ export {
   getConversationMessage,
   forwardMessage,
   reactToMessage,
+  setMessagePinned,
   listConversations,
   createConversation,
   getMessages,
