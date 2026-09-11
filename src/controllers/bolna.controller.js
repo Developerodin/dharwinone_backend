@@ -266,24 +266,6 @@ const getBolnaDiagnostics = catchAsync(async (req, res) => {
   });
 });
 
-const getCallStatus = catchAsync(async (req, res) => {
-  const { executionId } = req.params;
-  // Ownership + field-level access, matching every sibling single-record read in this
-  // file. Without these the endpoint proxies Bolna's raw execution payload — transcript
-  // and extracted_data included — to anyone holding only `calls.view`, bypassing the
-  // call-transcripts.read / call-ai.read toggles. Harmless while the underlying request
-  // 404'd; a live leak once the endpoint was corrected to /executions/{id}.
-  await assertCanAccessCall(req, executionId);
-  const result = await bolnaService.getExecutionDetails(executionId);
-  if (!result.success) {
-    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Failed to fetch call status');
-  }
-  res.status(httpStatus.OK).send({
-    success: true,
-    details: sanitizeBolnaExecution(result.details, callRecordAccessFlags(req)),
-  });
-});
-
 const getCallRecords = catchAsync(async (req, res) => {
   const userId = req.user?.id || req.user?._id?.toString();
   const isAdmin = await userIsAdmin(req.user);
@@ -715,7 +697,6 @@ const receiveCandidateWebhook = catchAsync(async (req, res) => {
 export {
   initiateCall,
   initiateCandidateCall,
-  getCallStatus,
   getCallRecords,
   getCallRecord,
   refreshCallRecord,
