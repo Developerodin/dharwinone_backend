@@ -61,7 +61,14 @@ let _transport = null;
 /** ponytail: lazy so importing this module in a test does not open a socket. */
 const getTransport = () => {
   if (!_transport) {
-    _transport = nodemailer.createTransport(config.email.smtp);
+    // Under test, never build a real SMTP transport. The lazy-import guard above stops a
+    // socket opening on import, but a suite that actually calls sendEmail still reached the
+    // live server — the meeting fixtures did, and every run mailed EMAIL_REDIRECT_TO.
+    // jsonTransport resolves like a successful send, so EmailLog rows and callers are
+    // unchanged and nothing leaves the box.
+    _transport = nodemailer.createTransport(
+      config.env === 'test' ? { jsonTransport: true } : config.email.smtp
+    );
     /* istanbul ignore next */
     if (config.env !== 'test') {
       _transport

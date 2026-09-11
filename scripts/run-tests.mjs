@@ -57,7 +57,14 @@ const args = [
   ...present,
 ];
 
-const child = spawn(process.execPath, args, { cwd: repoRoot, stdio: 'inherit' });
+// NODE_ENV=test is what makes email.service use a jsonTransport instead of the live SMTP
+// account, and what points config.mongoose.url at the -test database. Without it the suite
+// inherits .env's development and really sends the meeting fixtures' invitations.
+const child = spawn(process.execPath, args, {
+  cwd: repoRoot,
+  stdio: 'inherit',
+  env: { ...process.env, NODE_ENV: 'test' },
+});
 child.on('error', (err) => {
   console.error(`[run-tests] failed to start: ${err.message}`);
   process.exit(1);
