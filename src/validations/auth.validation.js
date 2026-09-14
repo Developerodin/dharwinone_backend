@@ -27,6 +27,12 @@ const register = {
       then: Joi.string().custom(objectId),
       otherwise: Joi.optional(),
     }),
+    entryMode: Joi.string().valid('manual', 'ai').optional().default('manual'),
+    skills: Joi.string().trim().allow('', null).optional(),
+    experiences: Joi.string().trim().allow('', null).optional(),
+    qualifications: Joi.string().trim().allow('', null).optional(),
+    socialLinks: Joi.string().trim().allow('', null).optional(),
+    resume: Joi.any().optional(),
   }),
 };
 
@@ -41,7 +47,17 @@ const registerCandidate = {
     countryCode: Joi.string().length(2).uppercase().optional().allow(''),
     /** HMAC v1 ref= token from tracked referral link */
     ref: Joi.string().trim().allow('').optional(),
+    entryMode: Joi.string().valid('manual', 'ai').optional().default('manual'),
+    skills: Joi.string().trim().allow('', null).optional(),
+    experiences: Joi.string().trim().allow('', null).optional(),
+    qualifications: Joi.string().trim().allow('', null).optional(),
+    socialLinks: Joi.string().trim().allow('', null).optional(),
+    resume: Joi.any().optional(),
   }),
+};
+
+const parsePublicResumeOnboard = {
+  body: Joi.object().keys({}).unknown(true),
 };
 
 const login = {
@@ -424,6 +440,7 @@ const recommendSkillsByRole = {
 export {
   register,
   registerCandidate,
+  parsePublicResumeOnboard,
   registerRecruiter,
   registerStudent,
   registerMentor,

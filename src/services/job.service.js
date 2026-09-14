@@ -1652,7 +1652,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     candidate: candidate._id,
     appliedBy: user._id,
     status: 'Applied',
-    coverLetter: coverLetter || '',
+    coverLetter: typeof coverLetter === 'string' ? coverLetter : '',
   });
   logger.info('✅ Job application created:', { _id: application._id, candidate: application.candidate, job: application.job });
 

@@ -153,7 +153,11 @@ const register = catchAsync(async (req, res) => {
       if (!existingUser.registrationSource) existingUser.registrationSource = 'public_candidate';
       await existingUser.save();
       await User.findByIdAndUpdate(existingUser._id, { $addToSet: { roleIds: candidateRole._id } });
-      await ensureCandidateProfileForUser(existingUser._id);
+      const resumeCandidate = await ensureCandidateProfileForUser(existingUser._id);
+      if (resumeCandidate) {
+        const { applyPublicCandidateRegistrationProfile } = await import('../services/publicCandidateProfile.service.js');
+        await applyPublicCandidateRegistrationProfile(resumeCandidate, existingUser, req.body, req.files);
+      }
       const resumeVerifyToken = await generateVerifyEmailToken(existingUser);
       await sendVerificationEmail2(existingUser.email, resumeVerifyToken, {
         req,
@@ -196,6 +200,8 @@ const register = catchAsync(async (req, res) => {
     if (cc && !candidate.countryCode) candidate.countryCode = cc;
     if ((candidate.isProfileCompleted || 0) < 30) candidate.isProfileCompleted = 30;
     await candidate.save();
+    const { applyPublicCandidateRegistrationProfile } = await import('../services/publicCandidateProfile.service.js');
+    await applyPublicCandidateRegistrationProfile(candidate, user, req.body, req.files);
     const inviterRef = await applyOnboardInviteReferral(candidate._id, user.email, adminId);
     if (inviterRef.applied) {
       try {
@@ -325,10 +331,12 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
         'This email is already registered to an internal account. Sign in or use a different email.',
       );
     }
-    if (!user.registrationSource) {
-      await updateUserById(user._id, { registrationSource: 'public_candidate' });
-      user.registrationSource = 'public_candidate';
-    }
+    user.name = name;
+    user.password = password;
+    if (phone !== '0000000000') user.phoneNumber = phone;
+    if (cc) user.countryCode = cc;
+    if (!user.registrationSource) user.registrationSource = 'public_candidate';
+    await user.save();
     await User.findByIdAndUpdate(user._id, { $addToSet: { roleIds: candidateRole._id } });
     user = await getUserById(user._id);
   } else {
@@ -343,23 +351,30 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       ...(cc && { countryCode: cc }),
     });
   }
-  let candidate;
-  try {
-    candidate = await createCandidate(user._id, {
-      fullName: name,
-      email,
-      phoneNumber: phone,
-      ...(cc && { countryCode: cc }),
-      adminId: user._id,
-    });
-  } catch (err) {
-    if (err.statusCode === httpStatus.CONFLICT && err.message?.includes('already exists')) {
-      return res.status(httpStatus.OK).send({
-        user,
-        message: 'You are already registered and in the employee list. You can sign in when your account is active.',
+  let candidate = await ensureCandidateProfileForUser(user._id);
+  if (!candidate) {
+    try {
+      candidate = await createCandidate(user._id, {
+        fullName: name,
+        email,
+        phoneNumber: phone,
+        ...(cc && { countryCode: cc }),
+        adminId: user._id,
       });
+    } catch (err) {
+      if (err.statusCode === httpStatus.CONFLICT && err.message?.includes('already exists')) {
+        candidate = await ensureCandidateProfileForUser(user._id);
+      }
+      if (!candidate) throw err;
     }
-    throw err;
+  }
+  if (candidate) {
+    if (name) candidate.fullName = name;
+    if (phone !== '0000000000') candidate.phoneNumber = phone;
+    if (cc) candidate.countryCode = cc;
+    if (!candidate.adminId) candidate.adminId = user._id;
+    if ((candidate.isProfileCompleted || 0) < 30) candidate.isProfileCompleted = 30;
+    await candidate.save();
   }
   if (referralRef && String(referralRef).trim() && candidate?._id) {
     const v = verifyReferralToken(String(referralRef).trim());
@@ -386,16 +401,26 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
     }
   }
   if (candidate?._id) {
+    const { applyPublicCandidateRegistrationProfile } = await import('../services/publicCandidateProfile.service.js');
+    await applyPublicCandidateRegistrationProfile(candidate, user, req.body, req.files);
     await syncReferralPipelineStatusForCandidate(candidate._id).catch((e) =>
       logReferralEvent('referral_pipeline_sync_failed', { message: e?.message })
     );
   }
+  if (!user.isEmailVerified) {
+    const verifyEmailToken = await generateVerifyEmailToken(user);
+    await sendVerificationEmail2(user.email, verifyEmailToken, {
+      req,
+      recipientName: user.name || 'there',
+      accountContext: 'new candidate account',
+    });
+  }
   res.status(httpStatus.CREATED).send({
     user,
     candidate,
-    message: user.status === 'pending'
-      ? 'Registration successful. Check your email to verify your address and activate your account.'
-      : 'You were already registered. You have been added to the employee list.',
+    message: user.isEmailVerified
+      ? 'You were already registered. You have been added to the employee list.'
+      : 'Registration successful. Check your email to verify your address and activate your account.',
   });
 });
 

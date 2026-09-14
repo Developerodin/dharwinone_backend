@@ -4212,7 +4212,26 @@ const deleteCandidateDocumentVersion = async (candidateId, slotRaw, versionRaw, 
   };
 };
 
+/** Attach a versioned resume or cover-letter file to a candidate (public apply / onboarding). */
+const attachVersionedSlotUploadToCandidate = async (candidate, slot, uploadMeta, actorId) => {
+  if (!candidate) return;
+  const meta = normalizeVersionPayloadFile({
+    ...uploadMeta,
+    documentUrl: uploadMeta.url || uploadMeta.documentUrl,
+  });
+  if (!meta) return;
+  const normalizedSlot = normalizeVersionSlot(slot);
+  if (!normalizedSlot) return;
+  const fallback = canonicalDocumentDefaultsForSlot(normalizedSlot);
+  const { versionRow } = applySlotVersionUpload(candidate, normalizedSlot, meta, fallback, actorId);
+  if (!versionRow) return;
+  upsertLatestSlotDocumentFromVersion(candidate, normalizedSlot, versionRow);
+  candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+  await candidate.save();
+};
+
 export {
+  attachVersionedSlotUploadToCandidate,
   createCandidate,
   queryCandidates,
   buildEmployeeListMongoFilter,

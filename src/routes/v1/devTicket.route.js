@@ -8,7 +8,7 @@ import * as devTicketController from '../../controllers/devTicket.controller.js'
 
 const router = express.Router();
 
-const canView = [auth(), requirePermissions('devTickets.view')];
+const canView = [auth(), requirePermissions('help-and-support.read')];
 
 router.get('/analytics', ...canView, devTicketController.analytics);
 

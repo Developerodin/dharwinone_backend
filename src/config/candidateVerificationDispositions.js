@@ -7,7 +7,7 @@ export function getCandidateVerificationDispositionSpecs() {
     {
       name: 'Name Confirmed',
       question:
-        'Did the candidate confirm their name is {candidate_name}? Return true if they agreed it is correct, false if they said it was wrong or gave a different name.',
+        'Did the candidate confirm their name is {candidate_verification_applicant_name}? Return true if they agreed it is correct, false if they said it was wrong or gave a different name.',
       category: CANDIDATE_VERIFICATION_CATEGORY,
       is_subjective: true,
       is_objective: false,
@@ -25,7 +25,7 @@ export function getCandidateVerificationDispositionSpecs() {
     {
       name: 'Job Confirmed',
       question:
-        'Did the candidate confirm the position they applied for is {job_title}? Return true if confirmed, false if they disagreed.',
+        'Did the candidate confirm the position they applied for is {candidate_verification_job_title}? Return true if confirmed, false if they disagreed.',
       category: CANDIDATE_VERIFICATION_CATEGORY,
       is_subjective: true,
       is_objective: false,

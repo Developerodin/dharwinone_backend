@@ -14,7 +14,11 @@ import * as userController from '../../controllers/user.controller.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
 import * as twilioVoiceController from '../../controllers/twilioVoice.controller.js';
 import { verifyTwilioWebhook } from '../../middlewares/verifyTwilioWebhook.js';
-import { uploadJobApplicationFiles, uploadPublicResumeParse } from '../../middlewares/upload.js';
+import {
+  uploadJobApplicationFiles,
+  uploadPublicCandidateRegistration,
+  uploadPublicResumeParse,
+} from '../../middlewares/upload.js';
 import { publicRegistrationLimiter, publicResumeParseLimiter, publicWriteLimiter } from '../../middlewares/rateLimiter.js';
 import { verifyCaptcha } from '../../middlewares/verifyCaptcha.js';
 
@@ -36,8 +40,23 @@ router.post('/register', publicRegistrationLimiter, validate(authValidation.regi
 router.post(
   '/register-candidate',
   publicRegistrationLimiter,
+  verifyCaptcha,
+  uploadPublicCandidateRegistration,
   validate(authValidation.registerCandidate),
   authController.publicRegisterCandidate
+);
+
+/**
+ * POST /v1/public/parse-resume
+ * Public resume parse for candidate onboarding (no job id). PDF/DOCX only; does not store the file.
+ */
+router.post(
+  '/parse-resume',
+  publicResumeParseLimiter,
+  verifyCaptcha,
+  uploadPublicResumeParse,
+  validate(authValidation.parsePublicResumeOnboard),
+  jobController.parsePublicResumeOnboard
 );
 
 /**

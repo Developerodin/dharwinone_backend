@@ -582,6 +582,15 @@ const publicApplyToJob = catchAsync(async (req, res) => {
 
   const result = await publicApplyToJobService(req.params.jobId, req.body, req.files, { req });
 
+  if (req.files?.coverLetter?.[0] && result?.candidate?.id && result?.user?.id) {
+    const candidate = await Employee.findById(result.candidate.id);
+    const user = await User.findById(result.user.id);
+    if (candidate && user) {
+      const { attachPublicApplyCoverLetter } = await import('../services/publicCandidateProfile.service.js');
+      await attachPublicApplyCoverLetter(candidate, user, req.files);
+    }
+  }
+
   res.status(httpStatus.CREATED).send(result);
 });
 
@@ -595,6 +604,25 @@ const parsePublicResume = catchAsync(async (req, res) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
 
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'resume is required (multipart field name: resume)');
+  }
+
+  const { parseResumeForPublicApply } = await import('../services/resumeSkillsExtract.service.js');
+  const result = await parseResumeForPublicApply(
+    file.buffer,
+    file.mimetype || 'application/octet-stream',
+    file.originalname || 'resume.pdf'
+  );
+
+  res.send(result);
+});
+
+/**
+ * POST /v1/public/parse-resume — AI prefill for candidate onboarding (no job id).
+ */
+const parsePublicResumeOnboard = catchAsync(async (req, res) => {
   const file = req.file;
   if (!file?.buffer?.length) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'resume is required (multipart field name: resume)');
@@ -713,6 +741,7 @@ export {
   getPublicJob,
   publicApplyToJob,
   parsePublicResume,
+  parsePublicResumeOnboard,
   checkPublicEmail,
   listBookmarks,
   addBookmark,

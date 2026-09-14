@@ -322,7 +322,8 @@
   "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js",
   "./src/utils/__tests__/chatSendRate.test.js",
   "./src/services/__tests__/chat.unreadScopes.test.js",
-  "./src/services/__tests__/bolnaVerificationGuards.test.js",
+    "./src/services/__tests__/bolnaVerificationGuards.test.js",
+    "./src/services/__tests__/bolnaCandidateJobTitleVerification.test.js",
   "./src/services/__tests__/callSync.executionContext.test.js",
   "./src/utils/__tests__/bolnaAgentPromptLock.test.js"
 ]

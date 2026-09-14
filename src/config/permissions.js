@@ -457,6 +457,19 @@ export const permissionAliases = {
     'agents.manage',
     'bolna-voice-agent.manage',
   ],
+  // Help & Support iframe (sidebar): support.help-and-support:view → help-and-support.read
+  'help-and-support.read': [
+    'help-and-support.read',
+    'support.help-and-support:view',
+    'support.help-and-support:view,create,edit,delete',
+    // Legacy role toggle (removed from matrix); keep until roles are re-saved
+    'devTickets.view',
+  ],
+  'help-and-support.manage': [
+    'help-and-support.manage',
+    'support.help-and-support:create,edit,delete',
+    'support.help-and-support:view,create,edit,delete',
+  ],
   // Support tickets: support.tickets:view → tickets.read, support.tickets:create,edit,delete → tickets.manage
   'supportTickets.read': [
     'supportTickets.read',

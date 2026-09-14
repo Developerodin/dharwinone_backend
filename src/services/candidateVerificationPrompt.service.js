@@ -9,10 +9,12 @@ import { emailToSpokenForm } from '../utils/emailToSpokenForm.js';
  * Opening greeting for the confirmation call.
  * Delivered as the Bolna agent_welcome_message (spoken immediately on call connect).
  * @param {Record<string, unknown>} ctx - from buildCandidateVerificationPromptContext
- * @param {string} [greetingOverride] - optional admin override with {candidate_name}, {job_title}, {company_name}
+ * @param {string} [greetingOverride] - optional admin override with {candidate_verification_applicant_name}, {candidate_verification_job_title}, {candidate_verification_company_name} (legacy {candidate_name}, {job_title}, {company_name} still resolved when pre-rendering overrides)
  */
 export function resolveCandidateAgentGreeting(ctx, greetingOverride, opts = {}) {
   const hiringCompany = ctx.company_name || 'our company';
+  const defaultWelcome =
+    'Hi there! This is an automated call from {candidate_verification_company_name}. We are calling about your recent job application. This will only take about two minutes. Is now a good time?';
   // raw=true returns the greeting with its {placeholders} INTACT. Used for the
   // agent_welcome_message, which is shared agent state — resolving per-call data
   // into it would make the next call greet the previous candidate. Bolna fills
@@ -20,17 +22,20 @@ export function resolveCandidateAgentGreeting(ctx, greetingOverride, opts = {}) 
   if (opts.raw === true) {
     const override = greetingOverride && String(greetingOverride).trim();
     if (override) return override;
-    return `Hi there! This is an automated call from {company_name}. We are calling about your recent job application. This will only take about two minutes. Is now a good time?`;
+    return defaultWelcome;
   }
   if (greetingOverride && String(greetingOverride).trim()) {
     return String(greetingOverride)
       .trim()
+      .replaceAll('{candidate_verification_applicant_name}', ctx.candidate_name)
+      .replaceAll('{candidate_verification_job_title}', ctx.job_title)
+      .replaceAll('{candidate_verification_company_name}', hiringCompany)
       .replaceAll('{candidate_name}', ctx.candidate_name)
       .replaceAll('{job_title}', ctx.job_title)
       .replaceAll('{company_name}', hiringCompany);
   }
   // Short, friendly, TTS-safe. No em dashes or symbols.
-  return `Hi there! This is an automated call from {company_name}. We are calling about your recent job application. This will only take about two minutes. Is now a good time?`;
+  return defaultWelcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +89,11 @@ export function promptSafe(value, maxLen = 120) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLen);
+}
+
+/** Same resolution as buildCandidateVerificationPromptContext job_title (promptSafe, max 150). */
+export function resolveCanonicalCandidateJobTitle(job, jobTitleOverride) {
+  return promptSafe(jobTitleOverride || job?.title, 150);
 }
 
 export function skillTagRegex(skill) {
@@ -267,7 +277,7 @@ export async function buildCandidateVerificationPromptContext({
         : ''
     ),
     candidate_skills: promptSafe(candidateSkillsReadable, 300),
-    job_title: promptSafe(jobTitleOverride || job.title, 150),
+    job_title: resolveCanonicalCandidateJobTitle(job, jobTitleOverride),
     company_name: promptSafe(companyName, 150) || 'our company',
     // Skill-matched other opportunities
     matched_jobs_spoken: matchedJobsSpoken,
@@ -460,21 +470,12 @@ Say: "Our team will be in touch if something suitable comes up. Have a great day
 // Main prompt builder (Bolna {variable} template)
 // ---------------------------------------------------------------------------
 //
-// IMPORTANT: The system prompt is a STATIC template. Per-call candidate data is
-// NEVER baked into the prompt text. Instead it is injected at call time via
-// Bolna `user_data` using SINGLE-curly `{variable}` placeholders — confirmed
-// against the official Bolna docs (bolna.ai/docs/agent-setup/agent-tab). The
-// repo's docs/BOLNA_AGENT_VARIABLES.md shows {{double}}, which is WRONG — Bolna
-// only substitutes single braces, so {{x}} would be spoken literally.
+// The template below remains the single source of truth for call instructions.
+// Candidate flow renders it per call from buildCandidateAgentTemplateVars(), then
+// PATCHes that rendered copy (with a unique render token) before dialing.
+// The same vars still travel in user_data for extraction/audit context.
 //
-// Why: the candidate agent is a single shared Bolna agent whose prompt is PATCHed
-// before each call. Baking literal values (e.g. "I have your name as Prakhar")
-// into that shared prompt is racy — a concurrent call, a failed PATCH, or Bolna
-// propagation lag could leave a PREVIOUS candidate's name/job live, so the agent
-// would greet the wrong person. Sending the data in `user_data` makes it travel
-// atomically with the call, so it can never belong to another candidate.
-//
-// buildCandidateAgentPromptTemplate() -> the static {...} template (PATCH this).
+// buildCandidateAgentPromptTemplate() -> the static {...} template (render then PATCH).
 // buildCandidateAgentTemplateVars(ctx) -> the rendered values to pass in user_data.
 
 /**
@@ -489,6 +490,7 @@ export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
   const hiringCompany = ctx.company_name || 'our company';
 
   const greeting = resolveCandidateAgentGreeting(ctx, opts.greetingOverride)
+    .replaceAll('{candidate_verification_company_name}', hiringCompany)
     .replaceAll('{company_name}', hiringCompany);
 
   const { q1, q2, q3, q4, q5 } = buildQuestionScripts(ctx);
@@ -499,28 +501,40 @@ export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
       : '';
 
   return {
-    company_name: hiringCompany,
-    greeting,
-    q1_line: q1,
-    q2_line: q2,
-    q3_line: q3,
-    q4_line: q4,
-    q5_line: q5,
-    candidate_name_or_applicant: ctx.candidate_name || 'the applicant',
-    other_opportunities_block: otherOpportunitiesBlock,
-    additional_instructions: extra ? `\n## ADDITIONAL INSTRUCTIONS\n${extra}` : '',
+    candidate_verification_company_name: hiringCompany,
+    candidate_verification_greeting: greeting,
+    candidate_verification_q1_line: q1,
+    candidate_verification_q2_line: q2,
+    candidate_verification_q3_line: q3,
+    candidate_verification_q4_line: q4,
+    candidate_verification_q5_line: q5,
+    candidate_verification_applicant_name: ctx.candidate_name || 'the applicant',
+    candidate_verification_other_opportunities_block: otherOpportunitiesBlock,
+    candidate_verification_additional_instructions: extra
+      ? `\n## ADDITIONAL INSTRUCTIONS\n${extra}`
+      : '',
   };
 }
 
 /**
+ * Replace single-brace {placeholders} using the supplied vars.
+ * Keys not present in vars are left intact so missingTemplateVars() can fail closed upstream.
+ */
+export function renderPromptTemplateWithVars(template, vars) {
+  return String(template).replace(/\{(\w+)\}/g, (full, key) => {
+    if (!(key in vars)) return full;
+    return String(vars[key] ?? '');
+  });
+}
+
+/**
  * The complete, STATIC system prompt template for the candidate confirmation agent.
- * Contains only {placeholders} — no per-call data. PATCH this onto the agent.
- * Filled at call time by Bolna from the `user_data` produced by
- * buildCandidateAgentTemplateVars().
+ * Contains only {placeholders} — no per-call data.
+ * Rendered per call using renderPromptTemplateWithVars().
  */
 export function buildCandidateAgentPromptTemplate() {
   const base = `## WHO YOU ARE
-You are a friendly and professional automated voice assistant. You are calling on behalf of {company_name}. Your primary purpose is to confirm a few details from the candidate's job application. You are not a recruiter. You do not evaluate or screen candidates. You do not make or influence any hiring decisions.
+You are a friendly and professional automated voice assistant. You are calling on behalf of {candidate_verification_company_name}. Your primary purpose is to confirm a few details from the candidate's job application. You are not a recruiter. You do not evaluate or screen candidates. You do not make or influence any hiring decisions.
 
 You may, if the candidate asks, share information about other active job openings that match their profile. This is always optional and never proactive.
 
@@ -550,7 +564,7 @@ This is a confirmation call. You will go through exactly five short questions to
 
 ### OPENING
 The following welcome message is already spoken by the system when the call connects:
-"{greeting}"
+"{candidate_verification_greeting}"
 
 Do NOT repeat this welcome. After the candidate responds positively, begin with a brief bridge:
 "Wonderful. This will only take a couple of minutes."
@@ -565,8 +579,14 @@ Move to the VOICEMAIL SCRIPT below.
 
 ---
 
+### CURRENT CALL VALUES
+- Use only the question lines shown in this prompt for this specific call.
+- Read each candidate_verification_q-line exactly as provided. Do not reuse values from any previous call.
+
+---
+
 ### QUESTION 1 — FULL NAME
-Say: "{q1_line}"
+Say: "{candidate_verification_q1_line}"
 
 - If confirmed: "Perfect. Thank you." Move to Question 2.
 - If corrected: "Got it. I will note that. Thank you." Move to Question 2.
@@ -574,17 +594,20 @@ Say: "{q1_line}"
 
 ---
 
-### QUESTION 2 — POSITION APPLIED FOR
-Say: "{q2_line}"
-
-- If confirmed: "Great. Thank you for confirming that." Move to Question 3.
+ ### QUESTION 2 — POSITION APPLIED FOR
+ Say: "{candidate_verification_q2_line}"
+ 
+ - Use candidate_verification_job_title and candidate_verification_q2_line from user_data exactly. Do not infer, rename, shorten, or invent a job title.
+ - Read candidate_verification_q2_line verbatim for this question. Do not substitute a title from matched jobs or anywhere else.
+ 
+ - If confirmed: "Great. Thank you for confirming that." Move to Question 3.
 - If corrected: "Understood. I have noted that. Thank you." Move to Question 3.
 - If unclear after one retry: "That is fine. We will check our records. Let us continue."
 
 ---
 
 ### QUESTION 3 — DATE OF APPLICATION
-Say: "{q3_line}"
+Say: "{candidate_verification_q3_line}"
 
 - If confirmed: "Perfect. Thank you." Move to Question 4.
 - If corrected or unsure: "No worries at all. We have it on our end. Thank you." Move to Question 4.
@@ -593,7 +616,7 @@ Say: "{q3_line}"
 ---
 
 ### QUESTION 4 — CURRENT LOCATION
-Say: "{q4_line}"
+Say: "{candidate_verification_q4_line}"
 
 - If confirmed: "Great. Thank you." Move to Question 5.
 - If corrected: "Got it. I have updated that. Thank you." Move to Question 5.
@@ -602,7 +625,7 @@ Say: "{q4_line}"
 ---
 
 ### QUESTION 5 — EXPECTED JOINING DATE
-Say: "{q5_line}"
+Say: "{candidate_verification_q5_line}"
 
 - After their answer (whatever it is): "That is very helpful. Thank you for letting us know."
 Then move immediately to the CLOSING.
@@ -616,7 +639,7 @@ Deliver this closing message after Question 5. Speak it naturally in short piece
 Pause one second.
 "Our team will carefully review your application."
 Pause one second.
-"Someone from {company_name} will contact you about the next steps."
+"Someone from {candidate_verification_company_name} will contact you about the next steps."
 Pause one second.
 
 Before ending, offer one final optional prompt:
@@ -635,7 +658,7 @@ If the candidate asks a question here, handle it using the HANDLING COMMON SITUA
 
 ### VOICEMAIL SCRIPT
 If the call connects but no one responds after two attempts:
-"Hi. This is an automated message from {company_name}."
+"Hi. This is an automated message from {candidate_verification_company_name}."
 Pause.
 "We called to confirm a few details about your job application."
 Pause.
@@ -649,7 +672,7 @@ Then end the call.
 ## HANDLING COMMON SITUATIONS
 
 ### If the candidate asks what company is calling:
-"This call is from {company_name}. It is about your recent job application."
+"This call is from {candidate_verification_company_name}. It is about your recent job application."
 
 ### If the candidate asks why they are being called:
 "We are just confirming a few quick details from your application. It will take about two minutes."
@@ -672,7 +695,7 @@ Then end the call.
 Then end the call.
 
 ### If a different person answers (not the candidate):
-"I am sorry to bother you. I was looking for {candidate_name_or_applicant}. Is this a good time to reach them?"
+"I am sorry to bother you. I was looking for {candidate_verification_applicant_name}. Is this a good time to reach them?"
 If they say no or they do not know: "No problem at all. Thank you. Have a good day." End the call.
 
 ### If the candidate asks about interview process or next steps:
@@ -680,11 +703,11 @@ If they say no or they do not know: "No problem at all. Thank you. Have a good d
 "I do not have those specifics on this call. Thank you for your patience."
 
 ### If the candidate asks about the company:
-"I represent {company_name} on this call. For more information about them, our team can share details by email."
+"I represent {candidate_verification_company_name} on this call. For more information about them, our team can share details by email."
 
 ---
 
-{other_opportunities_block}
+{candidate_verification_other_opportunities_block}
 
 ---
 
@@ -698,7 +721,7 @@ If they say no or they do not know: "No problem at all. Thank you. Have a good d
 - Never invent a job opening, company name, location, or salary. Use only the matched jobs listed above.
 - If a matched job's title or company is nothing but a placeholder word, meaning the whole title is just one of ${JUNK_LISTING_SPOKEN}, skip that one job silently. Do not read it aloud and do not mention that you skipped it. A real title that merely contains such a word, like "Test Engineer" or "Demo Specialist", is a genuine role. Read it normally.
 - Never invent information. If you do not know something, say the team will follow up by email.
-{additional_instructions}`;
+{candidate_verification_additional_instructions}`;
 
   return base;
 }

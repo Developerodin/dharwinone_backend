@@ -128,7 +128,8 @@ const uploadPublicResumeParse = (req, res, next) => {
 const uploadJobApplicationFiles = (req, res, next) => {
   jobApplicationUpload.fields([
     { name: 'resume', maxCount: 1 },
-    { name: 'documents', maxCount: 5 }
+    { name: 'coverLetter', maxCount: 1 },
+    { name: 'documents', maxCount: 5 },
   ])(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError) {
@@ -312,6 +313,21 @@ const uploadChatAttachments = (req, res, next) => {
 };
 
 // Single-file document upload — used by candidate-self and admin-on-behalf-of-candidate doc endpoints.
+/** Public candidate onboarding — optional resume (PDF/DOCX). */
+const uploadPublicCandidateRegistration = (req, res, next) => {
+  jobApplicationUpload.fields([{ name: 'resume', maxCount: 1 }])(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return next(new ApiError(httpStatus.BAD_REQUEST, 'File size too large. Maximum 10MB.'));
+        }
+      }
+      return next(err);
+    }
+    next();
+  });
+};
+
 const uploadDocumentFile = (req, res, next) => {
   jobApplicationUpload.single('file')(req, res, (err) => {
     if (err) {
@@ -329,6 +345,7 @@ const uploadDocumentFile = (req, res, next) => {
 export {
   uploadSingle,
   uploadJobApplicationFiles,
+  uploadPublicCandidateRegistration,
   uploadPublicResumeParse,
   uploadImagesVideos,
   studentProfileImageUpload,

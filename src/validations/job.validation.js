@@ -427,7 +427,10 @@ const publicApplyToJob = {
     countryCode: Joi.string().required().trim().default('US').messages({
       'any.required': 'Country code is required',
     }),
-    coverLetter: Joi.string().optional().trim().allow('', null),
+    /** Legacy plain-text or multipart file field `coverLetter`. */
+    coverLetter: Joi.alternatives()
+      .try(Joi.string().optional().trim().allow('', null), Joi.any().optional())
+      .optional(),
     /** HMAC v1 `ref` from job share URL ?ref= (must match job id in token for job-sourced links). */
     ref: Joi.string().trim().allow('', null).optional(),
     /**

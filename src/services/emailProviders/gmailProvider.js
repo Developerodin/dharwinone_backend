@@ -1383,34 +1383,115 @@ const GMAIL_FOLDER_LABELS = {
   starred: 'STARRED',
 };
 
+/** Parallel labels.get calls per batch — Gmail rejects bursts of concurrent requests per user. */
+const LABEL_COUNT_BATCH = 10;
+/**
+ * ponytail: Gmail allows 10k labels and each needs its own labels.get, so only the first 100
+ * visible user labels are counted; the rest show no number. Gmail's HTTP batch endpoint lifts this.
+ */
+const MAX_COUNTED_USER_LABELS = 100;
+/** Same scope the Archive list queries — keep in sync with frontend communication/email/_utils/listScope.ts. */
+const GMAIL_ARCHIVE_SCOPE = '-in:inbox -in:sent -in:draft -in:trash -in:spam -in:chats';
+/**
+ * Gmail has no archive label to read a count from, and threads.list's resultSizeEstimate is only
+ * an estimate (the sidebar showed a flat 201 from it). So archive ids are counted for real.
+ * ponytail: one page only; a bigger archive comes back `capped` and shows "500+". Page further
+ * if an exact large number matters — each page is another 10-unit list call on every refresh.
+ */
+const ARCHIVE_COUNT_PAGE = 500;
+
 export async function getFolderCounts(account) {
   await ensureValidToken(account);
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({ access_token: account.accessToken });
   const gmail = getGmailClient(oauth2Client);
 
-  const entries = await Promise.all(
-    Object.entries(GMAIL_FOLDER_LABELS).map(async ([folder, labelId]) => {
-      try {
-        const res = await gmail.users.labels.get({ userId: 'me', id: labelId });
-        const data = res.data || {};
-        return [
-          folder,
-          {
-            unread: Number(data.threadsUnread ?? data.messagesUnread ?? 0) || 0,
-            total: Number(data.threadsTotal ?? data.messagesTotal ?? 0) || 0,
-            messagesUnread: Number(data.messagesUnread ?? 0) || 0,
-            messagesTotal: Number(data.messagesTotal ?? 0) || 0,
-          },
-        ];
-      } catch (err) {
-        logger.warn('[Gmail] labels.get %s failed: %s', labelId, err?.message || err);
-        return [folder, { unread: 0, total: 0, messagesUnread: 0, messagesTotal: 0 }];
-      }
-    })
-  );
+  // null when Gmail refuses: the folder is left out so the sidebar shows no number, not a false 0.
+  const countLabel = async (labelId) => {
+    try {
+      const res = await gmail.users.labels.get({ userId: 'me', id: labelId });
+      const data = res.data || {};
+      return {
+        unread: Number(data.threadsUnread ?? data.messagesUnread ?? 0) || 0,
+        total: Number(data.threadsTotal ?? data.messagesTotal ?? 0) || 0,
+        messagesUnread: Number(data.messagesUnread ?? 0) || 0,
+        messagesTotal: Number(data.messagesTotal ?? 0) || 0,
+      };
+    } catch (err) {
+      logger.warn('[Gmail] labels.get %s failed: %s', labelId, err?.message || err);
+      return null;
+    }
+  };
 
-  return Object.fromEntries(entries);
+  const [userLabelIds, profile, archive] = await Promise.all([
+    gmail.users.labels
+      .list({ userId: 'me' })
+      .then((res) =>
+        (res.data.labels || [])
+          .filter((l) => l.type === 'user' && l.labelListVisibility !== 'labelHide')
+          .slice(0, MAX_COUNTED_USER_LABELS)
+          .map((l) => l.id)
+      )
+      .catch((err) => {
+        logger.warn('[Gmail] labels.list for counts failed: %s', err?.message || err);
+        return [];
+      }),
+    gmail.users
+      .getProfile({ userId: 'me' })
+      .then((res) => res.data || {})
+      .catch((err) => {
+        logger.warn('[Gmail] getProfile for counts failed: %s', err?.message || err);
+        return null;
+      }),
+    gmail.users.threads
+      .list({
+        userId: 'me',
+        q: GMAIL_ARCHIVE_SCOPE,
+        maxResults: ARCHIVE_COUNT_PAGE,
+        fields: 'threads/id,nextPageToken',
+      })
+      .then((res) => ({
+        unread: 0,
+        total: (res.data.threads || []).length,
+        capped: Boolean(res.data.nextPageToken),
+      }))
+      .catch((err) => {
+        logger.warn('[Gmail] archive count failed: %s', err?.message || err);
+        return null;
+      }),
+  ]);
+
+  // System folders keep their lowercase keys; user labels are keyed by their own id ("Label_12").
+  const targets = [...Object.entries(GMAIL_FOLDER_LABELS), ...userLabelIds.map((id) => [id, id])];
+  const counts = {};
+  for (let i = 0; i < targets.length; i += LABEL_COUNT_BATCH) {
+    const batch = targets.slice(i, i + LABEL_COUNT_BATCH);
+    const results = await Promise.all(batch.map(([, labelId]) => countLabel(labelId)));
+    batch.forEach(([key], j) => {
+      if (results[j]) counts[key] = results[j];
+    });
+  }
+  if (archive) counts.archive = archive;
+
+  // `all` is read off the UNREAD label, whose own total is only the unread count again, so the
+  // total is rebuilt: profile threads minus spam and trash (the All Mails list excludes them).
+  // Threads can sit in spam/trash and another folder at once, which pushed that below Inbox, so
+  // it never goes under the largest folder it contains. No profile → no total, not a wrong one.
+  if (counts.all) {
+    delete counts.all.total;
+    if (profile) {
+      const contained = Object.entries(counts)
+        .filter(([key]) => !['all', 'spam', 'trash'].includes(key))
+        .map(([, c]) => c.total);
+      counts.all.total = Math.max(
+        0,
+        (Number(profile.threadsTotal) || 0) - (counts.spam?.total ?? 0) - (counts.trash?.total ?? 0),
+        ...contained
+      );
+    }
+  }
+
+  return counts;
 }
 
 /**

@@ -26,7 +26,6 @@ const NAMESPACED_RESOURCE_KEYS = new Set([
  * the frontend list.
  */
 const STANDALONE_API_PERMISSIONS = new Set([
-  'devTickets.view', // "Help & Support access" role toggle
   'communication.directory:all',
   'communication.directory:referred',
 ]);
@@ -55,6 +54,12 @@ export const deriveApiPermissions = (rawPermissions) => {
   const apiPermissions = new Set();
 
   for (const raw of rawPermissions) {
+    // Legacy Help & Support toggle (matrix row is support.help-and-support:*).
+    if (raw === 'devTickets.view') {
+      apiPermissions.add('help-and-support.read');
+      continue;
+    }
+
     // Standalone permissions are already in final API form — pass through verbatim.
     if (STANDALONE_API_PERMISSIONS.has(raw)) {
       apiPermissions.add(raw);

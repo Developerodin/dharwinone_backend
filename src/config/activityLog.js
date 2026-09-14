@@ -143,6 +143,8 @@ export const ActivityActions = {
   INTERVIEW_EXPORT: 'interview.export',
   INTERVIEW_RECORDING_VIEW: 'interview.recording.view',
   INTERVIEW_RESULT_UPDATE: 'interview.result.update',
+  INTERVIEW_LINKAGE_UPDATE: 'interview.linkage.update',
+  INTERVIEW_APPLICATION_CREATE: 'interview.application.create',
   // Offers & placement
   OFFER_CREATE: 'offer.create',
   OFFER_UPDATE: 'offer.update',

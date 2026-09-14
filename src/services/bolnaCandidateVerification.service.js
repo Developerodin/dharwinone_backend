@@ -1,6 +1,7 @@
 import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import {
+  assertQ2LineMatchesJobTitle,
   assertUserDataWithinLimit,
   bolnaJobAndCandidateAgentsCollide,
   missingTemplateVars,
@@ -11,13 +12,19 @@ import {
   buildCandidateAgentPromptTemplate,
   buildCandidateAgentTemplateVars,
   buildCandidateVerificationPromptContext,
+  renderPromptTemplateWithVars,
   resolveCandidateAgentGreeting,
 } from './candidateVerificationPrompt.service.js';
 import { getKbPromptContextForExternalAgent } from './kbQuery.service.js';
 
+function bolnaEntityId(doc) {
+  if (!doc) return '';
+  return String(doc._id ?? doc.id ?? '').trim();
+}
+
 /**
- * PATCH the STATIC prompt template onto the candidate agent, then place the call
- * with every per-call value travelling in `user_data`.
+ * Render and PATCH the candidate prompt for THIS call, then place the call with
+ * matching per-call values in `user_data`.
  * @param {Object} p
  * @param {string} p.agentId
  * @param {string} p.formattedPhone - E.164
@@ -67,12 +74,7 @@ export async function initiateCandidateVerificationCall({
     logger.warn(`[KB] prompt context skipped: ${e.message}`);
   }
 
-  // The PATCHed prompt is SHARED, PERMANENT agent state; `user_data` travels with
-  // the call. So the prompt must stay static and every per-call value must ride in
-  // user_data. Baking the candidate's name into the prompt made the agent greet
-  // whichever candidate was PATCHed last — see the 2026-09-03 calls that spoke a
-  // previous candidate's name while user_data held the correct one.
-  const systemPrompt = buildCandidateAgentPromptTemplate();
+  const systemPromptTemplate = buildCandidateAgentPromptTemplate();
   const templateVars = buildCandidateAgentTemplateVars(promptContext, {
     greetingOverride: settings.greetingOverride,
     extraSystemInstructions: extra,
@@ -80,8 +82,8 @@ export async function initiateCandidateVerificationCall({
 
   // additional_instructions is blank whenever no admin extras and no KB context exist,
   // which is the normal case — everything else rendering empty is a bug.
-  const missing = missingTemplateVars(systemPrompt, templateVars, {
-    allowEmpty: ['additional_instructions'],
+  const missing = missingTemplateVars(systemPromptTemplate, templateVars, {
+    allowEmpty: ['candidate_verification_additional_instructions'],
   });
   if (missing.length) {
     const errMsg = `Bolna prompt template has unsupplied placeholders: ${missing.join(', ')}`;
@@ -89,40 +91,40 @@ export async function initiateCandidateVerificationCall({
     return { success: false, error: errMsg };
   }
 
-  // Welcome message keeps its {placeholders} — it is shared state too, and Bolna
-  // fills it per call from the same user_data.
-  const welcomeMessage = resolveCandidateAgentGreeting(promptContext, settings.greetingOverride, {
+  const welcomeTemplate = resolveCandidateAgentGreeting(promptContext, settings.greetingOverride, {
     raw: true,
   });
 
-  // The template is static and per-call data rides in user_data, but that alone is not
-  // enough: Bolna caches the RESOLVED prompt per agent, keyed on prompt content, so
-  // byte-identical bytes get a byte-identical cache hit and the agent keeps reading out
-  // whoever it resolved for first. ensureAgentPrompt appends a unique token per call to
-  // defeat that, and polls until the agent hands the token back.
-  const welcomeMissing = missingTemplateVars(welcomeMessage, templateVars, {
-    allowEmpty: ['additional_instructions'],
+  const welcomeMissing = missingTemplateVars(welcomeTemplate, templateVars, {
+    allowEmpty: ['candidate_verification_additional_instructions'],
   });
   if (welcomeMissing.length) {
     const errMsg = `Bolna welcome template has unsupplied placeholders: ${welcomeMissing.join(', ')}`;
     logger.error(`[Bolna] ${errMsg}`);
     return { success: false, error: errMsg };
   }
+  const systemPrompt = renderPromptTemplateWithVars(systemPromptTemplate, templateVars);
+  const welcomeMessage = renderPromptTemplateWithVars(welcomeTemplate, templateVars);
 
   const userData = {
-    candidate_name: promptContext.candidate_name,
+    candidate_verification_applicant_name: promptContext.candidate_name,
+    candidate_verification_job_title: promptContext.job_title,
+    candidate_verification_company_name: promptContext.company_name,
     candidate_phone: promptContext.candidate_phone,
     candidate_email: promptContext.candidate_email,
     candidate_email_spoken: promptContext.candidate_email_spoken,
     candidate_location: promptContext.candidate_location,
     candidate_skills: promptContext.candidate_skills || '',
-    job_title: promptContext.job_title,
-    company_name: promptContext.company_name,
     application_date: promptContext.application_date,
     matched_jobs_count: promptContext.matched_jobs_count ?? 0,
     matched_jobs_spoken: promptContext.matched_jobs_spoken || '',
-    // last: these carry the template's own empty-value fallbacks (e.g.
-    // company_name -> 'our company') and must not be overwritten by a blank ctx field.
+    // Legacy Bolna keys (initiateCall + remote disposition specs may still bind these).
+    // Canonical prompt/extraction fields use candidate_verification_* above and in templateVars.
+    candidate_name: promptContext.candidate_name,
+    job_title: promptContext.job_title,
+    company_name: promptContext.company_name,
+    // last: templateVars carry empty-value fallbacks (e.g. company -> 'our company')
+    // and must not be overwritten by a blank ctx field.
     ...templateVars,
   };
 
@@ -132,6 +134,27 @@ export async function initiateCandidateVerificationCall({
     return { success: false, error: payloadCheck.error };
   }
 
+  const dialLogContext = {
+    candidateId: bolnaEntityId(candidate),
+    applicationId: bolnaEntityId(application),
+    jobId: bolnaEntityId(job),
+    canonicalJobTitle: promptContext.job_title,
+    agentId,
+    userDataBytes: payloadCheck.bytes,
+  };
+
+  const jobTitleCheck = assertQ2LineMatchesJobTitle({
+    canonicalJobTitle: promptContext.job_title,
+    q2Line: templateVars.candidate_verification_q2_line,
+    userDataJobTitle: userData.candidate_verification_job_title,
+  });
+  if (!jobTitleCheck.ok) {
+    logger.error(`[Bolna] ${jobTitleCheck.error}`, dialLogContext);
+    return { success: false, error: jobTitleCheck.error };
+  }
+
+  logger.info('[Bolna] candidate verification pre-dial checks passed', dialLogContext);
+
   const prepared = await prepareAgentPromptForCall(
     bolnaService,
     agentId,
@@ -139,9 +162,10 @@ export async function initiateCandidateVerificationCall({
     welcomeMessage,
     {},
     async ({ renderToken }) => {
-      logger.info(
-        `[Bolna] candidate call agent=${agentId} promptToken=${renderToken} userDataBytes=${payloadCheck.bytes}`
-      );
+      logger.info('[Bolna] candidate verification dialing', {
+        ...dialLogContext,
+        promptToken: renderToken,
+      });
       return bolnaService.initiateCall({
         phone: formattedPhone,
         // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
@@ -162,6 +186,13 @@ export async function initiateCandidateVerificationCall({
     // candidate, so the call would reach the right person and read out the wrong data.
     return { success: false, error: `Bolna agent could not be prepared before the call: ${prepared.error}` };
   }
+
+  const executionId = prepared.dialResult?.executionId;
+  logger.info('[Bolna] candidate verification dial completed', {
+    ...dialLogContext,
+    promptToken: prepared.renderToken,
+    executionId: executionId ? String(executionId) : undefined,
+  });
 
   return prepared.dialResult;
 }

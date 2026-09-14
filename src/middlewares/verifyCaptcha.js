@@ -100,3 +100,9 @@ export async function verifyCaptcha(req, res, next) {
   if (!verified) return reject(res, 'Captcha verification failed', 'CAPTCHA_INVALID');
   return next();
 }
+
+/** Skip captcha when an administrator is creating a user; require it for anonymous registration. */
+export async function verifyCaptchaUnlessAuthenticated(req, res, next) {
+  if (req.user) return next();
+  return verifyCaptcha(req, res, next);
+}

@@ -10,6 +10,8 @@ import requirePermissionIfAuthenticated from '../../middlewares/requirePermissio
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
 import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
 import { authLoginLimiter, authStrictFlowLimiter } from '../../middlewares/rateLimiter.js';
+import { uploadPublicCandidateRegistration } from '../../middlewares/upload.js';
+import { verifyCaptchaUnlessAuthenticated } from '../../middlewares/verifyCaptcha.js';
 
 const router = express.Router();
 
@@ -35,6 +37,8 @@ router.post(
   '/register',
   authStrictFlowLimiter,
   optionalAuth(),
+  verifyCaptchaUnlessAuthenticated,
+  uploadPublicCandidateRegistration,
   validate(authValidation.register),
   authController.register
 );

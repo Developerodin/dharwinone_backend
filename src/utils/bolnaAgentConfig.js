@@ -15,8 +15,9 @@ export function normalizeBolnaAgentId(id) {
  * fire for the failure it was written to catch.
  *
  * `allowEmpty` names the keys that are legitimately blank — measured against live data,
- * that is only `additional_instructions` (empty on 60/60 applications; the job flow has
- * none). Anything else rendering empty is a bug we want to hear about before dialling.
+ * that is only `candidate_verification_additional_instructions` on applicant calls (empty
+ * on most applications; the job flow has none). Anything else rendering empty is a bug we
+ * want to hear about before dialling.
  */
 /** Largest user_data payload known to work on this Bolna account (~4.2 KB). */
 export const MAX_BOLNA_USER_DATA_BYTES = 8000;
@@ -36,6 +37,37 @@ export function assertUserDataWithinLimit(userData) {
     };
   }
   return { ok: true, bytes };
+}
+
+/**
+ * Fail closed before dial: Question 2 must reference the same title as user_data.candidate_verification_job_title.
+ * @param {{ canonicalJobTitle: string, q2Line: string, userDataJobTitle: string }} p
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function assertQ2LineMatchesJobTitle({ canonicalJobTitle, q2Line, userDataJobTitle }) {
+  const canonical = String(canonicalJobTitle ?? '').trim();
+  if (!canonical) {
+    return {
+      ok: false,
+      error: 'Candidate verification call blocked: missing job title for this application.',
+    };
+  }
+  if (String(userDataJobTitle ?? '').trim() !== canonical) {
+    return {
+      ok: false,
+      error:
+        'Candidate verification call blocked: user_data candidate_verification_job_title does not match the canonical job title.',
+    };
+  }
+  const q2 = String(q2Line ?? '');
+  if (!q2.includes(canonical)) {
+    return {
+      ok: false,
+      error:
+        'Candidate verification call blocked: candidate_verification_q2_line does not include the canonical job title.',
+    };
+  }
+  return { ok: true };
 }
 
 export function missingTemplateVars(template, vars, { allowEmpty = [] } = {}) {
