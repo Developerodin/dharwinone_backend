@@ -186,11 +186,11 @@ const createInternalMeeting = async (body, userId) => {
   return meetingObj;
 };
 
-const queryInternalMeetings = async (filter, options, currentUser = null) => {
+const queryInternalMeetings = async (filter, options, currentUser = null, scopeOptions = {}) => {
   let scopedFilter = filter;
   let actorEmails = [];
   if (currentUser) {
-    const { filter: scope } = await internalMeetingScope(currentUser, 'read');
+    const { filter: scope } = await internalMeetingScope(currentUser, 'read', scopeOptions);
     scopedFilter = { $and: [filter || {}, scope] };
     actorEmails = await resolveActorEmails(currentUser);
   }

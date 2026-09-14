@@ -211,7 +211,12 @@ const meetingActorQuery = async (actor = {}) => {
   const actorId = toId(actor._id || actor.id);
   const emails = await resolveActorEmails(actor);
   const or = [];
-  if (actorId) or.push({ createdBy: actorId });
+  if (actorId) {
+    const idStr = actorId.toString();
+    or.push({ createdBy: actorId });
+    or.push({ 'recruiter.id': idStr });
+    or.push({ 'agents.id': idStr });
+  }
   or.push(
     ...emailFieldClauses(
       ['hosts.email', 'candidate.email', 'recruiter.email', 'agents.email', 'emailInvites'],
@@ -271,7 +276,14 @@ const INTERVIEW_FULL_ACCESS = ['interviews.read', 'interviews.create', 'intervie
  * @param {'read'|'write'} action
  * @returns {Promise<{ filter: object, scopeDebug: object }>}
  */
-const meetingScope = async (actor = {}, action = 'read') => {
+const meetingScope = async (actor = {}, action = 'read', options = {}) => {
+  if (options.listScope === 'mine') {
+    const actorQuery = await meetingActorQuery(actor);
+    return {
+      filter: actorQuery || EMPTY_SCOPE,
+      scopeDebug: { scopeType: 'meeting', action, role: 'list:mine' },
+    };
+  }
   if (await hasAllApiPermissions(actor, INTERVIEW_FULL_ACCESS)) {
     return { filter: {}, scopeDebug: { scopeType: 'meeting', action, role: 'interviews.full:all' } };
   }
@@ -308,7 +320,14 @@ const internalMeetingActorQuery = async (actor = {}) => {
  * @param {'read'|'write'} action
  * @returns {Promise<{ filter: object, scopeDebug: object }>}
  */
-const internalMeetingScope = async (actor = {}, action = 'read') => {
+const internalMeetingScope = async (actor = {}, action = 'read', options = {}) => {
+  if (options.listScope === 'mine') {
+    const actorQuery = await internalMeetingActorQuery(actor);
+    return {
+      filter: actorQuery || EMPTY_SCOPE,
+      scopeDebug: { scopeType: 'internalMeeting', action, role: 'list:mine' },
+    };
+  }
   if (await hasAllApiPermissions(actor, MEETING_ALL_ACCESS)) {
     return { filter: {}, scopeDebug: { scopeType: 'internalMeeting', action, role: 'meetings.all:all' } };
   }

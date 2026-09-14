@@ -710,10 +710,10 @@ const queryMyInterviews = async (currentUser, options = {}) => {
   return result;
 };
 
-const queryMeetings = async (filter, options, currentUser = null) => {
+const queryMeetings = async (filter, options, currentUser = null, scopeOptions = {}) => {
   let scopedFilter = filter;
   if (currentUser) {
-    const { filter: scope } = await meetingScope(currentUser, 'read');
+    const { filter: scope } = await meetingScope(currentUser, 'read', scopeOptions);
     scopedFilter = { $and: [filter || {}, scope] };
   }
   const result = await Meeting.paginate(scopedFilter, {

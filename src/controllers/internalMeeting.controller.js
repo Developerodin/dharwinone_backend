@@ -20,7 +20,9 @@ const create = catchAsync(async (req, res) => {
 const list = catchAsync(async (req, res) => {
   const filter = buildInternalMeetingsMongoFilter(req.query);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const result = await internalMeetingService.queryInternalMeetings(filter, options, req.user);
+  const scopeOptions =
+    String(req.query.scope || '').trim().toLowerCase() === 'mine' ? { listScope: 'mine' } : {};
+  const result = await internalMeetingService.queryInternalMeetings(filter, options, req.user, scopeOptions);
   res.send(result);
 });
 

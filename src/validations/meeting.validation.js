@@ -119,6 +119,8 @@ const meetingFilterQueryKeys = {
   /* Ordering is checked in boundedDateRange, not with Joi.ref('dateFrom') — an
      unresolvable ref makes a dateTo-only query fail, and either bound alone is valid. */
   dateTo: Joi.date().iso(),
+  /** When "mine", list only meetings the caller created, hosts, or is invited to — even with tenant-wide interview access. */
+  scope: Joi.string().valid('mine').optional(),
   sortBy: Joi.string(),
   limit: Joi.number().integer().min(1).max(100),
   page: Joi.number().integer().min(1),

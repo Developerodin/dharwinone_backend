@@ -63,6 +63,7 @@ const getInternalMeetings = {
     status: Joi.string().valid('scheduled', 'ended', 'cancelled'),
     dateFrom: Joi.date().iso().allow('', null),
     dateTo: Joi.date().iso().allow('', null),
+    scope: Joi.string().valid('mine').optional(),
     // ponytail: order by the meeting's own time, not row insert time — backfilled/seeded
     // rows carry a fresh createdAt and would otherwise jump to the top of the list.
     sortBy: Joi.string().default('-scheduledAt'),
