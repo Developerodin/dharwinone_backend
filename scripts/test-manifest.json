@@ -270,6 +270,7 @@
   "./src/utils/__tests__/candidateExtraction.test.js",
   "./src/utils/__tests__/documentVerificationMerge.test.js",
   "./src/utils/__tests__/documentVersionSlot.test.js",
+  "./src/services/__tests__/jobApplicationResumeSnapshot.test.js",
   "./src/utils/__tests__/employeeStatus.test.js",
   "./src/utils/__tests__/featureFlags.test.js",
   "./src/utils/__tests__/identityFields.test.js",

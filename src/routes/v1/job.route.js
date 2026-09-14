@@ -4,7 +4,7 @@ import optionalAuth from '../../middlewares/optionalAuth.js';
 import { jobsBrowseLimiter } from '../../middlewares/rateLimiter.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
-import { uploadSingle } from '../../middlewares/upload.js';
+import { uploadSingle, uploadJobApplicationFiles } from '../../middlewares/upload.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
 
@@ -81,7 +81,7 @@ router
 
 router
   .route('/browse/:jobId/apply')
-  .post(auth(), validate(jobValidation.browseJob), jobController.browseApply);
+  .post(auth(), uploadJobApplicationFiles, validate(jobValidation.browseApplyToJob), jobController.browseApply);
 
 router
   .route('/:jobId/apply')

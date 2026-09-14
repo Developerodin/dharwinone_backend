@@ -19,6 +19,7 @@ import {
 } from './applicantQuery.service.js';
 import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/jobLocation.util.js';
 import { collationForSortBy } from '../utils/mongoCollation.js';
+import { captureResumeSnapshot } from './jobApplicationResumeSnapshot.service.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1193,7 +1194,7 @@ const isApplicationDeadlinePast = (deadline) => {
   return Date.now() > endOfDeadlineDayUtc.getTime();
 };
 
-const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser) => {
+const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser, resumeOptions = {}) => {
   const job = await getJobById(jobId);
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
@@ -1223,6 +1224,9 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
   if (existing) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Candidate has already applied to this job');
   }
+  const submittedResume = await captureResumeSnapshot(candidate, {
+    version: resumeOptions.version,
+  });
   const application = await JobApplication.create({
     job: jobId,
     candidate: candidateId,
@@ -1231,6 +1235,7 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser)
     // leaves this null (external). Public apply also leaves it null. Drives the internal/external badge.
     applicantUser: isSelfApply ? userId : null,
     status: 'Applied',
+    ...(submittedResume ? { submittedResume } : {}),
   });
   await syncReferralPipelineAfterJobApplication(jobId, candidateId, job);
   await application.populate([{ path: 'candidate', select: 'fullName email' }, { path: 'job', select: 'title' }]);
@@ -1461,7 +1466,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
   // Handle file uploads to S3 and build candidate.documents entries that match documentSchema.
   // Earlier shape ({ name, url } and uploadResult.fileUrl) silently dropped the resume because
   // uploadFileToS3 returns `url` (not fileUrl) and the candidate doc schema uses `label`, not `name`.
-  let resumeDoc = null;
+  let resumeUploadMeta = null;
   let resumeSkills = [];
   let resumeExperiences = [];
   let resumeQualifications = [];
@@ -1495,15 +1500,12 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     const { uploadFileToS3 } = await import('./upload.service.js');
     const resumeFile = files.resume[0];
     const r = await uploadFileToS3(resumeFile, user._id, 'candidate-resumes');
-    resumeDoc = {
-      type: 'CV/Resume',
-      label: 'Resume',
+    resumeUploadMeta = {
       url: r.url,
       key: r.key,
       originalName: r.originalName,
       size: r.size,
       mimeType: r.mimeType,
-      status: 0,
     };
     // AI entry mode only: fallback extraction when the client did not supply parse-prefill skills.
     if (entryMode === 'ai' && resumeSkills.length === 0) {
@@ -1560,9 +1562,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       socialLinks: resumeSocialLinks,
     };
 
-    const newDocs = [...(resumeDoc ? [resumeDoc] : []), ...documentDocs];
-    if (newDocs.length > 0) {
-      candidateData.documents = newDocs;
+    if (documentDocs.length > 0) {
+      candidateData.documents = documentDocs;
     }
 
     try {
@@ -1594,10 +1595,8 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
       logger.info('✅ Candidate phone updated');
     }
     
-    // Add new documents if provided
-    const newDocs = [...(resumeDoc ? [resumeDoc] : []), ...documentDocs];
-    if (newDocs.length > 0) {
-      candidate.documents = [...(candidate.documents || []), ...newDocs];
+    if (documentDocs.length > 0) {
+      candidate.documents = [...(candidate.documents || []), ...documentDocs];
       await candidate.save();
       logger.info('✅ Candidate documents updated');
     }
@@ -1646,6 +1645,17 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     }
   }
 
+  if (resumeUploadMeta && candidate) {
+    // eslint-disable-next-line import/no-cycle -- lazy import; employee.service also pulls offer.service
+    const { attachVersionedSlotUploadToCandidate } = await import('./employee.service.js');
+    await attachVersionedSlotUploadToCandidate(candidate, 'resume', resumeUploadMeta, user._id);
+    candidate = await Employee.findById(candidate._id);
+  }
+
+  const submittedResume = candidate
+    ? await captureResumeSnapshot(candidate, { actorId: user._id })
+    : undefined;
+
   // Create job application
   application = await JobApplication.create({
     job: jobId,
@@ -1653,6 +1663,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     appliedBy: user._id,
     status: 'Applied',
     coverLetter: typeof coverLetter === 'string' ? coverLetter : '',
+    ...(submittedResume ? { submittedResume } : {}),
   });
   logger.info('✅ Job application created:', { _id: application._id, candidate: application.candidate, job: application.job });
 

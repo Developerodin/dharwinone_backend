@@ -367,6 +367,16 @@ const browseJob = {
   }),
 };
 
+const browseApplyToJob = {
+  params: Joi.object().keys({
+    jobId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    ref: Joi.string().optional().trim().allow(''),
+    resumeVersion: Joi.number().integer().min(1).optional(),
+  }),
+};
+
 // Public job validations
 const listPublicJobs = {
   query: Joi.object().keys({
@@ -524,6 +534,7 @@ export {
   createJobFromTemplate,
   browseJobs,
   browseJob,
+  browseApplyToJob,
   listPublicJobs,
   getPublicJob,
   parsePublicResume,

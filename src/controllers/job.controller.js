@@ -472,7 +472,55 @@ const browseApply = catchAsync(async (req, res) => {
     });
   }
 
-  const application = await applyCandidateToJob(jobId, candidate._id, userId, req.user);
+  const resumeVersionRaw = req.body?.resumeVersion;
+  const resumeVersion =
+    resumeVersionRaw != null && String(resumeVersionRaw).trim() !== ''
+      ? Number(resumeVersionRaw)
+      : undefined;
+  if (
+    resumeVersion != null &&
+    (!Number.isInteger(resumeVersion) || resumeVersion < 1)
+  ) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid resume version');
+  }
+  const resumeFile = req.files?.resume?.[0];
+  if (resumeFile && resumeVersion != null) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Provide either resumeVersion or a resume file, not both');
+  }
+
+  let resolvedResumeVersion = resumeVersion;
+  if (resumeFile) {
+    const { uploadFileToS3 } = await import('../services/upload.service.js');
+    // eslint-disable-next-line import/no-cycle -- lazy import; employee.service also pulls offer.service
+    const { attachVersionedSlotUploadToCandidate } = await import('../services/employee.service.js');
+    const { latestVersionForSlot, DOCUMENT_VERSION_SLOTS } = await import('../utils/documentVersionSlot.js');
+    const uploaded = await uploadFileToS3(resumeFile, userId, 'candidate-resumes');
+    await attachVersionedSlotUploadToCandidate(
+      candidate,
+      'resume',
+      {
+        url: uploaded.url,
+        key: uploaded.key,
+        originalName: uploaded.originalName,
+        size: uploaded.size,
+        mimeType: uploaded.mimeType,
+      },
+      userId,
+    );
+    candidate = await Employee.findById(candidate._id);
+    if (!candidate) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+    }
+    const latest = latestVersionForSlot(candidate.documentVersions || [], DOCUMENT_VERSION_SLOTS.RESUME);
+    if (!latest?.version) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Resume could not be saved');
+    }
+    resolvedResumeVersion = Number(latest.version);
+  }
+
+  const application = await applyCandidateToJob(jobId, candidate._id, userId, req.user, {
+    version: resolvedResumeVersion,
+  });
   const job = await getJobById(jobId);
   const referralRef = req.body?.ref;
   await applyJobReferralFromRef({

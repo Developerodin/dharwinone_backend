@@ -313,7 +313,12 @@ const buildDocumentVersionResponse = (row) => {
 const isOwnerOrAdmin = (user, candidate) => {
   if (!candidate) return false;
   const hasManage = user?.canManageCandidates === true;
-  return hasManage || String(candidate.owner) === String(user?.id || user?._id);
+  if (hasManage) return true;
+  const userId = String(user?.id || user?._id);
+  if (String(candidate.owner) === userId) return true;
+  const emailNorm = String(user?.email || '').toLowerCase().trim();
+  const candidateEmail = String(candidate.email || '').toLowerCase().trim();
+  return Boolean(emailNorm) && emailNorm === candidateEmail;
 };
 
 const inferCompanyEmailProvider = (email) => {

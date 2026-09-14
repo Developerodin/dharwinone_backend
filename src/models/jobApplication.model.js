@@ -25,6 +25,17 @@ const jobApplicationSchema = new mongoose.Schema(
       default: 'Applied',
     },
     coverLetter: { type: String, trim: true },
+    /** Immutable resume file captured at apply time (versioned slot snapshot). */
+    submittedResume: {
+      slot: { type: String, trim: true },
+      version: { type: Number },
+      key: { type: String, trim: true },
+      documentUrl: { type: String, trim: true },
+      originalName: { type: String, trim: true },
+      mimeType: { type: String, trim: true },
+      size: { type: Number },
+      capturedAt: { type: Date },
+    },
     appliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     /** P3: explicit tenant boundary. Denormalized from job.tenantId at creation time. */
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
