@@ -584,7 +584,19 @@ const startRecording = async (roomName) => {
 
   // Phase 1: insert pending row FIRST so DB always knows about every recording
   // attempt, even if the egress request below fails or the process dies between.
-  const pending = await recordingSyncService.createPending({ meetingId: roomName });
+  const roomDoc = await getMeetingByMeetingId(roomName);
+  let interviewId = null;
+  let meetingKind = null;
+  if (roomDoc) {
+    meetingKind = roomDoc.meetingKind === 'internal' ? 'internal' : 'interview';
+    interviewId = roomDoc._id || roomDoc.id || null;
+  }
+  const pending = await recordingSyncService.createPending({
+    meetingId: roomName,
+    interviewId,
+    meetingKind,
+    tenantId: roomDoc?.tenantId,
+  });
 
   let egressInfo;
   try {
@@ -871,6 +883,65 @@ const isLiveKitEgressRecorderParticipant = (p) => {
   if (p.permission?.recorder === true) return true;
   return isLiveKitEgressRecorderIdentity(p.identity);
 };
+
+/** ParticipantInfo.Kind AGENT — livekit.ParticipantInfo (proto). */
+const isLiveKitAgentParticipant = (p) => {
+  if (!p) return false;
+  if (p.kind != null) {
+    const k = typeof p.kind === 'number' ? p.kind : Number(p.kind);
+    if (k === 4 || p.kind === 'AGENT') return true;
+  }
+  return false;
+};
+
+/**
+ * D29 / F17: humans still in the room after scheduled end block auto-delete until hard cap.
+ * @param {{ humanCount: number, now: number, scheduledEndMs: number, hardCapMinutes: number }} p
+ * @returns {'end' | 'wait' | 'end_hard_cap'}
+ */
+export function decideAutoEnd({ humanCount, now, scheduledEndMs, hardCapMinutes }) {
+  const capMs = Math.max(0, Number(hardCapMinutes) || 0) * 60 * 1000;
+  if (now >= scheduledEndMs + capMs) {
+    return 'end_hard_cap';
+  }
+  if (humanCount > 0) {
+    return 'wait';
+  }
+  return 'end';
+}
+
+/**
+ * Plain LiveKit disconnect for server-side use (e.g. stopping the transcription agent). Unlike `removeParticipant`
+ * (host deny), it records no rejection and leaves admitted identities untouched.
+ * @param {string} roomName
+ * @param {string} identity
+ */
+export async function disconnectParticipant(roomName, identity) {
+  if (!roomService) throw new ApiError(httpStatus.SERVICE_UNAVAILABLE, 'Room service not available');
+  await roomService.removeParticipant(String(roomName).trim(), identity);
+}
+
+/**
+ * Count non-agent, non-egress participants. Room missing → 0.
+ * @param {string} roomName
+ * @returns {Promise<number>}
+ */
+export async function countHumanParticipants(roomName) {
+  if (!roomService) return 0;
+  const rid = String(roomName || '').trim();
+  if (!rid) return 0;
+  try {
+    const participants = (await roomService.listParticipants(rid)) || [];
+    return participants.filter((p) => !isLiveKitEgressRecorderParticipant(p) && !isLiveKitAgentParticipant(p)).length;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/not found|does not exist|no room/i.test(msg)) {
+      return 0;
+    }
+    logger.warn('[LiveKit] countHumanParticipants failed', { roomName: rid, error: msg });
+    return 0;
+  }
+}
 
 /**
  * Get waiting participants (participants who can subscribe but not publish)

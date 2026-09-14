@@ -23,15 +23,27 @@ import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
 import { meetingScope } from './visibilityScope.service.js';
-import { deleteInterviewRoom } from './livekit.service.js';
+import config from '../config/config.js';
+import Recording, { RECORDING_TERMINAL } from '../models/recording.model.js';
+import { countHumanParticipants, decideAutoEnd, deleteInterviewRoom } from './livekit.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { logActivity as logRecruiterActivity } from './recruiterActivity.service.js';
 import { dispatchReminder, isRetryableCategory } from './reminderDispatcher.js';
 import {
-  APPLICATION_STATUSES,
   isAllowedTransition,
   getInterviewSchedulingBlockReason,
 } from '../constants/atsPipeline.js';
+import {
+  deriveSchedulingLinkage,
+  assertInterviewLanguage,
+  defaultRoundIndexForApplication,
+  resolveInterviewApplication,
+  normalizeLinkageStatus,
+  linkageRevisionQuery,
+} from './interviewLinkage.service.js';
+import { hasAllApiPermissions } from '../utils/permissionCheck.js';
+import * as jobApplicationService from './jobApplication.service.js';
+import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 /** Minutes before the start that an interview reminder becomes due. */
@@ -57,10 +69,8 @@ export const computeRemindAt = (scheduledAt, now = new Date()) => {
 };
 const reminderLeaseTtlMs = () => Number(process.env.REMINDER_LEASE_TTL_MS) || 600000;
 
-/** Same pipeline rows createPlacementFromInterview operates on (retry includes Offered/Hired). */
-const PIPELINE_STATUSES = APPLICATION_STATUSES.filter((status) =>
-  ['Applied', 'Screening', 'Interview', 'Offered', 'Hired'].includes(status)
-);
+/** Stable client code (ApiError errorCode / linkageWarning) for interviews without a resolvable application. */
+const INTERVIEW_NOT_LINKED = 'interview_not_linked';
 
 const escapeRegexForJobTitle = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -109,126 +119,29 @@ const assertInterviewSchedulingAllowed = async (candidateId, jobPosition) => {
 };
 
 /**
- * Resolve job application for an interview's candidate + jobPosition (shared forward / rollback).
+ * Resolve the job application for an interview (plan §8.6 strict resolver; any application status).
  * @param {object} meeting - Meeting doc
- * @param {{ createIfMissing?: boolean }} [options]
  * @returns {Promise<{ candidateObjId: import('mongoose').Types.ObjectId|null, jobId: string|null, application: import('mongoose').Document|null }>}
  */
-async function resolveJobApplicationForInterviewMeeting(meeting, options = {}) {
-  const { createIfMissing = true } = options;
-  const candidateId = meeting.candidate?.id;
-  if (!candidateId || !mongoose.Types.ObjectId.isValid(candidateId)) {
-    return { candidateObjId: null, jobId: null, application: null };
-  }
-
-  const candidateObjId = new mongoose.Types.ObjectId(candidateId);
-
-  let jobId = null;
-  const jobPositionVal = (meeting.jobPosition || '').trim();
-
-  if (/^[0-9a-fA-F]{24}$/.test(jobPositionVal)) {
-    jobId = jobPositionVal;
-  } else if (jobPositionVal) {
-    const job = await Job.findOne({
-      title: { $regex: new RegExp(`^${jobPositionVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-    })
-      .select('_id')
-      .lean();
-    jobId = job?._id?.toString() || null;
-  }
-
-  let application = null;
-
-  if (jobId) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      job: new mongoose.Types.ObjectId(jobId),
-      status: { $in: PIPELINE_STATUSES },
-    });
-  }
-
-  if (!application) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      status: { $in: PIPELINE_STATUSES },
-    }).sort({ updatedAt: -1 });
-    if (application?.job) {
-      jobId = application.job._id?.toString?.() ?? String(application.job);
-    }
-  }
-
-  // Re-open path: interview result flipped back to selected after rejection leaves
-  // JobApplication in Rejected — still the same row createPlacementFromInterview must target.
-  if (!application && jobId) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      job: new mongoose.Types.ObjectId(jobId),
-      status: 'Rejected',
-    });
-  }
-
-  if (!application) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      status: 'Rejected',
-    }).sort({ updatedAt: -1 });
-    if (application?.job) {
-      jobId = application.job._id?.toString?.() ?? String(application.job);
-    }
-  }
-
-  if (!application && jobId && createIfMissing) {
-    try {
-      const existing = await JobApplication.findOne({
-        candidate: candidateObjId,
-        job: new mongoose.Types.ObjectId(jobId),
-      });
-      if (existing && PIPELINE_STATUSES.includes(existing.status)) {
-        application = existing;
-      } else if (!existing) {
-        application = await JobApplication.create({
-          job: new mongoose.Types.ObjectId(jobId),
-          candidate: candidateObjId,
-          status: 'Interview',
-        });
-        logger.info(
-          '[resolveJobApplicationForInterviewMeeting] Created JobApplication for candidate %s + job %s',
-          candidateId,
-          jobId
-        );
-      }
-    } catch (err) {
-      logger.warn('[resolveJobApplicationForInterviewMeeting] Could not create JobApplication:', err?.message || err);
-      throw new ApiError(httpStatus.BAD_REQUEST, `Could not link to a job application: ${err?.message || String(err)}`);
-    }
-  }
-
+async function resolveJobApplicationForInterviewMeeting(meeting) {
+  const { candidateObjId, jobId, application } = await resolveInterviewApplication(meeting);
   return { candidateObjId, jobId, application };
 }
 
 /**
- * When rollback needs an application row that left PIPELINE_STATUSES (e.g. Rejected), widen lookup.
+ * Rollback/rejection side effects use the same strict resolver. There is deliberately no "latest application
+ * for this candidate" fallback: for an unlinked interview it picks another job's application and resets or
+ * deletes that job's offer. Unlinked → the caller skips the side effect and reports INTERVIEW_NOT_LINKED.
  */
 async function resolveJobApplicationForInterviewRollback(meeting) {
-  const resolved = await resolveJobApplicationForInterviewMeeting(meeting, {
-    createIfMissing: false,
-  });
-  const { candidateObjId, jobId } = resolved;
-  let { application } = resolved;
-  if (application || !candidateObjId) {
-    return { candidateObjId, jobId, application };
-  }
-  if (jobId) {
-    application = await JobApplication.findOne({
-      candidate: candidateObjId,
-      job: new mongoose.Types.ObjectId(jobId),
-    });
-  }
-  if (!application) {
-    application = await JobApplication.findOne({ candidate: candidateObjId }).sort({ updatedAt: -1 });
-  }
-  return { candidateObjId, jobId, application };
+  return resolveJobApplicationForInterviewMeeting(meeting);
 }
+
+const skipUnlinkedSideEffect = (fnName, meeting, candidateObjId) => {
+  if (!candidateObjId) return null;
+  logger.warn('[%s] Interview %s is not linked to an application — application side effect skipped', fnName, meeting._id);
+  return INTERVIEW_NOT_LINKED;
+};
 
 /**
  * Undo Offers/placement pipeline created when result was Selected: delete Pending (etc.) placement + offer,
@@ -238,9 +151,8 @@ async function rollbackInterviewSelectionPipeline(meeting) {
   let syncCandidateId = null;
   try {
     const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
-    if (!candidateObjId || !application) {
-      logger.info('[rollbackInterviewSelectionPipeline] No application — nothing to roll back');
-      return;
+    if (!application) {
+      return skipUnlinkedSideEffect('rollbackInterviewSelectionPipeline', meeting, candidateObjId);
     }
 
     const offer = await Offer.findOne({ jobApplication: application._id });
@@ -298,9 +210,8 @@ async function applyInterviewRejectionToApplication(meeting) {
   let syncCandidateId = null;
   try {
     const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
-    if (!candidateObjId || !application) {
-      logger.info('[applyInterviewRejectionToApplication] No application — nothing to update');
-      return;
+    if (!application) {
+      return skipUnlinkedSideEffect('applyInterviewRejectionToApplication', meeting, candidateObjId);
     }
     if (application.status === 'Rejected') {
       return;
@@ -339,9 +250,8 @@ async function reopenApplicationAfterInterviewRejection(meeting) {
   let syncCandidateId = null;
   try {
     const { candidateObjId, application } = await resolveJobApplicationForInterviewRollback(meeting);
-    if (!candidateObjId || !application) {
-      logger.info('[reopenApplicationAfterInterviewRejection] No application — nothing to update');
-      return;
+    if (!application) {
+      return skipUnlinkedSideEffect('reopenApplicationAfterInterviewRejection', meeting, candidateObjId);
     }
     if (application.status !== 'Rejected') {
       return;
@@ -495,15 +405,92 @@ const sendInvitationEmails = async (meeting, emails, { rescheduled = false } = {
  * @param {string} userId - Created by user id
  * @returns {Promise<Object>} Meeting with publicMeetingUrl
  */
+const interviewApplicationRequired = () =>
+  String(process.env.INTERVIEW_APPLICATION_REQUIRED || 'false').toLowerCase() === 'true';
+
+const INTERVIEW_FULL_ACCESS = ['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete'];
+
+const transitionApplicationToInterview = async (application, userId, meeting, jobObjId, candId) => {
+  if (!application || !['Applied', 'Screening'].includes(application.status)) {
+    return;
+  }
+  const statusBefore = application.status;
+  application.status = 'Interview';
+  await application.save();
+  await syncReferralPipelineStatusForCandidate(candId).catch((err) =>
+    logger.warn('referral pipeline sync after interview schedule:', err?.message || err)
+  );
+  writeAtsAudit(
+    String(userId),
+    {
+      action: ActivityActions.JOB_APPLICATION_UPDATE,
+      entityType: EntityTypes.JOB_APPLICATION,
+      entityId: String(application._id),
+      metadata: {
+        source: 'system',
+        trigger: 'interview_scheduled',
+        statusBefore,
+        statusAfter: 'Interview',
+        related: {
+          jobId: String(jobObjId),
+          candidateId: String(candId),
+          meetingId: String(meeting._id),
+        },
+      },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit jobApplication.interview_scheduled:', err?.message || err));
+};
+
 const createMeeting = async (body, userId) => {
-  await assertInterviewSchedulingAllowed(body.candidate?.id, body.jobPosition);
+  // Transition window (plan §8.5.6, D5): a client that does not send applicationId keeps today's eligibility
+  // rules (no application for this candidate + job → 400; Rejected/Offered/Hired → 400). Otherwise it could
+  // create interviews that can never be placed (409 interview_not_linked) before the linkage UI exists.
+  if (!body.applicationId) {
+    await assertInterviewSchedulingAllowed(body.candidate?.id, body.jobPosition);
+  }
+  const linkage = await deriveSchedulingLinkage({
+    applicationId: body.applicationId,
+    candidate: body.candidate,
+    jobPosition: body.jobPosition,
+  });
+
+  if (interviewApplicationRequired() && body.candidate?.id && !linkage.applicationId) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'applicationId is required for interview scheduling');
+  }
+
+  const interviewLanguage = assertInterviewLanguage(body.interviewLanguage);
+  let round = body.round;
+  if (linkage.applicationId && (!round || round.index == null)) {
+    round = { ...(round || {}), index: await defaultRoundIndexForApplication(linkage.applicationId) };
+  }
+  if (round?.type && !INTERVIEW_ROUND_TYPES.includes(round.type)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
+  }
 
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
   const creator = await User.findById(userId).select('adminId').lean();
   const tenantId = creator?.adminId || userId;
+  const linkageFields = {
+    interviewLanguage,
+    round,
+    applicationId: linkage.applicationId,
+    jobId: linkage.jobId,
+    candidateId: linkage.candidateId,
+    linkageStatus: linkage.linkageStatus,
+    linkageSource: linkage.linkageSource,
+    jobPosition: linkage.jobPosition ?? body.jobPosition,
+  };
+  if (linkage.linkageStatus === 'verified' || linkage.linkageStatus === 'verified_exact_ids') {
+    linkageFields.linkageVerifiedAt = new Date();
+    linkageFields.linkageVerifiedBy = userId;
+  }
+
   const meeting = await Meeting.create({
     ...body,
+    ...linkageFields,
     durationMinutes,
     meetingId,
     roomName: meetingId, // same as meetingId for LiveKit; satisfies legacy index roomName_1
@@ -533,64 +520,13 @@ const createMeeting = async (body, userId) => {
     },
   }).catch((err) => logger.warn('logRecruiterActivity interview_scheduled:', err?.message || err));
 
-  // Update JobApplication to Interview when scheduling (candidate + job present)
   const candId = meeting.candidate?.id;
-  const jobPos = (meeting.jobPosition || '').trim();
-  if (candId && mongoose.Types.ObjectId.isValid(candId) && jobPos) {
-    let jobObjId = null;
-    if (/^[0-9a-fA-F]{24}$/.test(jobPos)) {
-      // B6 fix: confirm the job still exists before referencing it. A bare ObjectId cast
-      // could leave the Meeting / JobApplication referencing a deleted job (silent inconsistency).
-      const j = await Job.findById(jobPos).select('_id').lean();
-      jobObjId = j?._id || null;
-      if (!jobObjId) {
-        logger.warn(`createMeeting: jobPosition ${jobPos} resolved to no existing Job; skipping JobApplication transition`);
-      }
-    } else {
-      const j = await Job.findOne({ title: { $regex: new RegExp(`^${jobPos.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }).select('_id').lean();
-      jobObjId = j?._id;
-    }
-    if (jobObjId) {
-      try {
-        const application = await JobApplication.findOne({
-          candidate: new mongoose.Types.ObjectId(candId),
-          job: jobObjId,
-          status: { $in: ['Applied', 'Screening'] },
-        });
-        if (application) {
-          const statusBefore = application.status;
-          application.status = 'Interview';
-          await application.save();
-          await syncReferralPipelineStatusForCandidate(candId).catch((err) =>
-            logger.warn('referral pipeline sync after interview schedule:', err?.message || err)
-          );
-          writeAtsAudit(
-            String(userId),
-            {
-              action: ActivityActions.JOB_APPLICATION_UPDATE,
-              entityType: EntityTypes.JOB_APPLICATION,
-              entityId: String(application._id),
-              metadata: {
-                source: 'system',
-                trigger: 'interview_scheduled',
-                statusBefore,
-                statusAfter: 'Interview',
-                related: {
-                  jobId: String(jobObjId),
-                  candidateId: String(candId),
-                  meetingId: String(meeting._id),
-                },
-              },
-            },
-            null,
-            { editContext: { staffEdit: true } }
-          ).catch((err) =>
-            logger.warn('ats_audit jobApplication.interview_scheduled:', err?.message || err)
-          );
-        }
-      } catch (err) {
-        logger.warn('Failed to update JobApplication to Interview:', err?.message || err);
-      }
+  const jobObjId = meeting.jobId || null;
+  if (linkage.application && candId && jobObjId) {
+    try {
+      await transitionApplicationToInterview(linkage.application, userId, meeting, jobObjId, candId);
+    } catch (err) {
+      logger.warn('Failed to update JobApplication to Interview:', err?.message || err);
     }
   }
 
@@ -809,9 +745,7 @@ const ensureInterviewOfferLetterDefaults = async (offerId, userId) => {
  * @param {string} userId - User performing the action
  */
 const createPlacementFromInterview = async (meeting, userId) => {
-  const { candidateObjId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
-    createIfMissing: true,
-  });
+  const { candidateObjId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
 
   if (!candidateObjId) {
     throw new ApiError(
@@ -821,9 +755,14 @@ const createPlacementFromInterview = async (meeting, userId) => {
   }
 
   if (!application) {
+    if (normalizeLinkageStatus(meeting) === 'unlinked') {
+      throw new ApiError(httpStatus.CONFLICT, 'Interview is not linked to a job application', true, '', {
+        errorCode: INTERVIEW_NOT_LINKED,
+      });
+    }
     throw new ApiError(
       httpStatus.BAD_REQUEST,
-      'Cannot move to Offers & placement: no job application found for this candidate. Ensure they have an application in progress (Applied, Screening, Interview, Offered, or Hired).'
+      'Cannot move to Offers & placement: no job application found for this candidate. Link an application to this interview first.'
     );
   }
 
@@ -970,9 +909,7 @@ const notifyCandidateOfInterviewResultChange = async (meeting, previousInterview
 
     const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
     const jobTitle = jobPositionDisplay || 'the role';
-    const { jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
-      createIfMissing: false,
-    });
+    const { jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
 
     const { title, message } = isNewlySelected
       ? {
@@ -1108,12 +1045,14 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   // do not duplicate this call on the move-to-preboarding or internal-transfer paths.
   await notifyCandidateOfInterviewResultChange(meeting, previousInterviewResult, newInterviewResult);
 
+  // Set when an application side effect was skipped because the interview has no resolvable application.
+  let linkageWarning = null;
   if (
     previousInterviewResult === 'selected' &&
     (newInterviewResult === 'pending' || newInterviewResult === 'rejected')
   ) {
     try {
-      await rollbackInterviewSelectionPipeline(meeting);
+      linkageWarning = (await rollbackInterviewSelectionPipeline(meeting)) || linkageWarning;
     } catch (err) {
       logger.error('[updateMeetingById] rollbackInterviewSelectionPipeline failed:', err?.message || err);
     }
@@ -1121,19 +1060,20 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
 
   if (newInterviewResult === 'rejected' && previousInterviewResult !== 'rejected') {
     try {
-      await applyInterviewRejectionToApplication(meeting);
+      linkageWarning = (await applyInterviewRejectionToApplication(meeting)) || linkageWarning;
     } catch (err) {
       logger.error('[updateMeetingById] applyInterviewRejectionToApplication failed:', err?.message || err);
     }
   } else if (newInterviewResult === 'pending' && previousInterviewResult === 'rejected') {
     try {
-      await reopenApplicationAfterInterviewRejection(meeting);
+      linkageWarning = (await reopenApplicationAfterInterviewRejection(meeting)) || linkageWarning;
     } catch (err) {
       logger.error('[updateMeetingById] reopenApplicationAfterInterviewRejection failed:', err?.message || err);
     }
   }
 
   let moveError = null;
+  let moveErrorCode = null;
   if (
     updateBody.interviewResult === 'selected' &&
     meeting.candidate?.id
@@ -1151,12 +1091,15 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
       await createPlacementFromInterview(meeting, effectiveUserId);
     } catch (err) {
       moveError = err?.message || String(err);
+      moveErrorCode = err?.errorCode || null;
       logger.warn('[createPlacementFromInterview] Failed:', moveError);
     }
   }
 
   const result = await getMeetingById(meeting._id.toString());
   if (moveError) result.moveToPreboardingError = moveError;
+  if (moveErrorCode) result.moveToPreboardingErrorCode = moveErrorCode;
+  if (linkageWarning) result.linkageWarning = linkageWarning;
   return result;
 };
 
@@ -1316,13 +1259,16 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
     throw new ApiError(httpStatus.BAD_REQUEST, 'Meeting has no candidate linked');
   }
 
-  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting, {
-    createIfMissing: true,
-  });
+  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
   if (!candidateObjId) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'This interview has no valid candidate linked.');
   }
   if (!application) {
+    if (normalizeLinkageStatus(meeting) === 'unlinked') {
+      throw new ApiError(httpStatus.CONFLICT, 'Interview is not linked to a job application', true, '', {
+        errorCode: INTERVIEW_NOT_LINKED,
+      });
+    }
     throw new ApiError(httpStatus.BAD_REQUEST, 'No job application found for this candidate.');
   }
 
@@ -1474,9 +1420,29 @@ const autoEndExpiredMeetings = async () => {
     },
   }).lean();
 
+  const hardCapMinutes = config.livekit?.meetingAutoEndHardCapMinutes ?? 120;
+  const nowMs = now.getTime();
+
   let count = 0;
   for (const m of meetings) {
     try {
+      const scheduledEndMs =
+        new Date(m.scheduledAt).getTime() + (Number(m.durationMinutes) || 0) * 60 * 1000;
+      const humanCount = await countHumanParticipants(m.meetingId);
+      const action = decideAutoEnd({ humanCount, now: nowMs, scheduledEndMs, hardCapMinutes });
+      if (action === 'wait') {
+        logger.info('[autoEndExpiredMeetings] waiting for humans to disconnect', {
+          meetingId: m.meetingId,
+          humanCount,
+        });
+        continue;
+      }
+      if (action === 'end_hard_cap') {
+        await Recording.updateMany(
+          { meetingId: m.meetingId, status: { $nin: RECORDING_TERMINAL } },
+          { $set: { truncatedAtScheduleEnd: true } }
+        );
+      }
       await Meeting.updateOne(
         { _id: m._id },
         {
@@ -1490,7 +1456,7 @@ const autoEndExpiredMeetings = async () => {
         logger.warn(`[autoEndExpiredMeetings] LiveKit delete failed ${m.meetingId}:`, err?.message || err)
       );
       count += 1;
-      logger.info(`[autoEndExpiredMeetings] Auto-ended meeting ${m.meetingId} (${m.title})`);
+      logger.info(`[autoEndExpiredMeetings] Auto-ended meeting ${m.meetingId} (${m.title})`, { action });
     } catch (err) {
       logger.warn(`[autoEndExpiredMeetings] Failed to end meeting ${m.meetingId}:`, err?.message || err);
     }
@@ -1792,8 +1758,224 @@ export const sendInterviewConclusionNotifications = async () => {
   return stats;
 };
 
+const meetingHasRecording = async (meeting) => {
+  const room = meeting.meetingId || meeting.roomName;
+  if (!room) return false;
+  const rec = await Recording.findOne({
+    meetingId: room,
+    status: { $nin: ['aborted', 'failed', 'missing', 'expired'] },
+  })
+    .select('_id')
+    .lean();
+  return Boolean(rec);
+};
+
+const getMeetingLinkage = async (id, currentUser) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+  return {
+    applicationId: meeting.applicationId,
+    jobId: meeting.jobId,
+    candidateId: meeting.candidateId,
+    round: meeting.round,
+    interviewLanguage: meeting.interviewLanguage || 'en',
+    linkageStatus: normalizeLinkageStatus(meeting),
+    linkageSource: meeting.linkageSource,
+    linkageRevision: meeting.linkageRevision ?? 0,
+    linkageVerifiedAt: meeting.linkageVerifiedAt,
+  };
+};
+
+const patchMeetingLinkage = async (id, body, userId, currentUser) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+
+  const hasRecording = await meetingHasRecording(meeting);
+  const fullAccess = await hasAllApiPermissions(currentUser, INTERVIEW_FULL_ACCESS);
+  if (hasRecording && !fullAccess) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Linkage cannot be changed after a recording exists');
+  }
+
+  const expectedRevision = Number(body.expectedRevision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'expectedRevision is required');
+  }
+
+  const updates = {};
+  const changes = [];
+
+  if (body.interviewLanguage !== undefined) {
+    updates.interviewLanguage = assertInterviewLanguage(body.interviewLanguage);
+    changes.push({ field: 'interviewLanguage', from: meeting.interviewLanguage, to: updates.interviewLanguage });
+  }
+  if (body.round !== undefined) {
+    if (body.round?.type && !INTERVIEW_ROUND_TYPES.includes(body.round.type)) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
+    }
+    updates.round = body.round;
+    changes.push({ field: 'round', from: meeting.round, to: body.round });
+  }
+
+  if (body.applicationId !== undefined) {
+    // Linking is not scheduling: an interview that already happened may belong to an Offered/Hired/Rejected
+    // application, and that is exactly the case the placement 409 sends recruiters here to fix.
+    const linkage = await deriveSchedulingLinkage({
+      applicationId: body.applicationId,
+      candidate: meeting.candidate,
+      jobPosition: meeting.jobPosition,
+      enforceEligibility: false,
+    });
+    const meetingCand = meeting.candidate?.id;
+    if (meetingCand && linkage.candidateId && String(linkage.candidateId) !== String(meetingCand)) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Application candidate does not match interview candidate');
+    }
+    updates.applicationId = linkage.applicationId;
+    updates.jobId = linkage.jobId;
+    updates.candidateId = linkage.candidateId;
+    updates.linkageStatus = 'verified_manual';
+    updates.linkageSource = 'manual_link';
+    updates.linkageVerifiedAt = new Date();
+    updates.linkageVerifiedBy = userId;
+    updates.jobPosition = linkage.jobPosition ?? meeting.jobPosition;
+    changes.push({
+      field: 'applicationId',
+      from: meeting.applicationId ? String(meeting.applicationId) : null,
+      to: String(linkage.applicationId),
+    });
+  }
+
+  if (!Object.keys(updates).length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'No linkage fields to update');
+  }
+
+  const updated = await Meeting.findOneAndUpdate(
+    {
+      _id: meeting._id,
+      linkageRevision: linkageRevisionQuery(expectedRevision),
+    },
+    { $set: updates, $inc: { linkageRevision: 1 } },
+    { new: true }
+  );
+  if (!updated) {
+    throw new ApiError(httpStatus.CONFLICT, 'Linkage revision conflict', true, '', {
+      errorCode: 'linkage_revision_conflict',
+    });
+  }
+
+  await writeAtsAudit(
+    String(userId),
+    {
+      action: ActivityActions.INTERVIEW_LINKAGE_UPDATE,
+      entityType: EntityTypes.MEETING,
+      entityId: String(meeting._id),
+      metadata: { changes },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit interview.linkage.update:', err?.message || err));
+
+  return getMeetingLinkage(String(updated._id), currentUser);
+};
+
+const createExplicitApplicationForMeeting = async (id, userId, currentUser) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+
+  if (meeting.applicationId) {
+    throw new ApiError(httpStatus.CONFLICT, 'Interview is already linked to an application', true, '', {
+      errorCode: 'interview_already_linked',
+      details: { applicationId: String(meeting.applicationId) },
+    });
+  }
+  const candId = meeting.candidate?.id;
+  const jobPos = (meeting.jobPosition || '').trim();
+  if (!candId || !mongoose.Types.ObjectId.isValid(candId) || !/^[0-9a-fA-F]{24}$/.test(jobPos)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Interview needs a candidate and a 24-character job id in jobPosition');
+  }
+
+  let application;
+  try {
+    // The real caller: createJobApplication authorises through isOwnerOrAdmin (roles + authContext permissions).
+    // Its own existing-row check plus the unique { job, candidate } index cover concurrent creates.
+    application = await jobApplicationService.createJobApplication(
+      { job: jobPos, candidate: candId, status: 'Interview' },
+      currentUser
+    );
+  } catch (err) {
+    if (err?.code === 11000 || err?.statusCode === httpStatus.CONFLICT) {
+      const dup = await JobApplication.findOne({
+        candidate: new mongoose.Types.ObjectId(candId),
+        job: new mongoose.Types.ObjectId(jobPos),
+      })
+        .select('_id')
+        .lean();
+      throw new ApiError(httpStatus.CONFLICT, 'Application already exists for this candidate and job', true, '', {
+        errorCode: 'application_exists',
+        details: { applicationId: dup ? String(dup._id) : null },
+      });
+    }
+    throw err;
+  }
+
+  // Audit the application as soon as it exists: it stays even if linking the meeting below loses a race.
+  await writeAtsAudit(
+    String(userId),
+    {
+      action: ActivityActions.INTERVIEW_APPLICATION_CREATE,
+      entityType: EntityTypes.JOB_APPLICATION,
+      entityId: String(application._id),
+      metadata: {
+        meetingId: String(meeting._id),
+        jobId: jobPos,
+        candidateId: candId,
+      },
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit interview.application.create:', err?.message || err));
+
+  const revision = meeting.linkageRevision ?? 0;
+  const updated = await Meeting.findOneAndUpdate(
+    { _id: meeting._id, linkageRevision: linkageRevisionQuery(revision) },
+    {
+      $set: {
+        applicationId: application._id,
+        jobId: new mongoose.Types.ObjectId(jobPos),
+        candidateId: new mongoose.Types.ObjectId(candId),
+        linkageStatus: 'verified',
+        linkageSource: 'explicit_application_created',
+        linkageVerifiedAt: new Date(),
+        linkageVerifiedBy: userId,
+      },
+      $inc: { linkageRevision: 1 },
+    },
+    { new: true }
+  );
+  if (!updated) {
+    // The application was created; the client refetches the linkage and links it with PATCH.
+    throw new ApiError(httpStatus.CONFLICT, 'Linkage revision conflict', true, '', {
+      errorCode: 'linkage_revision_conflict',
+      details: { applicationId: String(application._id) },
+    });
+  }
+
+  return getMeetingLinkage(String(updated._id), currentUser);
+};
+
 export {
   createMeeting,
+  getMeetingLinkage,
+  patchMeetingLinkage,
+  createExplicitApplicationForMeeting,
   queryMyInterviews,
   queryMeetings,
   getMeetingById,

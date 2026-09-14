@@ -96,6 +96,25 @@ const createMeeting = {
       candidate: candidateRefSchema.allow(null),
       recruiter: recruiterRefSchema.allow(null),
       notes: Joi.string().allow('', null).trim(),
+      applicationId: Joi.string().hex().length(24).optional(),
+      interviewLanguage: Joi.string().trim().default('en'),
+      round: Joi.object()
+        .keys({
+          index: Joi.number().integer().min(1).optional(),
+          type: Joi.string()
+            .valid(
+              'screening',
+              'technical',
+              'behavioral',
+              'hiring_manager',
+              'culture',
+              'final',
+              'other'
+            )
+            .optional(),
+          label: Joi.string().allow('', null).trim().optional(),
+        })
+        .optional(),
     })
     .min(1),
 };
@@ -257,6 +276,48 @@ const getMeetingRecordings = {
   }),
 };
 
+const getMeetingLinkage = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim(),
+  }),
+};
+
+const patchMeetingLinkage = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim(),
+  }),
+  body: Joi.object()
+    .keys({
+      applicationId: Joi.string().hex().length(24).optional(),
+      interviewLanguage: Joi.string().trim().optional(),
+      round: Joi.object()
+        .keys({
+          index: Joi.number().integer().min(1).optional(),
+          type: Joi.string()
+            .valid(
+              'screening',
+              'technical',
+              'behavioral',
+              'hiring_manager',
+              'culture',
+              'final',
+              'other'
+            )
+            .optional(),
+          label: Joi.string().allow('', null).trim().optional(),
+        })
+        .optional(),
+      expectedRevision: Joi.number().integer().min(0).required(),
+    })
+    .min(1),
+};
+
+const createMeetingApplication = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim(),
+  }),
+};
+
 // Public: end meeting when host leaves (body: roomName, hostEmail)
 const endMeetingByRoomPublic = {
   body: Joi.object()
@@ -281,4 +342,7 @@ export {
   resendInvitations,
   endMeetingByRoomPublic,
   internalTransfer,
+  getMeetingLinkage,
+  patchMeetingLinkage,
+  createMeetingApplication,
 };

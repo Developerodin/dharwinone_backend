@@ -9,6 +9,14 @@ const processedWebhookEventSchema = new mongoose.Schema(
     roomName: { type: String, default: null, index: true },
     receivedAt: { type: Date, default: Date.now },
     bodyHash: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ['processing', 'processed', 'failed'],
+      default: 'processed',
+    },
+    attempts: { type: Number, default: 1 },
+    lastError: { type: String, default: null },
+    claimedAt: { type: Date, default: null },
   },
   { timestamps: false }
 );

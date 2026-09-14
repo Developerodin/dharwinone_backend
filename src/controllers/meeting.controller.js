@@ -140,4 +140,37 @@ const internalTransfer = catchAsync(async (req, res) => {
   res.send(result);
 });
 
-export { create, list, listMyInterviews, get, update, remove, resendInvitations, getRecordings, endMeetingByRoomPublic, moveToPreboarding, internalTransfer };
+const getLinkage = catchAsync(async (req, res) => {
+  const result = await meetingService.getMeetingLinkage(req.params.id, req.user);
+  res.send(result);
+});
+
+const patchLinkage = catchAsync(async (req, res) => {
+  const userId = req.user?._id?.toString() || req.user?.id;
+  const body = pick(req.body, ['applicationId', 'round', 'interviewLanguage', 'expectedRevision']);
+  const result = await meetingService.patchMeetingLinkage(req.params.id, body, userId, req.user);
+  res.send(result);
+});
+
+const createApplication = catchAsync(async (req, res) => {
+  const userId = req.user?._id?.toString() || req.user?.id;
+  const result = await meetingService.createExplicitApplicationForMeeting(req.params.id, userId, req.user);
+  res.status(httpStatus.CREATED).send(result);
+});
+
+export {
+  create,
+  list,
+  listMyInterviews,
+  get,
+  update,
+  remove,
+  resendInvitations,
+  getRecordings,
+  endMeetingByRoomPublic,
+  moveToPreboarding,
+  internalTransfer,
+  getLinkage,
+  patchLinkage,
+  createApplication,
+};

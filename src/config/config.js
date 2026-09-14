@@ -118,6 +118,26 @@ const envVarsSchema = Joi.object()
       .falsy('false', '0')
       .default(true)
       .description('Dispatch meeting-summary and meeting-assistant LiveKit agents (set false to disable)'),
+    LIVEKIT_WEBHOOK_HOST_LEAVE_STOP_ENABLED: Joi.boolean()
+      .truthy('true', '1')
+      .falsy('false', '0')
+      .default(false)
+      .description('LiveKit participant_left webhook stops recording when host leaves'),
+    LIVEKIT_WEBHOOK_ROOM_FINISHED_ENABLED: Joi.boolean()
+      .truthy('true', '1')
+      .falsy('false', '0')
+      .default(false)
+      .description('LiveKit room_finished webhook stops egress and closes ChatCall'),
+    LIVEKIT_SUMMARY_AGENT_NAME: Joi.string()
+      .optional()
+      .default('meeting-summary-agent')
+      .description('LiveKit agent name for meeting-summary dispatch (must match deployed agent)'),
+    MEETING_AUTO_END_HARD_CAP_MINUTES: Joi.number()
+      .integer()
+      .min(1)
+      .optional()
+      .default(120)
+      .description('Max minutes past scheduled end before auto-ending a meeting with humans still connected'),
 
     // Bolna Calling
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
@@ -563,6 +583,10 @@ const config = {
     },
     s3Bucket: envVars.LIVEKIT_S3_BUCKET,
     agentsEnabled: envVars.LIVEKIT_AGENTS_ENABLED,
+    webhookHostLeaveStopEnabled: envVars.LIVEKIT_WEBHOOK_HOST_LEAVE_STOP_ENABLED,
+    webhookRoomFinishedEnabled: envVars.LIVEKIT_WEBHOOK_ROOM_FINISHED_ENABLED,
+    summaryAgentName: String(envVars.LIVEKIT_SUMMARY_AGENT_NAME || 'meeting-summary-agent').trim(),
+    meetingAutoEndHardCapMinutes: envVars.MEETING_AUTO_END_HARD_CAP_MINUTES,
   },
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',

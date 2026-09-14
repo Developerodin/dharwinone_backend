@@ -15,6 +15,7 @@ import {
   computeEventId,
   computeBodyHash,
   claimWebhookEvent,
+  markWebhookEvent,
 } from '../services/webhookIdempotency.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -207,6 +208,7 @@ async function handleEgressEnded(payload) {
   const endedAtRaw = info.endedAt ?? info.ended_at;
   const endedMs = nsToMs(endedAtRaw) || Date.now();
   const completedAt = new Date(endedMs);
+  const egressStartedFromInfo = nsToMs(info.startedAt ?? info.started_at);
 
   const fileResults = info.fileResults || info.file_results || info.fileResultsList;
   // Legacy SDK / API may emit file output under singular `file` (or oneof
@@ -231,6 +233,11 @@ async function handleEgressEnded(payload) {
     const ms = nsToMs(d);
     return Number.isFinite(ms) && ms > 0 && ms < 24 * 60 * 60 * 1000 ? ms : null;
   })();
+  const fileStartedEpochMs = nsToMs(f0.startedAt ?? f0.started_at);
+  const egressEpochPatch = {
+    ...(egressStartedFromInfo != null ? { egressStartedAtEpochMs: egressStartedFromInfo } : {}),
+    ...(fileStartedEpochMs != null ? { egressFileStartedAtEpochMs: fileStartedEpochMs } : {}),
+  };
   // Spec fields for failure context — `error` + `error_code` populated for
   // FAILED/ABORTED, `details` for additional context. Surface to ops via lastError.
   const errorMsg = info.error || info.errorMessage || null;
@@ -255,6 +262,7 @@ async function handleEgressEnded(payload) {
       filePath: filePath || null,
       bytes: bytesFromEgress,
       durationMs: durationFromEgressMs,
+      ...egressEpochPatch,
       lastError: ['LiveKit egress_ended status=EGRESS_ABORTED', errorContext].filter(Boolean).join(' :: '),
     });
     logger.warn('[LiveKit Webhook] egress aborted', { egressId, filePath, errorContext });
@@ -267,6 +275,7 @@ async function handleEgressEnded(payload) {
       filePath: filePath || null,
       bytes: bytesFromEgress,
       durationMs: durationFromEgressMs,
+      ...egressEpochPatch,
       lastError: [
         isFailed ? 'LiveKit egress_ended status=EGRESS_FAILED' : 'LiveKit egress_ended status=EGRESS_LIMIT_REACHED',
         errorContext,
@@ -301,6 +310,7 @@ async function handleEgressEnded(payload) {
     finalizingAt: new Date(),
     filePath,
     bytes: bytesFromEgress,
+    ...egressEpochPatch,
   });
 
   // Verify S3 actually has the object with non-zero bytes.
@@ -322,6 +332,7 @@ async function handleEgressEnded(payload) {
       s3Bucket: verified.bucket,
       s3Key: verified.key,
       durationMs,
+      ...egressEpochPatch,
     });
 
     if (updated?.meetingId?.startsWith?.('chat-')) {
@@ -366,14 +377,14 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
   const { apiKey, apiSecret } = config.livekit || {};
   const hasLiveKitCreds = Boolean(apiKey && apiSecret);
 
-  if (config.env === 'production' && !hasLiveKitCreds) {
+  if (config.env !== 'test' && !hasLiveKitCreds) {
     return res.status(httpStatus.SERVICE_UNAVAILABLE).json({
       status: 'error',
-      message: 'LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set in production to verify egress webhooks.',
+      message: 'LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set to verify egress webhooks.',
     });
   }
 
-  if (hasLiveKitCreds) {
+  if (config.env !== 'test' && hasLiveKitCreds) {
     try {
       const receiver = new WebhookReceiver(apiKey, apiSecret);
       await receiver.receive(raw, req.get('Authorization') || '', false);
@@ -425,8 +436,11 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
       const egressId = topEgressId;
       if (egressId) {
         const startedRaw = egInfo.startedAt ?? egInfo.started_at;
+        const startedMs = nsToMs(startedRaw);
         await recordingSyncService.transitionRecording(egressId, 'recording', {
-          startedAt: new Date(nsToMs(startedRaw) || Date.now()),
+          startedAt: new Date(startedMs || Date.now()),
+          // Alignment input: store only a real egress start, never the webhook arrival time.
+          ...(startedMs ? { egressStartedAtEpochMs: startedMs } : {}),
         });
       }
     } else if (event === 'egress_updated') {
@@ -439,14 +453,17 @@ const receiveLiveKitEgressWebhook = catchAsync(async (req, res) => {
     } else if (event === 'egress_ended') {
       await handleEgressEnded(payload);
     } else if (event === 'participant_left') {
-      await handleParticipantLeft(payload);
+      if (config.livekit?.webhookHostLeaveStopEnabled) await handleParticipantLeft(payload);
     } else if (event === 'room_finished') {
-      await handleRoomFinished(payload);
+      if (config.livekit?.webhookRoomFinishedEnabled) await handleRoomFinished(payload);
     }
   } catch (err) {
     logger.error('[LiveKit Webhook] Handler error', { event, error: err?.message });
+    await markWebhookEvent(eventId, 'failed', err?.message);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ status: 'error', message: 'handler failed' });
   }
 
+  await markWebhookEvent(eventId, 'processed');
   res.status(httpStatus.OK).json({ status: 'received' });
 });
 

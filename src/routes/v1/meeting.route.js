@@ -54,6 +54,25 @@ router
   .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
 
 router
+  .route('/:id/linkage')
+  .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeetingLinkage), meetingController.getLinkage)
+  .patch(
+    auth(),
+    requirePermissions('interviews.manage'),
+    validate(meetingValidation.patchMeetingLinkage),
+    meetingController.patchLinkage
+  );
+
+router
+  .route('/:id/application')
+  .post(
+    auth(),
+    requirePermissions('interviews.manage', 'candidates.manage'),
+    validate(meetingValidation.createMeetingApplication),
+    meetingController.createApplication
+  );
+
+router
   .route('/:id')
   .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeeting), meetingController.get)
   .patch(auth(), requirePermissions('interviews.manage'), validate(meetingValidation.updateMeeting), meetingController.update)

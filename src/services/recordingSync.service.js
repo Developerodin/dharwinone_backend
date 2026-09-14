@@ -89,6 +89,21 @@ export async function transitionRecording(egressId, nextStatus, patch = {}, opts
   }
 
   logger.info(`[recordingSync] egressId=${egressId} → ${nextStatus} (rank=${nextRank})`);
+
+  const shouldCancelSummary =
+    nextStatus === 'stopping' || isRecordingTerminal(nextStatus);
+  if (shouldCancelSummary && updated?._id) {
+    import('./agentDispatch.service.js')
+      .then((m) => m.cancelSummaryDispatchForRecording(updated._id))
+      .catch((err) =>
+        logger.warn('[recordingSync] cancelSummaryDispatchForRecording failed', {
+          egressId,
+          recordingId: updated._id?.toString?.(),
+          error: err?.message,
+        })
+      );
+  }
+
   return updated;
 }
 
@@ -102,7 +117,13 @@ export async function transitionRecording(egressId, nextStatus, patch = {}, opts
  * @param {string} [args.stopReason]   Audit only; usually null at start.
  * @returns {Promise<object>}          Created Mongoose document (NOT lean — caller wants _id).
  */
-export async function createPending({ meetingId, stopReason = null, tenantId = null }) {
+export async function createPending({
+  meetingId,
+  stopReason = null,
+  tenantId = null,
+  interviewId = null,
+  meetingKind = null,
+}) {
   if (!meetingId) throw new Error('createPending: meetingId required');
   // Resolve tenantId from Meeting/InternalMeeting if caller didn't supply.
   // Without this, recordings created before tenantId stamping landed are
@@ -115,6 +136,8 @@ export async function createPending({ meetingId, stopReason = null, tenantId = n
     startedAt: new Date(),
     stopReason,
     ...(resolvedTenantId ? { tenantId: resolvedTenantId } : {}),
+    ...(interviewId ? { interviewId } : {}),
+    ...(meetingKind ? { meetingKind } : {}),
   });
 }
 

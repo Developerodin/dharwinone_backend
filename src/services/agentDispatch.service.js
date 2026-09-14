@@ -4,7 +4,6 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import AgentDispatch from '../models/agentDispatch.model.js';
 
-const AGENT_NAME = 'meeting-summary-agent';
 const ASSISTANT_AGENT_NAME = 'meeting-assistant-agent';
 
 const livekitUrl = config.livekit?.url?.replace(/^ws/, 'http') || 'http://localhost:7880';
@@ -28,8 +27,56 @@ export function buildDispatchMetadata({ meetingId, recordingId, hmacToken }) {
   });
 }
 
+export function buildDispatchMetadataV2({ meetingId, recordingId, hmacToken, dispatchKey, language = 'en' }) {
+  return JSON.stringify({
+    v: 2,
+    meetingId: String(meetingId),
+    recordingId: recordingId ? String(recordingId) : null,
+    dispatchKey: String(dispatchKey),
+    hmacToken: String(hmacToken),
+    language,
+  });
+}
+
 function agentsEnabled() {
   return config.livekit?.agentsEnabled !== false;
+}
+
+export function getAgentName() {
+  return config.livekit?.summaryAgentName || 'meeting-summary-agent';
+}
+
+async function requestSummaryCancel(active, meetingId) {
+  // Record the intent first: the salvage sweep keys on cancelRequestedAt, so a failed or impossible LiveKit call
+  // (network error, dispatch already gone, no client) must not leave the stop unrecorded.
+  await AgentDispatch.updateOne(
+    { _id: active._id, cancelRequestedAt: null },
+    { $set: { cancelRequestedAt: new Date() } }
+  );
+  logger.info('[AgentDispatch] cancel requested (summary)', {
+    meetingId,
+    dispatchId: active.dispatchId,
+    recordingId: active.recordingId?.toString?.(),
+  });
+  if (!dispatchClient) return;
+  try {
+    await dispatchClient.deleteDispatch(active.dispatchId, meetingId);
+  } catch (err) {
+    logger.warn('[AgentDispatch] deleteDispatch failed', { dispatchId: active.dispatchId, error: err.message });
+  }
+  if (active.agentIdentity) {
+    try {
+      const { disconnectParticipant } = await import('./livekit.service.js');
+      // ponytail: re-dispatch after removing the agent is unverified (V1); log-only on failure.
+      await disconnectParticipant(meetingId, active.agentIdentity);
+    } catch (remErr) {
+      logger.warn('[AgentDispatch] agent disconnect after cancel failed', {
+        meetingId,
+        identity: active.agentIdentity,
+        error: remErr.message,
+      });
+    }
+  }
 }
 
 export async function dispatchSummaryAgent({ meetingId, recordingId }) {
@@ -40,14 +87,24 @@ export async function dispatchSummaryAgent({ meetingId, recordingId }) {
   if (!dispatchClient) {
     throw new Error('AgentDispatchClient not initialized — LiveKit credentials missing');
   }
+  const agentName = getAgentName();
   const hmacToken = crypto.randomBytes(32).toString('hex');
-  const metadata = buildDispatchMetadata({ meetingId, recordingId, hmacToken });
-  const dispatch = await dispatchClient.createDispatch(meetingId, AGENT_NAME, { metadata });
+  const dispatchKey = crypto.randomBytes(16).toString('hex');
+  const metadata = buildDispatchMetadataV2({
+    meetingId,
+    recordingId,
+    hmacToken,
+    dispatchKey,
+    language: 'en',
+  });
+  const dispatch = await dispatchClient.createDispatch(meetingId, agentName, { metadata });
 
   await AgentDispatch.create({
     meetingId,
     recordingId: recordingId || null,
     dispatchId: dispatch.id,
+    dispatchKey,
+    agentName,
     hmacToken,
     status: 'requested',
   });
@@ -56,13 +113,20 @@ export async function dispatchSummaryAgent({ meetingId, recordingId }) {
   return dispatch.id;
 }
 
-export async function cancelDispatch(meetingId, agentName = AGENT_NAME) {
+export async function cancelDispatch(meetingId, agentName = getAgentName()) {
   const active = await AgentDispatch.findOne({
     meetingId,
     agentName,
     status: { $in: ['requested', 'running'] },
   });
-  if (!active || !dispatchClient) return;
+  if (!active) return;
+
+  if (agentName === getAgentName()) {
+    await requestSummaryCancel(active, meetingId);
+    return;
+  }
+
+  if (!dispatchClient) return;
   try {
     await dispatchClient.deleteDispatch(active.dispatchId, meetingId);
     active.status = 'completed';
@@ -74,13 +138,20 @@ export async function cancelDispatch(meetingId, agentName = AGENT_NAME) {
   }
 }
 
-export async function cancelAllDispatches(meetingId) {
-  await cancelDispatch(meetingId, AGENT_NAME);
-  await cancelDispatch(meetingId, ASSISTANT_AGENT_NAME);
+export async function cancelSummaryDispatchForRecording(recordingId) {
+  if (!recordingId) return;
+  const active = await AgentDispatch.findOne({
+    recordingId,
+    agentName: getAgentName(),
+    status: { $in: ['requested', 'running'] },
+  });
+  if (!active) return;
+  await requestSummaryCancel(active, active.meetingId);
 }
 
-export function getAgentName() {
-  return AGENT_NAME;
+export async function cancelAllDispatches(meetingId) {
+  await cancelDispatch(meetingId, getAgentName());
+  await cancelDispatch(meetingId, ASSISTANT_AGENT_NAME);
 }
 
 export function getAssistantAgentName() {

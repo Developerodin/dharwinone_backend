@@ -7,6 +7,42 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import { appendPartials } from '../services/partialTranscript.service.js';
 import { enqueueFinalize } from '../queues/summaryQueue.js';
+import { registerRunBody, transcriptBatchBody, finalizeV2BodySchema } from '../validations/agentInternal.validation.js';
+import validate from '../middlewares/validate.js';
+import {
+  registerRun,
+  ingestTranscriptBatch,
+  heartbeatV2,
+  finalizeV2Run,
+} from '../services/agentInternalV2.service.js';
+
+const FINALIZE_GRACE_MS = 5000;
+
+/** Delay so trailing segment writes land before the summary job runs. Finalize never refuses to enqueue (B2). */
+export function computeFinalizeDelayMs(lastSegmentSentAt, now = Date.now(), graceMs = FINALIZE_GRACE_MS) {
+  if (lastSegmentSentAt == null) return 0;
+  const lastMs = new Date(lastSegmentSentAt).getTime();
+  if (!Number.isFinite(lastMs)) return 0;
+  return Math.min(graceMs, Math.max(0, graceMs - (now - lastMs)));
+}
+
+const SPEAKER_SOURCES = new Set(['livekit', 'deepgram', 'fallback']);
+
+/** Maps a v1 agent utterance onto the TranscriptSegment utterance schema (B3). Returns schema keys only. */
+export function normalizeV1Utterance(u) {
+  const speakerSource = SPEAKER_SOURCES.has(u?.speakerSource) ? u.speakerSource : 'livekit';
+  return {
+    speaker: u.speaker ?? u.participantIdentity ?? null,
+    speakerName: u.speakerName ?? u.displayName ?? null,
+    speakerLabel: u.speakerLabel ?? null,
+    speakerSource,
+    speakerConfidence: u.speakerConfidence ?? null,
+    text: u.text,
+    startMs: u.startMs,
+    endMs: u.endMs,
+    confidence: u.confidence ?? null,
+  };
+}
 
 /** POST /v1/internal/meetings/:meetingId/agent-joined */
 export const agentJoined = catchAsync(async (req, res) => {
@@ -23,7 +59,10 @@ export const agentJoined = catchAsync(async (req, res) => {
   }
 
   await Recording.findOneAndUpdate(
-    { meetingId, aiProcessingStatus: 'dispatching' },
+    {
+      ...(req.agentDispatch.recordingId ? { _id: req.agentDispatch.recordingId } : { meetingId }),
+      aiProcessingStatus: 'dispatching',
+    },
     { $set: { aiProcessingStatus: 'transcribing' } }
   );
 
@@ -67,7 +106,7 @@ export const transcriptSegments = catchAsync(async (req, res) => {
     windowStartMs: s.windowStartMs,
     windowEndMs: s.windowEndMs,
     combinedText: s.combinedText,
-    utterances: Array.isArray(s.utterances) ? s.utterances : [],
+    utterances: Array.isArray(s.utterances) ? s.utterances.map(normalizeV1Utterance) : [],
     utteranceCount: Array.isArray(s.utterances) ? s.utterances.length : 0,
   }));
 
@@ -100,8 +139,39 @@ export const partialTranscripts = catchAsync(async (req, res) => {
   return res.status(httpStatus.OK).json(out);
 });
 
+/** POST /v1/internal/meetings/:meetingId/runs */
+export const runs = catchAsync(async (req, res) => {
+  if (req.body.runId !== req.agentRunId) {
+    return res.status(httpStatus.BAD_REQUEST).json({ message: 'invalid_body' });
+  }
+  const out = await registerRun({
+    dispatch: req.agentDispatch,
+    runId: req.body.runId,
+    body: req.body,
+  });
+  return res.status(httpStatus.OK).json(out);
+});
+
+/** POST /v1/internal/meetings/:meetingId/transcript-batches */
+export const transcriptBatches = catchAsync(async (req, res) => {
+  if (req.body.runId !== req.agentRunId) {
+    return res.status(httpStatus.BAD_REQUEST).json({ message: 'invalid_body' });
+  }
+  const result = await ingestTranscriptBatch({
+    dispatch: req.agentDispatch,
+    runId: req.body.runId,
+    batchSeq: req.body.batchSeq,
+    utterances: req.body.utterances,
+  });
+  return res.status(result.status).json(result.body);
+});
+
 /** POST /v1/internal/meetings/:meetingId/heartbeat */
 export const heartbeat = catchAsync(async (req, res) => {
+  if (req.agentRunId) {
+    await heartbeatV2({ dispatch: req.agentDispatch, runId: req.agentRunId });
+    return res.status(httpStatus.OK).json({ status: 'ok' });
+  }
   await AgentDispatch.findByIdAndUpdate(req.agentDispatch.id, {
     $set: { lastHeartbeat: new Date() },
   });
@@ -110,37 +180,46 @@ export const heartbeat = catchAsync(async (req, res) => {
 
 /** POST /v1/internal/meetings/:meetingId/finalize */
 export const finalize = catchAsync(async (req, res) => {
-  const { meetingId } = req.params;
-  const { totalSegments, durationMs } = req.body || {};
-
-  const dispatch = await AgentDispatch.findById(req.agentDispatch.id);
-  if (dispatch?.lastSegmentSentAt) {
-    const sinceLast = Date.now() - new Date(dispatch.lastSegmentSentAt).getTime();
-    if (sinceLast < 5000) {
-      return res
-        .status(httpStatus.ACCEPTED)
-        .json({ status: 'grace_period_active', sinceLastMs: sinceLast });
+  if (req.agentRunId) {
+    const { error, value } = finalizeV2BodySchema.validate(req.body || {}, { abortEarly: false });
+    if (error) {
+      return res.status(httpStatus.BAD_REQUEST).json({ message: 'invalid_body' });
     }
+    if (value.runId !== req.agentRunId) {
+      return res.status(httpStatus.BAD_REQUEST).json({ message: 'invalid_body' });
+    }
+    const result = await finalizeV2Run({ dispatch: req.agentDispatch, body: value });
+    return res.status(result.status).json(result.body);
   }
 
-  const segmentCount = await TranscriptSegment.countDocuments({ meetingId });
-  if (typeof totalSegments === 'number' && totalSegments !== segmentCount) {
-    return res.status(httpStatus.CONFLICT).json({
-      message: 'segment count mismatch — agent should retry after flushing',
+  const { meetingId } = req.params;
+  const { totalSegments, durationMs } = req.body || {};
+  const { recordingId } = req.agentDispatch;
+
+  const dispatch = await AgentDispatch.findById(req.agentDispatch.id);
+  const delayMs = computeFinalizeDelayMs(dispatch?.lastSegmentSentAt);
+
+  const have = await TranscriptSegment.countDocuments(
+    recordingId ? { meetingId, recordingId } : { meetingId }
+  );
+  const segmentShortfall = typeof totalSegments === 'number' && have < totalSegments;
+  if (segmentShortfall) {
+    logger.warn('[AgentInternal] finalize segment shortfall', {
+      meetingId,
+      recordingId,
       expected: totalSegments,
-      have: segmentCount,
+      have,
     });
   }
 
-  await Recording.findOneAndUpdate(
-    { meetingId, aiProcessingStatus: { $nin: ['finalizing', 'completed'] } },
-    { $set: { aiProcessingStatus: 'finalizing' } }
-  );
+  const job = await enqueueFinalize({ meetingId, recordingId, delayMs, segmentShortfall });
+  // If Redis is down, enqueue throws → agent gets 5xx and retries while dispatch stays active; bullmq dedupes by job id.
   await AgentDispatch.findByIdAndUpdate(req.agentDispatch.id, {
     $set: { status: 'completed', leftAt: new Date() },
   });
 
-  const recordingId = req.agentDispatch.recordingId;
-  const job = await enqueueFinalize({ meetingId, recordingId });
-  return res.status(httpStatus.ACCEPTED).json({ status: 'queued', jobId: job.id, durationMs });
+  return res.status(httpStatus.ACCEPTED).json({ status: 'queued', jobId: job.id, delayMs, durationMs });
 });
+
+export const runsValidation = validate(registerRunBody);
+export const transcriptBatchesValidation = validate(transcriptBatchBody);

@@ -36,11 +36,26 @@ export function getSummaryQueueEvents() {
   return eventsSingleton;
 }
 
-export async function enqueueFinalize({ meetingId, recordingId }) {
+/** bullmq rejects custom job ids containing ':' (unless exactly 3 parts), so ids use '-' only. */
+export function buildFinalizeJobId({ meetingId, recordingId, replayAt = null } = {}) {
+  const base = `finalize-${String(recordingId || meetingId)}`;
+  return (replayAt ? `${base}-replay-${replayAt}` : base).replace(/:/g, '_');
+}
+
+export async function enqueueFinalize({
+  meetingId,
+  recordingId,
+  delayMs = 0,
+  segmentShortfall = false,
+  replayAt = null,
+} = {}) {
   const q = getSummaryQueue();
   return q.add(
     'finalize',
-    { meetingId, recordingId: recordingId ? String(recordingId) : null, requestedAt: Date.now() },
-    { jobId: `finalize:${meetingId}` }
+    { meetingId, recordingId: recordingId ? String(recordingId) : null, requestedAt: Date.now(), segmentShortfall },
+    {
+      jobId: buildFinalizeJobId({ meetingId, recordingId, replayAt }),
+      delay: Math.max(0, Number(delayMs) || 0),
+    }
   );
 }

@@ -8,6 +8,10 @@ import {
   RUBRIC_RATING_MIN,
   RUBRIC_RATING_MAX,
 } from '../constants/interviewRubric.js';
+import {
+  INTERVIEW_LINKAGE_STATUSES,
+  INTERVIEW_ROUND_TYPES,
+} from '../constants/interviewLinkage.js';
 
 const meetingSchema = mongoose.Schema(
   {
@@ -115,6 +119,51 @@ const meetingSchema = mongoose.Schema(
       type: String,
       trim: true,
       default: '',
+    },
+    applicationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'JobApplication',
+      index: true,
+    },
+    jobId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Job',
+      index: true,
+    },
+    candidateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Employee',
+      index: true,
+    },
+    round: {
+      index: { type: Number },
+      type: {
+        type: String,
+        enum: INTERVIEW_ROUND_TYPES,
+      },
+      label: { type: String, trim: true },
+    },
+    interviewLanguage: {
+      type: String,
+      trim: true,
+      default: 'en',
+    },
+    linkageStatus: {
+      type: String,
+      enum: INTERVIEW_LINKAGE_STATUSES,
+    },
+    linkageSource: {
+      type: String,
+      trim: true,
+    },
+    linkageVerifiedAt: { type: Date },
+    linkageVerifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    linkageRevision: {
+      type: Number,
+      default: 0,
     },
     // --- System ---
     /** LiveKit participant identities granted publish after host admit (survives API restarts / multi-instance) */

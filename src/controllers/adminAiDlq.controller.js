@@ -18,7 +18,12 @@ export const replayDlq = catchAsync(async (req, res) => {
   const { jobId } = req.params;
   const row = await SummaryDeadLetter.findOne({ jobId });
   if (!row) return res.status(httpStatus.NOT_FOUND).json({ message: 'not found' });
-  const job = await enqueueFinalize({ meetingId: row.meetingId, recordingId: row.recordingId });
+  // Failed jobs are kept forever (removeOnFail: false); reusing the original job id would return the existing job silently.
+  const job = await enqueueFinalize({
+    meetingId: row.meetingId,
+    recordingId: row.recordingId,
+    replayAt: Date.now(),
+  });
   row.replayedAt = new Date();
   row.replayJobId = job.id;
   await row.save();

@@ -2,6 +2,9 @@ import OpenAI from 'openai';
 import config from '../config/config.js';
 import { costForUsage } from '../config/llmPricing.js';
 import TranscriptSegment from '../models/transcriptSegment.model.js';
+import TranscriptSession from '../models/transcriptSession.model.js';
+import TranscriptBatch from '../models/transcriptBatch.model.js';
+import { utterancesFromBatches } from './agentInternalV2.helpers.js';
 import Summary from '../models/summary.model.js';
 import Recording from '../models/recording.model.js';
 import logger from '../config/logger.js';
@@ -191,21 +194,150 @@ function getOpenai() {
   return openaiClient;
 }
 
-export async function finalizeSummary({ meetingId, recordingId, openai: openaiOverride } = {}) {
+export function buildSummaryClaimFilter({ meetingId, recordingId, now = Date.now(), staleMs }) {
+  return {
+    ...(recordingId ? { _id: recordingId } : { meetingId }),
+    aiProcessingStatus: { $ne: 'completed' },
+    $or: [{ summaryClaimedAt: null }, { summaryClaimedAt: { $lt: new Date(now - staleMs) } }],
+  };
+}
+
+export async function finalizeSummary({
+  meetingId,
+  recordingId,
+  segmentShortfall = false,
+  openai: openaiOverride,
+} = {}) {
   if (!meetingId) throw new Error('meetingId required');
   const openai = openaiOverride || getOpenai();
+  const staleMs = config.ai.finalizeTimeoutMs + 60000;
 
   const claim = await Recording.findOneAndUpdate(
-    { meetingId, aiProcessingStatus: { $nin: ['finalizing', 'completed'] } },
-    { $set: { aiProcessingStatus: 'finalizing', finalizingAt: new Date() } },
-    { new: true }
+    buildSummaryClaimFilter({ meetingId, recordingId, staleMs }),
+    { $set: { aiProcessingStatus: 'finalizing', summaryClaimedAt: new Date() } },
+    { new: true, sort: { _id: -1 } }
   );
   if (!claim) {
-    logger.info('[Finalize] another worker already finalizing or already completed', { meetingId });
-    return { skipped: true };
+    const existing = await Recording.findOne(recordingId ? { _id: recordingId } : { meetingId })
+      .sort({ _id: -1 })
+      .select('aiProcessingStatus')
+      .lean();
+    if (!existing) {
+      logger.warn('[Finalize] recording not found for claim', { meetingId, recordingId });
+      return { skipped: true, reason: 'recording_not_found' };
+    }
+    if (existing.aiProcessingStatus === 'completed') {
+      logger.info('[Finalize] already completed', { meetingId, recordingId });
+      return { skipped: true, reason: 'already_completed' };
+    }
+    // ponytail: a run that outlives the worker timeout loses its lease after timeout + 60 s and may run twice; upgrade path is a lease heartbeat.
+    throw new Error('summary lease held by another worker');
   }
 
   try {
+    const v2Session = recordingId
+      ? await TranscriptSession.findOne({ recordingId: claim._id }).lean()
+      : await TranscriptSession.findOne({ meetingId }).sort({ createdAt: -1 }).lean();
+
+    if (v2Session) {
+      const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
+        .sort({ batchSeq: 1 })
+        .lean();
+      const { utterances, durationMs } = utterancesFromBatches(batches);
+      if (!utterances.length) {
+        await Summary.findOneAndUpdate(
+          { meetingId },
+          {
+            $setOnInsert: { meetingId, recordingId: recordingId || claim._id },
+            $set: {
+              executiveSummary: '[no speech captured]',
+              bulletSummary: [],
+              partial: true,
+              generatedAt: new Date(),
+            },
+          },
+          { upsert: true, new: true }
+        );
+        await Recording.findByIdAndUpdate(claim._id, {
+          aiProcessingStatus: 'completed',
+          summaryClaimedAt: null,
+        });
+        await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
+        return { summaryId: null, version: 1, durationMs: 0, llmCostUsd: 0, partial: true };
+      }
+
+      const durationMinutes = Math.round(durationMs / 60000);
+      const estTokens = Math.ceil(
+        utterances.reduce((c, u) => c + (u.text || '').length, 0) / CHARS_PER_TOKEN
+      );
+      const gate = applyCostGate({ estTokens, durationMinutes });
+      if (!gate.ok) {
+        await Recording.findByIdAndUpdate(claim._id, {
+          aiProcessingStatus: 'failed',
+          aiProcessingError: gate.reason,
+          summaryClaimedAt: null,
+        });
+        await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'failed' });
+        return { failed: true, reason: gate.reason };
+      }
+
+      const transcriptJson = { meetingId, durationMs, utterances };
+      const transcriptUrl = await uploadJsonToS3({
+        key: `meetings/${meetingId}/transcript.json`,
+        data: transcriptJson,
+      });
+
+      const summaryPayload = await mapReduceSummarize({ utterances, durationMs, openai });
+      const partial = !!summaryPayload.partial || segmentShortfall || v2Session.partial;
+
+      const prev = await Summary.findOne({ meetingId }).lean();
+      const nextVersion = prev ? (prev.version || 1) + 1 : 1;
+      const summaryDoc = await Summary.findOneAndUpdate(
+        { meetingId },
+        {
+          $set: {
+            recordingId: recordingId || claim._id,
+            executiveSummary: summaryPayload.executiveSummary,
+            bulletSummary: summaryPayload.bulletSummary,
+            actionItems: summaryPayload.actionItems,
+            decisions: summaryPayload.decisions,
+            blockers: summaryPayload.blockers,
+            nextSteps: summaryPayload.nextSteps,
+            participantsActive: summaryPayload.participantsActive,
+            durationMs,
+            llmCostUsd: summaryPayload.llmCostUsd,
+            generatedAt: new Date(),
+            version: nextVersion,
+            partial,
+          },
+        },
+        { upsert: true, new: true }
+      );
+
+      const summaryUrl = await uploadJsonToS3({
+        key: `meetings/${meetingId}/summary.json`,
+        data: summaryDoc.toObject(),
+      });
+
+      await Recording.findByIdAndUpdate(claim._id, {
+        aiProcessingStatus: 'completed',
+        aiProcessingError: null,
+        summaryClaimedAt: null,
+        summaryId: summaryDoc._id,
+        transcriptUrl,
+        summaryUrl,
+      });
+      await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
+
+      return {
+        summaryId: summaryDoc._id,
+        version: nextVersion,
+        durationMs,
+        llmCostUsd: summaryPayload.llmCostUsd,
+        partial,
+      };
+    }
+
     const segments = await TranscriptSegment.find({ meetingId }).sort({ sequenceNumber: 1 }).lean();
     if (!segments.length) {
       await Summary.findOneAndUpdate(
@@ -221,7 +353,10 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
         },
         { upsert: true, new: true }
       );
-      await Recording.findByIdAndUpdate(claim._id, { aiProcessingStatus: 'completed' });
+      await Recording.findByIdAndUpdate(claim._id, {
+        aiProcessingStatus: 'completed',
+        summaryClaimedAt: null,
+      });
       return { summaryId: null, version: 1, durationMs: 0, llmCostUsd: 0, partial: true };
     }
 
@@ -236,6 +371,7 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
       await Recording.findByIdAndUpdate(claim._id, {
         aiProcessingStatus: 'failed',
         aiProcessingError: gate.reason,
+        summaryClaimedAt: null,
       });
       logger.warn('[Finalize] cost gate tripped', { meetingId, reason: gate.reason });
       return { failed: true, reason: gate.reason };
@@ -267,7 +403,7 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
           llmCostUsd: summaryPayload.llmCostUsd,
           generatedAt: new Date(),
           version: nextVersion,
-          partial: !!summaryPayload.partial,
+          partial: !!summaryPayload.partial || segmentShortfall,
         },
       },
       { upsert: true, new: true }
@@ -279,9 +415,12 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
     });
 
     const firstSeg = segments[0];
+    const partial = !!summaryPayload.partial || segmentShortfall;
+
     await Recording.findByIdAndUpdate(claim._id, {
       aiProcessingStatus: 'completed',
       aiProcessingError: null,
+      summaryClaimedAt: null,
       transcriptId: firstSeg._id,
       summaryId: summaryDoc._id,
       transcriptUrl,
@@ -292,7 +431,7 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
       meetingId,
       version: nextVersion,
       llmCostUsd: summaryPayload.llmCostUsd,
-      partial: summaryPayload.partial,
+      partial,
     });
 
     return {
@@ -300,12 +439,13 @@ export async function finalizeSummary({ meetingId, recordingId, openai: openaiOv
       version: nextVersion,
       durationMs,
       llmCostUsd: summaryPayload.llmCostUsd,
-      partial: !!summaryPayload.partial,
+      partial,
     };
   } catch (err) {
     await Recording.findByIdAndUpdate(claim._id, {
       aiProcessingStatus: 'failed',
       aiProcessingError: err.message,
+      summaryClaimedAt: null,
     }).catch(() => {});
     throw err;
   }

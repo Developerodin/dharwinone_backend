@@ -35,6 +35,10 @@ import {
 } from './services/chatAssistant/memorySweep.scheduler.js';
 import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js';
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
+import {
+  startTranscriptSessionSweeper,
+  stopTranscriptSessionSweeper,
+} from './jobs/transcriptSessionSweeper.js';
 import { startStuckFinalizeSweeper, stopStuckFinalizeSweeper } from './jobs/stuckFinalizeSweeper.js';
 import { startRetentionEnforcer, stopRetentionEnforcer } from './jobs/retentionEnforcer.js';
 import { startEmailNotificationPoller, stopEmailNotificationPoller } from './jobs/emailNotificationPoller.js';
@@ -109,6 +113,7 @@ mongoose
             startSummaryWorker();
           }
           startStuckDispatchSweeper();
+          startTranscriptSessionSweeper();
           if (redisFeaturesEnabled) {
             startStuckFinalizeSweeper();
           }
@@ -147,6 +152,7 @@ const exitHandler = (exitCode = 1) => {
         stopSummaryWorker().catch(() => {});
       }
       stopStuckDispatchSweeper();
+      stopTranscriptSessionSweeper();
       if (redisFeaturesEnabled) {
         stopStuckFinalizeSweeper();
       }

@@ -48,8 +48,10 @@ const jsonBodyVerify = (req, res, buf) => {
 const defaultJsonLimit = process.env.JSON_BODY_LIMIT || '512kb';
 const heavyJsonLimit = process.env.JSON_BODY_LIMIT_HEAVY || '2mb';
 const heavyJsonPaths = /^\/v1\/pm-assistant(\/|$)/;
-const jsonParserDefault = express.json({ limit: defaultJsonLimit, verify: jsonBodyVerify });
-const jsonParserHeavy = express.json({ limit: heavyJsonLimit, verify: jsonBodyVerify });
+// LiveKit sends webhooks as application/webhook+json; without it req.rawBody is never set and signature verification fails.
+const jsonBodyTypes = ['application/json', 'application/webhook+json'];
+const jsonParserDefault = express.json({ limit: defaultJsonLimit, verify: jsonBodyVerify, type: jsonBodyTypes });
+const jsonParserHeavy = express.json({ limit: heavyJsonLimit, verify: jsonBodyVerify, type: jsonBodyTypes });
 app.use((req, res, next) => {
   const path = (req.originalUrl || req.url || '').split('?')[0];
   if (heavyJsonPaths.test(path)) {

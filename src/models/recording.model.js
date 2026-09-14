@@ -66,6 +66,12 @@ const recordingSchema = mongoose.Schema(
     bytes: { type: Number, default: null },
     /** Egress duration in ms; populated from completedAt - startedAt at finalize. */
     durationMs: { type: Number, default: null },
+    /** LiveKit egressInfo.startedAt (ms epoch) from egress_started / egress_ended. */
+    egressStartedAtEpochMs: { type: Number, default: null },
+    /** file_results[0].startedAt when present (ms epoch). */
+    egressFileStartedAtEpochMs: { type: Number, default: null },
+    /** Set when auto-end forces room close past schedule hard cap (D29 design a). */
+    truncatedAtScheduleEnd: { type: Boolean, default: false },
 
     status: {
       type: String,
@@ -97,6 +103,8 @@ const recordingSchema = mongoose.Schema(
       index: true,
     },
     aiProcessingError: { type: String, default: null },
+    /** Summary worker lease. Distinct from `finalizingAt`, which belongs to the egress lifecycle. */
+    summaryClaimedAt: { type: Date, default: null },
     transcriptId: { type: mongoose.Schema.Types.ObjectId, ref: 'TranscriptSegment', default: null },
     summaryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Summary', default: null },
     transcriptUrl: { type: String, default: null },
@@ -104,6 +112,13 @@ const recordingSchema = mongoose.Schema(
     agentDispatchId: { type: String, default: null },
     /** P3: explicit tenant boundary. Populated from meeting.tenantId at recording creation. */
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    /** Interview Mongo id when the room is an ATS interview (additive). */
+    interviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'Meeting', index: true, default: null },
+    meetingKind: {
+      type: String,
+      enum: ['interview', 'internal', 'chat'],
+      default: null,
+    },
   },
   { timestamps: true }
 );

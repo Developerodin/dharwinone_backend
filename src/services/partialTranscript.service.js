@@ -19,6 +19,9 @@ export async function appendPartials(meetingId, partials = []) {
   const meta = buildMetaKey(meetingId);
   const pipe = client.pipeline();
   for (const p of partials) {
+    const speaker = p.speaker ?? p.participantIdentity ?? '';
+    const speakerName = p.speakerName ?? p.displayName ?? '';
+    const startMs = p.startMs ?? p.ts ?? 0;
     pipe.xadd(
       key,
       'MAXLEN',
@@ -26,13 +29,13 @@ export async function appendPartials(meetingId, partials = []) {
       String(STREAM_MAXLEN),
       '*',
       'speaker',
-      String(p.speaker || ''),
+      String(speaker),
       'speakerName',
-      String(p.speakerName || ''),
+      String(speakerName),
       'text',
       String(p.text || ''),
       'startMs',
-      String(p.startMs || 0),
+      String(startMs),
       'endMs',
       String(p.endMs || 0),
       'confidence',
