@@ -830,25 +830,31 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
   }
 
   const v2Session = await TranscriptSession.findOne({ recordingId: recording._id }).lean();
-  if (v2Session || recording.transcriptS3Key) {
+  const transcriptS3Key = recording.transcriptS3Key;
+  const isVersionedTranscriptKey = transcriptS3Key && /\/transcripts\/v\d+\.json$/.test(transcriptS3Key);
+  if (v2Session || transcriptS3Key) {
     let versionPayload = null;
-    if (recording.transcriptS3Key) {
+    if (isVersionedTranscriptKey) {
       try {
-        versionPayload = await readJsonFromS3({ key: recording.transcriptS3Key });
+        versionPayload = await readJsonFromS3({ key: transcriptS3Key });
       } catch (err) {
         logger.warn('[Recording] transcript version read failed', {
           recordingId,
-          key: recording.transcriptS3Key,
+          key: transcriptS3Key,
           error: err.message,
         });
       }
     }
     let rawUtterances = versionPayload?.utterances || [];
-    if (!rawUtterances.length && v2Session) {
+    if (!rawUtterances.length && (v2Session || (transcriptS3Key && !isVersionedTranscriptKey))) {
       const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
         .sort({ sessionId: 1, batchSeq: 1 })
         .lean();
       rawUtterances = dedupeAndSortUtterances(batches);
+    }
+    const recordingIdStr = String(recording._id);
+    if (rawUtterances.some((u) => u.recordingId != null && u.recordingId !== '')) {
+      rawUtterances = rawUtterances.filter((u) => String(u.recordingId) === recordingIdStr);
     }
     const utterances = rawUtterances.map((u) => ({
       utteranceId: u.utteranceId,

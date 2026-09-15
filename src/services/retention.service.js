@@ -84,9 +84,11 @@ export async function runRetention() {
     .lean();
   for (const v of oldVersions) {
     // eslint-disable-next-line no-await-in-loop
-    await deleteS3Object(v.s3Key);
-    // eslint-disable-next-line no-await-in-loop
-    await TranscriptVersion.deleteOne({ _id: v._id });
+    const deleted = await deleteS3Object(v.s3Key);
+    if (deleted) {
+      // eslint-disable-next-line no-await-in-loop
+      await TranscriptVersion.deleteOne({ _id: v._id });
+    }
   }
 
   const oldSessions = await TranscriptSession.find({ updatedAt: { $lt: tCutoff } })
