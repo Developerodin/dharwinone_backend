@@ -101,6 +101,7 @@ export const recordParticipantConsent = async ({
 };
 
 export const assertRecordingConsentForRoom = async (roomName) => {
+  if (!config.livekit?.recordingConsentRequired) return;
   const meeting = await Meeting.findOne({ meetingId: roomName });
   if (!meeting || meeting.meetingKind === 'internal') return;
 

@@ -891,11 +891,24 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
         aiProcessingError: recording.aiProcessingError ?? null,
       },
       meetingTitle: meeting?.title || recording.meetingId,
-      segments: [],
+      // v1 clients (Communication → Recordings TranscriptModal) only read `segments`.
+      segments: utterances.length
+        ? [
+            {
+              id: 'v2',
+              sequenceNumber: 1,
+              windowStartMs: utterances[0].startMs ?? 0,
+              windowEndMs: utterances[utterances.length - 1].startMs ?? 0,
+              combinedText: utterances.map((u) => u.text).join(' '),
+              utteranceCount: utterances.length,
+              utterances: utterances.map((u) => ({ ...u, endMs: null })),
+            },
+          ]
+        : [],
       utterances,
       evidenceGrade: versionPayload?.evidenceGrade ?? null,
       transcriptVersion: versionPayload?.version ?? null,
-      totalSegments: 0,
+      totalSegments: utterances.length ? 1 : 0,
       page: 1,
       limit,
       totalPages: 1,

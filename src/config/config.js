@@ -128,6 +128,11 @@ const envVarsSchema = Joi.object()
       .falsy('false', '0')
       .default(false)
       .description('LiveKit room_finished webhook stops egress and closes ChatCall'),
+    INTERVIEW_RECORDING_CONSENT_REQUIRED: Joi.boolean()
+      .truthy('true', '1')
+      .falsy('false', '0')
+      .default(false)
+      .description('Block recording start while a roster candidate is connected without recording consent (needs approved notice copy)'),
     LIVEKIT_SUMMARY_AGENT_NAME: Joi.string()
       .optional()
       .default('meeting-summary-agent')
@@ -587,6 +592,7 @@ const config = {
     agentsEnabled: envVars.LIVEKIT_AGENTS_ENABLED,
     webhookHostLeaveStopEnabled: envVars.LIVEKIT_WEBHOOK_HOST_LEAVE_STOP_ENABLED,
     webhookRoomFinishedEnabled: envVars.LIVEKIT_WEBHOOK_ROOM_FINISHED_ENABLED,
+    recordingConsentRequired: envVars.INTERVIEW_RECORDING_CONSENT_REQUIRED,
     summaryAgentName: String(envVars.LIVEKIT_SUMMARY_AGENT_NAME || 'meeting-summary-agent').trim(),
     meetingAutoEndHardCapMinutes: envVars.MEETING_AUTO_END_HARD_CAP_MINUTES,
   },
