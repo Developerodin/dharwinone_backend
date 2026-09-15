@@ -84,6 +84,7 @@
   "./src/services/__tests__/attendance.trackHistory.test.js",
   "./src/services/__tests__/chat.createConversation.dedupe.test.js",
   "./src/services/__tests__/chat.listConversations.test.js",
+  "./src/validations/__tests__/chat.listConversations.validation.test.js",
   "./src/services/__tests__/communicationAccess.canSeeUser.test.js",
   "./src/services/__tests__/communicationAccess.referral.test.js",
   "./src/services/__tests__/communicationAccess.scope.test.js",

@@ -12,6 +12,8 @@ const listConversations = {
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(50),
     type: Joi.string().valid('direct', 'group').optional(),
+    // Empty / omitted = unfiltered. Non-empty must be ≥2 after trim (1 char → 400).
+    q: Joi.string().trim().allow('').min(2).max(100).optional(),
   }),
 };
 

@@ -364,46 +364,92 @@ const buildUnreadScopes = (convs, userId) =>
     return scope;
   });
 
-const listConversations = async (userId, { page = 1, limit = 20, type } = {}) => {
-  const skip = (page - 1) * limit;
+const USER_SEARCH_CAP = 100;
+const USER_SEARCH_MAX_TIME_MS = 2000;
+const CONVERSATION_LIST_MAX_TIME_MS = 5000;
+
+const runConversationListAggregate = (pipeline) => {
+  const agg = Conversation.aggregate(pipeline);
+  if (typeof agg?.option === 'function') {
+    return agg.option({ maxTimeMS: CONVERSATION_LIST_MAX_TIME_MS, allowDiskUse: true });
+  }
+  return agg;
+};
+
+const listConversations = async (userId, { page: requestedPage = 1, limit = 20, type, q } = {}) => {
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const matchFilter = { 'participants.user': userObjectId };
   if (type === 'direct' || type === 'group') {
     matchFilter.type = type;
   }
 
-  const [ranked, total] = await Promise.all([
-    Conversation.aggregate([
-      { $match: matchFilter },
-      {
-        $addFields: {
-          myParticipant: {
-            $arrayElemAt: [
-              {
-                $filter: {
-                  input: '$participants',
-                  as: 'p',
-                  cond: { $eq: ['$$p.user', userObjectId] },
-                },
+  // List search is group name / DM name / email only — not last-message preview
+  // (the old sidebar client-filter used to match preview text).
+  const term = String(q || '').trim();
+  if (term.length >= 2) {
+    const escaped = escapeRegex(term);
+    const orClauses = [];
+    if (type !== 'direct') {
+      orClauses.push({ type: 'group', name: { $regex: escaped, $options: 'i' } });
+    }
+    if (type !== 'group') {
+      const users = await User.find({
+        _id: { $ne: userObjectId },
+        $or: [
+          { name: { $regex: escaped, $options: 'i' } },
+          { email: { $regex: escaped, $options: 'i' } },
+        ],
+      })
+        .select('_id')
+        .limit(USER_SEARCH_CAP)
+        .maxTimeMS(USER_SEARCH_MAX_TIME_MS)
+        .lean();
+      const ids = (users || []).map((u) => u._id).filter(Boolean);
+      if (ids.length > 0) {
+        orClauses.push({ type: 'direct', 'participants.user': { $in: ids } });
+      }
+    }
+    if (orClauses.length > 0) {
+      matchFilter.$and = [{ $or: orClauses }];
+    } else {
+      matchFilter._id = { $in: [] };
+    }
+  }
+
+  const total = await Conversation.countDocuments(matchFilter);
+  const totalPages = Math.ceil(total / limit) || 1;
+  const page = total === 0 ? 1 : Math.min(Math.max(Number(requestedPage) || 1, 1), totalPages);
+  const skip = (page - 1) * limit;
+
+  const ranked = await runConversationListAggregate([
+    { $match: matchFilter },
+    {
+      $addFields: {
+        myParticipant: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: '$participants',
+                as: 'p',
+                cond: { $eq: ['$$p.user', userObjectId] },
               },
-              0,
-            ],
-          },
+            },
+            0,
+          ],
         },
       },
-      {
-        $addFields: {
-          isPinned: {
-            $cond: [{ $gt: [{ $ifNull: ['$myParticipant.pinnedAt', null] }, null] }, 1, 0],
-          },
+    },
+    {
+      $addFields: {
+        isPinned: {
+          $cond: [{ $gt: [{ $ifNull: ['$myParticipant.pinnedAt', null] }, null] }, 1, 0],
         },
       },
-      { $sort: { isPinned: -1, lastMessageAt: -1, _id: -1 } },
-      { $skip: skip },
-      { $limit: limit },
-      { $project: { _id: 1 } },
-    ]),
-    Conversation.countDocuments(matchFilter),
+    },
+    { $sort: { isPinned: -1, lastMessageAt: -1, _id: -1 } },
+    { $skip: skip },
+    { $limit: limit },
+    { $project: { _id: 1 } },
   ]);
 
   const rankedIds = ranked.map((row) => row._id);
@@ -417,23 +463,7 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
   const byId = new Map(unordered.map((c) => [c._id.toString(), c]));
   const convs = rankedIds.map((id) => byId.get(id.toString())).filter(Boolean);
 
-  const seenGroupKeys = new Set();
-  const dedupedConvs = [];
-  for (const c of convs) {
-    if (c.type === 'group') {
-      const participantIds = (c.participants || [])
-        .map((p) => p.user?._id?.toString?.())
-        .filter(Boolean)
-        .sort()
-        .join(',');
-      const groupKey = `${c.name || 'Group'}|${participantIds}`;
-      if (seenGroupKeys.has(groupKey)) continue;
-      seenGroupKeys.add(groupKey);
-    }
-    dedupedConvs.push(c);
-  }
-
-  const convIds = dedupedConvs.map((c) => c._id);
+  const convIds = convs.map((c) => c._id);
 
   // Skip messages this user deleted for themselves, and skip "delete for everyone"
   // tombstones so the chat list never shows deleted content as the latest preview.
@@ -491,7 +521,7 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
   //
   // Same visibility rules as the list preview: a message this user deleted for themselves, or
   // one deleted for everyone, is not something they can still go and read.
-  const unreadScopes = buildUnreadScopes(dedupedConvs, userId);
+  const unreadScopes = buildUnreadScopes(convs, userId);
   const unreadCounts = unreadScopes.length
     ? await Message.aggregate([
         {
@@ -508,7 +538,7 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
     : [];
   const unreadMap = new Map(unreadCounts.map((row) => [row._id.toString(), row.count]));
 
-  const result = dedupedConvs.map((c) => {
+  const result = convs.map((c) => {
     const cid = c._id.toString();
     const otherParticipants = (c.participants || []).filter((p) => p?.user?._id?.toString() !== userId);
     const displayName = c.type === 'group' ? (c.name || 'Group') : otherParticipants[0]?.user?.name || 'Unknown';
@@ -524,7 +554,7 @@ const listConversations = async (userId, { page = 1, limit = 20, type } = {}) =>
   const enrichedResults = await Promise.all(
     result.map((r) => formatConversationForClient({ ...r }, userId))
   );
-  return { results: enrichedResults, page, limit, total, totalPages: Math.ceil(total / limit) || 1 };
+  return { results: enrichedResults, page, limit, total, totalPages };
 };
 
 const listConversationPreferences = async (userId) => {
