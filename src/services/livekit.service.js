@@ -252,7 +252,15 @@ const computeMeetingAccessGates = ({
  * @param {boolean} options.forceFullPermissions - Force full permissions (for admitted participants)
  * @returns {Promise<{token: string, isHost: boolean, canPublish: boolean, meetingEndAt: string|null}>} JWT token and participant grants
  */
-const generateAccessToken = async ({ roomName, participantName, participantIdentity, participantEmail, forceFullPermissions = false, forcePublicGuest = false }) => {
+const generateAccessToken = async ({
+  roomName,
+  participantName,
+  participantIdentity,
+  participantEmail,
+  forceFullPermissions = false,
+  forcePublicGuest = false,
+  authUser = null,
+}) => {
   logger.info('[LiveKit] generateAccessToken', { roomName, participantName, participantIdentity: participantIdentity || '(none)' });
 
   if (!apiKey || !apiSecret) {
@@ -453,6 +461,38 @@ const generateAccessToken = async ({ roomName, participantName, participantIdent
         logger.warn('[LiveKit] assistant dispatch failed (token still issued)', { roomName, error: err.message });
       }
     })();
+  }
+
+  if (meeting && !roomName.startsWith('chat-') && effectiveIdentity) {
+    try {
+      const {
+        hashParticipantEmail,
+        resolveRosterRole,
+        upsertParticipantRosterOnToken,
+      } = await import('./participantRoster.service.js');
+      const emailHash = hashParticipantEmail(participantEmail);
+      const { role, assurance, refKind, refId } = resolveRosterRole({
+        meeting,
+        user: authUser,
+        publicEmail: authUser ? null : participantEmail,
+        admitted: isAdmitted,
+      });
+      await upsertParticipantRosterOnToken({
+        meeting,
+        identity: effectiveIdentity,
+        displayName: participantName,
+        emailHash,
+        role,
+        assurance,
+        refKind,
+        refId,
+      });
+    } catch (err) {
+      logger.warn('[LiveKit] participant roster upsert failed (token still issued)', {
+        roomName,
+        error: err instanceof Error ? err.message : 'unknown',
+      });
+    }
   }
 
   return { token: jwt, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin: Boolean(meeting?.allowGuestJoin), rejected };

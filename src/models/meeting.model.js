@@ -165,6 +165,19 @@ const meetingSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    participantRoster: [
+      {
+        identity: { type: String, required: true, trim: true },
+        role: { type: String, trim: true },
+        refKind: { type: String, trim: true, default: 'none' },
+        refId: { type: String, trim: true, default: null },
+        displayName: { type: String, trim: true, default: '' },
+        emailHash: { type: String, trim: true, default: null },
+        assurance: { type: String, trim: true },
+        firstJoinedAt: { type: Date },
+        lastJoinedAt: { type: Date },
+      },
+    ],
     // --- System ---
     /** LiveKit participant identities granted publish after host admit (survives API restarts / multi-instance) */
     admittedIdentities: {

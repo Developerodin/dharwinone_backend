@@ -35,6 +35,15 @@ const transcriptSessionSchema = new mongoose.Schema(
     meetingId: { type: String, required: true, index: true },
     recordingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recording', default: null, index: true },
     interviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'Meeting', default: null },
+    applicationId: { type: mongoose.Schema.Types.ObjectId, ref: 'JobApplication', default: null },
+    jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
+    candidateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+    round: {
+      index: { type: Number },
+      type: { type: String },
+      label: { type: String },
+    },
+    interviewLanguage: { type: String, default: 'en' },
     runs: { type: [runSchema], default: [] },
     status: {
       type: String,
@@ -52,6 +61,7 @@ const transcriptSessionSchema = new mongoose.Schema(
 );
 
 transcriptSessionSchema.index({ status: 1, updatedAt: 1 });
+transcriptSessionSchema.index({ interviewId: 1 });
 
 transcriptSessionSchema.plugin(toJSON);
 

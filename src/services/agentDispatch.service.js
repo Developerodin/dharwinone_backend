@@ -3,6 +3,7 @@ import { AgentDispatchClient } from 'livekit-server-sdk';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import AgentDispatch from '../models/agentDispatch.model.js';
+import { getMeetingByMeetingId } from './meetingLookup.service.js';
 
 const ASSISTANT_AGENT_NAME = 'meeting-assistant-agent';
 
@@ -90,12 +91,14 @@ export async function dispatchSummaryAgent({ meetingId, recordingId }) {
   const agentName = getAgentName();
   const hmacToken = crypto.randomBytes(32).toString('hex');
   const dispatchKey = crypto.randomBytes(16).toString('hex');
+  const meeting = await getMeetingByMeetingId(meetingId);
+  const language = meeting?.interviewLanguage || 'en';
   const metadata = buildDispatchMetadataV2({
     meetingId,
     recordingId,
     hmacToken,
     dispatchKey,
-    language: 'en',
+    language,
   });
   const dispatch = await dispatchClient.createDispatch(meetingId, agentName, { metadata });
 

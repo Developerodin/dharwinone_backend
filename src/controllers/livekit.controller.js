@@ -5,24 +5,17 @@ import * as chatService from '../services/chat.service.js';
 import * as chatCallService from '../services/chatCall.service.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
-import crypto from 'crypto';
 import { userIsAdmin } from '../utils/roleHelpers.js';
+import {
+  stablePublicParticipantIdentity,
+  deriveAuthenticatedParticipantIdentity,
+} from '../services/participantRoster.service.js';
 
 const parseChatRoomConversationId = (roomName) => {
   if (!roomName || !roomName.startsWith('chat-')) return null;
   const parts = roomName.split('-');
   if (parts.length >= 2) return parts[1];
   return null;
-};
-
-const stablePublicParticipantIdentity = ({ roomName, participantName, participantEmail }) => {
-  const base = String(participantEmail || participantName || 'guest').toLowerCase().trim();
-  const digest = crypto
-    .createHash('sha1')
-    .update(`${String(roomName).trim()}|${base}`)
-    .digest('hex')
-    .slice(0, 10);
-  return `guest-${digest}`;
 };
 
 /** Meeting host/owner, Administrator role, or platform super user. */
@@ -47,7 +40,8 @@ const getToken = catchAsync(async (req, res) => {
   }
 
   // Use authenticated user info as defaults
-  const participantIdentity = req.user?.id || req.user?._id?.toString() || `user-${Date.now()}`;
+  const participantIdentity =
+    deriveAuthenticatedParticipantIdentity(req.user) || `user-${Date.now()}`;
   const name = participantName || req.user?.name || req.user?.email || 'Anonymous';
   const email = participantEmail || req.user?.email || null;
 
@@ -79,6 +73,7 @@ const getToken = catchAsync(async (req, res) => {
     participantEmail: email,
     // Admins / platform super users join with full host-equivalent grants (no waiting room).
     forceFullPermissions: forChatCall || isPrivilegedAdmin,
+    authUser: req.user,
   });
 
   res.status(httpStatus.OK).json({
@@ -170,7 +165,7 @@ const getRecordingStatus = catchAsync(async (req, res) => {
  * Body: { roomName, participantName }
  */
 const getTokenPublic = catchAsync(async (req, res) => {
-  const { roomName, participantName, participantEmail, participantIdentity: bodyIdentity } = req.body;
+  const { roomName, participantName, participantEmail, participantIdentity: requestedIdentity } = req.body;
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
@@ -182,19 +177,21 @@ const getTokenPublic = catchAsync(async (req, res) => {
   }
 
   const name = participantName?.trim() || 'Guest';
+  const trimmedEmail = participantEmail?.trim() || null;
+  const serverIdentity = stablePublicParticipantIdentity({
+    roomName,
+    participantName: name,
+    participantEmail: trimmedEmail,
+  });
+  const requested = requestedIdentity?.trim();
   const participantIdentity =
-    bodyIdentity?.trim() ||
-    stablePublicParticipantIdentity({
-      roomName,
-      participantName: name,
-      participantEmail: participantEmail?.trim(),
-    });
+    requested && requested === serverIdentity ? requested : serverIdentity;
 
   const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin, rejected } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
-    participantEmail: participantEmail?.trim() || null,
+    participantEmail: trimmedEmail,
   });
 
   res.status(httpStatus.OK).json({

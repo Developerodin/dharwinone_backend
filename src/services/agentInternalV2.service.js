@@ -3,6 +3,7 @@ import TranscriptSession from '../models/transcriptSession.model.js';
 import TranscriptBatch from '../models/transcriptBatch.model.js';
 import AgentDispatch from '../models/agentDispatch.model.js';
 import Recording from '../models/recording.model.js';
+import Meeting from '../models/meeting.model.js';
 import logger from '../config/logger.js';
 import { enqueueFinalize } from '../queues/summaryQueue.js';
 import {
@@ -10,6 +11,8 @@ import {
   sessionFinalizeState,
   utteranceIdsHash,
 } from './agentInternalV2.helpers.js';
+import { meetingInterviewSnapshot, resolveSpeakerFromRoster } from './participantRoster.service.js';
+import { getMeetingByMeetingId } from './meetingLookup.service.js';
 
 function findRun(session, runId) {
   return session.runs.find((r) => r.runId === runId);
@@ -17,7 +20,23 @@ function findRun(session, runId) {
 
 async function upsertSession({ dispatchKey, meetingId, recordingId }) {
   const filter = { dispatchKey };
-  const update = { $setOnInsert: { dispatchKey, meetingId, recordingId: recordingId || null, runs: [], status: 'open' } };
+  const meeting = await getMeetingByMeetingId(meetingId);
+  const snapshot = meetingInterviewSnapshot(meeting) || {};
+  const update = {
+    $setOnInsert: {
+      dispatchKey,
+      meetingId,
+      recordingId: recordingId || null,
+      interviewId: snapshot.interviewId || null,
+      applicationId: snapshot.applicationId || null,
+      jobId: snapshot.jobId || null,
+      candidateId: snapshot.candidateId || null,
+      round: snapshot.round || null,
+      interviewLanguage: snapshot.interviewLanguage || 'en',
+      runs: [],
+      status: 'open',
+    },
+  };
   try {
     return await TranscriptSession.findOneAndUpdate(filter, update, { upsert: true, new: true });
   } catch (err) {
@@ -99,6 +118,19 @@ export async function ingestTranscriptBatch({ dispatch, runId, batchSeq, utteran
 
   const hash = utteranceIdsHash(utterances);
   const n = utterances.length;
+
+  const meeting = await Meeting.findOne({ meetingId: dispatch.meetingId }).select('participantRoster').lean();
+  const roster = meeting?.participantRoster || [];
+  const enriched = utterances.map((u) => {
+    const { speakerRole, speakerRef, roleAssurance } = resolveSpeakerFromRoster(roster, u.participantIdentity);
+    return {
+      ...u,
+      speakerRole,
+      speakerRef: speakerRef ? `${speakerRef.kind}:${speakerRef.id}` : null,
+      roleAssurance,
+    };
+  });
+
   try {
     await TranscriptBatch.create({
       sessionId: session._id,
@@ -107,7 +139,7 @@ export async function ingestTranscriptBatch({ dispatch, runId, batchSeq, utteran
       meetingId: dispatch.meetingId,
       recordingId: dispatch.recordingId || null,
       utteranceIdsHash: hash,
-      utterances,
+      utterances: enriched,
     });
   } catch (err) {
     if (err?.code === 11000) {
