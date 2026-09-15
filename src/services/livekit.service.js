@@ -470,12 +470,18 @@ const generateAccessToken = async ({
         resolveRosterRole,
         upsertParticipantRosterOnToken,
       } = await import('./participantRoster.service.js');
+      let candidateOwnerUserId = null;
+      if (meeting.candidateId) {
+        const { default: Employee } = await import('../models/employee.model.js');
+        const candidateEmployee = await Employee.findById(meeting.candidateId).select('owner').lean();
+        candidateOwnerUserId = candidateEmployee?.owner ? String(candidateEmployee.owner) : null;
+      }
       const emailHash = hashParticipantEmail(participantEmail);
       const { role, assurance, refKind, refId } = resolveRosterRole({
         meeting,
         user: authUser,
         publicEmail: authUser ? null : participantEmail,
-        admitted: isAdmitted,
+        candidateOwnerUserId,
       });
       await upsertParticipantRosterOnToken({
         meeting,

@@ -40,10 +40,13 @@ function userMatchesEmbedded(user, embedded) {
   return false;
 }
 
-function isCandidateAuthenticated(meeting, user) {
+function isCandidateAuthenticated(meeting, user, candidateOwnerUserId) {
   if (!meeting || !user) return false;
-  if (meeting.candidateId && user.employeeId && String(meeting.candidateId) === String(user.employeeId)) {
-    return true;
+  if (meeting.candidateId && candidateOwnerUserId) {
+    const uid = deriveAuthenticatedParticipantIdentity(user);
+    if (uid && String(candidateOwnerUserId) === String(uid)) {
+      return true;
+    }
   }
   if (userMatchesEmbedded(user, meeting.candidate)) return true;
   return false;
@@ -78,9 +81,9 @@ function isInterviewerPublicClaim(meeting, publicEmail) {
  * Pure roster role resolution per plan §9.4.
  * @returns {{ role: string, assurance: string, refKind: string, refId: string|null }}
  */
-export function resolveRosterRole({ meeting, user, publicEmail, admitted }) {
+export function resolveRosterRole({ meeting, user, publicEmail, candidateOwnerUserId }) {
   if (user) {
-    if (isCandidateAuthenticated(meeting, user)) {
+    if (isCandidateAuthenticated(meeting, user, candidateOwnerUserId)) {
       return {
         role: 'candidate',
         assurance: 'authenticated',
@@ -97,7 +100,7 @@ export function resolveRosterRole({ meeting, user, publicEmail, admitted }) {
       };
     }
     return {
-      role: admitted ? 'guest' : 'guest',
+      role: 'guest',
       assurance: 'uninvited',
       refKind: 'user',
       refId: deriveAuthenticatedParticipantIdentity(user),
@@ -122,7 +125,7 @@ export function resolveRosterRole({ meeting, user, publicEmail, admitted }) {
   }
   return {
     role: 'guest',
-    assurance: admitted ? 'uninvited' : 'uninvited',
+    assurance: 'uninvited',
     refKind: 'none',
     refId: null,
   };
@@ -183,23 +186,6 @@ export async function upsertParticipantRosterOnToken({
   if (!meeting?._id || !identity) return meeting;
   const now = new Date();
   const existing = (meeting.participantRoster || []).find((r) => r.identity === identity);
-  if (existing) {
-    await Meeting.updateOne(
-      { _id: meeting._id, 'participantRoster.identity': identity },
-      {
-        $set: {
-          'participantRoster.$.displayName': displayName || existing.displayName,
-          'participantRoster.$.emailHash': emailHash ?? existing.emailHash,
-          'participantRoster.$.role': role,
-          'participantRoster.$.assurance': assurance,
-          'participantRoster.$.refKind': refKind || existing.refKind,
-          'participantRoster.$.refId': refId ?? existing.refId,
-          'participantRoster.$.lastJoinedAt': now,
-        },
-      }
-    );
-    return Meeting.findById(meeting._id);
-  }
   const entry = buildRosterEntry({
     identity,
     displayName,
@@ -210,7 +196,26 @@ export async function upsertParticipantRosterOnToken({
     refId,
     now,
   });
-  await Meeting.updateOne({ _id: meeting._id }, { $push: { participantRoster: entry } });
+  const pushResult = await Meeting.updateOne(
+    { _id: meeting._id, 'participantRoster.identity': { $ne: identity } },
+    { $push: { participantRoster: entry } }
+  );
+  if (pushResult.matchedCount === 0) {
+    await Meeting.updateOne(
+      { _id: meeting._id, 'participantRoster.identity': identity },
+      {
+        $set: {
+          'participantRoster.$.displayName': displayName || existing?.displayName || '',
+          'participantRoster.$.emailHash': emailHash ?? existing?.emailHash ?? null,
+          'participantRoster.$.role': role,
+          'participantRoster.$.assurance': assurance,
+          'participantRoster.$.refKind': refKind || existing?.refKind || 'none',
+          'participantRoster.$.refId': refId ?? existing?.refId ?? null,
+          'participantRoster.$.lastJoinedAt': now,
+        },
+      }
+    );
+  }
   return Meeting.findById(meeting._id);
 }
 
