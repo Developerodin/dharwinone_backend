@@ -14,7 +14,7 @@ const applicationMeta = (application) => {
 
 /** True when a non-cancelled meeting for this application already has interviewResult selected. */
 export async function applicationHasSelectedInterview(application) {
-  const { candidateId, jobId, jobTitle } = applicationMeta(application);
+  const { plain, candidateId, jobId, jobTitle } = applicationMeta(application);
   if (!candidateId) return false;
 
   const meetings = await Meeting.find({
@@ -26,7 +26,13 @@ export async function applicationHasSelectedInterview(application) {
 
   return meetings.some(
     (m) =>
-      meetingMatchesApplication(m, { candidateId, jobId, jobTitle }) && m.interviewResult === 'selected'
+      meetingMatchesApplication(m, {
+        candidateId,
+        jobId,
+        jobTitle,
+        applicationId: String(plain._id || plain.id || ''),
+      }) &&
+      m.interviewResult === 'selected'
   );
 }
 
@@ -38,7 +44,8 @@ export async function ensureInterviewSelectedForOfferBypass(application, userId)
   if (await applicationHasSelectedInterview(application)) return;
 
   const { plain, candidateId, jobId, jobTitle } = applicationMeta(application);
-  const meta = { candidateId, jobId, jobTitle };
+  const appId = String(plain._id || plain.id || '');
+  const meta = { candidateId, jobId, jobTitle, applicationId: appId };
 
   const meetings = await Meeting.find({
     'candidate.id': candidateId,
@@ -53,6 +60,15 @@ export async function ensureInterviewSelectedForOfferBypass(application, userId)
       if (target.status === 'scheduled') target.status = 'ended';
       const note = 'Interview marked selected via offer bypass.';
       target.notes = target.notes ? `${target.notes}\n${note}` : note;
+      if (appId) {
+        target.applicationId = appId;
+        target.jobId = jobId;
+        target.candidateId = candidateId;
+        target.linkageSource = 'offer_bypass';
+        if (!target.linkageStatus || target.linkageStatus === 'unlinked') {
+          target.linkageStatus = 'verified';
+        }
+      }
       await target.save();
     }
   } else {
@@ -68,6 +84,11 @@ export async function ensureInterviewSelectedForOfferBypass(application, userId)
       scheduledAt: new Date(),
       durationMinutes: 60,
       jobPosition: jobId,
+      applicationId: appId || undefined,
+      jobId: jobId || undefined,
+      candidateId: candidateId || undefined,
+      linkageStatus: appId ? 'verified' : undefined,
+      linkageSource: appId ? 'offer_bypass' : undefined,
       interviewType: 'Video',
       candidate: {
         id: candidateId,

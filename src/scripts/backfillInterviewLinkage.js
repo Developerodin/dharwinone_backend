@@ -13,6 +13,8 @@ import mongoose from 'mongoose';
 import config from '../config/config.js';
 import Meeting from '../models/meeting.model.js';
 import Recording from '../models/recording.model.js';
+import Job from '../models/job.model.js';
+import JobApplication from '../models/jobApplication.model.js';
 import { resolveInterviewApplication } from '../services/interviewLinkage.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -29,9 +31,30 @@ const counts = {
   ambiguous: 0,
   unlinked: 0,
   skipped: 0,
+  legacyTitle: 0,
 };
 
 const ambiguousRows = [];
+
+const linkageWriteFilter = (meetingId) => ({
+  _id: meetingId,
+  linkageStatus: { $in: [null, undefined, 'unlinked'] },
+  linkageRevision: { $in: [0, null] },
+});
+
+const syncRecordingSnapshots = async (meeting) => {
+  const kind = meeting.meetingKind === 'internal' ? 'internal' : 'interview';
+  const interviewId = kind === 'interview' ? meeting._id : null;
+  await Recording.updateMany(
+    { meetingId: meeting.meetingId },
+    {
+      $set: {
+        meetingKind: kind,
+        ...(interviewId ? { interviewId } : { interviewId: null }),
+      },
+    }
+  );
+};
 
 const classifyMeeting = async (meeting) => {
   const resolved = await resolveInterviewApplication(meeting);
@@ -47,24 +70,61 @@ const classifyMeeting = async (meeting) => {
         candidateId,
         linkageStatus: meeting.applicationId ? 'verified' : 'verified_exact_ids',
         linkageSource: meeting.applicationId ? 'scheduled_with_application' : 'backfill_exact_ids',
-        jobPosition: String(jobId),
       },
     };
   }
+
   const jobPos = (meeting.jobPosition || '').trim();
-  if (jobPos && !/^[0-9a-fA-F]{24}$/.test(jobPos) && meeting.candidate?.id) {
+  const candidateHex = meeting.candidate?.id;
+  if (jobPos && !/^[0-9a-fA-F]{24}$/.test(jobPos) && candidateHex && /^[0-9a-fA-F]{24}$/.test(candidateHex)) {
+    const jobs = await Job.find({ title: jobPos }).select('_id title').limit(3).lean();
+    if (jobs.length === 1) {
+      const jobId = jobs[0]._id;
+      const app = await JobApplication.findOne({ job: jobId, candidate: candidateHex })
+        .select('_id job candidate')
+        .lean();
+      if (app) {
+        return {
+          kind: 'legacy_title',
+          patch: {
+            applicationId: app._id,
+            jobId,
+            candidateId: candidateHex,
+            linkageStatus: 'legacy_title_candidate',
+            linkageSource: 'backfill_title',
+          },
+        };
+      }
+    }
+    if (jobs.length > 1) {
+      return { kind: 'ambiguous', reason: 'duplicate_job_title' };
+    }
     return { kind: 'ambiguous', reason: 'title_job_position' };
   }
+
   return { kind: 'unlinked' };
 };
 
 const run = async () => {
   await mongoose.connect(config.mongoose.url, config.mongoose.options);
+  const dbHost = (() => {
+    try {
+      const u = new URL(config.mongoose.url);
+      return u.hostname || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  })();
+  console.log(JSON.stringify({ phase: 'preflight', dbHost, dry, apply }, null, 2));
+
   const cursor = Meeting.find({}).cursor();
   for await (const meeting of cursor) {
     counts.scanned += 1;
     if (meeting.linkageStatus && meeting.linkageStatus !== 'unlinked') {
       counts.skipped += 1;
+      if (!dry) {
+        await syncRecordingSnapshots(meeting);
+      }
       continue;
     }
     const decision = await classifyMeeting(meeting);
@@ -82,20 +142,20 @@ const run = async () => {
     if (decision.kind === 'unlinked') {
       counts.unlinked += 1;
       if (!dry) {
-        await Meeting.updateOne(
-          { _id: meeting._id, linkageStatus: { $in: [null, undefined, 'unlinked'] } },
-          { $set: { linkageStatus: 'unlinked' } }
-        );
+        await Meeting.updateOne(linkageWriteFilter(meeting._id), { $set: { linkageStatus: 'unlinked' } });
+        await syncRecordingSnapshots(meeting);
       }
       continue;
     }
+    if (decision.kind === 'legacy_title') {
+      counts.legacyTitle += 1;
+    }
     if (!dry) {
-      await Meeting.updateOne({ _id: meeting._id }, { $set: decision.patch });
-      await Recording.updateMany(
-        { meetingId: meeting.meetingId, interviewId: null },
-        { $set: { interviewId: meeting._id, meetingKind: 'interview' } }
-      );
-      counts.updated += 1;
+      const res = await Meeting.updateOne(linkageWriteFilter(meeting._id), { $set: decision.patch });
+      if (res.matchedCount) {
+        counts.updated += 1;
+        await syncRecordingSnapshots(meeting);
+      }
     } else {
       counts.updated += 1;
     }
@@ -112,7 +172,7 @@ const run = async () => {
     fs.writeFileSync(path.resolve(outPath), header + lines, 'utf8');
   }
 
-  console.log(JSON.stringify({ dry, counts, outPath, ambiguous: ambiguousRows.length }, null, 2));
+  console.log(JSON.stringify({ dry, dbHost, counts, outPath, ambiguous: ambiguousRows.length }, null, 2));
   await mongoose.disconnect();
 };
 

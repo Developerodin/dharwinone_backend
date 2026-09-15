@@ -589,7 +589,8 @@ const startRecording = async (roomName) => {
   let meetingKind = null;
   if (roomDoc) {
     meetingKind = roomDoc.meetingKind === 'internal' ? 'internal' : 'interview';
-    interviewId = roomDoc._id || roomDoc.id || null;
+    interviewId =
+      meetingKind === 'interview' ? roomDoc._id || roomDoc.id || null : null;
   }
   const pending = await recordingSyncService.createPending({
     meetingId: roomName,

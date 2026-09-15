@@ -271,11 +271,15 @@ const listAll = async (options = {}, currentUser = {}) => {
     // Detect whether this recording came from an interview or a plain meeting.
     // Interviews always have a candidate.id or a jobPosition set on the Meeting
     // document; plain scheduled meetings do not.
-    const isInterview = !!(
-      mtg &&
-      ((mtg.candidate?.id && String(mtg.candidate.id).trim()) ||
-        (mtg.jobPosition && String(mtg.jobPosition).trim()))
-    );
+    const isInterview =
+      rec.meetingKind === 'interview' ||
+      (rec.meetingKind !== 'internal' &&
+        rec.meetingKind !== 'chat' &&
+        !!(
+          mtg &&
+          ((mtg.candidate?.id && String(mtg.candidate.id).trim()) ||
+            (mtg.jobPosition && String(mtg.jobPosition).trim()))
+        ));
 
     // Build a flat attendee list: candidate + recruiter + hosts + agents + emailInvites.
     const attendees = [];
