@@ -145,19 +145,21 @@ const register = catchAsync(async (req, res) => {
         });
       }
       // Unfinished signup (pending + unverified): let them resume instead of dead-ending at login.
-      // Email ownership is unproven for the earlier attempt too, so accepting the latest submitted
-      // details/password is safe — activation still requires clicking the verification link.
-      existingUser.name = name;
-      existingUser.password = password;
-      if (phone !== '0000000000') existingUser.phoneNumber = phone;
-      if (cc) existingUser.countryCode = cc;
-      if (!existingUser.registrationSource) existingUser.registrationSource = 'public_candidate';
-      await existingUser.save();
+      // Email ownership is unproven, so the account keeps its credentials and identity fields (setting the
+      // password here let anyone take the account over once its owner verified) and an existing profile is
+      // never written. Direct updates rather than updateUserById, whose profile hooks would write the profile.
+      await User.updateOne(
+        { _id: existingUser._id, registrationSource: null },
+        { $set: { registrationSource: 'public_candidate' } }
+      );
       await User.findByIdAndUpdate(existingUser._id, { $addToSet: { roleIds: candidateRole._id } });
-      const resumeCandidate = await ensureCandidateProfileForUser(existingUser._id);
-      if (resumeCandidate) {
-        const { applyPublicCandidateRegistrationProfile } = await import('../services/publicCandidateProfile.service.js');
-        await applyPublicCandidateRegistrationProfile(resumeCandidate, existingUser, req.body, req.files);
+      const hadProfile = await Employee.exists({ $or: [{ owner: existingUser._id }, { email: existingUser.email }] });
+      if (!hadProfile) {
+        const resumeCandidate = await ensureCandidateProfileForUser(existingUser._id);
+        if (resumeCandidate) {
+          const { applyPublicCandidateRegistrationProfile } = await import('../services/publicCandidateProfile.service.js');
+          await applyPublicCandidateRegistrationProfile(resumeCandidate, existingUser, req.body, req.files);
+        }
       }
       const resumeVerifyToken = await generateVerifyEmailToken(existingUser);
       await sendVerificationEmail2(existingUser.email, resumeVerifyToken, {
@@ -166,10 +168,11 @@ const register = catchAsync(async (req, res) => {
         accountContext: 'new candidate account',
       });
       res.status(httpStatus.OK).send({
-        user: existingUser,
+        // Echo nothing stored on an account the requester has not proven they own.
+        user: { id: existingUser.id, email: existingUser.email },
         resent: true,
         message:
-          'You already started registration with this email. We re-sent the verification link — verify your address to finish signing up.',
+          'You already started registration with this email. We re-sent the verification link: verify your address, then sign in with the password you chose originally or use "Forgot password" to set a new one.',
       });
       return;
     }
@@ -315,7 +318,7 @@ const publicRegister = catchAsync(async (req, res) => {
  * Duplicate email: internal/staff accounts are rejected; otherwise `$addToSet` Candidate role and set
  * `registrationSource` only when currently unset (never overwrite an existing source — R5).
  * Email ownership is not proven here, so an existing account's credentials, identity fields and Candidate profile
- * are never changed: a verified account gets 409; an unverified one only gets a profile when it has none.
+ * are never changed: a verified account gets 409 before any write; an unverified one only gets a profile when it has none.
  */
 const publicRegisterCandidate = catchAsync(async (req, res) => {
   const candidateRole = await getRoleByName('Candidate');
@@ -336,10 +339,6 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
         'This email is already registered to an internal account. Sign in or use a different email.',
       );
     }
-    // Anyone who knows the email reaches this branch: setting name/password here was an account takeover.
-    // Direct updates rather than updateUserById, whose profile hooks would create or re-activate a Candidate profile.
-    await User.updateOne({ _id: user._id, registrationSource: null }, { $set: { registrationSource: 'public_candidate' } });
-    await User.findByIdAndUpdate(user._id, { $addToSet: { roleIds: candidateRole._id } });
     if (user.isEmailVerified) {
       throw new ApiError(
         httpStatus.CONFLICT,
@@ -349,6 +348,10 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
         { errorCode: 'ACCOUNT_EXISTS' }
       );
     }
+    // Anyone who knows the email reaches this branch: setting name/password here was an account takeover.
+    // Direct updates rather than updateUserById, whose profile hooks would create or re-activate a Candidate profile.
+    await User.updateOne({ _id: user._id, registrationSource: null }, { $set: { registrationSource: 'public_candidate' } });
+    await User.findByIdAndUpdate(user._id, { $addToSet: { roleIds: candidateRole._id } });
     user = await getUserById(user._id);
     existingProfile = await Employee.findOne({ $or: [{ owner: user._id }, { email: user.email }] }).select('email');
   } else {
