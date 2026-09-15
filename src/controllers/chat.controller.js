@@ -49,8 +49,8 @@ const listConversations = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
-  const { type } = req.query;
-  const result = await chatService.listConversations(userId, { page, limit, type });
+  const { type, q } = req.query;
+  const result = await chatService.listConversations(userId, { page, limit, type, q });
   res.send(result);
 });
 

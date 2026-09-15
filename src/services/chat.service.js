@@ -364,12 +364,46 @@ const buildUnreadScopes = (convs, userId) =>
     return scope;
   });
 
-const listConversations = async (userId, { page = 1, limit = 20, type } = {}) => {
+/** Escape every regex metacharacter — conversation and message search are raw user input. */
+const REGEX_METACHARS = new Set(['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
+const escapeRegex = (value) =>
+  Array.from(String(value))
+    .map((ch) => (REGEX_METACHARS.has(ch) ? `\\${ch}` : ch))
+    .join('');
+
+const listConversations = async (userId, { page = 1, limit = 20, type, q } = {}) => {
   const skip = (page - 1) * limit;
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const matchFilter = { 'participants.user': userObjectId };
   if (type === 'direct' || type === 'group') {
     matchFilter.type = type;
+  }
+
+  // Search is applied in $match before $skip, so pin-then-lastMessageAt order is
+  // unchanged and unmessaged groups (lastMessageAt=null, sorts last) stay findable.
+  // Admins still only see conversations they belong to — membership is always required.
+  const term = typeof q === 'string' ? q.trim() : '';
+  if (term) {
+    const nameMatch = { $regex: escapeRegex(term), $options: 'i' };
+    const searchOr = [];
+    if (type !== 'direct') {
+      searchOr.push({ type: 'group', name: nameMatch });
+    }
+    if (type !== 'group') {
+      // DM display names/emails live on User, not Conversation. Resolve ids first.
+      // Unanchored case-insensitive regex cannot use the email unique index.
+      const matchingUsers = await User.find({
+        _id: { $ne: userObjectId },
+        $or: [{ name: nameMatch }, { email: nameMatch }],
+      })
+        .select('_id')
+        .lean();
+      searchOr.push({
+        type: 'direct',
+        'participants.user': { $in: matchingUsers.map((u) => u._id) },
+      });
+    }
+    matchFilter.$and = [{ $or: searchOr }];
   }
 
   const [ranked, total] = await Promise.all([
@@ -1079,13 +1113,6 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
  * (autoIndex is off there), so it is a deploy step, not a code change.
  */
 const SEARCH_MAX_LIMIT = 50;
-
-/** Escape every regex metacharacter — the query is raw user input. */
-const REGEX_METACHARS = new Set(['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
-const escapeRegex = (value) =>
-  Array.from(String(value))
-    .map((ch) => (REGEX_METACHARS.has(ch) ? `\\${ch}` : ch))
-    .join('');
 
 const searchMessages = async (conversationId, userId, { q, limit = 20 } = {}) => {
   await ensureParticipant(conversationId, userId);

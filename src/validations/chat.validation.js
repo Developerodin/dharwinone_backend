@@ -12,6 +12,7 @@ const listConversations = {
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(50),
     type: Joi.string().valid('direct', 'group').optional(),
+    q: Joi.string().trim().max(100).optional().allow(''),
   }),
 };
 
