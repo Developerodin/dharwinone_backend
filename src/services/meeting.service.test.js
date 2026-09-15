@@ -218,7 +218,7 @@ test('notification carries correct job/application metadata and the candidate My
 
   const meeting = await makeMeeting({
     candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job.title,
+    jobPosition: job._id.toString(),
     interviewResult: 'pending',
   });
 
@@ -296,7 +296,7 @@ test('pending -> rejected cascades JobApplication.status to Rejected', async () 
 
   const meeting = await makeMeeting({
     candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job.title,
+    jobPosition: job._id.toString(),
     interviewResult: 'pending',
   });
 
@@ -342,7 +342,7 @@ test('selected -> rejected rolls back offer and sets JobApplication Rejected', a
 
   const meeting = await makeMeeting({
     candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job.title,
+    jobPosition: job._id.toString(),
     interviewResult: 'pending',
   });
 
@@ -392,7 +392,7 @@ test('rejected -> selected preserves selection flow (offer created)', async () =
 
   const meeting = await makeMeeting({
     candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job.title,
+    jobPosition: job._id.toString(),
     interviewResult: 'pending',
   });
 
@@ -405,4 +405,50 @@ test('rejected -> selected preserves selection flow (offer created)', async () =
   const afterReselect = await JobApplication.findById(application._id).lean();
   assert.equal(afterReselect.status, 'Offered');
   assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+});
+
+test('title-only jobPosition does not cascade application changes and returns linkageWarning', async () => {
+  const candidate = await makeUser('titleonly');
+  const adminId = new mongoose.Types.ObjectId();
+
+  const employee = await Employee.create({
+    owner: adminId,
+    adminId,
+    fullName: 'MTG_NOTIFY_TEST Title Only',
+    email: candidate.email,
+    phoneNumber: '+10000000004',
+  });
+  createdEmployeeIds.push(employee._id);
+
+  const job = await Job.create({
+    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
+    title: 'MTG_NOTIFY_TEST_JOB_Title Only Linkage',
+    jobDescription: 'Title-only interview must stay unlinked for cascades.',
+    jobType: 'Full-time',
+    location: 'Remote',
+    createdBy: adminId,
+  });
+  createdJobIds.push(job._id);
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: employee._id,
+    status: 'Interview',
+  });
+  createdApplicationIds.push(application._id);
+
+  const meeting = await makeMeeting({
+    candidate: { id: employee._id.toString(), email: candidate.email },
+    jobPosition: job.title,
+    interviewResult: 'pending',
+  });
+
+  const result = await meetingService.updateMeetingById(
+    meeting._id.toString(),
+    { interviewResult: 'rejected' },
+    new mongoose.Types.ObjectId().toString()
+  );
+
+  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Interview');
+  assert.equal(result.linkageWarning, 'interview_not_linked');
 });

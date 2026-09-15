@@ -37,7 +37,11 @@ export async function resolveInterviewApplication(meeting) {
       ? new mongoose.Types.ObjectId(candidateId)
       : null;
 
-  if (meeting.applicationId && mongoose.Types.ObjectId.isValid(String(meeting.applicationId))) {
+  if (
+    meeting.applicationId &&
+    mongoose.Types.ObjectId.isValid(String(meeting.applicationId)) &&
+    isVerifiedLinkage(meeting)
+  ) {
     const application = await JobApplication.findById(meeting.applicationId);
     if (!application) {
       return {
@@ -182,4 +186,29 @@ export function linkageRevisionQuery(expectedRevision) {
     return { $in: [0, null] };
   }
   return expectedRevision;
+}
+
+/**
+ * Pure backfill classifier for title-based legacy interviews (no DB).
+ * @returns {'legacy_title_candidate'|'ambiguous'|'unlinked_title'}
+ */
+export function classifyTitleJobPositionBackfill({ jobPosition, candidateId, matchingJobCount, hasApplication }) {
+  const jobPos = (jobPosition || '').trim();
+  const candidateHex = candidateId;
+  if (!jobPos || /^[0-9a-fA-F]{24}$/.test(jobPos)) {
+    return 'unlinked_title';
+  }
+  if (!candidateHex || !/^[0-9a-fA-F]{24}$/.test(candidateHex)) {
+    return 'unlinked_title';
+  }
+  if (matchingJobCount > 1) {
+    return 'ambiguous';
+  }
+  if (matchingJobCount === 1 && hasApplication) {
+    return 'legacy_title_candidate';
+  }
+  if (matchingJobCount === 1) {
+    return 'unlinked_title';
+  }
+  return 'ambiguous';
 }

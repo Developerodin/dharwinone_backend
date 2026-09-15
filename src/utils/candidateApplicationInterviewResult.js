@@ -15,7 +15,11 @@ export const meetingRelevanceSortKey = (meeting) => {
  * Whether a meeting belongs to the given application (candidate + job).
  * Mirrors meeting.service.js jobPosition resolution: ObjectId hex or exact job title.
  */
-export const meetingMatchesApplication = (meeting, { candidateId, jobId, jobTitle, applicationId }) => {
+export const meetingMatchesApplication = (
+  meeting,
+  { candidateId, jobId, jobTitle, applicationId },
+  { allowTitleMatch = true } = {}
+) => {
   const meetingCandidateId = String(meeting.candidate?.id || '');
   if (!meetingCandidateId || meetingCandidateId !== String(candidateId)) return false;
 
@@ -29,6 +33,10 @@ export const meetingMatchesApplication = (meeting, { candidateId, jobId, jobTitl
 
   if (OBJECT_ID_HEX_RE.test(jobPos)) {
     return String(jobPos) === String(jobId);
+  }
+
+  if (!allowTitleMatch) {
+    return false;
   }
 
   if (jobTitle) {

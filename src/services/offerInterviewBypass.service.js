@@ -26,13 +26,16 @@ export async function applicationHasSelectedInterview(application) {
 
   return meetings.some(
     (m) =>
-      meetingMatchesApplication(m, {
-        candidateId,
-        jobId,
-        jobTitle,
-        applicationId: String(plain._id || plain.id || ''),
-      }) &&
-      m.interviewResult === 'selected'
+      meetingMatchesApplication(
+        m,
+        {
+          candidateId,
+          jobId,
+          jobTitle,
+          applicationId: String(plain._id || plain.id || ''),
+        },
+        { allowTitleMatch: false }
+      ) && m.interviewResult === 'selected'
   );
 }
 
@@ -52,24 +55,33 @@ export async function ensureInterviewSelectedForOfferBypass(application, userId)
     status: { $ne: 'cancelled' },
   }).sort({ scheduledAt: -1 });
 
-  const matching = meetings.filter((m) => meetingMatchesApplication(m, meta));
+  const matching = meetings.filter((m) => meetingMatchesApplication(m, meta, { allowTitleMatch: false }));
   if (matching.length) {
     const target = matching[0];
     if (target.interviewResult !== 'selected') {
-      target.interviewResult = 'selected';
-      if (target.status === 'scheduled') target.status = 'ended';
       const note = 'Interview marked selected via offer bypass.';
-      target.notes = target.notes ? `${target.notes}\n${note}` : note;
-      if (appId) {
-        target.applicationId = appId;
-        target.jobId = jobId;
-        target.candidateId = candidateId;
-        target.linkageSource = 'offer_bypass';
-        if (!target.linkageStatus || target.linkageStatus === 'unlinked') {
-          target.linkageStatus = 'verified';
+      const linkageSet = appId
+        ? {
+            applicationId: appId,
+            jobId,
+            candidateId,
+            linkageSource: 'offer_bypass',
+            linkageStatus:
+              !target.linkageStatus || target.linkageStatus === 'unlinked' ? 'verified' : target.linkageStatus,
+          }
+        : {};
+      await Meeting.updateOne(
+        { _id: target._id },
+        {
+          $set: {
+            interviewResult: 'selected',
+            ...(target.status === 'scheduled' ? { status: 'ended' } : {}),
+            notes: target.notes ? `${target.notes}\n${note}` : note,
+            ...linkageSet,
+          },
+          $inc: { linkageRevision: 1 },
         }
-      }
-      await target.save();
+      );
     }
   } else {
     const cand =
