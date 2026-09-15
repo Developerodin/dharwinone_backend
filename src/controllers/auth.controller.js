@@ -144,14 +144,12 @@ const register = catchAsync(async (req, res) => {
         });
       }
       // Unfinished signup (pending + unverified): let them resume instead of dead-ending at login.
-      // Email ownership is unproven for the earlier attempt too, so accepting the latest submitted
-      // details/password is safe — activation still requires clicking the verification link.
-      existingUser.name = name;
-      existingUser.password = password;
-      if (phone !== '0000000000') existingUser.phoneNumber = phone;
-      if (cc) existingUser.countryCode = cc;
-      if (!existingUser.registrationSource) existingUser.registrationSource = 'public_candidate';
-      await existingUser.save();
+      // Email ownership is unproven, so the account keeps its credentials and identity fields: setting the
+      // password here let anyone take the account over once its owner clicked the verification link.
+      await User.updateOne(
+        { _id: existingUser._id, registrationSource: null },
+        { $set: { registrationSource: 'public_candidate' } }
+      );
       await User.findByIdAndUpdate(existingUser._id, { $addToSet: { roleIds: candidateRole._id } });
       await ensureCandidateProfileForUser(existingUser._id);
       const resumeVerifyToken = await generateVerifyEmailToken(existingUser);
@@ -161,10 +159,11 @@ const register = catchAsync(async (req, res) => {
         accountContext: 'new candidate account',
       });
       res.status(httpStatus.OK).send({
-        user: existingUser,
+        // Echo nothing stored on an account the requester has not proven they own.
+        user: { id: existingUser.id, email: existingUser.email },
         resent: true,
         message:
-          'You already started registration with this email. We re-sent the verification link — verify your address to finish signing up.',
+          'You already started registration with this email. We re-sent the verification link: verify your address, then sign in with the password you chose originally or use "Forgot password" to set a new one.',
       });
       return;
     }
