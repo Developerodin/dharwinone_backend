@@ -1,4 +1,18 @@
 import XLSX from 'xlsx';
+import {
+  DOCUMENTS_HEADERS,
+  DOCUMENTS_NOTE,
+  EMPLOYEE_DETAILS_HEADERS,
+  EXPERIENCE_HEADERS,
+  QUALIFICATIONS_HEADERS,
+  SALARY_SLIPS_HEADERS,
+  SHEET_NAMES,
+  SKILLS_HEADERS,
+  SOCIAL_HEADERS,
+  compensationStatusLabel,
+  employmentStatusLabel,
+  fmtIsoDate,
+} from './candidateExcelContract.js';
 
 function s(v) {
   if (v === null || v === undefined) return '';
@@ -10,15 +24,6 @@ function textPhone(v) {
   const d = v == null ? '' : String(v).replace(/\D/g, '');
   if (!d) return '';
   return `\u200B${d}`;
-}
-
-function fmtDate(d) {
-  if (!d) return '';
-  try {
-    return new Date(d).toLocaleDateString();
-  } catch {
-    return s(d);
-  }
 }
 
 function docUploadStatus(d) {
@@ -44,9 +49,12 @@ export const EMPLOYEE_DETAILS_MIN_COL_WIDTHS = {
   'Assigned Agent Name': 22,
   'Assigned Agent Email': 32,
   Designation: 18,
-  'Position (catalog)': 22,
+  Position: 22,
+  'Compensation Status': 18,
+  'Employment Status': 18,
   'Profile Completion %': 22,
-  Status: 14,
+  'Profile Status': 16,
+  Password: 12,
   'Short Bio': 30,
   'SEVIS ID': 14,
   EAD: 14,
@@ -114,45 +122,52 @@ export function generateCandidateExportXlsxBuffer(exportData) {
 
   const idRow = (c) => [s(c.employeeId), s(c.fullName), s(c.email)];
 
-  const detailsHeader = [
-    'Employee ID', 'Full Name', 'Email', 'Phone Number', 'Country Code',
-    'Owner', 'Owner Email', 'Admin', 'Admin Email',
-    'Assigned Agent Name', 'Assigned Agent Email',
-    'Designation', 'Position (catalog)', 'Profile Completion %', 'Status',
-    'Short Bio', 'SEVIS ID', 'EAD', 'Degree', 'Visa Type', 'Custom Visa Type',
-    'Supervisor Name', 'Supervisor Contact', 'Supervisor Country Code', 'Salary Range',
-    'Street Address', 'Street Address 2', 'City', 'State', 'Zip Code', 'Country',
-    'Created At', 'Updated At',
-  ];
   const detailsRows = list.map((c) => {
     const a = c.address || {};
     return [
-      s(c.employeeId), s(c.fullName), s(c.email), textPhone(c.phoneNumber), s(c.countryCode),
-      s(c.owner), s(c.ownerEmail), s(c.adminId), s(c.adminEmail),
-      s(c.assignedAgentName), s(c.assignedAgentEmail),
-      s(c.designation), s(c.positionTitle), c.isProfileCompleted ?? '', c.isCompleted ? 'Completed' : 'Incomplete',
-      s(c.shortBio), s(c.sevisId), s(c.ead), s(c.degree), s(c.visaType), s(c.customVisaType),
-      s(c.supervisorName), textPhone(c.supervisorContact), s(c.supervisorCountryCode), s(c.salaryRange),
-      s(a.streetAddress), s(a.streetAddress2), s(a.city), s(a.state), s(a.zipCode), s(a.country),
-      fmtDate(c.createdAt), fmtDate(c.updatedAt),
+      s(c.employeeId),
+      s(c.fullName),
+      s(c.email),
+      '',
+      textPhone(c.phoneNumber),
+      s(c.countryCode),
+      s(c.owner),
+      s(c.ownerEmail),
+      s(c.adminId),
+      s(c.adminEmail),
+      s(c.assignedAgentName),
+      s(c.assignedAgentEmail),
+      s(c.designation),
+      s(c.positionTitle),
+      c.compensationStatus || compensationStatusLabel(c.compensationType),
+      c.employmentStatus || employmentStatusLabel(c),
+      c.isProfileCompleted ?? '',
+      c.isCompleted ? 'Completed' : 'Incomplete',
+      s(c.shortBio),
+      s(c.sevisId),
+      s(c.ead),
+      s(c.degree),
+      s(c.visaType),
+      s(c.customVisaType),
+      s(c.supervisorName),
+      textPhone(c.supervisorContact),
+      s(c.supervisorCountryCode),
+      s(c.salaryRange),
+      s(a.streetAddress),
+      s(a.streetAddress2),
+      s(a.city),
+      s(a.state),
+      s(a.zipCode),
+      s(a.country),
+      fmtIsoDate(c.createdAt),
+      fmtIsoDate(c.updatedAt),
     ];
   });
-  const detailsAoa = [detailsHeader, ...detailsRows];
+  const detailsAoa = [EMPLOYEE_DETAILS_HEADERS.slice(), ...detailsRows];
   const wsDetails = XLSX.utils.aoa_to_sheet(detailsAoa);
   applyExportSheetFormatting(wsDetails, detailsAoa, EMPLOYEE_DETAILS_MIN_COL_WIDTHS);
-  XLSX.utils.book_append_sheet(wb, wsDetails, 'Employee Details');
+  XLSX.utils.book_append_sheet(wb, wsDetails, SHEET_NAMES.details);
 
-  const qualHeader = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Degree',
-    'Institute',
-    'Location',
-    'Start Year',
-    'End Year',
-    'Description',
-  ];
   const qualRows = [];
   for (const c of list) {
     for (const q of c.qualifications || []) {
@@ -167,22 +182,11 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       ]);
     }
   }
-  const qualAoa = qualRows.length ? [qualHeader, ...qualRows] : [qualHeader];
+  const qualAoa = [QUALIFICATIONS_HEADERS.slice(), ...qualRows];
   const wsQual = XLSX.utils.aoa_to_sheet(qualAoa);
   applyExportSheetFormatting(wsQual, qualAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, Description: 30 });
-  XLSX.utils.book_append_sheet(wb, wsQual, 'Qualifications');
+  XLSX.utils.book_append_sheet(wb, wsQual, SHEET_NAMES.qualifications);
 
-  const expHeader = [
-    'Employee ID',
-    'Full Name',
-    'Email',
-    'Company',
-    'Role',
-    'Start Date',
-    'End Date',
-    'Currently Working',
-    'Description',
-  ];
   const expRows = [];
   for (const c of list) {
     for (const e of c.experiences || []) {
@@ -197,39 +201,33 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       ]);
     }
   }
-  const expAoa = expRows.length ? [expHeader, ...expRows] : [expHeader];
+  const expAoa = [EXPERIENCE_HEADERS.slice(), ...expRows];
   const wsExp = XLSX.utils.aoa_to_sheet(expAoa);
   applyExportSheetFormatting(wsExp, expAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, Description: 30 });
-  XLSX.utils.book_append_sheet(wb, wsExp, 'Experience');
+  XLSX.utils.book_append_sheet(wb, wsExp, SHEET_NAMES.experience);
 
-  const skillHeader = ['Employee ID', 'Full Name', 'Email', 'Skill Name', 'Level', 'Category'];
   const skillRows = [];
   for (const c of list) {
     for (const sk of c.skills || []) {
       skillRows.push([...idRow(c), s(sk.name), s(sk.level), s(sk.category)]);
     }
   }
-  const skillAoa = skillRows.length ? [skillHeader, ...skillRows] : [skillHeader];
+  const skillAoa = [SKILLS_HEADERS.slice(), ...skillRows];
   const wsSkill = XLSX.utils.aoa_to_sheet(skillAoa);
   applyExportSheetFormatting(wsSkill, skillAoa, COMMON_SHEET_MIN_COL_WIDTHS);
-  XLSX.utils.book_append_sheet(wb, wsSkill, 'Skills');
+  XLSX.utils.book_append_sheet(wb, wsSkill, SHEET_NAMES.skills);
 
-  const socialHeader = ['Employee ID', 'Full Name', 'Email', 'Platform', 'URL'];
   const socialRows = [];
   for (const c of list) {
     for (const sl of c.socialLinks || []) {
       socialRows.push([...idRow(c), s(sl.platform), s(sl.url)]);
     }
   }
-  const socialAoa = socialRows.length ? [socialHeader, ...socialRows] : [socialHeader];
+  const socialAoa = [SOCIAL_HEADERS.slice(), ...socialRows];
   const wsSocial = XLSX.utils.aoa_to_sheet(socialAoa);
   applyExportSheetFormatting(wsSocial, socialAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, URL: 40 });
-  XLSX.utils.book_append_sheet(wb, wsSocial, 'Social Links');
+  XLSX.utils.book_append_sheet(wb, wsSocial, SHEET_NAMES.social);
 
-  const docHeader = [
-    'Employee ID', 'Full Name', 'Email',
-    'Document Name', 'Document Type', 'Upload Status', 'Mime Type',
-  ];
   const docRows = [];
   for (const c of list) {
     for (const d of c.documents || []) {
@@ -239,25 +237,25 @@ export function generateCandidateExportXlsxBuffer(exportData) {
         s(d.type),
         docUploadStatus(d),
         s(d.mimeType),
+        DOCUMENTS_NOTE,
       ]);
     }
   }
-  const docAoa = docRows.length ? [docHeader, ...docRows] : [docHeader];
+  const docAoa = [DOCUMENTS_HEADERS.slice(), ...docRows];
   const wsDoc = XLSX.utils.aoa_to_sheet(docAoa);
-  applyExportSheetFormatting(wsDoc, docAoa, COMMON_SHEET_MIN_COL_WIDTHS);
-  XLSX.utils.book_append_sheet(wb, wsDoc, 'Documents');
+  applyExportSheetFormatting(wsDoc, docAoa, { ...COMMON_SHEET_MIN_COL_WIDTHS, Note: 20 });
+  XLSX.utils.book_append_sheet(wb, wsDoc, SHEET_NAMES.documents);
 
-  const slipHeader = ['Employee ID', 'Full Name', 'Email', 'Month', 'Year'];
   const slipRows = [];
   for (const c of list) {
     for (const ss of c.salarySlips || []) {
       slipRows.push([...idRow(c), s(ss.month), s(ss.year)]);
     }
   }
-  const slipAoa = slipRows.length ? [slipHeader, ...slipRows] : [slipHeader];
+  const slipAoa = [SALARY_SLIPS_HEADERS.slice(), ...slipRows];
   const wsSlip = XLSX.utils.aoa_to_sheet(slipAoa);
   applyExportSheetFormatting(wsSlip, slipAoa, COMMON_SHEET_MIN_COL_WIDTHS);
-  XLSX.utils.book_append_sheet(wb, wsSlip, 'Salary Slips');
+  XLSX.utils.book_append_sheet(wb, wsSlip, SHEET_NAMES.salarySlips);
 
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }

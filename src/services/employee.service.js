@@ -1935,6 +1935,21 @@ const mapCandidateDocToExportRow = (candidate) => {
     assignedAgentEmail: ag && typeof ag === 'object' ? ag.email || '' : '',
     designation: candidate.designation || '',
     positionTitle: pos && typeof pos === 'object' ? pos.name || '' : '',
+    compensationType: candidate.compensationType || 'paid',
+    compensationStatus: String(candidate.compensationType || '').toLowerCase() === 'unpaid' ? 'Unpaid' : 'Paid',
+    isActive: candidate.isActive !== false,
+    resignDate: candidate.resignDate || null,
+    employmentStatus: (() => {
+      const cutoff = new Date();
+      cutoff.setHours(0, 0, 0, 0);
+      if (candidate.resignDate) {
+        const rd = new Date(candidate.resignDate);
+        rd.setHours(0, 0, 0, 0);
+        if (!Number.isNaN(rd.getTime()) && rd <= cutoff) return 'Resigned';
+      }
+      if (candidate.isActive === false) return 'Resigned';
+      return 'Active';
+    })(),
     isProfileCompleted: candidate.isProfileCompleted,
     isCompleted: candidate.isCompleted,
     createdAt: candidate.createdAt,

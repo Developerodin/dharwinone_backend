@@ -2375,7 +2375,7 @@ const importExcel = catchAsync(async (req, res) => {
 
   try {
     logger.debug('Starting import...');
-    const result = await importCandidatesFromExcel(req.file.buffer, createdBy);
+    const result = await importCandidatesFromExcel(req.file.buffer, req.user);
     logger.debug('Import result:', result.summary);
 
     await writeAtsAudit(
@@ -2388,6 +2388,8 @@ const importExcel = catchAsync(async (req, res) => {
           batch: {
             successful: result.summary?.successful ?? 0,
             failed: result.summary?.failed ?? 0,
+            created: result.summary?.created ?? 0,
+            updated: result.summary?.updated ?? 0,
           },
         },
       },
@@ -2397,17 +2399,17 @@ const importExcel = catchAsync(async (req, res) => {
     
     if (result.summary.failed === 0) {
       res.status(httpStatus.CREATED).send({
-        message: 'All candidates imported successfully',
+        message: 'All employees imported successfully',
         ...result,
       });
     } else if (result.summary.successful === 0) {
       res.status(httpStatus.BAD_REQUEST).send({
-        message: 'Failed to import any candidates',
+        message: 'Failed to import any employees',
         ...result,
       });
     } else {
       res.status(httpStatus.MULTI_STATUS).send({
-        message: 'Some candidates imported successfully, some failed',
+        message: 'Some employees imported successfully, some failed',
         ...result,
       });
     }
