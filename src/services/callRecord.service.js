@@ -9,6 +9,8 @@ import { CALL_SOURCES, UI_CALL_SOURCES, classifyCallSource } from '../utils/call
 import { deriveCallInsights } from '../utils/candidateExtraction.js';
 import ApiError from '../utils/ApiError.js';
 
+const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -431,23 +433,24 @@ async function fetchDialerChannelCallRows({ dialerScopeFilter, userId, sort, fet
 
 async function listCallRecords(options = {}) {
   const limit = Math.min(Number(options.limit) || 25, 500);
-  const page = Number(options.page) || 1;
-  const skip = (page - 1) * limit;
+  const requestedPage = Number(options.page) || 1;
   const sortBy = options.sortBy === 'date' || options.sortBy === 'createdAt' ? 'createdAt' : 'createdAt';
   const order = options.order === 'asc' ? 1 : -1;
   const sort = { [sortBy]: order };
 
   const andConditions = [];
-  if (options.search && String(options.search).trim()) {
-    const term = String(options.search).trim();
+  const searchTerm = String(options.search ?? '').trim();
+  if (searchTerm.length >= 2) {
+    const re = { $regex: escapeRegex(searchTerm), $options: 'i' };
     andConditions.push({
       $or: [
-        { phone: new RegExp(term, 'i') },
-        { recipientPhoneNumber: new RegExp(term, 'i') },
-        { toPhoneNumber: new RegExp(term, 'i') },
-        { fromPhoneNumber: new RegExp(term, 'i') },
-        { userNumber: new RegExp(term, 'i') },
-        { businessName: new RegExp(term, 'i') },
+        { phone: re },
+        { recipientPhoneNumber: re },
+        { toPhoneNumber: re },
+        { fromPhoneNumber: re },
+        { userNumber: re },
+        { businessName: re },
+        { displayName: re },
       ],
     });
   }
@@ -489,6 +492,7 @@ async function listCallRecords(options = {}) {
 
   let dedupedResults;
   let total;
+  let page = requestedPage;
   if (isDialerChannel) {
     const fetchCap = Math.min(500, Math.max(limit * 10, 200));
     const rawRows = await fetchDialerChannelCallRows({
@@ -501,14 +505,17 @@ async function listCallRecords(options = {}) {
       (r) => r.createdBy && String(r.createdBy) === String(options.userId)
     );
     total = owned.length;
+    const totalPagesDialer = Math.ceil(total / limit) || 1;
+    page = total === 0 ? 1 : Math.min(Math.max(requestedPage, 1), totalPagesDialer);
+    const skip = (page - 1) * limit;
     dedupedResults = owned.slice(skip, skip + limit);
   } else {
-    const [results, count] = await Promise.all([
-      CallRecord.find(filter).sort(sort).skip(skip).limit(limit).lean(),
-      CallRecord.countDocuments(filter),
-    ]);
+    total = await CallRecord.countDocuments(filter);
+    const totalPagesStd = Math.ceil(total / limit) || 1;
+    page = total === 0 ? 1 : Math.min(Math.max(requestedPage, 1), totalPagesStd);
+    const skip = (page - 1) * limit;
+    const results = await CallRecord.find(filter).sort(sort).skip(skip).limit(limit).lean();
     dedupedResults = dedupeTwilioDialerRows(results);
-    total = count;
   }
 
   // executionId -> Job (job post verification) or JobApplication (candidate verification)

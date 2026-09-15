@@ -43,7 +43,7 @@ const getCallRecords = {
   query: Joi.object().keys({
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(500),
-    search: Joi.string().trim().allow(''),
+    search: Joi.string().trim().allow('').min(2).max(100),
     status: Joi.string().trim().allow(''),
     language: Joi.string().trim().allow(''),
     sortBy: Joi.string().valid('date', 'createdAt').default('createdAt'),

@@ -16,6 +16,8 @@ import Recording from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
 import recordingSyncService from './recordingSync.service.js';
+import { pollReconcileAfterStop } from './recording.scheduler.js';
+import { hashParticipantEmail, resolvePublicTokenIdentity } from './participantRoster.service.js';
 
 // Initialize LiveKit clients
 // Convert ws:// to http:// for SDK clients (they use HTTP, not WebSocket)
@@ -67,7 +69,7 @@ const admittedParticipants = new Map();
 const WAITING_TTL_MS = 8000;
 const waitingRegistry = new Map();
 
-const recordWaitingParticipant = (roomName, identity, name) => {
+const recordWaitingParticipant = (roomName, identity, name, participantEmail = null) => {
   if (!roomName || !identity) return;
   const key = String(roomName).trim();
   let room = waitingRegistry.get(key);
@@ -77,11 +79,20 @@ const recordWaitingParticipant = (roomName, identity, name) => {
   }
   const now = Date.now();
   const existing = room.get(identity);
+  const emailHash = hashParticipantEmail(participantEmail);
+  if (emailHash) {
+    for (const [otherId, entry] of room) {
+      if (otherId !== identity && entry.emailHash === emailHash) {
+        room.delete(otherId);
+      }
+    }
+  }
   room.set(identity, {
     identity,
     name: name || existing?.name || identity,
     joinedAt: existing?.joinedAt || new Date(now).toISOString(),
     lastSeen: now,
+    emailHash: emailHash || existing?.emailHash || null,
   });
 };
 
@@ -360,13 +371,24 @@ const generateAccessToken = async ({
     }
   }
 
+  let resolvedIdentity = participantIdentity || participantName;
+  if (meeting && !roomName.startsWith('chat-')) {
+    resolvedIdentity = resolvePublicTokenIdentity({
+      meeting,
+      roomName,
+      participantName,
+      participantEmail,
+      requestedIdentity: resolvedIdentity,
+    });
+  }
+
   // Check if participant has been admitted from waiting room or forcing full permissions.
   const roomAdmitted = admittedParticipants.get(roomName);
   const dbAdmitted =
-    participantIdentity &&
+    resolvedIdentity &&
     Array.isArray(meeting?.admittedIdentities) &&
-    meeting.admittedIdentities.includes(participantIdentity);
-  const isAdmitted = roomAdmitted?.has(participantIdentity) || dbAdmitted || false;
+    meeting.admittedIdentities.includes(resolvedIdentity);
+  const isAdmitted = roomAdmitted?.has(resolvedIdentity) || dbAdmitted || false;
   const approvalRequired = Boolean(meeting?.requireApproval);
 
   const guestAllowed = Boolean(meeting?.allowGuestJoin);
@@ -387,7 +409,7 @@ const generateAccessToken = async ({
   // so a waiter is invisible to roomService.listParticipants(). Track waiters
   // (non-host, cannot publish, real meeting) so the host's roster can show them;
   // clear the moment they become joinable (host/admitted/approval-off).
-  const effectiveIdentity = participantIdentity || participantName;
+  const effectiveIdentity = resolvedIdentity;
   // A host-denied waiter must NOT be re-recorded as waiting (would re-surface in the
   // host roster). Flag the rejection back to the client so it shows a terminal screen
   // and stops polling. Host/admitted/forced tokens are never "rejected".
@@ -401,21 +423,21 @@ const generateAccessToken = async ({
   );
   if (effectiveIdentity) {
     if (!rejected && meeting && !isHost && !canPublish) {
-      recordWaitingParticipant(roomName, effectiveIdentity, participantName);
+      recordWaitingParticipant(roomName, effectiveIdentity, participantName, participantEmail);
     } else {
       removeWaitingParticipant(roomName, effectiveIdentity);
     }
   }
 
   logger.info(
-    `[LiveKit] Token grants room=${roomName} identity=${participantIdentity || participantName} ` +
+    `[LiveKit] Token grants room=${roomName} identity=${effectiveIdentity} ` +
       `host=${isHost} invited=${isInvitedGuest} admitted=${isAdmitted} ` +
       `preStartBlockPublish=${preStartBlockPublish} knocking=${knocking} ` +
       `forceFullPermissions=${forceFullPermissions} canPublish=${canPublish} canSubscribe=${canSubscribe}`
   );
 
   const token = new AccessToken(apiKey, apiSecret, {
-    identity: participantIdentity || participantName,
+    identity: effectiveIdentity,
     name: participantName,
     ttl: '6h', // Explicit TTL to avoid premature expiry and reconnects
   });
@@ -465,33 +487,13 @@ const generateAccessToken = async ({
 
   if (meeting && !roomName.startsWith('chat-') && effectiveIdentity) {
     try {
-      const {
-        hashParticipantEmail,
-        resolveRosterRole,
-        upsertParticipantRosterOnToken,
-      } = await import('./participantRoster.service.js');
-      let candidateOwnerUserId = null;
-      if (meeting.candidateId) {
-        const { default: Employee } = await import('../models/employee.model.js');
-        const candidateEmployee = await Employee.findById(meeting.candidateId).select('owner').lean();
-        candidateOwnerUserId = candidateEmployee?.owner ? String(candidateEmployee.owner) : null;
-      }
-      const emailHash = hashParticipantEmail(participantEmail);
-      const { role, assurance, refKind, refId } = resolveRosterRole({
-        meeting,
-        user: authUser,
-        publicEmail: authUser ? null : participantEmail,
-        candidateOwnerUserId,
-      });
-      await upsertParticipantRosterOnToken({
+      const { syncParticipantRosterForToken } = await import('./participantRoster.service.js');
+      await syncParticipantRosterForToken({
         meeting,
         identity: effectiveIdentity,
         displayName: participantName,
-        emailHash,
-        role,
-        assurance,
-        refKind,
-        refId,
+        participantEmail,
+        authUser,
       });
     } catch (err) {
       logger.warn('[LiveKit] participant roster upsert failed (token still issued)', {
@@ -709,6 +711,12 @@ const startRecording = async (roomName) => {
           aiProcessingStatus: 'dispatching',
           agentDispatchId: dispatchId,
         });
+      } else {
+        await Recording.findByIdAndUpdate(pending._id, {
+          aiProcessingStatus: 'failed',
+          aiProcessingError:
+            'LiveKit transcription agents are disabled (set LIVEKIT_AGENTS_ENABLED=true on the API server and restart)',
+        });
       }
     } catch (err) {
       logger.warn('[LiveKit] agent dispatch failed (recording continues)', { roomName, error: err.message });
@@ -768,8 +776,17 @@ const stopRecording = async (egressId, roomName = null, reason = 'manual') => {
   // webhook + room_finished webhook) are the leading cause of EGRESS_ABORTED — LiveKit
   // sees a redundant stop after it already started shutting down and reports abort
   // instead of complete.
+  const schedulePostStopReconcile = () => {
+    pollReconcileAfterStop(egressId, egressClient).catch((err) =>
+      logger.warn('[LiveKit] post-stop reconcile failed', { egressId, error: err?.message })
+    );
+  };
+
   const existing = await Recording.findOne({ egressId }).select('status statusRank').lean();
   if (existing && ['stopping', 'finalizing', 'completed', 'aborted', 'failed', 'missing', 'expired'].includes(existing.status)) {
+    if (existing.status === 'stopping' || existing.status === 'finalizing') {
+      schedulePostStopReconcile();
+    }
     logger.info('[LiveKit] stopRecording skipped — row already at/past stopping', { egressId, currentStatus: existing.status, reason });
     return { egressId, status: 'idempotent_noop', currentDbStatus: existing.status };
   }
@@ -789,6 +806,7 @@ const stopRecording = async (egressId, roomName = null, reason = 'manual') => {
     try {
       const egressInfo = await egressClient.stopEgress(egressId);
       logger.info('[LiveKit] stopEgress accepted', { egressId, status: egressInfo.status });
+      schedulePostStopReconcile();
       return { egressId, status: egressInfo.status };
     } catch (error) {
       lastErr = error;
@@ -796,6 +814,7 @@ const stopRecording = async (egressId, roomName = null, reason = 'manual') => {
       // LiveKit responses for an egress that already finished/aborted vary by version.
       if (m.includes('already') || m.includes('not active') || m.includes('terminated') || m.includes('not found')) {
         logger.info('[LiveKit] stopEgress: already terminal, treating as success', { egressId });
+        schedulePostStopReconcile();
         return { egressId, status: 'terminal' };
       }
       logger.warn(`[LiveKit] stopEgress attempt failed: ${error.message}`);
@@ -808,6 +827,7 @@ const stopRecording = async (egressId, roomName = null, reason = 'manual') => {
     'stopping',
     { lastError: lastErr?.message?.slice(0, 1000) || 'stopEgress retries exhausted' }
   ).catch(() => {});
+  schedulePostStopReconcile();
 
   const errorMessage = lastErr instanceof Error ? lastErr.message : 'Unknown error';
   if (errorMessage.includes('no response from servers') || errorMessage.includes('connection refused')) {

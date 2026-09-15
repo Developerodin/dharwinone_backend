@@ -188,6 +188,16 @@ async function handleRoomFinished(payload) {
   } catch (err) {
     logger.warn('[LiveKit Webhook] cancelAllDispatches failed', { roomName, error: err.message });
   }
+
+  try {
+    const { markMeetingEndedWhenRoomFinished } = await import('../services/meeting.service.js');
+    await markMeetingEndedWhenRoomFinished(roomName);
+  } catch (err) {
+    logger.warn('[LiveKit Webhook] markMeetingEndedWhenRoomFinished failed', {
+      roomName,
+      error: err?.message || err,
+    });
+  }
 }
 
 /**

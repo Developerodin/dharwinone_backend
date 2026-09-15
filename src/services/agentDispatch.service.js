@@ -39,8 +39,13 @@ export function buildDispatchMetadataV2({ meetingId, recordingId, hmacToken, dis
   });
 }
 
-function agentsEnabled() {
+/** True unless LIVEKIT_AGENTS_ENABLED is explicitly false (Joi default: true). */
+export function isLivekitAgentsEnabled() {
   return config.livekit?.agentsEnabled !== false;
+}
+
+function agentsEnabled() {
+  return isLivekitAgentsEnabled();
 }
 
 export function getAgentName() {

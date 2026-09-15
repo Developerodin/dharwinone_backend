@@ -1500,7 +1500,6 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search
   } catch (err) {
     logger.warn(`[listCalls] expireStaleCalls failed: ${err?.message}`);
   }
-  const skip = (page - 1) * limit;
   let filter = isAdmin ? {} : { $or: [{ caller: userId }, { participants: userId }] };
 
   const statusFilter = buildChatCallStatusFilter(status, userId, {
@@ -1511,25 +1510,18 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search
   }
 
   const searchTerm = typeof search === 'string' ? search.trim() : '';
-  if (searchTerm) {
-    const matchingUsers = await User.find({
-      status: 'active',
-      $or: [{ name: new RegExp(searchTerm, 'i') }, { email: new RegExp(searchTerm, 'i') }],
-    })
-      .select('_id')
-      .limit(100)
-      .lean();
-    const matchingIds = matchingUsers.map((u) => u._id);
-    if (matchingIds.length === 0) {
-      return { results: [], page, limit, total: 0, totalPages: 0 };
+  if (searchTerm.length >= 2) {
+    filter = await appendParticipantSearchToCallFilter(userId, filter, searchTerm);
+    if (filter._id?.$in && filter._id.$in.length === 0) {
+      return { results: [], page: 1, limit, total: 0, totalPages: 0 };
     }
-    filter = {
-      $and: [
-        filter,
-        { $or: [{ caller: { $in: matchingIds } }, { participants: { $in: matchingIds } }] },
-      ],
-    };
   }
+
+  const total = await ChatCall.countDocuments(filter);
+  const totalPages = Math.ceil(total / limit) || 1;
+  const clampedPage = total === 0 ? 1 : Math.min(Math.max(Number(page) || 1, 1), totalPages);
+  const skip = (clampedPage - 1) * limit;
+
   const calls = await ChatCall.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -1539,7 +1531,6 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search
     .populate('roomJoinedUserIds', 'name email')
     .populate('conversation')
     .lean();
-  const total = await ChatCall.countDocuments(filter);
   const results = [];
   for (const c of calls) {
     const item = { ...c, id: c._id?.toString() };
@@ -1557,17 +1548,57 @@ const listCalls = async (userId, { page = 1, limit = 20, isAdmin = false, search
   }
   return {
     results,
-    page,
+    page: clampedPage,
     limit,
     total,
-    totalPages: Math.ceil(total / limit),
+    totalPages,
   };
 };
 
+const appendParticipantSearchToCallFilter = async (userId, filter, q) => {
+  const term = String(q || '').trim();
+  if (term.length < 2) return filter;
+  const escaped = escapeRegex(term);
+  const matchingUsers = await User.find({
+    status: 'active',
+    $or: [
+      { name: { $regex: escaped, $options: 'i' } },
+      { email: { $regex: escaped, $options: 'i' } },
+    ],
+  })
+    .select('_id')
+    .limit(USER_SEARCH_CAP)
+    .maxTimeMS(USER_SEARCH_MAX_TIME_MS)
+    .lean();
+  const matchingIds = matchingUsers.map((u) => u._id);
+  if (matchingIds.length === 0) {
+    return { _id: { $in: [] } };
+  }
+  const participantMatch = {
+    $or: [{ caller: { $in: matchingIds } }, { participants: { $in: matchingIds } }],
+  };
+  if (filter.$and) {
+    return { $and: [...filter.$and, participantMatch] };
+  }
+  return { $and: [filter, participantMatch] };
+};
+
 /** In-app Calls tab: always scoped to viewer participations; adds direction + peer */
-const listCallsForUser = async (userId, { page = 1, limit = 20 } = {}) => {
+const listCallsForUser = async (userId, { page: requestedPage = 1, limit = 20, q, status } = {}) => {
+  let filter = { $or: [{ caller: userId }, { participants: userId }] };
+
+  const statusFilter = buildChatCallStatusFilter(status, userId, { incomingMissedOnly: true });
+  if (statusFilter) {
+    filter = filter.$and ? { $and: [...filter.$and, statusFilter] } : { $and: [filter, statusFilter] };
+  }
+
+  filter = await appendParticipantSearchToCallFilter(userId, filter, q);
+
+  const total = await ChatCall.countDocuments(filter);
+  const totalPages = Math.ceil(total / limit) || 1;
+  const page = total === 0 ? 1 : Math.min(Math.max(Number(requestedPage) || 1, 1), totalPages);
   const skip = (page - 1) * limit;
-  const filter = { $or: [{ caller: userId }, { participants: userId }] };
+
   const calls = await ChatCall.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -1577,7 +1608,6 @@ const listCallsForUser = async (userId, { page = 1, limit = 20 } = {}) => {
     .populate('roomJoinedUserIds', 'name email')
     .populate('conversation')
     .lean();
-  const total = await ChatCall.countDocuments(filter);
   const results = [];
   for (const c of calls) {
     const item = { ...c, id: c._id?.toString() };
@@ -1598,7 +1628,8 @@ const listCallsForUser = async (userId, { page = 1, limit = 20 } = {}) => {
     results,
     page,
     limit,
-    totalPages: Math.ceil(total / limit),
+    total,
+    totalPages,
   };
 };
 

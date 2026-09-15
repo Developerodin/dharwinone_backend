@@ -122,6 +122,8 @@ const listCalls = {
   query: Joi.object().keys({
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(500),
+    q: Joi.string().trim().allow('').min(2).max(100).optional(),
+    status: Joi.string().trim().allow('').optional(),
   }),
 };
 

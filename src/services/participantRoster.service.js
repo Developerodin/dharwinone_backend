@@ -23,6 +23,57 @@ export function stablePublicParticipantIdentity({ roomName, participantName, par
   return `guest-${digest}`;
 }
 
+function isMongoObjectIdString(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || '').trim());
+}
+
+function findRosterIdentityByEmailHash(meeting, participantEmail) {
+  const emailHash = hashParticipantEmail(participantEmail);
+  if (!emailHash || !Array.isArray(meeting?.participantRoster)) return null;
+  const entry = meeting.participantRoster.find((r) => r.emailHash === emailHash);
+  return entry?.identity || null;
+}
+
+/**
+ * Public token mint: keep a pinned identity when it is already on the meeting roster or
+ * admitted list. Prevents auth (user id) → public poll (guest-*) drift for interview joins.
+ */
+export function resolvePublicTokenIdentity({
+  meeting,
+  roomName,
+  participantName,
+  participantEmail,
+  requestedIdentity,
+}) {
+  const serverIdentity = stablePublicParticipantIdentity({
+    roomName,
+    participantName,
+    participantEmail,
+  });
+  const requested = String(requestedIdentity || '').trim();
+  const rosterByEmail = findRosterIdentityByEmailHash(meeting, participantEmail);
+
+  if (!requested) {
+    return rosterByEmail || serverIdentity;
+  }
+  if (requested === serverIdentity) {
+    return rosterByEmail || serverIdentity;
+  }
+  const onRoster = (meeting?.participantRoster || []).some((r) => r.identity === requested);
+  const admitted = (meeting?.admittedIdentities || []).includes(requested);
+  if (onRoster || admitted) {
+    return requested;
+  }
+  // Logged-in joiner: keep user id when admission polls hit the public token route.
+  if (isMongoObjectIdString(requested)) {
+    return requested;
+  }
+  if (rosterByEmail) {
+    return rosterByEmail;
+  }
+  return serverIdentity;
+}
+
 export function deriveAuthenticatedParticipantIdentity(user) {
   return user?.id || user?._id?.toString() || null;
 }
@@ -173,6 +224,48 @@ export function buildRosterEntry({
   };
 }
 
+export async function syncParticipantRosterForToken({
+  meeting,
+  identity,
+  displayName,
+  participantEmail,
+  authUser = null,
+}) {
+  if (!meeting?._id || !identity) return meeting;
+  let effectiveAuthUser = authUser;
+  if (!effectiveAuthUser && /^[a-f0-9]{24}$/i.test(String(identity))) {
+    const { default: User } = await import('../models/user.model.js');
+    const u = await User.findById(identity).select('email name').lean();
+    if (u) {
+      effectiveAuthUser = { id: String(identity), email: u.email, name: u.name };
+    }
+  }
+  let candidateOwnerUserId = null;
+  if (meeting.candidateId) {
+    const { default: Employee } = await import('../models/employee.model.js');
+    const candidateEmployee = await Employee.findById(meeting.candidateId).select('owner').lean();
+    candidateOwnerUserId = candidateEmployee?.owner ? String(candidateEmployee.owner) : null;
+  }
+  const emailHash = hashParticipantEmail(participantEmail);
+  const { role, assurance, refKind, refId } = resolveRosterRole({
+    meeting,
+    user: effectiveAuthUser,
+    publicEmail: effectiveAuthUser ? null : participantEmail,
+    candidateOwnerUserId,
+  });
+  await upsertParticipantRosterOnToken({
+    meeting,
+    identity,
+    displayName,
+    emailHash,
+    role,
+    assurance,
+    refKind,
+    refId,
+  });
+  return Meeting.findById(meeting._id);
+}
+
 export async function upsertParticipantRosterOnToken({
   meeting,
   identity,
@@ -222,7 +315,8 @@ export async function upsertParticipantRosterOnToken({
 export function meetingInterviewSnapshot(meeting) {
   if (!meeting) return null;
   return {
-    interviewId: meeting._id,
+    // getMeetingByMeetingId returns toJSON() output (no `_id`); internal meetings are not interviews.
+    interviewId: meeting.meetingKind === 'internal' ? null : meeting._id || meeting.id || null,
     applicationId: meeting.applicationId || null,
     jobId: meeting.jobId || null,
     candidateId: meeting.candidateId || null,

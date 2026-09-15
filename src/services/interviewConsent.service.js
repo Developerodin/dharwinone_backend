@@ -57,11 +57,24 @@ export const recordParticipantConsent = async ({
     throw new ApiError(httpStatus.FORBIDDEN, 'Token does not match this room');
   }
 
-  const meeting = await Meeting.findOne({ meetingId: roomName });
+  let meeting = await Meeting.findOne({ meetingId: roomName });
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
-  const roster = rosterEntryForIdentity(meeting, identity);
+  let roster = rosterEntryForIdentity(meeting, identity);
+  if (!roster) {
+    const displayName = typeof payload.name === 'string' ? payload.name.trim() : '';
+    const { syncParticipantRosterForToken } = await import('./participantRoster.service.js');
+    await syncParticipantRosterForToken({
+      meeting,
+      identity,
+      displayName,
+      participantEmail: null,
+      authUser: null,
+    });
+    meeting = await Meeting.findOne({ meetingId: roomName });
+    roster = rosterEntryForIdentity(meeting, identity);
+  }
   if (!roster) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Participant not on roster');
   }
@@ -75,7 +88,14 @@ export const recordParticipantConsent = async ({
     existing.transcription === !!transcription &&
     existing.aiEvaluation === !!aiEvaluation
   ) {
-    return { meetingId: meeting.meetingId, identity, noticeVersion, consent: existing, replay: true };
+    return {
+      meetingId: meeting.meetingId,
+      identity,
+      noticeVersion,
+      consent: existing,
+      replay: true,
+      auditActorId: String(meeting.createdBy),
+    };
   }
 
   const now = new Date();
@@ -97,7 +117,14 @@ export const recordParticipantConsent = async ({
   meeting.participantConsents.push(entry);
   await meeting.save();
 
-  return { meetingId: meeting.meetingId, identity, noticeVersion, consent: entry, replay: false };
+  return {
+    meetingId: meeting.meetingId,
+    identity,
+    noticeVersion,
+    consent: entry,
+    replay: false,
+    auditActorId: String(meeting.createdBy),
+  };
 };
 
 export const assertRecordingConsentForRoom = async (roomName) => {

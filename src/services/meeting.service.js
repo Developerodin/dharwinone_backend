@@ -1371,6 +1371,9 @@ const endMeetingByRoomPublic = async (roomName, hostEmail) => {
       throw new ApiError(httpStatus.FORBIDDEN, 'Only a host can end the meeting');
     }
     meeting.status = 'ended';
+    if (!meeting.interviewCompletedAt) {
+      meeting.interviewCompletedAt = new Date();
+    }
     await meeting.save();
     try {
       await deleteInterviewRoom(roomName);
@@ -1971,6 +1974,26 @@ const createExplicitApplicationForMeeting = async (id, userId, currentUser) => {
   return getMeetingLinkage(String(updated._id), currentUser);
 };
 
+/**
+ * LiveKit `room_finished` means the room is gone — keep the Meeting row in sync when
+ * hosts/participants disconnect without calling the public end endpoint.
+ */
+const markMeetingEndedWhenRoomFinished = async (roomName) => {
+  if (!roomName || roomName.startsWith('chat-')) {
+    return { modified: false };
+  }
+  const now = new Date();
+  const res = await Meeting.updateOne(
+    { meetingId: roomName, status: 'scheduled' },
+    { $set: { status: 'ended', interviewCompletedAt: now } }
+  );
+  if (res.modifiedCount) {
+    logger.info('[markMeetingEndedWhenRoomFinished] Meeting marked ended', { roomName });
+    return { modified: true };
+  }
+  return { modified: false };
+};
+
 export {
   createMeeting,
   getMeetingLinkage,
@@ -1989,6 +2012,7 @@ export {
   moveCandidateToPreboarding,
   getPublicMeetingUrl,
   endMeetingByRoomPublic,
+  markMeetingEndedWhenRoomFinished,
   autoEndExpiredMeetings,
   getInvitationEmails,
   resolveJobPositionDisplayTitle,

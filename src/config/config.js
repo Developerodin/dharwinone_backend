@@ -589,7 +589,7 @@ const config = {
       bucket: envVars.MINIO_BUCKET || 'recordings',
     },
     s3Bucket: envVars.LIVEKIT_S3_BUCKET,
-    agentsEnabled: envVars.LIVEKIT_AGENTS_ENABLED,
+    agentsEnabled: envVars.LIVEKIT_AGENTS_ENABLED ?? true,
     webhookHostLeaveStopEnabled: envVars.LIVEKIT_WEBHOOK_HOST_LEAVE_STOP_ENABLED,
     webhookRoomFinishedEnabled: envVars.LIVEKIT_WEBHOOK_ROOM_FINISHED_ENABLED,
     recordingConsentRequired: envVars.INTERVIEW_RECORDING_CONSENT_REQUIRED,

@@ -7,7 +7,7 @@ import TranscriptSegment from '../models/transcriptSegment.model.js';
 import TranscriptSession from '../models/transcriptSession.model.js';
 import TranscriptBatch from '../models/transcriptBatch.model.js';
 import { readJsonFromS3 } from './aiArtifactStorage.service.js';
-import { dedupeAndSortUtterances } from './transcriptAssembly.service.js';
+import { dedupeAndSortUtterances, filterUtterancesForRecording } from './transcriptAssembly.service.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import { recordingScope } from './visibilityScope.service.js';
@@ -858,9 +858,7 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
       rawUtterances = dedupeAndSortUtterances(batches);
     }
     const recordingIdStr = String(recording._id);
-    if (rawUtterances.some((u) => u.recordingId != null && u.recordingId !== '')) {
-      rawUtterances = rawUtterances.filter((u) => String(u.recordingId) === recordingIdStr);
-    }
+    rawUtterances = filterUtterancesForRecording(rawUtterances, recordingIdStr);
     const utterances = rawUtterances.map((u) => ({
       utteranceId: u.utteranceId,
       speaker: u.participantIdentity ?? null,

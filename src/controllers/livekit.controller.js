@@ -7,9 +7,10 @@ import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import {
-  stablePublicParticipantIdentity,
   deriveAuthenticatedParticipantIdentity,
+  resolvePublicTokenIdentity,
 } from '../services/participantRoster.service.js';
+import { getMeetingByMeetingId } from '../services/meetingLookup.service.js';
 
 const parseChatRoomConversationId = (roomName) => {
   if (!roomName || !roomName.startsWith('chat-')) return null;
@@ -178,14 +179,14 @@ const getTokenPublic = catchAsync(async (req, res) => {
 
   const name = participantName?.trim() || 'Guest';
   const trimmedEmail = participantEmail?.trim() || null;
-  const serverIdentity = stablePublicParticipantIdentity({
+  const meeting = await getMeetingByMeetingId(roomName);
+  const participantIdentity = resolvePublicTokenIdentity({
+    meeting,
     roomName,
     participantName: name,
     participantEmail: trimmedEmail,
+    requestedIdentity,
   });
-  const requested = requestedIdentity?.trim();
-  const participantIdentity =
-    requested && requested === serverIdentity ? requested : serverIdentity;
 
   const { token, isHost, canPublish, meetingEndAt, knocking, allowGuestJoin, rejected } = await livekitService.generateAccessToken({
     roomName,

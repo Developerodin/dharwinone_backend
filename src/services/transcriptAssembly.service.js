@@ -45,6 +45,20 @@ export function computeTranscriptContentHash(utterances) {
   return crypto.createHash('sha256').update(body).digest('hex');
 }
 
+/**
+ * When some utterances carry recordingId, keep rows for this recording plus unscoped rows.
+ * Previously, any scoped row caused unscoped utterances to be dropped entirely.
+ */
+export function filterUtterancesForRecording(utterances, recordingIdStr) {
+  if (!utterances?.length) return [];
+  const hasScoped = utterances.some((u) => u.recordingId != null && u.recordingId !== '');
+  if (!hasScoped) return utterances;
+  return utterances.filter((u) => {
+    if (u.recordingId == null || u.recordingId === '') return true;
+    return String(u.recordingId) === recordingIdStr;
+  });
+}
+
 export function dedupeAndSortUtterances(batchRows) {
   const sortedBatches = [...batchRows].sort((a, b) => {
     const sa = String(a.sessionId);
@@ -132,7 +146,8 @@ export function deriveEvidenceGrade({ sessions, recordings, utterances, intervie
 
 async function recordingsForOwner({ interviewId, meetingId }) {
   if (interviewId) {
-    return Recording.find({ interviewId }).lean();
+    // Recordings upserted from webhooks/discovery carry no interviewId; an interview has exactly one room.
+    return Recording.find({ $or: [{ interviewId }, { meetingId }] }).lean();
   }
   return Recording.find({ meetingId }).lean();
 }

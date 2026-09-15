@@ -66,6 +66,15 @@ mongoose
   .connect(config.mongoose.url, config.mongoose.options)
   .then(() => {
     logger.info('Connected to MongoDB');
+    if (config.livekit?.agentsEnabled === false) {
+      logger.warn(
+        '[config] LIVEKIT_AGENTS_ENABLED=false — meeting-summary and meeting-assistant agents will not dispatch'
+      );
+    } else if (config.livekit?.apiKey && config.livekit?.apiSecret) {
+      logger.info('[config] LiveKit agent dispatch enabled', {
+        summaryAgentName: config.livekit.summaryAgentName,
+      });
+    }
     logBolnaAgentConfigHealth();
     seedVoiceAgentsFromEnv().catch((e) => logger.warn(`[VoiceAgent] seed skipped: ${e.message}`));
     import('./services/numberPricing.service.js')

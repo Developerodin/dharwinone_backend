@@ -14,23 +14,52 @@
  */
 
 import { EgressStatus } from 'livekit-server-sdk';
-import Recording from '../models/recording.model.js';
+import Recording, { isRecordingTerminal } from '../models/recording.model.js';
 import recordingSyncService from './recordingSync.service.js';
 import { headRecordingObject } from '../config/s3.js';
 import logger from '../config/logger.js';
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+/** Fallback cron pickup for `stopping` after stop was requested (post-stop poll handles the fast path). */
+const STALE_STOPPING_THRESHOLD_MS = 30 * 1000;
 const FORCE_RESOLVE_THRESHOLD_MS = 8 * 60 * 60 * 1000;
 const RECONCILE_INTERVAL_MS = 2 * 60 * 1000;
+/** Poll LiveKit after stopEgress so DB catches terminal egress without waiting for webhook/cron. */
+const AFTER_STOP_POLL_DELAYS_MS = [400, 1000, 2000, 4000, 8000];
 
 let intervalId = null;
 
 const NON_TERMINAL = ['pending', 'recording', 'stopping', 'finalizing'];
 
 /**
+ * Mongo filter for non-terminal rows eligible for cron reconcile.
+ * `stopping` uses stopRequestedAt with a shorter window than recording/pending.
+ */
+export function buildStaleRecordingFilter(now = Date.now()) {
+  const generalCutoff = new Date(now - STALE_THRESHOLD_MS);
+  const stoppingCutoff = new Date(now - STALE_STOPPING_THRESHOLD_MS);
+  return {
+    $or: [
+      {
+        status: { $in: ['pending', 'recording', 'finalizing'] },
+        startedAt: { $lt: generalCutoff },
+      },
+      {
+        status: 'stopping',
+        $or: [
+          { stopRequestedAt: { $lt: stoppingCutoff } },
+          { stopRequestedAt: null, startedAt: { $lt: generalCutoff } },
+          { stopRequestedAt: { $exists: false }, startedAt: { $lt: generalCutoff } },
+        ],
+      },
+    ],
+  };
+}
+
+/**
  * Resolve a single stale recording. Returns final status string or null if skipped.
  */
-const resolveStaleRecording = async (recording, egressClient) => {
+export const reconcileRecordingFromLiveKit = async (recording, egressClient) => {
   const { egressId, _id } = recording;
 
   // Pending row with no egressId: orphan from a failed two-phase start.
@@ -256,14 +285,36 @@ const resolveStaleRecording = async (recording, egressClient) => {
   return 'missing';
 };
 
+/**
+ * After stopEgress, poll LiveKit until egress is terminal or attempts exhaust.
+ * Idempotent with webhook — transitionRecording monotonic guard handles races.
+ */
+export const pollReconcileAfterStop = async (egressId, egressClient) => {
+  if (!egressId || !egressClient) return;
+
+  for (let i = 0; i < AFTER_STOP_POLL_DELAYS_MS.length; i += 1) {
+    const delayMs = AFTER_STOP_POLL_DELAYS_MS[i];
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+
+    const rec = await Recording.findOne({ egressId }).lean();
+    if (!rec) return;
+    if (isRecordingTerminal(rec.status)) return;
+    if (rec.status !== 'stopping' && rec.status !== 'finalizing') return;
+
+    const result = await reconcileRecordingFromLiveKit(rec, egressClient);
+    if (result) {
+      logger.info('[Recording reconcile] post-stop resolved', { egressId, result, attempt: i + 1 });
+      return;
+    }
+  }
+};
+
 export const runRecoveryPass = async (egressClient) => {
   if (!egressClient) return;
 
-  const threshold = new Date(Date.now() - STALE_THRESHOLD_MS);
-
   const stale = await Recording.find({
+    ...buildStaleRecordingFilter(),
     status: { $in: NON_TERMINAL },
-    startedAt: { $lt: threshold },
   })
     .limit(200)
     .lean();
@@ -278,7 +329,7 @@ export const runRecoveryPass = async (egressClient) => {
 
   for (const rec of stale) {
     try {
-      const result = await resolveStaleRecording(rec, egressClient);
+      const result = await reconcileRecordingFromLiveKit(rec, egressClient);
       if (result === 'completed') completed += 1;
       else if (result === 'missing') missing += 1;
       else skipped += 1;
@@ -298,7 +349,7 @@ export const startRecordingScheduler = (egressClient) => {
   logger.info(
     `[Recording cron] started (interval: ${RECONCILE_INTERVAL_MS / 60000} min, stale: ${
       STALE_THRESHOLD_MS / 60000
-    } min)`
+    } min, stopping stale: ${STALE_STOPPING_THRESHOLD_MS / 1000}s)`
   );
 };
 

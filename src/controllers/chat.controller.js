@@ -280,7 +280,9 @@ const listCalls = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
-  const result = await chatService.listCallsForUser(userId, { page, limit });
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  const result = await chatService.listCallsForUser(userId, { page, limit, q, status });
   res.send(result);
 });
 
