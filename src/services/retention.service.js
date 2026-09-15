@@ -1,5 +1,8 @@
 import { DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import TranscriptSegment from '../models/transcriptSegment.model.js';
+import TranscriptSession from '../models/transcriptSession.model.js';
+import TranscriptBatch from '../models/transcriptBatch.model.js';
+import TranscriptVersion from '../models/transcriptVersion.model.js';
 import Summary from '../models/summary.model.js';
 import AgentDispatch from '../models/agentDispatch.model.js';
 import SummaryDeadLetter from '../models/summaryDeadLetter.model.js';
@@ -13,6 +16,22 @@ function cutoff(days) {
 
 function bucket() {
   return config.livekit?.s3Bucket || config.aws?.bucketName || 'recordings';
+}
+
+async function deleteS3Object(key) {
+  if (!key) return false;
+  try {
+    await s3Client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket(),
+        Delete: { Objects: [{ Key: key }] },
+      })
+    );
+    return true;
+  } catch (err) {
+    logger.warn('[Retention] S3 object delete failed', { key, error: err.message });
+    return false;
+  }
 }
 
 async function purgeS3PrefixForMeeting(meetingId) {
@@ -58,8 +77,35 @@ export async function runRetention() {
   }
 
   await TranscriptSegment.deleteMany({ createdAt: { $lt: tCutoff } });
+
+  const oldVersions = await TranscriptVersion.find({ updatedAt: { $lt: tCutoff } })
+    .select('s3Key')
+    .limit(500)
+    .lean();
+  for (const v of oldVersions) {
+    // eslint-disable-next-line no-await-in-loop
+    await deleteS3Object(v.s3Key);
+    // eslint-disable-next-line no-await-in-loop
+    await TranscriptVersion.deleteOne({ _id: v._id });
+  }
+
+  const oldSessions = await TranscriptSession.find({ updatedAt: { $lt: tCutoff } })
+    .select('_id')
+    .limit(500)
+    .lean();
+  for (const s of oldSessions) {
+    // eslint-disable-next-line no-await-in-loop
+    await TranscriptBatch.deleteMany({ sessionId: s._id });
+    // eslint-disable-next-line no-await-in-loop
+    await TranscriptSession.deleteOne({ _id: s._id });
+  }
+
   await AgentDispatch.deleteMany({ createdAt: { $lt: adCutoff } });
   await SummaryDeadLetter.deleteMany({ movedToDlqAt: { $lt: dlqCutoff } });
 
-  logger.info('[Retention] sweep complete', { summariesPurged: oldSummaries.length });
+  logger.info('[Retention] sweep complete', {
+    summariesPurged: oldSummaries.length,
+    transcriptVersionsPurged: oldVersions.length,
+    transcriptSessionsPurged: oldSessions.length,
+  });
 }

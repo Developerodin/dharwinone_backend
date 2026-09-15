@@ -4,6 +4,10 @@ import Recording, { recordingRank } from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
 import TranscriptSegment from '../models/transcriptSegment.model.js';
+import TranscriptSession from '../models/transcriptSession.model.js';
+import TranscriptBatch from '../models/transcriptBatch.model.js';
+import { readJsonFromS3 } from './aiArtifactStorage.service.js';
+import { dedupeAndSortUtterances } from './transcriptAssembly.service.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import { recordingScope } from './visibilityScope.service.js';
@@ -823,6 +827,69 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
   const recording = await Recording.findOne({ _id: recordingId, ...scopeFilter }).lean();
   if (!recording) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Recording not found');
+  }
+
+  const v2Session = await TranscriptSession.findOne({ recordingId: recording._id }).lean();
+  if (v2Session || recording.transcriptS3Key) {
+    let versionPayload = null;
+    if (recording.transcriptS3Key) {
+      try {
+        versionPayload = await readJsonFromS3({ key: recording.transcriptS3Key });
+      } catch (err) {
+        logger.warn('[Recording] transcript version read failed', {
+          recordingId,
+          key: recording.transcriptS3Key,
+          error: err.message,
+        });
+      }
+    }
+    let rawUtterances = versionPayload?.utterances || [];
+    if (!rawUtterances.length && v2Session) {
+      const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
+        .sort({ sessionId: 1, batchSeq: 1 })
+        .lean();
+      rawUtterances = dedupeAndSortUtterances(batches);
+    }
+    const utterances = rawUtterances.map((u) => ({
+      utteranceId: u.utteranceId,
+      speaker: u.participantIdentity ?? null,
+      speakerName: u.displayName ?? null,
+      speakerRole: u.speakerRole ?? null,
+      roleAssurance: u.roleAssurance ?? null,
+      text: u.text,
+      startMs: u.recordingOffsetMs ?? null,
+      recordingOffsetMs: u.recordingOffsetMs ?? null,
+      startedAtEpochMs: u.startedAtEpochMs ?? null,
+      endedAtEpochMs: u.endedAtEpochMs ?? null,
+      confidence: u.confidence ?? null,
+    }));
+    const meeting =
+      (await Meeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean()) ||
+      (await InternalMeeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean());
+
+    return {
+      recording: {
+        id: recording._id?.toString(),
+        meetingId: recording.meetingId,
+        egressId: recording.egressId,
+        status: recording.status,
+        startedAt: recording.startedAt,
+        completedAt: recording.completedAt,
+        durationMs: recording.durationMs ?? null,
+        aiProcessingStatus: recording.aiProcessingStatus ?? 'none',
+        aiProcessingError: recording.aiProcessingError ?? null,
+      },
+      meetingTitle: meeting?.title || recording.meetingId,
+      segments: [],
+      utterances,
+      evidenceGrade: versionPayload?.evidenceGrade ?? null,
+      transcriptVersion: versionPayload?.version ?? null,
+      totalSegments: 0,
+      page: 1,
+      limit,
+      totalPages: 1,
+      source: 'v2',
+    };
   }
 
   const segmentQuery = { recordingId: recording._id };
