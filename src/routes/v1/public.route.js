@@ -7,6 +7,8 @@ import * as livekitValidation from '../../validations/livekit.validation.js';
 import * as livekitController from '../../controllers/livekit.controller.js';
 import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
+import * as interviewConsentController from '../../controllers/interviewConsent.controller.js';
+import * as interviewConsentValidation from '../../validations/interviewConsent.validation.js';
 import * as jobValidation from '../../validations/job.validation.js';
 import * as jobController from '../../controllers/job.controller.js';
 import * as userValidation from '../../validations/user.validation.js';
@@ -136,6 +138,13 @@ router.get(
   '/recording/status/:roomName',
   validate(livekitValidation.getRecordingStatusPublic),
   livekitController.getRecordingStatusPublic
+);
+
+router.post(
+  '/meetings/:roomName/consent',
+  publicWriteLimiter,
+  validate(interviewConsentValidation.recordMeetingConsent),
+  interviewConsentController.recordConsent
 );
 
 /**

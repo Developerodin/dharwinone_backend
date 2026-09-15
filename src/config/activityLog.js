@@ -144,6 +144,7 @@ export const ActivityActions = {
   INTERVIEW_RECORDING_VIEW: 'interview.recording.view',
   INTERVIEW_TRANSCRIPT_VIEW: 'interview.transcript.view',
   INTERVIEW_SUMMARY_VIEW: 'interview.summary.view',
+  INTERVIEW_CONSENT_RECORDED: 'interview.consent.recorded',
   INTERVIEW_RESULT_UPDATE: 'interview.result.update',
   INTERVIEW_LINKAGE_UPDATE: 'interview.linkage.update',
   INTERVIEW_APPLICATION_CREATE: 'interview.application.create',

@@ -575,6 +575,9 @@ const startRecording = async (roomName) => {
     throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, `Failed to verify room: ${error.message}`);
   }
 
+  const { assertRecordingConsentForRoom } = await import('./interviewConsent.service.js');
+  await assertRecordingConsentForRoom(roomName);
+
   // Determine if using local MinIO or production S3
   // LiveKit Cloud: always use AWS S3 (Egress runs on LiveKit's side)
   // Local Docker: use MinIO in dev, AWS S3 in production
@@ -1378,6 +1381,11 @@ const deleteInterviewRoom = async (roomName) => {
 };
 
 export const getEgressClient = () => egressClient;
+
+export const listRoomParticipants = async (roomName) => {
+  if (!roomService) return [];
+  return (await roomService.listParticipants(roomName)) || [];
+};
 
 export {
   computeMeetingAccessGates,

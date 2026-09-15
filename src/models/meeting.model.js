@@ -178,6 +178,18 @@ const meetingSchema = mongoose.Schema(
         lastJoinedAt: { type: Date },
       },
     ],
+    participantConsents: [
+      {
+        identity: { type: String, required: true, trim: true },
+        role: { type: String, trim: true, default: 'guest' },
+        noticeVersion: { type: String, required: true, trim: true },
+        recording: { type: Boolean, default: false },
+        transcription: { type: Boolean, default: false },
+        aiEvaluation: { type: Boolean, default: false },
+        acceptedAt: { type: Date, required: true },
+        withdrawnAt: { type: Date, default: null },
+      },
+    ],
     // --- System ---
     /** LiveKit participant identities granted publish after host admit (survives API restarts / multi-instance) */
     admittedIdentities: {

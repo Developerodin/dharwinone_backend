@@ -1017,6 +1017,15 @@ const buildMeetingInvitationEmail = ({
     { label: 'Interview type', value: interviewType || '' },
     { label: 'Role / position', value: jobPosition || '' },
     ...(isVideoMeeting && joinUrl ? [{ label: 'Join link', value: joinUrl }] : []),
+    ...(jobPosition
+      ? [
+          {
+            label: 'Privacy notice (draft)',
+            value:
+              'This interview may be recorded and transcribed. Optional AI-assisted evaluation is advisory only. Notice version draft-2026-09-v1 — legal approval required.',
+          },
+        ]
+      : []),
   ];
   const sections = [
     description

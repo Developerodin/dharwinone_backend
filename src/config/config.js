@@ -360,6 +360,8 @@ const envVarsSchema = Joi.object()
     AGENT_DISPATCH_RETENTION_DAYS: Joi.number().default(30),
     PROCESSED_WEBHOOK_RETENTION_DAYS: Joi.number().default(7),
     DLQ_RETENTION_DAYS: Joi.number().default(90),
+    RECORDING_MEDIA_RETENTION_ENABLED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    RECORDING_MEDIA_RETENTION_DAYS: Joi.number().default(180),
     PRESIGN_EXPIRY_SECONDS: Joi.number().default(900),
 
     /** Task board V2 runtime flag (GET /v1/feature-flags/taskboard-v2). V2 is the only UI; default all. */
@@ -827,6 +829,10 @@ const config = {
     agentDispatchDays: envVars.AGENT_DISPATCH_RETENTION_DAYS,
     processedWebhookDays: envVars.PROCESSED_WEBHOOK_RETENTION_DAYS,
     dlqDays: envVars.DLQ_RETENTION_DAYS,
+    recordingMediaEnabled:
+      String(envVars.RECORDING_MEDIA_RETENTION_ENABLED ?? '').trim().toLowerCase() === 'true' ||
+      String(envVars.RECORDING_MEDIA_RETENTION_ENABLED ?? '').trim() === '1',
+    recordingMediaDays: envVars.RECORDING_MEDIA_RETENTION_DAYS,
   },
   featureFlags: {
     taskboardV2: {

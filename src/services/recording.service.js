@@ -11,6 +11,8 @@ import { dedupeAndSortUtterances } from './transcriptAssembly.service.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import { recordingScope } from './visibilityScope.service.js';
+import { hasApiPermission } from '../utils/permissionCheck.js';
+import { recordingPlaybackExpiresSeconds } from '../utils/recordingPlaybackTtl.js';
 import { resolveTenantIdForMeeting } from './recordingSync.service.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
@@ -46,7 +48,7 @@ export const tsToMs = (v) => {
   return Math.floor(n * 1000);               // seconds
 };
 
-const PLAYBACK_URL_EXPIRY_SECONDS = 3600; // 1 hour
+
 const LISTABLE_STATUSES = ['recording', 'stopping', 'finalizing', 'completed', 'aborted', 'failed', 'expired'];
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -125,7 +127,7 @@ const listByMeetingId = async (meetingIdOrMongoId) => {
       try {
         item.playbackUrl = await generatePresignedRecordingPlaybackUrl(
           rec.filePath,
-          PLAYBACK_URL_EXPIRY_SECONDS
+          recordingPlaybackExpiresSeconds(durationMs)
         );
       } catch (err) {
         item.playbackUrl = null;
@@ -179,6 +181,9 @@ const listAll = async (options = {}, currentUser = {}) => {
   //   aborted/failed                  → red "Recording failed" badge with reason
   // `missing` and `expired` are hidden from list APIs — no playback and noisy for users.
   const query = { status: { $in: selectedStatuses } };
+  if (!(await hasApiPermission(currentUser, 'interviews.read'))) {
+    query.meetingKind = { $ne: 'interview' };
+  }
   if (dateFrom || dateTo) {
     query.startedAt = {};
     if (dateFrom && !Number.isNaN(dateFrom.getTime())) query.startedAt.$gte = dateFrom;
@@ -341,7 +346,7 @@ const listAll = async (options = {}, currentUser = {}) => {
       try {
         item.playbackUrl = await generatePresignedRecordingPlaybackUrl(
           rec.filePath,
-          PLAYBACK_URL_EXPIRY_SECONDS
+          recordingPlaybackExpiresSeconds(durationMs)
         );
       } catch (err) {
         item.playbackUrl = null;
