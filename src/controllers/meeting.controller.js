@@ -5,6 +5,7 @@ import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
 import recordingService from '../services/recording.service.js';
 import { writeAtsAudit } from '../services/atsAudit.service.js';
+import { writeDedupedInterviewViewAudit } from '../utils/interviewViewAuditDedup.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
 const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
@@ -40,14 +41,40 @@ const get = catchAsync(async (req, res) => {
 
 const update = catchAsync(async (req, res) => {
   const userId = req.user?._id?.toString() || req.user?.id;
+  const before = await meetingService.getMeetingById(req.params.id, req.user);
+  if (!before) {
+    return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
+  }
   const result = await meetingService.updateMeetingById(req.params.id, req.body, userId, req.user);
+  const changes = [];
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'interviewResult')) {
+    changes.push({
+      field: 'interviewResult',
+      from: before.interviewResult ?? null,
+      to: result.interviewResult ?? null,
+    });
+  }
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'interviewScorecard')) {
+    changes.push({
+      field: 'interviewScorecard',
+      from: before.interviewScorecard ?? null,
+      to: result.interviewScorecard ?? null,
+    });
+  }
+  const auditAction =
+    changes.some((c) => c.field === 'interviewResult') && changes.length
+      ? ActivityActions.INTERVIEW_RESULT_UPDATE
+      : ActivityActions.INTERVIEW_UPDATE;
   await writeAtsAudit(
     auditActorId(req),
     {
-      action: ActivityActions.INTERVIEW_UPDATE,
+      action: auditAction,
       entityType: EntityTypes.MEETING,
       entityId: String(req.params.id),
-      metadata: { fieldsUpdated: Object.keys(req.body || {}) },
+      metadata: {
+        fieldsUpdated: Object.keys(req.body || {}),
+        ...(changes.length ? { changes } : {}),
+      },
     },
     req,
     { editContext: { staffEdit: true } }
@@ -93,7 +120,7 @@ const getRecordings = catchAsync(async (req, res) => {
     return res.status(httpStatus.NOT_FOUND).send({ message: 'Meeting not found' });
   }
   const list = await recordingService.listByMeetingId(req.params.id);
-  await writeAtsAudit(
+  await writeDedupedInterviewViewAudit(
     auditActorId(req),
     {
       action: ActivityActions.INTERVIEW_RECORDING_VIEW,

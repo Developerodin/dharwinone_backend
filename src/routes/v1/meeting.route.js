@@ -1,11 +1,13 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
 import * as meetingValidation from '../../validations/meeting.validation.js';
 import * as meetingController from '../../controllers/meeting.controller.js';
 import * as meetingExcelController from '../../controllers/meetingExcel.controller.js';
+import * as interviewTranscriptController from '../../controllers/interviewTranscript.controller.js';
+import * as interviewEvaluationValidation from '../../validations/interviewEvaluation.validation.js';
 
 const router = express.Router();
 
@@ -52,6 +54,33 @@ router
 router
   .route('/:id/recordings')
   .get(auth(), requirePermissions('interviews.read'), validate(meetingValidation.getMeetingRecordings), meetingController.getRecordings);
+
+router
+  .route('/:id/transcript/utterances/:utteranceId/context')
+  .get(
+    auth(),
+    requireAnyOfPermissions('interviews.transcript.read', 'interviews.evaluation.read'),
+    validate(interviewEvaluationValidation.getMeetingTranscriptUtteranceContext),
+    interviewTranscriptController.getTranscriptUtteranceContext
+  );
+
+router
+  .route('/:id/transcript')
+  .get(
+    auth(),
+    requirePermissions('interviews.transcript.read'),
+    validate(interviewEvaluationValidation.getMeetingTranscript),
+    interviewTranscriptController.getTranscript
+  );
+
+router
+  .route('/:id/summary')
+  .get(
+    auth(),
+    requirePermissions('interviews.summary.read'),
+    validate(interviewEvaluationValidation.getMeetingSummary),
+    interviewTranscriptController.getSummary
+  );
 
 router
   .route('/:id/linkage')

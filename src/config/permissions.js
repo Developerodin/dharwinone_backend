@@ -188,6 +188,17 @@ export const permissionAliases = {
   // ATS interviews (/meetings). Domain: ats.interviews → interviews.read / interviews.manage
   'interviews.read': ['interviews.read'],
   'interviews.manage': ['interviews.manage'],
+  'interviews.transcript.read': [
+    'interviews.transcript.read',
+    'ats.interviews.transcript:view',
+    'ats.interviews.transcript:view,create,edit,delete',
+  ],
+  'interviews.summary.read': [
+    'interviews.summary.read',
+    'ats.interviews.summary:view',
+    'ats.interviews.summary:view,create,edit,delete',
+  ],
+  'interviews.evaluation.read': ['interviews.evaluation.read'],
   // Calls (dialer, Bolna call records, recordings) — CRUD-only matrix actions.
   'calls.view': [
     'calls.view',

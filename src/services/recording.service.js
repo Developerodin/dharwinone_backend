@@ -846,7 +846,7 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
       }
     }
     let rawUtterances = versionPayload?.utterances || [];
-    if (!rawUtterances.length && (v2Session || (transcriptS3Key && !isVersionedTranscriptKey))) {
+    if (!rawUtterances.length && v2Session) {
       const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
         .sort({ sessionId: 1, batchSeq: 1 })
         .lean();
