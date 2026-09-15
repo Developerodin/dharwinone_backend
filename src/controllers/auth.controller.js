@@ -44,6 +44,7 @@ import {
   validateRoleIdsForAgent,
 } from '../utils/roleHelpers.js';
 import User from '../models/user.model.js';
+import Employee from '../models/employee.model.js';
 import { getMyPermissionsForFrontend } from '../services/permission.service.js';
 import { getPageCapabilities } from '../services/pageCapabilities.service.js';
 import { pickUserDisplayForActivityLog } from '../utils/activityLogSubject.util.js';
@@ -313,6 +314,8 @@ const publicRegister = catchAsync(async (req, res) => {
  * Creates User (status 'pending', registrationSource public_candidate) and a Candidate linked to that user.
  * Duplicate email: internal/staff accounts are rejected; otherwise `$addToSet` Candidate role and set
  * `registrationSource` only when currently unset (never overwrite an existing source — R5).
+ * Email ownership is not proven here, so an existing account's credentials, identity fields and Candidate profile
+ * are never changed: a verified account gets 409; an unverified one only gets a profile when it has none.
  */
 const publicRegisterCandidate = catchAsync(async (req, res) => {
   const candidateRole = await getRoleByName('Candidate');
@@ -324,6 +327,8 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
   const phone = (phoneNumber && String(phoneNumber).trim()) || '0000000000';
   const cc = countryCode && String(countryCode).trim().toUpperCase();
   let user = await getUserByEmail(email);
+  const isExistingUser = Boolean(user);
+  let existingProfile = null;
   if (user) {
     if (await userIsStaffForVerifyEmail(user)) {
       throw new ApiError(
@@ -331,14 +336,21 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
         'This email is already registered to an internal account. Sign in or use a different email.',
       );
     }
-    user.name = name;
-    user.password = password;
-    if (phone !== '0000000000') user.phoneNumber = phone;
-    if (cc) user.countryCode = cc;
-    if (!user.registrationSource) user.registrationSource = 'public_candidate';
-    await user.save();
+    // Anyone who knows the email reaches this branch: setting name/password here was an account takeover.
+    // Direct updates rather than updateUserById, whose profile hooks would create or re-activate a Candidate profile.
+    await User.updateOne({ _id: user._id, registrationSource: null }, { $set: { registrationSource: 'public_candidate' } });
     await User.findByIdAndUpdate(user._id, { $addToSet: { roleIds: candidateRole._id } });
+    if (user.isEmailVerified) {
+      throw new ApiError(
+        httpStatus.CONFLICT,
+        'An account with this email already exists. Sign in, or use "Forgot password" if you do not remember your password.',
+        true,
+        '',
+        { errorCode: 'ACCOUNT_EXISTS' }
+      );
+    }
     user = await getUserById(user._id);
+    existingProfile = await Employee.findOne({ $or: [{ owner: user._id }, { email: user.email }] }).select('email');
   } else {
     user = await createUser({
       name,
@@ -351,8 +363,9 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       ...(cc && { countryCode: cc }),
     });
   }
-  let candidate = await ensureCandidateProfileForUser(user._id);
-  if (!candidate) {
+  // An existing profile belongs to the account holder: candidate stays null so none of the writes below touch it.
+  let candidate = existingProfile ? null : await ensureCandidateProfileForUser(user._id);
+  if (!existingProfile && !candidate) {
     try {
       candidate = await createCandidate(user._id, {
         fullName: name,
@@ -414,6 +427,17 @@ const publicRegisterCandidate = catchAsync(async (req, res) => {
       recipientName: user.name || 'there',
       accountContext: 'new candidate account',
     });
+  }
+  if (isExistingUser) {
+    // Echo nothing stored on an account the requester has not proven they own.
+    const shownProfile = candidate || existingProfile;
+    res.status(httpStatus.CREATED).send({
+      user: { id: user.id, email: user.email },
+      candidate: { id: shownProfile.id, email: shownProfile.email },
+      message:
+        'Check your email to verify your address. This email already had a registration in progress, so its original password was kept: after verifying, sign in with that password or use "Forgot password" to set a new one.',
+    });
+    return;
   }
   res.status(httpStatus.CREATED).send({
     user,
