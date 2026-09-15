@@ -32,3 +32,18 @@ export async function uploadJsonToS3({ key, data }) {
   logger.info('[AiArtifactStorage] uploaded', { key, bytes: body.length });
   return url;
 }
+
+export async function readJsonFromS3({ key }) {
+  const resp = await s3Client.send(
+    new GetObjectCommand({
+      Bucket: bucket(),
+      Key: key,
+    })
+  );
+  const chunks = [];
+  for await (const chunk of resp.Body) {
+    chunks.push(chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  return JSON.parse(raw);
+}

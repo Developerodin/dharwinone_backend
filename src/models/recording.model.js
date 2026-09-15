@@ -109,6 +109,8 @@ const recordingSchema = mongoose.Schema(
     summaryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Summary', default: null },
     transcriptUrl: { type: String, default: null },
     summaryUrl: { type: String, default: null },
+    transcriptS3Key: { type: String, default: null },
+    summaryS3Key: { type: String, default: null },
     agentDispatchId: { type: String, default: null },
     /** P3: explicit tenant boundary. Populated from meeting.tenantId at recording creation. */
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },

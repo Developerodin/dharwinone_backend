@@ -8,7 +8,7 @@ import { utterancesFromBatches } from './agentInternalV2.helpers.js';
 import Summary from '../models/summary.model.js';
 import Recording from '../models/recording.model.js';
 import logger from '../config/logger.js';
-import { uploadJsonToS3 } from './aiArtifactStorage.service.js';
+import { uploadJsonToS3, readJsonFromS3 } from './aiArtifactStorage.service.js';
 
 const CHARS_PER_TOKEN = 4;
 
@@ -202,10 +202,29 @@ export function buildSummaryClaimFilter({ meetingId, recordingId, now = Date.now
   };
 }
 
+function utterancesFromTranscriptVersion(versionDoc) {
+  const rows = versionDoc?.utterances || [];
+  if (!rows.length) return { utterances: [], durationMs: 0 };
+  const firstStart = rows[0].startedAtEpochMs || 0;
+  const utterances = rows.map((u) => ({
+    speaker: u.participantIdentity,
+    speakerName: u.displayName,
+    speakerRole: u.speakerRole,
+    text: u.text,
+    startMs: (u.startedAtEpochMs || firstStart) - firstStart,
+    endMs: (u.endedAtEpochMs || firstStart) - firstStart,
+    confidence: u.confidence ?? null,
+  }));
+  const lastEnd = rows[rows.length - 1].endedAtEpochMs || firstStart;
+  return { utterances, durationMs: lastEnd - firstStart };
+}
+
 export async function finalizeSummary({
   meetingId,
   recordingId,
   segmentShortfall = false,
+  transcriptVersionId = null,
+  transcriptS3Key = null,
   openai: openaiOverride,
 } = {}) {
   if (!meetingId) throw new Error('meetingId required');
@@ -240,10 +259,23 @@ export async function finalizeSummary({
       : await TranscriptSession.findOne({ meetingId }).sort({ createdAt: -1 }).lean();
 
     if (v2Session) {
-      const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
-        .sort({ batchSeq: 1 })
-        .lean();
-      const { utterances, durationMs } = utterancesFromBatches(batches);
+      let utterances;
+      let durationMs;
+      let versionS3Key = transcriptS3Key;
+      if (transcriptVersionId && !versionS3Key) {
+        const TranscriptVersion = (await import('../models/transcriptVersion.model.js')).default;
+        const ver = await TranscriptVersion.findById(transcriptVersionId).lean();
+        versionS3Key = ver?.s3Key || null;
+      }
+      if (versionS3Key) {
+        const versionDoc = await readJsonFromS3({ key: versionS3Key });
+        ({ utterances, durationMs } = utterancesFromTranscriptVersion(versionDoc));
+      } else {
+        const batches = await TranscriptBatch.find({ sessionId: v2Session._id })
+          .sort({ batchSeq: 1 })
+          .lean();
+        ({ utterances, durationMs } = utterancesFromBatches(batches));
+      }
       if (!utterances.length) {
         await Summary.findOneAndUpdate(
           { meetingId },
@@ -282,8 +314,10 @@ export async function finalizeSummary({
       }
 
       const transcriptJson = { meetingId, durationMs, utterances };
-      const transcriptUrl = await uploadJsonToS3({
-        key: `meetings/${meetingId}/transcript.json`,
+      const legacyTranscriptKey = `meetings/${meetingId}/transcript.json`;
+      const transcriptKey = versionS3Key || legacyTranscriptKey;
+      await uploadJsonToS3({
+        key: transcriptKey,
         data: transcriptJson,
       });
 
@@ -314,19 +348,25 @@ export async function finalizeSummary({
         { upsert: true, new: true }
       );
 
-      const summaryUrl = await uploadJsonToS3({
-        key: `meetings/${meetingId}/summary.json`,
+      const summaryKey = `meetings/${meetingId}/summary.json`;
+      await uploadJsonToS3({
+        key: summaryKey,
         data: summaryDoc.toObject(),
       });
 
-      await Recording.findByIdAndUpdate(claim._id, {
+      const recordingPatch = {
         aiProcessingStatus: 'completed',
         aiProcessingError: null,
         summaryClaimedAt: null,
         summaryId: summaryDoc._id,
-        transcriptUrl,
-        summaryUrl,
-      });
+        transcriptS3Key: transcriptKey,
+        summaryS3Key: summaryKey,
+      };
+      if (!versionS3Key) {
+        recordingPatch.transcriptUrl = `s3://${transcriptKey}`;
+        recordingPatch.summaryUrl = `s3://${summaryKey}`;
+      }
+      await Recording.findByIdAndUpdate(claim._id, recordingPatch);
       await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
 
       return {

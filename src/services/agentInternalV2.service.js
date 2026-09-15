@@ -310,11 +310,19 @@ export async function maybeEnqueueSessionSummary(session, dispatch) {
   }
 
   try {
-    const job = await enqueueFinalize({
+    const { assembleAndPlanSummaryJob } = await import('./transcriptAssembly.service.js');
+    const assemblyPlan = await assembleAndPlanSummaryJob({ session: finalized, dispatch });
+    const enqueueOpts = {
       meetingId: dispatch.meetingId,
       recordingId: dispatch.recordingId,
       segmentShortfall: partial,
-    });
+    };
+    if (assemblyPlan.ready && assemblyPlan.summaryJobId) {
+      enqueueOpts.jobId = assemblyPlan.summaryJobId;
+      enqueueOpts.transcriptVersionId = assemblyPlan.transcriptVersionId;
+      enqueueOpts.transcriptS3Key = assemblyPlan.s3Key;
+    }
+    const job = await enqueueFinalize(enqueueOpts);
     await TranscriptSession.findByIdAndUpdate(session._id, {
       $set: {
         status: 'summary_queued',

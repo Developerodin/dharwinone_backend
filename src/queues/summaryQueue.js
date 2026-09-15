@@ -42,19 +42,36 @@ export function buildFinalizeJobId({ meetingId, recordingId, replayAt = null } =
   return (replayAt ? `${base}-replay-${replayAt}` : base).replace(/:/g, '_');
 }
 
+export function buildSummaryJobIdFromVersion({ ownerKey, version }) {
+  const safe = String(ownerKey).replace(/:/g, '_');
+  return `summary-${safe}-v${version}`;
+}
+
 export async function enqueueFinalize({
   meetingId,
   recordingId,
   delayMs = 0,
   segmentShortfall = false,
   replayAt = null,
+  jobId = null,
+  transcriptVersionId = null,
+  transcriptS3Key = null,
 } = {}) {
   const q = getSummaryQueue();
+  const resolvedJobId =
+    jobId || buildFinalizeJobId({ meetingId, recordingId, replayAt });
   return q.add(
     'finalize',
-    { meetingId, recordingId: recordingId ? String(recordingId) : null, requestedAt: Date.now(), segmentShortfall },
     {
-      jobId: buildFinalizeJobId({ meetingId, recordingId, replayAt }),
+      meetingId,
+      recordingId: recordingId ? String(recordingId) : null,
+      requestedAt: Date.now(),
+      segmentShortfall,
+      transcriptVersionId: transcriptVersionId ? String(transcriptVersionId) : null,
+      transcriptS3Key: transcriptS3Key || null,
+    },
+    {
+      jobId: resolvedJobId,
       delay: Math.max(0, Number(delayMs) || 0),
     }
   );
