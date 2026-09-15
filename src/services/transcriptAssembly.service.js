@@ -9,6 +9,9 @@ import logger from '../config/logger.js';
 
 export const SUPPORTED_TRANSCRIPT_LANGUAGES = ['en'];
 
+// ponytail: non-terminal recordings block assembly for 30 min after the newest run heartbeat; then partial grade recording_not_terminal.
+const RECORDING_TERMINAL_WAIT_MS = 30 * 60 * 1000;
+
 export function buildTranscriptOwnerKey({ interviewId, meetingId }) {
   if (interviewId) return `interview-${String(interviewId)}`;
   return `meeting-${String(meetingId)}`;
@@ -43,14 +46,26 @@ export function computeTranscriptContentHash(utterances) {
 }
 
 export function dedupeAndSortUtterances(batchRows) {
+  const sortedBatches = [...batchRows].sort((a, b) => {
+    const sa = String(a.sessionId);
+    const sb = String(b.sessionId);
+    if (sa !== sb) return sa.localeCompare(sb);
+    return (a.batchSeq || 0) - (b.batchSeq || 0);
+  });
   const byId = new Map();
-  for (const batch of batchRows) {
+  for (const batch of sortedBatches) {
+    const batchRecordingId = batch.recordingId ? String(batch.recordingId) : null;
     for (const u of batch.utterances || []) {
       if (!u?.utteranceId) continue;
-      if (!byId.has(u.utteranceId)) byId.set(u.utteranceId, u);
+      const row = batchRecordingId ? { ...u, recordingId: batchRecordingId } : u;
+      if (!byId.has(u.utteranceId)) byId.set(u.utteranceId, row);
     }
   }
-  return [...byId.values()].sort((a, b) => (a.startedAtEpochMs || 0) - (b.startedAtEpochMs || 0));
+  return [...byId.values()].sort((a, b) => {
+    const delta = (a.startedAtEpochMs || 0) - (b.startedAtEpochMs || 0);
+    if (delta !== 0) return delta;
+    return String(a.utteranceId).localeCompare(String(b.utteranceId));
+  });
 }
 
 export function recordingOffsetForUtterance(recording, startedAtEpochMs) {
@@ -64,8 +79,33 @@ export function recordingOffsetForUtterance(recording, startedAtEpochMs) {
   return offset < 0 ? null : offset;
 }
 
-export function deriveEvidenceGrade({ sessions, recordings, utterances, interviewLanguage }) {
-  const reasons = [];
+function newestRunHeartbeatMs(sessions) {
+  let max = 0;
+  for (const s of sessions) {
+    for (const r of s.runs || []) {
+      const t = r.lastHeartbeatAt ? new Date(r.lastHeartbeatAt).getTime() : 0;
+      if (t > max) max = t;
+    }
+  }
+  return max;
+}
+
+export function computeUtteranceQualityMetrics(utterances) {
+  let maxGapMs = 0;
+  let lowConfidenceCount = 0;
+  for (let i = 1; i < utterances.length; i += 1) {
+    const gap = (utterances[i].startedAtEpochMs || 0) - (utterances[i - 1].endedAtEpochMs || 0);
+    if (gap > maxGapMs) maxGapMs = gap;
+  }
+  for (const u of utterances) {
+    if (u.confidence != null && u.confidence < 0.75) lowConfidenceCount += 1;
+  }
+  const lowConfidenceShare = utterances.length ? lowConfidenceCount / utterances.length : 0;
+  return { maxGapMs, lowConfidenceShare, coverageRatio: null };
+}
+
+export function deriveEvidenceGrade({ sessions, recordings, utterances, interviewLanguage, extraPartialReasons = [] }) {
+  const reasons = [...extraPartialReasons];
   if (sessions.some((s) => s.partial)) reasons.push('partial_session');
   if (recordings.some((r) => r.truncatedAtScheduleEnd)) reasons.push('truncated_at_schedule_end');
   const lang = interviewLanguage || 'en';
@@ -84,7 +124,7 @@ export function deriveEvidenceGrade({ sessions, recordings, utterances, intervie
   if (reasons.includes('truncated_at_schedule_end')) {
     return { evidenceGrade: 'truncated', partialReasons: reasons };
   }
-  if (reasons.some((r) => r === 'partial_session' || r === 'coverage_gap')) {
+  if (reasons.some((r) => r === 'partial_session' || r === 'coverage_gap' || r === 'recording_not_terminal')) {
     return { evidenceGrade: 'partial', partialReasons: reasons };
   }
   return { evidenceGrade: 'full', partialReasons: reasons };
@@ -102,20 +142,29 @@ async function sessionsForRecordings(recordingIds) {
   return TranscriptSession.find({ recordingId: { $in: recordingIds } }).lean();
 }
 
-export async function ownerReadyForAssembly({ ownerKey, interviewId, meetingId }) {
+export async function ownerReadyForAssembly({ ownerKey, interviewId, meetingId, now = Date.now() }) {
   const recordings = await recordingsForOwner({ interviewId, meetingId });
   if (!recordings.length) return { ready: false, reason: 'no_recordings' };
-  if (!recordings.every((r) => isRecordingTerminal(r.status))) {
-    return { ready: false, reason: 'recordings_not_terminal' };
-  }
   const recordingIds = recordings.map((r) => r._id);
   const sessions = await sessionsForRecordings(recordingIds);
   if (!sessions.length) return { ready: false, reason: 'no_sessions' };
+
+  const allRecordingsTerminal = recordings.every((r) => isRecordingTerminal(r.status));
+  let partialRecordingReason = null;
+  if (!allRecordingsTerminal) {
+    const newestHb = newestRunHeartbeatMs(sessions);
+    if (newestHb && now - newestHb >= RECORDING_TERMINAL_WAIT_MS) {
+      partialRecordingReason = 'recording_not_terminal';
+    } else {
+      return { ready: false, reason: 'recordings_not_terminal' };
+    }
+  }
+
   const terminalSession = new Set(['finalized', 'summary_queued', 'completed', 'failed']);
   if (!sessions.every((s) => terminalSession.has(s.status))) {
     return { ready: false, reason: 'sessions_not_finalized' };
   }
-  return { ready: true, recordings, sessions };
+  return { ready: true, recordings, sessions, partialRecordingReason };
 }
 
 export async function assembleTranscriptVersionForOwner({
@@ -124,10 +173,11 @@ export async function assembleTranscriptVersionForOwner({
   meetingId,
   recordings,
   sessions,
+  partialRecordingReason = null,
 }) {
   const sessionIds = sessions.map((s) => s._id);
   const batches = await TranscriptBatch.find({ sessionId: { $in: sessionIds } })
-    .sort({ batchSeq: 1 })
+    .sort({ sessionId: 1, batchSeq: 1 })
     .lean();
   const raw = dedupeAndSortUtterances(batches);
   if (!raw.length) {
@@ -166,7 +216,15 @@ export async function assembleTranscriptVersionForOwner({
   const nextVersion = (latest?.version || 0) + 1;
   const s3Key = buildTranscriptVersionS3Key({ ownerKey, version: nextVersion, interviewId, meetingId });
   const interviewLanguage = sessions[0]?.interviewLanguage || 'en';
-  const grade = deriveEvidenceGrade({ sessions, recordings, utterances: raw, interviewLanguage });
+  const extraReasons = partialRecordingReason ? [partialRecordingReason] : [];
+  const grade = deriveEvidenceGrade({
+    sessions,
+    recordings,
+    utterances: raw,
+    interviewLanguage,
+    extraPartialReasons: extraReasons,
+  });
+  const quality = computeUtteranceQualityMetrics(utterances);
 
   const payload = {
     schemaVersion: 1,
@@ -184,19 +242,38 @@ export async function assembleTranscriptVersionForOwner({
 
   await uploadJsonToS3({ key: s3Key, data: payload });
 
-  const doc = await TranscriptVersion.create({
-    ownerKey,
-    interviewId: interviewId || null,
-    meetingId: meetingId || null,
-    version: nextVersion,
-    sessionIds,
-    s3Key,
-    contentHash,
-    utteranceCount: utterances.length,
-    evidenceGrade: grade.evidenceGrade,
-    partialReasons: grade.partialReasons,
-    schemaVersion: 1,
-  });
+  let doc;
+  try {
+    doc = await TranscriptVersion.create({
+      ownerKey,
+      interviewId: interviewId || null,
+      meetingId: meetingId || null,
+      version: nextVersion,
+      sessionIds,
+      s3Key,
+      contentHash,
+      utteranceCount: utterances.length,
+      quality,
+      evidenceGrade: grade.evidenceGrade,
+      partialReasons: grade.partialReasons,
+      schemaVersion: 1,
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      const raced = await TranscriptVersion.findOne({ ownerKey }).sort({ version: -1 }).lean();
+      if (raced?.contentHash === contentHash) {
+        return {
+          skipped: true,
+          reason: 'unchanged',
+          version: raced.version,
+          transcriptVersionId: raced._id,
+          s3Key: raced.s3Key,
+          summaryJobId: buildSummaryJobIdFromVersion({ ownerKey, version: raced.version }),
+        };
+      }
+    }
+    throw err;
+  }
 
   return {
     skipped: false,
@@ -224,6 +301,7 @@ export async function assembleAndPlanSummaryJob({ session, dispatch }) {
     meetingId,
     recordings: readiness.recordings,
     sessions: readiness.sessions,
+    partialRecordingReason: readiness.partialRecordingReason || null,
   });
 
   if (assembly.skipped && assembly.reason === 'no_utterances') {

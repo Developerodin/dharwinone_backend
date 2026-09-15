@@ -312,6 +312,14 @@ export async function maybeEnqueueSessionSummary(session, dispatch) {
   try {
     const { assembleAndPlanSummaryJob } = await import('./transcriptAssembly.service.js');
     const assemblyPlan = await assembleAndPlanSummaryJob({ session: finalized, dispatch });
+    const pendingAssembly = new Set(['recordings_not_terminal', 'sessions_not_finalized']);
+    if (!assemblyPlan.ready && pendingAssembly.has(assemblyPlan.reason)) {
+      return {
+        status: httpStatus.ACCEPTED,
+        body: { status: 'queued', jobId: null, pending: assemblyPlan.reason },
+      };
+    }
+
     const enqueueOpts = {
       meetingId: dispatch.meetingId,
       recordingId: dispatch.recordingId,
@@ -321,6 +329,11 @@ export async function maybeEnqueueSessionSummary(session, dispatch) {
       enqueueOpts.jobId = assemblyPlan.summaryJobId;
       enqueueOpts.transcriptVersionId = assemblyPlan.transcriptVersionId;
       enqueueOpts.transcriptS3Key = assemblyPlan.s3Key;
+    } else if (!assemblyPlan.ready && assemblyPlan.reason !== 'no_utterances' && assemblyPlan.reason !== 'no_recordings') {
+      return {
+        status: httpStatus.ACCEPTED,
+        body: { status: 'queued', jobId: null, pending: assemblyPlan.reason },
+      };
     }
     const job = await enqueueFinalize(enqueueOpts);
     await TranscriptSession.findByIdAndUpdate(session._id, {

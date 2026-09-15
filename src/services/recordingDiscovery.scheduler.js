@@ -82,16 +82,23 @@ function buildS3() {
 
 function nsToMs(v) {
   if (v == null || v === '') return null;
+  const epochNsToMs = (bi) => Number(bi / 1000000n);
+  if (typeof v === 'bigint') return epochNsToMs(v);
   let n;
-  if (typeof v === 'bigint') n = Number(v);
-  else if (typeof v === 'number') n = v;
+  if (typeof v === 'number') n = v;
   else {
     const s = String(v).trim();
     if (!/^\d+(\.\d+)?$/.test(s)) {
       const p = Date.parse(s);
       return Number.isNaN(p) ? null : p;
     }
-    try { n = Number(BigInt(s.split('.')[0])); } catch { n = Number(s); }
+    try {
+      const intPart = BigInt(s.split('.')[0]);
+      if (intPart >= 10000000000000000n) return epochNsToMs(intPart);
+      n = Number(intPart);
+    } catch {
+      n = Number(s);
+    }
   }
   if (!Number.isFinite(n) || n <= 0) return null;
   if (n >= 1e16) return Math.floor(n / 1e6);

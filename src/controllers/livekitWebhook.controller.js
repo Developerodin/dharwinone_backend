@@ -33,10 +33,10 @@ const RECORDINGS_DIR = path.resolve(__dirname, '../../recordings');
  */
 function nsToMs(v) {
   if (v == null || v === '') return null;
+  const epochNsToMs = (bi) => Number(bi / 1000000n);
+  if (typeof v === 'bigint') return epochNsToMs(v);
   let n;
-  if (typeof v === 'bigint') {
-    n = Number(v);
-  } else if (typeof v === 'number') {
+  if (typeof v === 'number') {
     n = v;
   } else {
     const s = String(v).trim();
@@ -45,7 +45,9 @@ function nsToMs(v) {
       return Number.isNaN(parsed) ? null : parsed;
     }
     try {
-      n = Number(BigInt(s.split('.')[0]));
+      const intPart = BigInt(s.split('.')[0]);
+      if (intPart >= 10000000000000000n) return epochNsToMs(intPart);
+      n = Number(intPart);
     } catch {
       n = Number(s);
     }

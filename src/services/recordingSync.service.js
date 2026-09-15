@@ -104,6 +104,35 @@ export async function transitionRecording(egressId, nextStatus, patch = {}, opts
       );
   }
 
+  if (isRecordingTerminal(nextStatus) && updated?.meetingId) {
+    import('./agentInternalV2.service.js')
+      .then(async (m) => {
+        const TranscriptSession = (await import('../models/transcriptSession.model.js')).default;
+        const AgentDispatch = (await import('../models/agentDispatch.model.js')).default;
+        const session = await TranscriptSession.findOne({
+          meetingId: updated.meetingId,
+          status: 'finalized',
+          summaryQueuedAt: null,
+        }).sort({ updatedAt: -1 });
+        if (!session) return;
+        const dispatch = await AgentDispatch.findOne({ dispatchKey: session.dispatchKey });
+        if (!dispatch) return;
+        await m.maybeEnqueueSessionSummary(session, {
+          id: dispatch._id,
+          meetingId: dispatch.meetingId,
+          recordingId: dispatch.recordingId,
+          dispatchKey: dispatch.dispatchKey,
+        });
+      })
+      .catch((err) =>
+        logger.warn('[recordingSync] maybeEnqueueSessionSummary after terminal failed', {
+          egressId,
+          meetingId: updated.meetingId,
+          error: err?.message,
+        })
+      );
+  }
+
   return updated;
 }
 

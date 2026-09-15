@@ -128,13 +128,19 @@ const resolveStaleRecording = async (recording, egressClient) => {
   const fileDurationMs = (() => {
     const d = f0.duration ?? f0.durationNs;
     if (d == null || d === '') return null;
-    if (typeof d === 'bigint') return Math.floor(Number(d) / 1e6);
+    if (typeof d === 'bigint') return Number(d / 1000000n);
     if (typeof d === 'number' && Number.isFinite(d)) {
       return d >= 1e10 ? Math.floor(d / 1e6) : Math.floor(d);
     }
     const s = String(d).trim();
     if (/^\d+$/.test(s)) {
-      try { return Math.floor(Number(BigInt(s)) / 1e6); } catch { return null; }
+      try {
+        const intPart = BigInt(s);
+        if (intPart >= 10000000000000000n) return Number(intPart / 1000000n);
+        return Math.floor(Number(intPart) / 1e6);
+      } catch {
+        return null;
+      }
     }
     return null;
   })();
@@ -153,20 +159,30 @@ const resolveStaleRecording = async (recording, egressClient) => {
   let endedMs = null;
   if (endedAtRaw != null && endedAtRaw !== '') {
     let n;
+    const epochNsToMs = (bi) => Number(bi / 1000000n);
     if (typeof endedAtRaw === 'bigint') {
-      n = Number(endedAtRaw);
+      endedMs = epochNsToMs(endedAtRaw);
     } else if (typeof endedAtRaw === 'number') {
       n = endedAtRaw;
     } else {
       const s = String(endedAtRaw).trim();
       if (/^\d+(\.\d+)?$/.test(s)) {
-        try { n = Number(BigInt(s.split('.')[0])); } catch { n = Number(s); }
+        try {
+          const intPart = BigInt(s.split('.')[0]);
+          if (intPart >= 10000000000000000n) {
+            endedMs = epochNsToMs(intPart);
+          } else {
+            n = Number(intPart);
+          }
+        } catch {
+          n = Number(s);
+        }
       } else {
         const parsed = Date.parse(s);
         n = Number.isNaN(parsed) ? null : parsed;
       }
     }
-    if (Number.isFinite(n) && n > 0) {
+    if (endedMs == null && Number.isFinite(n) && n > 0) {
       if (n >= 1e16) endedMs = Math.floor(n / 1e6);
       else if (n >= 1e10) endedMs = Math.floor(n);
       else endedMs = Math.floor(n * 1000);

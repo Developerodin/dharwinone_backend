@@ -315,11 +315,13 @@ export async function finalizeSummary({
 
       const transcriptJson = { meetingId, durationMs, utterances };
       const legacyTranscriptKey = `meetings/${meetingId}/transcript.json`;
-      const transcriptKey = versionS3Key || legacyTranscriptKey;
-      await uploadJsonToS3({
-        key: transcriptKey,
-        data: transcriptJson,
-      });
+      const transcriptKeyForRecording = versionS3Key || legacyTranscriptKey;
+      if (!versionS3Key) {
+        await uploadJsonToS3({
+          key: legacyTranscriptKey,
+          data: transcriptJson,
+        });
+      }
 
       const summaryPayload = await mapReduceSummarize({ utterances, durationMs, openai });
       const partial = !!summaryPayload.partial || segmentShortfall || v2Session.partial;
@@ -359,15 +361,38 @@ export async function finalizeSummary({
         aiProcessingError: null,
         summaryClaimedAt: null,
         summaryId: summaryDoc._id,
-        transcriptS3Key: transcriptKey,
+        transcriptS3Key: transcriptKeyForRecording,
         summaryS3Key: summaryKey,
       };
       if (!versionS3Key) {
-        recordingPatch.transcriptUrl = `s3://${transcriptKey}`;
+        recordingPatch.transcriptUrl = `s3://${legacyTranscriptKey}`;
         recordingPatch.summaryUrl = `s3://${summaryKey}`;
       }
-      await Recording.findByIdAndUpdate(claim._id, recordingPatch);
-      await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
+
+      let sessionIdsToComplete = [v2Session._id];
+      if (versionS3Key || transcriptVersionId) {
+        const TranscriptVersion = (await import('../models/transcriptVersion.model.js')).default;
+        const ver =
+          transcriptVersionId
+            ? await TranscriptVersion.findById(transcriptVersionId).lean()
+            : await TranscriptVersion.findOne({ s3Key: versionS3Key }).lean();
+        if (ver?.sessionIds?.length) {
+          sessionIdsToComplete = ver.sessionIds;
+        }
+        const sessions = await TranscriptSession.find({ _id: { $in: sessionIdsToComplete } })
+          .select('recordingId')
+          .lean();
+        const recordingIds = sessions.map((s) => s.recordingId).filter(Boolean);
+        if (recordingIds.length) {
+          await Recording.updateMany({ _id: { $in: recordingIds } }, { $set: recordingPatch });
+        } else {
+          await Recording.findByIdAndUpdate(claim._id, recordingPatch);
+        }
+        await TranscriptSession.updateMany({ _id: { $in: sessionIdsToComplete } }, { $set: { status: 'completed' } });
+      } else {
+        await Recording.findByIdAndUpdate(claim._id, recordingPatch);
+        await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
+      }
 
       return {
         summaryId: summaryDoc._id,
