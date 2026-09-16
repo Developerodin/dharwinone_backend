@@ -1845,7 +1845,12 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   ).catch((err) => logger.warn('ats_audit offer.letter.generate:', err?.message || err));
 
   const generated = await getOfferById(id, currentUser);
-  const result = generated?.toObject ? generated.toObject() : { ...generated };
+  // toJSON, not toObject: the schema's toJSON plugin maps _id -> id and strips __v and the private
+  // paths, on this document and on every populated sub-document. Serializing with toObject made
+  // this the only offer endpoint returning _id. A null offer stays null rather than becoming an
+  // object carrying only vacancyBlockReason.
+  if (!generated) return generated;
+  const result = generated.toJSON ? generated.toJSON() : { ...generated };
   return Object.assign(result, { vacancyBlockReason });
 };
 

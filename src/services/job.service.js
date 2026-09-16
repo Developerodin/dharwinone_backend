@@ -620,12 +620,8 @@ const updateJobById = async (id, updateBody, currentUser) => {
   }
   const prevStatus = job.status;
   const prevVacancies = job.vacancies;
+  const wasAutoClosed = job.autoClosedForVacancies;
   Object.assign(job, updateBody);
-
-  // An explicit status change is always the human's call — it hands the job back to them.
-  if (updateBody.status != null) {
-    job.autoClosedForVacancies = false;
-  }
 
   // Raising the vacancy count on a job the auto-close tick closed reopens it in this same save.
   // Without this the instruction the user was given ("increase the vacancy count") dead-ends on a
@@ -633,17 +629,16 @@ const updateJobById = async (id, updateBody, currentUser) => {
   // notification below: a Closed -> Active transition normally mails every enabled
   // JobAlertSubscription — unscoped, uncapped, serialized SMTP — and republishing to that list is
   // not what "I need one more hire" asked for.
-  let reopenedForVacancies = false;
-  if (
-    job.autoClosedForVacancies &&
-    job.status === 'Closed' &&
-    updateBody.vacancies != null &&
-    Number(updateBody.vacancies) > Number(prevVacancies ?? 0)
-  ) {
-    job.status = 'Active';
-    job.autoClosedForVacancies = false;
-    reopenedForVacancies = true;
-  }
+  const { clearFlag, reopen: reopenedForVacancies } = resolveVacancyReopen({
+    autoClosedForVacancies: wasAutoClosed,
+    prevStatus,
+    nextStatus: job.status,
+    updateStatus: updateBody.status,
+    prevVacancies,
+    nextVacancies: updateBody.vacancies,
+  });
+  if (reopenedForVacancies) job.status = 'Active';
+  if (clearFlag) job.autoClosedForVacancies = false;
   await job.save();
 
   if (job.status === 'Active' && prevStatus !== 'Active' && !reopenedForVacancies) {
@@ -2041,6 +2036,65 @@ async function getHiredCountsForJobs(jobIds) {
   return new Map(rows.map((r) => [String(r._id), { hired: r.hired, lastHiredAt: r.lastHiredAt ?? null }]));
 }
 
+/**
+ * Whether a job update reopens an auto-closed posting, and whether it hands the flag back to a human.
+ *
+ * Pure, because the interesting case is invisible from the service: the Edit Job form sends
+ * `status` on EVERY save (EditJobClient.tsx), so testing `updateBody.status != null` cleared the
+ * flag before the reopen could ever be evaluated — the reopen was unreachable from the only screen
+ * that edits vacancies, and the flag was wiped so it could never reopen later either. Only a status
+ * value that actually DIFFERS from the stored one counts as the human taking the job back.
+ *
+ * Ceiling: a save that re-sends the same status while raising vacancies is treated as a reopen even
+ * if the user happened to also mean "keep it closed". The form gives us no way to tell those apart,
+ * and reopening is what raising the count asks for.
+ */
+const resolveVacancyReopen = ({
+  autoClosedForVacancies,
+  prevStatus,
+  nextStatus,
+  updateStatus,
+  prevVacancies,
+  nextVacancies,
+}) => {
+  if (updateStatus != null && updateStatus !== prevStatus) {
+    return { clearFlag: true, reopen: false };
+  }
+  const reopen =
+    Boolean(autoClosedForVacancies) &&
+    nextStatus === 'Closed' &&
+    nextVacancies != null &&
+    Number(nextVacancies) > Number(prevVacancies ?? 0);
+  return { clearFlag: reopen, reopen };
+};
+
+/**
+ * Whether each job's openings are full, for the candidate-facing endpoints.
+ *
+ * Reads `vacancies` LEANLY and deliberately. Mongoose applies schema defaults on hydration, so a
+ * legacy job that predates the field reports `vacancies: 1` off a hydrated document while
+ * assertJobVacancyCapacity — which reads lean — sees `undefined` and treats it as uncapped. Taking
+ * the number off the hydrated doc badged those jobs "filled" and removed Apply while the backend
+ * still allowed unlimited hires. Answering the whole question here keeps the display and the guard
+ * on one reading of the field.
+ */
+async function getVacancyFilledMap(jobIds) {
+  const ids = (jobIds || []).filter(Boolean).map((v) => String(v));
+  if (!ids.length) return new Map();
+  const [declared, hiredCounts] = await Promise.all([
+    Job.find({ _id: { $in: ids } })
+      .select('vacancies')
+      .lean(),
+    getHiredCountsForJobs(ids),
+  ]);
+  return new Map(
+    declared.map((j) => [
+      String(j._id),
+      isVacancyCapacityFull(hiredCounts.get(String(j._id))?.hired ?? 0, j.vacancies),
+    ])
+  );
+}
+
 /** Days a job stays Active after its openings fill, before the tick closes it. */
 const VACANCY_AUTO_CLOSE_DAYS = 2;
 
@@ -2070,7 +2124,15 @@ const shouldAutoCloseForVacancies = ({ vacancies, hired, lastHiredAt, now = new 
  * one aggregation over JobApplication joined back to Job.
  */
 async function runVacancyAutoCloseTick({ now = new Date() } = {}) {
-  const candidates = await Job.find({ status: 'Active', vacancies: { $exists: true, $ne: null } })
+  // Externally-mirrored jobs are excluded: updateJobById refuses to edit them by hand
+  // (jobOrigin === 'external'), and their sync force-sets status back to Active on every run
+  // without clearing autoClosedForVacancies. Closing one here would just make it flap — closed by
+  // the tick, reopened by the next sync, closed again six hours later, indefinitely.
+  const candidates = await Job.find({
+    status: 'Active',
+    jobOrigin: { $ne: 'external' },
+    vacancies: { $exists: true, $ne: null },
+  })
     .select('_id vacancies')
     .lean();
   if (!candidates.length) return { closed: 0 };
@@ -2127,6 +2189,8 @@ export {
   getJobStats,
   assertJobVacancyCapacity,
   getHiredCountsForJobs,
+  getVacancyFilledMap,
+  resolveVacancyReopen,
   shouldAutoCloseForVacancies,
   runVacancyAutoCloseTick,
 };

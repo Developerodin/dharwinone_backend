@@ -157,6 +157,109 @@ test('an empty or all-falsy id list short-circuits to an empty map', async () =>
   assert.equal((await getCounts(undefined)).size, 0);
 });
 
+const loadResolveReopen = async () => {
+  mock.reset();
+  mock.module('../../models/job.model.js', { defaultExport: {} });
+  mock.module('../../models/jobApplication.model.js', { defaultExport: {} });
+  const mod = await import(`../job.service.js?reopen-test=${Math.random()}`);
+  return mod.resolveVacancyReopen;
+};
+
+/**
+ * The Edit Job form sends `status` on every save, so "did the caller send a status?" is always true
+ * and cannot stand in for "did the human change the status?". Getting that wrong made the reopen
+ * unreachable from the only screen that edits vacancies — and wiped the flag so it could never
+ * reopen later either. These cases pin the distinction.
+ */
+test('raising vacancies reopens an auto-closed job even when the form re-sends the same status', async () => {
+  const resolve = await loadResolveReopen();
+  assert.deepEqual(
+    resolve({
+      autoClosedForVacancies: true,
+      prevStatus: 'Closed',
+      nextStatus: 'Closed',
+      updateStatus: 'Closed', // EditJobClient always sends this
+      prevVacancies: 1,
+      nextVacancies: 2,
+    }),
+    { clearFlag: true, reopen: true }
+  );
+});
+
+test('an explicit status change hands the job back to the human and never reopens', async () => {
+  const resolve = await loadResolveReopen();
+  assert.deepEqual(
+    resolve({
+      autoClosedForVacancies: true,
+      prevStatus: 'Closed',
+      nextStatus: 'Active',
+      updateStatus: 'Active',
+      prevVacancies: 1,
+      nextVacancies: 2,
+    }),
+    { clearFlag: true, reopen: false }
+  );
+});
+
+test('a job a human closed is never reopened by raising vacancies', async () => {
+  const resolve = await loadResolveReopen();
+  assert.deepEqual(
+    resolve({
+      autoClosedForVacancies: false,
+      prevStatus: 'Closed',
+      nextStatus: 'Closed',
+      updateStatus: 'Closed',
+      prevVacancies: 1,
+      nextVacancies: 5,
+    }),
+    { clearFlag: false, reopen: false }
+  );
+});
+
+test('editing an auto-closed job without touching vacancies leaves the flag intact', async () => {
+  // The flag must survive unrelated edits, or a later vacancy raise cannot reopen the job.
+  const resolve = await loadResolveReopen();
+  assert.deepEqual(
+    resolve({
+      autoClosedForVacancies: true,
+      prevStatus: 'Closed',
+      nextStatus: 'Closed',
+      updateStatus: 'Closed',
+      prevVacancies: 1,
+      nextVacancies: undefined,
+    }),
+    { clearFlag: false, reopen: false }
+  );
+});
+
+test('lowering or matching the vacancy count does not reopen', async () => {
+  const resolve = await loadResolveReopen();
+  const base = {
+    autoClosedForVacancies: true,
+    prevStatus: 'Closed',
+    nextStatus: 'Closed',
+    updateStatus: 'Closed',
+    prevVacancies: 3,
+  };
+  assert.equal(resolve({ ...base, nextVacancies: 3 }).reopen, false);
+  assert.equal(resolve({ ...base, nextVacancies: 2 }).reopen, false);
+});
+
+test('an auto-closed job with no previously declared count reopens on any positive raise', async () => {
+  const resolve = await loadResolveReopen();
+  assert.equal(
+    resolve({
+      autoClosedForVacancies: true,
+      prevStatus: 'Closed',
+      nextStatus: 'Closed',
+      updateStatus: 'Closed',
+      prevVacancies: null,
+      nextVacancies: 1,
+    }).reopen,
+    true
+  );
+});
+
 const NOW = new Date('2026-09-16T12:00:00Z');
 const daysAgo = (n) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
 

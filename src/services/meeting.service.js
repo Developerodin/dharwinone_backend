@@ -1306,7 +1306,14 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
   // a new hire would, so it consumes a vacancy. It must throw here rather than beside the
   // application write at the end: by that point the employee's designation, position and department
   // have already been saved, and a refusal there would leave a half-applied transfer.
-  await assertJobVacancyCapacity(jobId);
+  //
+  // Exempt when this application is already Hired, mirroring the pre-boarding move. The write at the
+  // end of this function is deliberately idempotent (`if (application.status !== 'Hired')`), so
+  // re-running a transfer to correct a designation or department is a supported action; guarding it
+  // unconditionally would refuse that with a capacity error naming the very person re-running it.
+  if (application.status !== 'Hired') {
+    await assertJobVacancyCapacity(jobId);
+  }
 
   // Resolve the new role: explicit body overrides win; otherwise default the title from the source job.
   let newDesignation = (body.designation || '').trim() || null;

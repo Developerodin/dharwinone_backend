@@ -28,9 +28,8 @@ import {
   getBookmarkedJobIdsForUser,
   deleteMyJobBookmarks,
   getJobStats,
-  getHiredCountsForJobs,
+  getVacancyFilledMap,
 } from '../services/job.service.js';
-import { isVacancyCapacityFull } from '../constants/atsPipeline.js';
 import { getJobAlertForUser, updateJobAlertForUser } from '../services/jobAlert.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
@@ -568,10 +567,11 @@ const listPublicJobs = catchAsync(async (req, res) => {
   const result = await queryJobs(filter, options);
 
   // Capacity, computed server-side and exposed as one boolean. The raw `vacancies` is deliberately
-  // NOT published: queryJobs returns hydrated docs, so a legacy job that never had the field still
-  // serializes the schema default of 1, while the guard reads it lean and treats it as uncapped.
-  // Publishing the number would badge those jobs filled while the backend still allows hires.
-  const hiredCounts = await getHiredCountsForJobs(result.results.map((j) => j._id ?? j.id));
+  // NOT published, and the count is NOT read off these documents: queryJobs returns hydrated docs,
+  // where Mongoose fills in the schema default of 1 for a legacy job that never had the field,
+  // while the guard reads it lean and treats the same job as uncapped. getVacancyFilledMap answers
+  // the question from a lean read so the badge and the guard cannot disagree.
+  const vacancyFilledById = await getVacancyFilledMap(result.results.map((j) => j._id ?? j.id));
 
   // Strip internal fields from public response
   const publicJobs = result.results.map((job) => ({
@@ -589,10 +589,7 @@ const listPublicJobs = catchAsync(async (req, res) => {
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
-    vacancyFilled: isVacancyCapacityFull(
-      hiredCounts.get(String(job._id ?? job.id))?.hired ?? 0,
-      job.get ? job.get('vacancies') : job.vacancies
-    ),
+    vacancyFilled: vacancyFilledById.get(String(job._id ?? job.id)) ?? false,
   }));
   
   res.send({
@@ -609,13 +606,16 @@ const getPublicJob = catchAsync(async (req, res) => {
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
-  const hiredCounts = await getHiredCountsForJobs([req.params.jobId]);
 
   // Only allow viewing Active jobs publicly
   if (job.status !== 'Active') {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
-  
+
+  // After the 404, not before: the auto-close tick makes Closed a common outcome for exactly the
+  // filled jobs this would be counting, so computing it first spent an aggregation per 404.
+  const vacancyFilledById = await getVacancyFilledMap([req.params.jobId]);
+
   // Strip internal fields (keep flags needed for public UI: internal vs external, apply rules)
   const publicJob = {
     id: job._id || job.id,
@@ -632,10 +632,7 @@ const getPublicJob = catchAsync(async (req, res) => {
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
-    vacancyFilled: isVacancyCapacityFull(
-      hiredCounts.get(String(req.params.jobId))?.hired ?? 0,
-      job.get ? job.get('vacancies') : job.vacancies
-    ),
+    vacancyFilled: vacancyFilledById.get(String(req.params.jobId)) ?? false,
   };
 
   res.send(publicJob);
