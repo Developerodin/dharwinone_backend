@@ -6,7 +6,13 @@ import Placement from '../models/placement.model.js';
 import Position from '../models/position.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
-import { getJobById, isOwnerOrAdmin, createJob, assertJobVacancyCapacity } from './job.service.js';
+import {
+  getJobById,
+  isOwnerOrAdmin,
+  createJob,
+  assertJobVacancyCapacity,
+  queueJobOwnerVacancyFilledNotify,
+} from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
@@ -1116,6 +1122,7 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         if (offer.jobApplication) {
           await syncReferralPipelineStatusForCandidate(offer.candidate);
         }
+        queueJobOwnerVacancyFilledNotify(offer.job?._id ?? offer.job);
       }
     } else if (newStatus === 'Rejected') {
       offer.rejectedAt = new Date();
@@ -1822,6 +1829,7 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
       await JobApplication.findByIdAndUpdate(fresh.jobApplication, { status: 'Hired' });
       await syncReferralPipelineStatusForCandidate(candidateId);
     }
+    queueJobOwnerVacancyFilledNotify(jobId);
   }
 
   // Re-load after status flip so employee sync sees Accepted (not stale Draft).

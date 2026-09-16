@@ -397,3 +397,78 @@ test('a failed notify hands the claim back so the next tick retries', async () =
   assert.equal(calls.released.length, 1);
   assert.equal(String(calls.released[0]._id), JOB_A);
 });
+
+test('immediate hire path notifies the owner without waiting for the tick', async () => {
+  mock.reset();
+  const calls = { notified: [], released: [] };
+  const jobId = JOB_A;
+  mock.module('../../models/job.model.js', {
+    defaultExport: {
+      findById: () => ({
+        select: () => ({
+          lean: async () => ({ _id: jobId, status: 'Active', jobOrigin: 'internal', vacancies: 1 }),
+        }),
+      }),
+      findOneAndUpdate: (filter) => ({
+        lean: async () =>
+          filter.vacancyFilledNotifiedAt === null
+            ? { _id: jobId, vacancies: 1, title: 'Node Dev', createdBy: 'user-1' }
+            : null,
+      }),
+      updateOne: async (filter) => {
+        calls.released.push(filter);
+      },
+    },
+  });
+  mock.module('../../models/jobApplication.model.js', {
+    defaultExport: { aggregate: async () => [{ _id: jobId, hired: 1, lastHiredAt: daysAgo(0) }] },
+  });
+  mock.module('../notification.service.js', {
+    namedExports: {
+      plainTextEmailBody: (message) => message,
+      notify: async (userId, options) => {
+        calls.notified.push({ userId, options });
+      },
+    },
+  });
+  const mod = await import(`../job.service.js?immediate-notify=${Math.random()}`);
+  const sent = await mod.notifyJobOwnerIfVacanciesNowFilled(jobId, { now: NOW });
+  assert.equal(sent, 1);
+  assert.equal(calls.notified.length, 1);
+  assert.equal(calls.notified[0].options.type, 'job_filled');
+});
+
+test('immediate notify skips jobs that still have openings', async () => {
+  mock.reset();
+  const calls = { notified: [] };
+  const jobId = JOB_A;
+  mock.module('../../models/job.model.js', {
+    defaultExport: {
+      findById: () => ({
+        select: () => ({
+          lean: async () => ({ _id: jobId, status: 'Active', jobOrigin: 'internal', vacancies: 3 }),
+        }),
+      }),
+      findOneAndUpdate: () => ({
+        lean: async () => {
+          assert.fail('must not claim when vacancies remain');
+        },
+      }),
+    },
+  });
+  mock.module('../../models/jobApplication.model.js', {
+    defaultExport: { aggregate: async () => [{ _id: jobId, hired: 1, lastHiredAt: daysAgo(0) }] },
+  });
+  mock.module('../notification.service.js', {
+    namedExports: {
+      plainTextEmailBody: (message) => message,
+      notify: async (userId, options) => {
+        calls.notified.push({ userId, options });
+      },
+    },
+  });
+  const mod = await import(`../job.service.js?immediate-skip=${Math.random()}`);
+  const sent = await mod.notifyJobOwnerIfVacanciesNowFilled(jobId, { now: NOW });
+  assert.equal(sent, 0);
+  assert.equal(calls.notified.length, 0);
+});

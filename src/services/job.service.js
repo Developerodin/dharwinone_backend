@@ -2141,9 +2141,14 @@ async function notifyVacancyFilledOwners(fullJobs, now) {
     const claimed = await Job.findOneAndUpdate(
       { _id: job._id, vacancyFilledNotifiedAt: null },
       { $set: { vacancyFilledNotifiedAt: now } },
-      { new: true, projection: '_id title vacancies createdBy' }
+      { new: true, select: '_id title vacancies createdBy' }
     ).lean();
-    if (!claimed?.createdBy) continue;
+    if (!claimed?.createdBy) {
+      // eslint-disable-next-line no-await-in-loop
+      await Job.updateOne({ _id: job._id }, { $set: { vacancyFilledNotifiedAt: null } }).catch(() => {});
+      logger.warn(`[vacancyAutoClose] job ${job._id} has no createdBy — skipped vacancy-filled notify`);
+      continue;
+    }
     const link = `/ats/jobs/edit/${claimed._id}`;
     const message =
       `All ${claimed.vacancies} opening(s) on "${claimed.title}" are now filled. ` +
@@ -2171,6 +2176,28 @@ async function notifyVacancyFilledOwners(fullJobs, now) {
   }
   if (sent) logger.info(`[vacancyAutoClose] notified ${sent} job owner(s) that their vacancies are filled`);
   return sent;
+}
+
+/**
+ * Notify the job poster when the last opening just filled — called from hire paths, not only the tick.
+ * The six-hourly tick remains a backstop if this fire-and-forget path fails mid-request.
+ */
+async function notifyJobOwnerIfVacanciesNowFilled(jobId, { now = new Date() } = {}) {
+  if (!jobId) return 0;
+  const job = await Job.findById(jobId).select('status jobOrigin vacancies').lean();
+  if (!job || job.status !== 'Active' || job.jobOrigin === 'external') return 0;
+  if (job.vacancies == null) return 0;
+  const counts = await getHiredCountsForJobs([job._id]);
+  const row = counts.get(String(job._id));
+  if (!row || !isVacancyCapacityFull(row.hired, job.vacancies)) return 0;
+  return notifyVacancyFilledOwners([{ _id: job._id, vacancies: job.vacancies }], now);
+}
+
+function queueJobOwnerVacancyFilledNotify(jobId) {
+  if (!jobId) return;
+  notifyJobOwnerIfVacanciesNowFilled(jobId).catch((err) =>
+    logger.warn(`[vacancyFilled] immediate notify failed for job ${jobId}: ${err?.message || err}`)
+  );
 }
 
 /**
@@ -2261,4 +2288,6 @@ export {
   resolveVacancyReopen,
   shouldAutoCloseForVacancies,
   runVacancyAutoCloseTick,
+  notifyJobOwnerIfVacanciesNowFilled,
+  queueJobOwnerVacancyFilledNotify,
 };

@@ -19,7 +19,7 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
-import { assertJobVacancyCapacity } from './job.service.js';
+import { assertJobVacancyCapacity, queueJobOwnerVacancyFilledNotify } from './job.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
@@ -1348,6 +1348,7 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
   if (application.status !== 'Hired') {
     application.status = 'Hired';
     await application.save();
+    queueJobOwnerVacancyFilledNotify(jobId);
   }
   await syncReferralPipelineStatusForCandidate(candidateObjId);
 
