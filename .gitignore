@@ -124,6 +124,7 @@ attendance-status-backfill.*.journal.json
 # (approve left leftover punch sessions on the day, double-counting the calendar total).
 # Parent dirs are re-included above; these two files ship, the rest of the dirs stay ignored.
 !src/services/__tests__/backdatedAttendanceRequest.approve.test.js
+!src/services/__tests__/jobVacancyCapacity.test.js
 !scripts/migrations/2026-09-10-collapse-backdated-duplicate-days.js
 !scripts/migrations/2026-09-10-backfill-document-versions.js
 !scripts/migrations/__tests__/2026-09-10-backfill-document-versions.test.js

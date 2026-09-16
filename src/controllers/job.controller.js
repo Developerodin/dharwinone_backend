@@ -28,7 +28,9 @@ import {
   getBookmarkedJobIdsForUser,
   deleteMyJobBookmarks,
   getJobStats,
+  getHiredCountsForJobs,
 } from '../services/job.service.js';
+import { isVacancyCapacityFull } from '../constants/atsPipeline.js';
 import { getJobAlertForUser, updateJobAlertForUser } from '../services/jobAlert.service.js';
 import { sendJobShareEmail } from '../services/email.service.js';
 import { getFrontendBaseUrl } from '../utils/emailLinks.js';
@@ -565,6 +567,12 @@ const listPublicJobs = catchAsync(async (req, res) => {
   const options = pick(req.query, ['limit', 'page', 'sortBy']);
   const result = await queryJobs(filter, options);
 
+  // Capacity, computed server-side and exposed as one boolean. The raw `vacancies` is deliberately
+  // NOT published: queryJobs returns hydrated docs, so a legacy job that never had the field still
+  // serializes the schema default of 1, while the guard reads it lean and treats it as uncapped.
+  // Publishing the number would badge those jobs filled while the backend still allows hires.
+  const hiredCounts = await getHiredCountsForJobs(result.results.map((j) => j._id ?? j.id));
+
   // Strip internal fields from public response
   const publicJobs = result.results.map((job) => ({
     id: job._id || job.id,
@@ -581,6 +589,10 @@ const listPublicJobs = catchAsync(async (req, res) => {
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
+    vacancyFilled: isVacancyCapacityFull(
+      hiredCounts.get(String(job._id ?? job.id))?.hired ?? 0,
+      job.get ? job.get('vacancies') : job.vacancies
+    ),
   }));
   
   res.send({
@@ -597,7 +609,8 @@ const getPublicJob = catchAsync(async (req, res) => {
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   }
-  
+  const hiredCounts = await getHiredCountsForJobs([req.params.jobId]);
+
   // Only allow viewing Active jobs publicly
   if (job.status !== 'Active') {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
@@ -619,6 +632,10 @@ const getPublicJob = catchAsync(async (req, res) => {
     status: job.status,
     jobOrigin: job.jobOrigin,
     externalPlatformUrl: job.externalPlatformUrl,
+    vacancyFilled: isVacancyCapacityFull(
+      hiredCounts.get(String(req.params.jobId))?.hired ?? 0,
+      job.get ? job.get('vacancies') : job.vacancies
+    ),
   };
 
   res.send(publicJob);

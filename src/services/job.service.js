@@ -20,6 +20,7 @@ import {
 import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/jobLocation.util.js';
 import { collationForSortBy } from '../utils/mongoCollation.js';
 import { captureResumeSnapshot } from './jobApplicationResumeSnapshot.service.js';
+import { getVacancyCapacityBlockReason, isVacancyCapacityFull } from '../constants/atsPipeline.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -618,10 +619,34 @@ const updateJobById = async (id, updateBody, currentUser) => {
     applyLocationMetaToPayload(updateBody);
   }
   const prevStatus = job.status;
+  const prevVacancies = job.vacancies;
   Object.assign(job, updateBody);
+
+  // An explicit status change is always the human's call — it hands the job back to them.
+  if (updateBody.status != null) {
+    job.autoClosedForVacancies = false;
+  }
+
+  // Raising the vacancy count on a job the auto-close tick closed reopens it in this same save.
+  // Without this the instruction the user was given ("increase the vacancy count") dead-ends on a
+  // Closed job. It is done here, not by the tick, so it is instant and so we can suppress the
+  // notification below: a Closed -> Active transition normally mails every enabled
+  // JobAlertSubscription — unscoped, uncapped, serialized SMTP — and republishing to that list is
+  // not what "I need one more hire" asked for.
+  let reopenedForVacancies = false;
+  if (
+    job.autoClosedForVacancies &&
+    job.status === 'Closed' &&
+    updateBody.vacancies != null &&
+    Number(updateBody.vacancies) > Number(prevVacancies ?? 0)
+  ) {
+    job.status = 'Active';
+    job.autoClosedForVacancies = false;
+    reopenedForVacancies = true;
+  }
   await job.save();
 
-  if (job.status === 'Active' && prevStatus !== 'Active') {
+  if (job.status === 'Active' && prevStatus !== 'Active' && !reopenedForVacancies) {
     const { notifyJobAlertSubscribersForJob } = await import('./jobAlert.service.js');
     notifyJobAlertSubscribersForJob(job).catch(() => {});
   }
@@ -1961,6 +1986,116 @@ async function getJobStats(jobId, currentUser = {}) {
   };
 }
 
+/**
+ * Throw when this job has no vacancy left for another hire.
+ *
+ * Counts live rather than keeping a counter on Job for two reasons: the number this reads is
+ * exactly the number the Job analytics "Hired" tile shows, so the guard and the UI can never
+ * disagree; and un-hiring (the interview rollback in meeting.service) frees the slot with no
+ * bookkeeping and no drift.
+ *
+ * ponytail: this is read-then-write, so two hires landing within the same few hundred ms can both
+ * pass. The accept path's transaction does NOT close that window — the two writes touch different
+ * JobApplication docs, so they never write-conflict. If concurrent hiring on one req ever becomes
+ * real, serialize on the Job doc itself:
+ *   Job.findOneAndUpdate({ _id, $expr: { $lt: ['$hiredCount', '$vacancies'] } },
+ *                        { $inc: { hiredCount: 1 } }, { session })
+ * at the cost of a denormalized counter that must be decremented on every un-hire path.
+ */
+async function assertJobVacancyCapacity(jobId, { session } = {}) {
+  if (!jobId) return;
+  const job = await Job.findById(jobId).select('vacancies').lean();
+  if (!job || job.vacancies == null) return;
+  const query = JobApplication.countDocuments({ job: jobId, status: 'Hired' });
+  const hired = await (session ? query.session(session) : query);
+  const reason = getVacancyCapacityBlockReason(hired, job.vacancies);
+  if (reason) {
+    throw new ApiError(httpStatus.CONFLICT, reason, true, '', { errorCode: 'JOB_VACANCIES_FILLED' });
+  }
+}
+
+/**
+ * Hired count per job for a bounded set of job ids, plus when each job's most recent hire landed.
+ *
+ * One aggregation for the whole set rather than a countDocuments per row — the browse list works
+ * from a 12-row page and the auto-close cron from the Active jobs that declare vacancies, so both
+ * callers hand over a small, bounded id list.
+ *
+ * The ObjectId cast is NOT optional: `$match` does not auto-cast string ids the way `find` does,
+ * and skipping it is what previously left the job analytics funnel stuck at 0
+ * (see the comment on aggregateApplicantsByStatus in applicantQuery.service.js).
+ *
+ * ponytail: `lastHiredAt` reads `updatedAt`, which moves on ANY edit to a hired application, so an
+ * edited application pushes the auto-close date out. That fails toward closing late, never early —
+ * the safe direction, because an early close blocks real candidates from applying.
+ */
+async function getHiredCountsForJobs(jobIds) {
+  const ids = (jobIds || [])
+    .filter(Boolean)
+    .map((v) => (v instanceof mongoose.Types.ObjectId ? v : new mongoose.Types.ObjectId(String(v))));
+  if (!ids.length) return new Map();
+  const rows = await JobApplication.aggregate([
+    { $match: { job: { $in: ids }, status: 'Hired' } },
+    { $group: { _id: '$job', hired: { $sum: 1 }, lastHiredAt: { $max: '$updatedAt' } } },
+  ]);
+  return new Map(rows.map((r) => [String(r._id), { hired: r.hired, lastHiredAt: r.lastHiredAt ?? null }]));
+}
+
+/** Days a job stays Active after its openings fill, before the tick closes it. */
+const VACANCY_AUTO_CLOSE_DAYS = 2;
+
+/**
+ * Should this job be auto-closed? Pure, so the policy is testable without a database.
+ *
+ * Requires positive evidence on every axis: a declared vacancy count, enough hires to fill it, and
+ * a timestamp for when the last one landed. Anything missing means "leave it to a human" — closing
+ * a job stops candidates applying, so the absence of data must never be read as a reason to close.
+ */
+const shouldAutoCloseForVacancies = ({ vacancies, hired, lastHiredAt, now = new Date(), days = VACANCY_AUTO_CLOSE_DAYS }) => {
+  if (!isVacancyCapacityFull(hired, vacancies)) return false;
+  if (!lastHiredAt) return false;
+  const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return new Date(lastHiredAt) <= cutoff;
+};
+
+/**
+ * Close Active jobs whose openings have been full for VACANCY_AUTO_CLOSE_DAYS.
+ *
+ * Writes with updateMany rather than going through updateJobById: that path runs owner and
+ * external-origin checks this system action does not need, and re-asserting `status: 'Active'` in
+ * the filter makes the write a no-op if a human changed the job between the read and the write.
+ *
+ * ponytail: loads every Active job that declares vacancies into memory. Fine while that is
+ * hundreds; if it ever reaches tens of thousands, page the find() or move the whole decision into
+ * one aggregation over JobApplication joined back to Job.
+ */
+async function runVacancyAutoCloseTick({ now = new Date() } = {}) {
+  const candidates = await Job.find({ status: 'Active', vacancies: { $exists: true, $ne: null } })
+    .select('_id vacancies')
+    .lean();
+  if (!candidates.length) return { closed: 0 };
+
+  const counts = await getHiredCountsForJobs(candidates.map((j) => j._id));
+  const toClose = candidates.filter((job) => {
+    const row = counts.get(String(job._id));
+    if (!row) return false;
+    return shouldAutoCloseForVacancies({
+      vacancies: job.vacancies,
+      hired: row.hired,
+      lastHiredAt: row.lastHiredAt,
+      now,
+    });
+  });
+  if (!toClose.length) return { closed: 0 };
+
+  await Job.updateMany(
+    { _id: { $in: toClose.map((j) => j._id) }, status: 'Active' },
+    { $set: { status: 'Closed', autoClosedForVacancies: true } }
+  );
+  logger.info(`[vacancyAutoClose] closed ${toClose.length} job(s) whose vacancies have been filled for ${VACANCY_AUTO_CLOSE_DAYS} day(s)`);
+  return { closed: toClose.length };
+}
+
 export {
   createJob,
   queryJobs,
@@ -1990,4 +2125,8 @@ export {
   getBookmarkedJobIdsForUser,
   deleteMyJobBookmarks,
   getJobStats,
+  assertJobVacancyCapacity,
+  getHiredCountsForJobs,
+  shouldAutoCloseForVacancies,
+  runVacancyAutoCloseTick,
 };

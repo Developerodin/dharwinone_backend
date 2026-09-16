@@ -19,6 +19,7 @@ import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
+import { assertJobVacancyCapacity } from './job.service.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { getMeetingByMeetingId } from './meetingLookup.service.js';
@@ -745,7 +746,7 @@ const ensureInterviewOfferLetterDefaults = async (offerId, userId) => {
  * @param {string} userId - User performing the action
  */
 const createPlacementFromInterview = async (meeting, userId) => {
-  const { candidateObjId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
+  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
 
   if (!candidateObjId) {
     throw new ApiError(
@@ -777,6 +778,18 @@ const createPlacementFromInterview = async (meeting, userId) => {
       httpStatus.BAD_REQUEST,
       'This candidate is already an employee. Use Internal transfer instead of the offer/placement flow.'
     );
+  }
+
+  // Capacity gate for the whole move, not only the branch that hires. Of this function's seven
+  // non-throwing outcomes only one (an existing Sent/Under Negotiation offer with a joining date)
+  // actually marks anyone Hired; the rest top up a Draft offer's joining date or mint a new zeroed
+  // Draft offer. Those still push a second person down a requisition that has no opening left,
+  // which is the state this guard exists to prevent.
+  //
+  // An application that is already Hired is exempt: it is part of the count, and the Accepted-offer
+  // and placement-exists branches below are idempotent re-entries for that same person.
+  if (application.status !== 'Hired') {
+    await assertJobVacancyCapacity(jobId);
   }
 
   const existingOffer = await Offer.findOne({ jobApplication: application._id });
@@ -1288,6 +1301,12 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
       'This employee is resigned. Use the rehire (offer/placement) flow, not Internal transfer.'
     );
   }
+
+  // Capacity gate, placed before any mutation below. An internal transfer fills the same requisition
+  // a new hire would, so it consumes a vacancy. It must throw here rather than beside the
+  // application write at the end: by that point the employee's designation, position and department
+  // have already been saved, and a refusal there would leave a half-applied transfer.
+  await assertJobVacancyCapacity(jobId);
 
   // Resolve the new role: explicit body overrides win; otherwise default the title from the source job.
   let newDesignation = (body.designation || '').trim() || null;

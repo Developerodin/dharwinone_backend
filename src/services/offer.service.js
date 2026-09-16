@@ -6,7 +6,7 @@ import Placement from '../models/placement.model.js';
 import Position from '../models/position.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
-import { getJobById, isOwnerOrAdmin, createJob } from './job.service.js';
+import { getJobById, isOwnerOrAdmin, createJob, assertJobVacancyCapacity } from './job.service.js';
 import ApiError from '../utils/ApiError.js';
 import { getLetterDefaultsForPositionTitle } from '../config/offerLetterRoleDefaults.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
@@ -1046,6 +1046,12 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
         );
       }
       if (oldStatus !== 'Accepted') {
+        // Capacity gate. Inside the `oldStatus !== 'Accepted'` branch so re-saving an already-
+        // accepted offer never trips it — that hire is already counted. Before the transaction
+        // rather than inside it: throwing here leaves the offer untouched at its previous status,
+        // whereas aborting mid-transaction would make the caller distinguish a capacity refusal
+        // from a write failure.
+        await assertJobVacancyCapacity(offer.job?._id ?? offer.job);
         offer.acceptedAt = new Date();
         const candidate = await Employee.findById(offer.candidate)
           .select('employeeId joiningDate referredByUserId referralJti attributionLockedAt referralContext referralJobTitle')
@@ -1726,7 +1732,22 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
   const fresh = await getOfferById(id, currentUser);
   validateAndBuildLetterContext(fresh);
 
-  const transitionToAccepted = fresh.status === 'Draft';
+  // Capacity gate, applied as a downgrade rather than a refusal. "Save letter" is a letter action;
+  // the Draft -> Accepted -> Hired jump below is an implicit side effect of it (this endpoint's Joi
+  // schema has no `status` key at all). Throwing here would fail letter generation and read to the
+  // user as a broken offer letter, so instead the letter is still produced and the offer simply
+  // stays Draft — reachable later, deliberately, via the Update status action once a vacancy opens.
+  let vacancyBlockReason = null;
+  if (fresh.status === 'Draft') {
+    try {
+      await assertJobVacancyCapacity(fresh.job?._id ?? fresh.job);
+    } catch (err) {
+      const code = err?.errorCode ?? err?.meta?.errorCode;
+      if (code !== 'JOB_VACANCIES_FILLED') throw err;
+      vacancyBlockReason = err.message;
+    }
+  }
+  const transitionToAccepted = fresh.status === 'Draft' && !vacancyBlockReason;
 
   // Mark letter as generated (first save stamps the date; re-saves preserve it).
   // Only unset S3 PDF refs — offerLetterGeneratedAt must NOT be unset so the
@@ -1823,7 +1844,9 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     { editContext: { staffEdit: true } }
   ).catch((err) => logger.warn('ats_audit offer.letter.generate:', err?.message || err));
 
-  return getOfferById(id, currentUser);
+  const generated = await getOfferById(id, currentUser);
+  const result = generated?.toObject ? generated.toObject() : { ...generated };
+  return Object.assign(result, { vacancyBlockReason });
 };
 
 const getLetterDefaultsForTitle = (positionTitle) => getLetterDefaultsForPositionTitle(positionTitle);

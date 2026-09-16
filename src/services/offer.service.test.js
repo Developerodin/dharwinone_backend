@@ -143,6 +143,9 @@ mock.module('./job.service.js', {
     getJobById: async () => null,
     isOwnerOrAdmin: () => true,
     createJob: async () => ({ _id: 'job1' }),
+    // Vacancy capacity has its own suite (jobVacancyCapacity.test.js); here it must not block,
+    // and it must be present — offer.service.js imports it, so omitting it fails module linking.
+    assertJobVacancyCapacity: async () => {},
   },
 });
 mock.module('./referralLeads.service.js', {

@@ -86,6 +86,12 @@ const jobSchema = new mongoose.Schema(
       enum: ['Draft', 'Active', 'Closed', 'Archived'],
       default: 'Active',
     },
+    /**
+     * True only when the vacancy auto-close tick closed this job. It is what lets raising the
+     * vacancy count reopen the posting, and what stops that reopen from ever touching a job a
+     * human closed deliberately.
+     */
+    autoClosedForVacancies: { type: Boolean, default: false },
     /** Optional last date to accept applications; shown on browse listings when set. */
     applicationDeadline: { type: Date, default: null },
 

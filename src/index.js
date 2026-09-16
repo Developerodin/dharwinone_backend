@@ -51,6 +51,10 @@ import {
   startSalesAgentCacheReconcilerScheduler,
   stopSalesAgentCacheReconcilerScheduler,
 } from './jobs/salesAgentCacheReconciler.scheduler.js';
+import {
+  startVacancyAutoCloseScheduler,
+  stopVacancyAutoCloseScheduler,
+} from './jobs/jobVacancyAutoClose.scheduler.js';
 
 let server;
 let candidateSchedulerId;
@@ -128,6 +132,7 @@ mongoose
           }
           startRetentionEnforcer();
           startWorkforceReconciliationScheduler({ intervalHours: 24 });
+          startVacancyAutoCloseScheduler({ intervalHours: 6 });
           startSalesAgentCacheReconcilerScheduler({ intervalHours: 24 });
           startEmailNotificationPoller();
         }
@@ -167,6 +172,7 @@ const exitHandler = (exitCode = 1) => {
       }
       stopRetentionEnforcer();
       stopWorkforceReconciliationScheduler();
+      stopVacancyAutoCloseScheduler();
       stopSalesAgentCacheReconcilerScheduler();
       stopEmailNotificationPoller();
       process.exit(exitCode);

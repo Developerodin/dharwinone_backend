@@ -119,6 +119,29 @@ export const getInterviewSchedulingBlockReason = (applicationStatus) => {
   return null;
 };
 
+/**
+ * User-facing reason when a job's openings are all filled, or null when there is room.
+ *
+ * `vacancies` is optional on Job — older postings predate the field — and a job with no declared
+ * openings is uncapped by design, so a missing, zero, negative or unparseable value returns null.
+ * Failing closed there would silently freeze hiring on every job with incomplete data.
+ *
+ * The comparison is `>=`, so a job that is already over capacity stays blocked rather than being
+ * retro-corrected: it cannot get worse, and nothing rewrites history.
+ */
+export const getVacancyCapacityBlockReason = (hiredCount, vacancies) => {
+  if (vacancies == null) return null;
+  const cap = Number(vacancies);
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  const filled = Number(hiredCount) || 0;
+  if (filled < cap) return null;
+  return `All ${cap} ${cap === 1 ? 'vacancy' : 'vacancies'} for this job have been filled (${filled} hired). Increase the vacancy count on the job to hire another applicant.`;
+};
+
+/** True when this job has no opening left for another hire. */
+export const isVacancyCapacityFull = (hiredCount, vacancies) =>
+  Boolean(getVacancyCapacityBlockReason(hiredCount, vacancies));
+
 /** Application statuses that block scheduling a new interview. */
 export const isInterviewSchedulingBlocked = (applicationStatus) =>
   Boolean(getInterviewSchedulingBlockReason(applicationStatus));
