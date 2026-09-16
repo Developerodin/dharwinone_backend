@@ -30,9 +30,6 @@ scripts/*
 # test runner + manifest must ship so the tracked tests are runnable on a clone
 !scripts/run-tests.mjs
 !scripts/test-manifest.json
-!scripts/backup-local-mongo.sh
-!scripts/push-ec2-to-newcloud.sh
-!scripts/diff-newcloud.sh
 tests/
 graphify-out/
 
@@ -94,6 +91,7 @@ referral_hits.csv
 src/scripts/backfillDevTicket*.js
 src/scripts/smokeDevTicketEmailFanout.js
 src/scripts/dev-ticket-email-preview.html
+src/scripts/patchTwilioCallGaps.js
 src/scripts/.patchTwilioCallGaps.backup.json
 src/scripts/.removedEc2Notes.backup.json
 src/scripts/inspectRecruitmentData.js
