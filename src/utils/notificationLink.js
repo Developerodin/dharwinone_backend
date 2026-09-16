@@ -79,6 +79,24 @@ const ROUTE_MAP = {
   },
   system: () => '/notifications',
   general: () => '/notifications',
+  job_filled: ({ relatedEntity, metadata }) => {
+    const id = stripId(relatedEntity?.id) || stripId(metadata?.jobId);
+    return id ? `/ats/jobs/edit/${id}` : '/ats/jobs';
+  },
+  smart_nudge: ({ relatedEntity, metadata }) => {
+    const explicit = metadata?.link;
+    if (explicit && String(explicit).startsWith('/')) return String(explicit);
+    if (metadata?.navTarget === 'interviews_list') return '/ats/interviews';
+    if (metadata?.navTarget === 'offers') return '/ats/offers-placement';
+    if (metadata?.navTarget === 'applications') return '/ats/applications';
+    if (metadata?.navTarget === 'preboarding') return '/ats/pre-boarding';
+    if (metadata?.navTarget === 'onboarding') return '/ats/onboarding';
+    if (metadata?.navTarget === 'tasks') return '/task/my-tasks';
+    if (metadata?.navTarget === 'leave') return '/settings/attendance/leave-requests';
+    const id = stripId(relatedEntity?.id);
+    if (relatedEntity?.type === 'meeting' && id) return `/join/room?room=${encodeURIComponent(id)}`;
+    return '/notifications';
+  },
 };
 
 /**

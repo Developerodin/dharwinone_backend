@@ -34,6 +34,7 @@ const notificationSchema = mongoose.Schema(
         'placement_update',
         'onboarding_reminder',
         'system',
+        'smart_nudge',
       ],
       default: 'general',
       index: true,

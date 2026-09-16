@@ -119,6 +119,8 @@ const userSchema = mongoose.Schema(
       assignmentUpdatesInApp: { type: Boolean, default: true },
       projectUpdatesInApp: { type: Boolean, default: true },
       sopAssignmentsInApp: { type: Boolean, default: true },
+      smartNudges: { type: Boolean, default: true },
+      smartNudgesInApp: { type: Boolean, default: true },
     },
     platformSuperUser: {
       type: Boolean,

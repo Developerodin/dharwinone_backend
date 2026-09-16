@@ -24,7 +24,7 @@ const getAuditLog = {
         'course', 'certificate', 'job_application', 'project',
         'account', 'recruiter', 'assignment', 'sop', 'support_ticket', 'dev_ticket',
         'chat_message', 'joining_reminder', 'placement_update',
-        'onboarding_reminder', 'system', 'general'
+        'onboarding_reminder', 'system', 'general', 'smart_nudge', 'job_filled'
       ),
       from: Joi.date().iso(),
       to: Joi.date().iso(),
