@@ -10,6 +10,7 @@ import Notification from '../models/notification.model.js';
 import Offer from '../models/offer.model.js';
 import Placement from '../models/placement.model.js';
 import * as meetingService from './meeting.service.js';
+import { moveApplicationToOffer } from './applicationOffer.service.js';
 
 const TEST_URI = process.env.TEST_MONGODB_URL || 'mongodb://127.0.0.1:27017/dharwin_test';
 
@@ -51,6 +52,51 @@ const makeMeeting = async ({ candidate, recruiter, jobPosition, interviewResult 
   return meeting;
 };
 
+/** Employee + Job + JobApplication + a meeting linked to that application, all tracked for cleanup. */
+const makeLinkedFixture = async ({
+  label,
+  phoneNumber,
+  jobTitle,
+  jobDescription,
+  candidateEmail,
+  applicationStatus = 'Interview',
+}) => {
+  const adminId = new mongoose.Types.ObjectId();
+  const employee = await Employee.create({
+    owner: adminId,
+    adminId,
+    fullName: `MTG_NOTIFY_TEST ${label}`,
+    email: candidateEmail,
+    phoneNumber,
+  });
+  createdEmployeeIds.push(employee._id);
+
+  const job = await Job.create({
+    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
+    title: jobTitle,
+    jobDescription,
+    jobType: 'Full-time',
+    location: 'Remote',
+    createdBy: adminId,
+  });
+  createdJobIds.push(job._id);
+
+  const application = await JobApplication.create({
+    job: job._id,
+    candidate: employee._id,
+    status: applicationStatus,
+  });
+  createdApplicationIds.push(application._id);
+
+  const meeting = await makeMeeting({
+    candidate: { id: employee._id.toString(), email: candidateEmail },
+    jobPosition: job._id.toString(),
+    interviewResult: 'pending',
+  });
+
+  return { employee, job, application, meeting };
+};
+
 const candidateNotifications = (userId) =>
   Notification.find({ user: userId, type: 'job_application' }).lean();
 
@@ -59,9 +105,8 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  // The 'selected' transition also drives the pre-existing move-to-preboarding pipeline
-  // (createPlacementFromInterview), which drafts a real Offer for the metadata fixture's
-  // application — clean that up too so this suite leaves no stray docs in the test DB.
+  // Move to Offer drafts a real Offer for some fixtures' applications — clean those up too so
+  // this suite leaves no stray docs in the test DB.
   const offers = await Offer.find({ jobApplication: { $in: createdApplicationIds } }).select('_id').lean();
   const offerIds = offers.map((o) => o._id);
   await Placement.deleteMany({ offer: { $in: offerIds } });
@@ -87,7 +132,10 @@ test('pending -> selected creates exactly one candidate notification', async () 
 
   const notifs = await candidateNotifications(candidate._id);
   assert.equal(notifs.length, 1);
-  assert.equal(notifs[0].title, "Congratulations! You've Been Selected");
+  // Round-level copy only: a passed round no longer implies an offer.
+  assert.equal(notifs[0].title, 'Interview Round Passed');
+  assert.match(notifs[0].message, /passed your interview round/);
+  assert.doesNotMatch(notifs[0].message, /offer/i);
   assert.match(notifs[0].message, /MTG_NOTIFY_TEST_JOB_Backend Engineer/);
 });
 
@@ -310,101 +358,86 @@ test('pending -> rejected cascades JobApplication.status to Rejected', async () 
   assert.equal(updated.status, 'Rejected');
 });
 
-test('selected -> rejected rolls back offer and sets JobApplication Rejected', async () => {
+test('marking a round selected creates no offer and leaves the application at Interview', async () => {
   const candidate = await makeUser('rejapp2');
-  const adminId = new mongoose.Types.ObjectId();
-
-  const employee = await Employee.create({
-    owner: adminId,
-    adminId,
-    fullName: 'MTG_NOTIFY_TEST Candidate Reject Selected',
-    email: candidate.email,
+  const { employee, application, meeting } = await makeLinkedFixture({
+    label: 'Candidate Selected No Offer',
     phoneNumber: '+10000000002',
+    jobTitle: 'MTG_NOTIFY_TEST_JOB_Selected No Offer',
+    jobDescription: 'Verify selected no longer creates an offer.',
+    candidateEmail: candidate.email,
   });
-  createdEmployeeIds.push(employee._id);
+  assert.ok(employee._id);
 
-  const job = await Job.create({
-    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
-    title: 'MTG_NOTIFY_TEST_JOB_Reject After Selected',
-    jobDescription: 'Verify selected→rejected rollback.',
-    jobType: 'Full-time',
-    location: 'Remote',
-    createdBy: adminId,
-  });
-  createdJobIds.push(job._id);
+  await meetingService.updateMeetingById(
+    meeting._id.toString(),
+    { interviewResult: 'selected' },
+    new mongoose.Types.ObjectId().toString()
+  );
 
-  const application = await JobApplication.create({
-    job: job._id,
-    candidate: employee._id,
-    status: 'Interview',
-  });
-  createdApplicationIds.push(application._id);
-
-  const meeting = await makeMeeting({
-    candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job._id.toString(),
-    interviewResult: 'pending',
-  });
-
-  const actorId = new mongoose.Types.ObjectId().toString();
-  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
-
-  const afterSelect = await JobApplication.findById(application._id).lean();
-  assert.equal(afterSelect.status, 'Offered');
-  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
-
-  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'rejected' }, actorId);
-
-  const afterReject = await JobApplication.findById(application._id).lean();
-  assert.equal(afterReject.status, 'Rejected');
+  const after = await JobApplication.findById(application._id).lean();
+  assert.equal(after.status, 'Interview');
   assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 0);
 });
 
-test('rejected -> selected preserves selection flow (offer created)', async () => {
+test('selected -> rejected keeps an offer created by Move to Offer', async () => {
   const candidate = await makeUser('rejapp3');
-  const adminId = new mongoose.Types.ObjectId();
-
-  const employee = await Employee.create({
-    owner: adminId,
-    adminId,
-    fullName: 'MTG_NOTIFY_TEST Candidate Reopen Selected',
-    email: candidate.email,
+  const { application, meeting } = await makeLinkedFixture({
+    label: 'Candidate Offer Survives Reject',
     phoneNumber: '+10000000003',
-  });
-  createdEmployeeIds.push(employee._id);
-
-  const job = await Job.create({
-    organisation: { name: 'MTG_NOTIFY_TEST_ORG' },
-    title: 'MTG_NOTIFY_TEST_JOB_Rejected To Selected',
-    jobDescription: 'Verify rejected→selected still creates offer.',
-    jobType: 'Full-time',
-    location: 'Remote',
-    createdBy: adminId,
-  });
-  createdJobIds.push(job._id);
-
-  const application = await JobApplication.create({
-    job: job._id,
-    candidate: employee._id,
-    status: 'Interview',
-  });
-  createdApplicationIds.push(application._id);
-
-  const meeting = await makeMeeting({
-    candidate: { id: employee._id.toString(), email: candidate.email },
-    jobPosition: job._id.toString(),
-    interviewResult: 'pending',
+    jobTitle: 'MTG_NOTIFY_TEST_JOB_Offer Survives Reject',
+    jobDescription: 'Verify a round edit never deletes the offer.',
+    candidateEmail: candidate.email,
   });
 
   const actorId = new mongoose.Types.ObjectId().toString();
-  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'rejected' }, actorId);
-  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Rejected');
-
   await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
-
-  const afterReselect = await JobApplication.findById(application._id).lean();
-  assert.equal(afterReselect.status, 'Offered');
+  await moveApplicationToOffer(application._id.toString(), actorId);
   assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'rejected' }, actorId);
+
+  // Application closure still cascades; the offer is a separate decision and must survive.
+  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Rejected');
+  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+});
+
+test('selected -> pending keeps the offer and does not reset an Offered application', async () => {
+  const candidate = await makeUser('rejapp4');
+  const { application, meeting } = await makeLinkedFixture({
+    label: 'Candidate Offer Survives Reopen',
+    phoneNumber: '+10000000005',
+    jobTitle: 'MTG_NOTIFY_TEST_JOB_Offer Survives Reopen',
+    jobDescription: 'Verify reopening a round leaves the offer alone.',
+    candidateEmail: candidate.email,
+  });
+
+  const actorId = new mongoose.Types.ObjectId().toString();
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
+  await moveApplicationToOffer(application._id.toString(), actorId);
+
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'pending' }, actorId);
+
+  assert.equal(await Offer.countDocuments({ jobApplication: application._id }), 1);
+  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Offered');
+});
+
+test('selected -> pending normalizes an Offered application with no offer back to Interview', async () => {
+  const candidate = await makeUser('rejapp5');
+  const { application, meeting } = await makeLinkedFixture({
+    label: 'Candidate Stale Offered',
+    phoneNumber: '+10000000006',
+    jobTitle: 'MTG_NOTIFY_TEST_JOB_Stale Offered',
+    jobDescription: 'Verify status normalization without an offer doc.',
+    candidateEmail: candidate.email,
+    applicationStatus: 'Offered',
+  });
+
+  const actorId = new mongoose.Types.ObjectId().toString();
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'selected' }, actorId);
+  await meetingService.updateMeetingById(meeting._id.toString(), { interviewResult: 'pending' }, actorId);
+
+  assert.equal((await JobApplication.findById(application._id).lean()).status, 'Interview');
 });
 
 test('title-only jobPosition does not cascade application changes and returns linkageWarning', async () => {

@@ -2025,9 +2025,17 @@ const exportAllCandidates = async (listFilter = {}, queryOptions = {}) => {
 
   const exportData = candidates.map((c) => mapCandidateDocToExportRow(c));
 
+  const employmentStatusFilter =
+    listFilter.employmentStatus === undefined ||
+    listFilter.employmentStatus === null ||
+    listFilter.employmentStatus === ''
+      ? 'current'
+      : listFilter.employmentStatus;
+
   return {
     totalCandidates: exportData.length,
     exportedAt: new Date().toISOString(),
+    employmentStatusFilter,
     data: exportData,
   };
 };

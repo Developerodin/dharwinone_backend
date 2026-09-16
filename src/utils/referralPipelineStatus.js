@@ -135,8 +135,9 @@ export function deriveReferralPipelineStatus(ctx) {
   }
 
   if (hasPendingInterview(meetings)) return 'interview';
-  // Interview decided 'selected' → next stage is Offer, even before an offer entity exists.
-  if (hasSelectedInterview(meetings)) return 'offer';
+  // A 'selected' round is a passed interview, not an offer: the stage only advances when the
+  // recruiter runs Move to Offer and an Offer doc exists (handled by hasOpenOffer above).
+  if (hasSelectedInterview(meetings)) return 'interview';
   if (primaryApp && ['Interview', 'Screening'].includes(primaryApp.status)) return 'interview';
 
   if (primaryApp?.status === 'Applied') return 'applied';

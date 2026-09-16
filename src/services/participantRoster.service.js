@@ -263,7 +263,8 @@ export async function syncParticipantRosterForToken({
     refKind,
     refId,
   });
-  return Meeting.findById(meeting._id);
+  const Model = meeting.constructor;
+  return Model.findById(meeting._id);
 }
 
 export async function upsertParticipantRosterOnToken({
@@ -289,12 +290,13 @@ export async function upsertParticipantRosterOnToken({
     refId,
     now,
   });
-  const pushResult = await Meeting.updateOne(
+  const Model = meeting.constructor;
+  const pushResult = await Model.updateOne(
     { _id: meeting._id, 'participantRoster.identity': { $ne: identity } },
     { $push: { participantRoster: entry } }
   );
   if (pushResult.matchedCount === 0) {
-    await Meeting.updateOne(
+    await Model.updateOne(
       { _id: meeting._id, 'participantRoster.identity': identity },
       {
         $set: {
@@ -309,7 +311,7 @@ export async function upsertParticipantRosterOnToken({
       }
     );
   }
-  return Meeting.findById(meeting._id);
+  return Model.findById(meeting._id);
 }
 
 export function meetingInterviewSnapshot(meeting) {

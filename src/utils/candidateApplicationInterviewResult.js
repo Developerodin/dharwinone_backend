@@ -94,3 +94,40 @@ export const buildLatestInterviewResultMap = (applications, meetings) => {
 
   return map;
 };
+
+/**
+ * Group matched meetings per application (all statuses, including cancelled).
+ * Sorted by round.index ascending, then scheduledAt ascending.
+ * @param {object[]} applications
+ * @param {object[]} meetings
+ * @returns {Map<string, object[]>}
+ */
+export const buildApplicationInterviewsByAppId = (applications, meetings) => {
+  const map = new Map();
+
+  for (const app of applications || []) {
+    const meta = applicationMeta(app);
+    if (!meta.appId) continue;
+
+    const matching = (meetings || []).filter((m) =>
+      meetingMatchesApplication(m, { ...meta, applicationId: meta.appId })
+    );
+
+    matching.sort((a, b) => {
+      const ra = a.round?.index ?? Number.MAX_SAFE_INTEGER;
+      const rb = b.round?.index ?? Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      const sa = a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0;
+      const sb = b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0;
+      return sa - sb;
+    });
+
+    map.set(meta.appId, matching);
+  }
+
+  return map;
+};
+
+/** Fields required for application linkage and candidate interview panels. */
+export const CANDIDATE_INTERVIEW_MEETING_SELECT =
+  'candidate.id jobPosition applicationId interviewResult scheduledAt createdAt updatedAt status durationMinutes timezone meetingId round interviewType requireApproval notes interviewCompletedAt title';

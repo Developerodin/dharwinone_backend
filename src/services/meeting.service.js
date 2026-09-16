@@ -145,8 +145,13 @@ const skipUnlinkedSideEffect = (fnName, meeting, candidateObjId) => {
 };
 
 /**
- * Undo Offers/placement pipeline created when result was Selected: delete Pending (etc.) placement + offer,
- * set JobApplication back to Interview. Skips if placement already Joined (onboarding started).
+ * Undo the application-stage effect of a round that was marked Selected: set JobApplication back to
+ * Interview when nothing downstream exists yet.
+ *
+ * Deliberately non-destructive since Stage 1 decoupling. An Offer can now only be created by the
+ * explicit Move to Offer action, so editing a round's result back to pending/rejected must NOT
+ * delete it — that would silently throw away a separate recruiter decision (and, once accepted, the
+ * placement behind it). Withdrawing an offer is done from Offers & placement.
  */
 async function rollbackInterviewSelectionPipeline(meeting) {
   let syncCandidateId = null;
@@ -156,43 +161,21 @@ async function rollbackInterviewSelectionPipeline(meeting) {
       return skipUnlinkedSideEffect('rollbackInterviewSelectionPipeline', meeting, candidateObjId);
     }
 
-    const offer = await Offer.findOne({ jobApplication: application._id });
-    if (!offer) {
-      const st = application.status;
-      if (st === 'Offered' || st === 'Hired') {
-        await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
-        syncCandidateId = candidateObjId;
-      }
-      logger.info('[rollbackInterviewSelectionPipeline] No offer doc — normalized application status only');
-      if (syncCandidateId) await syncReferralPipelineStatusForCandidate(syncCandidateId);
-      return;
-    }
-
-    const placement = await Placement.findOne({ offer: offer._id }).lean();
-
-    if (placement?.status === 'Joined') {
-      logger.warn(
-        '[rollbackInterviewSelectionPipeline] Placement already Joined — skipping destructive rollback (meeting=%s)',
+    if (await Offer.exists({ jobApplication: application._id })) {
+      logger.info(
+        '[rollbackInterviewSelectionPipeline] Application %s already has an offer — round edit leaves offer/placement untouched (meeting=%s)',
+        application._id,
         meeting._id
       );
       return;
     }
 
-    if (placement) {
-      await Placement.deleteOne({ _id: placement._id });
+    const st = application.status;
+    if (st === 'Offered' || st === 'Hired') {
+      await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+      syncCandidateId = candidateObjId;
     }
-
-    await Offer.deleteOne({ _id: offer._id });
-
-    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
-
-    syncCandidateId = candidateObjId;
-
-    logger.info(
-      '[rollbackInterviewSelectionPipeline] Rolled back offer/placement for application %s (meeting=%s)',
-      application._id,
-      meeting._id
-    );
+    logger.info('[rollbackInterviewSelectionPipeline] No offer doc — normalized application status only');
   } catch (err) {
     logger.error('[rollbackInterviewSelectionPipeline] Failed:', err?.message || err);
     throw err;
@@ -610,9 +593,31 @@ const enrichMeetingForCandidateDashboard = async (meeting) => {
   return doc;
 };
 
+const meetingEndStillOpenExpr = (now) => ({
+  $gte: [
+    {
+      $add: [
+        '$scheduledAt',
+        {
+          $multiply: [
+            {
+              $cond: [{ $gt: ['$durationMinutes', 0] }, '$durationMinutes', 60],
+            },
+            60000,
+          ],
+        },
+      ],
+    },
+    now,
+  ],
+});
+
+const parseMyInterviewsIncludePast = (value) => value === true || value === 'true' || value === '1';
+
 /**
  * Upcoming interviews for the signed-in candidate (auth only — no interviews.read).
- * Returns scheduled rows where the meeting window has not ended and result is not rejected.
+ * Default: scheduled rows whose window has not ended and result is not rejected.
+ * Optional applicationId scopes to one application; includePast returns ended/cancelled history too.
  */
 const queryMyInterviews = async (currentUser, options = {}) => {
   const candidateFilter = await buildMyInterviewsCandidateFilter(currentUser);
@@ -621,13 +626,22 @@ const queryMyInterviews = async (currentUser, options = {}) => {
   }
 
   const now = new Date();
-  const filter = {
-    $and: [
-      candidateFilter,
-      { status: 'scheduled' },
-      { interviewResult: { $ne: 'rejected' } },
-    ],
-  };
+  const includePast = parseMyInterviewsIncludePast(options.includePast);
+  const and = [candidateFilter, { interviewResult: { $ne: 'rejected' } }];
+
+  const applicationId = options.applicationId ? String(options.applicationId).trim() : '';
+  if (applicationId && OBJECT_ID_HEX_RE.test(applicationId)) {
+    and.push({ applicationId });
+  }
+
+  if (includePast) {
+    and.push({ status: { $in: ['scheduled', 'ended', 'cancelled'] } });
+  } else {
+    and.push({ status: 'scheduled' });
+    and.push({ $expr: meetingEndStillOpenExpr(now) });
+  }
+
+  const filter = { $and: and };
 
   const result = await Meeting.paginate(filter, {
     ...options,
@@ -636,14 +650,9 @@ const queryMyInterviews = async (currentUser, options = {}) => {
     page: options.page || 1,
   });
 
-  const upcoming = (result.results || []).filter((m) => {
-    const end = meetingEndsAt(m.scheduledAt, m.durationMinutes);
-    return end && end >= now;
-  });
-
-  result.results = await Promise.all(upcoming.map((m) => enrichMeetingForCandidateDashboard(m)));
-  result.totalResults = result.results.length;
-  result.totalPages = Math.ceil(result.totalResults / (result.limit || 20)) || 0;
+  result.results = await Promise.all(
+    (result.results || []).map((m) => enrichMeetingForCandidateDashboard(m))
+  );
   return result;
 };
 
@@ -738,35 +747,19 @@ const ensureInterviewOfferLetterDefaults = async (offerId, userId) => {
 };
 
 /**
- * [ADR] createPlacementFromInterview: ensures a Draft offer (+ default joining date when missing) for this interview’s
- * job application. Placement is created when the offer is Accepted from Offers & Placement — not during this call.
- * @deprecated use createPlacementFromInterview name; `moveCandidateToPreboarding` is a backward-compatible alias.
- * Runs when interview result is "selected".
- * @param {Object} meeting - Meeting document (after save)
+ * [ADR] ensureOfferForApplication: ensures a Draft offer (+ default joining date when missing) for this
+ * job application. Placement is created when the offer is Accepted from Offers & Placement — not during
+ * this call.
+ *
+ * Application-scoped on purpose: the offer chain is shared by the explicit Move to Offer action
+ * (`applicationOffer.service.js`) and by the interview wrapper below, so both enforce the same guards.
+ *
+ * @param {Object} application - JobApplication document
+ * @param {string} jobId - Job id the application belongs to
+ * @param {import('mongoose').Types.ObjectId|string} candidateObjId - Candidate Employee id
  * @param {string} userId - User performing the action
  */
-const createPlacementFromInterview = async (meeting, userId) => {
-  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
-
-  if (!candidateObjId) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'Cannot move to Offers & placement: this interview has no valid candidate linked. Edit the interview and choose a candidate.'
-    );
-  }
-
-  if (!application) {
-    if (normalizeLinkageStatus(meeting) === 'unlinked') {
-      throw new ApiError(httpStatus.CONFLICT, 'Interview is not linked to a job application', true, '', {
-        errorCode: INTERVIEW_NOT_LINKED,
-      });
-    }
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'Cannot move to Offers & placement: no job application found for this candidate. Link an application to this interview first.'
-    );
-  }
-
+const ensureOfferForApplication = async (application, jobId, candidateObjId, userId) => {
   // Existing (active) employees must NOT enter the offer/placement hire flow — that would create a
   // second hire and a new offer letter. They move via Internal transfer instead. Resigned employees
   // self-applying ARE a rehire, so they fall through to the normal hire flow below.
@@ -795,18 +788,18 @@ const createPlacementFromInterview = async (meeting, userId) => {
   const existingOffer = await Offer.findOne({ jobApplication: application._id });
   if (existingOffer) {
     if (existingOffer.status === 'Accepted') {
-      logger.debug('[createPlacementFromInterview] Offer already accepted, placement exists');
+      logger.debug('[ensureOfferForApplication] Offer already accepted, placement exists');
       return;
     }
     if (existingOffer.status === 'Draft') {
       try {
         await ensureInterviewOfferLetterDefaults(existingOffer._id, userId);
         logger.info(
-          '[createPlacementFromInterview] Draft offer ensured (joining date); awaiting acceptance in Offers & placement — application %s',
+          '[ensureOfferForApplication] Draft offer ensured (joining date); awaiting acceptance in Offers & placement — application %s',
           application._id
         );
       } catch (err) {
-        logger.error('[createPlacementFromInterview] Failed to ensure draft offer defaults:', err?.message || err);
+        logger.error('[ensureOfferForApplication] Failed to ensure draft offer defaults:', err?.message || err);
         throw err;
       }
       return;
@@ -814,7 +807,7 @@ const createPlacementFromInterview = async (meeting, userId) => {
     if (existingOffer.status === 'Sent' || existingOffer.status === 'Under Negotiation') {
       const hasPlacement = await Placement.exists({ offer: existingOffer._id });
       if (hasPlacement) {
-        logger.debug('[createPlacementFromInterview] Offer already has placement, skipping');
+        logger.debug('[ensureOfferForApplication] Offer already has placement, skipping');
         return;
       }
       if (!existingOffer.joiningDate) {
@@ -830,9 +823,9 @@ const createPlacementFromInterview = async (meeting, userId) => {
           { id: userId, _id: userId },
           { skipAccessCheck: true }
         );
-        logger.info('[createPlacementFromInterview] Accepted existing Sent offer for application %s, placement created', application._id);
+        logger.info('[ensureOfferForApplication] Accepted existing Sent offer for application %s, placement created', application._id);
       } catch (err) {
-        logger.error('[createPlacementFromInterview] Failed to accept existing offer:', err?.message || err);
+        logger.error('[ensureOfferForApplication] Failed to accept existing offer:', err?.message || err);
         throw err;
       }
       return;
@@ -863,7 +856,7 @@ const createPlacementFromInterview = async (meeting, userId) => {
     if (created) {
       await ensureInterviewOfferLetterDefaults(created._id, userId);
     }
-    logger.info('[createPlacementFromInterview] Created draft offer for application %s (complete in Offers & placement)', application._id);
+    logger.info('[ensureOfferForApplication] Created draft offer for application %s (complete in Offers & placement)', application._id);
   } catch (err) {
     // BUG-8 FIX: race condition — two concurrent requests both passed the existingOffer check.
     // The second call gets "An offer already exists"; treat it as an idempotent success.
@@ -871,16 +864,49 @@ const createPlacementFromInterview = async (meeting, userId) => {
       (err?.statusCode === 400 || err?.status === 400) &&
       /already exists/i.test(err?.message || '')
     ) {
-      logger.info('[createPlacementFromInterview] Concurrent offer creation detected for application %s — treating as success', application._id);
+      logger.info('[ensureOfferForApplication] Concurrent offer creation detected for application %s — treating as success', application._id);
       const created = await Offer.findOne({ jobApplication: application._id });
       if (created && created.status !== 'Accepted' && created.status !== 'Rejected') {
         await ensureInterviewOfferLetterDefaults(created._id, userId);
       }
       return;
     }
-    logger.error('[createPlacementFromInterview] Failed to create/accept offer:', err?.message || err);
+    logger.error('[ensureOfferForApplication] Failed to create/accept offer:', err?.message || err);
     throw err;
   }
+};
+
+/**
+ * Interview-scoped entry to the offer chain: resolves this interview's job application, then runs
+ * `ensureOfferForApplication`. Never fires automatically from an interview result any more — only
+ * the explicit Move to Pre-boarding / internal-transfer actions call it.
+ * @deprecated use createPlacementFromInterview name; `moveCandidateToPreboarding` is a backward-compatible alias.
+ * @param {Object} meeting - Meeting document (after save)
+ * @param {string} userId - User performing the action
+ */
+const createPlacementFromInterview = async (meeting, userId) => {
+  const { candidateObjId, jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
+
+  if (!candidateObjId) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot move to Offers & placement: this interview has no valid candidate linked. Edit the interview and choose a candidate.'
+    );
+  }
+
+  if (!application) {
+    if (normalizeLinkageStatus(meeting) === 'unlinked') {
+      throw new ApiError(httpStatus.CONFLICT, 'Interview is not linked to a job application', true, '', {
+        errorCode: INTERVIEW_NOT_LINKED,
+      });
+    }
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot move to Offers & placement: no job application found for this candidate. Link an application to this interview first.'
+    );
+  }
+
+  return ensureOfferForApplication(application, jobId, candidateObjId, userId);
 };
 
 /**
@@ -924,10 +950,11 @@ const notifyCandidateOfInterviewResultChange = async (meeting, previousInterview
     const jobTitle = jobPositionDisplay || 'the role';
     const { jobId, application } = await resolveJobApplicationForInterviewMeeting(meeting);
 
+    // A passed round is not an offer since Stage 1 decoupling — the copy must not promise one.
     const { title, message } = isNewlySelected
       ? {
-          title: "Congratulations! You've Been Selected",
-          message: `Congratulations! You've been selected for ${jobTitle}.`,
+          title: 'Interview Round Passed',
+          message: `Good news — you passed your interview round for ${jobTitle}. We'll be in touch about the next step.`,
         }
       : {
           title: 'Application Update',
@@ -1085,33 +1112,9 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
     }
   }
 
-  let moveError = null;
-  let moveErrorCode = null;
-  if (
-    updateBody.interviewResult === 'selected' &&
-    meeting.candidate?.id
-  ) {
-    // BUG-6 FIX: guard null effectiveUserId — createOffer requires createdBy.
-    const effectiveUserId = userId || meeting.createdBy?.toString?.() || meeting.createdBy;
-    if (!effectiveUserId) {
-      const msg = 'Cannot create offer: no user identity available for this meeting. Please retry while logged in.';
-      logger.warn('[updateMeetingById] %s (meetingId=%s)', msg, meeting._id);
-      const result2 = await getMeetingById(meeting._id.toString());
-      result2.moveToPreboardingError = msg;
-      return result2;
-    }
-    try {
-      await createPlacementFromInterview(meeting, effectiveUserId);
-    } catch (err) {
-      moveError = err?.message || String(err);
-      moveErrorCode = err?.errorCode || null;
-      logger.warn('[createPlacementFromInterview] Failed:', moveError);
-    }
-  }
-
+  // Stage 1 decoupling: marking a round "selected" records the round outcome only. Creating the
+  // offer is a separate, explicit recruiter decision — POST /job-applications/:id/move-to-offer.
   const result = await getMeetingById(meeting._id.toString());
-  if (moveError) result.moveToPreboardingError = moveError;
-  if (moveErrorCode) result.moveToPreboardingErrorCode = moveErrorCode;
   if (linkageWarning) result.linkageWarning = linkageWarning;
   return result;
 };
@@ -2034,6 +2037,7 @@ export {
   resendMeetingInvitations,
   moveMeetingToPreboarding,
   transferEmployeeInternally,
+  ensureOfferForApplication,
   createPlacementFromInterview,
   moveCandidateToPreboarding,
   getPublicMeetingUrl,

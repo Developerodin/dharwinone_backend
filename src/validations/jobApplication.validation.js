@@ -68,6 +68,12 @@ const updateJobApplicationStatus = {
     }),
 };
 
+const moveApplicationToOffer = {
+  params: Joi.object().keys({
+    applicationId: Joi.string().custom(objectId).required(),
+  }),
+};
+
 const deleteJobApplication = {
   params: Joi.object().keys({
     applicationId: Joi.string().custom(objectId).required(),
@@ -157,6 +163,7 @@ const withdrawMyApplication = {
 export {
   getJobApplication,
   updateJobApplicationStatus,
+  moveApplicationToOffer,
   getJobApplications,
   getMyApplications,
   withdrawMyApplication,

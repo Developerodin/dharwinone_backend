@@ -335,5 +335,6 @@
     "./src/services/__tests__/bolnaCandidateJobTitleVerification.test.js",
   "./src/services/__tests__/callSync.executionContext.test.js",
   "./src/utils/__tests__/bolnaAgentPromptLock.test.js",
-  "./src/services/__tests__/jobVacancyCapacity.test.js"
+  "./src/services/__tests__/jobVacancyCapacity.test.js",
+  "./src/services/__tests__/applicationOffer.service.test.js"
 ]

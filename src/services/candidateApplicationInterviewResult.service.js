@@ -1,14 +1,26 @@
 import Meeting from '../models/meeting.model.js';
-import { buildLatestInterviewResultMap } from '../utils/candidateApplicationInterviewResult.js';
+import {
+  buildLatestInterviewResultMap,
+  buildApplicationInterviewsByAppId,
+  CANDIDATE_INTERVIEW_MEETING_SELECT,
+} from '../utils/candidateApplicationInterviewResult.js';
+
+const emptyMapsForRows = (rows) => {
+  const interviewResultByAppId = new Map(rows.map((app) => [String(app.id || app._id), null]));
+  const interviewsByAppId = new Map(rows.map((app) => [String(app.id || app._id), []]));
+  return { interviewResultByAppId, interviewsByAppId };
+};
 
 /**
  * Batched lookup: one Meeting query for all applications on the current page.
  * @param {object[]} applications - paginated JobApplication docs (candidate + job populated)
- * @returns {Promise<Map<string, string|null>>} applicationId → interviewResult | null
+ * @returns {Promise<{ interviewResultByAppId: Map<string, string|null>, interviewsByAppId: Map<string, object[]> }>}
  */
-export const loadInterviewResultsForApplications = async (applications) => {
+export const loadCandidateInterviewDataForApplications = async (applications) => {
   const rows = applications || [];
-  if (!rows.length) return new Map();
+  if (!rows.length) {
+    return { interviewResultByAppId: new Map(), interviewsByAppId: new Map() };
+  }
 
   const candidateIds = [
     ...new Set(
@@ -22,17 +34,26 @@ export const loadInterviewResultsForApplications = async (applications) => {
   ];
 
   if (!candidateIds.length) {
-    return new Map(
-      rows.map((app) => [String(app.id || app._id), null])
-    );
+    return emptyMapsForRows(rows);
   }
 
   const meetings = await Meeting.find({
     'candidate.id': { $in: candidateIds },
-    status: { $ne: 'cancelled' },
   })
-    .select('candidate.id jobPosition interviewResult scheduledAt createdAt updatedAt status')
+    .select(CANDIDATE_INTERVIEW_MEETING_SELECT)
     .lean();
 
-  return buildLatestInterviewResultMap(rows, meetings);
+  return {
+    interviewResultByAppId: buildLatestInterviewResultMap(rows, meetings),
+    interviewsByAppId: buildApplicationInterviewsByAppId(rows, meetings),
+  };
+};
+
+/**
+ * @param {object[]} applications
+ * @returns {Promise<Map<string, string|null>>} applicationId → interviewResult | null
+ */
+export const loadInterviewResultsForApplications = async (applications) => {
+  const { interviewResultByAppId } = await loadCandidateInterviewDataForApplications(applications);
+  return interviewResultByAppId;
 };

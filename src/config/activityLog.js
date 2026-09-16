@@ -149,6 +149,10 @@ export const ActivityActions = {
   INTERVIEW_LINKAGE_UPDATE: 'interview.linkage.update',
   INTERVIEW_APPLICATION_CREATE: 'interview.application.create',
   // Offers & placement
+  /** Explicit recruiter decision to advance an application from Interview to Offer. */
+  JOB_APPLICATION_MOVE_TO_OFFER: 'jobApplication.moveToOffer',
+  /** Offer created for an application with no interview round marked selected (acknowledged). */
+  OFFER_INTERVIEW_BYPASS: 'offer.interviewBypass',
   OFFER_CREATE: 'offer.create',
   OFFER_UPDATE: 'offer.update',
   OFFER_DELETE: 'offer.delete',

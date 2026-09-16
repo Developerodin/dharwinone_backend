@@ -28,7 +28,7 @@ import { SYNTHETIC_EMAIL_RE } from '../utils/identityFields.js';
 import * as emailService from './email.service.js';
 import {
   applicationHasSelectedInterview,
-  ensureInterviewSelectedForOfferBypass,
+  recordOfferInterviewBypass,
 } from './offerInterviewBypass.service.js';
 import { refreshProfilePictureInPlace } from '../utils/profilePicture.util.js';
 import { collationForSortBy } from '../utils/mongoCollation.js';
@@ -644,15 +644,17 @@ const createOfferCore = async (applicationId, payload, userId) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'An offer already exists for this application');
   }
 
+  // Offer without a passed interview round stays possible, but only as an acknowledged exception
+  // that leaves a trail. It no longer back-writes a "selected" round onto the interview record.
   const hasSelectedInterview = await applicationHasSelectedInterview(application);
   if (!hasSelectedInterview) {
     if (!payload.ackBypassInterview) {
       throw new ApiError(
         httpStatus.BAD_REQUEST,
-        'This candidate has no interview marked selected. Confirm bypass to create the offer.'
+        'This candidate has no interview round marked selected. Confirm bypass to create the offer.'
       );
     }
-    await ensureInterviewSelectedForOfferBypass(application, userId);
+    await recordOfferInterviewBypass(application, userId);
   }
 
   const gross = payload.ctcBreakdown?.gross ?? 0;

@@ -22,3 +22,20 @@ export const getMeetingByMeetingId = async (meetingId) => {
   doc.meetingKind = 'internal';
   return doc;
 };
+
+/**
+ * Load the backing Mongo document for a LiveKit room (interview or communication meeting).
+ * @param {string} meetingId
+ * @returns {Promise<{ meeting: import('mongoose').Document, meetingKind: 'interview'|'internal' }|null>}
+ */
+export const findRoomMeetingDocument = async (meetingId) => {
+  const trimmed = String(meetingId || '').trim();
+  if (!trimmed) return null;
+  const interview = await Meeting.findOne({ meetingId: trimmed });
+  if (interview) {
+    return { meeting: interview, meetingKind: 'interview' };
+  }
+  const internal = await InternalMeeting.findOne({ meetingId: trimmed });
+  if (!internal) return null;
+  return { meeting: internal, meetingKind: 'internal' };
+};

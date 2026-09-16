@@ -9,8 +9,8 @@ import {
   SHEET_NAMES,
   SKILLS_HEADERS,
   SOCIAL_HEADERS,
-  compensationStatusLabel,
-  employmentStatusLabel,
+  exportCompensationStatusCell,
+  exportEmploymentStatusCell,
   fmtIsoDate,
 } from './candidateExcelContract.js';
 
@@ -119,6 +119,7 @@ export function applyExportSheetFormatting(ws, aoa, minByHeader = {}) {
 export function generateCandidateExportXlsxBuffer(exportData) {
   const wb = XLSX.utils.book_new();
   const list = exportData.data || [];
+  const employmentFilterScope = exportData.employmentStatusFilter;
 
   const idRow = (c) => [s(c.employeeId), s(c.fullName), s(c.email)];
 
@@ -139,8 +140,8 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       s(c.assignedAgentEmail),
       s(c.designation),
       s(c.positionTitle),
-      c.compensationStatus || compensationStatusLabel(c.compensationType),
-      c.employmentStatus || employmentStatusLabel(c),
+      exportCompensationStatusCell(c),
+      exportEmploymentStatusCell(c, employmentFilterScope),
       c.isProfileCompleted ?? '',
       c.isCompleted ? 'Completed' : 'Incomplete',
       s(c.shortBio),

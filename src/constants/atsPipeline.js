@@ -342,8 +342,9 @@ export const resolveCandidateLifecycle = ({
   offerStatus,
   enteredOnboarding = false,
 } = {}) => {
-  const selectionPersisted =
-    Boolean(offerStatus || placementStatus) || interviewResult === 'selected';
+  // A passed interview round is not a selection outcome the candidate can be congratulated on —
+  // since Stage 1 decoupling only an Offer/Placement proves the recruiter actually advanced them.
+  const selectionPersisted = Boolean(offerStatus || placementStatus);
 
   const build = (stage, rejectionStage = null, badgeOverride = null) => ({
     stage,
@@ -378,7 +379,8 @@ export const resolveCandidateLifecycle = ({
   if (interviewResult === 'rejected') return build('rejected', 'interview');
   // Rejected before any interview decision (Applied/Screening) has no stage to name.
   if (applicationStatus === 'Rejected') return build('rejected', null, 'Rejected');
-  if (interviewResult === 'selected') return build('offer');
+  // Selected with no Offer doc = round passed, still at Interview. Only Move to Offer advances the stage.
+  if (interviewResult === 'selected') return build('interview', null, 'Interview');
   if (interviewResult === 'pending') return build('interview', null, 'Interview');
   return build('interview');
 };

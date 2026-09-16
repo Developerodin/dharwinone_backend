@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
 import Meeting from '../models/meeting.model.js';
+import { findRoomMeetingDocument } from './meetingLookup.service.js';
 import ApiError from '../utils/ApiError.js';
 import { TokenVerifier } from 'livekit-server-sdk';
 import { INTERVIEW_NOTICE_VERSION, getInterviewNotice } from '../constants/interviewNotices.js';
@@ -57,10 +58,11 @@ export const recordParticipantConsent = async ({
     throw new ApiError(httpStatus.FORBIDDEN, 'Token does not match this room');
   }
 
-  let meeting = await Meeting.findOne({ meetingId: roomName });
-  if (!meeting) {
+  const resolved = await findRoomMeetingDocument(roomName);
+  if (!resolved) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  let meeting = resolved.meeting;
   let roster = rosterEntryForIdentity(meeting, identity);
   if (!roster) {
     const displayName = typeof payload.name === 'string' ? payload.name.trim() : '';
@@ -72,7 +74,8 @@ export const recordParticipantConsent = async ({
       participantEmail: null,
       authUser: null,
     });
-    meeting = await Meeting.findOne({ meetingId: roomName });
+    const refetched = await findRoomMeetingDocument(roomName);
+    meeting = refetched?.meeting || meeting;
     roster = rosterEntryForIdentity(meeting, identity);
   }
   if (!roster) {

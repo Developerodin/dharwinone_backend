@@ -7,7 +7,7 @@ import { resolveCandidateLifecycle } from '../constants/atsPipeline.js';
  */
 export const serializeCandidateApplication = (
   application,
-  { placementStatus, interviewResult, offerStatus, enteredOnboarding } = {}
+  { placementStatus, interviewResult, offerStatus, enteredOnboarding, interviews } = {}
 ) => {
   const plain =
     application && typeof application.toJSON === 'function' ? application.toJSON() : application || {};
@@ -28,6 +28,9 @@ export const serializeCandidateApplication = (
   };
   if (interviewResult !== undefined) {
     payload.interviewResult = interviewResult;
+  }
+  if (interviews !== undefined) {
+    payload.interviews = interviews;
   }
   return payload;
 };
