@@ -14,7 +14,13 @@ import {
   seriesMaterializationFloor,
 } from '../utils/recurrence.util.js';
 import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
-import { getInternalMeetingById, buildReminderSchedule, sendInternalMeetingCancellationEmails, getInternalMeetingInvitationEmails } from './internalMeeting.service.js';
+import {
+  getInternalMeetingById,
+  buildReminderSchedule,
+  sendInternalMeetingCancellationEmails,
+  getInternalMeetingInvitationEmails,
+  notifyInternalMeetingInviteChanges,
+} from './internalMeeting.service.js';
 
 /**
  * Recurring meeting series. A MeetingSeries holds the recurrence rule + a shared
@@ -170,7 +176,7 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
   })();
   const { notifyByEmail } = await import('./notification.service.js');
 
-  let anyDelivered = false;
+  let deliveredCount = 0;
   for (const to of recipients) {
     const inviteName = resolveInviteeDisplayName(series, to);
     const personalUrl = getPublicMeetingUrl(meeting.meetingId, { name: inviteName, email: to });
@@ -206,7 +212,7 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
           to
         ),
       });
-      if (delivered !== false) anyDelivered = true;
+      if (delivered !== false) deliveredCount += 1;
     } catch (err) {
       logger.warn(`[sendOccurrenceInvites] invite to ${to} failed: ${err?.message || err}`);
     }
@@ -220,13 +226,14 @@ const sendOccurrenceInvites = async (series, meeting, { emails: onlyEmails } = {
     }).catch(() => {});
   }
 
-  if (!onlyEmails?.length && anyDelivered) {
+  const allDelivered = recipients.length > 0 && deliveredCount === recipients.length;
+  if (!onlyEmails?.length && allDelivered) {
     await InternalMeeting.updateOne(
       { _id: meetingId, invitationSentAt: null },
       { $set: { invitationSentAt: new Date() } }
     );
   }
-  return anyDelivered;
+  return allDelivered;
 };
 
 /** Send invites for series occurrences that are visible but not yet emailed. */
@@ -450,13 +457,14 @@ const purgeForwardOccurrences = async (seriesId, fromIndex) => {
     detached: false,
     occurrenceIndex: { $gte: fromIndex },
   };
-  const doomed = await InternalMeeting.find(filter).select('meetingId').lean();
-  await InternalMeeting.deleteMany(filter);
-  for (const d of doomed) {
-    deleteInterviewRoom(d.meetingId).catch((err) =>
-      logger.warn(`[purgeForwardOccurrences] LiveKit delete failed ${d.meetingId}: ${err?.message || err}`)
+  const doomed = await InternalMeeting.find(filter);
+  for (const doc of doomed) {
+    sendInternalMeetingCancellationEmails(doc, getInternalMeetingInvitationEmails(doc));
+    deleteInterviewRoom(doc.meetingId).catch((err) =>
+      logger.warn(`[purgeForwardOccurrences] LiveKit delete failed ${doc.meetingId}: ${err?.message || err}`)
     );
   }
+  await InternalMeeting.deleteMany(filter);
   return doomed.length;
 };
 
@@ -485,15 +493,30 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
     if (!(Number.isInteger(dur) && dur >= 1 && dur <= 480)) delete safe.durationMinutes;
     delete safe.recurrence;
     delete safe.end;
-    // Snapshot before the assign so only genuinely new people are emailed — an edit must
-    // never re-spam everyone already on the invite list.
-    const beforeEmails = new Set(getInvitationEmails(meeting));
+    const previousStatus = meeting.status;
+    const beforeInviteEmails = new Set(getInvitationEmails(meeting));
+    const previousScheduledAt = meeting.scheduledAt;
+    const previousDurationMinutes = meeting.durationMinutes;
+    const previousTitle = meeting.title;
     Object.assign(meeting, safe, { detached: true });
+    const movedTo = meeting.scheduledAt;
+    const timeMoved =
+      !!previousScheduledAt &&
+      !!movedTo &&
+      new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime();
+    if (timeMoved) {
+      meeting.reminderSentAt = null;
+      meeting.reminderState = new Map();
+      meeting.reminders = buildReminderSchedule(movedTo);
+    }
     await meeting.save();
-    // A detached occurrence carries its own invite list, so invite against the occurrence
-    // rather than the series template.
-    const added = getInvitationEmails(meeting).filter((e) => !beforeEmails.has(e));
-    if (added.length) await sendOccurrenceInvites(series, meeting, { emails: added });
+    notifyInternalMeetingInviteChanges(meeting, {
+      previousStatus,
+      beforeInviteEmails,
+      previousScheduledAt,
+      previousDurationMinutes,
+      previousTitle,
+    });
     return getInternalMeetingById(meeting._id.toString());
   }
 
@@ -510,15 +533,34 @@ export const updateSeries = async (meetingRef, body, mode = 'single') => {
     if (Object.keys(tpl).length) {
       const filter = { seriesId: series._id, status: 'scheduled', detached: false };
       if (mode === 'future') filter.occurrenceIndex = { $gte: fromIndex };
+      const targets = await InternalMeeting.find(filter);
+      const snapshots = targets.map((m) => ({
+        _id: m._id,
+        previousStatus: m.status,
+        beforeInviteEmails: new Set(getInvitationEmails(m)),
+        previousScheduledAt: m.scheduledAt,
+        previousDurationMinutes: m.durationMinutes,
+        previousTitle: m.title,
+      }));
       await InternalMeeting.updateMany(filter, {
         $set: { ...tpl, recurrenceSummary: recurrenceLabel(series.recurrence) },
       });
+      for (const snap of snapshots) {
+        const doc = await InternalMeeting.findById(snap._id);
+        if (!doc) continue;
+        notifyInternalMeetingInviteChanges(
+          doc,
+          {
+            previousStatus: snap.previousStatus,
+            beforeInviteEmails: snap.beforeInviteEmails,
+            previousScheduledAt: snap.previousScheduledAt,
+            previousDurationMinutes: snap.previousDurationMinutes,
+            previousTitle: snap.previousTitle,
+          },
+          { skipNewInvites: true }
+        );
+      }
     }
-    // Adding a participant to a recurring meeting is a content-only change, so this was the
-    // branch that ran — and it emailed nobody. The new invitee was written to every future
-    // occurrence and showed under Participants & Invitees while never being told the meeting
-    // existed. Only the re-anchor path below ever sent, which is why one-off meetings worked
-    // and recurring ones silently did not.
     const added = getInvitationEmails(series).filter((e) => !seriesEmailsBefore.has(e));
     await sendInvitesToNewRecipients(series, added);
     const refreshed = await MeetingSeries.findById(series._id);

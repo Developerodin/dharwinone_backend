@@ -183,6 +183,51 @@ const sendCancellationEmails = (meeting, emails) => {
 };
 
 /**
+ * Invitation/cancellation side effects after an occurrence save — shared by one-off updates
+ * and recurring series occurrence edits.
+ * @param {Object} meeting - saved InternalMeeting document
+ * @param {Object} before
+ * @param {string} before.previousStatus
+ * @param {Set<string>} before.beforeInviteEmails
+ * @param {Date|string} [before.previousScheduledAt]
+ * @param {number} [before.previousDurationMinutes]
+ * @param {string} [before.previousTitle]
+ */
+const notifyInternalMeetingInviteChanges = (meeting, before, { skipNewInvites = false } = {}) => {
+  const {
+    previousStatus,
+    beforeInviteEmails,
+    previousScheduledAt,
+    previousDurationMinutes,
+    previousTitle,
+  } = before;
+  const afterInviteEmails = getInvitationEmails(meeting);
+  const cancelledNow = previousStatus !== 'cancelled' && meeting.status === 'cancelled';
+  const movedTo = meeting.scheduledAt;
+  const timeMoved =
+    !!previousScheduledAt &&
+    !!movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime();
+  const calendarChanged =
+    Number(previousDurationMinutes) !== Number(meeting.durationMinutes) ||
+    String(previousTitle || '') !== String(meeting.title || '');
+
+  if (cancelledNow) {
+    const cancelRecipients = new Set([...beforeInviteEmails, ...afterInviteEmails]);
+    if (cancelRecipients.size) sendCancellationEmails(meeting, [...cancelRecipients]);
+  } else {
+    const removedEmails = [...beforeInviteEmails].filter((e) => !afterInviteEmails.includes(e));
+    if (removedEmails.length) sendCancellationEmails(meeting, removedEmails);
+    const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
+    if (!skipNewInvites && newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
+    if (timeMoved || calendarChanged) {
+      const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
+      if (existingEmails.length) sendInvitationEmails(meeting, existingEmails, { rescheduled: true });
+    }
+  }
+};
+
+/**
  * @param {Object} body
  * @param {string} userId
  */
@@ -302,25 +347,13 @@ const updateInternalMeetingById = async (id, updateBody) => {
   }
   await meeting.save();
 
-  const afterInviteEmails = getInvitationEmails(meeting);
-  const cancelledNow = previousStatus !== 'cancelled' && meeting.status === 'cancelled';
-  const calendarChanged =
-    Number(previousDurationMinutes) !== Number(meeting.durationMinutes) ||
-    String(previousTitle || '') !== String(meeting.title || '');
-
-  if (cancelledNow) {
-    const cancelRecipients = new Set([...beforeInviteEmails, ...afterInviteEmails]);
-    if (cancelRecipients.size) sendCancellationEmails(meeting, [...cancelRecipients]);
-  } else {
-    const removedEmails = [...beforeInviteEmails].filter((e) => !afterInviteEmails.includes(e));
-    if (removedEmails.length) sendCancellationEmails(meeting, removedEmails);
-    const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
-    if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
-    if (timeMoved || calendarChanged) {
-      const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
-      if (existingEmails.length) sendInvitationEmails(meeting, existingEmails, { rescheduled: true });
-    }
-  }
+  notifyInternalMeetingInviteChanges(meeting, {
+    previousStatus,
+    beforeInviteEmails,
+    previousScheduledAt,
+    previousDurationMinutes,
+    previousTitle,
+  });
 
   return getInternalMeetingById(meeting._id.toString());
 };
@@ -329,6 +362,9 @@ const deleteInternalMeetingById = async (id) => {
   const meeting = await InternalMeeting.findById(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  if (meeting.status === 'scheduled') {
+    sendCancellationEmails(meeting, getInvitationEmails(meeting));
   }
   await meeting.deleteOne();
   return meeting;
@@ -661,5 +697,7 @@ export {
   endInternalMeetingByRoomPublic,
   autoEndExpiredInternalMeetings,
   sendCancellationEmails as sendInternalMeetingCancellationEmails,
+  sendInvitationEmails as sendInternalMeetingInvitationEmails,
+  notifyInternalMeetingInviteChanges,
   getInvitationEmails as getInternalMeetingInvitationEmails,
 };
