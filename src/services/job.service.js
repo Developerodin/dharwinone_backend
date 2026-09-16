@@ -639,6 +639,13 @@ const updateJobById = async (id, updateBody, currentUser) => {
   });
   if (reopenedForVacancies) job.status = 'Active';
   if (clearFlag) job.autoClosedForVacancies = false;
+
+  // Raising the count re-arms the "vacancies filled" alert, so filling the new openings notifies the
+  // owner a second time. Tied to the raise itself rather than to the reopen above: a job can fill
+  // and be topped up before the six-hourly tick ever closes it, and that owner still wants telling.
+  if (updateBody.vacancies != null && Number(updateBody.vacancies) > Number(prevVacancies ?? 0)) {
+    job.vacancyFilledNotifiedAt = null;
+  }
   await job.save();
 
   if (job.status === 'Active' && prevStatus !== 'Active' && !reopenedForVacancies) {
@@ -2113,6 +2120,60 @@ const shouldAutoCloseForVacancies = ({ vacancies, hired, lastHiredAt, now = new 
 };
 
 /**
+ * Tell each job's owner their openings are full, so they can raise the count or close the posting.
+ *
+ * Fires as soon as the openings fill — deliberately NOT on the auto-close, which is
+ * VACANCY_AUTO_CLOSE_DAYS later. Telling an owner to "increase the vacancy count" after the tick has
+ * already closed the posting inverts the instruction; the whole point of the two-day delay is that
+ * they get that window to act.
+ *
+ * The claim is a conditional update, not a read-then-write: `vacancyFilledNotifiedAt: null` in the
+ * filter is both the lock and the "already told them" record, so a tick that overlaps a restart
+ * cannot mail the same owner twice. Raising `vacancies` nulls the field (updateJobById), which is
+ * what lets a job that refills at the higher count notify again.
+ */
+async function notifyVacancyFilledOwners(fullJobs, now) {
+  if (!fullJobs.length) return 0;
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
+  let sent = 0;
+  for (const job of fullJobs) {
+    // eslint-disable-next-line no-await-in-loop
+    const claimed = await Job.findOneAndUpdate(
+      { _id: job._id, vacancyFilledNotifiedAt: null },
+      { $set: { vacancyFilledNotifiedAt: now } },
+      { new: true, projection: '_id title vacancies createdBy' }
+    ).lean();
+    if (!claimed?.createdBy) continue;
+    const link = `/ats/jobs/edit/${claimed._id}`;
+    const message =
+      `All ${claimed.vacancies} opening(s) on "${claimed.title}" are now filled. ` +
+      `Increase the vacancy count to keep hiring, or close the job post. ` +
+      `It closes on its own in ${VACANCY_AUTO_CLOSE_DAYS} day(s) if left as is.`;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await notify(claimed.createdBy, {
+        type: 'job_filled',
+        title: 'Job vacancies filled',
+        message,
+        link,
+        relatedEntity: { type: 'Job', id: String(claimed._id) },
+        email: { subject: `Vacancies filled: ${claimed.title}`, text: plainTextEmailBody(message, link) },
+      });
+      sent += 1;
+    } catch (err) {
+      // Hand the claim back rather than leave the owner permanently silent. notify() already
+      // swallows its own in-app and email failures, so reaching here means the recipient lookup
+      // itself broke — a next-tick retry is the right answer.
+      // eslint-disable-next-line no-await-in-loop
+      await Job.updateOne({ _id: claimed._id }, { $set: { vacancyFilledNotifiedAt: null } }).catch(() => {});
+      logger.warn(`[vacancyAutoClose] notify failed for job ${claimed._id}: ${err?.message || err}`);
+    }
+  }
+  if (sent) logger.info(`[vacancyAutoClose] notified ${sent} job owner(s) that their vacancies are filled`);
+  return sent;
+}
+
+/**
  * Close Active jobs whose openings have been full for VACANCY_AUTO_CLOSE_DAYS.
  *
  * Writes with updateMany rather than going through updateJobById: that path runs owner and
@@ -2135,27 +2196,34 @@ async function runVacancyAutoCloseTick({ now = new Date() } = {}) {
   })
     .select('_id vacancies')
     .lean();
-  if (!candidates.length) return { closed: 0 };
+  if (!candidates.length) return { closed: 0, notified: 0 };
 
   const counts = await getHiredCountsForJobs(candidates.map((j) => j._id));
-  const toClose = candidates.filter((job) => {
+  const full = candidates.filter((job) => {
     const row = counts.get(String(job._id));
-    if (!row) return false;
-    return shouldAutoCloseForVacancies({
-      vacancies: job.vacancies,
-      hired: row.hired,
-      lastHiredAt: row.lastHiredAt,
-      now,
-    });
+    return row ? isVacancyCapacityFull(row.hired, job.vacancies) : false;
   });
-  if (!toClose.length) return { closed: 0 };
+
+  // Notify on "full", close on "full for two days" — two different sets, and the owner has to hear
+  // about it while the posting is still open enough to act on.
+  const notified = await notifyVacancyFilledOwners(full, now);
+
+  const toClose = full.filter((job) =>
+    shouldAutoCloseForVacancies({
+      vacancies: job.vacancies,
+      hired: counts.get(String(job._id))?.hired,
+      lastHiredAt: counts.get(String(job._id))?.lastHiredAt,
+      now,
+    })
+  );
+  if (!toClose.length) return { closed: 0, notified };
 
   await Job.updateMany(
     { _id: { $in: toClose.map((j) => j._id) }, status: 'Active' },
     { $set: { status: 'Closed', autoClosedForVacancies: true } }
   );
   logger.info(`[vacancyAutoClose] closed ${toClose.length} job(s) whose vacancies have been filled for ${VACANCY_AUTO_CLOSE_DAYS} day(s)`);
-  return { closed: toClose.length };
+  return { closed: toClose.length, notified };
 }
 
 export {

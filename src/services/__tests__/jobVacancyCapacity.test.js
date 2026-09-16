@@ -301,3 +301,99 @@ test('an over-capacity job closes on the same rule', async () => {
   const should = await loadShouldClose();
   assert.equal(should({ vacancies: 1, hired: 2, lastHiredAt: daysAgo(5), now: NOW }), true);
 });
+
+/**
+ * The tick has two jobs now, on two different clocks: tell the owner the moment the openings fill,
+ * and close the posting two days later. These cover the first one, including the claim that stops a
+ * second tick re-mailing the same owner.
+ */
+const JOB_A = '000000000000000000000a01';
+
+const loadTick = async ({ candidates, rows, claim, notify }) => {
+  mock.reset();
+  const calls = { notified: [], released: [], closed: [] };
+  mock.module('../../models/job.model.js', {
+    defaultExport: {
+      find: () => ({ select: () => ({ lean: async () => candidates }) }),
+      findOneAndUpdate: (filter) => ({ lean: async () => claim(filter) }),
+      updateMany: async (filter) => {
+        calls.closed.push(filter);
+      },
+      updateOne: async (filter) => {
+        calls.released.push(filter);
+      },
+    },
+  });
+  mock.module('../../models/jobApplication.model.js', {
+    defaultExport: { aggregate: async () => rows },
+  });
+  mock.module('../notification.service.js', {
+    namedExports: {
+      plainTextEmailBody: (message) => message,
+      notify: async (userId, options) => {
+        calls.notified.push({ userId, options });
+        if (notify) await notify();
+      },
+    },
+  });
+  const mod = await import(`../job.service.js?tick-test=${Math.random()}`);
+  return { run: mod.runVacancyAutoCloseTick, calls };
+};
+
+const fullOneVacancy = (lastHiredAt) => ({
+  candidates: [{ _id: JOB_A, vacancies: 1, title: 'Node Dev', createdBy: 'user-1' }],
+  rows: [{ _id: JOB_A, hired: 1, lastHiredAt }],
+  claim: (filter) =>
+    filter.vacancyFilledNotifiedAt === null
+      ? { _id: JOB_A, vacancies: 1, title: 'Node Dev', createdBy: 'user-1' }
+      : null,
+});
+
+test('the owner is told as soon as the openings fill, without waiting for the close', async () => {
+  // The whole point: "increase the vacancy count" is only actionable while the job is still open.
+  const { run, calls } = await loadTick(fullOneVacancy(daysAgo(1)));
+  const result = await run({ now: NOW });
+  assert.deepEqual(result, { closed: 0, notified: 1 });
+  assert.equal(calls.notified.length, 1);
+  assert.equal(calls.notified[0].userId, 'user-1');
+  assert.equal(calls.notified[0].options.type, 'job_filled');
+  assert.equal(calls.notified[0].options.link, `/ats/jobs/edit/${JOB_A}`);
+  assert.match(calls.notified[0].options.email.subject, /Node Dev/);
+  assert.equal(calls.closed.length, 0);
+});
+
+test('a job already notified is not mailed a second time', async () => {
+  // The claim is the record. A tick that runs again over the same full job must find it taken.
+  const { run, calls } = await loadTick({ ...fullOneVacancy(daysAgo(1)), claim: () => null });
+  assert.deepEqual(await run({ now: NOW }), { closed: 0, notified: 0 });
+  assert.equal(calls.notified.length, 0);
+});
+
+test('a job with room notifies nobody', async () => {
+  const { run, calls } = await loadTick({
+    candidates: [{ _id: JOB_A, vacancies: 3, title: 'Node Dev', createdBy: 'user-1' }],
+    rows: [{ _id: JOB_A, hired: 1, lastHiredAt: daysAgo(90) }],
+    claim: () => assert.fail('a job with room must never be claimed'),
+  });
+  assert.deepEqual(await run({ now: NOW }), { closed: 0, notified: 0 });
+  assert.equal(calls.notified.length, 0);
+});
+
+test('a long-full job is both notified and closed in the same tick', async () => {
+  const { run, calls } = await loadTick(fullOneVacancy(daysAgo(3)));
+  assert.deepEqual(await run({ now: NOW }), { closed: 1, notified: 1 });
+  assert.equal(calls.closed.length, 1);
+});
+
+test('a failed notify hands the claim back so the next tick retries', async () => {
+  // Otherwise the claim silently becomes a permanent "already told them" for a mail never sent.
+  const { run, calls } = await loadTick({
+    ...fullOneVacancy(daysAgo(1)),
+    notify: async () => {
+      throw new Error('recipient lookup failed');
+    },
+  });
+  assert.deepEqual(await run({ now: NOW }), { closed: 0, notified: 0 });
+  assert.equal(calls.released.length, 1);
+  assert.equal(String(calls.released[0]._id), JOB_A);
+});

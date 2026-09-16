@@ -92,6 +92,12 @@ const jobSchema = new mongoose.Schema(
      * human closed deliberately.
      */
     autoClosedForVacancies: { type: Boolean, default: false },
+    /**
+     * When the owner was told this job's openings are full. Null means "not told yet", which is what
+     * the tick claims against so two overlapping ticks cannot mail twice. Raising `vacancies` nulls
+     * it again, so a job that refills after the count goes up notifies a second time.
+     */
+    vacancyFilledNotifiedAt: { type: Date, default: null },
     /** Optional last date to accept applications; shown on browse listings when set. */
     applicationDeadline: { type: Date, default: null },
 

@@ -20,6 +20,7 @@ const notificationSchema = mongoose.Schema(
         'course',
         'certificate',
         'job_application',
+        'job_filled',
         'project',
         'account',
         'recruiter',
