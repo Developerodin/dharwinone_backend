@@ -31,6 +31,8 @@ const notificationPreferencesSchema = Joi.object({
   assignmentUpdatesInApp: Joi.boolean(),
   projectUpdatesInApp: Joi.boolean(),
   sopAssignmentsInApp: Joi.boolean(),
+  smartNudges: Joi.boolean(),
+  smartNudgesInApp: Joi.boolean(),
 });
 
 const objectId = (value, helpers) => {

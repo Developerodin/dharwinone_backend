@@ -19,6 +19,7 @@ import {
   stopExternalJobAutoFetchScheduler,
 } from './services/externalJobAutoFetch.scheduler.js';
 import { startMeetingScheduler, stopMeetingScheduler } from './services/meeting.scheduler.js';
+import { startSmartNudgeScheduler, stopSmartNudgeScheduler } from './services/smartNudge.scheduler.js';
 import { startRecordingScheduler, stopRecordingScheduler } from './services/recording.scheduler.js';
 import {
   startRecordingDiscoveryScheduler,
@@ -118,6 +119,7 @@ mongoose
           externalJobAutoFetchSchedulerId = startExternalJobAutoFetchScheduler();
           applicationVerificationSchedulerId = applicationVerificationCallScheduler.startApplicationVerificationCallScheduler(1);
           startMeetingScheduler();
+          startSmartNudgeScheduler();
           startRecordingScheduler(getEgressClient());
           recordingDiscoverySchedulerId = startRecordingDiscoveryScheduler();
           runEmbeddingBackfill().catch((err) => logger.error(`[EmbeddingSync] backfill failed: ${err?.stack || err?.message || String(err)}`));
@@ -159,6 +161,7 @@ const exitHandler = (exitCode = 1) => {
       stopExternalJobAutoFetchScheduler(externalJobAutoFetchSchedulerId);
       applicationVerificationCallScheduler.stopApplicationVerificationCallScheduler(applicationVerificationSchedulerId);
       stopMeetingScheduler();
+      stopSmartNudgeScheduler();
       stopRecordingScheduler();
       stopRecordingDiscoveryScheduler(recordingDiscoverySchedulerId);
       stopMemorySweepScheduler();

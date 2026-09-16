@@ -28,6 +28,7 @@ export const NOTIFICATION_PREF_KEYS = {
   assignment:       { inApp: 'assignmentUpdatesInApp' },
   project:          { inApp: 'projectUpdatesInApp' },
   sop:              { inApp: 'sopAssignmentsInApp' },
+  smart_nudge:      { email: 'smartNudges', inApp: 'smartNudgesInApp' },
 };
 
 export const isChannelAllowed = (type, channel, prefs) => {

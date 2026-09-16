@@ -254,6 +254,10 @@ const envVarsSchema = Joi.object()
 
     /** Candidate scheduler (`employee.scheduler.js`): resign auto-deactivate, joining reminders, role promotion, offer expiry. Default 5 min. */
     CANDIDATE_SCHEDULER_INTERVAL_MINUTES: Joi.number().integer().min(1).max(1440).optional().default(1),
+    /** Smart delay/no-show nudges. Unset = on. Set SMART_NUDGES_ENABLED=0 to disable. */
+    SMART_NUDGES_ENABLED: Joi.string().valid('true', 'false', '1', '0', '').optional().allow(null).empty(''),
+    SMART_NUDGE_INTERVAL_MINUTES: Joi.number().integer().min(5).max(1440).optional().default(15),
+    SMART_NUDGE_MAX_PER_USER_PER_DAY: Joi.number().integer().min(1).max(20).optional().default(3),
 
     /**
      * Comma-separated emails: sole accounts for Activity Logs API/UI and support camera invites.
@@ -787,6 +791,16 @@ const config = {
   },
   candidate: {
     schedulerIntervalMinutes: envVars.CANDIDATE_SCHEDULER_INTERVAL_MINUTES,
+  },
+  smartNudge: {
+    enabled:
+      envVars.SMART_NUDGES_ENABLED === undefined ||
+      envVars.SMART_NUDGES_ENABLED === null ||
+      envVars.SMART_NUDGES_ENABLED === ''
+        ? true
+        : ['true', '1'].includes(String(envVars.SMART_NUDGES_ENABLED).toLowerCase()),
+    intervalMinutes: envVars.SMART_NUDGE_INTERVAL_MINUTES ?? 15,
+    maxPerUserPerDay: envVars.SMART_NUDGE_MAX_PER_USER_PER_DAY ?? 3,
   },
   pinecone: {
     apiKey: envVars.PINECONE_API_KEY || '',
