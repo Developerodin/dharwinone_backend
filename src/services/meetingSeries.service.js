@@ -14,7 +14,7 @@ import {
   seriesMaterializationFloor,
 } from '../utils/recurrence.util.js';
 import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
-import { getInternalMeetingById, buildReminderSchedule } from './internalMeeting.service.js';
+import { getInternalMeetingById, buildReminderSchedule, sendInternalMeetingCancellationEmails, getInternalMeetingInvitationEmails } from './internalMeeting.service.js';
 
 /**
  * Recurring meeting series. A MeetingSeries holds the recurrence rule + a shared
@@ -601,11 +601,15 @@ export const cancelSeries = async (meetingRef, mode = 'single') => {
   if (!series) throw new ApiError(httpStatus.NOT_FOUND, 'Meeting series not found');
 
   const cancelOccurrences = async (filter) => {
-    const targets = await InternalMeeting.find(filter).select('meetingId').lean();
-    await InternalMeeting.updateMany(filter, { $set: { status: 'cancelled' } });
-    for (const t of targets) {
-      deleteInterviewRoom(t.meetingId).catch((err) =>
-        logger.warn(`[cancelSeries] LiveKit delete failed ${t.meetingId}: ${err?.message || err}`)
+    const targets = await InternalMeeting.find(filter);
+    const cancelledAt = new Date();
+    await InternalMeeting.updateMany(filter, { $set: { status: 'cancelled', updatedAt: cancelledAt } });
+    for (const doc of targets) {
+      doc.status = 'cancelled';
+      doc.updatedAt = cancelledAt;
+      sendInternalMeetingCancellationEmails(doc, getInternalMeetingInvitationEmails(doc));
+      deleteInterviewRoom(doc.meetingId).catch((err) =>
+        logger.warn(`[cancelSeries] LiveKit delete failed ${doc.meetingId}: ${err?.message || err}`)
       );
     }
     return targets.length;
@@ -615,6 +619,7 @@ export const cancelSeries = async (meetingRef, mode = 'single') => {
     meeting.status = 'cancelled';
     meeting.detached = true;
     await meeting.save();
+    sendInternalMeetingCancellationEmails(meeting, getInternalMeetingInvitationEmails(meeting));
     deleteInterviewRoom(meeting.meetingId).catch(() => {});
     return { cancelled: 1 };
   }

@@ -47,6 +47,7 @@ import {
   normalizeVersionPayloadFile,
   versionFileIdentity,
   latestVersionForSlot,
+  resolveActiveVersionRowForSlot,
   nextVersionForSlot,
   findLatestSlotDocumentIndex,
   findGenericVersionedSlotBypass,
@@ -4071,9 +4072,11 @@ const listCandidateDocumentVersions = async (candidateId, slotRaw, user) => {
     .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))
     .map((row) => buildDocumentVersionResponse(row));
 
+  const activeRow = resolveActiveVersionRowForSlot(candidate, slot);
+
   return {
     slot,
-    currentVersion: rows.length > 0 ? rows[0].version : null,
+    currentVersion: activeRow ? Number(activeRow.version) : null,
     versions: rows,
   };
 };
@@ -4114,6 +4117,72 @@ const addCandidateDocumentVersion = async (candidateId, slotRaw, payload, user) 
     created,
     currentVersion: Number(versionRow.version),
     version: buildDocumentVersionResponse(versionRow),
+  };
+};
+
+/** Point `documents[]` at an existing version row without appending a duplicate history entry. */
+const restoreCandidateDocumentVersion = async (candidateId, slotRaw, versionRaw, user) => {
+  const slot = normalizeVersionSlot(slotRaw);
+  if (!slot) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid document slot. Use resume or cover-letter.');
+  }
+  const versionNumber = Number(versionRaw);
+  if (!Number.isInteger(versionNumber) || versionNumber < 1) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid version number');
+  }
+  const candidate = await Employee.findById(candidateId);
+  if (!candidate) throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
+  if (!isOwnerOrAdmin(user, candidate)) throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
+
+  candidate.documentVersions = Array.isArray(candidate.documentVersions) ? candidate.documentVersions : [];
+  const targetRow = candidate.documentVersions.find(
+    (v) => normalizeVersionSlot(v?.slot) === slot && Number(v?.version) === versionNumber
+  );
+  if (!targetRow) throw new ApiError(httpStatus.NOT_FOUND, 'Document version not found');
+
+  const activeRow = resolveActiveVersionRowForSlot(candidate, slot);
+  const docIdx = findLatestSlotDocumentIndex(candidate.documents || [], slot);
+  const docRow = docIdx >= 0 ? candidate.documents[docIdx] : null;
+  const targetIdentity = versionFileIdentity(targetRow);
+  const docIdentity = docRow ? versionFileIdentity(docRow) : null;
+  const slotVersionMatches =
+    docRow && Number.isInteger(Number(docRow.slotVersion)) && Number(docRow.slotVersion) === versionNumber;
+
+  const alreadyCurrent =
+    activeRow &&
+    Number(activeRow.version) === versionNumber &&
+    slotVersionMatches &&
+    docIdentity === targetIdentity;
+
+  if (alreadyCurrent) {
+    return {
+      slot,
+      restored: false,
+      currentVersion: versionNumber,
+      version: buildDocumentVersionResponse(targetRow),
+    };
+  }
+
+  const sameFileAsProfile = docRow && docIdentity === targetIdentity;
+  if (sameFileAsProfile && slotVersionMatches) {
+    return {
+      slot,
+      restored: false,
+      currentVersion: versionNumber,
+      version: buildDocumentVersionResponse(targetRow),
+    };
+  }
+
+  upsertLatestSlotDocumentFromVersion(candidate, slot, targetRow);
+  candidate.isProfileCompleted = calculateProfileCompletion(candidate);
+  candidate.isCompleted = candidate.isProfileCompleted === 100;
+  await candidate.save();
+
+  return {
+    slot,
+    restored: true,
+    currentVersion: versionNumber,
+    version: buildDocumentVersionResponse(targetRow),
   };
 };
 
@@ -4291,6 +4360,7 @@ export {
   deleteCandidateDocument,
   listCandidateDocumentVersions,
   addCandidateDocumentVersion,
+  restoreCandidateDocumentVersion,
   getCandidateDocumentVersionDownloadUrl,
   deleteCandidateDocumentVersion,
   getSalarySlipDownloadUrl,

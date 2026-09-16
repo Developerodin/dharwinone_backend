@@ -327,6 +327,7 @@ router
 
 router
   .route('/documents/:candidateId/versions/:slot/:version')
+  .patch(auth(), validate(employeeValidation.restoreDocumentVersion), employeeController.restoreDocumentVersion)
   .delete(auth(), validate(employeeValidation.deleteDocumentVersion), employeeController.deleteDocumentVersion);
 
 router

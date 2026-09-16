@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildIcsEvent, buildMeetingIcs } from '../email.service.js';
+import {
+  buildIcsEvent,
+  buildMeetingIcs,
+  buildMeetingCancelIcs,
+  meetingIcsUid,
+} from '../email.service.js';
 
 /**
  * Meeting invitations carried no calendar attachment at all: `buildIcsEvent` existed but had
@@ -147,4 +152,24 @@ test('buildMeetingIcs raises SEQUENCE with the meeting revision', () => {
 
 test('buildMeetingIcs falls back to SEQUENCE 0 when the doc carries no updatedAt', () => {
   assert.match(buildMeetingIcs(MEETING, JOIN_URL, ATTENDEE), /SEQUENCE:0/);
+});
+
+test('buildMeetingCancelIcs uses METHOD:CANCEL, STATUS:CANCELLED, and the same UID', () => {
+  const cancel = unfold(
+    buildMeetingCancelIcs({ ...MEETING, updatedAt: new Date('2026-09-11T12:00:00.000Z') }, ATTENDEE)
+  );
+  const invite = unfold(
+    buildMeetingIcs({ ...MEETING, updatedAt: new Date('2026-09-11T10:00:00.000Z') }, JOIN_URL, ATTENDEE)
+  );
+  assert.match(cancel, /METHOD:CANCEL/);
+  assert.match(cancel, /STATUS:CANCELLED/);
+  assert.match(cancel, new RegExp(`UID:${meetingIcsUid(MEETING.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  const uidOf = (s) => s.match(/UID:(.+)/)[1].trim();
+  assert.equal(uidOf(cancel), uidOf(unfold(invite)));
+  assert.ok(Number(cancel.match(/SEQUENCE:(\d+)/)[1]) > Number(invite.match(/SEQUENCE:(\d+)/)[1]));
+});
+
+test('buildMeetingCancelIcs returns empty string when id or start is missing', () => {
+  assert.equal(buildMeetingCancelIcs({ title: 'x' }, ATTENDEE), '');
+  assert.equal(buildMeetingCancelIcs({ id: 'x' }, ATTENDEE), '');
 });

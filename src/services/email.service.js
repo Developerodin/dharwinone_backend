@@ -928,11 +928,14 @@ const icsSequence = (updatedAt) => {
   return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
 };
 
+/** Stable calendar UID for a meeting row — must match frontend "Add to calendar" downloads. */
+const meetingIcsUid = (meetingId) => `meeting-${meetingId}@dharwin`;
+
 const buildMeetingIcs = (m, joinUrl, attendeeEmail) => {
   if (!m?.id || !m?.scheduledAt) return '';
   const organizerEmail = bareAddress(config.email.from);
   return buildIcsEvent({
-    uid: `meeting-${m.id}@dharwin`,
+    uid: meetingIcsUid(m.id),
     title: m.title || 'Meeting',
     // The join link belongs in the body too: Outlook renders LOCATION as plain text in some
     // views, and a calendar entry nobody can click through from is half an invite.
@@ -942,6 +945,31 @@ const buildMeetingIcs = (m, joinUrl, attendeeEmail) => {
     durationMinutes: m.durationMinutes || 60,
     organizerEmail,
     attendeeEmail,
+    sequence: icsSequence(m.updatedAt),
+  });
+};
+
+/**
+ * METHOD:CANCEL attachment — same UID and SEQUENCE as the original invite so Gmail/Outlook
+ * remove or mark the event cancelled instead of leaving a stale entry.
+ * @param {Object} m - { id, title, description, scheduledAt, durationMinutes, updatedAt }
+ * @param {string} attendeeEmail
+ * @returns {string}
+ */
+const buildMeetingCancelIcs = (m, attendeeEmail) => {
+  if (!m?.id || !m?.scheduledAt) return '';
+  const organizerEmail = bareAddress(config.email.from);
+  return buildIcsEvent({
+    uid: meetingIcsUid(m.id),
+    title: m.title || 'Meeting',
+    description: m.description || '',
+    location: '',
+    startAt: m.scheduledAt,
+    durationMinutes: m.durationMinutes || 60,
+    organizerEmail,
+    attendeeEmail,
+    method: 'CANCEL',
+    status: 'CANCELLED',
     sequence: icsSequence(m.updatedAt),
   });
 };
@@ -1096,6 +1124,77 @@ const sendMeetingInvitationEmail = async (to, payload) => {
     ? { icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: icsContent } }
     : {};
   await sendEmail(to, subject, text, html, 'meetingInvitation', metadata, extra);
+  return true;
+};
+
+/**
+ * @param {Object} payload
+ * @returns {{ subject: string, text: string, html: string }}
+ */
+const buildMeetingCancellationEmail = ({
+  title,
+  scheduledAt,
+  timezone,
+  durationMinutes,
+  inviteeName,
+  hostName,
+}) => {
+  const subject = `Cancelled: ${title || 'Dharwin meeting'}`;
+  const scheduled = formatDateTime(scheduledAt, timezone);
+  const duration = durationMinutes ? `${durationMinutes} minutes` : '';
+  const introLines = [
+    'A meeting you were invited to has been cancelled.',
+    'The attached calendar update removes it from your calendar if you added it from a prior invite.',
+    hostName ? `${hostName} was listed as the host.` : '',
+  ];
+  const detailRows = [
+    { label: 'Meeting', value: title || 'Meeting' },
+    { label: 'Was scheduled for', value: scheduled },
+    { label: 'Timezone', value: timezone || '' },
+    { label: 'Duration', value: duration },
+    { label: 'Host', value: hostName || '' },
+  ];
+  const text = buildPlainTextEmail({
+    title: 'Meeting cancelled',
+    greeting: inviteeName || 'there',
+    introLines,
+    detailRows,
+  });
+  const html = buildEmailHTML({
+    badgeText: 'Meeting cancelled',
+    title: title || 'Meeting cancelled',
+    greeting: inviteeName || 'there',
+    introLines,
+    detailRows,
+    preheader: scheduled ? `Cancelled — was ${scheduled}.` : 'This meeting was cancelled.',
+  });
+  return { subject, text, html };
+};
+
+/**
+ * Send meeting cancellation email with METHOD:CANCEL ICS.
+ * @param {string} to
+ * @param {Object} payload - same shape as invitation + icsContent
+ * @returns {Promise<boolean>}
+ */
+const sendMeetingCancellationEmail = async (to, payload) => {
+  const { shouldSendNotificationEmailToAddress } = await import('./notification.service.js');
+  const { icsContent, ...contentPayload } = payload;
+  const { subject, text, html } = buildMeetingCancellationEmail(contentPayload);
+  const metadata = compactMetadata({
+    title: contentPayload.title,
+    scheduled: formatDateTime(contentPayload.scheduledAt, contentPayload.timezone),
+    timezone: contentPayload.timezone,
+    hostName: contentPayload.hostName,
+  });
+  if (!(await shouldSendNotificationEmailToAddress(to, 'meeting'))) {
+    await logSuppressedEmail(to, subject, 'meetingCancellation', metadata);
+    return false;
+  }
+  const extra = icsContent
+    ? { icalEvent: { method: 'CANCEL', filename: 'cancel.ics', content: icsContent } }
+    : {};
+  await sendEmail(to, subject, text, html, 'meetingCancellation', metadata, extra);
   return true;
 };
 
@@ -1748,10 +1847,15 @@ export {
   sendCandidateAccountActivationEmail,
   sendMeetingInvitationEmail,
   buildMeetingInvitationEmail,
+  sendMeetingCancellationEmail,
+  buildMeetingCancellationEmail,
   buildMeetingJoiningPolicyTips,
   buildIcsEvent,
   buildSeriesIcs,
   buildMeetingIcs,
+  buildMeetingCancelIcs,
+  meetingIcsUid,
+  icsSequence,
   buildMeetingReminderEmail,
   sendMeetingReminderEmail,
   buildInterviewConclusionEmail,

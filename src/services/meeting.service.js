@@ -16,7 +16,7 @@ import { isExistingEmployee, isResignedEmployee } from '../utils/employeeStatus.
 import { createActivityLog } from './activityLog.service.js';
 import { writeAtsAudit } from './atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
-import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
+import { sendMeetingInvitationEmail, sendMeetingCancellationEmail, buildMeetingIcs, buildMeetingCancelIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import * as offerService from './offer.service.js';
 import { assertJobVacancyCapacity, queueJobOwnerVacancyFilledNotify } from './job.service.js';
@@ -380,6 +380,42 @@ const sendInvitationEmails = async (meeting, emails, { rescheduled = false } = {
         ...interviewMeetingNotificationFields(meeting, { name: inviteName, email: to }),
       }).catch(() => {});
     }).catch(() => {});
+  });
+};
+
+/**
+ * Send cancellation email + METHOD:CANCEL ICS so calendars drop the event.
+ * @param {Object} meeting
+ * @param {string[]} emails - lowercased recipient emails
+ */
+const sendCancellationEmails = async (meeting, emails) => {
+  const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);
+  emails.forEach((to) => {
+    const inviteName = resolveInviteeDisplayName(meeting, to);
+    const payload = {
+      title: meeting.title,
+      scheduledAt: meeting.scheduledAt,
+      timezone: meeting.timezone,
+      durationMinutes: meeting.durationMinutes,
+      inviteeName: inviteName,
+      hostName: meeting.recruiter?.name || meeting.hosts?.[0]?.nameOrRole || '',
+      interviewType: meeting.interviewType,
+      jobPosition: jobPositionDisplay,
+      icsContent: buildMeetingCancelIcs(
+        {
+          id: meeting.meetingId,
+          title: meeting.title,
+          description: meeting.description,
+          scheduledAt: meeting.scheduledAt,
+          durationMinutes: meeting.durationMinutes,
+          updatedAt: meeting.updatedAt,
+        },
+        to
+      ),
+    };
+    sendMeetingCancellationEmail(to, payload).catch((err) => {
+      logger.warn(`Failed to send meeting cancellation to ${to}:`, err?.message || err);
+    });
   });
 };
 
@@ -1022,6 +1058,8 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
     };
   }
   const previousScheduledAt = meeting.scheduledAt;
+  const previousDurationMinutes = meeting.durationMinutes;
+  const previousTitle = meeting.title;
   Object.assign(meeting, safeBody);
   // A moved meeting needs a fresh reminder. Without this the old T-15 already fired for a
   // time that no longer exists, and the new time is never reminded at all, because
@@ -1045,23 +1083,41 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   }
   await meeting.save();
 
-  // No re-spam on edit: newly-added invitees get a first invitation, everyone else stays quiet.
   const afterInviteEmails = getInvitationEmails(meeting);
-  const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
-  if (newlyAddedEmails.length) {
-    sendInvitationEmails(meeting, newlyAddedEmails).catch((err) => {
-      logger.warn('sendInvitationEmails failed:', err?.message || err);
-    });
-  }
-  // A moved start time is the one edit existing invitees must hear about: their calendar still
-  // holds the old slot and nothing else in the app corrects it. Same ICS UID with a higher
-  // SEQUENCE, so this updates that entry instead of adding a second one.
-  if (timeMoved) {
-    const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
-    if (existingEmails.length) {
-      sendInvitationEmails(meeting, existingEmails, { rescheduled: true }).catch((err) => {
-        logger.warn('sendInvitationEmails (reschedule) failed:', err?.message || err);
+  const cancelledNow = previousStatus !== 'cancelled' && meeting.status === 'cancelled';
+  const calendarChanged =
+    Number(previousDurationMinutes) !== Number(meeting.durationMinutes) ||
+    String(previousTitle || '') !== String(meeting.title || '');
+
+  if (cancelledNow) {
+    const cancelRecipients = new Set([...beforeInviteEmails, ...afterInviteEmails]);
+    if (cancelRecipients.size) {
+      sendCancellationEmails(meeting, [...cancelRecipients]).catch((err) => {
+        logger.warn('sendCancellationEmails failed:', err?.message || err);
       });
+    }
+  } else {
+    const removedEmails = [...beforeInviteEmails].filter((e) => !afterInviteEmails.includes(e));
+    if (removedEmails.length) {
+      sendCancellationEmails(meeting, removedEmails).catch((err) => {
+        logger.warn('sendCancellationEmails (removed invitee) failed:', err?.message || err);
+      });
+    }
+    // No re-spam on edit: newly-added invitees get a first invitation, everyone else stays quiet.
+    const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
+    if (newlyAddedEmails.length) {
+      sendInvitationEmails(meeting, newlyAddedEmails).catch((err) => {
+        logger.warn('sendInvitationEmails failed:', err?.message || err);
+      });
+    }
+    // A moved start time or other calendar fields (duration, title) must update existing entries.
+    if (timeMoved || calendarChanged) {
+      const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
+      if (existingEmails.length) {
+        sendInvitationEmails(meeting, existingEmails, { rescheduled: true }).catch((err) => {
+          logger.warn('sendInvitationEmails (reschedule) failed:', err?.message || err);
+        });
+      }
     }
   }
 
@@ -1157,6 +1213,9 @@ const resendMeetingInvitations = async (id, currentUser = null) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
   await assertMeetingInScope(meeting, currentUser);
+  if (meeting.status === 'cancelled') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot resend invitations for a cancelled meeting');
+  }
   const emails = getInvitationEmails(meeting);
   const scheduled = meeting.scheduledAt ? new Date(meeting.scheduledAt).toLocaleString() : 'TBD';
   const jobPositionDisplay = await resolveJobPositionDisplayTitle(meeting.jobPosition);

@@ -52,6 +52,7 @@ import {
   deleteCandidateDocument,
   listCandidateDocumentVersions,
   addCandidateDocumentVersion,
+  restoreCandidateDocumentVersion,
   getCandidateDocumentVersionDownloadUrl,
   deleteCandidateDocumentVersion,
 } from '../services/employee.service.js';
@@ -1018,6 +1019,35 @@ const addDocumentVersion = catchAsync(async (req, res) => {
   res.status(data?.created ? httpStatus.CREATED : httpStatus.OK).send({ success: true, data });
 });
 
+const restoreDocumentVersion = catchAsync(async (req, res) => {
+  req.user.canManageCandidates = canMutateDocumentVersion(req);
+  const data = await restoreCandidateDocumentVersion(
+    req.params.candidateId,
+    req.params.slot,
+    req.params.version,
+    req.user
+  );
+
+  await writeAtsAudit(
+    auditActorId(req),
+    {
+      action: ActivityActions.EMPLOYEE_DOCUMENT_VERSION_ADD,
+      entityType: EntityTypes.EMPLOYEE,
+      entityId: String(req.params.candidateId),
+      metadata: {
+        slot: data?.slot || req.params.slot,
+        version: data?.currentVersion ?? Number(req.params.version),
+        fileName: data?.version?.originalName || data?.version?.label || null,
+        restored: Boolean(data?.restored),
+      },
+    },
+    req,
+    { editContext: { selfService: !req.user.canManageCandidates, staffEdit: req.user.canManageCandidates } }
+  );
+
+  res.status(httpStatus.OK).send({ success: true, data });
+});
+
 const downloadDocumentVersion = catchAsync(async (req, res) => {
   const { candidateId, slot, version } = req.params;
   req.user.canManageCandidates = canViewDocumentVersions(req);
@@ -1250,6 +1280,7 @@ export {
   downloadDocument,
   listDocumentVersions,
   addDocumentVersion,
+  restoreDocumentVersion,
   downloadDocumentVersion,
   deleteDocumentVersion,
   downloadSalarySlip,
