@@ -88,7 +88,13 @@ const createJob = {
       .allow(null),
     minExperience: Joi.number().min(0).max(80).optional().allow(null),
     maxExperience: Joi.number().min(0).max(80).optional().allow(null),
-    vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
+    // Required, and no longer nullable: a job with no declared openings has no hiring cap at all,
+    // which is how a 1-vacancy job ended up with two hires. Closing a job is a status change.
+    vacancies: Joi.number().integer().min(1).max(10000).required().messages({
+      'any.required': 'Vacancies is required and must be at least 1.',
+      'number.min':
+        'Vacancies must be a whole number of 1 or more. Set the job status to Closed to stop hiring.',
+    }),
     applicationDeadline: Joi.date().iso().optional().allow(null),
     status: Joi.string()
       .valid('Draft', 'Active', 'Closed', 'Archived')
@@ -176,7 +182,12 @@ const updateJob = {
         .allow(null),
       minExperience: Joi.number().min(0).max(80).optional().allow(null),
       maxExperience: Joi.number().min(0).max(80).optional().allow(null),
-      vacancies: Joi.number().integer().min(1).max(10000).optional().allow(null),
+      // Optional so a partial update need not resend it, but it can no longer be cleared to null —
+      // that would strip an existing job's hiring cap.
+      vacancies: Joi.number().integer().min(1).max(10000).optional().messages({
+        'number.min':
+          'Vacancies must be a whole number of 1 or more. Set the job status to Closed to stop hiring.',
+      }),
       applicationDeadline: Joi.date().iso().optional().allow(null),
       status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
       templateId: Joi.string().custom(objectId).optional(),
