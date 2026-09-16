@@ -315,6 +315,18 @@ export async function connectWithTokens(userId, { accessToken, refreshToken, tok
 }
 
 /**
+ * Google token-endpoint errors that mean this account's grant is dead rather than the request
+ * being unlucky. `invalid_grant` is a revoked or expired refresh token; `unauthorized_client` is a
+ * token presented to an OAuth client that did not mint it. Neither is fixable by retrying, and
+ * neither is fixable by us — the account owner has to reconnect.
+ *
+ * Deliberately excludes `invalid_client`, which means OUR configured client id/secret is wrong.
+ * That is a server misconfiguration affecting every account at once, and parking them all would
+ * turn one bad secret into a mass re-consent.
+ */
+const DEAD_GRANT_REFRESH_ERRORS = new Set(['invalid_grant', 'unauthorized_client']);
+
+/**
  * Refresh access token if expired.
  */
 export async function refreshToken(account) {
@@ -323,7 +335,39 @@ export async function refreshToken(account) {
   oauth2Client.setCredentials({
     refresh_token: account.refreshToken,
   });
-  const { credentials } = await oauth2Client.refreshAccessToken();
+  let credentials;
+  try {
+    ({ credentials } = await oauth2Client.refreshAccessToken());
+  } catch (err) {
+    const code = String(err?.response?.data?.error || err?.message || '').trim();
+    if (DEAD_GRANT_REFRESH_ERRORS.has(code)) {
+      // This account's grant is gone for good: the user revoked it, or the refresh token was
+      // minted by an OAuth client that is no longer the configured one. oauthClientId is null on
+      // every account connected before that field existed, so we cannot even identify the right
+      // client to retry with — only the owner reconnecting can fix it.
+      //
+      // Parking the account is the point. The poller selects on status 'active' and swallows every
+      // failure with no backoff, so without this a dead grant is retried every 60 seconds forever —
+      // ~1,440 rejected token requests a day against Google, one warn line each, drowning the log.
+      // Reconnecting sets status back to 'active' (see handleCallback).
+      account.status = 'error';
+      await account.save().catch(() => {});
+      logger.warn(
+        '[Gmail] refresh rejected (%s) for account %s - parked as error; the owner must reconnect Gmail',
+        code,
+        String(account._id)
+      );
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Gmail access has expired — connect Gmail again.', true, '', {
+        subCode: 'gmail_reauth_required',
+      });
+    }
+    // Everything else — invalid_client, a 5xx, a network blip — is either transient or a
+    // server-side misconfiguration that is not this account's fault. Parking accounts over a bad
+    // client secret would force every user to reconnect once the secret was fixed, so leave the
+    // status alone and let the next tick retry.
+    logger.error('[Gmail] token refresh failed for account %s: %s', String(account._id), code || 'unknown error');
+    throw err;
+  }
   account.accessToken = credentials.access_token;
   if (credentials.expiry_date) account.tokenExpiry = new Date(credentials.expiry_date);
   await account.save();
