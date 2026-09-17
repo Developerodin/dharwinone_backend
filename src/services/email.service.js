@@ -228,7 +228,12 @@ const renderActionButtons = (actions = []) => {
     <div style="padding:8px 0 0 0;text-align:center;">
       ${validActions
         .map((action, index) => {
-          const bg = action.variant === 'secondary' ? '#0f766e' : '#2563eb';
+          const bg =
+            action.variant === 'secondary'
+              ? '#0f766e'
+              : action.variant === 'accent'
+                ? '#7c3aed'
+                : '#2563eb';
           return `<a href="${escapeHtml(action.href)}" style="display:inline-block;margin:${index === 0 ? '0 8px 8px 0' : '0 8px 8px 0'};padding:13px 24px;background-color:${bg};color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:700;">${escapeHtml(action.label)}</a>`;
         })
         .join('')}
@@ -348,6 +353,113 @@ const buildPlainTextEmail = ({
   if (outroLines.length) blocks.push(outroLines.filter(Boolean).join('\n'));
   if (footerLines.length) blocks.push(footerLines.filter(Boolean).join('\n'));
   return blocks.filter(Boolean).join('\n\n').trim();
+};
+
+const toAbsoluteFrontendUrl = (link) => {
+  if (!link) return '';
+  const raw = String(link).trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const base = getFrontendBaseUrl().replace(/\/$/, '');
+  return `${base}${raw.startsWith('/') ? raw : `/${raw}`}`;
+};
+
+/**
+ * Branded multipart content for in-app notifications that include a portal deep link.
+ * @returns {{ subject?: string, text: string, html: string }}
+ */
+const buildPortalNotificationEmail = ({
+  badgeText,
+  title,
+  message,
+  link,
+  recipientName,
+  preheader,
+  primaryActionLabel = 'Open in Dharwin',
+  subject,
+}) => {
+  const absLink = toAbsoluteFrontendUrl(link);
+  const introLines = message ? [message] : [];
+  const primaryAction = absLink ? { label: primaryActionLabel, href: absLink, variant: 'accent' } : null;
+  const text = buildPlainTextEmail({
+    title,
+    greeting: recipientName || undefined,
+    introLines,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText: badgeText || title || 'Notification',
+    title: title || badgeText || 'Notification',
+    greeting: recipientName || undefined,
+    introLines,
+    primaryAction,
+    fallbackUrl: absLink,
+    preheader: preheader || truncateText(message || title || '', 120),
+  });
+  return { subject, text, html };
+};
+
+/**
+ * Job owner alert when all declared vacancies are filled (hire path + auto-close tick).
+ * @returns {{ subject: string, text: string, html: string }}
+ */
+const buildJobVacanciesFilledEmail = ({
+  jobTitle,
+  vacancies,
+  autoCloseDays = 2,
+  link,
+  recipientName,
+}) => {
+  const title = jobTitle || 'Job posting';
+  const subject = `Vacancies filled: ${title}`;
+  const absLink = toAbsoluteFrontendUrl(link);
+  const count = vacancies != null ? String(vacancies) : '—';
+  const introLines = [
+    `All ${count} opening(s) on "${title}" are now filled.`,
+    'Increase the vacancy count to keep hiring, or close the job post when you are done.',
+  ];
+  const detailRows = [
+    { label: 'Job', value: title },
+    { label: 'Openings filled', value: count },
+    { label: 'Auto-close if unchanged', value: `${autoCloseDays} day(s)` },
+  ];
+  const sections = [
+    {
+      title: 'What happens next',
+      tone: 'warning',
+      bulletItems: [
+        `If you leave the posting as is, it closes automatically in ${autoCloseDays} day(s).`,
+        'Raising the vacancy count reopens hiring and resets this reminder for the new capacity.',
+      ],
+    },
+    {
+      title: 'All openings filled',
+      tone: 'success',
+      bodyLines: ['Your hiring target for this posting has been reached. Review the pipeline or adjust capacity from the job editor.'],
+    },
+  ];
+  const primaryAction = absLink
+    ? { label: 'Manage job posting', href: absLink, variant: 'accent' }
+    : null;
+  const text = buildPlainTextEmail({
+    title: 'Job vacancies filled',
+    greeting: recipientName || 'there',
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+  });
+  const html = buildEmailHTML({
+    badgeText: 'Vacancies filled',
+    title: 'Job vacancies filled',
+    greeting: recipientName || 'there',
+    introLines,
+    detailRows,
+    sections,
+    primaryAction,
+    fallbackUrl: absLink,
+    preheader: `All openings on "${title}" are filled. Manage the posting or it auto-closes in ${autoCloseDays} day(s).`,
+  });
+  return { subject, text, html };
 };
 
 /**
@@ -1840,6 +1952,8 @@ export {
   /** Shared branded wrapper — same layout as reset password / verification emails */
   buildEmailHTML,
   buildPlainTextEmail,
+  buildPortalNotificationEmail,
+  buildJobVacanciesFilledEmail,
   sendResetPasswordEmail,
   sendVerificationEmail,
   sendCandidateInvitationEmail,

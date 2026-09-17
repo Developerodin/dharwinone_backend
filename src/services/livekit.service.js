@@ -11,7 +11,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { getMeetingByMeetingId } from './meetingLookup.service.js';
+import { findRoomMeetingDocument, getMeetingByMeetingId } from './meetingLookup.service.js';
 import Recording from '../models/recording.model.js';
 import Meeting from '../models/meeting.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
@@ -488,8 +488,12 @@ const generateAccessToken = async ({
   if (meeting && !roomName.startsWith('chat-') && effectiveIdentity) {
     try {
       const { syncParticipantRosterForToken } = await import('./participantRoster.service.js');
+      const roomDoc = await findRoomMeetingDocument(roomName);
+      if (!roomDoc?.meeting) {
+        throw new Error('meeting document not found for roster sync');
+      }
       await syncParticipantRosterForToken({
-        meeting,
+        meeting: roomDoc.meeting,
         identity: effectiveIdentity,
         displayName: participantName,
         participantEmail,
