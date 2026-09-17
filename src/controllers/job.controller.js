@@ -42,11 +42,40 @@ import User from '../models/user.model.js';
 import * as activityLogService from '../services/activityLog.service.js';
 import { persistAtsAudit, writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
+/**
+ * A job's rubric assignments are interview configuration that happens to live on a job
+ * document, so `jobs.manage` alone must not set them (audit J11). The job form hides the
+ * editor for such a user; this is what makes that a boundary rather than a decoration.
+ *
+ * Silently stripping the key was the alternative and is worse: the user would see a saved
+ * job and believe the rubric took effect.
+ *
+ * hasOwnProperty, not truthiness — `rubricAssignments: []` is a WRITE that removes a job's
+ * rubrics, and must be gated exactly like setting them.
+ *
+ * @param {import('express').Request} req
+ */
+const assertMayWriteRubricAssignments = async (req) => {
+  if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'rubricAssignments')) return;
+  const allowed = await hasApiPermission(req.user, 'interviews.manage');
+  if (!allowed) {
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'Interview scoring can only be changed by someone with interview management access.',
+      true,
+      '',
+      { errorCode: 'rubric_requires_interview_access' }
+    );
+  }
+};
+
 // Job CRUD
 const create = catchAsync(async (req, res) => {
+  await assertMayWriteRubricAssignments(req);
   const createdById = req.user.id || req.user._id;
   const job = await createJob(createdById, req.body);
 
@@ -146,6 +175,7 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
+  await assertMayWriteRubricAssignments(req);
   const job = await updateJobById(req.params.jobId, req.body, req.user);
   const jid = job?._id ?? job?.id ?? req.params.jobId;
   await writeAtsAudit(

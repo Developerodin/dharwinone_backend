@@ -27,6 +27,7 @@
   "./src/controllers/__tests__/activityLog.exportExcel.controller.test.js",
   "./src/controllers/__tests__/activityLog.resolveFilter.test.js",
   "./src/controllers/__tests__/job.exportExcel.controller.test.js",
+  "./src/controllers/__tests__/jobRubricPermission.test.js",
   "./src/controllers/__tests__/salesAgentAttribution.controller.test.js",
   "./src/controllers/__tests__/salesAgentAttribution.flagOff.test.js",
   "./src/controllers/__tests__/teamExcel.controller.test.js",
