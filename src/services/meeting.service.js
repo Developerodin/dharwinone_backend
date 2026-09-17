@@ -1067,15 +1067,16 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   } else if ('durationMinutes' in safeBody) {
     delete safeBody.durationMinutes;
   }
-  // Rubric authorship is server-owned: a client can send ratings/comment, never who scored or when.
-  // Stamped on every scorecard write so a later reader sees who owns the score set currently stored.
-  if (safeBody.interviewScorecard) {
-    safeBody.interviewScorecard = {
-      ratings: safeBody.interviewScorecard.ratings || [],
-      comment: safeBody.interviewScorecard.comment || '',
-      scoredBy: userId || meeting.createdBy || null,
-      scoredAt: new Date(),
-    };
+  /**
+   * The single embedded scorecard is READ-ONLY as of the per-interviewer evaluation
+   * model. Writing it destroyed every earlier evaluation on the round (audit R1), and an
+   * empty object coerced to `ratings: []` wiped a real one (audit R5).
+   *
+   * Existing rows still render, labelled as legacy, in the round history. New scores go
+   * to PUT /v1/meetings/:id/evaluation.
+   */
+  if ('interviewScorecard' in safeBody) {
+    delete safeBody.interviewScorecard;
   }
   const previousScheduledAt = meeting.scheduledAt;
   const previousDurationMinutes = meeting.durationMinutes;

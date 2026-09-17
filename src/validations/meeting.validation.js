@@ -242,7 +242,13 @@ const updateMeeting = {
       notes: Joi.string().allow('', null).trim(),
       status: Joi.string().valid(...INTERVIEW_STATUSES),
       interviewResult: Joi.string().valid(...INTERVIEW_RESULTS),
-      interviewScorecard: interviewScorecardSchema,
+      // Read-only since evaluations moved to one document per interviewer. Rejected with
+      // a message rather than silently ignored, so a stale client fails loudly instead of
+      // appearing to save. New scores: PUT /meetings/:id/evaluation.
+      interviewScorecard: Joi.any().forbidden().messages({
+        'any.unknown':
+          'Interview scores are now saved per interviewer. Use the evaluation endpoint instead.',
+      }),
     })
     .min(1),
 };
