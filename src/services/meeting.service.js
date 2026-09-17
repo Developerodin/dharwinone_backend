@@ -1928,6 +1928,19 @@ const patchMeetingLinkage = async (id, body, userId, currentUser) => {
     if (meetingCand && linkage.candidateId && String(linkage.candidateId) !== String(meetingCand)) {
       throw new ApiError(httpStatus.BAD_REQUEST, 'Application candidate does not match interview candidate');
     }
+    // An interview linked after the fact joined the application's history with no round
+    // number: it sorted last whenever it happened, and it inflated the old count so the
+    // next scheduled round skipped a number (audit M5). Allocate one now, unless this
+    // PATCH supplies a round explicitly or the meeting already has an index.
+    const linkingToNewApplication =
+      String(linkage.applicationId || '') !== String(meeting.applicationId || '');
+    if (linkingToNewApplication && updates.round?.index == null && meeting.round?.index == null) {
+      const allocatedIndex = await allocateRoundIndex(linkage.applicationId);
+      if (allocatedIndex != null) {
+        const existingRound = updates.round || meeting.round?.toObject?.() || meeting.round || {};
+        updates.round = { ...existingRound, index: allocatedIndex };
+      }
+    }
     updates.applicationId = linkage.applicationId;
     updates.jobId = linkage.jobId;
     updates.candidateId = linkage.candidateId;
