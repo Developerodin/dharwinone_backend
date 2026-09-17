@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import RubricTemplate from '../models/rubricTemplate.model.js';
+import Job from '../models/job.model.js';
 import ApiError from '../utils/ApiError.js';
 import { DEFAULT_RUBRIC_CRITERIA, criteriaWeightError } from '../constants/interviewRubric.js';
 
@@ -14,37 +15,31 @@ const plainCriteria = (criteria) =>
     scaleMax: Number(c.scaleMax ?? 5),
   }));
 
-const sameId = (a, b) => Boolean(a) && Boolean(b) && String(a) === String(b);
-
 /**
  * Pick the most specific template for a round. PURE — no database, so the precedence
  * rule is testable on its own and the DB query stays a plain "every live template that
  * could apply" fetch.
  *
- * Specificity: job+type 3, job 2, type 1, default 0. A template targeting a DIFFERENT
- * job or a DIFFERENT round type is not a candidate at all, which is why this cannot be
- * expressed as a sort alone.
+ * Job targeting moved to Job.rubricAssignments (audit J1). Only round-type targeting and
+ * the house default remain here: type 1, default 0. A template targeting a DIFFERENT
+ * round type is not a candidate at all.
  *
  * @param {Array<object>} templates
- * @param {{jobId?: string|null, roundType?: string|null}} target
+ * @param {{roundType?: string|null}} target
  * @returns {object|null}
  */
-export const pickMostSpecificTemplate = (templates, { jobId, roundType } = {}) => {
+export const pickMostSpecificTemplate = (templates, { roundType } = {}) => {
   const list = Array.isArray(templates) ? templates : [];
   let best = null;
   let bestScore = -1;
 
   for (const template of list) {
-    const tJob = template?.appliesTo?.jobId ?? null;
     const tType = template?.appliesTo?.roundType ?? null;
 
-    if (tJob && !sameId(tJob, jobId)) continue;
     if (tType && tType !== roundType) continue;
 
     let score;
-    if (tJob && tType) score = 3;
-    else if (tJob) score = 2;
-    else if (tType) score = 1;
+    if (tType) score = 1;
     else if (template?.isDefault) score = 0;
     else continue; // untargeted and not the default — never auto-applies
 
@@ -58,23 +53,80 @@ export const pickMostSpecificTemplate = (templates, { jobId, roundType } = {}) =
 };
 
 /**
- * Resolve the rubric a round should be scored against.
+ * Pick a job's assignment for a round. PURE — no database, so the precedence rule is
+ * testable on its own.
  *
- * Falls back to DEFAULT_RUBRIC_CRITERIA so an install that has configured nothing still
- * gets a real weighted form rather than an empty one.
+ * A row naming this round type wins; otherwise the job's `roundType: null` default applies.
+ * If the job has neither, this returns null and resolution falls through to the template
+ * rungs — including for a round with no type at all, which only the default row can
+ * cover (audit J7).
+ *
+ * @param {Array<object>} assignments - Job.rubricAssignments
+ * @param {string|null} roundType
+ * @returns {object|null}
+ */
+export const pickJobAssignment = (assignments, roundType) => {
+  const rows = Array.isArray(assignments) ? assignments : [];
+  if (!rows.length) return null;
+  if (roundType) {
+    const exact = rows.find((r) => r?.roundType === roundType);
+    if (exact) return exact;
+  }
+  return rows.find((r) => (r?.roundType ?? null) === null) || null;
+};
+
+/**
+ * Resolve the rubric a round should be scored against, most specific first:
+ *
+ *   1. the job's assignment for this round type
+ *   2. the job's default assignment
+ *   3. a template targeting this round type
+ *   4. the template flagged isDefault
+ *   5. DEFAULT_RUBRIC_CRITERIA in code
+ *
+ * The first rung that matches wins and nothing below it is consulted. Rungs 1–2 come from
+ * the job; `appliesTo.jobId` is deliberately NOT consulted any more, so a job's rubric has
+ * exactly one place to be set (audit J1).
+ *
+ * A row pointing at a template resolves that template even when it is archived: a job
+ * deliberately assigned a rubric must not silently fall back to the house default because
+ * someone tidied up. Archiving a referenced template is refused separately (audit J3).
  *
  * @param {{jobId?: string|null, roundType?: string|null}} target
  * @returns {Promise<{templateId: mongoose.Types.ObjectId|null, templateName: string, criteria: Array<object>}>}
  */
 export const resolveRubricForRound = async ({ jobId = null, roundType = null } = {}) => {
-  const or = [{ isDefault: true }];
-  if (roundType) or.push({ 'appliesTo.roundType': roundType });
   if (jobId && mongoose.Types.ObjectId.isValid(jobId)) {
-    or.push({ 'appliesTo.jobId': new mongoose.Types.ObjectId(jobId) });
+    const job = await Job.findById(jobId).select('rubricAssignments').lean();
+    const assignment = pickJobAssignment(job?.rubricAssignments, roundType);
+
+    if (assignment?.criteria?.length) {
+      return {
+        templateId: null,
+        templateName: 'Custom for this job',
+        criteria: plainCriteria(assignment.criteria),
+      };
+    }
+
+    if (assignment?.templateId) {
+      const template = await RubricTemplate.findById(assignment.templateId).lean();
+      if (template) {
+        return {
+          templateId: template._id,
+          templateName: template.name,
+          criteria: plainCriteria(template.criteria),
+        };
+      }
+      // The template is gone entirely. Fall through rather than throw — a dangling
+      // reference must not stop an interview being scheduled.
+    }
   }
 
+  const or = [{ isDefault: true }];
+  if (roundType) or.push({ 'appliesTo.roundType': roundType });
+
   const candidates = await RubricTemplate.find({ archivedAt: null, $or: or }).lean();
-  const picked = pickMostSpecificTemplate(candidates, { jobId, roundType });
+  const picked = pickMostSpecificTemplate(candidates, { roundType });
 
   if (!picked) {
     return {

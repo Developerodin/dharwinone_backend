@@ -153,6 +153,7 @@
   "./src/services/__tests__/shift.queryShifts.test.js",
   "./src/services/__tests__/referralLeadsQueryBuilder.test.js",
   "./src/services/__tests__/rubricResolution.test.js",
+  "./src/services/__tests__/jobRubricResolution.test.js",
   "./src/services/__tests__/reminderDispatcher.test.js",
   "./src/services/__tests__/salesAgentAttribution.assign.test.js",
   "./src/services/__tests__/salesAgentAttribution.change.test.js",
