@@ -142,6 +142,18 @@ const meetingSchema = mongoose.Schema(
         enum: INTERVIEW_ROUND_TYPES,
       },
       label: { type: String, trim: true },
+      /**
+       * The key of the JobApplication.roundPlanSnapshot row this round was scheduled
+       * against. Null for a round with no plan in force, and for an ad-hoc round the
+       * recruiter added outside the plan — both are legitimate and neither blocks
+       * completion; they are reported as off-plan instead (audit R6).
+       *
+       * Stored, never derived. round.index cannot stand in for it: the index keeps
+       * climbing when a round is cancelled and rebooked, so a 3-round plan can end up
+       * holding rounds numbered 1 and 3, and any index-based matching then mis-reports
+       * that application's progress permanently.
+       */
+      planKey: { type: String, default: null },
     },
     interviewLanguage: {
       type: String,

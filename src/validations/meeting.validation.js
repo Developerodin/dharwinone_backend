@@ -113,6 +113,7 @@ const createMeeting = {
             )
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
+          planKey: Joi.string().trim().max(40).allow(null, ''),
         })
         .optional(),
     })
@@ -321,6 +322,7 @@ const patchMeetingLinkage = {
             )
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
+          planKey: Joi.string().trim().max(40).allow(null, ''),
         })
         .optional(),
       expectedRevision: Joi.number().integer().min(0).required(),

@@ -38,6 +38,7 @@ import {
   deriveSchedulingLinkage,
   assertInterviewLanguage,
   allocateRoundIndex,
+  ensureRoundPlanSnapshot,
   resolveInterviewApplication,
   normalizeLinkageStatus,
   linkageRevisionQuery,
@@ -491,6 +492,57 @@ const createMeeting = async (body, userId) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
   }
 
+  /**
+   * Freeze the application's round sequence, then decide which row this round fills.
+   *
+   * An explicit planKey from the caller wins — the schedule form sends the row the
+   * recruiter picked. With none, fall to the first planned row that has no live round yet,
+   * so the common case needs no input at all.
+   *
+   * A snapshot failure must not block scheduling an interview: the round is booked with
+   * planKey null, reads as off-plan, and is recoverable by PATCHing the round later.
+   */
+  if (linkage.applicationId) {
+    try {
+      const planRounds = await ensureRoundPlanSnapshot(
+        linkage.applicationId,
+        linkage.jobId ? String(linkage.jobId) : null
+      );
+      if (planRounds.length) {
+        let planKey = round?.planKey ? String(round.planKey) : null;
+        if (planKey && !planRounds.some((r) => r.key === planKey)) planKey = null;
+
+        if (!planKey) {
+          const held = await Meeting.find({
+            applicationId: linkage.applicationId,
+            status: { $ne: 'cancelled' },
+            'round.planKey': { $ne: null },
+          })
+            .select('round.planKey')
+            .lean();
+          const taken = new Set(held.map((m) => String(m.round?.planKey || '')));
+          planKey = planRounds.find((r) => !taken.has(r.key))?.key || null;
+        }
+
+        const row = planRounds.find((r) => r.key === planKey) || null;
+        round = {
+          ...(round || {}),
+          planKey,
+          // The plan names the round unless the caller said otherwise. Two rounds of the
+          // same type are only distinguishable by their label, so losing it loses the
+          // distinction the plan exists to express.
+          ...(row && !round?.label ? { label: row.label } : {}),
+          ...(row?.roundType && !round?.type ? { type: row.roundType } : {}),
+        };
+      }
+    } catch (err) {
+      logger.warn('[createMeeting] round plan snapshot failed; round scheduled off-plan', {
+        applicationId: String(linkage.applicationId),
+        error: err?.message || String(err),
+      });
+    }
+  }
+
   // Resolve once and pin a copy: see Meeting.rubricSnapshot. A resolution failure must
   // not block scheduling an interview, so it degrades to no snapshot and readers fall
   // back to the default criteria.
@@ -499,11 +551,12 @@ const createMeeting = async (body, userId) => {
     const resolved = await resolveRubricForRound({
       jobId: linkage.jobId ? String(linkage.jobId) : null,
       roundType: round?.type || null,
+      planKey: round?.planKey || null,
     });
     rubricSnapshot = { ...resolved, capturedAt: new Date() };
   } catch (err) {
     logger.warn('[createMeeting] rubric resolution failed; round scheduled without a snapshot', {
-      err: err?.message || err,
+      error: err?.message || String(err),
     });
     rubricSnapshot = undefined;
   }
