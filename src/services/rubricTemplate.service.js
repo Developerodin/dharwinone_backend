@@ -255,7 +255,11 @@ export const updateRubricTemplate = async (id, body, userId) => {
  */
 export const jobsUsingTemplate = async (templateId, limit = 25) => {
   if (!templateId || !mongoose.Types.ObjectId.isValid(templateId)) return [];
-  const rows = await Job.find({ 'rubricAssignments.templateId': templateId })
+  // Both arrays: interviewRounds is the write target, rubricAssignments is still read as
+  // the resolver's fallback rung, so a template named by either is genuinely in use.
+  const rows = await Job.find({
+    $or: [{ 'rubricAssignments.templateId': templateId }, { 'interviewRounds.templateId': templateId }],
+  })
     .select('title')
     .limit(limit)
     .lean();
@@ -282,10 +286,27 @@ export const countJobsByTemplate = async (templateIds) => {
   if (!ids.length) return counts;
 
   const rows = await Job.aggregate([
-    { $match: { 'rubricAssignments.templateId': { $in: ids } } },
-    { $unwind: '$rubricAssignments' },
-    { $match: { 'rubricAssignments.templateId': { $in: ids } } },
-    { $group: { _id: '$rubricAssignments.templateId', jobs: { $addToSet: '$_id' } } },
+    {
+      $match: {
+        $or: [
+          { 'rubricAssignments.templateId': { $in: ids } },
+          { 'interviewRounds.templateId': { $in: ids } },
+        ],
+      },
+    },
+    {
+      $project: {
+        rows: {
+          $concatArrays: [
+            { $ifNull: ['$rubricAssignments', []] },
+            { $ifNull: ['$interviewRounds', []] },
+          ],
+        },
+      },
+    },
+    { $unwind: '$rows' },
+    { $match: { 'rows.templateId': { $in: ids } } },
+    { $group: { _id: '$rows.templateId', jobs: { $addToSet: '$_id' } } },
   ]);
 
   for (const row of rows) {
