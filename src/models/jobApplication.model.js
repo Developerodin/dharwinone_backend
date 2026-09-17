@@ -39,6 +39,16 @@ const jobApplicationSchema = new mongoose.Schema(
     appliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     /** P3: explicit tenant boundary. Denormalized from job.tenantId at creation time. */
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    /**
+     * Monotonic allocator for Meeting.round.index on this application. Only ever
+     * incremented — a cancelled round's number is never reissued, so two live
+     * rounds can never share an index (audit M3).
+     *
+     * 0 / missing means "never allocated". allocateRoundIndex seeds it once from the
+     * highest index already present on this application's meetings, so applications
+     * that predate this field keep numbering where their history left off.
+     */
+    roundCounter: { type: Number, default: 0 },
     notes: { type: String, trim: true },
     // Bolna verification call fields
     verificationCallExecutionId: { type: String, trim: true, index: true, sparse: true },

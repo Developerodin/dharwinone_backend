@@ -110,6 +110,7 @@
   "./src/services/__tests__/finalizeSummary.orchestrator.test.js",
   "./src/services/__tests__/holiday.queryHolidays.test.js",
   "./src/services/__tests__/internalMeeting.reminders.test.js",
+  "./src/services/__tests__/interviewRoundIndex.test.js",
   "./src/services/__tests__/job.applicationNotification.test.js",
   "./src/services/__tests__/publicApplyEntryMode.test.js",
   "./src/services/__tests__/publicApplyRollback.test.js",

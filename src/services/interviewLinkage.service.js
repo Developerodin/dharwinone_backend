@@ -168,6 +168,48 @@ export function assertInterviewLanguage(language) {
   return lang;
 }
 
+/**
+ * Allocate the next round index for an application.
+ *
+ * Counting live meetings (the old defaultRoundIndexForApplication) reissued a number
+ * after a cancellation and collided under concurrency. This increments a persisted
+ * counter instead, so the only shared step is an atomic $inc.
+ *
+ * The seed pass reads the highest index EVER used, cancelled rounds included. If two
+ * processes seed at once they compute the same value, and the $inc that follows is
+ * atomic either way.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} applicationId
+ * @returns {Promise<number|null>} the allocated index, or null when the application is gone
+ */
+export async function allocateRoundIndex(applicationId) {
+  if (!applicationId) return null;
+  const current = await JobApplication.findById(applicationId).select('roundCounter').lean();
+  if (!current) return null;
+
+  if (!Number(current.roundCounter)) {
+    const [highest] = await Meeting.find({ applicationId })
+      .sort({ 'round.index': -1 })
+      .limit(1)
+      .select('round.index')
+      .lean();
+    const seed = Number(highest?.round?.index) || 0;
+    if (seed > 0) {
+      await JobApplication.updateOne(
+        { _id: applicationId, $or: [{ roundCounter: { $lte: 0 } }, { roundCounter: { $exists: false } }] },
+        { $set: { roundCounter: seed } }
+      );
+    }
+  }
+
+  const bumped = await JobApplication.findByIdAndUpdate(
+    applicationId,
+    { $inc: { roundCounter: 1 } },
+    { new: true, select: 'roundCounter' }
+  ).lean();
+  return Number(bumped?.roundCounter) || null;
+}
+
 export async function defaultRoundIndexForApplication(applicationId) {
   const count = await Meeting.countDocuments({
     applicationId,
