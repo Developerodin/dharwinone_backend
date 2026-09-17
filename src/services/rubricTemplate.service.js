@@ -78,11 +78,11 @@ export const pickJobAssignment = (assignments, roundType) => {
 /**
  * Resolve the rubric a round should be scored against, most specific first:
  *
- *   1. the job's assignment for this round type
- *   2. the job's default assignment
- *   3. a template targeting this round type
- *   4. the template flagged isDefault
- *   5. DEFAULT_RUBRIC_CRITERIA in code
+ *   1. the job's plan row whose `key === planKey` — its own criteria, then its template
+ *   2. the job's `rubricAssignments` row for this round type, then the job default row
+ *   3. a template whose `appliesTo.roundType` matches
+ *   4. the template marked `isDefault`
+ *   5. `DEFAULT_RUBRIC_CRITERIA` in code
  *
  * The first rung that matches wins and nothing below it is consulted. Rungs 1–2 come from
  * the job; `appliesTo.jobId` is deliberately NOT consulted any more, so a job's rubric has
@@ -92,12 +92,49 @@ export const pickJobAssignment = (assignments, roundType) => {
  * deliberately assigned a rubric must not silently fall back to the house default because
  * someone tidied up. Archiving a referenced template is refused separately (audit J3).
  *
- * @param {{jobId?: string|null, roundType?: string|null}} target
+ * @param {{jobId?: string|null, roundType?: string|null, planKey?: string|null}} target
  * @returns {Promise<{templateId: mongoose.Types.ObjectId|null, templateName: string, criteria: Array<object>}>}
  */
-export const resolveRubricForRound = async ({ jobId = null, roundType = null } = {}) => {
+export const resolveRubricForRound = async ({ jobId = null, roundType = null, planKey = null } = {}) => {
   if (jobId && mongoose.Types.ObjectId.isValid(jobId)) {
-    const job = await Job.findById(jobId).select('rubricAssignments').lean();
+    const job = await Job.findById(jobId).select('rubricAssignments interviewRounds').lean();
+
+    /**
+     * Rung 1 — the plan row this round was scheduled against (audit R1/R6).
+     *
+     * Matched on the frozen planKey, never on round type or position: a round type can
+     * legitimately repeat across the plan, and an index shifts whenever a round is
+     * cancelled and rebooked.
+     *
+     * A planKey that matches no row falls through rather than throwing. The row can be
+     * deleted from the job after a round was already held against it, and that must not
+     * stop the next round being scheduled.
+     */
+    if (planKey) {
+      const row = (job?.interviewRounds || []).find((r) => String(r.key) === String(planKey));
+      if (row?.criteria?.length) {
+        return {
+          templateId: null,
+          templateName: 'Custom for this round',
+          criteria: plainCriteria(row.criteria),
+        };
+      }
+      if (row?.templateId) {
+        const template = await RubricTemplate.findById(row.templateId).lean();
+        if (template) {
+          return {
+            templateId: template._id,
+            templateName: template.name,
+            criteria: plainCriteria(template.criteria),
+          };
+        }
+        // The template is gone entirely. Fall through — a dangling reference must not
+        // stop an interview being scheduled.
+      }
+    }
+
+    // Rung 2 — legacy: the round-type-keyed assignments this field replaced. Kept so
+    // every job that has not been re-saved on the new form keeps resolving (D2).
     const assignment = pickJobAssignment(job?.rubricAssignments, roundType);
 
     if (assignment?.criteria?.length) {
