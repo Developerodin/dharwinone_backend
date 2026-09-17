@@ -122,6 +122,7 @@
   "./src/services/__tests__/job.exportExcel.test.js",
   "./src/services/__tests__/job.queryJobs.caseInsensitiveFilter.test.js",
   "./src/services/__tests__/job.serverPagination.test.js",
+  "./src/validations/__tests__/job.rubricAssignments.validation.test.js",
   "./src/validations/__tests__/job.serverPagination.validation.test.js",
   "./src/services/__tests__/livekit.accessGates.test.js",
   "./src/services/__tests__/meeting.conclusion.test.js",
