@@ -37,7 +37,7 @@ import {
 import {
   deriveSchedulingLinkage,
   assertInterviewLanguage,
-  defaultRoundIndexForApplication,
+  allocateRoundIndex,
   resolveInterviewApplication,
   normalizeLinkageStatus,
   linkageRevisionQuery,
@@ -483,7 +483,8 @@ const createMeeting = async (body, userId) => {
   const interviewLanguage = assertInterviewLanguage(body.interviewLanguage);
   let round = body.round;
   if (linkage.applicationId && (!round || round.index == null)) {
-    round = { ...(round || {}), index: await defaultRoundIndexForApplication(linkage.applicationId) };
+    // Counter-allocated, never count-derived: see allocateRoundIndex (audit M3/M4).
+    round = { ...(round || {}), index: await allocateRoundIndex(linkage.applicationId) };
   }
   if (round?.type && !INTERVIEW_ROUND_TYPES.includes(round.type)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
