@@ -278,6 +278,7 @@
   "./src/utils/__tests__/bolnaAgentTemplateSync.test.js",
   "./src/utils/__tests__/callSource.test.js",
   "./src/utils/__tests__/candidateApplicationInterviewResult.test.js",
+  "./src/utils/__tests__/interviewResultOrdering.test.js",
   "./src/utils/__tests__/candidateExportCsv.docs.test.js",
   "./src/utils/__tests__/candidateExportXlsx.test.js",
   "./src/utils/__tests__/candidateExcelContract.test.js",
