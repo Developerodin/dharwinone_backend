@@ -354,5 +354,6 @@
   "./src/utils/__tests__/bolnaAgentPromptLock.test.js",
   "./src/services/__tests__/jobVacancyCapacity.test.js",
   "./src/services/__tests__/applicationOffer.service.test.js",
-  "./src/services/__tests__/interviewRoundPlan.test.js"
+  "./src/services/__tests__/interviewRoundPlan.test.js",
+  "./src/services/__tests__/interviewRoundProgress.test.js"
 ]

@@ -1,6 +1,8 @@
 import httpStatus from 'http-status';
 import Meeting from '../models/meeting.model.js';
+import JobApplication from '../models/jobApplication.model.js';
 import ApiError from '../utils/ApiError.js';
+import { computeRoundProgress, roundProgressLabel } from './interviewRoundProgress.service.js';
 import { meetingScope } from './visibilityScope.service.js';
 import { criteriaForMeeting, listEvaluationsForMeetings } from './interviewEvaluation.service.js';
 
@@ -224,5 +226,16 @@ export const getRoundHistoryForApplication = async (applicationId, currentUser) 
     };
   });
 
-  return { applicationId: String(applicationId), summary: summariseRounds(rounds), rounds };
+  const application = await JobApplication.findById(applicationId).select('roundPlanSnapshot').lean();
+  const progress = computeRoundProgress({
+    planRounds: application?.roundPlanSnapshot?.rounds || [],
+    meetings,
+  });
+
+  return {
+    applicationId: String(applicationId),
+    summary: summariseRounds(rounds),
+    progress: { ...progress, label: roundProgressLabel(progress) },
+    rounds,
+  };
 };
