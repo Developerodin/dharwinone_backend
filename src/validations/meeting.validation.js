@@ -327,6 +327,12 @@ const createMeetingApplication = {
 };
 
 // Public: end meeting when host leaves (body: roomName, hostEmail)
+const getRoundHistory = {
+  query: Joi.object().keys({
+    applicationId: Joi.string().hex().length(24).required(),
+  }),
+};
+
 const endMeetingByRoomPublic = {
   body: Joi.object()
     .keys({
@@ -353,4 +359,5 @@ export {
   getMeetingLinkage,
   patchMeetingLinkage,
   createMeetingApplication,
+  getRoundHistory,
 };

@@ -9,6 +9,7 @@ import * as meetingExcelController from '../../controllers/meetingExcel.controll
 import * as interviewTranscriptController from '../../controllers/interviewTranscript.controller.js';
 import * as interviewEvaluationValidation from '../../validations/interviewEvaluation.validation.js';
 import interviewRubricEvaluationValidation from '../../validations/interviewRubricEvaluation.validation.js';
+import interviewRoundController from '../../controllers/interviewRound.controller.js';
 
 const router = express.Router();
 
@@ -30,6 +31,16 @@ router.post(
   validate(meetingValidation.exportMeetings),
   meetingExcelController.exportExcel
 );
+
+// Round history for one application. MUST be before /:id so "rounds" is not read as an id.
+router
+  .route('/rounds')
+  .get(
+    auth(),
+    requirePermissions('interviews.read'),
+    validate(meetingValidation.getRoundHistory),
+    interviewRoundController.getRoundHistory
+  );
 
 router
   .route('/:id/resend-invitations')

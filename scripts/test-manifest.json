@@ -82,6 +82,7 @@
   "./src/services/__tests__/applicantQuery.scheduleEligible.test.js",
   "./src/services/__tests__/meeting.scheduleEligibility.test.js",
   "./src/services/__tests__/interviewEvaluationRatings.test.js",
+  "./src/services/__tests__/interviewRoundHistory.test.js",
   "./src/services/__tests__/jobApplication.statusGuard.test.js",
   "./src/services/__tests__/aiArtifactStorage.test.js",
   "./src/services/__tests__/atsAnalytics.service.test.js",
