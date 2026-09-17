@@ -45,6 +45,7 @@ import {
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
+import { resolveRubricForRound } from './rubricTemplate.service.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 /** Minutes before the start that an interview reminder becomes due. */
@@ -490,6 +491,23 @@ const createMeeting = async (body, userId) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
   }
 
+  // Resolve once and pin a copy: see Meeting.rubricSnapshot. A resolution failure must
+  // not block scheduling an interview, so it degrades to no snapshot and readers fall
+  // back to the default criteria.
+  let rubricSnapshot;
+  try {
+    const resolved = await resolveRubricForRound({
+      jobId: linkage.jobId ? String(linkage.jobId) : null,
+      roundType: round?.type || null,
+    });
+    rubricSnapshot = { ...resolved, capturedAt: new Date() };
+  } catch (err) {
+    logger.warn('[createMeeting] rubric resolution failed; round scheduled without a snapshot', {
+      err: err?.message || err,
+    });
+    rubricSnapshot = undefined;
+  }
+
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
   const creator = await User.findById(userId).select('adminId').lean();
@@ -497,6 +515,7 @@ const createMeeting = async (body, userId) => {
   const linkageFields = {
     interviewLanguage,
     round,
+    rubricSnapshot,
     applicationId: linkage.applicationId,
     jobId: linkage.jobId,
     candidateId: linkage.candidateId,

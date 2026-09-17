@@ -283,6 +283,33 @@ const meetingSchema = mongoose.Schema(
       scoredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       scoredAt: { type: Date, default: null },
     },
+    /**
+     * The rubric this round is scored against, COPIED from the resolved RubricTemplate
+     * when the round is scheduled.
+     *
+     * It is a copy on purpose: editing or re-weighting a template must never change what
+     * a past round was measured by. Every reader — the evaluation form, the weighted
+     * total, the history panel — uses this, never the live template.
+     *
+     * Empty on rounds scheduled before this field existed. Readers fall back to
+     * DEFAULT_RUBRIC_CRITERIA; they must NOT resolve a template retroactively, because
+     * that would score an old round against today's rubric.
+     */
+    rubricSnapshot: {
+      templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'RubricTemplate', default: null },
+      templateName: { type: String, trim: true, default: '' },
+      criteria: [
+        {
+          _id: false,
+          key: { type: String, required: true, trim: true },
+          label: { type: String, required: true, trim: true },
+          weight: { type: Number, required: true },
+          scaleMin: { type: Number, default: 1 },
+          scaleMax: { type: Number, default: 5 },
+        },
+      ],
+      capturedAt: { type: Date, default: null },
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
