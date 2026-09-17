@@ -138,6 +138,14 @@ const meetingFilterQueryKeys = {
   /* Ordering is checked in boundedDateRange, not with Joi.ref('dateFrom') — an
      unresolvable ref makes a dateTo-only query fail, and either bound alone is valid. */
   dateTo: Joi.date().iso(),
+  /**
+   * Scope the list to one application's rounds, or to one candidate across applications.
+   * The list previously took no identifier at all — only a substring match on the
+   * candidate's display name — so the rounds of one application could not be requested
+   * (audit M2).
+   */
+  applicationId: Joi.string().hex().length(24),
+  candidateId: Joi.string().hex().length(24),
   /** When "mine", list only meetings the caller created, hosts, or is invited to — even with tenant-wide interview access. */
   scope: Joi.string().valid('mine').optional(),
   sortBy: Joi.string(),
