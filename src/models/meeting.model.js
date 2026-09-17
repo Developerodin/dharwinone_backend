@@ -351,6 +351,32 @@ meetingSchema.index({ 'candidate.id': 1 });
 meetingSchema.index({ scheduledAt: 1 });
 
 /**
+ * One round number per application. The database-level guarantee behind
+ * allocateRoundIndex — without it, two concurrent schedules could still land on the same
+ * number if the counter is ever bypassed.
+ *
+ * Partial, because rounds with no application or no index are legitimate (an unlinked
+ * interview, a legacy row) and a plain unique index would collide all of them on null.
+ *
+ * ⚠️ This index FAILS TO BUILD while duplicates exist. Run
+ * src/scripts/reportDuplicateRoundIndexes.js first.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build it
+ * there. Staging and local build it automatically — which is exactly where a duplicate
+ * will surface first.
+ */
+meetingSchema.index(
+  { applicationId: 1, 'round.index': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      applicationId: { $exists: true },
+      'round.index': { $exists: true },
+    },
+  }
+);
+
+/**
  * Generate unique meetingId
  * @returns {string}
  */
