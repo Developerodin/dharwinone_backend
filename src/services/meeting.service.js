@@ -1187,6 +1187,26 @@ const deleteMeetingById = async (id, currentUser = null) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
   await assertMeetingInScope(meeting, currentUser);
+  /**
+   * A round that recorded an outcome or an evaluation is hiring evidence, not clutter.
+   * Deleting it erased the result and the scorecard with no tombstone (audit M6), so
+   * refuse and send the caller to Cancel, which keeps the row and its number.
+   *
+   * Scheduled rounds nobody has judged are still deletable - that is the mis-booking case.
+   */
+  const hasDecision = meeting.interviewResult && meeting.interviewResult !== 'pending';
+  const hasLegacyScorecard =
+    Boolean(meeting.interviewScorecard?.ratings?.length) ||
+    Boolean(String(meeting.interviewScorecard?.comment || '').trim());
+  if (hasDecision || hasLegacyScorecard) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'This round has a recorded result or evaluation and cannot be deleted. Cancel it instead - the round stays in the history.',
+      true,
+      '',
+      { errorCode: 'round_has_record' }
+    );
+  }
   // Stop egress + wait for finalize BEFORE removing the meeting doc, otherwise
   // a live recording is orphaned in EGRESS_ACTIVE with no DB row to reconcile.
   if (meeting.meetingId) {
