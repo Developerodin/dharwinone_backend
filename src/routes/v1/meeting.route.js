@@ -8,6 +8,7 @@ import * as meetingController from '../../controllers/meeting.controller.js';
 import * as meetingExcelController from '../../controllers/meetingExcel.controller.js';
 import * as interviewTranscriptController from '../../controllers/interviewTranscript.controller.js';
 import * as interviewEvaluationValidation from '../../validations/interviewEvaluation.validation.js';
+import interviewRubricEvaluationValidation from '../../validations/interviewRubricEvaluation.validation.js';
 
 const router = express.Router();
 
@@ -99,6 +100,24 @@ router
     requirePermissions('interviews.manage', 'candidates.manage'),
     validate(meetingValidation.createMeetingApplication),
     meetingController.createApplication
+  );
+
+router
+  .route('/:id/evaluation')
+  .put(
+    auth(),
+    requirePermissions('interviews.manage'),
+    validate(interviewRubricEvaluationValidation.saveEvaluation),
+    meetingController.saveEvaluation
+  );
+
+router
+  .route('/:id/evaluations')
+  .get(
+    auth(),
+    requirePermissions('interviews.read'),
+    validate(interviewRubricEvaluationValidation.getEvaluations),
+    meetingController.getEvaluations
   );
 
 router

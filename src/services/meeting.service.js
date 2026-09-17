@@ -1902,6 +1902,24 @@ const meetingHasRecording = async (meeting) => {
   return Boolean(rec);
 };
 
+/**
+ * Fetch a meeting for the evaluation endpoints, enforcing the same visibility rule as
+ * every other meeting read. Kept here rather than in interviewEvaluation.service.js so
+ * that service never has to import this one.
+ *
+ * @param {string} id - ObjectId or meetingId string
+ * @param {object} currentUser
+ * @returns {Promise<object>} the meeting document
+ */
+const getMeetingForEvaluation = async (id, currentUser) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+  return meeting;
+};
+
 const getMeetingLinkage = async (id, currentUser) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) {
@@ -2138,6 +2156,7 @@ const markMeetingEndedWhenRoomFinished = async (roomName) => {
 
 export {
   createMeeting,
+  getMeetingForEvaluation,
   getMeetingLinkage,
   patchMeetingLinkage,
   createExplicitApplicationForMeeting,
