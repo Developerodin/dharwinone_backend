@@ -49,6 +49,31 @@ const jobApplicationSchema = new mongoose.Schema(
      * that predate this field keep numbering where their history left off.
      */
     roundCounter: { type: Number, default: 0 },
+    /**
+     * The job's interview round sequence, frozen when this application's FIRST round was
+     * scheduled. Empty means "no plan was in force" — the state of every application that
+     * predates this field, and of any application whose job plans no rounds. Readers must
+     * treat empty as "fall back to the pre-plan rule" (audit R3).
+     *
+     * Frozen, not read live from the Job, because the Job is shared by every applicant: a
+     * recruiter extending a 3-round plan to 5 would otherwise retroactively add two rounds
+     * to a candidate who was one round from an offer (audit R7).
+     *
+     * Deliberately stores the SEQUENCE ONLY — key, label, round type. Not the criteria.
+     * Meeting.rubricSnapshot already owns the criteria copy for each round, and a second
+     * copy here would be a third answer to "what was this round scored against" (D4).
+     */
+    roundPlanSnapshot: {
+      capturedAt: { type: Date, default: null },
+      rounds: [
+        {
+          _id: false,
+          key: { type: String, required: true, trim: true },
+          label: { type: String, required: true, trim: true },
+          roundType: { type: String, default: null },
+        },
+      ],
+    },
     notes: { type: String, trim: true },
     // Bolna verification call fields
     verificationCallExecutionId: { type: String, trim: true, index: true, sparse: true },
