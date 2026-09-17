@@ -1,3 +1,5 @@
+import { INTERVIEW_ROUND_TYPES } from './interviewLinkage.js';
+
 /**
  * Interview scoring rubric (PRD 5.4).
  *
@@ -84,5 +86,75 @@ export const criteriaWeightError = (criteria) => {
   if (total !== RUBRIC_WEIGHT_TOTAL) {
     return `Weights must add up to ${RUBRIC_WEIGHT_TOTAL}%. This rubric adds up to ${total}%.`;
   }
+  return null;
+};
+
+/**
+ * A job may declare at most this many rubric assignments. There are nine round types plus
+ * one job default, so twelve leaves headroom without letting a job form become a spreadsheet.
+ */
+export const MAX_RUBRIC_ASSIGNMENTS = 12;
+
+/**
+ * Validate `Job.rubricAssignments`.
+ *
+ * The invariant that matters: each row names EITHER a saved template or its own criteria,
+ * never both and never neither. Both would force resolution to pick a winner at read time
+ * in two separate services; neither leaves the row unresolvable (audit J5).
+ *
+ * `roundType: null` is the job's own default — the row used by any round the job has not
+ * named specifically, including rounds scheduled with no type at all. It may appear once.
+ *
+ * An empty or absent list is VALID and means "this job has no opinion"; resolution then
+ * falls through to the template rungs. That is the state of every job that exists today.
+ *
+ * A criteria error names its round type on purpose: a bare "weights must add up to 100"
+ * inside a 900-line job form gives the user nothing to act on (audit J10).
+ *
+ * @param {Array<{roundType: string|null, templateId?: string|null, criteria?: Array<object>|null}>} assignments
+ * @returns {string|null} a user-facing reason, or null when valid
+ */
+export const rubricAssignmentsError = (assignments) => {
+  if (assignments == null) return null;
+  if (!Array.isArray(assignments)) return 'Interview scoring must be a list of assignments.';
+  if (assignments.length === 0) return null;
+  if (assignments.length > MAX_RUBRIC_ASSIGNMENTS) {
+    return `A job can have at most ${MAX_RUBRIC_ASSIGNMENTS} rubric assignments.`;
+  }
+
+  const seen = new Set();
+
+  for (const row of assignments) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return 'Each rubric assignment must be an object.';
+    }
+
+    const roundType = row.roundType ?? null;
+    if (roundType !== null && roundType !== '' && !INTERVIEW_ROUND_TYPES.includes(roundType)) {
+      return `"${roundType}" is not an interview round type.`;
+    }
+    const normalizedType = roundType === '' ? null : roundType;
+
+    const key = normalizedType === null ? '__default__' : normalizedType;
+    if (seen.has(key)) {
+      return normalizedType
+        ? `The ${normalizedType} round is set more than once.`
+        : 'The job default is set more than once.';
+    }
+    seen.add(key);
+
+    const label = normalizedType ? `the ${normalizedType} round` : 'rounds with no specific rubric';
+    const hasTemplate = Boolean(row.templateId);
+    const hasCriteria = Array.isArray(row.criteria) && row.criteria.length > 0;
+    if (hasTemplate === hasCriteria) {
+      return `${label} needs either a saved rubric or its own criteria — not both, and not neither.`;
+    }
+
+    if (hasCriteria) {
+      const reason = criteriaWeightError(row.criteria);
+      if (reason) return `${label}: ${reason}`;
+    }
+  }
+
   return null;
 };

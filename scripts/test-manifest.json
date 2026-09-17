@@ -22,6 +22,7 @@
   "./src/config/__tests__/redis.test.js",
   "./src/constants/__tests__/atsPipeline.test.js",
   "./src/constants/__tests__/interviewRoundTypes.test.js",
+  "./src/constants/__tests__/rubricAssignments.test.js",
   "./src/constants/__tests__/communicationAccess.test.js",
   "./src/controllers/__tests__/activityLog.exportExcel.controller.test.js",
   "./src/controllers/__tests__/activityLog.resolveFilter.test.js",
