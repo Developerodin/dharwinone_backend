@@ -51,6 +51,15 @@ router
   );
 
 router
+  .route('/:templateId/usage')
+  .get(
+    auth(),
+    requirePermissions('interviews.read'),
+    validate(rubricTemplateValidation.getRubricTemplate),
+    rubricTemplateController.usage
+  );
+
+router
   .route('/:templateId')
   .get(
     auth(),

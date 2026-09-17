@@ -209,6 +209,55 @@ export const updateRubricTemplate = async (id, body, userId) => {
 };
 
 /**
+ * Jobs whose assignments reference this template. Capped — the caller only needs enough
+ * names to make an error message actionable.
+ *
+ * @param {string} templateId
+ * @param {number} [limit]
+ * @returns {Promise<Array<{id: string, title: string}>>}
+ */
+export const jobsUsingTemplate = async (templateId, limit = 25) => {
+  if (!templateId || !mongoose.Types.ObjectId.isValid(templateId)) return [];
+  const rows = await Job.find({ 'rubricAssignments.templateId': templateId })
+    .select('title')
+    .limit(limit)
+    .lean();
+  return rows.map((j) => ({ id: String(j._id), title: j.title || 'Untitled job' }));
+};
+
+/**
+ * Job counts for many templates at once.
+ *
+ * One aggregation rather than a countDocuments per row: the template list renders up to a
+ * hundred templates, and an N+1 there is a page-load cliff (audit J15).
+ *
+ * $addToSet on the job id matters — a job with both a default row and a round row pointing
+ * at the same template is ONE job using it, not two.
+ *
+ * @param {Array<string>} templateIds
+ * @returns {Promise<Map<string, number>>} templateId → job count
+ */
+export const countJobsByTemplate = async (templateIds) => {
+  const ids = (templateIds || [])
+    .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  const counts = new Map(ids.map((id) => [String(id), 0]));
+  if (!ids.length) return counts;
+
+  const rows = await Job.aggregate([
+    { $match: { 'rubricAssignments.templateId': { $in: ids } } },
+    { $unwind: '$rubricAssignments' },
+    { $match: { 'rubricAssignments.templateId': { $in: ids } } },
+    { $group: { _id: '$rubricAssignments.templateId', jobs: { $addToSet: '$_id' } } },
+  ]);
+
+  for (const row of rows) {
+    counts.set(String(row._id), row.jobs.length);
+  }
+  return counts;
+};
+
+/**
  * Archive, never delete: a Meeting.rubricSnapshot may point at this template, and the
  * history panel names the rubric a round was scored against.
  */
@@ -220,6 +269,25 @@ export const archiveRubricTemplate = async (id, userId) => {
       'This is the default rubric. Make another rubric the default before archiving it.'
     );
   }
+
+  /**
+   * A job deliberately pointed at this rubric would otherwise fall back to the house
+   * default with nobody told (audit J3). Name the jobs — "in use" alone leaves the user
+   * hunting for which ones.
+   */
+  const jobs = await jobsUsingTemplate(doc._id);
+  if (jobs.length) {
+    const names = jobs.slice(0, 5).map((j) => j.title).join(', ');
+    const more = jobs.length > 5 ? ` and ${jobs.length - 5} more` : '';
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `${jobs.length} ${jobs.length === 1 ? 'job uses' : 'jobs use'} this rubric: ${names}${more}. Point them at another rubric first.`,
+      true,
+      '',
+      { errorCode: 'rubric_template_in_use' }
+    );
+  }
+
   doc.archivedAt = new Date();
   doc.updatedBy = userId;
   await doc.save();

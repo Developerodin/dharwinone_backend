@@ -14,6 +14,16 @@ const list = catchAsync(async (req, res) => {
   const { includeArchived, ...options } = req.query;
   const filter = includeArchived ? {} : { archivedAt: null };
   const result = await rubricTemplateService.queryRubricTemplates(filter, options);
+
+  // One aggregation for the page. Editing a shared rubric re-weights every job using it,
+  // so the count has to be visible before anyone opens the editor (audit J15).
+  const rows = result.results || [];
+  const counts = await rubricTemplateService.countJobsByTemplate(rows.map((t) => t.id || t._id));
+  result.results = rows.map((t) => ({
+    ...(typeof t.toJSON === 'function' ? t.toJSON() : t),
+    jobCount: counts.get(String(t.id || t._id)) ?? 0,
+  }));
+
   res.send(result);
 });
 
@@ -46,4 +56,10 @@ const restore = catchAsync(async (req, res) => {
   res.send(doc);
 });
 
-export default { create, list, resolve, get, update, archive, restore };
+/** GET /v1/rubric-templates/:templateId/usage — which jobs reference this rubric. */
+const usage = catchAsync(async (req, res) => {
+  const jobs = await rubricTemplateService.jobsUsingTemplate(req.params.templateId);
+  res.send({ templateId: req.params.templateId, jobCount: jobs.length, jobs });
+});
+
+export default { create, list, resolve, get, update, archive, restore, usage };
