@@ -47,25 +47,31 @@ import { hasApiPermission } from '../utils/permissionCheck.js';
 const auditActorId = (req) => String(req.user?.id || req.user?._id || '');
 
 /**
- * A job's rubric assignments are interview configuration that happens to live on a job
- * document, so `jobs.manage` alone must not set them (audit J11). The job form hides the
- * editor for such a user; this is what makes that a boundary rather than a decoration.
+ * A job's interview rounds and rubric assignments are interview configuration that happens
+ * to live on a job document, so `jobs.manage` alone must not set them (audit J11, R15).
+ * The job form hides the editor for such a user; this is what makes that a boundary rather
+ * than a decoration.
  *
  * Silently stripping the key was the alternative and is worse: the user would see a saved
- * job and believe the rubric took effect.
+ * job and believe the rounds took effect.
  *
- * hasOwnProperty, not truthiness — `rubricAssignments: []` is a WRITE that removes a job's
- * rubrics, and must be gated exactly like setting them.
+ * hasOwnProperty, not truthiness — `interviewRounds: []` is a WRITE that removes a job's
+ * rounds, and must be gated exactly like setting them.
  *
  * @param {import('express').Request} req
  */
-const assertMayWriteRubricAssignments = async (req) => {
-  if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'rubricAssignments')) return;
+const assertMayWriteInterviewConfig = async (req) => {
+  const body = req.body || {};
+  const touchesConfig =
+    Object.prototype.hasOwnProperty.call(body, 'rubricAssignments') ||
+    Object.prototype.hasOwnProperty.call(body, 'interviewRounds');
+  if (!touchesConfig) return;
+
   const allowed = await hasApiPermission(req.user, 'interviews.manage');
   if (!allowed) {
     throw new ApiError(
       httpStatus.FORBIDDEN,
-      'Interview scoring can only be changed by someone with interview management access.',
+      'Interview rounds and scoring can only be changed by someone with interview management access.',
       true,
       '',
       { errorCode: 'rubric_requires_interview_access' }
@@ -75,7 +81,7 @@ const assertMayWriteRubricAssignments = async (req) => {
 
 // Job CRUD
 const create = catchAsync(async (req, res) => {
-  await assertMayWriteRubricAssignments(req);
+  await assertMayWriteInterviewConfig(req);
   const createdById = req.user.id || req.user._id;
   const job = await createJob(createdById, req.body);
 
@@ -175,7 +181,7 @@ const get = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
-  await assertMayWriteRubricAssignments(req);
+  await assertMayWriteInterviewConfig(req);
   const job = await updateJobById(req.params.jobId, req.body, req.user);
   const jid = job?._id ?? job?.id ?? req.params.jobId;
   await writeAtsAudit(
