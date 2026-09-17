@@ -37,6 +37,7 @@ import config from '../../config/config.js';
 import blogRoute from './blog.route.js';
 import livekitRoute from './livekit.route.js';
 import meetingRoute from './meeting.route.js';
+import rubricTemplateRoute from './rubricTemplate.route.js';
 import internalMeetingRoute from './internalMeeting.route.js';
 import agentInternalRoute from './agentInternal.route.js';
 import adminAiDlqRoute from './adminAiDlq.route.js';
@@ -308,6 +309,10 @@ const defaultRoutes = [
   {
     path: '/meetings',
     route: meetingRoute,
+  },
+  {
+    path: '/rubric-templates',
+    route: rubricTemplateRoute,
   },
   {
     path: '/internal-meetings',
