@@ -47,6 +47,10 @@ graphify-out/
 !src/services/__tests__/
 src/services/__tests__/fixtures/
 src/services/__tests__/helpers/
+# Un-ignores the directory only; `*.test.js` above still excludes the specs in it, so each
+# one that should be versioned is named explicitly below.
+!src/validations/__tests__/
+!src/validations/__tests__/meeting.roundType.validation.test.js
 !src/services/__tests__/job.applicationNotification.test.js
 !src/services/meeting.service.test.js
 !src/services/offer.service.test.js
@@ -125,6 +129,8 @@ attendance-status-backfill.*.journal.json
 # Parent dirs are re-included above; these two files ship, the rest of the dirs stay ignored.
 !src/services/__tests__/backdatedAttendanceRequest.approve.test.js
 !src/services/__tests__/jobVacancyCapacity.test.js
+!src/services/__tests__/interviewRoundPlan.test.js
+!src/services/__tests__/interviewRoundProgress.test.js
 !scripts/migrations/2026-09-10-collapse-backdated-duplicate-days.js
 !scripts/migrations/2026-09-10-backfill-document-versions.js
 !scripts/migrations/__tests__/2026-09-10-backfill-document-versions.test.js

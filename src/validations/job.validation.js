@@ -1,4 +1,6 @@
 import Joi from 'joi';
+import { rubricAssignmentsError, MAX_RUBRIC_ASSIGNMENTS } from '../constants/interviewRubric.js';
+import { roundPlanError, MAX_PLANNED_ROUNDS } from '../constants/interviewRoundPlan.js';
 import { objectId, boundedLimit } from './custom.validation.js';
 
 const JOB_TYPE_VALUES = ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'];
@@ -54,6 +56,77 @@ const salaryRange = Joi.object({
   currency: Joi.string().optional().trim().default('USD'),
 });
 
+/**
+ * A job's interview rubrics.
+ *
+ * Row shape is checked structurally here; the rules that span rows — exactly one of
+ * templateId/criteria, no duplicate round type, weights summing to 100 — come from the one
+ * shared validator, so the job form, this schema and the service cannot drift apart.
+ *
+ * `roundType` is validated by that shared function rather than a Joi `.valid(...)` list,
+ * so adding a round type to the constant does not need an edit in two places.
+ */
+const rubricAssignmentsSchema = Joi.array()
+  .items(
+    Joi.object({
+      roundType: Joi.string().trim().allow(null, ''),
+      templateId: Joi.string().custom(objectId).allow(null, ''),
+      criteria: Joi.array()
+        .items(
+          Joi.object({
+            key: Joi.string()
+              .trim()
+              .pattern(/^[a-zA-Z0-9_-]{1,40}$/)
+              .required(),
+            label: Joi.string().trim().min(1).max(80).required(),
+            weight: Joi.number().integer().min(0).max(100).required(),
+            scaleMin: Joi.number().integer().min(0).max(9).default(1),
+            scaleMax: Joi.number().integer().min(1).max(10).default(5),
+          })
+        )
+        .max(20)
+        .allow(null),
+    })
+  )
+  .max(MAX_RUBRIC_ASSIGNMENTS)
+  .custom((value, helpers) => {
+    const reason = rubricAssignmentsError(value);
+    return reason ? helpers.message(reason) : value;
+  });
+
+const interviewRoundsSchema = Joi.array()
+  .items(
+    Joi.object({
+      key: Joi.string()
+        .trim()
+        .pattern(/^[a-z0-9_-]{1,40}$/)
+        .required(),
+      label: Joi.string().trim().min(1).max(80).required(),
+      roundType: Joi.string().trim().allow(null, ''),
+      templateId: Joi.string().custom(objectId).allow(null, ''),
+      criteria: Joi.array()
+        .items(
+          Joi.object({
+            key: Joi.string()
+              .trim()
+              .pattern(/^[a-zA-Z0-9_-]{1,40}$/)
+              .required(),
+            label: Joi.string().trim().min(1).max(80).required(),
+            weight: Joi.number().integer().min(0).max(100).required(),
+            scaleMin: Joi.number().integer().min(0).max(9).default(1),
+            scaleMax: Joi.number().integer().min(1).max(10).default(5),
+          })
+        )
+        .max(20)
+        .allow(null),
+    })
+  )
+  .max(MAX_PLANNED_ROUNDS)
+  .custom((value, helpers) => {
+    const reason = roundPlanError(value);
+    return reason ? helpers.message(reason) : value;
+  });
+
 // Job Validations
 const createJob = {
   body: Joi.object().keys({
@@ -100,6 +173,8 @@ const createJob = {
       .valid('Draft', 'Active', 'Closed', 'Archived')
       .optional()
       .default('Active'),
+    rubricAssignments: rubricAssignmentsSchema.optional(),
+    interviewRounds: interviewRoundsSchema.optional(),
     templateId: Joi.string().custom(objectId).optional(),
     templateVariables: Joi.object().optional(),
   }).required(),
@@ -190,6 +265,8 @@ const updateJob = {
       }),
       applicationDeadline: Joi.date().iso().optional().allow(null),
       status: Joi.string().valid('Draft', 'Active', 'Closed', 'Archived').optional(),
+      rubricAssignments: rubricAssignmentsSchema.optional(),
+    interviewRounds: interviewRoundsSchema.optional(),
       templateId: Joi.string().custom(objectId).optional(),
     })
     .min(1),

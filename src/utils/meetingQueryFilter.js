@@ -36,6 +36,20 @@ export function buildMeetingsMongoFilter(query = {}, body = {}) {
     filter._id = { $in: ids };
   }
 
+  // Exact-id scoping. Equality rather than the $regex used by the name filters, so these
+  // can use the applicationId / candidateId indexes on Meeting.
+  const applicationId = String(query.applicationId ?? '').trim();
+  if (applicationId) {
+    and.push({ applicationId });
+  }
+
+  const candidateId = String(query.candidateId ?? '').trim();
+  if (candidateId) {
+    // `candidate.id` is a string field on Meeting while `candidateId` is an ObjectId ref.
+    // A round may carry either, so match both rather than assuming which is populated.
+    and.push({ $or: [{ candidateId }, { 'candidate.id': candidateId }] });
+  }
+
   const title = String(query.title ?? '').trim();
   if (title) {
     and.push({ title: { $regex: escapeRegex(title), $options: 'i' } });

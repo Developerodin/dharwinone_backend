@@ -2,6 +2,7 @@ import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 import { normalizeTimezone, isValidTimezone } from '../utils/timezone.js';
 import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
+import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
 import {
   RUBRIC_CRITERION_IDS,
   RUBRIC_RATING_MIN,
@@ -101,18 +102,14 @@ const createMeeting = {
       round: Joi.object()
         .keys({
           index: Joi.number().integer().min(1).optional(),
+          // Spread the constant, never a literal list. This schema used to hardcode seven of
+          // the nine types, so 'panel' and 'hr' were offered by the form, accepted by the
+          // model and by meeting.service.js, and then 400ed here before reaching either.
           type: Joi.string()
-            .valid(
-              'screening',
-              'technical',
-              'behavioral',
-              'hiring_manager',
-              'culture',
-              'final',
-              'other'
-            )
+            .valid(...INTERVIEW_ROUND_TYPES)
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
+          planKey: Joi.string().trim().max(40).allow(null, ''),
         })
         .optional(),
     })
@@ -138,6 +135,14 @@ const meetingFilterQueryKeys = {
   /* Ordering is checked in boundedDateRange, not with Joi.ref('dateFrom') — an
      unresolvable ref makes a dateTo-only query fail, and either bound alone is valid. */
   dateTo: Joi.date().iso(),
+  /**
+   * Scope the list to one application's rounds, or to one candidate across applications.
+   * The list previously took no identifier at all — only a substring match on the
+   * candidate's display name — so the rounds of one application could not be requested
+   * (audit M2).
+   */
+  applicationId: Joi.string().hex().length(24),
+  candidateId: Joi.string().hex().length(24),
   /** When "mine", list only meetings the caller created, hosts, or is invited to — even with tenant-wide interview access. */
   scope: Joi.string().valid('mine').optional(),
   sortBy: Joi.string(),
@@ -242,7 +247,13 @@ const updateMeeting = {
       notes: Joi.string().allow('', null).trim(),
       status: Joi.string().valid(...INTERVIEW_STATUSES),
       interviewResult: Joi.string().valid(...INTERVIEW_RESULTS),
-      interviewScorecard: interviewScorecardSchema,
+      // Read-only since evaluations moved to one document per interviewer. Rejected with
+      // a message rather than silently ignored, so a stale client fails loudly instead of
+      // appearing to save. New scores: PUT /meetings/:id/evaluation.
+      interviewScorecard: Joi.any().forbidden().messages({
+        'any.unknown':
+          'Interview scores are now saved per interviewer. Use the evaluation endpoint instead.',
+      }),
     })
     .min(1),
 };
@@ -296,17 +307,10 @@ const patchMeetingLinkage = {
         .keys({
           index: Joi.number().integer().min(1).optional(),
           type: Joi.string()
-            .valid(
-              'screening',
-              'technical',
-              'behavioral',
-              'hiring_manager',
-              'culture',
-              'final',
-              'other'
-            )
+            .valid(...INTERVIEW_ROUND_TYPES)
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
+          planKey: Joi.string().trim().max(40).allow(null, ''),
         })
         .optional(),
       expectedRevision: Joi.number().integer().min(0).required(),
@@ -321,6 +325,12 @@ const createMeetingApplication = {
 };
 
 // Public: end meeting when host leaves (body: roomName, hostEmail)
+const getRoundHistory = {
+  query: Joi.object().keys({
+    applicationId: Joi.string().hex().length(24).required(),
+  }),
+};
+
 const endMeetingByRoomPublic = {
   body: Joi.object()
     .keys({
@@ -347,4 +357,5 @@ export {
   getMeetingLinkage,
   patchMeetingLinkage,
   createMeetingApplication,
+  getRoundHistory,
 };

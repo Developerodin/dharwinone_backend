@@ -19,7 +19,9 @@ import Offer from './offer.model.js';
 import Placement from './placement.model.js';
 import AuditEvent from './auditEvent.model.js';
 import Recording from './recording.model.js';
+import RubricTemplate from './rubricTemplate.model.js';
+import InterviewEvaluation from './interviewEvaluation.model.js';
 import EmailAccount from './emailAccount.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, HolidayGroup, Shift, Employee, Meeting, JobApplication, EmployeeTransfer, Offer, Placement, AuditEvent, Recording, EmailAccount };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, HolidayGroup, Shift, Employee, Meeting, JobApplication, EmployeeTransfer, Offer, Placement, AuditEvent, Recording, RubricTemplate, InterviewEvaluation, EmailAccount };
 

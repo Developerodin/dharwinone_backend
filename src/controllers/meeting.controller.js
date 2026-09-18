@@ -3,6 +3,7 @@ import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
+import * as interviewEvaluationService from '../services/interviewEvaluation.service.js';
 import recordingService from '../services/recording.service.js';
 import { writeAtsAudit } from '../services/atsAudit.service.js';
 import { writeDedupedInterviewViewAudit } from '../utils/interviewViewAuditDedup.js';
@@ -185,6 +186,36 @@ const createApplication = catchAsync(async (req, res) => {
   res.status(httpStatus.CREATED).send(result);
 });
 
+/**
+ * PUT /v1/meetings/:id/evaluation — record the CALLING USER'S evaluation.
+ * The evaluator is the authenticated user; the body never names one.
+ */
+const saveEvaluation = catchAsync(async (req, res) => {
+  const meeting = await meetingService.getMeetingForEvaluation(req.params.id, req.user);
+  const saved = await interviewEvaluationService.saveEvaluation({
+    meeting,
+    user: req.user,
+    ratings: req.body.ratings,
+    comment: req.body.comment,
+  });
+  res.send(saved);
+});
+
+/** GET /v1/meetings/:id/evaluations — every evaluation for this round, plus its criteria. */
+const getEvaluations = catchAsync(async (req, res) => {
+  const meeting = await meetingService.getMeetingForEvaluation(req.params.id, req.user);
+  const grouped = await interviewEvaluationService.listEvaluationsForMeetings([meeting._id]);
+  res.send({
+    meetingId: String(meeting._id),
+    rubric: {
+      templateId: meeting.rubricSnapshot?.templateId || null,
+      templateName: meeting.rubricSnapshot?.templateName || 'Default rubric',
+      criteria: interviewEvaluationService.criteriaForMeeting(meeting),
+    },
+    evaluations: grouped.get(String(meeting._id)) || [],
+  });
+});
+
 export {
   create,
   list,
@@ -200,4 +231,6 @@ export {
   getLinkage,
   patchLinkage,
   createApplication,
+  saveEvaluation,
+  getEvaluations,
 };

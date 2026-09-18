@@ -10,6 +10,8 @@ import * as interviewTranscriptController from '../../controllers/interviewTrans
 import * as interviewEvaluationValidation from '../../validations/interviewEvaluation.validation.js';
 import * as interviewBiasValidation from '../../validations/interviewBias.validation.js';
 import * as interviewBiasController from '../../controllers/interviewBias.controller.js';
+import interviewRubricEvaluationValidation from '../../validations/interviewRubricEvaluation.validation.js';
+import interviewRoundController from '../../controllers/interviewRound.controller.js';
 
 const router = express.Router();
 
@@ -31,6 +33,16 @@ router.post(
   validate(meetingValidation.exportMeetings),
   meetingExcelController.exportExcel
 );
+
+// Round history for one application. MUST be before /:id so "rounds" is not read as an id.
+router
+  .route('/rounds')
+  .get(
+    auth(),
+    requirePermissions('interviews.read'),
+    validate(meetingValidation.getRoundHistory),
+    interviewRoundController.getRoundHistory
+  );
 
 router
   .route('/:id/resend-invitations')
@@ -119,6 +131,24 @@ router
     requirePermissions('interviews.manage', 'candidates.manage'),
     validate(meetingValidation.createMeetingApplication),
     meetingController.createApplication
+  );
+
+router
+  .route('/:id/evaluation')
+  .put(
+    auth(),
+    requirePermissions('interviews.manage'),
+    validate(interviewRubricEvaluationValidation.saveEvaluation),
+    meetingController.saveEvaluation
+  );
+
+router
+  .route('/:id/evaluations')
+  .get(
+    auth(),
+    requirePermissions('interviews.read'),
+    validate(interviewRubricEvaluationValidation.getEvaluations),
+    meetingController.getEvaluations
   );
 
 router

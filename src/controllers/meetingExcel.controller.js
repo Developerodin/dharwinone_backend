@@ -2,6 +2,7 @@ import catchAsync from '../utils/catchAsync.js';
 import { buildMeetingsMongoFilter } from '../utils/meetingQueryFilter.js';
 import * as meetingService from '../services/meeting.service.js';
 import * as meetingExcelService from '../services/meetingExcel.service.js';
+import { listEvaluationsForMeetings } from '../services/interviewEvaluation.service.js';
 import { writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 
@@ -22,7 +23,15 @@ export const exportExcel = catchAsync(async (req, res) => {
     { limit: MEETINGS_EXPORT_CAP, page: 1, sortBy },
     req.user
   );
-  const buf = meetingExcelService.buildMeetingsExportBuffer(result.results || []);
+  // One query for the whole export rather than one per row. At the 100k cap this is a
+  // single $in over an indexed field; a per-row lookup would be 100k round trips.
+  const rows = result.results || [];
+  const evaluationsByMeeting = await listEvaluationsForMeetings(rows.map((m) => m.id || m._id));
+  const rowsWithEvaluations = rows.map((m) => ({
+    ...(typeof m.toJSON === 'function' ? m.toJSON() : m),
+    evaluations: evaluationsByMeeting.get(String(m.id || m._id)) || [],
+  }));
+  const buf = meetingExcelService.buildMeetingsExportBuffer(rowsWithEvaluations);
   await writeAtsAudit(
     auditActorId(req),
     {
