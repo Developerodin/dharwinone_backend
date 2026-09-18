@@ -1,6 +1,6 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
 import validate from '../../middlewares/validate.js';
 import * as jobApplicationValidation from '../../validations/jobApplication.validation.js';
 import * as jobApplicationController from '../../controllers/jobApplication.controller.js';
@@ -36,6 +36,17 @@ router
     requirePermissions('candidates.manage'),
     validate(jobApplicationValidation.createJobApplication),
     jobApplicationController.create
+  );
+
+// Advancing an application to Offer is an offer-creating action, so it is gated on the same
+// capability as POST /offers rather than on candidate editing alone.
+router
+  .route('/:applicationId/move-to-offer')
+  .post(
+    auth(),
+    requireAnyOfPermissions('candidates.manage', 'employees.edit', 'offers.create', 'offers.manage'),
+    validate(jobApplicationValidation.moveApplicationToOffer),
+    jobApplicationController.moveToOffer
   );
 
 router

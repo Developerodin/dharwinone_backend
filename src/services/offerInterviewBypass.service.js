@@ -1,8 +1,8 @@
 import Meeting from '../models/meeting.model.js';
-import Employee from '../models/employee.model.js';
 import { meetingMatchesApplication } from '../utils/candidateApplicationInterviewResult.js';
-import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
-import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import { writeAtsAudit } from './atsAudit.service.js';
+import { ActivityActions, EntityTypes } from '../config/activityLog.js';
+import logger from '../config/logger.js';
 
 const applicationMeta = (application) => {
   const plain = application?.toObject?.() ?? application ?? {};
@@ -21,7 +21,7 @@ export async function applicationHasSelectedInterview(application) {
     'candidate.id': candidateId,
     status: { $ne: 'cancelled' },
   })
-    .select('candidate jobPosition interviewResult status')
+    .select('candidate jobPosition applicationId interviewResult status')
     .lean();
 
   return meetings.some(
@@ -40,80 +40,34 @@ export async function applicationHasSelectedInterview(application) {
 }
 
 /**
- * Mark interview selected for offer-without-interview. Uses direct Meeting writes — not
- * updateMeetingById — so createPlacementFromInterview does not race createOfferCore.
+ * Record that an offer was created for an application with no interview round marked selected.
+ *
+ * Audit only. It deliberately does NOT invent or mutate a Meeting: fabricating
+ * `interviewResult: 'selected'` made the bypass invisible in the interview record and let the
+ * pipeline claim a round had been passed when none had. The bypass is now an offer-side fact.
+ *
+ * Failure mode: the audit write is best-effort. Losing the trail must not fail the offer the
+ * recruiter explicitly acknowledged, so a write error is logged and swallowed.
  */
-export async function ensureInterviewSelectedForOfferBypass(application, userId) {
-  if (await applicationHasSelectedInterview(application)) return;
+export async function recordOfferInterviewBypass(application, userId) {
+  const { plain, candidateId, jobId } = applicationMeta(application);
+  const applicationId = String(plain._id || plain.id || '');
 
-  const { plain, candidateId, jobId, jobTitle } = applicationMeta(application);
-  const appId = String(plain._id || plain.id || '');
-  const meta = { candidateId, jobId, jobTitle, applicationId: appId };
-
-  const meetings = await Meeting.find({
-    'candidate.id': candidateId,
-    status: { $ne: 'cancelled' },
-  }).sort({ scheduledAt: -1 });
-
-  const matching = meetings.filter((m) => meetingMatchesApplication(m, meta, { allowTitleMatch: false }));
-  if (matching.length) {
-    const target = matching[0];
-    if (target.interviewResult !== 'selected') {
-      const note = 'Interview marked selected via offer bypass.';
-      const linkageSet = appId
-        ? {
-            applicationId: appId,
-            jobId,
-            candidateId,
-            linkageSource: 'offer_bypass',
-            linkageStatus:
-              !target.linkageStatus || target.linkageStatus === 'unlinked' ? 'verified' : target.linkageStatus,
-          }
-        : {};
-      await Meeting.updateOne(
-        { _id: target._id },
-        {
-          $set: {
-            interviewResult: 'selected',
-            ...(target.status === 'scheduled' ? { status: 'ended' } : {}),
-            notes: target.notes ? `${target.notes}\n${note}` : note,
-            ...linkageSet,
-          },
-          $inc: { linkageRevision: 1 },
-        }
-      );
-    }
-  } else {
-    const cand =
-      plain.candidate?.email != null
-        ? plain.candidate
-        : await Employee.findById(candidateId).select('fullName email phoneNumber').lean();
-    const roomId = await generateUniqueLivekitRoomId();
-    await Meeting.create({
-      meetingId: roomId,
-      roomName: roomId,
-      title: `Interview — ${jobTitle || 'Role'}`,
-      scheduledAt: new Date(),
-      durationMinutes: 60,
-      jobPosition: jobId,
-      applicationId: appId || undefined,
-      jobId: jobId || undefined,
-      candidateId: candidateId || undefined,
-      linkageStatus: appId ? 'verified' : undefined,
-      linkageSource: appId ? 'offer_bypass' : undefined,
-      interviewType: 'Video',
-      candidate: {
-        id: candidateId,
-        name: cand?.fullName || '',
-        email: cand?.email || '',
-        phone: cand?.phoneNumber || '',
+  await writeAtsAudit(
+    String(userId),
+    {
+      action: ActivityActions.OFFER_INTERVIEW_BYPASS,
+      entityType: EntityTypes.JOB_APPLICATION,
+      entityId: applicationId,
+      metadata: {
+        reason: 'no_selected_interview_round',
+        related: {
+          ...(candidateId && { candidateId }),
+          ...(jobId && { jobId }),
+        },
       },
-      status: 'ended',
-      interviewResult: 'selected',
-      notes: 'Interview marked selected via offer bypass (no prior interview scheduled).',
-      createdBy: userId,
-    });
-  }
-
-  await syncReferralPipelineStatusForCandidate(candidateId);
+    },
+    null,
+    { editContext: { staffEdit: true } }
+  ).catch((err) => logger.warn('ats_audit offer.interviewBypass:', err?.message || err));
 }

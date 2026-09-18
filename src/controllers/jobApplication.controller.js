@@ -17,8 +17,10 @@ import * as activityLogService from '../services/activityLog.service.js';
 import { writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
+import { moveApplicationToOffer } from '../services/applicationOffer.service.js';
 import { serializeCandidateApplication } from '../serializers/candidateApplication.serializer.js';
-import { loadInterviewResultsForApplications } from '../services/candidateApplicationInterviewResult.service.js';
+import { loadCandidateInterviewDataForApplications } from '../services/candidateApplicationInterviewResult.service.js';
+import { serializeCandidateInterviewMeeting } from '../serializers/candidateInterviewMeeting.serializer.js';
 
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
@@ -71,6 +73,27 @@ const updateStatus = catchAsync(async (req, res) => {
     { editContext: { staffEdit: true } }
   );
   res.send(application);
+});
+
+const moveToOffer = catchAsync(async (req, res) => {
+  const actorId = String(req.user.id || req.user._id);
+  const result = await moveApplicationToOffer(req.params.applicationId, actorId);
+  await writeAtsAudit(
+    actorId,
+    {
+      action: ActivityActions.JOB_APPLICATION_MOVE_TO_OFFER,
+      entityType: EntityTypes.JOB_APPLICATION,
+      entityId: String(req.params.applicationId),
+      metadata: {
+        source: 'manual',
+        moved: result.moved,
+        related: { offerId: result.offerId },
+      },
+    },
+    req,
+    { editContext: { staffEdit: true } }
+  );
+  res.send(result);
 });
 
 const list = catchAsync(async (req, res) => {
@@ -137,17 +160,21 @@ const getMyApplications = catchAsync(async (req, res) => {
     .lean();
   const placementByOfferId = new Map(placements.map((p) => [String(p.offer), p]));
 
-  const interviewResultByAppId = await loadInterviewResultsForApplications(result.results);
+  const { interviewResultByAppId, interviewsByAppId } = await loadCandidateInterviewDataForApplications(
+    result.results
+  );
 
   result.results = result.results.map((app) => {
     const appId = String(app.id || app._id);
     const offer = appToOffer.get(appId);
     const placement = offer ? placementByOfferId.get(String(offer._id)) : undefined;
+    const rawInterviews = interviewsByAppId.get(appId) || [];
     return serializeCandidateApplication(app, {
       offerStatus: offer?.status,
       placementStatus: placement?.status,
       enteredOnboarding: Boolean(placement?.enteredOnboardingAt),
       interviewResult: interviewResultByAppId.get(appId) ?? null,
+      interviews: rawInterviews.map(serializeCandidateInterviewMeeting),
     });
   });
 
@@ -218,4 +245,4 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { get, updateStatus, list, getMyApplications, withdrawApplication, create, remove };
+export { get, updateStatus, moveToOffer, list, getMyApplications, withdrawApplication, create, remove };

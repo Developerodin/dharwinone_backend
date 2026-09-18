@@ -188,6 +188,8 @@ const getMyInterviews = {
     sortBy: Joi.string().default('scheduledAt:asc'),
     limit: Joi.number().integer().min(1).max(50).default(20),
     page: Joi.number().integer().min(1).default(1),
+    applicationId: Joi.string().hex().length(24).optional(),
+    includePast: Joi.boolean().truthy('true', '1').falsy('false', '0').optional(),
   }),
 };
 

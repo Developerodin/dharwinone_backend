@@ -85,6 +85,31 @@ const internalMeetingSchema = mongoose.Schema(
       type: [String],
       default: [],
     },
+    participantRoster: [
+      {
+        identity: { type: String, required: true, trim: true },
+        role: { type: String, trim: true },
+        refKind: { type: String, trim: true, default: 'none' },
+        refId: { type: String, trim: true, default: null },
+        displayName: { type: String, trim: true, default: '' },
+        emailHash: { type: String, trim: true, default: null },
+        assurance: { type: String, trim: true },
+        firstJoinedAt: { type: Date },
+        lastJoinedAt: { type: Date },
+      },
+    ],
+    participantConsents: [
+      {
+        identity: { type: String, required: true, trim: true },
+        role: { type: String, trim: true, default: 'guest' },
+        noticeVersion: { type: String, required: true, trim: true },
+        recording: { type: Boolean, default: false },
+        transcription: { type: Boolean, default: false },
+        aiEvaluation: { type: Boolean, default: false },
+        acceptedAt: { type: Date, required: true },
+        withdrawnAt: { type: Date, default: null },
+      },
+    ],
     status: {
       type: String,
       enum: ['scheduled', 'ended', 'cancelled'],

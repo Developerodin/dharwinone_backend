@@ -90,6 +90,39 @@ const latestVersionForSlot = (documentVersions = [], slot) => {
   return latest;
 };
 
+/**
+ * Which version row is "current" for a slot — driven by `documents[]` (slotVersion / file identity),
+ * not the highest version number. Listing history used to treat max(version) as current, so "Use as
+ * current" via re-upload kept appending while the UI still showed older rows as restorable.
+ */
+const resolveActiveVersionRowForSlot = (candidateLike, slot) => {
+  const documentVersions = Array.isArray(candidateLike?.documentVersions) ? candidateLike.documentVersions : [];
+  const documents = Array.isArray(candidateLike?.documents) ? candidateLike.documents : [];
+  const idx = findLatestSlotDocumentIndex(documents, slot);
+  const docRow = idx >= 0 ? documents[idx] : null;
+
+  if (docRow) {
+    const slotVer = Number(docRow.slotVersion);
+    if (Number.isInteger(slotVer) && slotVer >= 1) {
+      const byNumber = documentVersions.find(
+        (row) => normalizeVersionSlot(row?.slot) === slot && Number(row.version) === slotVer
+      );
+      if (byNumber) return byNumber;
+    }
+
+    const docIdentity = versionFileIdentity(docRow);
+    let identityMatch = null;
+    for (const row of documentVersions) {
+      if (normalizeVersionSlot(row?.slot) !== slot) continue;
+      if (versionFileIdentity(row) !== docIdentity) continue;
+      if (!identityMatch || Number(row.version) > Number(identityMatch.version)) identityMatch = row;
+    }
+    if (identityMatch) return identityMatch;
+  }
+
+  return latestVersionForSlot(documentVersions, slot);
+};
+
 const nextVersionForSlot = (documentVersions = [], slot) => {
   const latest = latestVersionForSlot(documentVersions, slot);
   return latest ? Number(latest.version) + 1 : 1;
@@ -143,6 +176,7 @@ export {
   normalizeVersionPayloadFile,
   versionFileIdentity,
   latestVersionForSlot,
+  resolveActiveVersionRowForSlot,
   nextVersionForSlot,
   findLatestSlotDocumentIndex,
   VERSIONED_SLOT_GENERIC_UPLOAD_MESSAGE,

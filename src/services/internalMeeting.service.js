@@ -1,7 +1,7 @@
 import InternalMeeting from '../models/internalMeeting.model.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
-import { sendMeetingInvitationEmail, buildMeetingIcs } from './email.service.js';
+import { sendMeetingInvitationEmail, sendMeetingCancellationEmail, buildMeetingIcs, buildMeetingCancelIcs } from './email.service.js';
 import logger from '../config/logger.js';
 import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
@@ -152,6 +152,81 @@ const sendInvitationEmails = (meeting, emails, { rescheduled = false } = {}) => 
   });
 };
 
+/** @param {Object} meeting @param {string[]} emails */
+const sendCancellationEmails = (meeting, emails) => {
+  const hostName = meeting.hosts?.[0]?.nameOrRole || '';
+  emails.forEach((to) => {
+    const inviteName = resolveInviteeDisplayName(meeting, to);
+    const payload = {
+      title: meeting.title,
+      scheduledAt: meeting.scheduledAt,
+      timezone: meeting.timezone,
+      durationMinutes: meeting.durationMinutes,
+      inviteeName: inviteName,
+      hostName,
+      icsContent: buildMeetingCancelIcs(
+        {
+          id: meeting.meetingId,
+          title: meeting.title,
+          description: meeting.description,
+          scheduledAt: meeting.scheduledAt,
+          durationMinutes: meeting.durationMinutes,
+          updatedAt: meeting.updatedAt,
+        },
+        to
+      ),
+    };
+    sendMeetingCancellationEmail(to, payload).catch((err) => {
+      logger.warn(`Failed to send internal meeting cancellation to ${to}:`, err?.message || err);
+    });
+  });
+};
+
+/**
+ * Invitation/cancellation side effects after an occurrence save — shared by one-off updates
+ * and recurring series occurrence edits.
+ * @param {Object} meeting - saved InternalMeeting document
+ * @param {Object} before
+ * @param {string} before.previousStatus
+ * @param {Set<string>} before.beforeInviteEmails
+ * @param {Date|string} [before.previousScheduledAt]
+ * @param {number} [before.previousDurationMinutes]
+ * @param {string} [before.previousTitle]
+ */
+const notifyInternalMeetingInviteChanges = (meeting, before, { skipNewInvites = false } = {}) => {
+  const {
+    previousStatus,
+    beforeInviteEmails,
+    previousScheduledAt,
+    previousDurationMinutes,
+    previousTitle,
+  } = before;
+  const afterInviteEmails = getInvitationEmails(meeting);
+  const cancelledNow = previousStatus !== 'cancelled' && meeting.status === 'cancelled';
+  const movedTo = meeting.scheduledAt;
+  const timeMoved =
+    !!previousScheduledAt &&
+    !!movedTo &&
+    new Date(previousScheduledAt).getTime() !== new Date(movedTo).getTime();
+  const calendarChanged =
+    Number(previousDurationMinutes) !== Number(meeting.durationMinutes) ||
+    String(previousTitle || '') !== String(meeting.title || '');
+
+  if (cancelledNow) {
+    const cancelRecipients = new Set([...beforeInviteEmails, ...afterInviteEmails]);
+    if (cancelRecipients.size) sendCancellationEmails(meeting, [...cancelRecipients]);
+  } else {
+    const removedEmails = [...beforeInviteEmails].filter((e) => !afterInviteEmails.includes(e));
+    if (removedEmails.length) sendCancellationEmails(meeting, removedEmails);
+    const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
+    if (!skipNewInvites && newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
+    if (timeMoved || calendarChanged) {
+      const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
+      if (existingEmails.length) sendInvitationEmails(meeting, existingEmails, { rescheduled: true });
+    }
+  }
+};
+
 /**
  * @param {Object} body
  * @param {string} userId
@@ -250,6 +325,8 @@ const updateInternalMeetingById = async (id, updateBody) => {
     delete safeBody.durationMinutes;
   }
   const previousScheduledAt = meeting.scheduledAt;
+  const previousDurationMinutes = meeting.durationMinutes;
+  const previousTitle = meeting.title;
   Object.assign(meeting, safeBody);
   // Same reasoning as updateMeetingById: every claimed reminder window refers to the old
   // start time, so clear them all and let the scheduler re-catch the new one.
@@ -270,17 +347,13 @@ const updateInternalMeetingById = async (id, updateBody) => {
   }
   await meeting.save();
 
-  // No re-spam on edit: newly-added invitees get a first invitation, everyone else stays quiet.
-  const afterInviteEmails = getInvitationEmails(meeting);
-  const newlyAddedEmails = afterInviteEmails.filter((e) => !beforeInviteEmails.has(e));
-  if (newlyAddedEmails.length) sendInvitationEmails(meeting, newlyAddedEmails);
-  // Same reasoning as updateMeetingById: a moved start time is the one edit existing invitees
-  // must hear about, and the ICS carries the same UID with a higher SEQUENCE so their calendar
-  // entry moves rather than duplicating.
-  if (timeMoved) {
-    const existingEmails = afterInviteEmails.filter((e) => beforeInviteEmails.has(e));
-    if (existingEmails.length) sendInvitationEmails(meeting, existingEmails, { rescheduled: true });
-  }
+  notifyInternalMeetingInviteChanges(meeting, {
+    previousStatus,
+    beforeInviteEmails,
+    previousScheduledAt,
+    previousDurationMinutes,
+    previousTitle,
+  });
 
   return getInternalMeetingById(meeting._id.toString());
 };
@@ -290,6 +363,9 @@ const deleteInternalMeetingById = async (id) => {
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
+  if (meeting.status === 'scheduled') {
+    sendCancellationEmails(meeting, getInvitationEmails(meeting));
+  }
   await meeting.deleteOne();
   return meeting;
 };
@@ -298,6 +374,9 @@ const resendInternalMeetingInvitations = async (id) => {
   const meeting = await InternalMeeting.findById(id);
   if (!meeting) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  if (meeting.status === 'cancelled') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Cannot resend invitations for a cancelled meeting');
   }
   const emails = getInvitationEmails(meeting);
   const scheduled = formatMeetingScheduledLocal(meeting.scheduledAt, meeting.timezone);
@@ -617,4 +696,8 @@ export {
   resendInternalMeetingInvitations,
   endInternalMeetingByRoomPublic,
   autoEndExpiredInternalMeetings,
+  sendCancellationEmails as sendInternalMeetingCancellationEmails,
+  sendInvitationEmails as sendInternalMeetingInvitationEmails,
+  notifyInternalMeetingInviteChanges,
+  getInvitationEmails as getInternalMeetingInvitationEmails,
 };

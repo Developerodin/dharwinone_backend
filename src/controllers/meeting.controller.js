@@ -26,7 +26,7 @@ const list = catchAsync(async (req, res) => {
 });
 
 const listMyInterviews = catchAsync(async (req, res) => {
-  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const options = pick(req.query, ['sortBy', 'limit', 'page', 'applicationId', 'includePast']);
   const result = await meetingService.queryMyInterviews(req.user, options);
   res.send(result);
 });

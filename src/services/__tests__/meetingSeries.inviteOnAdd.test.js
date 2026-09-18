@@ -141,6 +141,22 @@ test('an invitee who muted meeting email gets a suppressed audit row, not silenc
   assert.match(rows[0].error, /notification preferences/i);
 });
 
+test('a partially delivered send does not stamp the occurrence as invited', async () => {
+  const series = await makeSeries();
+  const occurrence = await InternalMeeting.findById(series.occurrenceId);
+  await MeetingSeries.updateOne(
+    { _id: series.seriesId || series.id },
+    { $set: { hosts: [{ nameOrRole: 'Host', email: HOST }], emailInvites: [MUTED] } }
+  );
+  await InternalMeeting.updateOne({ _id: occurrence._id }, { $set: { invitationSentAt: null } });
+  await EmailLog.deleteMany({ to: { $in: ALL } });
+
+  await sendDueOccurrenceInvites({ now: new Date(occurrence.scheduledAt) });
+
+  const after = await InternalMeeting.findById(occurrence._id).lean();
+  assert.equal(after.invitationSentAt, null, 'one suppressed recipient must block the invited claim');
+});
+
 test('a fully suppressed send does not stamp the occurrence as invited', async () => {
   // `invitationSentAt` is the "this occurrence has been invited" claim. Counting a suppressed
   // send as delivered stamped it anyway, so the occurrence reported invitations nobody

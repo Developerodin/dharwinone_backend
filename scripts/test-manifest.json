@@ -128,6 +128,7 @@
   "./src/services/__tests__/meetingAccess.service.test.js",
   "./src/services/__tests__/meetingExcel.service.test.js",
   "./src/services/__tests__/meetingIcs.test.js",
+  "./src/services/__tests__/meetingInvitationEmail.test.js",
   "./src/services/__tests__/meetingSeries.inviteOnAdd.test.js",
   "./src/services/__tests__/notification.channelIsolation.test.js",
   "./src/services/__tests__/smartNudge.helpers.test.js",
@@ -322,6 +323,7 @@
   "src/services/__tests__/externalJob.postedWindow.test.js",
   "./src/services/__tests__/candidateCompensationWrite.test.js",
   "./src/services/__tests__/candidateDocumentDeleteS3Guard.test.js",
+  "./src/services/__tests__/candidateDocumentRestore.test.js",
   "./src/services/__tests__/offerCompensationSync.test.js",
   "./src/utils/__tests__/auditMetadata.helper.test.js",
   "./src/constants/__tests__/auditSource.test.js",
@@ -339,5 +341,6 @@
     "./src/services/__tests__/bolnaCandidateJobTitleVerification.test.js",
   "./src/services/__tests__/callSync.executionContext.test.js",
   "./src/utils/__tests__/bolnaAgentPromptLock.test.js",
-  "./src/services/__tests__/jobVacancyCapacity.test.js"
+  "./src/services/__tests__/jobVacancyCapacity.test.js",
+  "./src/services/__tests__/applicationOffer.service.test.js"
 ]

@@ -1,3 +1,8 @@
+import {
+  exportCompensationStatusCell,
+  exportEmploymentStatusCell,
+} from './candidateExcelContract.js';
+
 /**
  * RFC 4180-style CSV cells: always quoted, " escaped as "".
  * @param {unknown} value
@@ -21,9 +26,10 @@ export function csvPhoneCell(digits) {
 }
 
 /**
- * @param {{ totalCandidates: number, exportedAt: string, data: object[] }} exportData
+ * @param {{ totalCandidates: number, exportedAt: string, employmentStatusFilter?: string, data: object[] }} exportData
  */
 export function generateCandidateExportCsv(exportData) {
+  const employmentFilterScope = exportData.employmentStatusFilter;
   const headers = [
     'Employee ID',
     'Full Name',
@@ -112,8 +118,8 @@ export function generateCandidateExportCsv(exportData) {
       csvCell(candidate.assignedAgentEmail || ''),
       csvCell(candidate.designation || ''),
       csvCell(candidate.positionTitle || ''),
-      csvCell(candidate.compensationStatus || (String(candidate.compensationType || '').toLowerCase() === 'unpaid' ? 'Unpaid' : 'Paid')),
-      csvCell(candidate.employmentStatus || (candidate.isActive === false ? 'Resigned' : 'Active')),
+      csvCell(exportCompensationStatusCell(candidate)),
+      csvCell(exportEmploymentStatusCell(candidate, employmentFilterScope)),
       csvCell(candidate.isProfileCompleted ?? 0),
       csvCell(candidate.isCompleted ? 'Completed' : 'Incomplete'),
       csvCell(candidate.createdAt ? new Date(candidate.createdAt).toISOString().slice(0, 10) : ''),

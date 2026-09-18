@@ -519,6 +519,14 @@ const deleteDocumentVersion = {
   }),
 };
 
+const restoreDocumentVersion = {
+  params: Joi.object().keys({
+    candidateId: Joi.string().custom(objectId).required(),
+    slot: documentVersionSlot,
+    version: Joi.number().integer().min(1).required(),
+  }),
+};
+
 const shareCandidateProfile = {
   params: Joi.object().keys({
     candidateId: Joi.string().custom(objectId).required(),
@@ -886,6 +894,7 @@ export {
   addDocumentVersion,
   downloadDocumentVersion,
   deleteDocumentVersion,
+  restoreDocumentVersion,
   shareCandidateProfile,
   resendVerificationEmail,
   addRecruiterNote,

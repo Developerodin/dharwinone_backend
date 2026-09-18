@@ -172,6 +172,30 @@ export function employmentStatusLabel({ isActive, resignDate } = {}) {
   return 'Active';
 }
 
+/**
+ * Employee Details export cell — always Paid/Unpaid regardless of list filter.
+ * @param {{ compensationStatus?: string, compensationType?: string }} row
+ */
+export function exportCompensationStatusCell(row = {}) {
+  const preset = String(row.compensationStatus || '').trim();
+  if (preset === 'Paid' || preset === 'Unpaid') return preset;
+  return compensationStatusLabel(row.compensationType);
+}
+
+/**
+ * Employee Details export cell — scoped list filters map to Active/Resigned for every row.
+ * @param {{ employmentStatus?: string, isActive?: boolean, resignDate?: unknown }} row
+ * @param {'current'|'resigned'|'all'|string|null|undefined} employmentFilterScope
+ */
+export function exportEmploymentStatusCell(row = {}, employmentFilterScope) {
+  const scope = String(employmentFilterScope || '').toLowerCase();
+  if (scope === 'current') return 'Active';
+  if (scope === 'resigned') return 'Resigned';
+  const preset = String(row.employmentStatus || '').trim();
+  if (preset === 'Active' || preset === 'Resigned') return preset;
+  return employmentStatusLabel(row);
+}
+
 export function parseCurrentlyWorking(value) {
   const s = String(value ?? '')
     .trim()
