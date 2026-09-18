@@ -1,8 +1,8 @@
 import httpStatus from 'http-status';
 import Meeting from '../models/meeting.model.js';
-import JobApplication from '../models/jobApplication.model.js';
 import ApiError from '../utils/ApiError.js';
 import { computeRoundProgress, roundProgressLabel } from './interviewRoundProgress.service.js';
+import { planInForce } from './interviewLinkage.service.js';
 import { meetingScope } from './visibilityScope.service.js';
 import { criteriaForMeeting, listEvaluationsForMeetings } from './interviewEvaluation.service.js';
 
@@ -226,9 +226,10 @@ export const getRoundHistoryForApplication = async (applicationId, currentUser) 
     };
   });
 
-  const application = await JobApplication.findById(applicationId).select('roundPlanSnapshot').lean();
+  // planInForce, not the snapshot directly: before the first round is scheduled there is no
+  // snapshot, and that is exactly when the schedule form most needs the plan.
   const progress = computeRoundProgress({
-    planRounds: application?.roundPlanSnapshot?.rounds || [],
+    planRounds: await planInForce(applicationId),
     meetings,
   });
 

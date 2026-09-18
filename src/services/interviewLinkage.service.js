@@ -211,6 +211,39 @@ export async function allocateRoundIndex(applicationId) {
   return Number(bumped?.roundCounter) || null;
 }
 
+/** A Job.interviewRounds row reduced to the three fields a plan snapshot stores (D4). */
+const planRowsFromJob = (job) =>
+  (job?.interviewRounds || []).map((r) => ({
+    key: String(r.key),
+    label: String(r.label || '').trim() || String(r.key),
+    roundType: r.roundType ?? null,
+  }));
+
+/**
+ * The round sequence in force for this application, WITHOUT capturing it.
+ *
+ * The snapshot wins once it exists — that is the whole point of freezing it (audit R7).
+ * Before it exists, the job's live plan is genuinely what is in force, and the schedule
+ * form needs it to be able to offer a first round at all.
+ *
+ * Read-only on purpose. Capture belongs to ensureRoundPlanSnapshot, which is called only
+ * from the schedule path — a GET must never write.
+ *
+ * @param {string} applicationId
+ * @returns {Promise<Array<{key: string, label: string, roundType: string|null}>>}
+ */
+export const planInForce = async (applicationId) => {
+  if (!applicationId) return [];
+  const application = await JobApplication.findById(applicationId).select('roundPlanSnapshot job').lean();
+  const captured = application?.roundPlanSnapshot?.rounds;
+  if (Array.isArray(captured) && captured.length) return captured;
+
+  const jobId = application?.job?._id ?? application?.job ?? null;
+  if (!jobId || !mongoose.Types.ObjectId.isValid(String(jobId))) return [];
+  const job = await Job.findById(jobId).select('interviewRounds').lean();
+  return planRowsFromJob(job);
+};
+
 /**
  * The round sequence in force for this application, capturing it on first call.
  *
@@ -234,14 +267,14 @@ export const ensureRoundPlanSnapshot = async (applicationId, jobId) => {
   const captured = existing?.roundPlanSnapshot?.rounds;
   if (Array.isArray(captured) && captured.length) return captured;
 
-  if (!jobId || !mongoose.Types.ObjectId.isValid(String(jobId))) return [];
-
-  const job = await Job.findById(jobId).select('interviewRounds').lean();
-  const rounds = (job?.interviewRounds || []).map((r) => ({
-    key: String(r.key),
-    label: String(r.label || '').trim() || String(r.key),
-    roundType: r.roundType ?? null,
-  }));
+  // The explicit jobId from the linkage is preferred — it is the job this round is being
+  // scheduled against, which is authoritative even if the application's own job pointer
+  // is stale. Fall back to planInForce, which reads the application's job.
+  let rounds = [];
+  if (jobId && mongoose.Types.ObjectId.isValid(String(jobId))) {
+    rounds = planRowsFromJob(await Job.findById(jobId).select('interviewRounds').lean());
+  }
+  if (!rounds.length) rounds = await planInForce(applicationId);
   if (!rounds.length) return [];
 
   // Claim it: only write when nobody else already has. The $or covers the three shapes a
