@@ -1,14 +1,20 @@
 const OBJECT_ID_HEX_RE = /^[0-9a-fA-F]{24}$/;
 
 /**
- * Sort key for picking the latest relevant interview meeting.
- * scheduledAt is the primary signal (interview time); updatedAt/createdAt break ties.
+ * Sort key for picking the governing interview round, highest first.
+ *
+ * Round index leads, because the round NUMBER is what "latest round" means — a round 1
+ * rescheduled into next week must not override a round 2 that already happened
+ * (audit M7). scheduledAt/updatedAt/createdAt break ties and carry rows that have no
+ * index at all (legacy interviews, and interviews linked after the fact).
  */
 export const meetingRelevanceSortKey = (meeting) => {
+  const roundIndex = Number(meeting.round?.index);
+  const round = Number.isFinite(roundIndex) ? roundIndex : -1;
   const sched = meeting.scheduledAt ? new Date(meeting.scheduledAt).getTime() : 0;
   const updated = meeting.updatedAt ? new Date(meeting.updatedAt).getTime() : 0;
   const created = meeting.createdAt ? new Date(meeting.createdAt).getTime() : 0;
-  return [sched, updated, created];
+  return [round, sched, updated, created];
 };
 
 /**

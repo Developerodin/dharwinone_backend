@@ -126,7 +126,8 @@ export async function notifyJobAlertSubscribersForJob(job) {
   const subs = await JobAlertSubscription.find({ enabled: true }).select('user criteria channels').lean();
   if (!subs.length) return;
 
-  const { notify, notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
+  const { notify, notifyByEmail } = await import('./notification.service.js');
+  const { buildPortalNotificationEmail } = await import('./email.service.js');
   const link = `/ats/browse-jobs/${jobId}`;
   const title = 'New job matching your alerts';
   const message = `"${job.title}" at ${job.organisation?.name || 'an organisation'} may match your saved filters.`;
@@ -142,6 +143,15 @@ export async function notifyJobAlertSubscribersForJob(job) {
 
       // notifyByEmail also creates in-app when allowed — never call both paths.
       if (wantsEmail && user.email) {
+        const emailContent = buildPortalNotificationEmail({
+          badgeText: 'Job alert',
+          title,
+          message,
+          link,
+          subject: title,
+          primaryActionLabel: 'View job',
+          preheader: message,
+        });
         await notifyByEmail(user.email, {
           type: 'job_alert',
           title,
@@ -149,7 +159,8 @@ export async function notifyJobAlertSubscribersForJob(job) {
           link,
           email: {
             subject: title,
-            text: plainTextEmailBody(message, link),
+            text: emailContent.text,
+            html: emailContent.html,
           },
         });
       } else if (wantsInApp) {

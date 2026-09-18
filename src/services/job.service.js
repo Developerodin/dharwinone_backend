@@ -2134,7 +2134,8 @@ const shouldAutoCloseForVacancies = ({ vacancies, hired, lastHiredAt, now = new 
  */
 async function notifyVacancyFilledOwners(fullJobs, now) {
   if (!fullJobs.length) return 0;
-  const { notify, plainTextEmailBody } = await import('./notification.service.js');
+  const { notify } = await import('./notification.service.js');
+  const { buildJobVacanciesFilledEmail } = await import('./email.service.js');
   let sent = 0;
   for (const job of fullJobs) {
     // eslint-disable-next-line no-await-in-loop
@@ -2154,6 +2155,12 @@ async function notifyVacancyFilledOwners(fullJobs, now) {
       `All ${claimed.vacancies} opening(s) on "${claimed.title}" are now filled. ` +
       `Increase the vacancy count to keep hiring, or close the job post. ` +
       `It closes on its own in ${VACANCY_AUTO_CLOSE_DAYS} day(s) if left as is.`;
+    const emailContent = buildJobVacanciesFilledEmail({
+      jobTitle: claimed.title,
+      vacancies: claimed.vacancies,
+      autoCloseDays: VACANCY_AUTO_CLOSE_DAYS,
+      link,
+    });
     try {
       // eslint-disable-next-line no-await-in-loop
       await notify(claimed.createdBy, {
@@ -2162,7 +2169,11 @@ async function notifyVacancyFilledOwners(fullJobs, now) {
         message,
         link,
         relatedEntity: { type: 'Job', id: String(claimed._id) },
-        email: { subject: `Vacancies filled: ${claimed.title}`, text: plainTextEmailBody(message, link) },
+        email: {
+          subject: emailContent.subject,
+          text: emailContent.text,
+          html: emailContent.html,
+        },
       });
       sent += 1;
     } catch (err) {

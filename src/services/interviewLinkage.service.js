@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import JobApplication from '../models/jobApplication.model.js';
+import Job from '../models/job.model.js';
 import Meeting from '../models/meeting.model.js';
 import { getInterviewSchedulingBlockReason } from '../constants/atsPipeline.js';
 import {
@@ -167,6 +168,100 @@ export function assertInterviewLanguage(language) {
   }
   return lang;
 }
+
+/**
+ * Allocate the next round index for an application.
+ *
+ * Counting live meetings (the old defaultRoundIndexForApplication) reissued a number
+ * after a cancellation and collided under concurrency. This increments a persisted
+ * counter instead, so the only shared step is an atomic $inc.
+ *
+ * The seed pass reads the highest index EVER used, cancelled rounds included. If two
+ * processes seed at once they compute the same value, and the $inc that follows is
+ * atomic either way.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} applicationId
+ * @returns {Promise<number|null>} the allocated index, or null when the application is gone
+ */
+export async function allocateRoundIndex(applicationId) {
+  if (!applicationId) return null;
+  const current = await JobApplication.findById(applicationId).select('roundCounter').lean();
+  if (!current) return null;
+
+  if (!Number(current.roundCounter)) {
+    const [highest] = await Meeting.find({ applicationId })
+      .sort({ 'round.index': -1 })
+      .limit(1)
+      .select('round.index')
+      .lean();
+    const seed = Number(highest?.round?.index) || 0;
+    if (seed > 0) {
+      await JobApplication.updateOne(
+        { _id: applicationId, $or: [{ roundCounter: { $lte: 0 } }, { roundCounter: { $exists: false } }] },
+        { $set: { roundCounter: seed } }
+      );
+    }
+  }
+
+  const bumped = await JobApplication.findByIdAndUpdate(
+    applicationId,
+    { $inc: { roundCounter: 1 } },
+    { new: true, select: 'roundCounter' }
+  ).lean();
+  return Number(bumped?.roundCounter) || null;
+}
+
+/**
+ * The round sequence in force for this application, capturing it on first call.
+ *
+ * Claimed once with a conditional update, the same discipline as allocateRoundIndex: two
+ * recruiters scheduling this application's first round at the same moment must end up with
+ * ONE snapshot, not a race in which the later write silently replaces the earlier and
+ * changes which rounds the first meeting belongs to.
+ *
+ * Returns an empty array when the job plans no rounds, which readers treat as "no plan"
+ * and fall back to the pre-plan rule (audit R3). An empty array is NOT stored, so a job
+ * that gains a plan later still captures it on that application's next round.
+ *
+ * @param {string} applicationId
+ * @param {string|null} jobId
+ * @returns {Promise<Array<{key: string, label: string, roundType: string|null}>>}
+ */
+export const ensureRoundPlanSnapshot = async (applicationId, jobId) => {
+  if (!applicationId) return [];
+
+  const existing = await JobApplication.findById(applicationId).select('roundPlanSnapshot').lean();
+  const captured = existing?.roundPlanSnapshot?.rounds;
+  if (Array.isArray(captured) && captured.length) return captured;
+
+  if (!jobId || !mongoose.Types.ObjectId.isValid(String(jobId))) return [];
+
+  const job = await Job.findById(jobId).select('interviewRounds').lean();
+  const rounds = (job?.interviewRounds || []).map((r) => ({
+    key: String(r.key),
+    label: String(r.label || '').trim() || String(r.key),
+    roundType: r.roundType ?? null,
+  }));
+  if (!rounds.length) return [];
+
+  // Claim it: only write when nobody else already has. The $or covers the three shapes a
+  // never-captured application can be in (absent, null, empty).
+  await JobApplication.updateOne(
+    {
+      _id: applicationId,
+      $or: [
+        { 'roundPlanSnapshot.rounds': { $exists: false } },
+        { 'roundPlanSnapshot.rounds': { $size: 0 } },
+      ],
+    },
+    { $set: { roundPlanSnapshot: { capturedAt: new Date(), rounds } } }
+  );
+
+  // Read back rather than trusting the write: if a concurrent caller won the claim, theirs
+  // is the sequence in force and ours must be discarded.
+  const after = await JobApplication.findById(applicationId).select('roundPlanSnapshot').lean();
+  return after?.roundPlanSnapshot?.rounds || rounds;
+};
 
 export async function defaultRoundIndexForApplication(applicationId) {
   const count = await Meeting.countDocuments({

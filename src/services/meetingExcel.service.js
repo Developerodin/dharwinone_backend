@@ -1,4 +1,5 @@
 import XLSX from 'xlsx';
+import { buildRoundName } from './interviewRound.service.js';
 
 /**
  * Defang a cell against CSV/Excel formula injection. A leading =, +, -, or @
@@ -44,6 +45,26 @@ function formatResultLabel(result) {
 }
 
 /**
+ * Evaluation count and average weighted score for one row.
+ *
+ * Reads `meeting.evaluations`, which the export controller attaches — this file stays a
+ * pure formatter with no database access, like the rest of it.
+ *
+ * Legacy scorecards have no weighted score, so they are counted but left out of the
+ * average; treating them as 0 would understate every candidate interviewed before the
+ * weighted rubric existed. An empty average is '' rather than 0, so a spreadsheet does
+ * not read "not scored" as "scored zero".
+ */
+function summariseEvaluations(meeting) {
+  const rows = Array.isArray(meeting.evaluations) ? meeting.evaluations : [];
+  const scores = rows.map((r) => Number(r.weightedScore)).filter((n) => Number.isFinite(n));
+  const average = scores.length
+    ? Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1))
+    : '';
+  return { count: rows.length, average };
+}
+
+/**
  * Build an in-memory .xlsx workbook of ATS interviews (Meeting docs).
  *
  * Pure function — no I/O. Candidate / recruiter are embedded snapshots on the
@@ -57,6 +78,7 @@ export function buildMeetingsExportBuffer(meetings = []) {
     'Title', 'Candidate Name', 'Candidate Email', 'Candidate Phone',
     'Job Position', 'Interview Type', 'Recruiter Name', 'Recruiter Email',
     'Scheduled At (UTC)', 'Duration (min)', 'Status', 'Result',
+    'Round', 'Rubric', 'Evaluations', 'Avg Weighted Score %',
     'Created At (UTC)', 'Meeting Link',
   ];
   // Header on row 1 (no banner/blank offset) so sort, filter, and freeze work.
@@ -64,6 +86,7 @@ export function buildMeetingsExportBuffer(meetings = []) {
   for (const m of meetings) {
     const c = m.candidate || {};
     const r = m.recruiter || {};
+    const evaluationSummary = summariseEvaluations(m);
     aoa.push(
       [
         m.title || '',
@@ -78,6 +101,10 @@ export function buildMeetingsExportBuffer(meetings = []) {
         m.durationMinutes ?? '',
         formatStatusLabel(m.status),
         formatResultLabel(m.interviewResult),
+        buildRoundName(m.round),
+        m.rubricSnapshot?.templateName || '',
+        evaluationSummary.count,
+        evaluationSummary.average,
         fmtDateTime(m.createdAt),
         m.publicMeetingUrl || '',
       ].map(defangCell)

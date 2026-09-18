@@ -37,7 +37,8 @@ import {
 import {
   deriveSchedulingLinkage,
   assertInterviewLanguage,
-  defaultRoundIndexForApplication,
+  allocateRoundIndex,
+  ensureRoundPlanSnapshot,
   resolveInterviewApplication,
   normalizeLinkageStatus,
   linkageRevisionQuery,
@@ -45,6 +46,7 @@ import {
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
+import { resolveRubricForRound } from './rubricTemplate.service.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
 /** Minutes before the start that an interview reminder becomes due. */
@@ -483,10 +485,80 @@ const createMeeting = async (body, userId) => {
   const interviewLanguage = assertInterviewLanguage(body.interviewLanguage);
   let round = body.round;
   if (linkage.applicationId && (!round || round.index == null)) {
-    round = { ...(round || {}), index: await defaultRoundIndexForApplication(linkage.applicationId) };
+    // Counter-allocated, never count-derived: see allocateRoundIndex (audit M3/M4).
+    round = { ...(round || {}), index: await allocateRoundIndex(linkage.applicationId) };
   }
   if (round?.type && !INTERVIEW_ROUND_TYPES.includes(round.type)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid round type');
+  }
+
+  /**
+   * Freeze the application's round sequence, then decide which row this round fills.
+   *
+   * An explicit planKey from the caller wins — the schedule form sends the row the
+   * recruiter picked. With none, fall to the first planned row that has no live round yet,
+   * so the common case needs no input at all.
+   *
+   * A snapshot failure must not block scheduling an interview: the round is booked with
+   * planKey null, reads as off-plan, and is recoverable by PATCHing the round later.
+   */
+  if (linkage.applicationId) {
+    try {
+      const planRounds = await ensureRoundPlanSnapshot(
+        linkage.applicationId,
+        linkage.jobId ? String(linkage.jobId) : null
+      );
+      if (planRounds.length) {
+        let planKey = round?.planKey ? String(round.planKey) : null;
+        if (planKey && !planRounds.some((r) => r.key === planKey)) planKey = null;
+
+        if (!planKey) {
+          const held = await Meeting.find({
+            applicationId: linkage.applicationId,
+            status: { $ne: 'cancelled' },
+            'round.planKey': { $ne: null },
+          })
+            .select('round.planKey')
+            .lean();
+          const taken = new Set(held.map((m) => String(m.round?.planKey || '')));
+          planKey = planRounds.find((r) => !taken.has(r.key))?.key || null;
+        }
+
+        const row = planRounds.find((r) => r.key === planKey) || null;
+        round = {
+          ...(round || {}),
+          planKey,
+          // The plan names the round unless the caller said otherwise. Two rounds of the
+          // same type are only distinguishable by their label, so losing it loses the
+          // distinction the plan exists to express.
+          ...(row && !round?.label ? { label: row.label } : {}),
+          ...(row?.roundType && !round?.type ? { type: row.roundType } : {}),
+        };
+      }
+    } catch (err) {
+      logger.warn('[createMeeting] round plan snapshot failed; round scheduled off-plan', {
+        applicationId: String(linkage.applicationId),
+        error: err?.message || String(err),
+      });
+    }
+  }
+
+  // Resolve once and pin a copy: see Meeting.rubricSnapshot. A resolution failure must
+  // not block scheduling an interview, so it degrades to no snapshot and readers fall
+  // back to the default criteria.
+  let rubricSnapshot;
+  try {
+    const resolved = await resolveRubricForRound({
+      jobId: linkage.jobId ? String(linkage.jobId) : null,
+      roundType: round?.type || null,
+      planKey: round?.planKey || null,
+    });
+    rubricSnapshot = { ...resolved, capturedAt: new Date() };
+  } catch (err) {
+    logger.warn('[createMeeting] rubric resolution failed; round scheduled without a snapshot', {
+      error: err?.message || String(err),
+    });
+    rubricSnapshot = undefined;
   }
 
   const meetingId = await generateUniqueLivekitRoomId();
@@ -496,6 +568,7 @@ const createMeeting = async (body, userId) => {
   const linkageFields = {
     interviewLanguage,
     round,
+    rubricSnapshot,
     applicationId: linkage.applicationId,
     jobId: linkage.jobId,
     candidateId: linkage.candidateId,
@@ -1047,15 +1120,16 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   } else if ('durationMinutes' in safeBody) {
     delete safeBody.durationMinutes;
   }
-  // Rubric authorship is server-owned: a client can send ratings/comment, never who scored or when.
-  // Stamped on every scorecard write so a later reader sees who owns the score set currently stored.
-  if (safeBody.interviewScorecard) {
-    safeBody.interviewScorecard = {
-      ratings: safeBody.interviewScorecard.ratings || [],
-      comment: safeBody.interviewScorecard.comment || '',
-      scoredBy: userId || meeting.createdBy || null,
-      scoredAt: new Date(),
-    };
+  /**
+   * The single embedded scorecard is READ-ONLY as of the per-interviewer evaluation
+   * model. Writing it destroyed every earlier evaluation on the round (audit R1), and an
+   * empty object coerced to `ratings: []` wiped a real one (audit R5).
+   *
+   * Existing rows still render, labelled as legacy, in the round history. New scores go
+   * to PUT /v1/meetings/:id/evaluation.
+   */
+  if ('interviewScorecard' in safeBody) {
+    delete safeBody.interviewScorecard;
   }
   const previousScheduledAt = meeting.scheduledAt;
   const previousDurationMinutes = meeting.durationMinutes;
@@ -1186,6 +1260,26 @@ const deleteMeetingById = async (id, currentUser = null) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
   }
   await assertMeetingInScope(meeting, currentUser);
+  /**
+   * A round that recorded an outcome or an evaluation is hiring evidence, not clutter.
+   * Deleting it erased the result and the scorecard with no tombstone (audit M6), so
+   * refuse and send the caller to Cancel, which keeps the row and its number.
+   *
+   * Scheduled rounds nobody has judged are still deletable - that is the mis-booking case.
+   */
+  const hasDecision = meeting.interviewResult && meeting.interviewResult !== 'pending';
+  const hasLegacyScorecard =
+    Boolean(meeting.interviewScorecard?.ratings?.length) ||
+    Boolean(String(meeting.interviewScorecard?.comment || '').trim());
+  if (hasDecision || hasLegacyScorecard) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'This round has a recorded result or evaluation and cannot be deleted. Cancel it instead - the round stays in the history.',
+      true,
+      '',
+      { errorCode: 'round_has_record' }
+    );
+  }
   // Stop egress + wait for finalize BEFORE removing the meeting doc, otherwise
   // a live recording is orphaned in EGRESS_ACTIVE with no DB row to reconcile.
   if (meeting.meetingId) {
@@ -1862,6 +1956,24 @@ const meetingHasRecording = async (meeting) => {
   return Boolean(rec);
 };
 
+/**
+ * Fetch a meeting for the evaluation endpoints, enforcing the same visibility rule as
+ * every other meeting read. Kept here rather than in interviewEvaluation.service.js so
+ * that service never has to import this one.
+ *
+ * @param {string} id - ObjectId or meetingId string
+ * @param {object} currentUser
+ * @returns {Promise<object>} the meeting document
+ */
+const getMeetingForEvaluation = async (id, currentUser) => {
+  const meeting = await resolveMeetingByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertMeetingInScope(meeting, currentUser);
+  return meeting;
+};
+
 const getMeetingLinkage = async (id, currentUser) => {
   const meeting = await resolveMeetingByIdOrMeetingId(id);
   if (!meeting) {
@@ -1926,6 +2038,19 @@ const patchMeetingLinkage = async (id, body, userId, currentUser) => {
     const meetingCand = meeting.candidate?.id;
     if (meetingCand && linkage.candidateId && String(linkage.candidateId) !== String(meetingCand)) {
       throw new ApiError(httpStatus.BAD_REQUEST, 'Application candidate does not match interview candidate');
+    }
+    // An interview linked after the fact joined the application's history with no round
+    // number: it sorted last whenever it happened, and it inflated the old count so the
+    // next scheduled round skipped a number (audit M5). Allocate one now, unless this
+    // PATCH supplies a round explicitly or the meeting already has an index.
+    const linkingToNewApplication =
+      String(linkage.applicationId || '') !== String(meeting.applicationId || '');
+    if (linkingToNewApplication && updates.round?.index == null && meeting.round?.index == null) {
+      const allocatedIndex = await allocateRoundIndex(linkage.applicationId);
+      if (allocatedIndex != null) {
+        const existingRound = updates.round || meeting.round?.toObject?.() || meeting.round || {};
+        updates.round = { ...existingRound, index: allocatedIndex };
+      }
     }
     updates.applicationId = linkage.applicationId;
     updates.jobId = linkage.jobId;
@@ -2085,6 +2210,7 @@ const markMeetingEndedWhenRoomFinished = async (roomName) => {
 
 export {
   createMeeting,
+  getMeetingForEvaluation,
   getMeetingLinkage,
   patchMeetingLinkage,
   createExplicitApplicationForMeeting,

@@ -7,7 +7,8 @@ import { OVERLAP_WINDOW_MS } from '../constants/smartNudge.situations.js';
 import { dateBucketUtc, copySignature, isObjectIdHex } from './smartNudge.helpers.js';
 import { runAllDetectors } from './smartNudge.detector.js';
 import { resolveCopies } from './smartNudge.copy.js';
-import { notify, plainTextEmailBody } from './notification.service.js';
+import { notify } from './notification.service.js';
+import { buildPortalNotificationEmail } from './email.service.js';
 
 /**
  * Count smart nudges already recorded for this user today.
@@ -135,9 +136,18 @@ export const runSmartNudgeTick = async (deps = {}) => {
         metadata: { ...(event.metadata || {}), situation: event.situation, entityId: String(event.entityId) },
       };
       if (event.severity === 'high') {
+        const emailContent = buildPortalNotificationEmail({
+          badgeText: 'Reminder',
+          title: copy.title,
+          message: copy.message,
+          link: event.link,
+          subject: copy.title,
+          preheader: copy.message,
+        });
         payload.email = {
           subject: copy.title,
-          text: plainTextEmailBody(copy.message, event.link),
+          text: emailContent.text,
+          html: emailContent.html,
         };
       }
       await notifyFn(userId, payload);

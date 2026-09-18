@@ -101,6 +101,99 @@ const jobSchema = new mongoose.Schema(
     /** Optional last date to accept applications; shown on browse listings when set. */
     applicationDeadline: { type: Date, default: null },
 
+    /**
+     * This job's interview rubrics. Empty — the default, and the state of every job that
+     * predates this field — means the job has no opinion, and scoring falls through to the
+     * template rungs in rubricTemplate.service.js resolveRubricForRound.
+     *
+     * A row targets one round type, or `roundType: null` for the job's own default, and
+     * names EITHER a template to reuse or its own criteria. Validation enforces exactly one
+     * of the two; nothing here can, which is why rubricAssignmentsError runs on every
+     * write (audit J5).
+     *
+     * `templateId` is a REFERENCE: editing that template changes what this job scores
+     * against, which is the point of a template. `criteria` is a COPY owned by this job.
+     * Either way the resolved result is snapshotted onto the interview at schedule time,
+     * so changing any of it can never restate a round that already happened (audit J2).
+     *
+     * The job form's toggle is DERIVED from this array being non-empty. There is
+     * deliberately no separate boolean — two fields could disagree, and then "does this job
+     * have its own rubric" would have two answers.
+     */
+    rubricAssignments: [
+      {
+        _id: false,
+        /** null = this job's default row. At most one null row; enforced in validation. */
+        roundType: { type: String, default: null },
+        templateId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'RubricTemplate',
+          default: null,
+        },
+        criteria: [
+          {
+            _id: false,
+            key: { type: String, required: true, trim: true },
+            label: { type: String, required: true, trim: true },
+            weight: { type: Number, required: true },
+            scaleMin: { type: Number, default: 1 },
+            scaleMax: { type: Number, default: 5 },
+          },
+        ],
+      },
+    ],
+
+    /**
+     * This job's interview rounds, in the order they are held. Empty — the default, and
+     * the state of every job that predates this field — means the job plans no rounds,
+     * and everything downstream falls back to its pre-plan behaviour (audit R3).
+     *
+     * This is the write target that replaces `rubricAssignments`. Each row owns BOTH its
+     * place in the sequence and the rubric it is scored against, because a separate count
+     * and a separate type-keyed rubric list can disagree, and then "which rubric for
+     * round 2" has two answers (audit R1). It also lets two rounds share a round type —
+     * "Technical 1" and "Technical 2" at different bars — which the old one-row-per-type
+     * rule made impossible.
+     *
+     * `key` is generated once and frozen. `Meeting.round.planKey` stores it and
+     * `JobApplication.roundPlanSnapshot` repeats it, so changing a key orphans every
+     * round already held against that row (audit R6).
+     *
+     * `templateId` is a REFERENCE: editing that template changes what this round scores
+     * against, which is the point of a template. `criteria` is a COPY owned by this job.
+     * Either way the resolved result is snapshotted onto the interview at schedule time,
+     * so changing any of it can never restate a round that already happened (audit R7).
+     *
+     * Nothing in Mongoose can enforce "exactly one of templateId and criteria", or a
+     * unique key, which is why roundPlanError runs on every write.
+     */
+    interviewRounds: [
+      {
+        _id: false,
+        /** Stable, frozen, unique within the job. See ROUND_PLAN_KEY_PATTERN. */
+        key: { type: String, required: true, trim: true },
+        /** What the recruiter calls this round, e.g. "Technical 2". Shown everywhere. */
+        label: { type: String, required: true, trim: true },
+        /** One of INTERVIEW_ROUND_TYPES, or null. May repeat across rows, unlike rubricAssignments. */
+        roundType: { type: String, default: null },
+        templateId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'RubricTemplate',
+          default: null,
+        },
+        criteria: [
+          {
+            _id: false,
+            key: { type: String, required: true, trim: true },
+            label: { type: String, required: true, trim: true },
+            weight: { type: Number, required: true },
+            scaleMin: { type: Number, default: 1 },
+            scaleMax: { type: Number, default: 5 },
+          },
+        ],
+      },
+    ],
+
     // Template Reference (if created from template)
     templateId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -189,6 +282,25 @@ jobSchema.plugin(paginate);
 // P3: tenant-safe compound indexes.
 jobSchema.index({ tenantId: 1, createdBy: 1 });
 jobSchema.index({ tenantId: 1, status: 1 });
+/**
+ * Reverse lookup: which jobs reference a given rubric template.
+ *
+ * Needed by the archive guard and by the "used by N jobs" count on the template list
+ * (audit J3, J15). Sparse, because most jobs have no assignments at all.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build it.
+ * It needs a deliberate index-creation step on deploy. Correctness does not depend on it;
+ * only the latency of those two lookups does.
+ */
+jobSchema.index({ 'rubricAssignments.templateId': 1 }, { sparse: true });
+/**
+ * Backs jobsUsingTemplate and countJobsByTemplate, which the archive guard calls before
+ * refusing to archive a rubric a job still points at.
+ *
+ * NOTE: autoIndex is off in production. This index will NOT appear on a normal prod
+ * deploy — see the deploy notes at the end of this plan.
+ */
+jobSchema.index({ 'interviewRounds.templateId': 1 }, { sparse: true });
 
 // Include createdAt (and updatedAt) in API response so Posted Date is available in the UI
 const originalJobToJSON = jobSchema.options.toJSON?.transform;

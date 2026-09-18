@@ -142,6 +142,18 @@ const meetingSchema = mongoose.Schema(
         enum: INTERVIEW_ROUND_TYPES,
       },
       label: { type: String, trim: true },
+      /**
+       * The key of the JobApplication.roundPlanSnapshot row this round was scheduled
+       * against. Null for a round with no plan in force, and for an ad-hoc round the
+       * recruiter added outside the plan — both are legitimate and neither blocks
+       * completion; they are reported as off-plan instead (audit R6).
+       *
+       * Stored, never derived. round.index cannot stand in for it: the index keeps
+       * climbing when a round is cancelled and rebooked, so a 3-round plan can end up
+       * holding rounds numbered 1 and 3, and any index-based matching then mis-reports
+       * that application's progress permanently.
+       */
+      planKey: { type: String, default: null },
     },
     interviewLanguage: {
       type: String,
@@ -283,6 +295,33 @@ const meetingSchema = mongoose.Schema(
       scoredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       scoredAt: { type: Date, default: null },
     },
+    /**
+     * The rubric this round is scored against, COPIED from the resolved RubricTemplate
+     * when the round is scheduled.
+     *
+     * It is a copy on purpose: editing or re-weighting a template must never change what
+     * a past round was measured by. Every reader — the evaluation form, the weighted
+     * total, the history panel — uses this, never the live template.
+     *
+     * Empty on rounds scheduled before this field existed. Readers fall back to
+     * DEFAULT_RUBRIC_CRITERIA; they must NOT resolve a template retroactively, because
+     * that would score an old round against today's rubric.
+     */
+    rubricSnapshot: {
+      templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'RubricTemplate', default: null },
+      templateName: { type: String, trim: true, default: '' },
+      criteria: [
+        {
+          _id: false,
+          key: { type: String, required: true, trim: true },
+          label: { type: String, required: true, trim: true },
+          weight: { type: Number, required: true },
+          scaleMin: { type: Number, default: 1 },
+          scaleMax: { type: Number, default: 5 },
+        },
+      ],
+      capturedAt: { type: Date, default: null },
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -322,6 +361,32 @@ meetingSchema.index({ 'candidate.id': 1 });
  * index. It needs a deliberate index-creation step on deploy.
  */
 meetingSchema.index({ scheduledAt: 1 });
+
+/**
+ * One round number per application. The database-level guarantee behind
+ * allocateRoundIndex — without it, two concurrent schedules could still land on the same
+ * number if the counter is ever bypassed.
+ *
+ * Partial, because rounds with no application or no index are legitimate (an unlinked
+ * interview, a legacy row) and a plain unique index would collide all of them on null.
+ *
+ * ⚠️ This index FAILS TO BUILD while duplicates exist. Run
+ * src/scripts/reportDuplicateRoundIndexes.js first.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build it
+ * there. Staging and local build it automatically — which is exactly where a duplicate
+ * will surface first.
+ */
+meetingSchema.index(
+  { applicationId: 1, 'round.index': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      applicationId: { $exists: true },
+      'round.index': { $exists: true },
+    },
+  }
+);
 
 /**
  * Generate unique meetingId

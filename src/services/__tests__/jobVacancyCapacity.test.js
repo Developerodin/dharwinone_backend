@@ -359,6 +359,8 @@ test('the owner is told as soon as the openings fill, without waiting for the cl
   assert.equal(calls.notified[0].options.type, 'job_filled');
   assert.equal(calls.notified[0].options.link, `/ats/jobs/edit/${JOB_A}`);
   assert.match(calls.notified[0].options.email.subject, /Node Dev/);
+  assert.ok(calls.notified[0].options.email.html?.includes('Vacancies filled'));
+  assert.ok(calls.notified[0].options.email.text?.includes('Node Dev'));
   assert.equal(calls.closed.length, 0);
 });
 
