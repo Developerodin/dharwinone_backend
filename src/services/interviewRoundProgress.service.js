@@ -53,6 +53,7 @@ export const computeRoundProgress = ({ planRounds = [], meetings = [] } = {}) =>
       heldCount: 0,
       passedCount: 0,
       offPlanCount: live.length,
+      remainingCount: 0,
       isComplete: false,
       rejectedAt: null,
       nextRound: null,
@@ -98,6 +99,17 @@ export const computeRoundProgress = ({ planRounds = [], meetings = [] } = {}) =>
   const passedCount = rows.filter((r) => r.state === 'passed').length;
   const isComplete = rows.every((r) => r.state === 'passed');
   const nextRound = rejected || isComplete ? null : rows.find((r) => r.state === 'unscheduled') || null;
+  /**
+   * Rounds still to finish: every row that has not passed, counted per ROW.
+   *
+   * A plan with two Technical rows needs both of them done — the unit is the row, never
+   * the round type, which is the whole reason a row carries a frozen key. A scheduled
+   * round with no result yet still counts as remaining: it is held, not finished.
+   *
+   * Zero once rejected. The process stopped, so nothing remains to run, and "2 remaining"
+   * beside "Rejected at Technical 1" would read as work still expected.
+   */
+  const remainingCount = rejected ? 0 : rows.filter((r) => r.state !== 'passed').length;
 
   return {
     hasPlan: true,
@@ -105,6 +117,7 @@ export const computeRoundProgress = ({ planRounds = [], meetings = [] } = {}) =>
     heldCount,
     passedCount,
     offPlanCount,
+    remainingCount,
     isComplete,
     rejectedAt: rejected ? { key: rejected.key, label: rejected.label, index: rejected.index } : null,
     nextRound: nextRound

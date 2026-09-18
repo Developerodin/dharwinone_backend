@@ -108,3 +108,38 @@ test('labels read correctly in every state', () => {
     /Rejected at Screening/i
   );
 });
+
+test('remainingCount counts rows, so two Technical rounds need two results', () => {
+  // Nothing held yet: all three rows remain.
+  assert.equal(computeRoundProgress({ planRounds: plan, meetings: [] }).remainingCount, 3);
+
+  // Screening and the FIRST technical passed. The second technical is a separate row and
+  // still remains — the unit is the row, not the round type.
+  const oneTechnicalDone = computeRoundProgress({
+    planRounds: plan,
+    meetings: [meeting('round_1', 'selected'), meeting('round_2', 'selected')],
+  });
+  assert.equal(oneTechnicalDone.remainingCount, 1);
+  assert.equal(oneTechnicalDone.nextRound.key, 'round_3');
+
+  // Both technicals done: the plan is finished and nothing remains.
+  const bothTechnicalsDone = computeRoundProgress({
+    planRounds: plan,
+    meetings: plan.map((r) => meeting(r.key, 'selected')),
+  });
+  assert.equal(bothTechnicalsDone.remainingCount, 0);
+  assert.equal(bothTechnicalsDone.isComplete, true);
+
+  // Held but unscored still counts as remaining: it is not finished.
+  assert.equal(
+    computeRoundProgress({ planRounds: plan, meetings: [meeting('round_1', 'pending', 'scheduled')] })
+      .remainingCount,
+    3
+  );
+
+  // Rejected stops the process, so nothing remains to run.
+  assert.equal(
+    computeRoundProgress({ planRounds: plan, meetings: [meeting('round_1', 'rejected')] }).remainingCount,
+    0
+  );
+});
