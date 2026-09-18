@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import pick from '../utils/pick.js';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 import {
   createJob,
   queryJobs,
@@ -718,6 +719,81 @@ const parsePublicResume = catchAsync(async (req, res) => {
 });
 
 /**
+ * Stream a resume parse to the client as Server-Sent Events.
+ *
+ * Event types, one JSON object per `data:` frame:
+ *   {type:'stage',  stage:'extracting'|'reading', chars?}  progress milestones
+ *   {type:'field',  field, value}                          a contact field the model finished
+ *   {type:'skill',  name}                                  a skill the model finished
+ *   {type:'result', status, warnings, fields}              final payload, identical to the
+ *                                                          buffered endpoint's response body
+ *   {type:'error',  message}                               unexpected failure, no result follows
+ *
+ * `result` is authoritative; everything before it is a preview for the UI. A client that loses the
+ * connection therefore degrades to "nothing arrived", never to partial data treated as complete.
+ */
+async function streamResumeParse(req, res) {
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'resume is required (multipart field name: resume)');
+  }
+
+  res.writeHead(httpStatus.OK, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    // nginx buffers proxied responses by default, which would hold every event back until the
+    // request finished — exactly defeating the point of streaming.
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  let clientGone = false;
+  req.on('close', () => {
+    clientGone = true;
+  });
+
+  const emit = (event) => {
+    if (clientGone || res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const { parseResumeForPublicApplyStream } = await import('../services/resumeSkillsExtract.service.js');
+  try {
+    await parseResumeForPublicApplyStream(
+      file.buffer,
+      file.mimetype || 'application/octet-stream',
+      file.originalname || 'resume.pdf',
+      emit
+    );
+  } catch (e) {
+    // Headers are already sent, so the error middleware cannot help — report in-band instead.
+    logger.error('[parsePublicResumeStream] unexpected failure', { message: e?.message });
+    emit({ type: 'error', message: 'Resume parsing failed. You can fill in the form manually.' });
+  }
+
+  if (!clientGone) res.end();
+}
+
+/**
+ * POST /v1/public/jobs/:jobId/parse-resume/stream — streaming twin of parsePublicResume.
+ */
+const parsePublicResumeStream = catchAsync(async (req, res) => {
+  const job = await getJobById(req.params.jobId);
+  if (!job || job.status !== 'Active') {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
+  }
+  await streamResumeParse(req, res);
+});
+
+/**
+ * POST /v1/public/parse-resume/stream — streaming twin of parsePublicResumeOnboard.
+ */
+const parsePublicResumeOnboardStream = catchAsync(async (req, res) => {
+  await streamResumeParse(req, res);
+});
+
+/**
  * POST /v1/public/parse-resume — AI prefill for candidate onboarding (no job id).
  */
 const parsePublicResumeOnboard = catchAsync(async (req, res) => {
@@ -840,6 +916,8 @@ export {
   publicApplyToJob,
   parsePublicResume,
   parsePublicResumeOnboard,
+  parsePublicResumeStream,
+  parsePublicResumeOnboardStream,
   checkPublicEmail,
   listBookmarks,
   addBookmark,

@@ -2,13 +2,126 @@ import mammoth from 'mammoth';
 import JSZip from 'jszip';
 import XLSX from 'xlsx';
 
+/** Items within this many points of the same baseline belong to one visual line. */
+const LINE_Y_TOLERANCE = 2.5;
+/** A whitespace band must span at least this share of page width to count as a column gutter. */
+const COLUMN_GAP_RATIO = 0.06;
+
+function toTextBox(item) {
+  const t = Array.isArray(item.transform) ? item.transform : [];
+  const x = Number(t[4]) || 0;
+  const y = Number(t[5]) || 0;
+  const h = Math.abs(Number(t[3])) || Math.abs(Number(item.height)) || 10;
+  const w = Number(item.width) || 0;
+  return { x, y, h, x2: x + w, str: item.str };
+}
+
+/**
+ * Find the x of a vertical gutter splitting the page into two columns, or null.
+ * Bins the x-axis, takes the widest interior empty run, and requires both sides to
+ * hold a meaningful share of the text so a wide margin is not mistaken for a gutter.
+ */
+function detectColumnSplit(boxes, pageWidth) {
+  if (boxes.length < 20 || !pageWidth) return null;
+  const BINS = 100;
+  const binWidth = pageWidth / BINS;
+  const filled = new Array(BINS).fill(false);
+  for (const b of boxes) {
+    const start = Math.max(0, Math.floor(b.x / binWidth));
+    const end = Math.min(BINS - 1, Math.floor(b.x2 / binWidth));
+    for (let i = start; i <= end; i++) filled[i] = true;
+  }
+
+  let best = null;
+  let runStart = -1;
+  for (let i = 1; i < BINS - 1; i++) {
+    if (!filled[i]) {
+      if (runStart < 0) runStart = i;
+    } else if (runStart >= 0) {
+      const len = i - runStart;
+      if (!best || len > best.len) best = { start: runStart, len };
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0) {
+    const len = BINS - 1 - runStart;
+    if (!best || len > best.len) best = { start: runStart, len };
+  }
+  if (!best || best.len < BINS * COLUMN_GAP_RATIO) return null;
+
+  const splitX = (best.start + best.len / 2) * binWidth;
+  const leftCount = boxes.filter((b) => b.x2 <= splitX).length;
+  const minShare = boxes.length * 0.15;
+  if (leftCount < minShare || boxes.length - leftCount < minShare) return null;
+  return splitX;
+}
+
+/**
+ * Join positioned text runs into lines.
+ * PDF producers emit kerned runs with no space glyph between them, so a space is
+ * inserted whenever the horizontal gap is wide relative to the glyph height.
+ */
+function boxesToText(boxes) {
+  const lines = [];
+  const sorted = [...boxes].sort((a, b) => b.y - a.y || a.x - b.x);
+  for (const box of sorted) {
+    const current = lines[lines.length - 1];
+    if (current && Math.abs(current.y - box.y) <= LINE_Y_TOLERANCE) current.items.push(box);
+    else lines.push({ y: box.y, items: [box] });
+  }
+
+  return lines
+    .map((line) => {
+      const items = line.items.sort((a, b) => a.x - b.x);
+      let out = '';
+      let prevX2 = null;
+      for (const item of items) {
+        if (prevX2 != null && item.x - prevX2 > item.h * 0.2) out += ' ';
+        out += item.str;
+        prevX2 = item.x2;
+      }
+      return out.replace(/[^\S\n]{2,}/g, ' ').trim();
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Reconstruct a page's text in human reading order from pdfjs text items.
+ * The default text layer follows content-stream order, which on two-column
+ * (photo sidebar + main) resume templates interleaves the columns line by line.
+ * @param {Array<object>} items - pdfjs getTextContent().items
+ * @param {number} pageWidth
+ * @returns {string}
+ */
+export function layoutAwarePageText(items, pageWidth) {
+  // Whitespace-only items are pdfjs's own gap markers, and on a two-column page it emits one
+  // that spans the whole gutter — which would hide the gutter from detectColumnSplit. Drop
+  // them; boxesToText reinstates spacing from the geometry.
+  const boxes = (items || [])
+    .filter((i) => i && typeof i.str === 'string' && i.str.trim().length > 0)
+    .map(toTextBox);
+  if (boxes.length === 0) return '';
+
+  const splitX = detectColumnSplit(boxes, pageWidth);
+  // ponytail: handles the 2-column case that covers designed resume templates.
+  // A 3+ column page falls back to single-column order; split recursively if that shows up.
+  if (splitX == null) return boxesToText(boxes);
+
+  const left = boxes.filter((b) => b.x2 <= splitX);
+  const right = boxes.filter((b) => b.x2 > splitX);
+  return [boxesToText(left), boxesToText(right)].filter(Boolean).join('\n\n');
+}
+
 /**
  * Extract raw text + embedded hyperlinks from PDF buffer.
  * Uses pdfjs-dist to get page text and link annotations.
  * YouTube links found on each page are injected inline so they associate
  * with the correct module when the text is later split by module headers.
  * @param {Buffer} buffer
- * @param {{ skipYoutubeLinks?: boolean }} [opts]
+ * @param {{ skipYoutubeLinks?: boolean, layoutAware?: boolean }} [opts] - layoutAware
+ *   reorders text by position instead of content-stream order (resume parsing); off by
+ *   default so course-document extraction is unchanged.
  */
 /* eslint-disable import/no-extraneous-dependencies */
 async function extractTextFromPdfBuffer(buffer, opts = {}) {
@@ -23,7 +136,9 @@ async function extractTextFromPdfBuffer(buffer, opts = {}) {
     const page = await doc.getPage(i);
 
     const tc = await page.getTextContent();
-    let text = tc.items.map((item) => item.str + (item.hasEOL ? '\n' : '')).join('');
+    let text = opts.layoutAware
+      ? layoutAwarePageText(tc.items, page.getViewport({ scale: 1 })?.width)
+      : tc.items.map((item) => item.str + (item.hasEOL ? '\n' : '')).join('');
 
     if (!opts.skipYoutubeLinks) {
       const annotations = await page.getAnnotations();
@@ -59,6 +174,24 @@ async function extractTextFromPdfBuffer(buffer, opts = {}) {
   }
 
   return fullText;
+}
+
+/**
+ * Page count of a PDF buffer, or 0 when it cannot be read.
+ * Used to bound the cost of the resume vision fallback before a file is sent to a model.
+ * @param {Buffer} buffer
+ * @returns {Promise<number>}
+ */
+export async function getPdfPageCount(buffer) {
+  try {
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+    const { numPages } = doc;
+    await doc.destroy();
+    return numPages;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -416,7 +549,8 @@ export function extractDocumentTitle(rawText) {
  * @param {Buffer} buffer - File buffer
  * @param {string} mimeType - MIME type
  * @param {string} filename - Original filename
- * @param {{ skipYoutubeLinks?: boolean }} [opts] - Pass skipYoutubeLinks:true for resume parsing
+ * @param {{ skipYoutubeLinks?: boolean, layoutAware?: boolean }} [opts] - Pass
+ *   skipYoutubeLinks:true and layoutAware:true for resume parsing
  * @returns {Promise<string>} Raw extracted text
  */
 export async function extractRawTextFromFile(buffer, mimeType, filename, opts = {}) {

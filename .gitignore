@@ -52,6 +52,9 @@ src/services/__tests__/helpers/
 !src/validations/__tests__/
 !src/validations/__tests__/meeting.roundType.validation.test.js
 !src/services/__tests__/job.applicationNotification.test.js
+!src/services/__tests__/resumeParseStructure.test.js
+!src/services/__tests__/resumeVisionFallback.test.js
+!src/services/__tests__/resumeParseStream.test.js
 !src/services/meeting.service.test.js
 !src/services/offer.service.test.js
 

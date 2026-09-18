@@ -62,6 +62,20 @@ router.post(
 );
 
 /**
+ * POST /v1/public/parse-resume/stream
+ * Same parse delivered as Server-Sent Events, so the form fills in as the model writes.
+ * Identical guards to the buffered route above; the final `result` event carries the same body.
+ */
+router.post(
+  '/parse-resume/stream',
+  publicResumeParseLimiter,
+  verifyCaptcha,
+  uploadPublicResumeParse,
+  validate(authValidation.parsePublicResumeOnboard),
+  jobController.parsePublicResumeOnboardStream
+);
+
+/**
  * POST /v1/public/livekit-token
  * Public LiveKit token (no auth). Body: { roomName, participantName }
  */
@@ -193,6 +207,20 @@ router.post(
   uploadPublicResumeParse,
   validate(jobValidation.parsePublicResume),
   jobController.parsePublicResume
+);
+
+/**
+ * POST /v1/public/jobs/:jobId/parse-resume/stream
+ * Same parse delivered as Server-Sent Events, so the apply form fills in as the model writes.
+ * Identical guards to the buffered route above; the final `result` event carries the same body.
+ */
+router.post(
+  '/jobs/:jobId/parse-resume/stream',
+  publicResumeParseLimiter,
+  verifyCaptcha,
+  uploadPublicResumeParse,
+  validate(jobValidation.parsePublicResume),
+  jobController.parsePublicResumeStream
 );
 
 /**
