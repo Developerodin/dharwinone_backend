@@ -12,6 +12,12 @@ import {
   INTERVIEW_LINKAGE_STATUSES,
   INTERVIEW_ROUND_TYPES,
 } from '../constants/interviewLinkage.js';
+import {
+  BIAS_CHECK_STATUSES,
+  BIAS_EVIDENCE_SOURCES,
+  BIAS_FLAG_CATEGORIES,
+  BIAS_RISK_LEVELS,
+} from '../constants/interviewBias.js';
 
 const meetingSchema = mongoose.Schema(
   {
@@ -294,6 +300,39 @@ const meetingSchema = mongoose.Schema(
       comment: { type: String, default: '', trim: true },
       scoredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       scoredAt: { type: Date, default: null },
+    },
+    /**
+     * Staff-only advisory bias report. Hidden from default queries / toJSON (select:false + private).
+     * Never gates or derives `interviewResult`. Last writer wins.
+     */
+    biasCheck: {
+      type: {
+        status: { type: String, enum: BIAS_CHECK_STATUSES },
+        skipReason: { type: String, default: '', trim: true },
+        riskLevel: { type: String, enum: BIAS_RISK_LEVELS },
+        flags: [
+          {
+            _id: false,
+            category: { type: String, enum: BIAS_FLAG_CATEGORIES },
+            label: { type: String, trim: true },
+          },
+        ],
+        evidence: [
+          {
+            _id: false,
+            quote: { type: String, trim: true },
+            utteranceId: { type: String, default: null, trim: true },
+            source: { type: String, enum: BIAS_EVIDENCE_SOURCES },
+          },
+        ],
+        reasons: { type: [String], default: [] },
+        advisoryNotice: { type: String, default: '', trim: true },
+        model: { type: String, default: '', trim: true },
+        promptVersion: { type: String, default: '', trim: true },
+        analyzedAt: { type: Date, default: null },
+      },
+      select: false,
+      private: true,
     },
     /**
      * The rubric this round is scored against, COPIED from the resolved RubricTemplate

@@ -35,6 +35,7 @@ import {
   stopMemorySweepScheduler,
 } from './services/chatAssistant/memorySweep.scheduler.js';
 import { startSummaryWorker, stopSummaryWorker } from './queues/summaryWorker.js';
+import { startBiasWorker, stopBiasWorker } from './queues/biasWorker.js';
 import { startStuckDispatchSweeper, stopStuckDispatchSweeper } from './jobs/stuckDispatchSweeper.js';
 import {
   startTranscriptSessionSweeper,
@@ -126,6 +127,7 @@ mongoose
           startMemorySweepScheduler({ intervalHours: 24 });
           if (redisFeaturesEnabled) {
             startSummaryWorker();
+            startBiasWorker();
           }
           startStuckDispatchSweeper();
           startTranscriptSessionSweeper();
@@ -167,6 +169,7 @@ const exitHandler = (exitCode = 1) => {
       stopMemorySweepScheduler();
       if (redisFeaturesEnabled) {
         stopSummaryWorker().catch(() => {});
+        stopBiasWorker().catch(() => {});
       }
       stopStuckDispatchSweeper();
       stopTranscriptSessionSweeper();

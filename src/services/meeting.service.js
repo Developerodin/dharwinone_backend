@@ -43,6 +43,7 @@ import {
   normalizeLinkageStatus,
   linkageRevisionQuery,
 } from './interviewLinkage.service.js';
+import { enqueueInterviewBiasCheck } from './interviewBias.enqueue.js';
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
@@ -1157,6 +1158,12 @@ const updateMeetingById = async (id, updateBody, userId, currentUser = null) => 
   }
   await meeting.save();
 
+  if (safeBody.interviewScorecard) {
+    enqueueInterviewBiasCheck(meeting._id.toString()).catch((err) => {
+      logger.warn('[updateMeetingById] enqueueInterviewBiasCheck failed:', err?.message || err);
+    });
+  }
+
   const afterInviteEmails = getInvitationEmails(meeting);
   const cancelledNow = previousStatus !== 'cancelled' && meeting.status === 'cancelled';
   const calendarChanged =
@@ -2218,6 +2225,7 @@ export {
   queryMeetings,
   getMeetingById,
   getMeetingByMeetingId,
+  assertMeetingInScope,
   updateMeetingById,
   deleteMeetingById,
   resendMeetingInvitations,
