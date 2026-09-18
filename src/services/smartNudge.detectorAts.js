@@ -44,6 +44,9 @@ export const detectInterviewNoShows = async ({ now = new Date(), meetings } = {}
 
   const events = [];
   for (const m of docs) {
+    const roster = m.participantRoster || [];
+    // Empty roster = we never recorded who entered. Do not call that a no-show.
+    if (!roster.length) continue;
     if (didCandidateJoin(m)) continue;
     const label = m.title || 'Interview';
     const entityId = String(m._id);

@@ -305,6 +305,7 @@ export async function upsertParticipantRosterOnToken({
           'participantRoster.$.refKind': refKind || existing?.refKind || 'none',
           'participantRoster.$.refId': refId ?? existing?.refId ?? null,
           'participantRoster.$.lastJoinedAt': now,
+          ...(existing?.firstJoinedAt ? {} : { 'participantRoster.$.firstJoinedAt': now }),
         },
       }
     );

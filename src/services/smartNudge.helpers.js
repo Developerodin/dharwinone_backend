@@ -53,25 +53,59 @@ export const copySignature = (facts) => {
 };
 
 /**
- * True when the candidate appears on the roster with a join timestamp.
- * Empty roster or no matching firstJoinedAt = no-show.
+ * True when this roster row actually entered the room.
+ * @param {object} row
+ * @returns {boolean}
+ */
+const rosterRowJoined = (row) => Boolean(row?.firstJoinedAt || row?.lastJoinedAt);
+
+/**
+ * Recruiter / host / agent ids we must not treat as the candidate.
+ * @param {object} meeting
+ * @returns {Set<string>}
+ */
+const interviewerIdentitySet = (meeting) => {
+  const ids = new Set();
+  const add = (id) => {
+    if (id) ids.add(String(id));
+  };
+  add(meeting?.recruiter?.id);
+  add(meeting?.createdBy);
+  for (const a of meeting?.agents || []) add(a?.id);
+  for (const h of meeting?.hosts || []) add(h?.id);
+  return ids;
+};
+
+/**
+ * True when the candidate appears to have entered the room.
+ * Public / instant-interview joins are often stored as `guest` with no emailHash;
+ * those still count. Empty roster is unknown (caller should skip), not a join.
  * @param {object} meeting
  * @returns {boolean}
  */
-export const didCandidateJoin = (meeting) => {
+export function didCandidateJoin(meeting) {
   const roster = meeting?.participantRoster || [];
   if (!roster.length) return false;
   const email = meeting.candidate?.email;
   const candId = meeting.candidate?.id || meeting.candidateId;
   const hash = hashParticipantEmail(email);
+  const interviewers = interviewerIdentitySet(meeting);
   return roster.some((row) => {
-    if (!row?.firstJoinedAt) return false;
+    if (!rosterRowJoined(row)) return false;
     if (row.role === 'candidate') return true;
     if (hash && row.emailHash === hash) return true;
     if (candId && String(row.refId) === String(candId)) return true;
+    if (candId && String(row.identity) === String(candId)) return true;
+    if (row.role === 'interviewer') return false;
+    if (row.identity && interviewers.has(String(row.identity))) return false;
+    if (row.refId && interviewers.has(String(row.refId))) return false;
+    const id = String(row.identity || '');
+    if (/agent|assistant|egress/i.test(id)) return false;
+    // guest-* (or unlabeled) with a join timestamp — candidate used the public link
+    if (!row.role || row.role === 'guest' || row.role === 'unknown') return true;
     return false;
   });
-};
+}
 
 /**
  * Clamp generated copy to the contract limits.
