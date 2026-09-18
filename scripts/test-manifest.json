@@ -316,6 +316,7 @@
   "./src/validations/__tests__/contact.validation.test.js",
   "./src/validations/__tests__/employee.salesAgent.validation.test.js",
   "./src/validations/__tests__/meeting.dateRange.validation.test.js",
+  "./src/validations/__tests__/meeting.roundType.validation.test.js",
   "./src/validations/__tests__/meeting.validation.timezone.test.js",
   "./src/validations/__tests__/task.validation.test.js",
   "./src/validations/__tests__/team.validation.test.js",

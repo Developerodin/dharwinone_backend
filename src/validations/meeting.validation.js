@@ -2,6 +2,7 @@ import Joi from 'joi';
 import { objectId } from './custom.validation.js';
 import { normalizeTimezone, isValidTimezone } from '../utils/timezone.js';
 import { INTERVIEW_STATUSES, INTERVIEW_RESULTS } from '../constants/atsPipeline.js';
+import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
 import {
   RUBRIC_CRITERION_IDS,
   RUBRIC_RATING_MIN,
@@ -101,16 +102,11 @@ const createMeeting = {
       round: Joi.object()
         .keys({
           index: Joi.number().integer().min(1).optional(),
+          // Spread the constant, never a literal list. This schema used to hardcode seven of
+          // the nine types, so 'panel' and 'hr' were offered by the form, accepted by the
+          // model and by meeting.service.js, and then 400ed here before reaching either.
           type: Joi.string()
-            .valid(
-              'screening',
-              'technical',
-              'behavioral',
-              'hiring_manager',
-              'culture',
-              'final',
-              'other'
-            )
+            .valid(...INTERVIEW_ROUND_TYPES)
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
           planKey: Joi.string().trim().max(40).allow(null, ''),
@@ -311,15 +307,7 @@ const patchMeetingLinkage = {
         .keys({
           index: Joi.number().integer().min(1).optional(),
           type: Joi.string()
-            .valid(
-              'screening',
-              'technical',
-              'behavioral',
-              'hiring_manager',
-              'culture',
-              'final',
-              'other'
-            )
+            .valid(...INTERVIEW_ROUND_TYPES)
             .optional(),
           label: Joi.string().allow('', null).trim().optional(),
           planKey: Joi.string().trim().max(40).allow(null, ''),

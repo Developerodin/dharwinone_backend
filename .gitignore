@@ -47,6 +47,10 @@ graphify-out/
 !src/services/__tests__/
 src/services/__tests__/fixtures/
 src/services/__tests__/helpers/
+# Un-ignores the directory only; `*.test.js` above still excludes the specs in it, so each
+# one that should be versioned is named explicitly below.
+!src/validations/__tests__/
+!src/validations/__tests__/meeting.roundType.validation.test.js
 !src/services/__tests__/job.applicationNotification.test.js
 !src/services/meeting.service.test.js
 !src/services/offer.service.test.js
