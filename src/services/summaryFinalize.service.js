@@ -9,8 +9,19 @@ import Summary from '../models/summary.model.js';
 import Recording from '../models/recording.model.js';
 import logger from '../config/logger.js';
 import { uploadJsonToS3, readJsonFromS3 } from './aiArtifactStorage.service.js';
+import { enqueueInterviewBiasCheck } from './interviewBias.enqueue.js';
 
 const CHARS_PER_TOKEN = 4;
+
+/**
+ * Dual-trigger: after a real transcript finalize, enqueue if a scorecard already exists.
+ * @param {string} meetingId
+ */
+function scheduleBiasCheck(meetingId) {
+  enqueueInterviewBiasCheck(meetingId).catch((err) => {
+    logger.warn('[Finalize] enqueueInterviewBiasCheck failed:', err?.message || err);
+  });
+}
 
 export function estimateTranscriptTokens(segments = []) {
   let chars = 0;
@@ -394,6 +405,7 @@ export async function finalizeSummary({
         await TranscriptSession.findByIdAndUpdate(v2Session._id, { status: 'completed' });
       }
 
+      scheduleBiasCheck(meetingId);
       return {
         summaryId: summaryDoc._id,
         version: nextVersion,

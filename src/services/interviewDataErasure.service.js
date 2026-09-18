@@ -13,5 +13,6 @@ export function planCandidateErasure(facts = {}) {
   for (const sessionId of facts.transcriptSessionIds || []) push('transcriptSession', sessionId);
   for (const versionId of facts.transcriptVersionIds || []) push('transcriptVersion', versionId);
   if (facts.summaryMeetingId) push('summary', facts.summaryMeetingId);
+  // biasCheck is embedded on Meeting (select:false). Deleting the meeting covers it — no extra kind.
   return { deletions };
 }

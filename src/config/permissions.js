@@ -198,7 +198,20 @@ export const permissionAliases = {
     'ats.interviews.summary:view',
     'ats.interviews.summary:view,create,edit,delete',
   ],
-  'interviews.evaluation.read': ['interviews.evaluation.read'],
+  'interviews.evaluation.read': [
+    'interviews.evaluation.read',
+    'interviews.manage',
+    'interviews.transcript.read',
+    'ats.interviews.transcript:view',
+    'ats.interviews.transcript:view,create,edit,delete',
+    'ats.interviews:view,create,edit,delete',
+  ],
+  'interviews.evaluation.write': [
+    'interviews.evaluation.write',
+    'interviews.manage',
+    'ats.interviews:create,edit,delete',
+    'ats.interviews:view,create,edit,delete',
+  ],
   // Calls (dialer, Bolna call records, recordings) — CRUD-only matrix actions.
   'calls.view': [
     'calls.view',

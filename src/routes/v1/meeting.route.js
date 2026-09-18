@@ -8,6 +8,8 @@ import * as meetingController from '../../controllers/meeting.controller.js';
 import * as meetingExcelController from '../../controllers/meetingExcel.controller.js';
 import * as interviewTranscriptController from '../../controllers/interviewTranscript.controller.js';
 import * as interviewEvaluationValidation from '../../validations/interviewEvaluation.validation.js';
+import * as interviewBiasValidation from '../../validations/interviewBias.validation.js';
+import * as interviewBiasController from '../../controllers/interviewBias.controller.js';
 
 const router = express.Router();
 
@@ -80,6 +82,24 @@ router
     requirePermissions('interviews.summary.read'),
     validate(interviewEvaluationValidation.getMeetingSummary),
     interviewTranscriptController.getSummary
+  );
+
+router
+  .route('/:id/bias-check/rerun')
+  .post(
+    auth(),
+    requireAnyOfPermissions('interviews.evaluation.write', 'interviews.manage'),
+    validate(interviewBiasValidation.rerunBiasCheck),
+    interviewBiasController.rerunBiasCheck
+  );
+
+router
+  .route('/:id/bias-check')
+  .get(
+    auth(),
+    requireAnyOfPermissions('interviews.evaluation.read', 'interviews.manage'),
+    validate(interviewBiasValidation.getBiasCheck),
+    interviewBiasController.getBiasCheck
   );
 
 router
