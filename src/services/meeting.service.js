@@ -44,6 +44,7 @@ import {
   linkageRevisionQuery,
 } from './interviewLinkage.service.js';
 import { enqueueInterviewBiasCheck } from './interviewBias.enqueue.js';
+import { serializeBiasSummary } from './interviewBias.inputs.js';
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
@@ -778,10 +779,14 @@ const queryMeetings = async (filter, options, currentUser = null, scopeOptions =
     // populate, which would try to populate `interviewScorecard` itself (not a ref) and throw.
     populate: ['createdBy', { path: 'interviewScorecard.scoredBy', select: 'name email' }],
     sort: options.sortBy || '-createdAt',
+    select: '+biasCheck',
   });
   result.results = (result.results || []).map((m) => {
-    const doc = m.toJSON ? m.toJSON() : m;
+    const summary = serializeBiasSummary(m.biasCheck);
+    const doc = m.toJSON ? m.toJSON() : { ...m };
+    delete doc.biasCheck;
     doc.publicMeetingUrl = getPublicMeetingUrl(doc.meetingId);
+    doc.biasSummary = summary;
     return doc;
   });
   return result;
@@ -797,11 +802,15 @@ const getMeetingById = async (id, currentUser = null) => {
   if (!meeting) return null;
   await assertMeetingInScope(meeting, currentUser);
   const populated = await Meeting.findById(meeting._id)
+    .select('+biasCheck')
     .populate('createdBy')
     .populate({ path: 'interviewScorecard.scoredBy', select: 'name email' });
   if (!populated) return null;
+  const summary = serializeBiasSummary(populated.biasCheck);
   const doc = populated.toJSON();
+  delete doc.biasCheck;
   doc.publicMeetingUrl = getPublicMeetingUrl(populated.meetingId);
+  doc.biasSummary = summary;
   return doc;
 };
 
