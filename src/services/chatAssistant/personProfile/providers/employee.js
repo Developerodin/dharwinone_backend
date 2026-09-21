@@ -126,6 +126,9 @@ export const EMPLOYEE_FIELDS = {
     documents:        { derive: 'documentsSummary', requires: 'employees.manage', orSelf: true },
   },
   payroll: {
+    // EmployeePayrollDetail is deliberately absent from this provider. The projector
+    // is an allow-list, so bank, tax and statutory identifiers are unreachable here
+    // unless someone adds them — do not.
     salarySlips:      { derive: 'salarySlipsSummary', requires: 'employees.manage', orSelf: true },
   },
   notes: {

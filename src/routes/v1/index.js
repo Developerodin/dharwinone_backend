@@ -24,6 +24,7 @@ import positionRoute from './position.route.js';
 import leaveRequestRoute from './leaveRequest.route.js';
 import backdatedAttendanceRequestRoute from './backdatedAttendanceRequest.route.js';
 import employeeRoute from './employee.route.js';
+import payrollDetailRoute from './payrollDetail.route.js';
 import candidateSopTemplateRoute from './candidateSopTemplate.route.js';
 import offboardingSopRoute from './offboardingSop.route.js';
 import jobRoute from './job.route.js';
@@ -181,6 +182,10 @@ const defaultRoutes = [
   {
     path: '/employees',
     route: employeeRoute,
+  },
+  {
+    path: '/payroll-details',
+    route: payrollDetailRoute,
   },
     {
       path: '/candidate-sop-templates',

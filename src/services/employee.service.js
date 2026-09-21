@@ -27,6 +27,7 @@ import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { resignBucket } from '../utils/resignBucket.js';
 import { notify } from './notification.service.js';
+import { clearBankProofIndex } from './payrollDetail.service.js';
 import {
   canFullEmployeeRecordEdit,
   canMutateEmployeeRecord,
@@ -4023,6 +4024,11 @@ const deleteCandidateDocument = async (candidateId, documentIndex, user) => {
   }
   candidate.markModified('documents');
   await candidate.save();
+
+  // Employee.documents is a positional array, so deleting one shifts every later
+  // index. documentRequests is re-indexed just above; the payroll bank-proof pointer
+  // needs the same treatment or it silently points at the wrong file.
+  await clearBankProofIndex(candidate._id, idx);
 
   // Never delete an object another surviving row still points at — a version and its document row
   // share one S3 key, and so can two duplicate rows on a legacy profile.

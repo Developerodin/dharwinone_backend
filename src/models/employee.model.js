@@ -44,6 +44,11 @@ const DOCUMENT_TYPES = [
   'EAD Card',
   'I-765 Receipt',
   'I-983 Form-only',
+  'Bank Proof',
+  'W-4',
+  'State Withholding Certificate',
+  'Form 12BB',
+  'Form I-9',
   'Other',
 ];
 

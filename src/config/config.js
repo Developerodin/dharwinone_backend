@@ -382,6 +382,15 @@ const envVarsSchema = Joi.object()
     FEATURE_FLAG_TASKBOARD_V2_ALLOWLIST: Joi.string().optional().allow(''),
     /** Latest published mobile app version (semver). GET /v1/app/version */
     MOBILE_APP_LATEST_VERSION: Joi.string().optional().default('1.0.0'),
+    PAYROLL_ENCRYPTION_KEY: Joi.string()
+      .length(64)
+      .pattern(/^[0-9a-fA-F]+$/)
+      .when('NODE_ENV', {
+        is: 'production',
+        then: Joi.required(),
+        otherwise: Joi.optional(),
+      })
+      .description('32-byte hex key for AES-256-GCM encryption of payroll identifiers'),
   })
   .unknown();
 
@@ -454,6 +463,7 @@ const resolvedBackendPublicUrl = (
 const config = {
   env: envVars.NODE_ENV,
   port: envVars.PORT,
+  payrollEncryptionKey: envVars.PAYROLL_ENCRYPTION_KEY || '',
   mongoose: {
     url: envVars.MONGODB_URL + (envVars.NODE_ENV === 'test' ? '-test' : ''),
     options: {

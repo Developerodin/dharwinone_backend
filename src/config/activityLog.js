@@ -126,6 +126,17 @@ export const ActivityActions = {
   EMPLOYEE_DOCUMENT_VERSION_ADD: 'employee.document.version.add',
   EMPLOYEE_DOCUMENT_VERSION_DOWNLOAD: 'employee.document.version.download',
   EMPLOYEE_DOCUMENT_VERSION_DELETE: 'employee.document.version.delete',
+  PAYROLL_DETAILS_REQUEST: 'employee.payrollDetails.request',
+  PAYROLL_DETAILS_SUBMIT: 'employee.payrollDetails.submit',
+  PAYROLL_DETAILS_VERIFY: 'employee.payrollDetails.verify',
+  PAYROLL_DETAILS_REJECT: 'employee.payrollDetails.reject',
+  /**
+   * An outstanding request was withdrawn before the candidate submitted anything.
+   * The record is deleted, so this row is the only surviving trace that it existed.
+   */
+  PAYROLL_DETAILS_CANCEL: 'employee.payrollDetails.cancel',
+  /** Full account number was decrypted and shown to a human. */
+  PAYROLL_DETAILS_REVEAL: 'employee.payrollDetails.reveal',
   EMPLOYEE_SALARY_SLIP_ADD: 'employee.salarySlip.add',
   EMPLOYEE_SALARY_SLIP_UPDATE: 'employee.salarySlip.update',
   EMPLOYEE_SALARY_SLIP_DELETE: 'employee.salarySlip.delete',
