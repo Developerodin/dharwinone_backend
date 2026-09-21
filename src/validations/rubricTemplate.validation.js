@@ -34,7 +34,7 @@ const criteriaList = Joi.array()
   });
 
 const appliesToSchema = Joi.object({
-  jobId: Joi.string().custom(objectId).allow(null, ''),
+  jobId: Joi.any().strip(),
   roundType: Joi.string()
     .valid(...INTERVIEW_ROUND_TYPES)
     .allow(null, ''),
@@ -65,6 +65,11 @@ const resolveRubric = {
     roundType: Joi.string()
       .valid(...INTERVIEW_ROUND_TYPES)
       .allow(null, ''),
+    planKey: Joi.string()
+      .trim()
+      .pattern(/^[a-z0-9_-]{1,40}$/)
+      .allow(null, ''),
+    templateId: Joi.string().custom(objectId).allow(null, ''),
   }),
 };
 

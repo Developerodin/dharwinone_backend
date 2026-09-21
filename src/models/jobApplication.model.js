@@ -74,9 +74,10 @@ const jobApplicationSchema = new mongoose.Schema(
      * recruiter extending a 3-round plan to 5 would otherwise retroactively add two rounds
      * to a candidate who was one round from an offer (audit R7).
      *
-     * Deliberately stores the SEQUENCE ONLY — key, label, round type. Not the criteria.
-     * Meeting.rubricSnapshot already owns the criteria copy for each round, and a second
-     * copy here would be a third answer to "what was this round scored against" (D4).
+     * First write copies the sequence AND the rubric then in force (templateId, name,
+     * criteria). Later template edits must not rewrite yesterday's evaluation. Meetings
+     * still copy rubricSnapshot at schedule; when this snapshot already has criteria,
+     * schedule prefers that copy.
      */
     roundPlanSnapshot: {
       capturedAt: { type: Date, default: null },
@@ -86,6 +87,18 @@ const jobApplicationSchema = new mongoose.Schema(
           key: { type: String, required: true, trim: true },
           label: { type: String, required: true, trim: true },
           roundType: { type: String, default: null },
+          templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'RubricTemplate', default: null },
+          templateName: { type: String, trim: true, default: null },
+          criteria: [
+            {
+              _id: false,
+              key: { type: String, trim: true },
+              label: { type: String, trim: true },
+              weight: { type: Number },
+              scaleMin: { type: Number },
+              scaleMax: { type: Number },
+            },
+          ],
         },
       ],
     },

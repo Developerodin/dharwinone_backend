@@ -167,6 +167,13 @@ const placementSchema = new mongoose.Schema(
       default: null,
     },
     referralJobTitle: { type: String, trim: true, default: null },
+    /** Communication / LiveKit internal meeting for orientation & compliance. */
+    orientationMeetingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InternalMeeting',
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

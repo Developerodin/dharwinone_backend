@@ -1,4 +1,6 @@
 import Joi from 'joi';
+import { objectId } from './custom.validation.js';
+import { ORIENTATION_ONBOARDING_TASK_TITLES } from '../utils/orientationMeeting.js';
 
 const hostSchema = Joi.object({
   nameOrRole: Joi.string().allow('', null).trim(),
@@ -52,6 +54,8 @@ const createInternalMeeting = {
       // Recurring series (optional). scheduledAt doubles as the series startAt.
       recurrence: recurrenceSchema.optional(),
       end: endSchema.optional(),
+      // Edit HRMS orientation: duplicate-guard the placement FK before creating.
+      orientationPlacementId: Joi.string().custom(objectId).optional(),
     })
     .min(1),
 };
@@ -135,6 +139,34 @@ const getInternalMeetingRecordings = {
   }),
 };
 
+const orientationOnboardingId = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim().min(1),
+  }),
+};
+
+const patchOrientationOnboarding = {
+  params: Joi.object().keys({
+    id: Joi.string().required().trim().min(1),
+  }),
+  body: Joi.object()
+    .keys({
+      tasks: Joi.array()
+        .items(
+          Joi.object().keys({
+            title: Joi.string()
+              .valid(...ORIENTATION_ONBOARDING_TASK_TITLES)
+              .required(),
+            done: Joi.boolean().required(),
+          })
+        )
+        .min(1)
+        .max(ORIENTATION_ONBOARDING_TASK_TITLES.length)
+        .required(),
+    })
+    .required(),
+};
+
 export {
   createInternalMeeting,
   getInternalMeetings,
@@ -144,4 +176,6 @@ export {
   deleteInternalMeeting,
   resendInternalInvitations,
   getInternalMeetingRecordings,
+  orientationOnboardingId,
+  patchOrientationOnboarding,
 };

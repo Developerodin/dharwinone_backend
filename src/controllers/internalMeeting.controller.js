@@ -115,4 +115,25 @@ const getRecordings = catchAsync(async (req, res) => {
   res.send(list);
 });
 
-export { create, list, get, update, cancel, remove, resendInvitations, getRecordings };
+const getOrientationOnboarding = catchAsync(async (req, res) => {
+  const result = await internalMeetingService.getOrientationOnboarding(req.params.id, req.user);
+  res.send(result);
+});
+
+const patchOrientationOnboarding = catchAsync(async (req, res) => {
+  const result = await internalMeetingService.patchOrientationOnboarding(req.params.id, req.user, req.body);
+  res.send(result);
+});
+
+export {
+  create,
+  list,
+  get,
+  update,
+  cancel,
+  remove,
+  resendInvitations,
+  getRecordings,
+  getOrientationOnboarding,
+  patchOrientationOnboarding,
+};

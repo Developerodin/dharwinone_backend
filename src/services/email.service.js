@@ -1142,6 +1142,7 @@ const buildMeetingInvitationEmail = ({
     : `Meeting invitation: ${title || 'Dharwin meeting'}`;
   const scheduled = formatDateTime(scheduledAt, timezone);
   const duration = durationMinutes ? `${durationMinutes} minutes` : '';
+  const isInterviewInvite = Boolean(String(jobPosition || '').trim());
   const introLines = [
     rescheduled
       ? 'A meeting you are invited to has been rescheduled. The new time is below — your existing calendar entry will be updated.'
@@ -1154,7 +1155,8 @@ const buildMeetingInvitationEmail = ({
     { label: 'Timezone', value: timezone || '' },
     { label: 'Duration', value: duration },
     { label: 'Host', value: hostName || '' },
-    { label: 'Interview type', value: interviewType || '' },
+    // ATS interview invites pass a job title; internal/orientation meetings do not.
+    { label: isInterviewInvite ? 'Interview type' : 'Meeting type', value: interviewType || '' },
     { label: 'Role / position', value: jobPosition || '' },
     ...(isVideoMeeting && joinUrl ? [{ label: 'Join link', value: joinUrl }] : []),
     ...(jobPosition

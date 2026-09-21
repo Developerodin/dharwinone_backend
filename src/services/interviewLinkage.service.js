@@ -3,6 +3,8 @@ import httpStatus from 'http-status';
 import ApiError from '../utils/ApiError.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Job from '../models/job.model.js';
+import RubricTemplate from '../models/rubricTemplate.model.js';
+import { attachRubricCopyToPlanRows } from '../constants/interviewRoundPlan.js';
 import Meeting from '../models/meeting.model.js';
 import { getInterviewSchedulingBlockReason } from '../constants/atsPipeline.js';
 import {
@@ -211,13 +213,16 @@ export async function allocateRoundIndex(applicationId) {
   return Number(bumped?.roundCounter) || null;
 }
 
-/** A Job.interviewRounds row reduced to the three fields a plan snapshot stores (D4). */
-const planRowsFromJob = (job) =>
-  (job?.interviewRounds || []).map((r) => ({
-    key: String(r.key),
-    label: String(r.label || '').trim() || String(r.key),
-    roundType: r.roundType ?? null,
-  }));
+/** A Job.interviewRounds list with each row's rubric copied for a snapshot. */
+const planRowsFromJob = async (job) => {
+  const rows = job?.interviewRounds || [];
+  const ids = rows.map((r) => r?.templateId).filter(Boolean);
+  let templates = [];
+  if (ids.length) {
+    templates = await RubricTemplate.find({ _id: { $in: ids } }).lean();
+  }
+  return attachRubricCopyToPlanRows(rows, templates);
+};
 
 /**
  * The round sequence in force for this application, WITHOUT capturing it.
@@ -272,7 +277,7 @@ export const ensureRoundPlanSnapshot = async (applicationId, jobId) => {
   // is stale. Fall back to planInForce, which reads the application's job.
   let rounds = [];
   if (jobId && mongoose.Types.ObjectId.isValid(String(jobId))) {
-    rounds = planRowsFromJob(await Job.findById(jobId).select('interviewRounds').lean());
+    rounds = await planRowsFromJob(await Job.findById(jobId).select('interviewRounds').lean());
   }
   if (!rounds.length) rounds = await planInForce(applicationId);
   if (!rounds.length) return [];

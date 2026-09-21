@@ -38,6 +38,14 @@ test('two rounds of the same type are ALLOWED', () => {
   assert.equal(roundPlanError(plan), null);
 });
 
+test('two Other rows with different templateIds save (type is not identity)', () => {
+  const plan = [
+    row({ key: 'r1', label: 'Other v1', roundType: 'other', templateId: '507f1f77bcf86cd799439011' }),
+    row({ key: 'r2', label: 'Other v2', roundType: 'other', templateId: '507f1f77bcf86cd799439012' }),
+  ];
+  assert.equal(roundPlanError(plan), null);
+});
+
 test('duplicate keys are rejected and the message names the key', () => {
   const plan = [row({ key: 'dup' }), row({ key: 'dup', label: 'HR', roundType: 'hr' })];
   assert.match(roundPlanError(plan), /dup/);

@@ -570,6 +570,14 @@ export const permissionAliases = {
 export const MEETING_ALL_ACCESS = ['meetings.read', 'meetings.create', 'meetings.edit', 'meetings.delete'];
 
 /**
+ * Smallest additive grant so ATS onboarding editors can schedule/view the
+ * orientation LiveKit meeting on Edit HRMS without Communication (meetings.*).
+ * Route-level only — not an alias on meetings.read/create/edit, so the
+ * Communication nav and tenant-wide meeting list stay closed.
+ */
+export const ONBOARDING_ORIENTATION_MEETING_PERMS = ['onboarding.edit'];
+
+/**
  * Resolve required permission to the list of permission strings that grant access.
  * @param {string} required - e.g. 'activityLogs.read'
  * @returns {string[]} - e.g. ['activityLogs.read', 'activity.read']

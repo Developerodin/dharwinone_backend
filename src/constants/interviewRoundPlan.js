@@ -41,8 +41,9 @@ export const planRowLabel = (row, index) => {
  * for the person editing the job, or null.
  *
  * Deliberately DIFFERENT from rubricAssignmentsError in exactly one respect: a round type
- * may repeat. "Technical 1" and "Technical 2" at different bars is the reason this field
- * exists, and the old one-row-per-type rule is what made that impossible.
+ * may repeat. Identity is the round (name + plan key), not the type — two Other rows keep
+ * their own templateIds. A template's appliesTo.roundType is a catalog filter, not a save
+ * rule: a mismatch is a UI warning, never a 400.
  *
  * Failure modes handled: null and empty (a job with no opinion — the default, and the
  * state of every job that predates this field), a non-array, over-length, a missing or
@@ -104,4 +105,76 @@ export const roundPlanError = (rounds) => {
   }
 
   return null;
+};
+
+/** Copy criteria into plain objects for a round-plan snapshot. */
+const copyCriteria = (criteria) =>
+  (criteria || []).map((c) => ({
+    key: String(c?.key || '').trim(),
+    label: String(c?.label || '').trim(),
+    weight: Number(c?.weight),
+    scaleMin: Number(c?.scaleMin ?? 1),
+    scaleMax: Number(c?.scaleMax ?? 5),
+  }));
+
+/**
+ * Attach a copied rubric onto each plan row at snapshot time.
+ *
+ * templateId is the binding; roundType is descriptive only. Two Other rounds stay
+ * distinct because each row keeps its own copied criteria.
+ */
+export const attachRubricCopyToPlanRows = (rows, templates = []) => {
+  const byId = new Map(
+    (templates || []).map((t) => [String(t.id || t._id), t])
+  );
+  return (rows || []).map((r) => {
+    const key = String(r?.key || '');
+    const label = String(r?.label || '').trim() || key;
+    const roundType = r?.roundType ?? null;
+    if (Array.isArray(r?.criteria) && r.criteria.length) {
+      return {
+        key,
+        label,
+        roundType,
+        templateId: null,
+        templateName: 'Custom for this round',
+        criteria: copyCriteria(r.criteria),
+      };
+    }
+    const template = r?.templateId ? byId.get(String(r.templateId)) : null;
+    if (template) {
+      return {
+        key,
+        label,
+        roundType,
+        templateId: template._id || template.id || r.templateId,
+        templateName: template.name,
+        criteria: copyCriteria(template.criteria),
+      };
+    }
+    return {
+      key,
+      label,
+      roundType,
+      templateId: r?.templateId || null,
+      templateName: null,
+      criteria: [],
+    };
+  });
+};
+
+/**
+ * Off-plan rounds on a job that already has interviewRounds must name a rubric.
+ * Jobs with no plan keep type/default fallback.
+ */
+export const offPlanRubricError = ({
+  planKey = null,
+  templateId = null,
+  hasInlineCriteria = false,
+  jobHasPlan = false,
+} = {}) => {
+  if (planKey) return null;
+  if (!jobHasPlan) return null;
+  if (templateId || hasInlineCriteria) return null;
+  return 'Pick a rubric for this off-plan round';
 };

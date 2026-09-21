@@ -7,6 +7,14 @@ import { generateUniqueLivekitRoomId } from '../utils/livekitRoomId.js';
 import { deleteInterviewRoom } from './livekit.service.js';
 import { getPublicMeetingUrl, getInAppMeetingLink } from '../utils/meetingPublicUrl.js';
 import { internalMeetingScope, resolveActorEmails } from './visibilityScope.service.js';
+import Placement from '../models/placement.model.js';
+import {
+  applyOrientationOnboardingTaskPatch,
+  assertCanAssignOrientationMeeting,
+  isOrientationMeetingEnded,
+  pickOrientationOnboardingTasks,
+} from '../utils/orientationMeeting.js';
+import { hasApiPermission } from '../utils/permissionCheck.js';
 
 const internalMeetingNotificationFields = (meeting, invite = {}, extra = {}) => ({
   link: getInAppMeetingLink(meeting.meetingId, invite),
@@ -232,24 +240,40 @@ const notifyInternalMeetingInviteChanges = (meeting, before, { skipNewInvites = 
  * @param {string} userId
  */
 const createInternalMeeting = async (body, userId) => {
+  const { orientationPlacementId, ...meetingBody } = body;
+  if (orientationPlacementId) {
+    const placement = await Placement.findById(orientationPlacementId).select('orientationMeetingId').lean();
+    if (!placement) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Placement not found');
+    }
+    let currentMeeting = null;
+    if (placement.orientationMeetingId) {
+      currentMeeting = await InternalMeeting.findById(placement.orientationMeetingId).select('status').lean();
+    }
+    assertCanAssignOrientationMeeting({
+      currentMeetingId: placement.orientationMeetingId,
+      currentMeeting,
+      nextMeetingId: null,
+    });
+  }
   const meetingId = await generateUniqueLivekitRoomId();
-  const durationMinutes = Number(body.durationMinutes) || 60;
-  const hosts = (body.hosts || []).map((h) => ({
+  const durationMinutes = Number(meetingBody.durationMinutes) || 60;
+  const hosts = (meetingBody.hosts || []).map((h) => ({
     ...h,
     email: String(h?.email || '').trim().toLowerCase(),
   }));
-  const emailInvites = (body.emailInvites || [])
+  const emailInvites = (meetingBody.emailInvites || [])
     .map((e) => String(e || '').trim().toLowerCase())
     .filter(Boolean);
   const meeting = await InternalMeeting.create({
-    ...body,
+    ...meetingBody,
     hosts,
     emailInvites,
     durationMinutes,
     meetingId,
     roomName: meetingId,
     createdBy: userId,
-    reminders: buildReminderSchedule(body.scheduledAt),
+    reminders: buildReminderSchedule(meetingBody.scheduledAt),
   });
 
   const meetingObj = meeting.toJSON();
@@ -257,6 +281,17 @@ const createInternalMeeting = async (body, userId) => {
 
   // Send invitation emails to everyone (fire-and-forget; log errors)
   sendInvitationEmails(meeting, getInvitationEmails(meeting));
+
+  if (orientationPlacementId) {
+    try {
+      await Placement.updateOne(
+        { _id: orientationPlacementId },
+        { $set: { orientationMeetingId: meeting._id } }
+      );
+    } catch (err) {
+      logger.warn(`orientation meeting link failed: ${err?.message || err}`);
+    }
+  }
 
   return meetingObj;
 };
@@ -687,6 +722,72 @@ export const sendUpcomingInternalMeetingReminders = async () => {
   }
 };
 
+const isInternalMeetingHost = async (meeting, user) => {
+  const emails = await resolveActorEmails(user);
+  const emailSet = new Set((emails || []).map(normalizeEmail).filter(Boolean));
+  return (meeting.hosts || []).some((h) => emailSet.has(normalizeEmail(h?.email)));
+};
+
+const assertCanAccessOrientationOnboarding = async (meeting, user) => {
+  if (await isInternalMeetingHost(meeting, user)) return;
+  if (await hasApiPermission(user, 'onboarding.edit')) return;
+  throw new ApiError(httpStatus.FORBIDDEN, 'Only the meeting host can confirm orientation onboarding');
+};
+
+const serializeOrientationOnboarding = (meeting, placement) => ({
+  linked: true,
+  ended: isOrientationMeetingEnded(meeting),
+  meetingStatus: meeting.status || 'scheduled',
+  placementId: String(placement._id),
+  candidateName:
+    (placement.candidate && typeof placement.candidate === 'object' && placement.candidate.fullName) || '',
+  tasks: pickOrientationOnboardingTasks(placement.onboardingTasks),
+});
+
+const findPlacementForOrientationMeeting = (meetingId) =>
+  Placement.findOne({ orientationMeetingId: meetingId })
+    .select('onboardingTasks candidate orientationMeetingId')
+    .populate({ path: 'candidate', select: 'fullName' });
+
+/**
+ * Host-only view of the two Edit HRMS orientation checklist items for this meeting.
+ * Unlinked meetings return `{ linked: false }` so the join-room overlay can fall through.
+ */
+const getOrientationOnboarding = async (id, user) => {
+  const meeting = await resolveInternalByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertCanAccessOrientationOnboarding(meeting, user);
+  const placement = await findPlacementForOrientationMeeting(meeting._id);
+  if (!placement) return { linked: false };
+  return serializeOrientationOnboarding(meeting, placement);
+};
+
+/**
+ * Persist only the two orientation checklist titles onto Placement.onboardingTasks.
+ * Does not recompute onboardingCompletedAt / placement status.
+ */
+const patchOrientationOnboarding = async (id, user, body) => {
+  const meeting = await resolveInternalByIdOrMeetingId(id);
+  if (!meeting) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Meeting not found');
+  }
+  await assertCanAccessOrientationOnboarding(meeting, user);
+  if (!isOrientationMeetingEnded(meeting)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Confirm these items after the orientation meeting ends');
+  }
+  const placement = await findPlacementForOrientationMeeting(meeting._id);
+  if (!placement) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'This meeting is not linked to an orientation placement');
+  }
+  const current = (placement.onboardingTasks || []).map((t) => (t.toObject ? t.toObject() : { ...t }));
+  placement.onboardingTasks = applyOrientationOnboardingTaskPatch(current, body?.tasks);
+  placement.markModified('onboardingTasks');
+  await placement.save();
+  return serializeOrientationOnboarding(meeting, placement);
+};
+
 export {
   createInternalMeeting,
   queryInternalMeetings,
@@ -700,4 +801,6 @@ export {
   sendInvitationEmails as sendInternalMeetingInvitationEmails,
   notifyInternalMeetingInviteChanges,
   getInvitationEmails as getInternalMeetingInvitationEmails,
+  getOrientationOnboarding,
+  patchOrientationOnboarding,
 };

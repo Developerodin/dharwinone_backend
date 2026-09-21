@@ -48,6 +48,7 @@ import { serializeBiasSummary } from './interviewBias.inputs.js';
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
+import { offPlanRubricError } from '../constants/interviewRoundPlan.js';
 import { resolveRubricForRound } from './rubricTemplate.service.js';
 
 const REMINDER_MAX_ATTEMPTS = 3;
@@ -504,6 +505,7 @@ const createMeeting = async (body, userId) => {
    * A snapshot failure must not block scheduling an interview: the round is booked with
    * planKey null, reads as off-plan, and is recoverable by PATCHing the round later.
    */
+  let snapshotRow = null;
   if (linkage.applicationId) {
     try {
       const planRounds = await ensureRoundPlanSnapshot(
@@ -527,17 +529,25 @@ const createMeeting = async (body, userId) => {
         }
 
         const row = planRounds.find((r) => r.key === planKey) || null;
+        snapshotRow = row;
         round = {
           ...(round || {}),
           planKey,
-          // The plan names the round unless the caller said otherwise. Two rounds of the
-          // same type are only distinguishable by their label, so losing it loses the
-          // distinction the plan exists to express.
           ...(row && !round?.label ? { label: row.label } : {}),
           ...(row?.roundType && !round?.type ? { type: row.roundType } : {}),
         };
+
+        const offPlanReason = offPlanRubricError({
+          planKey,
+          templateId: round?.templateId || null,
+          jobHasPlan: true,
+        });
+        if (offPlanReason) {
+          throw new ApiError(httpStatus.BAD_REQUEST, offPlanReason);
+        }
       }
     } catch (err) {
+      if (err instanceof ApiError && err.statusCode === httpStatus.BAD_REQUEST) throw err;
       logger.warn('[createMeeting] round plan snapshot failed; round scheduled off-plan', {
         applicationId: String(linkage.applicationId),
         error: err?.message || String(err),
@@ -545,17 +555,30 @@ const createMeeting = async (body, userId) => {
     }
   }
 
-  // Resolve once and pin a copy: see Meeting.rubricSnapshot. A resolution failure must
-  // not block scheduling an interview, so it degrades to no snapshot and readers fall
-  // back to the default criteria.
+  // Resolve once and pin a copy: see Meeting.rubricSnapshot. Prefer the application's
+  // frozen rubric copy when this plan row already has one, so later template edits
+  // cannot rewrite yesterday's evaluation.
+  const creator = await User.findById(userId).select('adminId').lean();
+  const tenantId = creator?.adminId || userId;
   let rubricSnapshot;
   try {
-    const resolved = await resolveRubricForRound({
-      jobId: linkage.jobId ? String(linkage.jobId) : null,
-      roundType: round?.type || null,
-      planKey: round?.planKey || null,
-    });
-    rubricSnapshot = { ...resolved, capturedAt: new Date() };
+    if (Array.isArray(snapshotRow?.criteria) && snapshotRow.criteria.length) {
+      rubricSnapshot = {
+        templateId: snapshotRow.templateId || null,
+        templateName: snapshotRow.templateName || 'Custom for this round',
+        criteria: snapshotRow.criteria,
+        capturedAt: new Date(),
+      };
+    } else {
+      const resolved = await resolveRubricForRound({
+        jobId: linkage.jobId ? String(linkage.jobId) : null,
+        roundType: round?.type || null,
+        planKey: round?.planKey || null,
+        templateId: round?.templateId || null,
+        tenantId,
+      });
+      rubricSnapshot = { ...resolved, capturedAt: new Date() };
+    }
   } catch (err) {
     logger.warn('[createMeeting] rubric resolution failed; round scheduled without a snapshot', {
       error: err?.message || String(err),
@@ -565,8 +588,6 @@ const createMeeting = async (body, userId) => {
 
   const meetingId = await generateUniqueLivekitRoomId();
   const durationMinutes = Number(body.durationMinutes) || 60;
-  const creator = await User.findById(userId).select('adminId').lean();
-  const tenantId = creator?.adminId || userId;
   const linkageFields = {
     interviewLanguage,
     round,

@@ -10,10 +10,13 @@ import { writeAtsAudit } from './atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
+import { getPublicMeetingUrl } from '../utils/meetingPublicUrl.js';
 import { placementCandidateHasDisplayIdentity } from '../utils/placementCandidateIdentity.js';
 import { ALLOWED_TRANSITIONS, PLACEMENT_STATUSES } from '../constants/atsPipeline.js';
 import { applyDepartmentToEmployee } from './employeeDepartment.helper.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
+import InternalMeeting from '../models/internalMeeting.model.js';
+import { assertCanAssignOrientationMeeting, ORIENTATION_MEETING_POPULATE } from '../utils/orientationMeeting.js';
 
 // Any pipeline-scope perm (15 keys across pre-boarding/onboarding/offers) grants full read
 // across placements — same as admin. Used to bypass owner/job-ownership gates for non-admin
@@ -606,18 +609,27 @@ const queryPlacements = async (filter, options, currentUser) => {
 };
 
 const maybeStripSingle = async (placement, currentUser) => {
-  if (!currentUser) return placement;
+  if (!currentUser) return attachOrientationMeetingPublicUrl(placement);
   const { userIsAdmin, userIsAgent } = await import('../utils/roleHelpers.js');
   if (await userIsAdmin(currentUser)) {
     const plain = placement.toObject ? placement.toObject() : { ...placement };
     stripPlacementPlain(plain);
-    return plain;
+    return attachOrientationMeetingPublicUrl(plain);
   }
   if (await userIsAgent(currentUser)) {
     await assertAgentCanReadPlacement(currentUser, placement);
     const plain = placement.toObject ? placement.toObject() : { ...placement };
     stripPlacementPlain(plain);
-    return plain;
+    return attachOrientationMeetingPublicUrl(plain);
+  }
+  return attachOrientationMeetingPublicUrl(placement);
+};
+
+const attachOrientationMeetingPublicUrl = (placement) => {
+  if (!placement) return placement;
+  const om = placement.orientationMeetingId;
+  if (om && typeof om === 'object' && om.meetingId && !om.publicMeetingUrl) {
+    om.publicMeetingUrl = getPublicMeetingUrl(om.meetingId);
   }
   return placement;
 };
@@ -632,7 +644,8 @@ const getPlacementById = async (id, currentUser = null) => {
     .populate('candidate', 'fullName email phoneNumber employeeId department designation reportingManager')
     .populate('createdBy', 'name email')
     .populate('deferredBy', 'name email')
-    .populate('cancelledBy', 'name email');
+    .populate('cancelledBy', 'name email')
+    .populate({ path: 'orientationMeetingId', select: ORIENTATION_MEETING_POPULATE });
   if (!placement) return null;
 
   if (!placementCandidateHasDisplayIdentity(placement.candidate)) {
@@ -867,6 +880,22 @@ const updatePlacementStatus = async (id, updateBody, currentUser, canOverridePre
   }
   if (updateBody.suppressCandidateNotifications !== undefined) {
     placement.suppressCandidateNotifications = Boolean(updateBody.suppressCandidateNotifications);
+  }
+  if (updateBody.orientationMeetingId !== undefined) {
+    const nextId = updateBody.orientationMeetingId || null;
+    const currentId = placement.orientationMeetingId || null;
+    if (String(nextId || '') !== String(currentId || '')) {
+      let currentMeeting = null;
+      if (currentId) {
+        currentMeeting = await InternalMeeting.findById(currentId).select('status').lean();
+      }
+      assertCanAssignOrientationMeeting({
+        currentMeetingId: currentId,
+        currentMeeting,
+        nextMeetingId: nextId,
+      });
+    }
+    placement.orientationMeetingId = nextId;
   }
 
   await placement.save();

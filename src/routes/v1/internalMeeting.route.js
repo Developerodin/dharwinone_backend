@@ -1,17 +1,32 @@
 import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
-import requirePermissions from '../../middlewares/requirePermissions.js';
+import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
+import { ONBOARDING_ORIENTATION_MEETING_PERMS } from '../../config/permissions.js';
 import * as internalMeetingValidation from '../../validations/internalMeeting.validation.js';
 import * as internalMeetingController from '../../controllers/internalMeeting.controller.js';
 
 const router = express.Router();
 
+/** Communication meetings.* plus ATS onboarding.edit for orientation on Edit HRMS. */
+const canCreateInternalMeeting = requireAnyOfPermissions(
+  'meetings.create',
+  ...ONBOARDING_ORIENTATION_MEETING_PERMS
+);
+const canReadInternalMeeting = requireAnyOfPermissions(
+  'meetings.read',
+  ...ONBOARDING_ORIENTATION_MEETING_PERMS
+);
+const canEditInternalMeeting = requireAnyOfPermissions(
+  'meetings.edit',
+  ...ONBOARDING_ORIENTATION_MEETING_PERMS
+);
+
 router
   .route('/')
   .post(
     auth(),
-    requirePermissions('meetings.create'),
+    canCreateInternalMeeting,
     validate(internalMeetingValidation.createInternalMeeting),
     internalMeetingController.create
   )
@@ -37,9 +52,24 @@ router
   .get(
     auth(),
     // Recording is a VIEW-tier action (row icon shown to any user who can see the list).
-    requirePermissions('meetings.read'),
+    canReadInternalMeeting,
     validate(internalMeetingValidation.getInternalMeetingRecordings),
     internalMeetingController.getRecordings
+  );
+
+// Host (or onboarding.edit) confirms the two Edit HRMS orientation tasks after the session ends.
+// Auth only — the service checks host email so Communication hosts do not need full HRMS.
+router
+  .route('/:id/orientation-onboarding')
+  .get(
+    auth(),
+    validate(internalMeetingValidation.orientationOnboardingId),
+    internalMeetingController.getOrientationOnboarding
+  )
+  .patch(
+    auth(),
+    validate(internalMeetingValidation.patchOrientationOnboarding),
+    internalMeetingController.patchOrientationOnboarding
   );
 
 // One-off meeting "Cancel meeting" — DELETE tier, deliberately separate from the generic
@@ -62,13 +92,13 @@ router
     // made the detail view unreachable for view-only roles. WHICH meetings are readable is
     // still enforced by internalMeetingScope in the controller (404 when out of scope).
     auth(),
-    requirePermissions('meetings.read'),
+    canReadInternalMeeting,
     validate(internalMeetingValidation.getInternalMeeting),
     internalMeetingController.get
   )
   .patch(
     auth(),
-    requirePermissions('meetings.edit'),
+    canEditInternalMeeting,
     validate(internalMeetingValidation.updateInternalMeeting),
     internalMeetingController.update
   )

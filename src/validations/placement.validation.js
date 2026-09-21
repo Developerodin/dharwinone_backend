@@ -91,6 +91,7 @@ const updatePlacement = {
       itAccess: Joi.array().items(itAccessSchema).optional(),
       preBoardingTasks: Joi.array().items(taskPatchSchema).optional(),
       onboardingTasks: Joi.array().items(taskPatchSchema).optional(),
+      orientationMeetingId: Joi.string().custom(objectId).optional().allow(null),
     })
     .min(1),
 };

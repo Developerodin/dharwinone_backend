@@ -2,7 +2,7 @@ import express from 'express';
 import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions, { requireAnyOfPermissions } from '../../middlewares/requirePermissions.js';
-import { MEETING_ALL_ACCESS } from '../../config/permissions.js';
+import { MEETING_ALL_ACCESS, ONBOARDING_ORIENTATION_MEETING_PERMS } from '../../config/permissions.js';
 import * as recordingValidation from '../../validations/recording.validation.js';
 import * as recordingController from '../../controllers/recording.controller.js';
 
@@ -18,6 +18,12 @@ const router = express.Router();
 const canViewRecordings = [
   auth(),
   requireAnyOfPermissions('meetings.read', 'meetings.record'),
+];
+
+/** Transcript for a single recording. Onboarding editors may read orientation session transcripts. */
+const canViewRecordingTranscript = [
+  auth(),
+  requireAnyOfPermissions('meetings.read', 'meetings.record', ...ONBOARDING_ORIENTATION_MEETING_PERMS),
 ];
 
 /**
@@ -50,6 +56,6 @@ router.post('/sync', ...canSyncRecordings, recordingController.syncFromLiveKit);
  */
 router
   .route('/:recordingId/transcript')
-  .get(...canViewRecordings, validate(recordingValidation.getTranscript), recordingController.getTranscript);
+  .get(...canViewRecordingTranscript, validate(recordingValidation.getTranscript), recordingController.getTranscript);
 
 export default router;

@@ -16,6 +16,44 @@ const plainCriteria = (criteria) =>
   }));
 
 /**
+ * Tenant scope for rubric templates.
+ *
+ * Superuser/platform bypass matches job-template reads: no tenant clause.
+ * Everyone else sees templates stamped with their adminId, plus legacy docs
+ * whose tenantId is missing or null (created before stamping). Stamped
+ * templates belonging to another adminId never leak.
+ */
+export const rubricTenantFilter = ({ tenantId = null, bypassTenant = false } = {}) => {
+  if (bypassTenant) return {};
+  const unscoped = [{ tenantId: null }, { tenantId: { $exists: false } }];
+  if (!tenantId) return { $or: unscoped };
+  return { $or: [{ tenantId }, ...unscoped] };
+};
+
+const tenantClause = (access = {}) => {
+  if (!access || (access.tenantId == null && !access.bypassTenant && !access.enforceTenant)) {
+    return {};
+  }
+  return rubricTenantFilter(access);
+};
+
+const isImpossibleTenant = (clause) =>
+  Boolean(clause?._id && Array.isArray(clause._id.$in) && clause._id.$in.length === 0);
+
+const findScopedTemplate = async (id, access = {}) => {
+  if (!id || !mongoose.Types.ObjectId.isValid(String(id))) return null;
+  const clause = tenantClause(access);
+  if (isImpossibleTenant(clause)) return null;
+  return RubricTemplate.findOne({ _id: id, ...clause }).lean();
+};
+
+const toResolved = (template) => ({
+  templateId: template._id,
+  templateName: template.name,
+  criteria: plainCriteria(template.criteria),
+});
+
+/**
  * Pick the most specific template for a round. PURE — no database, so the precedence
  * rule is testable on its own and the DB query stays a plain "every live template that
  * could apply" fetch.
@@ -92,12 +130,27 @@ export const pickJobAssignment = (assignments, roundType) => {
  * deliberately assigned a rubric must not silently fall back to the house default because
  * someone tidied up. Archiving a referenced template is refused separately (audit J3).
  *
- * @param {{jobId?: string|null, roundType?: string|null, planKey?: string|null}} target
+ * @param {{jobId?: string|null, roundType?: string|null, planKey?: string|null, templateId?: string|null, tenantId?: string|null, bypassTenant?: boolean, enforceTenant?: boolean, strictMissing?: boolean}} target
  * @returns {Promise<{templateId: mongoose.Types.ObjectId|null, templateName: string, criteria: Array<object>}>}
  */
-export const resolveRubricForRound = async ({ jobId = null, roundType = null, planKey = null } = {}) => {
+export const resolveRubricForRound = async ({
+  jobId = null,
+  roundType = null,
+  planKey = null,
+  templateId = null,
+  tenantId = null,
+  bypassTenant = false,
+  enforceTenant = false,
+  strictMissing = false,
+} = {}) => {
+  const access = { tenantId, bypassTenant, enforceTenant };
+  const scoped = tenantClause(access);
+
+  let skipTypeFallback = false;
+
   if (jobId && mongoose.Types.ObjectId.isValid(jobId)) {
     const job = await Job.findById(jobId).select('rubricAssignments interviewRounds').lean();
+    const hasPlan = Array.isArray(job?.interviewRounds) && job.interviewRounds.length > 0;
 
     /**
      * Rung 1 — the plan row this round was scheduled against (audit R1/R6).
@@ -120,49 +173,69 @@ export const resolveRubricForRound = async ({ jobId = null, roundType = null, pl
         };
       }
       if (row?.templateId) {
-        const template = await RubricTemplate.findById(row.templateId).lean();
-        if (template) {
-          return {
-            templateId: template._id,
-            templateName: template.name,
-            criteria: plainCriteria(template.criteria),
-          };
+        const template = await findScopedTemplate(row.templateId, access);
+        if (template) return toResolved(template);
+        if (strictMissing) {
+          throw new ApiError(httpStatus.NOT_FOUND, 'Rubric template not found');
         }
-        // The template is gone entirely. Fall through — a dangling reference must not
-        // stop an interview being scheduled.
+        // A planned row named a template that is gone. Do not silently swap in the
+        // house default — that is how Other v1 replaced Other v2.
+        if (hasPlan) skipTypeFallback = true;
       }
+      // A planned row with neither templateId nor criteria may still use catalog
+      // defaults. Once a row names a rubric, type / isDefault must not swap it.
+    } else if (hasPlan) {
+      // Off-plan on a job that already has interviewRounds: type / isDefault are
+      // filter-only. An explicit templateId still resolves below.
+      skipTypeFallback = true;
     }
 
-    // Rung 2 — legacy: the round-type-keyed assignments this field replaced. Kept so
-    // every job that has not been re-saved on the new form keeps resolving (D2).
-    const assignment = pickJobAssignment(job?.rubricAssignments, roundType);
+    if (!skipTypeFallback) {
+      // Rung 2 — legacy: the round-type-keyed assignments this field replaced. Kept so
+      // every job that has not been re-saved on the new form keeps resolving (D2).
+      const assignment = pickJobAssignment(job?.rubricAssignments, roundType);
 
-    if (assignment?.criteria?.length) {
-      return {
-        templateId: null,
-        templateName: 'Custom for this job',
-        criteria: plainCriteria(assignment.criteria),
-      };
-    }
-
-    if (assignment?.templateId) {
-      const template = await RubricTemplate.findById(assignment.templateId).lean();
-      if (template) {
+      if (assignment?.criteria?.length) {
         return {
-          templateId: template._id,
-          templateName: template.name,
-          criteria: plainCriteria(template.criteria),
+          templateId: null,
+          templateName: 'Custom for this job',
+          criteria: plainCriteria(assignment.criteria),
         };
       }
-      // The template is gone entirely. Fall through rather than throw — a dangling
-      // reference must not stop an interview being scheduled.
+
+      if (assignment?.templateId) {
+        const template = await findScopedTemplate(assignment.templateId, access);
+        if (template) return toResolved(template);
+      }
     }
+  }
+
+  if (templateId) {
+    const template = await findScopedTemplate(templateId, access);
+    if (template) return toResolved(template);
+    if (strictMissing) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Rubric template not found');
+    }
+  }
+
+  if (skipTypeFallback) {
+    return {
+      templateId: null,
+      templateName: 'Default rubric',
+      criteria: plainCriteria(DEFAULT_RUBRIC_CRITERIA),
+    };
   }
 
   const or = [{ isDefault: true }];
   if (roundType) or.push({ 'appliesTo.roundType': roundType });
 
-  const candidates = await RubricTemplate.find({ archivedAt: null, $or: or }).lean();
+  let candidates = [];
+  if (!isImpossibleTenant(scoped)) {
+    const typeFilter = { archivedAt: null, $or: or };
+    const query =
+      scoped && Object.keys(scoped).length ? { $and: [typeFilter, scoped] } : typeFilter;
+    candidates = await RubricTemplate.find(query).lean();
+  }
   const picked = pickMostSpecificTemplate(candidates, { roundType });
 
   if (!picked) {
@@ -172,11 +245,7 @@ export const resolveRubricForRound = async ({ jobId = null, roundType = null, pl
       criteria: plainCriteria(DEFAULT_RUBRIC_CRITERIA),
     };
   }
-  return {
-    templateId: picked._id,
-    templateName: picked.name,
-    criteria: plainCriteria(picked.criteria),
-  };
+  return toResolved(picked);
 };
 
 const assertValidCriteria = (criteria) => {
@@ -189,9 +258,11 @@ const assertValidCriteria = (criteria) => {
  * means "make this the default" always succeeds, which is what the admin screen needs;
  * the alternative is an error the user can only clear by editing another record.
  */
-const demoteOtherDefaults = async (keepId) => {
+const demoteOtherDefaults = async (keepId, tenantId = null) => {
   const filter = { isDefault: true, archivedAt: null };
   if (keepId) filter._id = { $ne: keepId };
+  if (tenantId) filter.tenantId = tenantId;
+  else filter.$or = [{ tenantId: null }, { tenantId: { $exists: false } }];
   await RubricTemplate.updateMany(filter, { $set: { isDefault: false } });
 };
 
@@ -202,27 +273,35 @@ export const createRubricTemplate = async (body, userId, tenantId = null) => {
     description: body.description || '',
     criteria: plainCriteria(body.criteria),
     appliesTo: {
-      jobId: body.appliesTo?.jobId || null,
+      jobId: null,
       roundType: body.appliesTo?.roundType || null,
     },
     isDefault: Boolean(body.isDefault),
     createdBy: userId,
     tenantId: tenantId || null,
   });
-  if (doc.isDefault) await demoteOtherDefaults(doc._id);
+  if (doc.isDefault) await demoteOtherDefaults(doc._id, doc.tenantId || null);
   return doc;
 };
 
-export const getRubricTemplateById = async (id) => {
-  const doc = await RubricTemplate.findById(id);
+export const getRubricTemplateById = async (id, access = null) => {
+  const filter = { _id: id };
+  if (access) {
+    const clause = rubricTenantFilter(access);
+    if (isImpossibleTenant(clause)) {
+      throw new ApiError(httpStatus.NOT_FOUND, 'Rubric template not found');
+    }
+    Object.assign(filter, clause);
+  }
+  const doc = await RubricTemplate.findOne(filter);
   if (!doc) throw new ApiError(httpStatus.NOT_FOUND, 'Rubric template not found');
   return doc;
 };
 
 export const queryRubricTemplates = async (filter, options) => RubricTemplate.paginate(filter, options);
 
-export const updateRubricTemplate = async (id, body, userId) => {
-  const doc = await getRubricTemplateById(id);
+export const updateRubricTemplate = async (id, body, userId, access = null) => {
+  const doc = await getRubricTemplateById(id, access);
   if (doc.archivedAt) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'This rubric is archived. Restore it before editing.');
   }
@@ -234,14 +313,14 @@ export const updateRubricTemplate = async (id, body, userId) => {
   if (body.description !== undefined) doc.description = body.description;
   if (body.appliesTo !== undefined) {
     doc.appliesTo = {
-      jobId: body.appliesTo?.jobId || null,
+      jobId: null,
       roundType: body.appliesTo?.roundType || null,
     };
   }
   if (body.isDefault !== undefined) doc.isDefault = Boolean(body.isDefault);
   doc.updatedBy = userId;
   await doc.save();
-  if (doc.isDefault) await demoteOtherDefaults(doc._id);
+  if (doc.isDefault) await demoteOtherDefaults(doc._id, doc.tenantId || null);
   return doc;
 };
 
@@ -319,8 +398,8 @@ export const countJobsByTemplate = async (templateIds) => {
  * Archive, never delete: a Meeting.rubricSnapshot may point at this template, and the
  * history panel names the rubric a round was scored against.
  */
-export const archiveRubricTemplate = async (id, userId) => {
-  const doc = await getRubricTemplateById(id);
+export const archiveRubricTemplate = async (id, userId, access = null) => {
+  const doc = await getRubricTemplateById(id, access);
   if (doc.isDefault) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
@@ -352,8 +431,8 @@ export const archiveRubricTemplate = async (id, userId) => {
   return doc;
 };
 
-export const restoreRubricTemplate = async (id, userId) => {
-  const doc = await getRubricTemplateById(id);
+export const restoreRubricTemplate = async (id, userId, access = null) => {
+  const doc = await getRubricTemplateById(id, access);
   doc.archivedAt = null;
   doc.updatedBy = userId;
   await doc.save();

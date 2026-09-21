@@ -7,13 +7,13 @@ import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
  * A reusable set of weighted scoring criteria.
  *
  * A template is RESOLVED when a round is scheduled and COPIED onto the meeting
- * (Meeting.rubricSnapshot). Nothing reads a template at evaluation time, so editing one
- * never changes what a past round was scored against — the same reason offer letters
- * snapshot their terms.
+ * (Meeting.rubricSnapshot) and, for planned jobs, onto JobApplication.roundPlanSnapshot.
+ * Nothing reads a template at evaluation time, so editing one never changes what a past
+ * round was scored against — the same reason offer letters snapshot their terms.
  *
- * Resolution precedence, most specific first:
- *   1. jobId + roundType   2. jobId only   3. roundType only   4. isDefault
- *   5. DEFAULT_RUBRIC_CRITERIA in code, when nothing matches
+ * `appliesTo.roundType` and `isDefault` are catalog filters. They do not auto-apply once
+ * a job has interviewRounds; each plan row's templateId is the binding. `appliesTo.jobId`
+ * is unused and is not written.
  *
  * Archiving rather than deleting keeps the name and weights resolvable for any snapshot
  * that points back at this template.
