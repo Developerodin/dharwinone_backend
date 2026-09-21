@@ -103,3 +103,17 @@ test('buildV2Segment ends at the latest utterance end, not the last start', () =
 test('buildV2Segment returns null for no utterances', () => {
   assert.equal(buildV2Segment([]), null);
 });
+
+test('an assembled transcript with no egress epoch still anchors on first speech', () => {
+  const rows = [
+    raw({ startedAtEpochMs: EPOCH + 3000, endedAtEpochMs: EPOCH + 4000 }),
+    raw({ utteranceId: 'u-2', startedAtEpochMs: EPOCH + 9000, endedAtEpochMs: EPOCH + 9500 }),
+  ];
+  const { baseMs, timebase } = resolveUtteranceTimebase(rows, {
+    egressFileStartedAtEpochMs: null,
+    egressStartedAtEpochMs: null,
+  });
+  assert.equal(timebase, 'first_utterance');
+  assert.equal(offsetFromBase(rows[0].startedAtEpochMs, baseMs), 0);
+  assert.equal(offsetFromBase(rows[1].startedAtEpochMs, baseMs), 6000);
+});

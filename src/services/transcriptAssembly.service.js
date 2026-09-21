@@ -6,6 +6,7 @@ import Recording, { isRecordingTerminal } from '../models/recording.model.js';
 import { uploadJsonToS3 } from './aiArtifactStorage.service.js';
 import { buildSummaryJobIdFromVersion } from '../queues/summaryQueue.js';
 import logger from '../config/logger.js';
+import { resolveUtteranceTimebase, offsetFromBase } from './agentInternalV2.helpers.js';
 
 export const SUPPORTED_TRANSCRIPT_LANGUAGES = ['en'];
 
@@ -82,15 +83,12 @@ export function dedupeAndSortUtterances(batchRows) {
   });
 }
 
-export function recordingOffsetForUtterance(recording, startedAtEpochMs) {
-  if (!recording || startedAtEpochMs == null) return null;
+export function recordingOffsetForUtterance(recording, startedAtEpochMs, fallbackBaseMs = null) {
   const base =
-    recording.egressFileStartedAtEpochMs ??
-    recording.egressStartedAtEpochMs ??
-    null;
-  if (base == null) return null;
-  const offset = startedAtEpochMs - base;
-  return offset < 0 ? null : offset;
+    recording?.egressFileStartedAtEpochMs ??
+    recording?.egressStartedAtEpochMs ??
+    fallbackBaseMs;
+  return offsetFromBase(startedAtEpochMs, base ?? null);
 }
 
 function newestRunHeartbeatMs(sessions) {
@@ -200,9 +198,12 @@ export async function assembleTranscriptVersionForOwner({
   }
 
   const recordingById = new Map(recordings.map((r) => [String(r._id), r]));
+  // A missed egress webhook leaves both epoch fields null; anchor on first speech
+  // rather than emitting a transcript where every offset is null.
+  const { baseMs: fallbackBaseMs } = resolveUtteranceTimebase(raw, null);
   const utterances = raw.map((u) => {
     const rec = u.recordingId ? recordingById.get(String(u.recordingId)) : recordings[0];
-    const recordingOffsetMs = recordingOffsetForUtterance(rec, u.startedAtEpochMs);
+    const recordingOffsetMs = recordingOffsetForUtterance(rec, u.startedAtEpochMs, fallbackBaseMs);
     return {
       ...canonicalUtteranceForHash({
         ...u,
