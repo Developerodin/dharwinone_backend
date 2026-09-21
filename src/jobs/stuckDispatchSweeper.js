@@ -124,6 +124,7 @@ export async function sweepStuckDispatches() {
   for (const d of neverJoined) {
     d.status = 'failed';
     d.error = 'agent_never_joined';
+    d.failureStage = 'job_not_accepted';
     d.leftAt = new Date();
     // eslint-disable-next-line no-await-in-loop
     await d.save();

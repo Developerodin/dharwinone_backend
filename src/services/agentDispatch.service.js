@@ -85,13 +85,51 @@ async function requestSummaryCancel(active, meetingId) {
   }
 }
 
+const DISPATCH_ATTEMPTS = 3;
+
+/**
+ * Bounded retry around AgentDispatchClient.createDispatch.
+ *
+ * ponytail: doubling backoff capped at 8 s, no jitter. Dispatch is a
+ * once-per-recording call, so contention is not a concern; if that changes,
+ * add jitter the way node_client does.
+ */
+export async function createDispatchWithRetry(
+  dispatchClient,
+  { room, agentName, metadata, attempts = DISPATCH_ATTEMPTS, sleepFn }
+) {
+  if (!dispatchClient) {
+    return {
+      ok: false,
+      dispatchId: null,
+      attempts: 0,
+      error: 'AgentDispatchClient not initialized — LiveKit credentials missing',
+    };
+  }
+  const sleep = sleepFn || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const max = Math.max(1, attempts);
+  let backoff = 500;
+  let lastError = null;
+  for (let attempt = 1; attempt <= max; attempt += 1) {
+    try {
+      const dispatch = await dispatchClient.createDispatch(room, agentName, { metadata });
+      return { ok: true, dispatchId: dispatch.id, attempts: attempt, error: null };
+    } catch (err) {
+      lastError = err?.message || String(err);
+      logger.warn('[AgentDispatch] createDispatch attempt failed', { room, attempt, error: lastError });
+      if (attempt < max) {
+        await sleep(backoff);
+        backoff = Math.min(8000, backoff * 2);
+      }
+    }
+  }
+  return { ok: false, dispatchId: null, attempts: max, error: lastError };
+}
+
 export async function dispatchSummaryAgent({ meetingId, recordingId }) {
   if (!agentsEnabled()) {
     logger.info('[AgentDispatch] summary agent disabled (LIVEKIT_AGENTS_ENABLED=false)', { meetingId });
     return null;
-  }
-  if (!dispatchClient) {
-    throw new Error('AgentDispatchClient not initialized — LiveKit credentials missing');
   }
   const agentName = getAgentName();
   const hmacToken = crypto.randomBytes(32).toString('hex');
@@ -105,7 +143,17 @@ export async function dispatchSummaryAgent({ meetingId, recordingId }) {
     dispatchKey,
     language,
   });
-  const dispatch = await dispatchClient.createDispatch(meetingId, agentName, { metadata });
+  const attempt = await createDispatchWithRetry(dispatchClient, {
+    room: meetingId,
+    agentName,
+    metadata,
+  });
+  if (!attempt.ok) {
+    const err = new Error(attempt.error || 'createDispatch failed');
+    err.failureStage = 'dispatch_failed';
+    throw err;
+  }
+  const dispatch = { id: attempt.dispatchId };
 
   await AgentDispatch.create({
     meetingId,

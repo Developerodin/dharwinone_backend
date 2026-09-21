@@ -21,6 +21,19 @@ const agentDispatchSchema = new mongoose.Schema(
     lastHeartbeat: { type: Date, default: null },
     lastSegmentSentAt: { type: Date, default: null },
     error: { type: String, default: null },
+    /** Which step failed, so `agent_never_joined` stops meaning five different things. */
+    failureStage: {
+      type: String,
+      enum: [
+        'dispatch_failed',
+        'job_not_accepted',
+        'metadata_invalid',
+        'register_run_failed',
+        'room_connect_failed',
+        null,
+      ],
+      default: null,
+    },
     hmacToken: { type: String, required: true },
     /** Summary-agent cancel: LiveKit dispatch deleted but row stays active until finalize/salvage (F22). */
     cancelRequestedAt: { type: Date, default: null },

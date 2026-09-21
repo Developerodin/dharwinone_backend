@@ -103,6 +103,7 @@ const recordingSchema = mongoose.Schema(
       index: true,
     },
     aiProcessingError: { type: String, default: null },
+    aiProcessingFailureStage: { type: String, default: null },
     /** Summary worker lease. Distinct from `finalizingAt`, which belongs to the egress lifecycle. */
     summaryClaimedAt: { type: Date, default: null },
     transcriptId: { type: mongoose.Schema.Types.ObjectId, ref: 'TranscriptSegment', default: null },

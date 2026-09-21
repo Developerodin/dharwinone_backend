@@ -728,6 +728,7 @@ const startRecording = async (roomName) => {
         await Recording.findByIdAndUpdate(pending._id, {
           aiProcessingStatus: 'failed',
           aiProcessingError: `dispatch failed: ${err.message}`,
+          aiProcessingFailureStage: err.failureStage || 'dispatch_failed',
         });
       } catch (innerErr) {
         logger.warn('[LiveKit] failed to mark recording.aiProcessingStatus=failed', { error: innerErr.message });
