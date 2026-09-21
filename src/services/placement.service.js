@@ -608,7 +608,18 @@ const queryPlacements = async (filter, options, currentUser) => {
   return result;
 };
 
-const maybeStripSingle = async (placement, currentUser) => {
+const placementActorId = (ref) => {
+  if (ref == null) return '';
+  if (typeof ref === 'object') return String(ref._id ?? ref.id ?? '');
+  return String(ref);
+};
+
+/**
+ * Strip CTC/BGV notes for admin/agent readers. Authz belongs in getPlacementById —
+ * Agents with pipeline/owner/creator grant must not be re-403'd here for not hosting
+ * the interview (list + payroll + onboarding edit already allow those screens).
+ */
+const maybeStripSingle = async (placement, currentUser, alreadyAuthorized = false) => {
   if (!currentUser) return attachOrientationMeetingPublicUrl(placement);
   const { userIsAdmin, userIsAgent } = await import('../utils/roleHelpers.js');
   if (await userIsAdmin(currentUser)) {
@@ -617,7 +628,9 @@ const maybeStripSingle = async (placement, currentUser) => {
     return attachOrientationMeetingPublicUrl(plain);
   }
   if (await userIsAgent(currentUser)) {
-    await assertAgentCanReadPlacement(currentUser, placement);
+    if (!alreadyAuthorized) {
+      await assertAgentCanReadPlacement(currentUser, placement);
+    }
     const plain = placement.toObject ? placement.toObject() : { ...placement };
     stripPlacementPlain(plain);
     return attachOrientationMeetingPublicUrl(plain);
@@ -654,16 +667,21 @@ const getPlacementById = async (id, currentUser = null) => {
 
   await reconcilePlacementJoiningDateWithAcceptedOffer(placement);
 
+  let alreadyAuthorized = false;
   if (currentUser) {
-    const createdByMe = String(placement.createdBy) === String(currentUser.id ?? currentUser._id);
-    if (!hasAnyPipelinePerm(currentUser) && !createdByMe && placement.job) {
+    // createdBy is populated on this read — compare ids, not String(doc) === '[object Object]'.
+    const createdByMe = placementActorId(placement.createdBy) === placementActorId(currentUser);
+    if (hasAnyPipelinePerm(currentUser) || createdByMe) {
+      alreadyAuthorized = true;
+    } else if (placement.job) {
       const canAccess = await isOwnerOrAdmin(currentUser, placement.job);
       if (!canAccess) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
       }
+      alreadyAuthorized = true;
     }
   }
-  return maybeStripSingle(placement, currentUser);
+  return maybeStripSingle(placement, currentUser, alreadyAuthorized);
 };
 
 /**
