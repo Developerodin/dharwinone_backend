@@ -370,5 +370,6 @@
   "./src/constants/__tests__/payrollCountries.test.js",
   "./src/models/__tests__/employeePayrollDetail.model.test.js",
   "./src/services/__tests__/payrollDetail.service.test.js",
-  "./src/validations/__tests__/payrollDetail.validation.test.js"
+  "./src/validations/__tests__/payrollDetail.validation.test.js",
+  "./src/services/__tests__/agentInternalV2.timebase.test.js"
 ]
