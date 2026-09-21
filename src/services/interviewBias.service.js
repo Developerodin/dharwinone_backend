@@ -2,16 +2,20 @@ import mongoose from 'mongoose';
 import Meeting from '../models/meeting.model.js';
 import Job from '../models/job.model.js';
 import TranscriptVersion from '../models/transcriptVersion.model.js';
+import TranscriptSegment from '../models/transcriptSegment.model.js';
+import InterviewEvaluation from '../models/interviewEvaluation.model.js';
 import logger from '../config/logger.js';
 import { readJsonFromS3 } from './aiArtifactStorage.service.js';
 import { buildTranscriptOwnerKey } from './transcriptAssembly.service.js';
 import { assertMeetingInScope } from './meeting.service.js';
 import { generateBiasReport } from './interviewBias.openai.js';
+import { applyThinTranscriptMismatch } from './interviewBias.parse.js';
 import {
   decideBiasSkip,
   hasUsableScorecard,
   resolveJobIdFromMeeting,
   scorecardForPrompt,
+  utterancesFromLegacySegments,
 } from './interviewBias.inputs.js';
 import {
   BIAS_ADVISORY_NOTICE,
@@ -32,12 +36,11 @@ function meetingInterviewId(meeting) {
 }
 
 /**
- * Load latest assembled transcript without staff permission checks (worker path).
- * Keeps at most 80 non-empty utterances so a large S3 file is not retained.
+ * Load latest assembled TranscriptVersion utterances from S3.
  * @param {object} meeting
  * @returns {Promise<Array<{ utteranceId?: string, speakerRole?: string, text?: string }>>}
  */
-export async function loadTranscriptUtterancesInternal(meeting) {
+async function loadTranscriptVersionUtterances(meeting) {
   const interviewId = meetingInterviewId(meeting);
   const ownerKey = buildTranscriptOwnerKey({ interviewId, meetingId: meeting.meetingId });
   const versionDoc = await TranscriptVersion.findOne({ ownerKey }).sort({ version: -1 }).lean();
@@ -60,6 +63,45 @@ export async function loadTranscriptUtterancesInternal(meeting) {
     if (rows.length >= MAX_LOAD_UTTERANCES) break;
   }
   return rows;
+}
+
+/**
+ * Prefer assembled TranscriptVersion; fall back to legacy segments so recorded interviews still analyze.
+ * @param {object} meeting
+ * @returns {Promise<Array<{ utteranceId?: string, speakerRole?: string, text?: string }>>}
+ */
+export async function loadTranscriptUtterancesInternal(meeting) {
+  const fromVersion = await loadTranscriptVersionUtterances(meeting);
+  if (fromVersion.length) return fromVersion;
+  const segments = await TranscriptSegment.find({ meetingId: meeting.meetingId })
+    .sort({ sequenceNumber: 1 })
+    .select('sequenceNumber utterances')
+    .lean();
+  return utterancesFromLegacySegments(segments, MAX_LOAD_UTTERANCES);
+}
+
+/**
+ * Scorecard from the meeting embed, or panel InterviewEvaluation rows (new rubric UI).
+ * @param {object} meeting
+ * @returns {Promise<object|null>}
+ */
+export async function loadScorecardForBias(meeting) {
+  if (hasUsableScorecard(meeting.interviewScorecard)) return meeting.interviewScorecard;
+  const evals = await InterviewEvaluation.find({ meeting: meeting._id })
+    .select('ratings comment')
+    .lean();
+  const ratings = [];
+  const comments = [];
+  for (const ev of evals || []) {
+    if (typeof ev.comment === 'string' && ev.comment.trim()) comments.push(ev.comment.trim());
+    for (const r of ev.ratings || []) {
+      if (r?.notApplicable) continue;
+      if (r?.rating == null) continue;
+      ratings.push({ criterion: String(r.key || ''), rating: Number(r.rating) });
+    }
+  }
+  const scorecard = { ratings, comment: comments.join('\n') };
+  return hasUsableScorecard(scorecard) ? scorecard : meeting.interviewScorecard;
 }
 
 /**
@@ -164,7 +206,7 @@ export async function analyzeInterviewBias(meetingIdOrMongoId) {
   }
 
   const mongoId = meeting._id;
-  const scorecard = meeting.interviewScorecard;
+  const scorecard = await loadScorecardForBias(meeting);
   const stamp = {
     flags: [],
     evidence: [],
@@ -202,12 +244,15 @@ export async function analyzeInterviewBias(meetingIdOrMongoId) {
   }
 
   try {
-    const report = await generateBiasReport({
-      utterances,
-      jobDescription,
-      scorecard: scorecardForPrompt(scorecard),
-      interviewResult: meeting.interviewResult,
-    });
+    const report = applyThinTranscriptMismatch(
+      await generateBiasReport({
+        utterances,
+        jobDescription,
+        scorecard: scorecardForPrompt(scorecard),
+        interviewResult: meeting.interviewResult,
+      }),
+      { utterances, interviewResult: meeting.interviewResult }
+    );
     await persistBiasCheck(mongoId, {
       ...stamp,
       status: 'ready',

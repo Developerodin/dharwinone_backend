@@ -11,7 +11,8 @@ export function hasUsableScorecard(scorecard) {
   if (!scorecard || typeof scorecard !== 'object') return false;
   const ratings = Array.isArray(scorecard.ratings) ? scorecard.ratings : [];
   const comment = typeof scorecard.comment === 'string' ? scorecard.comment.trim() : '';
-  return ratings.length > 0 || comment.length > 0;
+  const hasRating = ratings.some((r) => r && r.rating != null && r.rating !== '');
+  return hasRating || comment.length > 0;
 }
 
 /**
@@ -61,16 +62,54 @@ export function sanitizeBiasJobMeetingKey(meetingId) {
 }
 
 /**
+ * List/detail chip only — never quotes, flags, or skip copy.
+ * @param {object|null|undefined} biasCheck
+ * @returns {{ status: string|null, riskLevel: string|null }}
+ */
+export function serializeBiasSummary(biasCheck) {
+  if (!biasCheck || typeof biasCheck !== 'object') {
+    return { status: null, riskLevel: null };
+  }
+  return {
+    status: biasCheck.status || null,
+    riskLevel: biasCheck.riskLevel || null,
+  };
+}
+
+/**
  * Compact scorecard for the LLM — no scorer identity.
  * @param {object|null|undefined} scorecard
  * @returns {{ ratings: Array<{ criterion: string, rating: number }>, comment: string }}
  */
 export function scorecardForPrompt(scorecard) {
   const ratings = (scorecard?.ratings || [])
-    .filter((r) => r && r.criterion != null && r.rating != null)
-    .map((r) => ({ criterion: String(r.criterion), rating: Number(r.rating) }));
+    .filter((r) => r && (r.criterion != null || r.key != null) && r.rating != null)
+    .map((r) => ({ criterion: String(r.criterion || r.key), rating: Number(r.rating) }));
   return {
     ratings,
     comment: typeof scorecard?.comment === 'string' ? scorecard.comment.trim() : '',
   };
+}
+
+/**
+ * Flatten legacy TranscriptSegment utterances into the bias prompt shape.
+ * @param {Array<{ sequenceNumber?: number, utterances?: Array<object> }>} segments
+ * @param {number} [maxRows]
+ * @returns {Array<{ utteranceId: string, speakerRole: string, text: string }>}
+ */
+export function utterancesFromLegacySegments(segments, maxRows = 80) {
+  const rows = [];
+  for (const seg of Array.isArray(segments) ? segments : []) {
+    for (const u of seg.utterances || []) {
+      const text = String(u?.text || '').trim();
+      if (!text) continue;
+      rows.push({
+        utteranceId: `${seg.sequenceNumber ?? 0}-${u.startMs ?? rows.length}`,
+        speakerRole: String(u.speakerLabel || u.speaker || 'unknown'),
+        text,
+      });
+      if (rows.length >= maxRows) return rows;
+    }
+  }
+  return rows;
 }

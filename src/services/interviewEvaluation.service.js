@@ -1,8 +1,10 @@
 import httpStatus from 'http-status';
 import InterviewEvaluation from '../models/interviewEvaluation.model.js';
 import ApiError from '../utils/ApiError.js';
+import logger from '../config/logger.js';
 import { computeWeightedScore } from '../utils/interviewScore.js';
 import { DEFAULT_RUBRIC_CRITERIA } from '../constants/interviewRubric.js';
+import { enqueueInterviewBiasCheck } from './interviewBias.enqueue.js';
 
 /**
  * The criteria a round is scored against.
@@ -122,11 +124,15 @@ export const saveEvaluation = async ({ meeting, user, ratings, comment }) => {
     },
   };
 
-  return InterviewEvaluation.findOneAndUpdate(
+  const saved = await InterviewEvaluation.findOneAndUpdate(
     { meeting: meeting._id, evaluator: evaluatorId },
     update,
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+  enqueueInterviewBiasCheck(meeting._id.toString()).catch((err) => {
+    logger.warn('[saveEvaluation] enqueueInterviewBiasCheck failed:', err?.message || err);
+  });
+  return saved;
 };
 
 /** The caller's own evaluation, for pre-filling the form. Null when they have not scored yet. */

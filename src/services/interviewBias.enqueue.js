@@ -4,6 +4,8 @@ import TranscriptVersion from '../models/transcriptVersion.model.js';
 import logger from '../config/logger.js';
 import { isRedisEnabled } from '../config/redis.js';
 import { buildTranscriptOwnerKey } from './transcriptAssembly.service.js';
+import TranscriptSegment from '../models/transcriptSegment.model.js';
+import InterviewEvaluation from '../models/interviewEvaluation.model.js';
 import { hasUsableScorecard, shouldEnqueueBiasCheck } from './interviewBias.inputs.js';
 import {
   BIAS_ADVISORY_NOTICE,
@@ -41,7 +43,24 @@ export async function transcriptVersionExists(meeting) {
   const interviewId = meeting.id || meeting._id?.toString?.() || String(meeting._id);
   const ownerKey = buildTranscriptOwnerKey({ interviewId, meetingId: meeting.meetingId });
   const doc = await TranscriptVersion.findOne({ ownerKey }).select('_id').lean();
-  return !!doc;
+  if (doc) return true;
+  const seg = await TranscriptSegment.exists({ meetingId: meeting.meetingId });
+  return !!seg;
+}
+
+/**
+ * @param {object} meeting
+ * @returns {Promise<boolean>}
+ */
+async function meetingHasScorecard(meeting) {
+  if (hasUsableScorecard(meeting.interviewScorecard)) return true;
+  const ev = await InterviewEvaluation.findOne({
+    meeting: meeting._id,
+    $or: [{ comment: { $nin: [null, ''] } }, { 'ratings.rating': { $ne: null } }],
+  })
+    .select('_id')
+    .lean();
+  return !!ev;
 }
 
 /**
@@ -66,7 +85,7 @@ export async function enqueueInterviewBiasCheck(meetingIdOrMongoId, options = {}
   if (!meeting) {
     return { enqueued: false, reason: 'meeting_not_found' };
   }
-  const hasScorecard = hasUsableScorecard(meeting.interviewScorecard);
+  const hasScorecard = await meetingHasScorecard(meeting);
   if (!force && !hasScorecard) {
     return { enqueued: false, reason: 'no_scorecard' };
   }
@@ -76,7 +95,7 @@ export async function enqueueInterviewBiasCheck(meetingIdOrMongoId, options = {}
       return { enqueued: false, reason: 'no_transcript' };
     }
   }
-  if (force && meeting.biasCheck?.status === 'pending') {
+  if (force && isRedisEnabled() && meeting.biasCheck?.status === 'pending') {
     return { enqueued: true, reason: 'already_pending' };
   }
 
@@ -92,14 +111,29 @@ export async function enqueueInterviewBiasCheck(meetingIdOrMongoId, options = {}
     analyzedAt: null,
   };
 
+  /**
+   * Redis-off (local) or enqueue failure: run GPT inline so Re-run still produces a report.
+   * @returns {Promise<{ enqueued: boolean, reason: string }>}
+   */
+  const runInline = async () => {
+    const { analyzeInterviewBias } = await import('./interviewBias.service.js');
+    await analyzeInterviewBias(meeting._id.toString());
+    return { enqueued: true, reason: 'inline' };
+  };
+
   if (!isRedisEnabled()) {
-    await stampBiasCheck(meeting._id, {
-      ...pendingStamp,
-      status: 'skipped',
-      skipReason: BIAS_SKIP_REASONS.queue_unavailable,
-      analyzedAt: new Date(),
-    });
-    return { enqueued: false, reason: BIAS_SKIP_REASONS.queue_unavailable };
+    try {
+      return await runInline();
+    } catch (err) {
+      logger.warn('[interviewBias] inline analyze failed:', err?.message || err);
+      await stampBiasCheck(meeting._id, {
+        ...pendingStamp,
+        status: 'failed',
+        analyzedAt: new Date(),
+        reasons: ['Automatic bias review failed. Try Re-run.'],
+      });
+      return { enqueued: false, reason: 'inline_failed' };
+    }
   }
 
   await stampBiasCheck(meeting._id, pendingStamp);
@@ -112,13 +146,18 @@ export async function enqueueInterviewBiasCheck(meetingIdOrMongoId, options = {}
     );
     return { enqueued: true };
   } catch (err) {
-    logger.warn('[interviewBias] enqueue failed:', err?.message || err);
-    await stampBiasCheck(meeting._id, {
-      ...pendingStamp,
-      status: 'skipped',
-      skipReason: BIAS_SKIP_REASONS.queue_unavailable,
-      analyzedAt: new Date(),
-    });
-    return { enqueued: false, reason: BIAS_SKIP_REASONS.queue_unavailable };
+    logger.warn('[interviewBias] enqueue failed, analyzing inline:', err?.message || err);
+    try {
+      return await runInline();
+    } catch (inlineErr) {
+      logger.warn('[interviewBias] inline analyze failed:', inlineErr?.message || inlineErr);
+      await stampBiasCheck(meeting._id, {
+        ...pendingStamp,
+        status: 'skipped',
+        skipReason: BIAS_SKIP_REASONS.queue_unavailable,
+        analyzedAt: new Date(),
+      });
+      return { enqueued: false, reason: BIAS_SKIP_REASONS.queue_unavailable };
+    }
   }
 }

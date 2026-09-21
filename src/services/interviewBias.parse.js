@@ -19,8 +19,66 @@ const MAX_REASON = 300;
  */
 export function quoteInCorpus(quote, corpus) {
   const q = String(quote || '').trim().toLowerCase();
-  if (q.length < 8) return false;
-  return String(corpus || '').toLowerCase().includes(q);
+  if (q.length < 4) return false;
+  const hay = String(corpus || '').toLowerCase();
+  if (q.length < 8) {
+    return hay.split(/\n+/).some((line) => line.trim() === q);
+  }
+  return hay.includes(q);
+}
+
+const THIN_SPEECH_CHARS = 80;
+const THIN_MISMATCH_LABEL = 'A result was recorded against a very short transcript';
+const THIN_MISMATCH_REASON =
+  'The recording has almost no speech, but an interview result was still recorded.';
+
+/**
+ * Mechanical score_mismatch when a non-pending result sits on a near-empty transcript.
+ * Quotes must still be exact utterance text (short full-line quotes are allowed).
+ * @param {{ riskLevel: string, flags: object[], evidence: object[], reasons: string[] }} report
+ * @param {{ utterances?: Array<{ utteranceId?: string, text?: string }>, interviewResult?: string }} input
+ * @returns {{ riskLevel: string, flags: object[], evidence: object[], reasons: string[] }}
+ */
+export function applyThinTranscriptMismatch(report, input) {
+  if (!report) return report;
+  const decided = input?.interviewResult && input.interviewResult !== 'pending';
+  if (!decided) return report;
+  const rows = Array.isArray(input?.utterances) ? input.utterances : [];
+  const speechChars = rows.reduce((n, u) => n + String(u?.text || '').trim().length, 0);
+  if (speechChars >= THIN_SPEECH_CHARS) return report;
+  const transcriptText = rows.map((u) => String(u?.text || '').trim()).filter(Boolean).join('\n');
+  const extraEvidence = [];
+  for (const u of rows) {
+    if (extraEvidence.length >= 2) break;
+    const quote = String(u?.text || '').trim();
+    if (!quoteInCorpus(quote, transcriptText)) continue;
+    extraEvidence.push({
+      quote,
+      utteranceId: u?.utteranceId != null ? String(u.utteranceId) : null,
+      source: 'transcript',
+    });
+  }
+  if (!extraEvidence.length) return report;
+  const flags = report.flags.some((f) => f.category === 'score_mismatch')
+    ? report.flags
+    : [...report.flags, { category: 'score_mismatch', label: THIN_MISMATCH_LABEL }];
+  const reasons = report.reasons
+    .filter((r) => !String(r).includes('No bias indicators'))
+    .concat(report.reasons.includes(THIN_MISMATCH_REASON) ? [] : [THIN_MISMATCH_REASON])
+    .slice(0, MAX_REASONS);
+  const evidence = [...report.evidence];
+  for (const row of extraEvidence) {
+    if (evidence.length >= MAX_EVIDENCE) break;
+    if (evidence.some((x) => x.quote === row.quote && x.source === row.source)) continue;
+    evidence.push(row);
+  }
+  return {
+    ...report,
+    flags,
+    evidence,
+    reasons,
+    riskLevel: report.riskLevel === 'high' ? 'high' : 'medium',
+  };
 }
 
 /**
