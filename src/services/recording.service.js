@@ -8,6 +8,7 @@ import TranscriptSession from '../models/transcriptSession.model.js';
 import TranscriptBatch from '../models/transcriptBatch.model.js';
 import { readJsonFromS3 } from './aiArtifactStorage.service.js';
 import { dedupeAndSortUtterances, filterUtterancesForRecording } from './transcriptAssembly.service.js';
+import { mapV2Utterances, buildV2Segment } from './agentInternalV2.helpers.js';
 import { generatePresignedRecordingPlaybackUrl, headRecordingObject } from '../config/s3.js';
 import { getEgressClient } from './livekit.service.js';
 import { recordingScope } from './visibilityScope.service.js';
@@ -859,19 +860,8 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
     }
     const recordingIdStr = String(recording._id);
     rawUtterances = filterUtterancesForRecording(rawUtterances, recordingIdStr);
-    const utterances = rawUtterances.map((u) => ({
-      utteranceId: u.utteranceId,
-      speaker: u.participantIdentity ?? null,
-      speakerName: u.displayName ?? null,
-      speakerRole: u.speakerRole ?? null,
-      roleAssurance: u.roleAssurance ?? null,
-      text: u.text,
-      startMs: u.recordingOffsetMs ?? null,
-      recordingOffsetMs: u.recordingOffsetMs ?? null,
-      startedAtEpochMs: u.startedAtEpochMs ?? null,
-      endedAtEpochMs: u.endedAtEpochMs ?? null,
-      confidence: u.confidence ?? null,
-    }));
+    const { utterances, timebase } = mapV2Utterances(rawUtterances, recording);
+    const segment = buildV2Segment(utterances);
     const meeting =
       (await Meeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean()) ||
       (await InternalMeeting.findOne({ meetingId: recording.meetingId }).select('meetingId title').lean());
@@ -890,19 +880,8 @@ const getTranscriptByRecordingId = async (recordingId, currentUser = {}, options
       },
       meetingTitle: meeting?.title || recording.meetingId,
       // v1 clients (Communication → Recordings TranscriptModal) only read `segments`.
-      segments: utterances.length
-        ? [
-            {
-              id: 'v2',
-              sequenceNumber: 1,
-              windowStartMs: utterances[0].startMs ?? 0,
-              windowEndMs: utterances[utterances.length - 1].startMs ?? 0,
-              combinedText: utterances.map((u) => u.text).join(' '),
-              utteranceCount: utterances.length,
-              utterances: utterances.map((u) => ({ ...u, endMs: null })),
-            },
-          ]
-        : [],
+      segments: segment ? [segment] : [],
+      timebase,
       utterances,
       evidenceGrade: versionPayload?.evidenceGrade ?? null,
       transcriptVersion: versionPayload?.version ?? null,
