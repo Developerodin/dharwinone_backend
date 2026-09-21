@@ -137,3 +137,15 @@ attendance-status-backfill.*.journal.json
 !scripts/migrations/2026-09-10-collapse-backdated-duplicate-days.js
 !scripts/migrations/2026-09-10-backfill-document-versions.js
 !scripts/migrations/__tests__/2026-09-10-backfill-document-versions.test.js
+
+# Payroll & bank details (2026-09-21) — guards encryption-at-rest, country-branched
+# validation and the masked-view contract for bank/tax/statutory identifiers.
+# src/constants/__tests__/ has no directory un-ignore above, so it is added here;
+# the other four parent dirs are already re-included. `*.test.js` still excludes
+# everything in them, so each spec that ships is named explicitly.
+!src/constants/__tests__/
+!src/utils/__tests__/fieldCrypto.test.js
+!src/constants/__tests__/payrollCountries.test.js
+!src/models/__tests__/employeePayrollDetail.model.test.js
+!src/services/__tests__/payrollDetail.service.test.js
+!src/validations/__tests__/payrollDetail.validation.test.js

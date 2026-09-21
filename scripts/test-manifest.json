@@ -363,5 +363,10 @@
   "./src/services/__tests__/jobVacancyCapacity.test.js",
   "./src/services/__tests__/applicationOffer.service.test.js",
   "./src/services/__tests__/interviewRoundPlan.test.js",
-  "./src/services/__tests__/interviewRoundProgress.test.js"
+  "./src/services/__tests__/interviewRoundProgress.test.js",
+  "./src/utils/__tests__/fieldCrypto.test.js",
+  "./src/constants/__tests__/payrollCountries.test.js",
+  "./src/models/__tests__/employeePayrollDetail.model.test.js",
+  "./src/services/__tests__/payrollDetail.service.test.js",
+  "./src/validations/__tests__/payrollDetail.validation.test.js"
 ]
