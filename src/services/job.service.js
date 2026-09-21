@@ -19,7 +19,8 @@ import {
 } from './applicantQuery.service.js';
 import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/jobLocation.util.js';
 import { collationForSortBy } from '../utils/mongoCollation.js';
-import { captureResumeSnapshot } from './jobApplicationResumeSnapshot.service.js';
+import { captureResumeSnapshot, captureSlotSnapshot } from './jobApplicationResumeSnapshot.service.js';
+import { DOCUMENT_VERSION_SLOTS } from '../utils/documentVersionSlot.js';
 import { getVacancyCapacityBlockReason, isVacancyCapacityFull } from '../constants/atsPipeline.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
@@ -1221,7 +1222,14 @@ const isApplicationDeadlinePast = (deadline) => {
   return Date.now() > endOfDeadlineDayUtc.getTime();
 };
 
-const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser, resumeOptions = {}) => {
+/**
+ * @param {object} [documentOptions]
+ * @param {number} [documentOptions.version] - resume version; omitted falls back to the candidate's latest.
+ * @param {number} [documentOptions.coverLetterVersion] - cover letter version. Omitted means NO cover
+ *   letter on this application — unlike the resume there is no latest-version fallback, because an
+ *   applicant who did not pick one must not have a stale file sent on their behalf.
+ */
+const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser, documentOptions = {}) => {
   const job = await getJobById(jobId);
   if (!job) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
@@ -1252,8 +1260,14 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser,
     throw new ApiError(httpStatus.BAD_REQUEST, 'Candidate has already applied to this job');
   }
   const submittedResume = await captureResumeSnapshot(candidate, {
-    version: resumeOptions.version,
+    version: documentOptions.version,
   });
+  const submittedCoverLetter =
+    documentOptions.coverLetterVersion != null
+      ? await captureSlotSnapshot(candidate, DOCUMENT_VERSION_SLOTS.COVER_LETTER, {
+          version: documentOptions.coverLetterVersion,
+        })
+      : undefined;
   const application = await JobApplication.create({
     job: jobId,
     candidate: candidateId,
@@ -1263,6 +1277,7 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser,
     applicantUser: isSelfApply ? userId : null,
     status: 'Applied',
     ...(submittedResume ? { submittedResume } : {}),
+    ...(submittedCoverLetter ? { submittedCoverLetter } : {}),
   });
   await syncReferralPipelineAfterJobApplication(jobId, candidateId, job);
   await application.populate([{ path: 'candidate', select: 'fullName email' }, { path: 'job', select: 'title' }]);

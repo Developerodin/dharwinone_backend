@@ -36,6 +36,21 @@ const jobApplicationSchema = new mongoose.Schema(
       size: { type: Number },
       capturedAt: { type: Date },
     },
+    /**
+     * Immutable cover-letter file captured at apply time. Optional: absent when the applicant
+     * sent no cover letter, which is why this is not folded into `submittedResume`'s shape.
+     * `coverLetter` above is the legacy plain-text field and is a different thing.
+     */
+    submittedCoverLetter: {
+      slot: { type: String, trim: true },
+      version: { type: Number },
+      key: { type: String, trim: true },
+      documentUrl: { type: String, trim: true },
+      originalName: { type: String, trim: true },
+      mimeType: { type: String, trim: true },
+      size: { type: Number },
+      capturedAt: { type: Date },
+    },
     appliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     /** P3: explicit tenant boundary. Denormalized from job.tenantId at creation time. */
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },

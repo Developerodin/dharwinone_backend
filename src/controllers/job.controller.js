@@ -510,32 +510,41 @@ const browseApply = catchAsync(async (req, res) => {
     });
   }
 
-  const resumeVersionRaw = req.body?.resumeVersion;
-  const resumeVersion =
-    resumeVersionRaw != null && String(resumeVersionRaw).trim() !== ''
-      ? Number(resumeVersionRaw)
-      : undefined;
-  if (
-    resumeVersion != null &&
-    (!Number.isInteger(resumeVersion) || resumeVersion < 1)
-  ) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid resume version');
-  }
+  // Both versioned slots take the same shape: either a saved version number or a fresh file
+  // (never both). Multipart sends the number as a string, hence the explicit coercion.
+  const readVersion = (raw, label) => {
+    if (raw == null || String(raw).trim() === '') return undefined;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1) {
+      throw new ApiError(httpStatus.BAD_REQUEST, `Invalid ${label} version`);
+    }
+    return value;
+  };
+
+  const resumeVersion = readVersion(req.body?.resumeVersion, 'resume');
+  const coverLetterVersion = readVersion(req.body?.coverLetterVersion, 'cover letter');
   const resumeFile = req.files?.resume?.[0];
+  const coverLetterFile = req.files?.coverLetter?.[0];
   if (resumeFile && resumeVersion != null) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Provide either resumeVersion or a resume file, not both');
   }
+  if (coverLetterFile && coverLetterVersion != null) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Provide either coverLetterVersion or a cover letter file, not both'
+    );
+  }
 
-  let resolvedResumeVersion = resumeVersion;
-  if (resumeFile) {
+  /** Upload to the slot, then read back the version it landed on. Returns the new version number. */
+  const saveSlotFile = async (file, slot, s3Folder, label) => {
     const { uploadFileToS3 } = await import('../services/upload.service.js');
     // eslint-disable-next-line import/no-cycle -- lazy import; employee.service also pulls offer.service
     const { attachVersionedSlotUploadToCandidate } = await import('../services/employee.service.js');
-    const { latestVersionForSlot, DOCUMENT_VERSION_SLOTS } = await import('../utils/documentVersionSlot.js');
-    const uploaded = await uploadFileToS3(resumeFile, userId, 'candidate-resumes');
+    const { latestVersionForSlot } = await import('../utils/documentVersionSlot.js');
+    const uploaded = await uploadFileToS3(file, userId, s3Folder);
     await attachVersionedSlotUploadToCandidate(
       candidate,
-      'resume',
+      slot,
       {
         url: uploaded.url,
         key: uploaded.key,
@@ -549,15 +558,31 @@ const browseApply = catchAsync(async (req, res) => {
     if (!candidate) {
       throw new ApiError(httpStatus.NOT_FOUND, 'Candidate not found');
     }
-    const latest = latestVersionForSlot(candidate.documentVersions || [], DOCUMENT_VERSION_SLOTS.RESUME);
+    const latest = latestVersionForSlot(candidate.documentVersions || [], slot);
     if (!latest?.version) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Resume could not be saved');
+      throw new ApiError(httpStatus.BAD_REQUEST, `${label} could not be saved`);
     }
-    resolvedResumeVersion = Number(latest.version);
+    return Number(latest.version);
+  };
+
+  let resolvedResumeVersion = resumeVersion;
+  if (resumeFile) {
+    resolvedResumeVersion = await saveSlotFile(resumeFile, 'resume', 'candidate-resumes', 'Resume');
+  }
+
+  let resolvedCoverLetterVersion = coverLetterVersion;
+  if (coverLetterFile) {
+    resolvedCoverLetterVersion = await saveSlotFile(
+      coverLetterFile,
+      'cover-letter',
+      'candidate-documents',
+      'Cover letter'
+    );
   }
 
   const application = await applyCandidateToJob(jobId, candidate._id, userId, req.user, {
     version: resolvedResumeVersion,
+    coverLetterVersion: resolvedCoverLetterVersion,
   });
   const job = await getJobById(jobId);
   const referralRef = req.body?.ref;

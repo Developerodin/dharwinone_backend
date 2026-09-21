@@ -7,7 +7,16 @@ import {
   normalizeVersionSlot,
 } from '../utils/documentVersionSlot.js';
 
-const buildSubmittedResumeFromRow = (slot, row) => ({
+// ponytail: file is still named ...ResumeSnapshot because every importer does; it now serves
+// both versioned slots. Rename it only if a third consumer appears.
+
+/** Human label per slot, used in the "version N not found" error. */
+const SLOT_LABELS = {
+  [DOCUMENT_VERSION_SLOTS.RESUME]: 'Resume',
+  [DOCUMENT_VERSION_SLOTS.COVER_LETTER]: 'Cover letter',
+};
+
+const buildSubmittedFileFromRow = (slot, row) => ({
   slot,
   version: Number(row.version) || 1,
   key: String(row.key || '').trim() || undefined,
@@ -18,18 +27,18 @@ const buildSubmittedResumeFromRow = (slot, row) => ({
   capturedAt: new Date(),
 });
 
-const resolveResumeVersionRow = (candidate, explicitVersion) => {
-  const slot = DOCUMENT_VERSION_SLOTS.RESUME;
+const resolveSlotVersionRow = (candidate, slot, explicitVersion) => {
+  const label = SLOT_LABELS[slot] || 'Document';
   if (explicitVersion != null) {
     const versionNumber = Number(explicitVersion);
     if (!Number.isInteger(versionNumber) || versionNumber < 1) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid resume version');
+      throw new ApiError(httpStatus.BAD_REQUEST, `Invalid ${label.toLowerCase()} version`);
     }
     const row = (candidate.documentVersions || []).find(
       (v) => normalizeVersionSlot(v?.slot) === slot && Number(v.version) === versionNumber
     );
     if (!row) {
-      throw new ApiError(httpStatus.BAD_REQUEST, `Resume version ${versionNumber} not found`);
+      throw new ApiError(httpStatus.BAD_REQUEST, `${label} version ${versionNumber} not found`);
     }
     return row;
   }
@@ -53,19 +62,33 @@ const resolveResumeVersionRow = (candidate, explicitVersion) => {
 };
 
 /**
- * Immutable resume snapshot for a job application (read-only; upload before calling).
+ * Immutable file snapshot for a job application (read-only; upload before calling).
  * @param {import('mongoose').Document} candidate
+ * @param {string} slot - a DOCUMENT_VERSION_SLOTS value
  * @param {{ version?: number }} [options]
  * @returns {Promise<object|undefined>}
  */
-const captureResumeSnapshot = async (candidate, options = {}) => {
+const captureSlotSnapshot = async (candidate, slot, options = {}) => {
   if (!candidate?._id) return undefined;
 
-  const { version } = options;
-  const slot = DOCUMENT_VERSION_SLOTS.RESUME;
-  const row = resolveResumeVersionRow(candidate, version);
+  const row = resolveSlotVersionRow(candidate, slot, options.version);
   if (!row) return undefined;
-  return buildSubmittedResumeFromRow(slot, row);
+  return buildSubmittedFileFromRow(slot, row);
 };
 
-export { captureResumeSnapshot, resolveResumeVersionRow, buildSubmittedResumeFromRow };
+const captureResumeSnapshot = async (candidate, options = {}) =>
+  captureSlotSnapshot(candidate, DOCUMENT_VERSION_SLOTS.RESUME, options);
+
+const resolveResumeVersionRow = (candidate, explicitVersion) =>
+  resolveSlotVersionRow(candidate, DOCUMENT_VERSION_SLOTS.RESUME, explicitVersion);
+
+const buildSubmittedResumeFromRow = (slot, row) => buildSubmittedFileFromRow(slot, row);
+
+export {
+  captureSlotSnapshot,
+  resolveSlotVersionRow,
+  buildSubmittedFileFromRow,
+  captureResumeSnapshot,
+  resolveResumeVersionRow,
+  buildSubmittedResumeFromRow,
+};

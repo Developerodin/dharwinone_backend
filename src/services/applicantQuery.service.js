@@ -231,21 +231,27 @@ const queryApplicants = async (filter = {}, options = {}, currentUser = {}) => {
   // Stored document `url`s are presigned at upload with a short TTL, so resumes opened days later
   // 403 with "Request has expired". Re-sign each candidate document from its `key` (7-day TTL),
   // mirroring employee.service.js. Best-effort: keep the stale url if presigning fails.
+  //
+  // The submitted resume / cover letter snapshots carry the SAME expired urls and are what the
+  // applications list actually links to, so they are re-signed on the same pass. Without this the
+  // recruiter's link 403s on every application older than the original TTL.
+  const resign = async (holder, urlField) => {
+    if (!holder?.key) return;
+    try {
+      holder[urlField] = await generatePresignedDownloadUrl(holder.key, 7 * 24 * 3600);
+    } catch (_) {
+      /* keep stale url if presigning fails */
+    }
+  };
+
   await Promise.all(
     (result?.results || []).map(async (app) => {
       const docs = app.candidate?.documents;
-      if (!Array.isArray(docs) || !docs.length) return;
-      await Promise.all(
-        docs.map(async (doc) => {
-          if (doc?.key) {
-            try {
-              doc.url = await generatePresignedDownloadUrl(doc.key, 7 * 24 * 3600);
-            } catch (_) {
-              /* keep stale url if presigning fails */
-            }
-          }
-        })
-      );
+      await Promise.all([
+        resign(app.submittedResume, 'documentUrl'),
+        resign(app.submittedCoverLetter, 'documentUrl'),
+        ...(Array.isArray(docs) ? docs.map((doc) => resign(doc, 'url')) : []),
+      ]);
     })
   );
 

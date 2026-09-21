@@ -462,6 +462,8 @@ const browseApplyToJob = {
   body: Joi.object().keys({
     ref: Joi.string().optional().trim().allow(''),
     resumeVersion: Joi.number().integer().min(1).optional(),
+    /** Saved cover-letter version to attach. Omitted means the application carries no cover letter. */
+    coverLetterVersion: Joi.number().integer().min(1).optional(),
   }),
 };
 
