@@ -18,9 +18,11 @@ import { writeAtsAudit } from '../services/atsAudit.service.js';
 import { ActivityActions, EntityTypes } from '../config/activityLog.js';
 import { syncReferralPipelineAfterApplicationWithdrawal } from '../services/referralLeads.service.js';
 import { moveApplicationToOffer } from '../services/applicationOffer.service.js';
+import logger from '../config/logger.js';
 import { serializeCandidateApplication } from '../serializers/candidateApplication.serializer.js';
 import { loadCandidateInterviewDataForApplications } from '../services/candidateApplicationInterviewResult.service.js';
 import { serializeCandidateInterviewMeeting } from '../serializers/candidateInterviewMeeting.serializer.js';
+import { attachApplicantFit } from '../services/applicantFit.service.js';
 
 /** Owner row, or email match (public-apply candidates use job creator as owner). */
 const findApplicantCandidate = async (user) => {
@@ -116,6 +118,11 @@ const list = catchAsync(async (req, res) => {
   ]);
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
   const result = await queryJobApplications(filter, options, req.user);
+  try {
+    result.results = await attachApplicantFit(result.results);
+  } catch (err) {
+    logger.warn(`attachApplicantFit failed: ${err?.message || err}`);
+  }
   res.send(result);
 });
 

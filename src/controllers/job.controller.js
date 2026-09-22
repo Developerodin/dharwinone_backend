@@ -38,6 +38,7 @@ import { mintJobOpenReferralRefWithAudit } from '../services/referralAttribution
 import { syncReferralPipelineStatusForCandidate } from '../services/referralLeads.service.js';
 import { logActivity } from '../services/recruiterActivity.service.js';
 import { userHasRecruiterRole, userCanViewAllJobsForListing } from '../utils/roleHelpers.js';
+import { attachHireForecasts } from '../services/hireForecast.service.js';
 import Employee from '../models/employee.model.js';
 import User from '../models/user.model.js';
 import * as activityLogService from '../services/activityLog.service.js';
@@ -143,7 +144,15 @@ const list = catchAsync(async (req, res) => {
   filter.platformSuperUser = req.user.platformSuperUser;
 
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const forCandidates = Boolean(filter.forCandidates);
   const result = await queryJobs(filter, options);
+  if (!forCandidates) {
+    try {
+      result.results = await attachHireForecasts(result.results);
+    } catch (err) {
+      logger.warn(`attachHireForecasts failed: ${err?.message || err}`);
+    }
+  }
   res.send(result);
 });
 
