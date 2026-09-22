@@ -61,6 +61,7 @@ src/services/__tests__/helpers/
 # Shared position-to-student resolver (2026-09-22) — used by the curriculum setup merge.
 !src/services/__tests__/positionEnrollment.service.test.js
 !src/services/__tests__/trainingModule.queryEmployeesForModule.test.js
+!src/services/__tests__/position.roster.studentCount.test.js
 
 # Meeting reminder repair (2026-09-08) — these guard a production delivery failure.
 # Parent dirs re-included first (git cannot re-include a file whose parent dir is excluded).

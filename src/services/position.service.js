@@ -4,6 +4,7 @@ import ApiError from '../utils/ApiError.js';
 import Position from '../models/position.model.js';
 import Employee from '../models/employee.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
+import { countStudentsByPosition } from './positionEnrollment.service.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -278,6 +279,7 @@ const getPositionRoster = async () => {
 
   const positionIds = positions.map((pos) => pos._id);
   const modulesByPosition = await buildModulesByPositionId(positionIds);
+  const studentCounts = await countStudentsByPosition(positionIds.map(String));
 
   const linkedRows = positions.map((pos) => {
     const meta = metaByPosition.get(String(pos._id)) ?? { employeeCount: 0, assignedEmployees: [] };
@@ -287,6 +289,7 @@ const getPositionRoster = async () => {
       employeeCount: meta.employeeCount,
       assignedEmployees: meta.assignedEmployees,
       assignedModules: modulesByPosition.get(String(pos._id)) ?? [],
+      studentCount: studentCounts[String(pos._id)] ?? 0,
     };
   });
 
@@ -301,6 +304,7 @@ const getPositionRoster = async () => {
         employeeCount: meta.employeeCount,
         assignedEmployees: meta.assignedEmployees,
         assignedModules: [],
+        studentCount: 0,
       };
     })
     .filter((row) => row.employeeCount > 0);
