@@ -3645,8 +3645,17 @@ const CANDIDATE_ME_FIELDS = [
   'shortBio',
   'sevisId',
   'ead',
+  // The scanned equivalents of `ead`, which this list has always allowed a person to
+  // set for themselves. Omitting them would let the wizard fill these fields from a
+  // card scan and then drop them silently on save.
+  'eadCardNumber',
+  'eadValidFrom',
+  'eadValidTo',
   'visaType',
   'customVisaType',
+  'visaNumber',
+  'visaIssueDate',
+  'visaExpiryDate',
   'countryCode',
   'degree',
   'supervisorName',
