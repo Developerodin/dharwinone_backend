@@ -5,6 +5,7 @@
 // does Employee.findOne({owner}). candidate.js reads the same store under a
 // different namespace; see selectProviders.js for the collapse rule.
 
+import { eadDisplayValue } from '../../../../utils/eadDisplayValue.js';
 import Employee from '../../../../models/employee.model.js';
 import { resignationCutoff } from '../../employeeEmploymentFilter.js';
 
@@ -140,7 +141,9 @@ export const EMPLOYEE_FIELDS = {
   },
   immigration: {
     sevisId:  { path: 'sevisId',  requires: 'employees.manage', orSelf: true },
-    ead:      { path: 'ead',      requires: 'employees.manage', orSelf: true },
+    // Derived, not a plain path: the validated eadCardNumber wins over the legacy
+    // free-text ead, so the assistant reports the same number the exports do.
+    ead:      { derive: 'eadNumber', requires: 'employees.manage', orSelf: true },
     visaType: { path: 'visaType', requires: 'employees.manage', orSelf: true },
   },
   internal: {
@@ -160,6 +163,7 @@ export default {
                  'fetch_leave_requests', 'fetch_tasks', 'fetch_projects'],
   FIELDS: EMPLOYEE_FIELDS,
   deriveFns: {
+    eadNumber: eadDisplayValue,
     employmentStatus,
     reportingManagerName,
     positionName,

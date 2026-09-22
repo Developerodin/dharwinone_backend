@@ -1,4 +1,5 @@
 import XLSX from 'xlsx';
+import { eadDisplayValue } from './eadDisplayValue.js';
 import {
   DOCUMENTS_HEADERS,
   DOCUMENTS_NOTE,
@@ -146,7 +147,7 @@ export function generateCandidateExportXlsxBuffer(exportData) {
       c.isCompleted ? 'Completed' : 'Incomplete',
       s(c.shortBio),
       s(c.sevisId),
-      s(c.ead),
+      s(eadDisplayValue(c)),
       s(c.degree),
       s(c.visaType),
       s(c.customVisaType),

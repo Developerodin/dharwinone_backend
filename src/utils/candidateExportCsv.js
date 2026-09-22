@@ -2,6 +2,7 @@ import {
   exportCompensationStatusCell,
   exportEmploymentStatusCell,
 } from './candidateExcelContract.js';
+import { eadDisplayValue } from './eadDisplayValue.js';
 
 /**
  * RFC 4180-style CSV cells: always quoted, " escaped as "".
@@ -95,7 +96,7 @@ export function generateCandidateExportCsv(exportData) {
       csvPhoneCell(candidate.phoneNumber || ''),
       csvCell(candidate.shortBio || ''),
       csvCell(candidate.sevisId || ''),
-      csvCell(candidate.ead || ''),
+      csvCell(eadDisplayValue(candidate)),
       csvCell(candidate.visaType || ''),
       csvCell(candidate.customVisaType || ''),
       csvCell(candidate.countryCode || ''),

@@ -8,6 +8,7 @@
 //   2. Role resolution goes through roleRegistry, never getAtsJobSeekerRoleIds(),
 //      which folds Employee and Candidate together (role.service.js:118).
 
+import { eadDisplayValue } from '../../../../utils/eadDisplayValue.js';
 import Employee from '../../../../models/employee.model.js';
 import { employmentStatus } from './employee.js';
 
@@ -28,7 +29,9 @@ export const CANDIDATE_FIELDS = {
   },
   immigration: {
     sevisId:  { path: 'sevisId',  requires: 'employees.manage', orSelf: true },
-    ead:      { path: 'ead',      requires: 'employees.manage', orSelf: true },
+    // Derived, not a plain path: the validated eadCardNumber wins over the legacy
+    // free-text ead, so the assistant reports the same number the exports do.
+    ead:      { derive: 'eadNumber', requires: 'employees.manage', orSelf: true },
     visaType: { path: 'visaType', requires: 'employees.manage', orSelf: true },
   },
   internal: {
@@ -44,6 +47,6 @@ export default {
   key: 'owner',
   relatedTools: ['fetch_job_applications', 'fetch_interviews', 'fetch_offers'],
   FIELDS: CANDIDATE_FIELDS,
-  deriveFns: { employmentStatus },
+  deriveFns: { employmentStatus, eadNumber: eadDisplayValue },
   load: (target) => Employee.findOne({ owner: target.userId }).lean(),
 };

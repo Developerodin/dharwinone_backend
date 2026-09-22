@@ -5,6 +5,7 @@ import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import Student from '../models/student.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
+import { eadDisplayValue } from '../utils/eadDisplayValue.js';
 import Project from '../models/project.model.js';
 import { 
   createCandidate, 
@@ -676,7 +677,7 @@ const exportProfile = catchAsync(async (req, res) => {
     candidate.profilePicture?.url ? `Profile Picture: ${candidate.profilePicture.url}` : null,
     candidate.shortBio ? `Bio: ${candidate.shortBio}` : null,
     candidate.sevisId ? `SEVIS ID: ${candidate.sevisId}` : null,
-    candidate.ead ? `EAD: ${candidate.ead}` : null,
+    eadDisplayValue(candidate) ? `EAD: ${eadDisplayValue(candidate)}` : null,
     candidate.visaType ? `Visa Type: ${candidate.visaType}` : null,
     candidate.customVisaType ? `Custom Visa Type: ${candidate.customVisaType}` : null,
     candidate.countryCode ? `Country Code: ${candidate.countryCode}` : null,
@@ -1862,10 +1863,10 @@ const generatePublicProfileHTML = (candidateData) => {
                         </div>
                         ` : ''}
                         
-                        ${candidateData.ead ? `
+                        ${eadDisplayValue(candidateData) ? `
                         <div class="info-item">
                             <div class="info-label">EAD</div>
-                            <div class="info-value">${candidateData.ead}</div>
+                            <div class="info-value">${eadDisplayValue(candidateData)}</div>
                         </div>
                         ` : ''}
                         
