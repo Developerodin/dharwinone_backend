@@ -22,8 +22,26 @@ mock.module('../../models/student.model.js', {
 let updateOneResult = { modifiedCount: 1 };
 const updateOneMock = mock.fn(async () => updateOneResult);
 
+let findModulesResult = [];
+const trainingModuleFindMock = mock.fn(() => ({
+  select: () => ({
+    lean: async () => findModulesResult,
+  }),
+}));
+
 mock.module('../../models/trainingModule.model.js', {
-  exports: { default: { updateOne: updateOneMock } },
+  exports: { default: { updateOne: updateOneMock, find: trainingModuleFindMock } },
+});
+
+let findByIdPosition = null;
+const positionFindByIdMock = mock.fn(() => ({
+  select: () => ({
+    lean: async () => findByIdPosition,
+  }),
+}));
+
+mock.module('../../models/position.model.js', {
+  exports: { default: { findById: positionFindByIdMock } },
 });
 
 let service;
@@ -130,4 +148,40 @@ test('bulkEnroll with no active students writes nothing', async () => {
 
   assert.deepEqual(result, { enrolled: 0, skipped: 0, modules: [] });
   assert.equal(updateOneMock.mock.callCount(), 0);
+});
+
+test('autoEnrollStudentForPosition returns empty when flag is off and skips module query', async () => {
+  positionFindByIdMock.mock.resetCalls();
+  trainingModuleFindMock.mock.resetCalls();
+  updateOneMock.mock.resetCalls();
+  findByIdPosition = { autoEnrollNewHires: false };
+
+  const result = await service.autoEnrollStudentForPosition('s1', 'p1');
+
+  assert.deepEqual(result, { enrolled: [] });
+  assert.equal(trainingModuleFindMock.mock.callCount(), 0);
+  assert.equal(updateOneMock.mock.callCount(), 0);
+});
+
+test('autoEnrollStudentForPosition enrols into every linked module when flag is on', async () => {
+  positionFindByIdMock.mock.resetCalls();
+  trainingModuleFindMock.mock.resetCalls();
+  updateOneMock.mock.resetCalls();
+  findByIdPosition = { autoEnrollNewHires: true };
+  findModulesResult = [{ _id: 'm1' }, { _id: 'm2' }];
+
+  const result = await service.autoEnrollStudentForPosition('s1', 'p1');
+
+  assert.deepEqual(result.enrolled.sort(), ['m1', 'm2']);
+  assert.equal(updateOneMock.mock.callCount(), 2);
+  assert.deepEqual(updateOneMock.mock.calls[0].arguments[1], {
+    $addToSet: { students: 's1' },
+  });
+});
+
+test('autoEnrollStudentForPosition returns empty when student or position id is missing', async () => {
+  positionFindByIdMock.mock.resetCalls();
+  assert.deepEqual(await service.autoEnrollStudentForPosition(null, 'p1'), { enrolled: [] });
+  assert.deepEqual(await service.autoEnrollStudentForPosition('s1', ''), { enrolled: [] });
+  assert.equal(positionFindByIdMock.mock.callCount(), 0);
 });

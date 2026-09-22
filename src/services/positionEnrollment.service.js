@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Student from '../models/student.model.js';
 import TrainingModule from '../models/trainingModule.model.js';
+import Position from '../models/position.model.js';
 
 /**
  * The position-to-student edge lives here and nowhere else. The module employee
@@ -71,4 +72,26 @@ export const bulkEnroll = async (positionId, { moduleIds, action, studentIds }) 
     skipped: (moduleIds.length - touched.length) * targets.length,
     modules: touched,
   };
+};
+
+/**
+ * Enrol one student into every module linked to their position, if that
+ * position opts in. Called from the employee designation-to-position sync.
+ * Deliberately never retroactive: it only ever sees the student being synced.
+ */
+export const autoEnrollStudentForPosition = async (studentId, positionId) => {
+  if (!studentId || !positionId) return { enrolled: [] };
+  const position = await Position.findById(positionId).select('autoEnrollNewHires').lean();
+  if (!position?.autoEnrollNewHires) return { enrolled: [] };
+
+  const modules = await TrainingModule.find({ positions: positionId }).select('_id').lean();
+  const enrolled = [];
+  for (const mod of modules) {
+    await TrainingModule.updateOne(
+      { _id: mod._id },
+      { $addToSet: { students: String(studentId) } }
+    );
+    enrolled.push(String(mod._id));
+  }
+  return { enrolled };
 };

@@ -25,6 +25,7 @@ import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailC
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
+import { autoEnrollStudentForPosition } from './positionEnrollment.service.js';
 import { resignBucket } from '../utils/resignBucket.js';
 import { notify } from './notification.service.js';
 import { clearBankProofIndex } from './payrollDetail.service.js';
@@ -1778,8 +1779,15 @@ const updateCandidateById = async (id, updateBody, currentUser) => {
   if ('position' in sanitized || (designationProvided && sanitized.position)) {
     const student = await Student.findOne({ user: ownerIdForIdentity });
     if (student) {
+      const previousPosition = student.position ? String(student.position) : null;
       student.position = sanitized.position ?? null;
       await student.save();
+
+      const nextPosition = student.position ? String(student.position) : null;
+      if (nextPosition && nextPosition !== previousPosition) {
+        // A training side effect must never fail an employee save.
+        autoEnrollStudentForPosition(String(student._id), nextPosition).catch(() => {});
+      }
     }
   }
 
