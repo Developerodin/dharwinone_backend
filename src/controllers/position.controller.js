@@ -3,6 +3,7 @@ import pick from '../utils/pick.js';
 import ApiError from '../utils/ApiError.js';
 import catchAsync from '../utils/catchAsync.js';
 import * as positionService from '../services/position.service.js';
+import * as positionEnrollmentService from '../services/positionEnrollment.service.js';
 
 const createPosition = catchAsync(async (req, res) => {
   const position = await positionService.createPosition(req.body);
@@ -57,6 +58,11 @@ const setPositionModules = catchAsync(async (req, res) => {
   res.send(result);
 });
 
+const bulkEnroll = catchAsync(async (req, res) => {
+  const result = await positionEnrollmentService.bulkEnroll(req.params.positionId, req.body);
+  res.send(result);
+});
+
 export {
   createPosition,
   getPositions,
@@ -65,6 +71,7 @@ export {
   getPositionRoster,
   getPositionEmployees,
   setPositionModules,
+  bulkEnroll,
   updatePosition,
   deletePosition,
 };

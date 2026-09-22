@@ -19,6 +19,13 @@ mock.module('../../models/student.model.js', {
   exports: { default: { find: findMock, aggregate: aggregateMock } },
 });
 
+let updateOneResult = { modifiedCount: 1 };
+const updateOneMock = mock.fn(async () => updateOneResult);
+
+mock.module('../../models/trainingModule.model.js', {
+  exports: { default: { updateOne: updateOneMock } },
+});
+
 let service;
 before(async () => {
   service = await import('../positionEnrollment.service.js');
@@ -70,4 +77,57 @@ test('countStudentsByPosition returns an empty object for no positions without t
 
   assert.deepEqual(counts, {});
   assert.equal(aggregateMock.mock.callCount(), 0);
+});
+
+test('bulkEnroll assign issues one addToSet updateOne per module', async () => {
+  findMock.mock.resetCalls();
+  updateOneMock.mock.resetCalls();
+  findResult = [{ _id: 's1' }, { _id: 's2' }];
+  updateOneResult = { modifiedCount: 1 };
+
+  const result = await service.bulkEnroll('p1', {
+    moduleIds: ['m1', 'm2'],
+    action: 'assign',
+  });
+
+  assert.equal(updateOneMock.mock.callCount(), 2);
+  assert.deepEqual(updateOneMock.mock.calls[0].arguments[1], {
+    $addToSet: { students: { $each: ['s1', 's2'] } },
+  });
+  assert.deepEqual(updateOneMock.mock.calls[1].arguments[1], {
+    $addToSet: { students: { $each: ['s1', 's2'] } },
+  });
+  assert.equal(result.enrolled, 4);
+  assert.deepEqual(result.modules.sort(), ['m1', 'm2']);
+});
+
+test('bulkEnroll remove issues a pull updateOne per module', async () => {
+  updateOneMock.mock.resetCalls();
+  updateOneResult = { modifiedCount: 1 };
+
+  const result = await service.bulkEnroll('p1', {
+    moduleIds: ['m1'],
+    action: 'remove',
+    studentIds: ['s9'],
+  });
+
+  assert.equal(updateOneMock.mock.callCount(), 1);
+  assert.deepEqual(updateOneMock.mock.calls[0].arguments[1], {
+    $pull: { students: { $in: ['s9'] } },
+  });
+  assert.equal(result.enrolled, 1);
+});
+
+test('bulkEnroll with no active students writes nothing', async () => {
+  findMock.mock.resetCalls();
+  updateOneMock.mock.resetCalls();
+  findResult = [];
+
+  const result = await service.bulkEnroll('p1', {
+    moduleIds: ['m1', 'm2'],
+    action: 'assign',
+  });
+
+  assert.deepEqual(result, { enrolled: 0, skipped: 0, modules: [] });
+  assert.equal(updateOneMock.mock.callCount(), 0);
 });

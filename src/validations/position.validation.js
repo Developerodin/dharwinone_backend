@@ -65,12 +65,24 @@ const setPositionModules = {
   }),
 };
 
+const bulkEnroll = {
+  params: Joi.object().keys({
+    positionId: Joi.string().custom(objectId).required(),
+  }),
+  body: Joi.object().keys({
+    moduleIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
+    action: Joi.string().valid('assign', 'remove').required(),
+    studentIds: Joi.array().items(Joi.string().custom(objectId)),
+  }),
+};
+
 export {
   createPosition,
   getPositions,
   getPosition,
   getPositionEmployees,
   setPositionModules,
+  bulkEnroll,
   updatePosition,
   deletePosition,
 };

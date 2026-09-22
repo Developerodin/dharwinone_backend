@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Student from '../models/student.model.js';
+import TrainingModule from '../models/trainingModule.model.js';
 
 /**
  * The position-to-student edge lives here and nowhere else. The module employee
@@ -39,4 +40,35 @@ export const countStudentsByPosition = async (positionIds) => {
   ]);
   for (const row of rows) counts[String(row._id)] = row.n;
   return counts;
+};
+
+/**
+ * Enrol or unenrol a position's students across several modules.
+ * addToSet/pull are used deliberately: the old frontend path read the whole
+ * students array and wrote it back, which loses concurrent writes. This never
+ * reads the array.
+ *
+ * Note: one updateOne per module. At ~20 modules per position that is fine;
+ * past a few hundred, switch to a single updateMany over moduleIds.
+ */
+export const bulkEnroll = async (positionId, { moduleIds, action, studentIds }) => {
+  const targets = studentIds?.length
+    ? studentIds.map(String)
+    : await resolveStudentIdsForPositions([positionId]);
+  if (!targets.length || !moduleIds?.length) return { enrolled: 0, skipped: 0, modules: [] };
+
+  const update = action === 'remove'
+    ? { $pull: { students: { $in: targets } } }
+    : { $addToSet: { students: { $each: targets } } };
+
+  const touched = [];
+  for (const moduleId of moduleIds) {
+    const res = await TrainingModule.updateOne({ _id: moduleId }, update);
+    if (res.modifiedCount) touched.push(String(moduleId));
+  }
+  return {
+    enrolled: touched.length * targets.length,
+    skipped: (moduleIds.length - touched.length) * targets.length,
+    modules: touched,
+  };
 };

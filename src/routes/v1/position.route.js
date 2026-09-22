@@ -51,6 +51,15 @@ router
   );
 
 router
+  .route('/:positionId/enrollments')
+  .post(
+    auth(),
+    requireAnyOfPermissions('modules.manage', 'positions.manage'),
+    validate(positionValidation.bulkEnroll),
+    positionController.bulkEnroll
+  );
+
+router
   .route('/:positionId')
   .get(...canReadPositions, validate(positionValidation.getPosition), positionController.getPosition)
   .patch(auth(), requirePermissions('positions.manage'), validate(positionValidation.updatePosition), positionController.updatePosition)
