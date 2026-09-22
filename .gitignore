@@ -44,6 +44,7 @@ graphify-out/
 !src/__tests__/
 !src/__tests__/routes/
 !src/__tests__/routes/notification.route.permissions.test.js
+!src/__tests__/eadExtract.test.js
 !src/services/__tests__/
 src/services/__tests__/fixtures/
 src/services/__tests__/helpers/

@@ -9,7 +9,7 @@ import optionalAuth from '../../middlewares/optionalAuth.js';
 import requirePermissionIfAuthenticated from '../../middlewares/requirePermissionIfAuthenticated.js';
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
 import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
-import { authLoginLimiter, authStrictFlowLimiter } from '../../middlewares/rateLimiter.js';
+import { authLoginLimiter, authStrictFlowLimiter, eadExtractLimiter } from '../../middlewares/rateLimiter.js';
 import { uploadPublicCandidateRegistration } from '../../middlewares/upload.js';
 import { verifyCaptchaUnlessAuthenticated } from '../../middlewares/verifyCaptcha.js';
 
@@ -29,6 +29,24 @@ const resumeSkillsUpload = multer({
       cb(null, true);
     } else {
       cb(new Error('Upload a PDF or DOCX resume.'));
+    }
+  },
+});
+
+const EAD_ALLOWED_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'application/pdf']);
+
+const eadCardUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = (file.originalname || '').toLowerCase();
+    const okExt = ['.jpg', '.jpeg', '.png', '.pdf'].some((e) => ext.endsWith(e));
+    if (EAD_ALLOWED_MIMES.has(file.mimetype) || okExt) {
+      cb(null, true);
+    } else {
+      // Named formats, not a generic failure: a .heic straight off a Mac is the likely
+      // reject here and the user needs to be told what to convert it to.
+      cb(new Error('Upload the card as a JPG, PNG or PDF.'));
     }
   },
 });
@@ -71,6 +89,13 @@ router.post(
   authStrictFlowLimiter,
   resumeSkillsUpload.single('file'),
   authController.extractSkillsFromResume
+);
+router.post(
+  '/me/extract-ead-card',
+  auth(),
+  eadExtractLimiter,
+  eadCardUpload.single('file'),
+  authController.extractEadCard
 );
 router.post(
   '/me/recommend-skills-by-role',

@@ -35,6 +35,7 @@ import {
   extractSkillsFromResumeBuffer,
   recommendSkillsForJobRole,
 } from '../services/resumeSkillsExtract.service.js';
+import { extractEadCardFromBuffer } from '../services/eadExtract.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import {
   userHasPersonProfileRole,
@@ -867,6 +868,28 @@ const extractSkillsFromResume = catchAsync(async (req, res) => {
 });
 
 /**
+ * POST /auth/me/extract-ead-card — multipart field `file`, an image or short PDF of an
+ * I-766 front.
+ *
+ * Unlike extractSkillsFromResume this does NOT look up a candidate profile. The caller
+ * supplies the file and receives only what was read from it, so there is nothing to own
+ * and nothing to authorize; requiring a profile would lock out every admin scanning a
+ * card on someone else's behalf. Nothing is stored.
+ */
+const extractEadCard = catchAsync(async (req, res) => {
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'file is required (multipart field name: file)');
+  }
+  const result = await extractEadCardFromBuffer(
+    file.buffer,
+    file.mimetype || 'application/octet-stream',
+    file.originalname || 'ead.jpg'
+  );
+  res.send(result);
+});
+
+/**
  * POST /auth/me/recommend-skills-by-role — JSON body `{ role, currentSkills? }`.
  * Persists result to SkillRecommendation (fire-and-forget; never fails the response).
  */
@@ -1027,6 +1050,7 @@ export {
   getMeWithCandidate,
   updateMeWithCandidate,
   extractSkillsFromResume,
+  extractEadCard,
   recommendSkillsByRole,
   listSkillRecommendations,
   getMyPermissions,

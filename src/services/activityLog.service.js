@@ -438,6 +438,7 @@ const sanitizeMetadata = (meta) => {
     'nationalid',
     'passport',
     'creditcard',
+    'eadcardnumber',
   ];
   const out = {};
   for (const [k, v] of Object.entries(meta)) {

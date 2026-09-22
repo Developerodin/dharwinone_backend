@@ -169,6 +169,13 @@ const employeeSchema = new mongoose.Schema(
     shortBio: { type: String, trim: true },
     sevisId: { type: String, trim: true },
     ead: { type: String, trim: true },
+    /** Card# from the front of an I-766. Not the USCIS# / A-Number, which is a different value. */
+    eadCardNumber: { type: String, trim: true },
+    // Written as a bare YYYY-MM-DD, which Mongoose casts to UTC midnight. Read back via the
+    // ISO prefix ONLY -- local getters return the PREVIOUS calendar day for any viewer west
+    // of UTC, and an off-by-one expiry on a work-authorisation document is an I-9 error.
+    eadValidFrom: { type: Date },
+    eadValidTo: { type: Date },
     visaType: { type: String, trim: true },
     customVisaType: { type: String, trim: true },
     countryCode: { type: String, trim: true },

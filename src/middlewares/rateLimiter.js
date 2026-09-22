@@ -22,6 +22,20 @@ const authStrictFlowLimiter = rateLimit({
   message: { message: 'Too many requests. Please try again later.' },
 });
 
+/**
+ * EAD card scanning. Its own bucket on purpose: authStrictFlowLimiter is shared with
+ * forgot-password, verify-email and registration, so an office behind one NAT scanning
+ * cards would burn the allowance that password resets depend on.
+ */
+const eadExtractLimiter = rateLimit({
+  windowMs: (config.rateLimit?.eadExtractWindowMinutes ?? 15) * 60 * 1000,
+  max: config.rateLimit?.eadExtractMax ?? 20,
+  skipSuccessfulRequests: false,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many card scans. Please try again shortly.' },
+});
+
 /** Public registration / onboarding — tighter cap per IP. */
 const publicRegistrationLimiter = rateLimit({
   windowMs: (config.rateLimit?.publicRegistrationWindowMinutes ?? 60) * 60 * 1000,
@@ -158,6 +172,7 @@ const emailLookupLimiterByIp = rateLimit({
 export {
   authLoginLimiter,
   authStrictFlowLimiter,
+  eadExtractLimiter,
   publicRegistrationLimiter,
   publicResumeParseLimiter,
   publicWriteLimiter,
