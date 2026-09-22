@@ -68,6 +68,7 @@ src/services/__tests__/helpers/
 # Parent dirs re-included first (git cannot re-include a file whose parent dir is excluded).
 !src/models/__tests__/
 !src/models/__tests__/notification.relatedEntity.test.js
+!src/models/__tests__/position.autoEnroll.test.js
 !src/services/__tests__/notification.channelIsolation.test.js
 !src/services/__tests__/reminderDispatcher.test.js
 !src/services/__tests__/meeting.conclusionRecipients.test.js

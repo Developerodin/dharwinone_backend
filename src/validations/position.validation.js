@@ -34,6 +34,7 @@ const updatePosition = {
       name: Joi.string().trim(),
       department: Joi.string().trim().max(100).allow('').optional(),
       skillsSuggested: Joi.array().items(Joi.string().trim().max(80)).max(50).optional(),
+      autoEnrollNewHires: Joi.boolean(),
     })
     .min(1),
 };

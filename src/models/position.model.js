@@ -20,6 +20,10 @@ const positionSchema = mongoose.Schema(
       type: [String],
       default: [],
     },
+    autoEnrollNewHires: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
@@ -38,6 +42,7 @@ positionSchema.options.toJSON.transform = function (doc, ret, options) {
   ret.updatedAt = doc.updatedAt;
   ret.department = doc.department ?? '';
   ret.skillsSuggested = doc.skillsSuggested ?? [];
+  ret.autoEnrollNewHires = doc.autoEnrollNewHires ?? false;
   return ret;
 };
 
