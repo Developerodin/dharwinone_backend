@@ -559,6 +559,9 @@ const queryTrainingModules = async (filter, options, currentUser) => {
       // A module with an empty playlist produces no aggregation row at all ($unwind
       // drops it), so the zeroed summary has to come from here, not from the Map.
       m.$locals.playlistSummary = summaryById.get(String(m._id)) ?? emptyPlaylistSummary();
+      // Trims `coverImage` down to `url` on the way out (see toJSON transform). The
+      // query still has to load `key`, because the presign below reads it.
+      m.$locals.listView = true;
     }
 
     // Always re-sign, never "only when url is missing". The stored url is itself a

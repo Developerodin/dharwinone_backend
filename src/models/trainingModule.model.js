@@ -222,6 +222,13 @@ trainingModuleSchema.options.toJSON.transform = function (doc, ret, options) {
   if (doc.$locals?.playlistSummary != null) {
     ret.playlistSummary = doc.$locals.playlistSummary;
   }
+  // List cards only ever read `coverImage.url`, but the stored object also carries
+  // key/originalName/size/mimeType/uploadedAt. Across a full catalog that was ~47%
+  // of the list payload. The detail view sets no `listView` flag and keeps the
+  // whole object, which the module editor needs to re-submit the existing cover.
+  if (doc.$locals?.listView && ret.coverImage) {
+    ret.coverImage = ret.coverImage.url ? { url: ret.coverImage.url } : undefined;
+  }
   return ret;
 };
 
