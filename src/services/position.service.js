@@ -290,6 +290,7 @@ const getPositionRoster = async () => {
       assignedEmployees: meta.assignedEmployees,
       assignedModules: modulesByPosition.get(String(pos._id)) ?? [],
       studentCount: studentCounts[String(pos._id)] ?? 0,
+      autoEnrollNewHires: pos.autoEnrollNewHires ?? false,
     };
   });
 
@@ -305,6 +306,7 @@ const getPositionRoster = async () => {
         assignedEmployees: meta.assignedEmployees,
         assignedModules: [],
         studentCount: 0,
+        autoEnrollNewHires: false,
       };
     })
     .filter((row) => row.employeeCount > 0);

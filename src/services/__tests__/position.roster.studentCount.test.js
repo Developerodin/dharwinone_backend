@@ -102,3 +102,37 @@ test('unlinked roster row reports studentCount 0', async () => {
   assert.equal(unlinked.studentCount, 0);
   assert.equal(unlinked.employeeCount, 1);
 });
+
+test('roster reports autoEnrollNewHires true, defaults missing field to false, and unlinked is false', async () => {
+  positions = [
+    { _id: 'p1', name: 'Analyst', department: 'Ops', autoEnrollNewHires: true },
+    { _id: 'p2', name: 'Clerk', department: 'Ops' },
+  ];
+  employees = [];
+  modules = [];
+  studentCounts = { p1: 0, p2: 0 };
+
+  const roster = await service.getPositionRoster();
+  const p1 = roster.find((r) => r.id === 'p1');
+  const p2 = roster.find((r) => r.id === 'p2');
+
+  assert.equal(p1.autoEnrollNewHires, true);
+  assert.equal(p2.autoEnrollNewHires, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(p2, 'autoEnrollNewHires'), true);
+
+  // Force an unlinked row and confirm the flag is false there too.
+  employees = [
+    {
+      _id: 'e9',
+      fullName: 'Unlinked Emp',
+      email: 'u@ex.com',
+      position: null,
+      designation: 'Ghost Title',
+      referralJobTitle: null,
+    },
+  ];
+  const roster2 = await service.getPositionRoster();
+  const unlinked = roster2.find((r) => r.unlinked === true);
+  assert.ok(unlinked);
+  assert.equal(unlinked.autoEnrollNewHires, false);
+});
