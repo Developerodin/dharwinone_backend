@@ -70,7 +70,7 @@ test('catalog position reports employeeCount and studentCount independently', as
   countStudentsByPositionMock.mock.resetCalls();
 
   const roster = await service.getPositionRoster();
-  const row = roster.find((r) => r.id === 'p1');
+  const row = roster.results.find((r) => r.id === 'p1');
 
   assert.ok(row);
   assert.equal(row.employeeCount, 8);
@@ -96,7 +96,7 @@ test('unlinked roster row reports studentCount 0', async () => {
   countStudentsByPositionMock.mock.resetCalls();
 
   const roster = await service.getPositionRoster();
-  const unlinked = roster.find((r) => r.unlinked === true);
+  const unlinked = roster.results.find((r) => r.unlinked === true);
 
   assert.ok(unlinked);
   assert.equal(unlinked.studentCount, 0);
@@ -113,8 +113,8 @@ test('roster reports autoEnrollNewHires true, defaults missing field to false, a
   studentCounts = { p1: 0, p2: 0 };
 
   const roster = await service.getPositionRoster();
-  const p1 = roster.find((r) => r.id === 'p1');
-  const p2 = roster.find((r) => r.id === 'p2');
+  const p1 = roster.results.find((r) => r.id === 'p1');
+  const p2 = roster.results.find((r) => r.id === 'p2');
 
   assert.equal(p1.autoEnrollNewHires, true);
   assert.equal(p2.autoEnrollNewHires, false);
@@ -132,7 +132,7 @@ test('roster reports autoEnrollNewHires true, defaults missing field to false, a
     },
   ];
   const roster2 = await service.getPositionRoster();
-  const unlinked = roster2.find((r) => r.unlinked === true);
+  const unlinked = roster2.results.find((r) => r.unlinked === true);
   assert.ok(unlinked);
   assert.equal(unlinked.autoEnrollNewHires, false);
 });

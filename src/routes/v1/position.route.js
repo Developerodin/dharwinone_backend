@@ -26,7 +26,12 @@ const canReadPositionRoster = [
 
 router.get('/all', ...canReadPositions, positionController.getAllPositions);
 
-router.get('/roster', ...canReadPositionRoster, positionController.getPositionRoster);
+router.get(
+  '/roster',
+  ...canReadPositionRoster,
+  validate(positionValidation.getPositionRoster),
+  positionController.getPositionRoster
+);
 
 router
   .route('/')

@@ -19,6 +19,18 @@ const getPositions = {
   }),
 };
 
+/** Curriculum Setup roster: page / limit / search / folderIds / sortBy=field:dir,_id:asc */
+const getPositionRoster = {
+  query: Joi.object().keys({
+    search: Joi.string().allow('').optional(),
+    /** Comma-separated category (folder) ObjectIds. OR semantics across folders. */
+    folderIds: Joi.string().allow('').optional(),
+    sortBy: Joi.string().allow('').optional(),
+    limit: Joi.number().integer().min(1).max(2000),
+    page: Joi.number().integer().min(1),
+  }),
+};
+
 const getPosition = {
   params: Joi.object().keys({
     positionId: Joi.string().custom(objectId),
@@ -80,6 +92,7 @@ const bulkEnroll = {
 export {
   createPosition,
   getPositions,
+  getPositionRoster,
   getPosition,
   getPositionEmployees,
   setPositionModules,

@@ -527,7 +527,10 @@ const queryTrainingModules = async (filter, options, currentUser) => {
     const mentorIds = await mentorIdsForInstructorName(instructor);
     mongoFilter.mentorsAssigned = { $in: mentorIds.length ? mentorIds : [new mongoose.Types.ObjectId()] };
   }
-  if (status) {
+  if (status === 'active') {
+    // Admin "All" tab: live curriculum only (draft + published), not archived.
+    mongoFilter.status = { $in: ['draft', 'published'] };
+  } else if (status) {
     mongoFilter.status = status;
   } else if (!canManageModules) {
     mongoFilter.status = 'published';

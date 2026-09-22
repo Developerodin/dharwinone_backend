@@ -168,8 +168,7 @@ const deletePositionById = async (positionId) => {
 };
 
 /**
- * All positions with active HR employee assignments (Employee.position, designation, or referralJobTitle).
- * @returns {Promise<Array>}
+ * Normalize module id list for position ↔ module assignment writes.
  */
 const normalizeModuleIds = (moduleIds) => {
   if (!Array.isArray(moduleIds)) return [];
@@ -188,35 +187,151 @@ const assertModulesExist = async (moduleIds) => {
 
 /**
  * @param {import('mongoose').Types.ObjectId[]} positionIds
- * @returns {Promise<Map<string, Array<{ id: string, name: string }>>>}
+ * @returns {Promise<{
+ *   modulesByPosition: Map<string, Array<{ id: string, name: string }>>,
+ *   foldersByModuleId: Map<string, string[]>,
+ * }>}
  */
 const buildModulesByPositionId = async (positionIds) => {
-  const map = new Map();
-  if (!positionIds.length) return map;
+  const modulesByPosition = new Map();
+  const foldersByModuleId = new Map();
+  if (!positionIds.length) return { modulesByPosition, foldersByModuleId };
 
   for (const posId of positionIds) {
-    map.set(String(posId), []);
+    modulesByPosition.set(String(posId), []);
   }
 
   const modules = await TrainingModule.find({ positions: { $in: positionIds } })
-    .select('moduleName positions')
+    .select('moduleName positions categories')
     .lean();
 
   for (const mod of modules) {
-    const modEntry = { id: String(mod._id), name: mod.moduleName };
+    const modId = String(mod._id);
+    const modEntry = { id: modId, name: mod.moduleName };
+    foldersByModuleId.set(
+      modId,
+      (mod.categories ?? []).map((c) => String(c)).filter(Boolean)
+    );
     for (const posRef of mod.positions ?? []) {
       const posKey = String(posRef);
-      if (map.has(posKey)) {
-        map.get(posKey).push(modEntry);
+      if (modulesByPosition.has(posKey)) {
+        modulesByPosition.get(posKey).push(modEntry);
       }
     }
   }
 
-  for (const [, list] of map) {
+  for (const [, list] of modulesByPosition) {
     list.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  return map;
+  return { modulesByPosition, foldersByModuleId };
+};
+
+/** Match frontend normalizeSearchKey / normalizedSearchIncludes for roster search. */
+const normalizeSearchKey = (value) =>
+  String(value ?? '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+
+const normalizedSearchIncludes = (haystack, query) => {
+  const q = normalizeSearchKey(query);
+  if (!q) return true;
+  return normalizeSearchKey(haystack).includes(q);
+};
+
+/**
+ * Filter roster rows by text + folder chips (OR folders, AND with search).
+ * Mirrors frontend filterPositions.
+ */
+const filterRosterRows = (rows, search, folderIds, foldersByModuleId) => {
+  const q = String(search ?? '').trim();
+  const folders = new Set((folderIds ?? []).map(String).filter(Boolean));
+
+  return rows.filter((row) => {
+    if (folders.size > 0) {
+      const inFolder = (row.assignedModules ?? []).some((m) =>
+        (foldersByModuleId.get(m.id) ?? []).some((f) => folders.has(f))
+      );
+      if (!inFolder) return false;
+    }
+    if (!q) return true;
+    return (
+      normalizedSearchIncludes(row.name, q) ||
+      normalizedSearchIncludes(row.department ?? '', q) ||
+      (row.assignedModules ?? []).some((m) => normalizedSearchIncludes(m.name, q)) ||
+      (row.assignedEmployees ?? []).some((e) => normalizedSearchIncludes(e.name, q))
+    );
+  });
+};
+
+const ALLOWED_ROSTER_SORT_FIELDS = new Set(['name', 'employees']);
+
+/**
+ * Parse `sortBy=name:asc,_id:asc` (or employees). Unknown fields ignored.
+ * Neutral / empty → keep incoming order with stable id tie-break only when sorting.
+ */
+const parseRosterSort = (sortBy) => {
+  const raw = String(sortBy ?? '').trim();
+  if (!raw) return null;
+  for (const part of raw.split(',')) {
+    const [fieldRaw, dirRaw] = part.split(':');
+    const field = String(fieldRaw ?? '').trim();
+    if (!ALLOWED_ROSTER_SORT_FIELDS.has(field)) continue;
+    const dir = String(dirRaw ?? 'asc').trim().toLowerCase() === 'desc' ? 'desc' : 'asc';
+    return { field, dir };
+  }
+  return null;
+};
+
+const compareRosterRows = (a, b, sort) => {
+  if (sort) {
+    const cmp =
+      sort.field === 'employees'
+        ? (a.employeeCount ?? 0) - (b.employeeCount ?? 0)
+        : String(a.name ?? '').localeCompare(String(b.name ?? ''), undefined, { sensitivity: 'base' });
+    if (cmp !== 0) return sort.dir === 'desc' ? -cmp : cmp;
+  }
+  return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+};
+
+const sortRosterRows = (rows, sortBy) => {
+  const sort = parseRosterSort(sortBy);
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => compareRosterRows(a, b, sort));
+};
+
+const parseFolderIdsParam = (raw) => {
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => mongoose.Types.ObjectId.isValid(id));
+};
+
+const paginateRosterRows = (rows, page, limit) => {
+  const totalResults = rows.length;
+  if (limit == null) {
+    return {
+      results: rows,
+      page: 1,
+      limit: totalResults || 1,
+      totalPages: totalResults > 0 ? 1 : 0,
+      totalResults,
+    };
+  }
+  const safeLimit = Math.min(Math.max(1, limit), 2000);
+  const safePage = Math.max(1, page || 1);
+  const totalPages = totalResults === 0 ? 0 : Math.ceil(totalResults / safeLimit);
+  const start = (safePage - 1) * safeLimit;
+  return {
+    results: rows.slice(start, start + safeLimit),
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
+    totalResults,
+  };
 };
 
 const dedupeAndSortAssignedEmployees = (metaByPosition) => {
@@ -233,7 +348,21 @@ const dedupeAndSortAssignedEmployees = (metaByPosition) => {
   }
 };
 
-const getPositionRoster = async () => {
+/**
+ * All positions with active HR employee assignments (Employee.position, designation, or referralJobTitle).
+ * Supports optional search / folderIds / sortBy / page / limit. When limit is omitted, returns every
+ * matching row (FolderPositionsPopover / bulk-assign callers).
+ *
+ * @param {Object} [filter]
+ * @param {string} [filter.search]
+ * @param {string} [filter.folderIds] - comma-separated category ids
+ * @param {Object} [options]
+ * @param {string} [options.sortBy] - e.g. `name:asc,_id:asc` or `employees:desc,_id:asc`
+ * @param {number} [options.limit]
+ * @param {number} [options.page]
+ * @returns {Promise<{ results: Array, page: number, limit: number, totalPages: number, totalResults: number }>}
+ */
+const getPositionRoster = async (filter = {}, options = {}) => {
   const positions = await Position.find().sort({ name: 1 }).lean();
   const positionNameToId = new Map(
     positions.map((pos) => [String(pos.name).trim().toLowerCase(), String(pos._id)])
@@ -278,7 +407,7 @@ const getPositionRoster = async () => {
   dedupeAndSortAssignedEmployees(metaByPosition);
 
   const positionIds = positions.map((pos) => pos._id);
-  const modulesByPosition = await buildModulesByPositionId(positionIds);
+  const { modulesByPosition, foldersByModuleId } = await buildModulesByPositionId(positionIds);
   const studentCounts = await countStudentsByPosition(positionIds.map(String));
 
   const linkedRows = positions.map((pos) => {
@@ -311,7 +440,16 @@ const getPositionRoster = async () => {
     })
     .filter((row) => row.employeeCount > 0);
 
-  return [...linkedRows, ...unlinkedRows].sort((a, b) => a.name.localeCompare(b.name));
+  // Default catalog order (name) before optional explicit sortBy.
+  const assembled = [...linkedRows, ...unlinkedRows].sort((a, b) => a.name.localeCompare(b.name));
+  const folderIds = parseFolderIdsParam(filter.folderIds);
+  const filtered = filterRosterRows(assembled, filter.search, folderIds, foldersByModuleId);
+  const sorted = sortRosterRows(filtered, options.sortBy);
+
+  const hasLimit = options.limit != null && options.limit !== '';
+  const limit = hasLimit ? Number(options.limit) : null;
+  const page = options.page != null && options.page !== '' ? Number(options.page) : 1;
+  return paginateRosterRows(sorted, page, limit);
 };
 
 /**

@@ -42,7 +42,9 @@ const deletePosition = catchAsync(async (req, res) => {
 });
 
 const getPositionRoster = catchAsync(async (req, res) => {
-  const roster = await positionService.getPositionRoster();
+  const filter = pick(req.query, ['search', 'folderIds']);
+  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const roster = await positionService.getPositionRoster(filter, options);
   res.send(roster);
 });
 

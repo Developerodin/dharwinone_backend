@@ -169,7 +169,8 @@ const getTrainingModules = {
     search: Joi.string().allow(''),
     category: Joi.alternatives().try(Joi.custom(objectId), Joi.string()),
     instructor: Joi.string().allow(''),
-    status: Joi.string().valid('draft', 'published', 'archived'),
+    /** `active` = draft + published (admin All tab). */
+    status: Joi.string().valid('draft', 'published', 'archived', 'active'),
     mine: Joi.boolean(),
     sortBy: Joi.string(),
     limit: Joi.number().integer().max(2000),
