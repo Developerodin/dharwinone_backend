@@ -5,6 +5,7 @@ import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import { getPdfPageCount } from './documentExtraction.service.js';
 import { parseJsonWithRepair } from './moduleOpenAI.service.js';
+import { cleanRaw, guardDateOrder } from '../utils/scanFieldHelpers.util.js';
 
 /**
  * EAD (Form I-766) card extraction.
@@ -90,21 +91,9 @@ const RESPONSE_SCHEMA = {
   },
 };
 
-/** Values a vision model returns when it means "nothing here". Treated as absence, not content. */
-const SENTINELS = new Set([
-  '', '-', '--', 'n/a', 'na', 'none', 'null', 'undefined',
-  'unknown', 'not visible', 'not readable', 'illegible',
-]);
-
-/**
- * @param {unknown} raw
- * @returns {string|null} the trimmed string, or null if it is empty or a sentinel
- */
-export function cleanRaw(raw) {
-  const s = String(raw ?? '').trim();
-  if (!s) return null;
-  return SENTINELS.has(s.toLowerCase()) ? null : s;
-}
+// Shared with the visa extractor so the two cannot disagree on what "unreadable" means.
+// Re-exported because this module's tests and callers already import it from here.
+export { cleanRaw };
 
 /**
  * USCIS# / A-Number: nine digits, optionally dashed 3-3-3. Verified against the public I-766
@@ -217,13 +206,14 @@ export function buildEadFields(parsed) {
     warnings.push('Could not read "Card Expires" as a date. Enter it by hand.');
   }
 
-  // ISO YYYY-MM-DD compares correctly as a string, so no Date objects are needed here.
-  if (validFrom && validTo && validFrom > validTo) {
-    // Never swap. A swap turns a misread into a record that looks entirely plausible.
-    warnings.push('"Valid From" falls after "Card Expires", so both dates were discarded. Enter them by hand.');
-    validFrom = null;
-    validTo = null;
-  }
+  const ordered = guardDateOrder(
+    validFrom,
+    validTo,
+    '"Valid From" falls after "Card Expires", so both dates were discarded. Enter them by hand.'
+  );
+  validFrom = ordered.from;
+  validTo = ordered.to;
+  if (ordered.warning) warnings.push(ordered.warning);
 
   return {
     fields: { cardNumber: card.value, validFrom, validTo },

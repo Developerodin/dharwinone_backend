@@ -153,3 +153,4 @@ attendance-status-backfill.*.journal.json
 !src/services/__tests__/payrollDetail.service.test.js
 !src/validations/__tests__/payrollDetail.validation.test.js
 !src/utils/__tests__/playlistSummary.util.test.js
+!src/__tests__/visaExtract.test.js

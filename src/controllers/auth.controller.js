@@ -36,6 +36,7 @@ import {
   recommendSkillsForJobRole,
 } from '../services/resumeSkillsExtract.service.js';
 import { extractEadCardFromBuffer } from '../services/eadExtract.service.js';
+import { extractVisaFromBuffer } from '../services/visaExtract.service.js';
 import { getRoleByName } from '../services/role.service.js';
 import {
   userHasPersonProfileRole,
@@ -876,6 +877,25 @@ const extractSkillsFromResume = catchAsync(async (req, res) => {
  * and nothing to authorize; requiring a profile would lock out every admin scanning a
  * card on someone else's behalf. Nothing is stored.
  */
+/**
+ * POST /auth/me/extract-visa — multipart field `file`, an image or short PDF of a visa.
+ *
+ * Stateless in the same way extractEadCard is: no candidate lookup, so an admin scanning
+ * a visa on someone else's behalf is not locked out, and nothing is stored.
+ */
+const extractVisa = catchAsync(async (req, res) => {
+  const file = req.file;
+  if (!file?.buffer?.length) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'file is required (multipart field name: file)');
+  }
+  const result = await extractVisaFromBuffer(
+    file.buffer,
+    file.mimetype || 'application/octet-stream',
+    file.originalname || 'visa.jpg'
+  );
+  res.send(result);
+});
+
 const extractEadCard = catchAsync(async (req, res) => {
   const file = req.file;
   if (!file?.buffer?.length) {
@@ -1051,6 +1071,7 @@ export {
   updateMeWithCandidate,
   extractSkillsFromResume,
   extractEadCard,
+  extractVisa,
   recommendSkillsByRole,
   listSkillRecommendations,
   getMyPermissions,

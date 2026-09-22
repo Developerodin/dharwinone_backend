@@ -23,17 +23,17 @@ const authStrictFlowLimiter = rateLimit({
 });
 
 /**
- * EAD card scanning. Its own bucket on purpose: authStrictFlowLimiter is shared with
- * forgot-password, verify-email and registration, so an office behind one NAT scanning
- * cards would burn the allowance that password resets depend on.
+ * Shared by the EAD and visa scanners. Its own bucket on purpose: authStrictFlowLimiter
+ * is shared with forgot-password, verify-email and registration, so an office behind one
+ * NAT scanning documents would burn the allowance that password resets depend on.
  */
-const eadExtractLimiter = rateLimit({
-  windowMs: (config.rateLimit?.eadExtractWindowMinutes ?? 15) * 60 * 1000,
-  max: config.rateLimit?.eadExtractMax ?? 20,
+const documentScanLimiter = rateLimit({
+  windowMs: (config.rateLimit?.documentScanWindowMinutes ?? 15) * 60 * 1000,
+  max: config.rateLimit?.documentScanMax ?? 20,
   skipSuccessfulRequests: false,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: 'Too many card scans. Please try again shortly.' },
+  message: { message: 'Too many document scans. Please try again shortly.' },
 });
 
 /** Public registration / onboarding — tighter cap per IP. */
@@ -172,7 +172,7 @@ const emailLookupLimiterByIp = rateLimit({
 export {
   authLoginLimiter,
   authStrictFlowLimiter,
-  eadExtractLimiter,
+  documentScanLimiter,
   publicRegistrationLimiter,
   publicResumeParseLimiter,
   publicWriteLimiter,

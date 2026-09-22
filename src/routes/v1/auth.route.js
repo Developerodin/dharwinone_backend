@@ -9,7 +9,7 @@ import optionalAuth from '../../middlewares/optionalAuth.js';
 import requirePermissionIfAuthenticated from '../../middlewares/requirePermissionIfAuthenticated.js';
 import requireAdministratorRole from '../../middlewares/requireAdministratorRole.js';
 import requireAdministratorOrPermission from '../../middlewares/requireAdministratorOrPermission.js';
-import { authLoginLimiter, authStrictFlowLimiter, eadExtractLimiter } from '../../middlewares/rateLimiter.js';
+import { authLoginLimiter, authStrictFlowLimiter, documentScanLimiter } from '../../middlewares/rateLimiter.js';
 import { uploadPublicCandidateRegistration } from '../../middlewares/upload.js';
 import { verifyCaptchaUnlessAuthenticated } from '../../middlewares/verifyCaptcha.js';
 
@@ -93,9 +93,17 @@ router.post(
 router.post(
   '/me/extract-ead-card',
   auth(),
-  eadExtractLimiter,
+  documentScanLimiter,
   eadCardUpload.single('file'),
   authController.extractEadCard
+);
+// Same upload rules as the EAD scan — JPG/PNG/PDF, 8MB — so the two share one multer.
+router.post(
+  '/me/extract-visa',
+  auth(),
+  documentScanLimiter,
+  eadCardUpload.single('file'),
+  authController.extractVisa
 );
 router.post(
   '/me/recommend-skills-by-role',

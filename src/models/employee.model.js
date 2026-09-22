@@ -178,6 +178,12 @@ const employeeSchema = new mongoose.Schema(
     eadValidTo: { type: Date },
     visaType: { type: String, trim: true },
     customVisaType: { type: String, trim: true },
+    /** Visa foil number, printed in red on the visa. Not the passport or control number. */
+    visaNumber: { type: String, trim: true },
+    // Written as a bare YYYY-MM-DD, which Mongoose casts to UTC midnight. Read back via
+    // the ISO prefix ONLY -- local getters return the PREVIOUS calendar day west of UTC.
+    visaIssueDate: { type: Date },
+    visaExpiryDate: { type: Date },
     countryCode: { type: String, trim: true },
     degree: { type: String, trim: true },
     supervisorName: { type: String, trim: true },
