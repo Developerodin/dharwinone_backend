@@ -1,4 +1,6 @@
 import express from 'express';
+import httpStatus from 'http-status';
+import ApiError from '../../utils/ApiError.js';
 import multer from 'multer';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
@@ -20,36 +22,76 @@ const RESUME_ALLOWED_MIMES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 
+const RESUME_MAX_BYTES = 15 * 1024 * 1024;
+
 const resumeSkillsUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: RESUME_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     const ext = (file.originalname || '').toLowerCase();
     if (RESUME_ALLOWED_MIMES.has(file.mimetype) || ext.endsWith('.pdf') || ext.endsWith('.docx')) {
       cb(null, true);
-    } else {
-      cb(new Error('Upload a PDF or DOCX resume.'));
+      return;
     }
+    // ApiError, not a bare Error: errorConverter gives anything without a status a 500,
+    // so picking the wrong file type answered "Internal Server Error".
+    cb(new ApiError(httpStatus.BAD_REQUEST, 'Upload a PDF or DOCX resume.'), false);
   },
 });
 
-const EAD_ALLOWED_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'application/pdf']);
+/** Maps multer's own MulterError, which carries no HTTP status, onto a 400. */
+const uploadResumeForSkills = (req, res, next) => {
+  resumeSkillsUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      next();
+      return;
+    }
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      next(new ApiError(httpStatus.BAD_REQUEST, 'That file is too large. Maximum 15MB.'));
+      return;
+    }
+    next(err);
+  });
+};
 
-const eadCardUpload = multer({
+const SCAN_ALLOWED_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'application/pdf']);
+const SCAN_MAX_BYTES = 8 * 1024 * 1024;
+
+const documentScanUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 },
+  limits: { fileSize: SCAN_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     const ext = (file.originalname || '').toLowerCase();
     const okExt = ['.jpg', '.jpeg', '.png', '.pdf'].some((e) => ext.endsWith(e));
-    if (EAD_ALLOWED_MIMES.has(file.mimetype) || okExt) {
+    if (SCAN_ALLOWED_MIMES.has(file.mimetype) || okExt) {
       cb(null, true);
-    } else {
-      // Named formats, not a generic failure: a .heic straight off a Mac is the likely
-      // reject here and the user needs to be told what to convert it to.
-      cb(new Error('Upload the card as a JPG, PNG or PDF.'));
+      return;
     }
+    // ApiError, not a bare Error: errorConverter gives anything without a status a 500,
+    // which turned "wrong file type" into "Internal Server Error". Named formats too —
+    // a .heic straight off a Mac is the likely reject and the user needs to know what
+    // to convert it to.
+    cb(new ApiError(httpStatus.BAD_REQUEST, 'Upload the document as a JPG, PNG or PDF.'), false);
   },
 });
+
+/**
+ * Multer reports its own limits by throwing MulterError, which carries no HTTP status,
+ * so an oversized upload answered 500 until this mapped it. Shared by both scan routes.
+ */
+const uploadScannedDocument = (req, res, next) => {
+  documentScanUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      next();
+      return;
+    }
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      next(new ApiError(httpStatus.BAD_REQUEST, 'That file is too large. Maximum 8MB.'));
+      return;
+    }
+    next(err);
+  });
+};
 
 router.post(
   '/register',
@@ -87,14 +129,14 @@ router.post(
   '/me/extract-skills-from-resume',
   auth(),
   authStrictFlowLimiter,
-  resumeSkillsUpload.single('file'),
+  uploadResumeForSkills,
   authController.extractSkillsFromResume
 );
 router.post(
   '/me/extract-ead-card',
   auth(),
   documentScanLimiter,
-  eadCardUpload.single('file'),
+  uploadScannedDocument,
   authController.extractEadCard
 );
 // Same upload rules as the EAD scan — JPG/PNG/PDF, 8MB — so the two share one multer.
@@ -102,7 +144,7 @@ router.post(
   '/me/extract-visa',
   auth(),
   documentScanLimiter,
-  eadCardUpload.single('file'),
+  uploadScannedDocument,
   authController.extractVisa
 );
 router.post(
