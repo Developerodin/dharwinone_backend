@@ -30,6 +30,7 @@ scripts/*
 # test runner + manifest must ship so the tracked tests are runnable on a clone
 !scripts/run-tests.mjs
 !scripts/test-manifest.json
+!scripts/backfill-student-positions.js
 tests/
 graphify-out/
 
