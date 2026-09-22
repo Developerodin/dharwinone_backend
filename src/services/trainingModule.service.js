@@ -7,6 +7,7 @@ import Mentor from '../models/mentor.model.js';
 import Category from '../models/category.model.js';
 import User from '../models/user.model.js';
 import * as studentService from './student.service.js';
+import { resolveStudentIdsForPositions } from './positionEnrollment.service.js';
 import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
@@ -914,8 +915,18 @@ const queryEmployeesForModule = async (moduleId, filter, options) => {
       totalResults: 0,
     };
   }
+  const studentIds = await resolveStudentIdsForPositions(positionIds);
+  if (!studentIds.length) {
+    return {
+      results: [],
+      page: options.page ?? 1,
+      limit: options.limit ?? 10,
+      totalPages: 0,
+      totalResults: 0,
+    };
+  }
   return studentService.queryStudents(
-    { ...filter, position: { $in: positionIds }, status: 'active' },
+    { ...filter, _id: { $in: studentIds }, status: 'active' },
     options
   );
 };

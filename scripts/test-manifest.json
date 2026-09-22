@@ -380,5 +380,6 @@
   "./src/validations/__tests__/payrollDetail.validation.test.js",
   "./src/services/__tests__/agentInternalV2.timebase.test.js",
   "./src/services/__tests__/agentDispatch.retry.test.js",
-  "./src/services/__tests__/positionEnrollment.service.test.js"
+  "./src/services/__tests__/positionEnrollment.service.test.js",
+  "./src/services/__tests__/trainingModule.queryEmployeesForModule.test.js"
 ]
