@@ -11,21 +11,70 @@ import { uploadFileToS3 } from './upload.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { wrap as wrapPresignedCache } from '../utils/presignedUrlCache.js';
 import { buildCourseSearchRegexes } from '../utils/courseSearch.util.js';
+import { foldPlaylistCounts, emptyPlaylistSummary } from '../utils/playlistSummary.util.js';
+import { refreshTrainingModuleCoverImages } from '../utils/trainingCoverImageUrl.js';
 import logger from '../config/logger.js';
 import { hasApiPermissionFromContext } from '../utils/permissionCheck.js';
 
 const signedDownloadUrl = wrapPresignedCache(generatePresignedDownloadUrl);
 
-// Heavy fields excluded from list-view payload — saves megabytes per response.
-// Detail view (getTrainingModuleById) still returns the full doc.
-const LIST_EXCLUDE_FIELDS = [
-  '-playlist.videoFile',
-  '-playlist.pdfDocument',
-  '-playlist.blogContent',
-  '-playlist.quiz',
-  '-playlist.essay',
-  '-playlist.testLinkOrReference',
-].join(' ');
+/**
+ * Heavy fields excluded from the list payload. Detail view (getTrainingModuleById)
+ * still returns the full document.
+ *
+ * `playlist` is dropped whole rather than field by field. The list only ever needed
+ * five counts from it, which now arrive as `playlistSummary`; shipping the array so the
+ * browser could count it cost about 2MB and ~19s of the 21s this endpoint took on a
+ * 215-module catalog. Dropping it whole is also the only form Mongo accepts — mixing
+ * `-playlist` with `-playlist.videoFile` raises "Path collision at playlist", which is
+ * what made every `mine=true` request throw.
+ */
+const LIST_SELECT = '-playlist -students';
+
+/** Cap parallel S3 presigns during module list — unbounded Promise.all stalls the event loop. */
+const LIST_COVER_PRESIGN_CONCURRENCY = 25;
+
+/**
+ * @param {import('mongoose').Types.ObjectId[]} moduleIds
+ * @returns {Promise<Map<string, number>>}
+ */
+const studentCountsByModuleId = async (moduleIds) => {
+  if (!moduleIds.length) return new Map();
+  const rows = await TrainingModule.aggregate([
+    { $match: { _id: { $in: moduleIds } } },
+    { $project: { studentCount: { $size: { $ifNull: ['$students', []] } } } },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), row.studentCount ?? 0]));
+};
+
+/**
+ * Per-module playlist content-type counts, so the list never has to ship the playlist.
+ *
+ * Grouped in Mongo down to one small row per content type, then folded into display
+ * buckets in JS — the bucket mapping stays in playlistSummary.util.js alone, so the
+ * list and the detail view cannot drift apart on what counts as a "video".
+ *
+ * A separate round trip from studentCountsByModuleId rather than a $facet: the two are
+ * ~50ms each against the 19s this removes, and two plain pipelines read far easier.
+ *
+ * @param {import('mongoose').Types.ObjectId[]} moduleIds
+ * @returns {Promise<Map<string, ReturnType<typeof emptyPlaylistSummary>>>}
+ */
+const playlistSummariesByModuleId = async (moduleIds) => {
+  if (!moduleIds.length) return new Map();
+  const rows = await TrainingModule.aggregate([
+    { $match: { _id: { $in: moduleIds } } },
+    { $unwind: '$playlist' },
+    { $group: { _id: { id: '$_id', contentType: '$playlist.contentType' }, count: { $sum: 1 } } },
+    {
+      $group: {
+        _id: '$_id.id',
+        counts: { $push: { contentType: '$_id.contentType', count: '$count' } },
+      },
+    },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), foldPlaylistCounts(row.counts)]));
+};
 
 /**
  * Resolve category query (ObjectId or display name) to a category _id.
@@ -494,27 +543,34 @@ const queryTrainingModules = async (filter, options, currentUser) => {
   // grouping silently fails (every folder appears empty).
   const modules = await TrainingModule.paginate(mongoFilter, {
     ...options,
-    select: isMine ? `${LIST_EXCLUDE_FIELDS} -playlist -students` : LIST_EXCLUDE_FIELDS,
-    // List cards need category names + mentor names + students.length (ids, not populated users).
+    select: LIST_SELECT,
+    // List cards need category names + mentor names + studentCount (not full student id arrays).
     populate: catalogPopulate,
   });
 
-  // Signed URLs only for rows that actually have a cover key (skip empty Promise.all).
   if (modules.results?.length) {
-    const coverJobs = [];
+    const moduleIds = modules.results.map((m) => m._id);
+    const [countById, summaryById] = await Promise.all([
+      studentCountsByModuleId(moduleIds),
+      playlistSummariesByModuleId(moduleIds),
+    ]);
     for (const m of modules.results) {
-      if (!m.coverImage?.key) continue;
-      coverJobs.push(
-        signedDownloadUrl(m.coverImage.key, 7 * 24 * 3600)
-          .then((url) => {
-            m.coverImage.url = url;
-          })
-          .catch((error) => {
-            logger.error('Failed to regenerate cover image URL:', error);
-          })
-      );
+      m.$locals.studentCount = countById.get(String(m._id)) ?? 0;
+      // A module with an empty playlist produces no aggregation row at all ($unwind
+      // drops it), so the zeroed summary has to come from here, not from the Map.
+      m.$locals.playlistSummary = summaryById.get(String(m._id)) ?? emptyPlaylistSummary();
     }
-    if (coverJobs.length) await Promise.all(coverJobs);
+
+    // Always re-sign, never "only when url is missing". The stored url is itself a
+    // presigned link with a 7-day TTL, so a present-but-expired one looked valid here
+    // and was left alone — which is why catalog covers silently stopped loading once
+    // they aged out. Shared with the student catalog so the two cannot drift again.
+    await refreshTrainingModuleCoverImages(
+      modules.results,
+      signedDownloadUrl,
+      (error) => logger.error('Failed to regenerate cover image URL:', error),
+      LIST_COVER_PRESIGN_CONCURRENCY
+    );
   }
 
   if (isMine && assignmentScope) {

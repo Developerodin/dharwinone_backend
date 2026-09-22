@@ -20,22 +20,41 @@ export const refreshTrainingCoverImageUrl = async (
 };
 
 /**
- * Refresh cover image URLs for many modules in parallel.
+ * Default cap on parallel signs. Signing is local crypto, so an unbounded Promise.all
+ * over a whole catalog occupies the event loop in a single burst.
+ */
+export const TRAINING_COVER_PRESIGN_CONCURRENCY = 25;
+
+/**
+ * Refresh cover image URLs for many modules, a bounded number at a time.
  *
  * @param {Array<{ coverImage?: { key?: string, url?: string } }>} modules
  * @param {(key: string, ttlSec: number) => Promise<string>} signDownloadUrl
  * @param {(error: unknown) => void} [onError]
+ * @param {number} [concurrency]
  */
-export const refreshTrainingModuleCoverImages = async (modules, signDownloadUrl, onError) => {
+export const refreshTrainingModuleCoverImages = async (
+  modules,
+  signDownloadUrl,
+  onError,
+  concurrency = TRAINING_COVER_PRESIGN_CONCURRENCY
+) => {
   if (!modules?.length) return;
-  await Promise.all(
-    modules.map(async (module) => {
-      if (!module?.coverImage?.key) return;
+  const targets = modules.filter((module) => module?.coverImage?.key);
+  if (!targets.length) return;
+
+  const limit = Math.max(1, concurrency);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, targets.length) }, async () => {
+    while (next < targets.length) {
+      const { coverImage } = targets[next];
+      next += 1;
       try {
-        await refreshTrainingCoverImageUrl(module.coverImage, signDownloadUrl);
+        await refreshTrainingCoverImageUrl(coverImage, signDownloadUrl);
       } catch (error) {
         if (onError) onError(error);
       }
-    })
-  );
+    }
+  });
+  await Promise.all(runners);
 };

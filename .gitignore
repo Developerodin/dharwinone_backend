@@ -152,3 +152,4 @@ attendance-status-backfill.*.journal.json
 !src/models/__tests__/employeePayrollDetail.model.test.js
 !src/services/__tests__/payrollDetail.service.test.js
 !src/validations/__tests__/payrollDetail.validation.test.js
+!src/utils/__tests__/playlistSummary.util.test.js

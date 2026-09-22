@@ -214,6 +214,14 @@ trainingModuleSchema.options.toJSON.transform = function (doc, ret, options) {
   if (originalToJSON) originalToJSON(doc, ret, options);
   ret.createdAt = doc.createdAt;
   ret.updatedAt = doc.updatedAt;
+  if (doc.$locals?.studentCount != null) {
+    ret.studentCount = doc.$locals.studentCount;
+  }
+  // Set only on list responses, where `playlist` is omitted for payload size. The
+  // detail view ships the playlist itself and the client counts from that.
+  if (doc.$locals?.playlistSummary != null) {
+    ret.playlistSummary = doc.$locals.playlistSummary;
+  }
   return ret;
 };
 
