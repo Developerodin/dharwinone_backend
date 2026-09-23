@@ -364,6 +364,7 @@
   "./src/utils/__tests__/courseSearch.util.test.js",
   "./src/services/__tests__/backdatedAttendanceRequest.approve.test.js",
   "./src/utils/__tests__/chatSendRate.test.js",
+  "./src/utils/__tests__/chatSocketActiveViewer.test.js",
   "./src/services/__tests__/chat.unreadScopes.test.js",
   "./src/services/__tests__/bolnaVerificationGuards.test.js",
   "./src/services/__tests__/bolnaCandidateJobTitleVerification.test.js",

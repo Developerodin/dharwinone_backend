@@ -16,6 +16,7 @@ import { buildChatMessagePreview } from '../utils/chatMessagePreview.js';
 import { mentionedUserIds } from '../utils/chatMentions.js';
 import { buildChatNotifyCopy } from '../utils/chatNotifyCopy.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { isUserActiveInConversationRoom } from '../utils/chatSocketActiveViewer.js';
 
 let io = null;
 
@@ -507,12 +508,9 @@ const emitNewMessage = async (conversationId, message) => {
             conversationType: notifyState.type,
             suppressInAppNotify: mutedIds.has(uidStr),
           });
-          // Persist to Notification collection unless recipient is actively viewing this conversation
-          const sockets = io.sockets;
-          const room = sockets.adapter.rooms.get(`conversation:${conversationId}`);
-          const isActive = room && [...room].some(
-            (sid) => sockets.sockets.get(sid)?.data?.userId === uidStr
-          );
+          // Persist to Notification collection unless recipient is actively viewing this conversation.
+          // Auth sets socket.userId (not socket.data.userId) — see chatSocketActiveViewer.js.
+          const isActive = isUserActiveInConversationRoom(io, conversationId, uidStr);
           const isMentioned = mentionedIds.has(uidStr);
           // Muted conversations do not notify — including @mentions (WhatsApp-style).
           if (!isActive && chatPermittedIds.has(uidStr) && !mutedIds.has(uidStr)) {
