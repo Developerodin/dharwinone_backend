@@ -6,13 +6,14 @@ import {
   emitIncomingCall,
   emitCallEnded,
   emitCallCancelled,
-  emitCallDeclined,
+  emitCallDismiss,
   emitMessageDeleted,
   emitMessageReacted,
   emitMessagePinned,
   emitConversationUpdated,
   emitConversationDeleted,
   emitConversationDelivered,
+  evictUsersFromConversation,
   getIO,
 } from '../services/chatSocket.service.js';
 import mongoose from 'mongoose';
@@ -32,18 +33,48 @@ import {
 } from '../services/communicationAccess.audit.js';
 import { uploadFileToS3 } from '../services/upload.service.js';
 import logger from '../config/logger.js';
+import { getGrantingPermissions } from '../config/permissions.js';
+import { assertChatAttachmentKeysAllowed } from '../utils/chatAttachmentKey.js';
 
 const getUserId = (req) => req.user?.id || req.user?._id?.toString();
 
 const ACCESS_TOKEN_COOKIE = 'accessToken';
 
+/**
+ * Only echoes a token the client already holds (Authorization: Bearer — mobile). A browser
+ * authenticated by the httpOnly cookie must not get that cookie back as readable JSON; it
+ * connects the socket with the cookie itself (see chatSocket.service handshake).
+ */
 const getSocketToken = catchAsync(async (req, res) => {
-  const token = req.cookies?.[ACCESS_TOKEN_COOKIE] || req.headers?.authorization?.replace(/^Bearer\s+/i, '');
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
+  const bearer = /^Bearer\s+(.+)$/i.exec(req.headers?.authorization || '')?.[1]?.trim();
+  if (bearer) return res.json({ token: bearer });
+  if (req.cookies?.[ACCESS_TOKEN_COOKIE]) {
+    return res.status(401).json({ error: 'Use cookie handshake' });
   }
-  res.json({ token });
+  return res.status(401).json({ error: 'Not authenticated' });
 });
+
+/** Route guards that must run BEFORE multer, so a rejected upload never reaches S3. */
+const requireConversationParticipant = catchAsync(async (req, res, next) => {
+  await chatService.ensureParticipant(req.params.id, getUserId(req));
+  next();
+});
+
+const requireConversationAdmin = catchAsync(async (req, res, next) => {
+  await chatService.ensureAdmin(req.params.id, getUserId(req));
+  next();
+});
+
+/** Same permission the calling module uses to play recordings (bolna.route recording streams). */
+const canViewCallRecordings = (req) =>
+  Boolean(req.user?.platformSuperUser) ||
+  getGrantingPermissions('call-recording.view').some((p) => req.authContext?.permissions?.has(p));
+
+const withoutRecordingUrl = (call) => {
+  if (!call || typeof call !== 'object') return call;
+  const { recordingUrl, ...rest } = call;
+  return rest;
+};
 
 const listConversations = catchAsync(async (req, res) => {
   const userId = getUserId(req);
@@ -74,6 +105,7 @@ const getConversation = catchAsync(async (req, res) => {
 const deleteConversation = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const { participantIds } = await chatService.deleteConversation(req.params.id, userId);
+  evictUsersFromConversation(req.params.id, participantIds);
   emitConversationDeleted(req.params.id, participantIds);
   res.status(httpStatus.NO_CONTENT).end();
 });
@@ -107,6 +139,7 @@ const getConversationTimeline = catchAsync(async (req, res) => {
 
 const sendMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
+  assertChatAttachmentKeysAllowed(req.body?.attachments, userId);
   const msg = await chatService.createMessage(req.params.id, userId, req.body);
   await emitNewMessage(req.params.id, msg);
   res.status(httpStatus.CREATED).send(msg);
@@ -164,8 +197,12 @@ const uploadAndSendMessage = catchAsync(async (req, res) => {
 const deleteMessage = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const deleteFor = req.body?.deleteFor || 'me';
-  const msg = await chatService.deleteMessage(req.params.id, req.params.msgId, userId, { deleteFor });
+  const { wasPinned, ...msg } = await chatService.deleteMessage(req.params.id, req.params.msgId, userId, {
+    deleteFor,
+  });
   await emitMessageDeleted(req.params.id, req.params.msgId, deleteFor, userId);
+  // Delete-for-everyone also unpins; tell clients the same way an unpin does so the pinned bar clears.
+  if (wasPinned) emitMessagePinned(req.params.id, req.params.msgId, false, msg);
   res.send(msg);
 });
 
@@ -283,6 +320,7 @@ const listCalls = catchAsync(async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
   const result = await chatService.listCallsForUser(userId, { page, limit, q, status });
+  if (!canViewCallRecordings(req)) result.results = (result.results || []).map(withoutRecordingUrl);
   res.send(result);
 });
 
@@ -368,7 +406,7 @@ const startChatCallRecording = catchAsync(async (req, res) => {
 const getCall = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const call = await chatService.getCallById(req.params.id, userId);
-  res.send(call);
+  res.send(canViewCallRecordings(req) ? call : withoutRecordingUrl(call));
 });
 
 const updateCall = catchAsync(async (req, res) => {
@@ -376,17 +414,24 @@ const updateCall = catchAsync(async (req, res) => {
   const callId = req.params.id;
   const before = await chatService.getCallById(callId, userId);
   const previousStatus = String(before?.status ?? '').toLowerCase();
-  const callerId = String(before?.caller?.id ?? before?.caller?._id ?? before?.caller ?? '');
 
   const call = await chatService.updateCall(callId, userId, req.body);
-  const newStatus = String(req.body?.status ?? call?.status ?? '').toLowerCase();
+  const newStatus = String(call?.status ?? '').toLowerCase();
   const preConnect = previousStatus === 'initiated' || previousStatus === 'ringing';
 
-  if (preConnect && previousStatus !== newStatus) {
-    if (newStatus === 'missed' && callerId === userId) {
+  // Only failed/completed reach here (see CALL_PATCH_TRANSITIONS); stop every ringing device.
+  if (previousStatus !== newStatus) {
+    if (preConnect) {
       await emitCallCancelled(call, userId);
-    } else if (newStatus === 'declined' && callerId !== userId) {
-      await emitCallDeclined(call, userId);
+      await emitCallDismiss(call, 'cancelled');
+    } else if (previousStatus === 'ongoing') {
+      if (newStatus === 'completed') {
+        await emitCallEnded(call.conversation ? String(call.conversation) : '', call.livekitRoom, {
+          callId: String(call._id),
+          call,
+        });
+      }
+      await emitCallDismiss(call, 'ended');
     }
   }
 
@@ -396,13 +441,13 @@ const updateCall = catchAsync(async (req, res) => {
 const endCallByRoom = catchAsync(async (req, res) => {
   const userId = getUserId(req);
   const { roomName } = req.body;
-  if (!roomName) return res.status(400).json({ message: 'roomName required' });
   const result = await chatService.endCallByRoom(roomName, userId);
   if (result) {
     await emitCallEnded(result.conversationId, roomName, {
       callId: result.callId,
       call: result.call,
     });
+    await emitCallDismiss(result.call, result.dismissReason);
   }
   res.send({ success: true });
 });
@@ -506,8 +551,12 @@ const addParticipants = catchAsync(async (req, res) => {
 
 const removeParticipant = catchAsync(async (req, res) => {
   const userId = getUserId(req);
-  const conv = await chatService.removeParticipant(req.params.id, userId, req.params.userId);
-  if (conv) await emitConversationUpdated(req.params.id);
+  const targetId = String(req.params.userId);
+  const conv = await chatService.removeParticipant(req.params.id, userId, targetId);
+  // Removed or left: drop their sockets from the room first so they stop receiving its messages,
+  // then tell the remaining members (the leaver is no longer a participant, so not included).
+  evictUsersFromConversation(req.params.id, [targetId]);
+  await emitConversationUpdated(req.params.id);
   if (conv) res.send(conv);
   else res.status(httpStatus.NO_CONTENT).send();
 });
@@ -592,6 +641,8 @@ export {
   searchUsers,
   lookupUserByEmail,
   getSocketToken,
+  requireConversationParticipant,
+  requireConversationAdmin,
   addParticipants,
   removeParticipant,
   setParticipantRole,

@@ -4,7 +4,12 @@ import auth from '../../middlewares/auth.js';
 import validate from '../../middlewares/validate.js';
 import requirePermissions from '../../middlewares/requirePermissions.js';
 import { uploadChatAttachments } from '../../middlewares/upload.js';
-import { emailLookupLimiterByUser, emailLookupLimiterByIp, chatReactLimiter } from '../../middlewares/rateLimiter.js';
+import {
+  emailLookupLimiterByUser,
+  emailLookupLimiterByIp,
+  chatReactLimiter,
+  chatUploadLimiter,
+} from '../../middlewares/rateLimiter.js';
 import * as chatValidation from '../../validations/chat.validation.js';
 import * as chatController from '../../controllers/chat.controller.js';
 
@@ -53,6 +58,9 @@ router.patch(
 router.post(
   '/conversations/:id/avatar',
   validate(chatValidation.conversationIdParam),
+  // Authorize before multer so a non-admin's file is never buffered or sent to S3.
+  chatController.requireConversationAdmin,
+  chatUploadLimiter,
   groupAvatarUpload.single('avatar'),
   chatController.uploadGroupAvatar
 );
@@ -120,6 +128,9 @@ router.get(
 router.post(
   '/conversations/:id/messages/upload',
   validate(chatValidation.conversationIdParam),
+  // Authorize before multer so a non-member's file is never buffered or sent to S3.
+  chatController.requireConversationParticipant,
+  chatUploadLimiter,
   uploadChatAttachments,
   chatController.uploadAndSendMessage
 );
@@ -164,9 +175,10 @@ router.patch(
 );
 router.post(
   '/calls/:id/recording/start',
+  requirePermissions('call-recording.manage'),
   validate(chatValidation.startChatCallRecording),
   chatController.startChatCallRecording
 );
-router.post('/calls/end-by-room', chatController.endCallByRoom);
+router.post('/calls/end-by-room', validate(chatValidation.endCallByRoom), chatController.endCallByRoom);
 
 export default router;

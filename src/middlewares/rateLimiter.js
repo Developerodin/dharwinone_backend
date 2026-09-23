@@ -143,6 +143,20 @@ const chatReactLimiter = rateLimit({
 });
 
 /**
+ * Chat file uploads (attachments, voice notes, group avatars). Each request can carry several
+ * files straight to S3, so this is tighter than reactions. Runs after the membership check, so
+ * only real members of the conversation spend budget.
+ */
+const chatUploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many uploads. Please try again in a minute.' },
+});
+
+/**
  * Exact-email contact lookup. TWO independent limiters, both applied. Spec §6.
  * A per-user limit alone is insufficient: a compromised account can distribute requests across
  * IPs, and multiple accounts can sit behind one source.
@@ -181,6 +195,7 @@ export {
   jobsBrowseLimiter,
   chatAssistantLimiter,
   chatReactLimiter,
+  chatUploadLimiter,
   teamsImport,
   teamsExport,
   emailLookupLimiterByUser,

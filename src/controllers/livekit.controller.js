@@ -34,7 +34,9 @@ const canActAsMeetingHost = async (roomName, user) => {
  * POST /v1/livekit/token
  */
 const getToken = catchAsync(async (req, res) => {
-  const { roomName, participantName, participantEmail, forChatCall } = req.body;
+  // `forChatCall` is still accepted by the schema (older clients send it) but deliberately
+  // ignored: a client flag must never grant full permissions. Membership decides, below.
+  const { roomName, participantName, participantEmail } = req.body;
 
   if (!roomName) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'roomName is required');
@@ -67,13 +69,18 @@ const getToken = catchAsync(async (req, res) => {
 
   const isPrivilegedAdmin =
     Boolean(req.user?.platformSuperUser) || (await userIsAdmin(req.user));
+  // Ad-hoc group calls (POST /chats/calls/group with no matching group chat) use
+  // `group-call-*` rooms. Full grants there only for a member of the live ChatCall on that room.
+  const isChatCallMember =
+    roomName.startsWith('group-call-') &&
+    (await chatCallService.isLiveCallMemberForRoom(roomName, String(req.user?.id || req.user?._id || '')));
   const { token, isHost, canPublish, meetingEndAt, rejected } = await livekitService.generateAccessToken({
     roomName,
     participantName: name,
     participantIdentity,
     participantEmail: email,
     // Admins / platform super users join with full host-equivalent grants (no waiting room).
-    forceFullPermissions: forChatCall || isPrivilegedAdmin,
+    forceFullPermissions: isChatCallMember || isPrivilegedAdmin,
     authUser: req.user,
   });
 

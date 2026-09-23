@@ -153,28 +153,39 @@ async function handleRoomFinished(payload) {
   // Close any ChatCall tied to this room. Conditional update never regresses
   // completed/declined/missed rows. duration is computed in the aggregation
   // pipeline so it stays consistent with startedAt at the moment of close.
-  if (roomName.startsWith('chat-')) {
+  if (roomName.startsWith('chat-') || roomName.startsWith('group-call-')) {
     try {
-      const res = await ChatCall.updateOne(
-        { livekitRoom: roomName, status: { $in: ['ringing', 'ongoing'] } },
-        [
-          {
-            $set: {
-              status: { $cond: [{ $eq: ['$status', 'ringing'] }, 'missed', 'completed'] },
-              endedAt: '$$NOW',
-              duration: {
-                $cond: [
-                  { $ifNull: ['$startedAt', false] },
-                  { $round: [{ $divide: [{ $subtract: ['$$NOW', '$startedAt'] }, 1000] }, 0] },
-                  0,
-                ],
+      const live = await ChatCall.findOne({
+        livekitRoom: roomName,
+        status: { $in: ['initiated', 'ringing', 'ongoing'] },
+      })
+        .select('_id status caller participants')
+        .lean();
+      const wasRinging = live && live.status !== 'ongoing';
+      const res = live
+        ? await ChatCall.updateOne({ _id: live._id, status: live.status }, [
+            {
+              $set: {
+                // Never answered → no_answer (the old 'missed' conflated this with cancels).
+                status: wasRinging ? 'no_answer' : 'completed',
+                endedAt: '$$NOW',
+                duration: {
+                  $cond: [
+                    { $ifNull: ['$startedAt', false] },
+                    { $round: [{ $divide: [{ $subtract: ['$$NOW', '$startedAt'] }, 1000] }, 0] },
+                    0,
+                  ],
+                },
               },
             },
-          },
-        ]
-      );
-      if (res.modifiedCount) {
+          ])
+        : null;
+      if (res?.modifiedCount) {
         logger.info('[LiveKit Webhook] room_finished: closed ChatCall', { roomName });
+        // Stop any device still ringing for it (a group member who never answered, or a
+        // ring whose room emptied before anyone picked up).
+        const { emitCallDismiss } = await import('../services/chatSocket.service.js');
+        await emitCallDismiss(live, wasRinging ? 'no_answer' : 'ended');
       }
     } catch (err) {
       logger.warn(`[LiveKit Webhook] room_finished ChatCall close failed: ${err.message}`);

@@ -21,8 +21,8 @@ const createConversation = {
   body: Joi.object()
     .keys({
       type: Joi.string().valid('direct', 'group').required(),
-      participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1),
-      name: Joi.string().trim().allow(''),
+      participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).max(256),
+      name: Joi.string().trim().max(100).allow(''),
       description: Joi.string().trim().max(500).allow(''),
       /**
        * Restricted-role path: the client sends the ADDRESS, never the id it got back from
@@ -80,7 +80,8 @@ const getConversationTimeline = {
 };
 
 const attachmentItem = Joi.object().keys({
-  url: Joi.string().uri().required(),
+  // http(s) only: a bare .uri() accepts javascript:/data: URLs, which clients render as href.
+  url: Joi.string().uri({ scheme: ['http', 'https'] }).required(),
   key: Joi.string().allow(''),
   originalName: Joi.string().allow(''),
   size: Joi.number().min(0),
@@ -137,7 +138,9 @@ const updateCall = {
   params: callIdParam.params,
   body: Joi.object()
     .keys({
-      status: Joi.string().valid('initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined'),
+      // Only client-reportable transitions (see chat.service CALL_PATCH_TRANSITIONS).
+      status: Joi.string().valid('completed', 'failed'),
+      // Accepted for older clients but ignored — duration is computed server-side from startedAt.
       duration: Joi.number().min(0),
       recordRoomJoin: Joi.boolean().valid(true),
     })
@@ -230,7 +233,7 @@ const addParticipants = {
     id: Joi.string().custom(objectId).required(),
   }),
   body: Joi.object().keys({
-    participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).required(),
+    participantIds: Joi.array().items(Joi.string().custom(objectId)).min(1).max(256).required(),
   }),
 };
 
@@ -290,6 +293,12 @@ const getCall = {
   params: callIdParam.params,
 };
 
+const endCallByRoom = {
+  body: Joi.object().keys({
+    roomName: Joi.string().trim().max(200).required(),
+  }),
+};
+
 export {
   conversationIdParam,
   callIdParam,
@@ -318,4 +327,5 @@ export {
   setConversationPreferences,
   initiateGroupCall,
   startChatCallRecording,
+  endCallByRoom,
 };

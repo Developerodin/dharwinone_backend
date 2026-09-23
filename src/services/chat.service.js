@@ -202,6 +202,17 @@ const presentMessageForUser = (msg, userId) => {
     presented.deletedFor = null;
     presented.deletedBy = null;
   }
+  // Deleted for everyone: the delete path scrubs these in the DB, but legacy rows deleted before
+  // that scrub still hold the original content — never let it leave the server.
+  if (presented.deletedFor === 'everyone') {
+    presented.content = '';
+    presented.attachments = [];
+    presented.mentions = [];
+  }
+  // Same for a reply preview quoting a message that was later deleted for everyone.
+  if (presented.replyTo && typeof presented.replyTo === 'object' && presented.replyTo.deletedFor === 'everyone') {
+    presented.replyTo = { ...presented.replyTo, content: '', attachments: [] };
+  }
   // hiddenFor is server-side only — never needed by clients.
   delete presented.hiddenFor;
   // Collapse the two stored receipt shapes into one before anything leaves the server, so no
@@ -212,19 +223,47 @@ const presentMessageForUser = (msg, userId) => {
   return presented;
 };
 
-const formatLastMessagePreview = (lastMsg) => {
+/** replyTo populate: deletedFor lets presentMessageForUser redact a quoted deleted message. */
+const REPLY_TO_SELECT = 'content type sender createdAt deletedAt deletedFor';
+
+/**
+ * Tick state of a message from its sender's point of view, against the conversation's current
+ * members. 1:1 is simply the other participant; a group is 'read' only when every other member
+ * has read it and 'delivered' only when every other member has it. Read implies delivered.
+ */
+const computeMessageReceiptStatus = (msg, participantIds) => {
+  if (!msg) return 'sent';
+  const senderId = toIdString(msg.senderId ?? msg.sender);
+  const others = [...new Set((participantIds || []).map(toIdString))].filter((id) => id && id !== senderId);
+  if (!others.length) return 'sent';
+  const read = others.every((id) => userHasReceipt(msg.readBy, id));
+  if (read) return 'read';
+  const delivered = others.every((id) => userHasReceipt(msg.deliveredTo, id) || userHasReceipt(msg.readBy, id));
+  return delivered ? 'delivered' : 'sent';
+};
+
+/**
+ * @param {object} lastMsg
+ * @param {string[]} [participantIds] current member ids; when given, adds the tick `status`
+ */
+const formatLastMessagePreview = (lastMsg, participantIds) => {
   if (!lastMsg) return null;
   const preview = buildChatMessagePreview(lastMsg);
+  const id = toIdString(lastMsg._id ?? lastMsg.id);
+  const senderId = toIdString(lastMsg.senderId ?? lastMsg.sender);
   return {
+    ...(id ? { id } : {}),
+    ...(senderId ? { senderId } : {}),
     content: preview.text,
     sender: lastMsg.sender?.name,
     createdAt: lastMsg.createdAt,
     type: lastMsg.type,
     attachments: lastMsg.attachments,
+    ...(participantIds ? { status: computeMessageReceiptStatus(lastMsg, participantIds) } : {}),
   };
 };
 
-const getLastMessagePreview = async (conversationId, userId) => {
+const getLastMessagePreview = async (conversationId, userId, participantIds) => {
   const msg = await Message.findOne({
     conversation: new mongoose.Types.ObjectId(conversationId),
     ...messagePreviewVisibilityFilter(userId),
@@ -233,10 +272,13 @@ const getLastMessagePreview = async (conversationId, userId) => {
     .populate('sender', 'name')
     .lean();
   if (!msg) return null;
-  return formatLastMessagePreview({
-    ...presentMessageForUser(msg, userId),
-    sender: msg.sender ? { name: msg.sender.name } : undefined,
-  });
+  return formatLastMessagePreview(
+    {
+      ...presentMessageForUser(msg, userId),
+      sender: msg.sender ? { _id: msg.sender._id, name: msg.sender.name } : undefined,
+    },
+    participantIds
+  );
 };
 
 /** Notify targets for a call — uses conversation members when linked, else call.participants. */
@@ -479,6 +521,9 @@ const listConversations = async (userId, { page: requestedPage = 1, limit = 20, 
         {
           $group: {
             _id: '$conversation',
+            messageId: { $first: '$_id' },
+            readBy: { $first: '$readBy' },
+            deliveredTo: { $first: '$deliveredTo' },
             content: { $first: '$content' },
             type: { $first: '$type' },
             sender: { $first: '$sender' },
@@ -500,18 +545,28 @@ const listConversations = async (userId, { page: requestedPage = 1, limit = 20, 
       : [];
   const senderNameById = new Map(senders.map((s) => [s._id.toString(), s.name]));
 
+  const memberIdsByConv = new Map(
+    convs.map((c) => [c._id.toString(), (c.participants || []).map(participantRowUserId).filter(Boolean)])
+  );
   const lastMsgMap = new Map(
     lastMsgAgg.map((m) => [
       m._id.toString(),
-      formatLastMessagePreview({
-        content: m.content,
-        type: m.type,
-        createdAt: m.createdAt,
-        attachments: m.attachments,
-        deletedAt: m.deletedAt,
-        deletedFor: m.deletedFor,
-        sender: { name: senderNameById.get(m.sender?.toString()) },
-      }),
+      formatLastMessagePreview(
+        {
+          id: m.messageId,
+          senderId: m.sender,
+          content: m.content,
+          type: m.type,
+          createdAt: m.createdAt,
+          attachments: m.attachments,
+          deletedAt: m.deletedAt,
+          deletedFor: m.deletedFor,
+          readBy: m.readBy,
+          deliveredTo: m.deliveredTo,
+          sender: { name: senderNameById.get(m.sender?.toString()) },
+        },
+        memberIdsByConv.get(m._id.toString()) || []
+      ),
     ])
   );
 
@@ -613,6 +668,10 @@ const createConversation = async (
   }
 
   const allParticipantIds = [userId, ...ids].map((id) => new mongoose.Types.ObjectId(id));
+  // A group with the same members is only "the same group" if it also has the same name —
+  // two differently named groups of the same people are a normal thing to want.
+  const groupNameKey = (n) => (String(n || '').trim() || 'Group').toLowerCase();
+  const sameGroupName = (g) => groupNameKey(g.name) === groupNameKey(name);
   const caller = await User.findById(userId).select('platformSuperUser').lean();
   const callerIsSuper = !!caller?.platformSuperUser;
   const flagMap = await loadUserFlagsMapByIds(allParticipantIds);
@@ -645,7 +704,11 @@ const createConversation = async (
         .lean();
       const existingGroup = groupsEarly.find((g) => {
         const gIds = (g.participants || []).map((p) => p.user?._id?.toString?.()).filter(Boolean);
-        return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
+        return (
+          sameGroupName(g) &&
+          gIds.length === allParticipantIds.length &&
+          allParticipantIds.every((id) => gIds.includes(id.toString()))
+        );
       });
       if (existingGroup && (existingGroup.participants || []).some((p) => participantRowUserId(p) === userId)) {
         return formatConversationForClient({ ...existingGroup, id: existingGroup._id?.toString() }, userId);
@@ -675,7 +738,11 @@ const createConversation = async (
       .lean();
     const existing = groups.find((g) => {
       const gIds = (g.participants || []).map((p) => p.user?._id?.toString?.()).filter(Boolean);
-      return gIds.length === allParticipantIds.length && allParticipantIds.every((id) => gIds.includes(id.toString()));
+      return (
+        sameGroupName(g) &&
+        gIds.length === allParticipantIds.length &&
+        allParticipantIds.every((id) => gIds.includes(id.toString()))
+      );
     });
     if (existing) return formatConversationForClient({ ...existing, id: existing._id?.toString() }, userId);
   }
@@ -745,7 +812,9 @@ const getConversation = async (conversationId, userId) => {
     }
   }
 
-  return formatConversationForClient({ ...conv, id: conv._id?.toString() }, userId);
+  const memberIds = (conv.participants || []).map(participantRowUserId).filter(Boolean);
+  const lastMessage = await getLastMessagePreview(conversationId, userId, memberIds);
+  return formatConversationForClient({ ...conv, id: conv._id?.toString(), lastMessage }, userId);
 };
 
 const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
@@ -762,7 +831,7 @@ const getMessages = async (conversationId, userId, { before, limit = 50 }) => {
     .sort({ createdAt: -1 })
     .limit(limit)
     .populate('sender', 'name email')
-    .populate({ path: 'replyTo', select: 'content type sender createdAt', populate: { path: 'sender', select: 'name' } })
+    .populate({ path: 'replyTo', select: REPLY_TO_SELECT, populate: { path: 'sender', select: 'name' } })
     .populate('reactions.user', 'name')
     .populate('mentions.user', 'name email')
     .lean();
@@ -823,7 +892,7 @@ const getConversationMessage = async (conversationId, messageId, userId) => {
     .populate('sender', 'name email')
     .populate({
       path: 'replyTo',
-      select: 'content type sender createdAt',
+      select: REPLY_TO_SELECT,
       populate: { path: 'sender', select: 'name' },
     })
     .populate('reactions.user', 'name')
@@ -876,7 +945,7 @@ const getConversationTimeline = async (
       .populate('sender', 'name email')
       .populate({
         path: 'replyTo',
-        select: 'content type sender createdAt',
+        select: REPLY_TO_SELECT,
         populate: { path: 'sender', select: 'name' },
       })
       .populate('reactions.user', 'name')
@@ -1008,7 +1077,7 @@ const createMessage = async (conversationId, userId, { content, type, attachment
   await Conversation.findByIdAndUpdate(conversationId, { lastMessageAt: new Date() });
   const populated = await msg.populate([
     { path: 'sender', select: 'name email' },
-    { path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } },
+    { path: 'replyTo', select: REPLY_TO_SELECT, populate: { path: 'sender', select: 'name' } },
     { path: 'mentions.user', select: 'name email' },
   ]);
   const result = populated.toObject();
@@ -1021,23 +1090,9 @@ const createMessage = async (conversationId, userId, { content, type, attachment
  * Latest message still visible to a user (excludes their "delete for me" and all
  * "delete for everyone" tombstones). Used for chat-list previews after deletion.
  */
-const getLastVisibleMessageForUser = async (conversationId, userId) => {
-  const msg = await Message.findOne({
-    conversation: new mongoose.Types.ObjectId(conversationId),
-    ...messagePreviewVisibilityFilter(userId),
-  })
-    .sort({ createdAt: -1 })
-    .populate('sender', 'name')
-    .lean();
-  if (!msg) return null;
-  const preview = buildChatMessagePreview(presentMessageForUser(msg, userId));
-  return {
-    content: preview.text,
-    sender: msg.sender?.name || '',
-    createdAt: msg.createdAt,
-    type: msg.type,
-    attachments: msg.attachments,
-  };
+const getLastVisibleMessageForUser = async (conversationId, userId, participantIds) => {
+  const preview = await getLastMessagePreview(conversationId, userId, participantIds);
+  return preview ? { ...preview, sender: preview.sender || '' } : null;
 };
 
 const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) => {
@@ -1072,6 +1127,12 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
         deletedAt: new Date(),
         deletedFor: 'everyone',
         deletedBy: userId,
+        // Scrub, don't just flag: a tombstone must not keep the original text or files.
+        // ponytail: the S3 objects behind the attachments are left in place (keys dropped);
+        // add a delete here if storage cost or a takedown requirement ever needs it.
+        content: '',
+        attachments: [],
+        mentions: [],
         // A pinned tombstone would sit at the top of the thread forever.
         pinnedAt: null,
         pinnedBy: null,
@@ -1093,10 +1154,13 @@ const deleteMessage = async (conversationId, messageId, userId, { deleteFor }) =
 
   const updated = await Message.findById(messageId)
     .populate('sender', 'name email')
-    .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
+    .populate({ path: 'replyTo', select: REPLY_TO_SELECT, populate: { path: 'sender', select: 'name' } })
     .populate('mentions.user', 'name email')
     .lean();
-  return presentMessageForUser(updated, userId);
+  const presented = presentMessageForUser(updated, userId);
+  // Internal flag for the controller (stripped before responding): the delete also unpinned it.
+  if (mode === 'everyone' && msg.pinnedAt != null) presented.wasPinned = true;
+  return presented;
 };
 
 /**
@@ -1304,33 +1368,46 @@ const forwardMessage = async (conversationId, messageId, userId, options = {}) =
   return created;
 };
 
+/**
+ * Set (or with an empty emoji, remove) the caller's single reaction. Two atomic updates instead
+ * of load-modify-save, so concurrent reactions from different users never VersionError or
+ * overwrite each other; the `$ne` guard on the push keeps one reaction per user even if the
+ * same user's requests interleave.
+ */
 const reactToMessage = async (conversationId, messageId, userId, { emoji }) => {
   await ensureParticipant(conversationId, userId);
-  const msg = await Message.findOne({ _id: messageId, conversation: conversationId });
-  if (!msg) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
-  const nextEmoji = typeof emoji === 'string' ? emoji.trim() : '';
-  const uid = String(userId);
-  const reactions = (msg.reactions || []).filter((r) => {
-    const rid = r.user?._id ?? r.user?.id ?? r.user;
-    return String(rid) !== uid;
-  });
-  if (nextEmoji) {
-    reactions.push({ user: userId, emoji: nextEmoji });
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const msg = await Message.findOne({ _id: messageId, conversation: conversationId })
+    .select('deletedFor deletedBy hiddenFor')
+    .lean();
+  const hiddenForMe =
+    msg &&
+    ((msg.hiddenFor || []).some((id) => String(id) === String(userId)) ||
+      (msg.deletedFor === 'me' && String(msg.deletedBy) === String(userId)));
+  if (!msg || hiddenForMe) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  if (msg.deletedFor === 'everyone') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'This message was deleted and cannot be reacted to');
   }
-  msg.reactions = reactions;
-  await msg.save();
+
+  const nextEmoji = typeof emoji === 'string' ? emoji.trim() : '';
+  const live = { _id: messageId, conversation: conversationId, deletedFor: { $ne: 'everyone' } };
+  await Message.updateOne(live, { $pull: { reactions: { user: userObjectId } } });
+  if (nextEmoji) {
+    await Message.updateOne(
+      { ...live, 'reactions.user': { $ne: userObjectId } },
+      { $push: { reactions: { user: userObjectId, emoji: nextEmoji } } }
+    );
+  }
+
   const populated = await Message.findById(messageId)
     .populate('sender', 'name email')
-    .populate({ path: 'replyTo', select: 'content type sender', populate: { path: 'sender', select: 'name' } })
+    .populate({ path: 'replyTo', select: REPLY_TO_SELECT, populate: { path: 'sender', select: 'name' } })
     .populate('reactions.user', 'name')
     .populate('mentions.user', 'name email')
     .lean();
-  const result = {
-    ...populated,
-    id: populated._id?.toString(),
-    reactions: populated.reactions || [],
-    mentions: formatMentionsForClient(populated.mentions),
-  };
+  if (!populated) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  const result = presentMessageForUser(populated, userId);
+  result.reactions = result.reactions || [];
   return result;
 };
 
@@ -1402,6 +1479,38 @@ const markMessageDelivered = async (conversationId, messageId, userId) => {
     senderId: String(msg.sender),
     deliveredAt: at.toISOString(),
   };
+};
+
+/**
+ * Server-side delivery receipt for recipients known to be connected when a message is sent.
+ * One guarded atomic $push per recipient, so a concurrent join/ack never double-records.
+ * Membership is not re-checked: callers pass the conversation's own participant ids.
+ * @returns {Promise<{ userId: string, at: string }[]>} only the receipts actually written
+ */
+const markMessageDeliveredToUsers = async (messageId, userIds) => {
+  const at = new Date();
+  const results = await Promise.all(
+    [...new Set((userIds || []).map(String))].map(async (uid) => {
+      const userObjectId = new mongoose.Types.ObjectId(uid);
+      const res = await Message.updateOne(
+        { _id: messageId, sender: { $ne: userObjectId }, 'deliveredTo.user': { $ne: userObjectId } },
+        { $push: { deliveredTo: { user: userObjectId, at } } }
+      );
+      return res?.modifiedCount ? { userId: uid, at: at.toISOString() } : null;
+    })
+  );
+  return results.filter(Boolean);
+};
+
+/**
+ * Everyone who shares at least one conversation with this user (excluding the user). Presence
+ * events go only to these user rooms.
+ */
+const getConversationPartnerIds = async (userId) => {
+  const ids = await Conversation.distinct('participants.user', {
+    'participants.user': new mongoose.Types.ObjectId(userId),
+  });
+  return (ids || []).map(String).filter((id) => id !== String(userId));
 };
 
 /**
@@ -1585,6 +1694,15 @@ const appendParticipantSearchToCallFilter = async (userId, filter, q) => {
 
 /** In-app Calls tab: always scoped to viewer participations; adds direction + peer */
 const listCallsForUser = async (userId, { page: requestedPage = 1, limit = 20, q, status } = {}) => {
+  // Same lazy reconcile as listCalls/getCallById: staging runs no scheduler, so without this a
+  // call whose ring was never answered or cancelled stays "ringing" in the Calls tab forever.
+  try {
+    // eslint-disable-next-line import/no-cycle
+    const chatCallMod = await import('./chatCall.service.js');
+    await chatCallMod.expireStaleCalls();
+  } catch (err) {
+    logger.warn(`[listCallsForUser] expireStaleCalls failed: ${err?.message}`);
+  }
   let filter = { $or: [{ caller: userId }, { participants: userId }] };
 
   const statusFilter = buildChatCallStatusFilter(status, userId, { incomingMissedOnly: true });
@@ -1687,32 +1805,66 @@ const getCallById = async (callId, userId) => {
   return item;
 };
 
-const updateCall = async (callId, userId, { status, duration, recordRoomJoin }) => {
+/**
+ * The only status changes a client may request. Everything else (accept, decline, cancel,
+ * no_answer) goes through the socket handlers / sweeper, which own the ring state machine.
+ */
+const CALL_PATCH_TRANSITIONS = {
+  failed: ['initiated', 'ringing', 'ongoing'],
+  completed: ['ongoing'],
+};
+
+const updateCall = async (callId, userId, { status, recordRoomJoin }) => {
   const call = await ChatCall.findById(callId).lean();
   if (!call) throw new ApiError(httpStatus.NOT_FOUND, 'Call not found');
   const isParticipant = call.caller.toString() === userId || call.participants?.some((p) => p.toString() === userId);
   if (!isParticipant) throw new ApiError(httpStatus.FORBIDDEN, 'Not a participant');
 
-  const update = {};
-  if (status) update.status = status;
-  if (duration != null) update.duration = duration;
-  if (status === 'completed' || status === 'missed' || status === 'declined' || status === 'ended') {
-    update.endedAt = new Date();
-  }
-
+  const filter = { _id: callId };
   const mongoUpdate = {};
-  if (Object.keys(update).length) mongoUpdate.$set = update;
+  // A client reports `failed` when IT never connected. That must not end a call other people
+  // are in: if someone else already joined the room, or a group call is already ongoing, the
+  // report is accepted as a no-op (200, call unchanged) rather than failing the whole call.
+  const othersJoined = (call.roomJoinedUserIds || []).some((id) => String(id) !== String(userId));
+  const nonCallerCount = new Set(
+    (call.participants || []).map(String).filter((id) => id !== String(call.caller))
+  ).size;
+  const ignoreFailed =
+    status === 'failed' &&
+    ['initiated', 'ringing', 'ongoing'].includes(call.status) &&
+    (othersJoined || (nonCallerCount > 1 && call.status === 'ongoing'));
+  if (status && !ignoreFailed) {
+    if (!(CALL_PATCH_TRANSITIONS[status] || []).includes(call.status)) {
+      throw new ApiError(httpStatus.BAD_REQUEST, `Cannot change a ${call.status} call to ${status}`);
+    }
+    // Duration is never taken from the client — only derived from the server's startedAt.
+    const endedAt = new Date();
+    const $set = { status, endedAt };
+    if (call.status === 'ongoing' && call.startedAt) {
+      $set.duration = Math.max(0, Math.round((endedAt.getTime() - new Date(call.startedAt).getTime()) / 1000));
+    }
+    mongoUpdate.$set = $set;
+    // Guard on the status we validated against, so a concurrent transition is not overwritten.
+    filter.status = call.status;
+  }
   if (recordRoomJoin === true) {
     mongoUpdate.$addToSet = { roomJoinedUserIds: new mongoose.Types.ObjectId(userId) };
   }
   if (!mongoUpdate.$set && !mongoUpdate.$addToSet) {
+    if (ignoreFailed) {
+      return ChatCall.findById(callId)
+        .populate('caller', 'name email')
+        .populate('participants', 'name email')
+        .populate('roomJoinedUserIds', 'name email');
+    }
     throw new ApiError(httpStatus.BAD_REQUEST, 'No valid updates');
   }
 
-  const updated = await ChatCall.findByIdAndUpdate(callId, mongoUpdate, { new: true })
+  const updated = await ChatCall.findOneAndUpdate(filter, mongoUpdate, { new: true })
     .populate('caller', 'name email')
     .populate('participants', 'name email')
     .populate('roomJoinedUserIds', 'name email');
+  if (!updated) throw new ApiError(httpStatus.CONFLICT, 'Call state changed, refresh and retry');
   return updated;
 };
 
@@ -1727,6 +1879,9 @@ const startChatCallRecording = async (callId, userId) => {
   if (!isParticipant) throw new ApiError(httpStatus.FORBIDDEN, 'Not a participant');
   if (!call.livekitRoom || !call.livekitRoom.trim()) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Call has no LiveKit room');
+  }
+  if (call.status !== 'ongoing') {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Only an ongoing call can be recorded');
   }
   const result = await livekitService.startRecording(call.livekitRoom);
   return result;
@@ -1847,11 +2002,25 @@ const endCallByRoom = async (roomName, userId) => {
   const isParticipant = call.caller.toString() === userId || call.participants?.some((p) => p.toString() === userId);
   if (!isParticipant) throw new ApiError(httpStatus.FORBIDDEN, 'Not a participant');
   const endedAt = new Date();
-  const startedAt = call.startedAt ? new Date(call.startedAt) : new Date(call.createdAt);
-  const duration = Math.round((endedAt.getTime() - startedAt.getTime()) / 1000);
-  await ChatCall.findByIdAndUpdate(call._id, {
-    $set: { status: 'completed', endedAt, duration },
-  });
+  let updated = null;
+  // Only live calls transition; a finished row (completed, declined, cancelled, no_answer,
+  // failed, legacy missed) is never rewritten by a late or repeated end.
+  if (call.status === 'ongoing') {
+    const startedAt = call.startedAt ? new Date(call.startedAt) : new Date(call.createdAt);
+    const duration = Math.round((endedAt.getTime() - startedAt.getTime()) / 1000);
+    updated = await ChatCall.findOneAndUpdate(
+      { _id: call._id, status: 'ongoing' },
+      { $set: { status: 'completed', endedAt, duration } },
+      { new: true }
+    ).lean();
+  } else if (['initiated', 'ringing'].includes(call.status)) {
+    updated = await ChatCall.findOneAndUpdate(
+      { _id: call._id, status: { $in: ['initiated', 'ringing'] } },
+      { $set: { status: 'no_answer', endedAt } },
+      { new: true }
+    ).lean();
+  }
+  if (!updated) return null;
   const conversationId = call.conversation?.toString?.();
   if (roomName.startsWith('chat-')) {
     await livekitService.deleteInterviewRoom(roomName).catch(() => {});
@@ -1861,7 +2030,8 @@ const endCallByRoom = async (roomName, userId) => {
     conversationId,
     roomName,
     callId: String(call._id),
-    call,
+    call: updated,
+    dismissReason: updated.status === 'no_answer' ? 'no_answer' : 'ended',
   };
 };
 
@@ -1910,6 +2080,18 @@ const removeParticipant = async (conversationId, userId, targetUserId) => {
     await Conversation.findByIdAndUpdate(conversationId, {
       $pull: { participants: { user: new mongoose.Types.ObjectId(userId) } },
     });
+    // Leaving as the last admin (the creator counts as admin even without a role) would leave
+    // nobody able to manage the group — promote the earliest-joined remaining member.
+    // ponytail: read-then-write, so two admins leaving at the same instant can each see the
+    // other as the remaining admin and both skip; acceptable at group-chat concurrency.
+    const creatorId = conv.createdBy?.toString?.();
+    const remainingIsAdmin = (p) => p.role === 'admin' || (!p.role && p.user.toString() === creatorId);
+    if (!participants.some(remainingIsAdmin)) {
+      await Conversation.updateOne(
+        { _id: conversationId, 'participants.user': participants[0].user },
+        { $set: { 'participants.$.role': 'admin' } }
+      );
+    }
     return null;
   }
 
@@ -1937,6 +2119,9 @@ const setParticipantRole = async (conversationId, userId, targetUserId, { role }
   }
   if (!['admin', 'member'].includes(role)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'role must be admin or member');
+  }
+  if (!conv.participants?.some((p) => p.user.toString() === String(targetUserId))) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User is not a member of this group');
   }
 
   await Conversation.updateOne(
@@ -2036,7 +2221,11 @@ export {
   searchMessages,
   markAsRead,
   markMessageDelivered,
+  markMessageDeliveredToUsers,
   markConversationDelivered,
+  getConversationPartnerIds,
+  computeMessageReceiptStatus,
+  presentMessageForUser,
   listCalls,
   listCallsForUser,
   listCallsForConversation,
@@ -2048,6 +2237,7 @@ export {
   updateCall,
   startChatCallRecording,
   ensureParticipant,
+  ensureAdmin,
   addParticipants,
   removeParticipant,
   setParticipantRole,

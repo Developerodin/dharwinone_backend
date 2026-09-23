@@ -10,11 +10,18 @@ const chatCallSchema = new mongoose.Schema(
     /** Users who actually connected to the LiveKit room (subset of participants). */
     roomJoinedUserIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     callType: { type: String, enum: ['audio', 'video'], required: true },
+    /**
+     * cancelled = caller hung up before anyone answered; no_answer = ring timeout / sweeper /
+     * caller dropped while ringing; failed = client-reported token/media failure.
+     * `missed` is kept only for legacy rows written before those three existed.
+     */
     status: {
       type: String,
-      enum: ['initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined'],
+      enum: ['initiated', 'ringing', 'ongoing', 'completed', 'missed', 'declined', 'cancelled', 'no_answer', 'failed'],
       default: 'initiated',
     },
+    /** Group calls: non-caller participants who declined. The call is `declined` only once all have. */
+    declinedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     livekitRoom: { type: String, trim: true },
     /** Reference to Recording when in-app call was recorded via LiveKit Egress */
     recordingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recording', default: null },

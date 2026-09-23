@@ -8,7 +8,7 @@ import ChatCall from '../models/chatCall.model.js';
 import * as chatService from './chat.service.js';
 import logger from '../config/logger.js';
 import { notify } from './notification.service.js';
-import { getUserIdsWithApiPermission } from './permission.service.js';
+import { getUserIdsWithApiPermission, getUserPermissionContext } from './permission.service.js';
 import { sendPushToUser } from './push.service.js';
 import * as chatCallService from './chatCall.service.js';
 import { deleteInterviewRoom } from './livekit.service.js';
@@ -17,8 +17,87 @@ import { mentionedUserIds } from '../utils/chatMentions.js';
 import { buildChatNotifyCopy } from '../utils/chatNotifyCopy.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
 import { isUserActiveInConversationRoom } from '../utils/chatSocketActiveViewer.js';
+import { assertChatAttachmentKeysAllowed } from '../utils/chatAttachmentKey.js';
+import { getGrantingPermissions } from '../config/permissions.js';
+import * as chatValidation from '../validations/chat.validation.js';
 
 let io = null;
+
+const ACCESS_TOKEN_COOKIE = 'accessToken';
+
+/** Read one cookie from a raw Cookie header (the handshake has no cookie-parser). */
+const readCookie = (cookieHeader, name) => {
+  for (const part of String(cookieHeader || '').split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(idx + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+/** Handshake token: explicit auth/query token (mobile) first, then the httpOnly cookie (web). */
+const getHandshakeToken = (handshake) =>
+  handshake?.auth?.token ||
+  handshake?.query?.token ||
+  readCookie(handshake?.headers?.cookie, ACCESS_TOKEN_COOKIE) ||
+  null;
+
+/**
+ * Validate a socket send_message payload with the exact REST schema (params + body), so the
+ * socket path cannot bypass the length / attachment-URL rules. Unknown keys are rejected just
+ * as validate() rejects them on REST.
+ */
+const validateSocketSendMessage = (data) => {
+  const { conversationId, ...body } = data || {};
+  const { error: paramErr } = chatValidation.sendMessage.params.validate({ id: conversationId });
+  if (paramErr) return { error: paramErr.message };
+  const { value, error } = chatValidation.sendMessage.body.validate(body, { errors: { label: 'key' } });
+  if (error) return { error: error.message };
+  return { conversationId: String(conversationId), body: value };
+};
+
+const PRESENCE_QUERY_MAX_IDS = 200;
+/** How long a socket's cached conversation-partner set is trusted before re-reading it. */
+const PARTNER_CACHE_TTL_MS = 60 * 1000;
+
+/**
+ * Users who share a conversation with this socket's user, cached on the socket.
+ * ponytail: a partner gained after the cache was filled (new chat) waits up to the TTL for
+ * presence; acceptable for an online dot. Swap for a pub/sub invalidation if it ever isn't.
+ */
+const getSocketPartnerIds = async (socket, { maxAgeMs = PARTNER_CACHE_TTL_MS } = {}) => {
+  const fresh = socket.partnerIds && Date.now() - (socket.partnerIdsAt || 0) < maxAgeMs;
+  if (fresh) return socket.partnerIds;
+  const ids = await chatService.getConversationPartnerIds(socket.userId);
+  socket.partnerIds = new Set(ids);
+  socket.partnerIdsAt = Date.now();
+  return socket.partnerIds;
+};
+
+/** Emit to each partner's user room. Never `io.to([])` — an empty room list broadcasts to all. */
+const emitToPartners = (partnerIds, event, payload) => {
+  const rooms = [...(partnerIds || [])].map((id) => `user:${id}`);
+  if (rooms.length) io.to(rooms).emit(event, payload);
+};
+
+/** Bolna call:update rooms carry phone numbers and recording URLs: same gate as GET /bolna/call-records. */
+const socketCanViewCalls = async (socket) => {
+  if (socket.canViewCalls === undefined) {
+    const user = await User.findById(socket.userId).select('roleIds platformSuperUser').lean();
+    if (user?.platformSuperUser) {
+      socket.canViewCalls = true;
+    } else {
+      const { permissions } = await getUserPermissionContext(user);
+      socket.canViewCalls = getGrantingPermissions('calls.view').some((p) => permissions.has(p));
+    }
+  }
+  return socket.canViewCalls;
+};
 
 /** userId -> Set<socketId> */
 /**
@@ -45,8 +124,11 @@ const initSocket = (httpServer) => {
     maxHttpBufferSize: 1e6,
   });
 
+  // Cookie handshakes need `cors.credentials: true` (set above) and a client using
+  // `withCredentials: true`. Cross-site (Vercel → EC2) the accessToken cookie must be issued
+  // SameSite=None; Secure or the browser will not attach it to the handshake.
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    const token = getHandshakeToken(socket.handshake);
     if (!token) return next(new Error('Authentication required'));
     try {
       const payload = jwt.verify(token, config.jwt.secret);
@@ -68,7 +150,10 @@ const initSocket = (httpServer) => {
 
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
-    io.emit('user_online', { userId });
+    // Presence only to people who share a conversation with this user — not a global broadcast.
+    getSocketPartnerIds(socket)
+      .then((partners) => emitToPartners(partners, 'user_online', { userId }))
+      .catch((err) => logger.warn(`user_online emit failed: ${err.message}`));
 
     // Admins receive every Bolna call:update on role:admin (see emitCallUpdate).
     (async () => {
@@ -93,12 +178,18 @@ const initSocket = (httpServer) => {
       }
     })();
 
-    socket.on('subscribe:call', (data) => {
+    socket.on('subscribe:call', async (data, cb) => {
       const { scope, id } = data || {};
       const scopedId = id != null ? String(id).trim() : '';
-      if (!scopedId) return;
-      if (scope === 'candidate') socket.join(`call:candidate:${scopedId}`);
-      else if (scope === 'job') socket.join(`call:job:${scopedId}`);
+      if (!scopedId || (scope !== 'candidate' && scope !== 'job')) return cb?.({ error: 'scope and id required' });
+      try {
+        if (!(await socketCanViewCalls(socket))) return cb?.({ error: 'Forbidden' });
+      } catch (err) {
+        logger.warn(`subscribe:call permission check failed: ${err.message}`);
+        return cb?.({ error: 'Forbidden' });
+      }
+      socket.join(`call:${scope}:${scopedId}`);
+      cb?.({ success: true });
     });
 
     socket.on('unsubscribe:call', (data) => {
@@ -136,10 +227,11 @@ const initSocket = (httpServer) => {
 
     socket.on('send_message', async (data, cb) => {
       try {
-        const { conversationId, content, type, attachments, replyTo, mentions } = data || {};
-        if (!conversationId || (content == null && (!attachments || !attachments.length))) {
-          return cb?.({ error: 'conversationId and content (or attachments) required' });
-        }
+        const parsed = validateSocketSendMessage(data);
+        if (parsed.error) return cb?.({ error: parsed.error });
+        const { conversationId } = parsed;
+        const { content, type, attachments, replyTo, mentions } = parsed.body;
+        assertChatAttachmentKeysAllowed(attachments, userId);
         const msg = await chatService.createMessage(conversationId, userId, {
           content,
           type,
@@ -161,6 +253,9 @@ const initSocket = (httpServer) => {
     socket.on('typing', (data) => {
       const { conversationId } = data || {};
       if (!conversationId) return;
+      // Only members can be in the room (join_conversation checks membership, removal evicts),
+      // so room membership is the authorization — no DB read per keystroke.
+      if (!socket.rooms.has(`conversation:${conversationId}`)) return;
       const now = Date.now();
       const last = socket.typingLastEmitAt.get(conversationId) || 0;
       if (now - last < TYPING_EMIT_THROTTLE_MS) return;
@@ -245,13 +340,15 @@ const initSocket = (httpServer) => {
       try {
         const { conversationId, callType } = data || {};
         if (!conversationId || !callType) return cb?.({ error: 'conversationId and callType required' });
+        if (callType !== 'audio' && callType !== 'video') return cb?.({ error: 'callType must be audio or video' });
+        // Membership BEFORE the call row exists — a non-member must not be able to write a
+        // ChatCall or ring anyone. Same check as REST POST /conversations/:id/call, which also
+        // relies on the conversation itself (not assertCanInitiateWith) as the permission.
+        const conv = await chatService.ensureParticipant(conversationId, userId);
         const call = await chatCallService.initiateCall(conversationId, userId, callType);
         const callId = String(call._id);
         const roomName = `chat-${conversationId}-${callId}`;
-        const [participantIds, conv] = await Promise.all([
-          chatService.getConversationParticipantIds(conversationId),
-          chatService.ensureParticipant(conversationId, userId),
-        ]);
+        const participantIds = (conv.participants || []).map((p) => p.user.toString());
         const conversationType = conv?.type === 'group' ? 'group' : 'direct';
         const callScope = conversationType;
         const groupName =
@@ -314,60 +411,76 @@ const initSocket = (httpServer) => {
       try {
         const { callId } = data || {};
         if (!callId) return cb?.({ error: 'callId required' });
-        const result = await chatCallService.acceptCall(callId);
+        const result = await chatCallService.acceptCall(callId, userId);
         if (!result) return cb?.({ error: 'Call no longer available' });
-        const { call, tokens } = result;
-        call.participants.forEach((p) => {
-          const pidStr = String(p._id);
-          const token = tokens[pidStr];
-          if (token) {
-            io.to(`user:${pidStr}`).emit('call:start', {
-              callId: String(call._id),
-              conversationId: String(call.conversation),
-              roomName: call.livekitRoom,
-              callType: call.callType,
-              token,
-            });
-          }
+        const { call, tokens, firstAccept } = result;
+        // Tokens exist only for the acceptor, plus the caller on the first accept — other group
+        // members keep ringing and get their own token when (if) they accept.
+        Object.entries(tokens).forEach(([pidStr, token]) => {
+          io.to(`user:${pidStr}`).emit('call:start', {
+            callId: String(call._id),
+            conversationId: call.conversation ? String(call.conversation) : '',
+            roomName: call.livekitRoom,
+            callType: call.callType,
+            token,
+          });
         });
+        // Stop the ring on the acceptor's other devices, and tell the caller someone picked up.
+        await emitCallDismiss(call, 'answered_elsewhere', { userIds: [userId] });
+        if (firstAccept) {
+          await emitCallDismiss(call, 'accepted', { userIds: [String(call.caller?._id ?? call.caller)] });
+        }
         cb?.({ success: true });
       } catch (err) {
         cb?.({ error: err.message || 'Failed to accept call' });
       }
     });
 
-    socket.on('call:decline', async (data) => {
+    socket.on('call:decline', async (data, cb) => {
       const { callId } = data || {};
-      if (!callId) return;
+      if (!callId) return cb?.({ error: 'callId required' });
       try {
-        const call = await chatCallService.declineCall(callId);
-        if (call) {
-          await emitCallDeclined(call, userId);
+        const result = await chatCallService.declineCall(callId, userId);
+        // Always stop this user's own ringing devices, even if the call already moved on.
+        await emitCallDismiss({ _id: callId }, 'declined', { userIds: [userId] });
+        if (result?.allDeclined) {
+          await emitCallDeclined(result.call, userId);
+          await emitCallDismiss(result.call, 'declined');
         }
+        cb?.({ success: true });
       } catch (err) {
         logger.warn(`call:decline failed: ${err.message}`);
+        cb?.({ error: err.message || 'Failed to decline call' });
       }
     });
 
-    socket.on('call:cancel', async (data) => {
-      const { callId } = data || {};
-      if (!callId) return;
+    // Optional { reason: 'timeout' } = the caller's own ring timer expired → no_answer.
+    socket.on('call:cancel', async (data, cb) => {
+      const { callId, reason } = data || {};
+      if (!callId) return cb?.({ error: 'callId required' });
       try {
-        const call = await chatCallService.cancelCall(callId, userId);
+        const status = reason === 'timeout' ? 'no_answer' : 'cancelled';
+        const call = await chatCallService.cancelCall(callId, userId, { status });
         if (call) {
           await emitCallCancelled(call, userId);
+          await emitCallDismiss(call, status);
         }
+        cb?.({ success: true });
       } catch (err) {
         logger.warn(`call:cancel failed: ${err.message}`);
+        cb?.({ error: err.message || 'Failed to cancel call' });
       }
     });
 
-    socket.on('call:end', async (data) => {
+    socket.on('call:end', async (data, cb) => {
       const { callId } = data || {};
-      if (!callId) return;
+      if (!callId) return cb?.({ error: 'callId required' });
       try {
-        const call = await chatCallService.endCall(callId);
-        if (call) {
+        const call = await chatCallService.endCall(callId, userId);
+        if (call?.status === 'cancelled') {
+          await emitCallCancelled(call, userId);
+          await emitCallDismiss(call, 'cancelled');
+        } else if (call) {
           if (call.livekitRoom) {
             await deleteInterviewRoom(call.livekitRoom).catch((err) =>
               logger.warn(`call:end LiveKit cleanup failed: ${err?.message}`)
@@ -377,20 +490,34 @@ const initSocket = (httpServer) => {
             callId: String(call._id),
             call,
           });
+          await emitCallDismiss(call, 'ended');
         }
+        cb?.({ success: true });
       } catch (err) {
         logger.warn(`call:end failed: ${err.message}`);
+        cb?.({ error: err.message || 'Failed to end call' });
       }
     });
 
-    socket.on('get_online_users', (data, cb) => {
+    // Presence lookups are limited to the requester's conversation partners (anyone else reads
+    // as offline) and capped, so this cannot be used to probe arbitrary users.
+    socket.on('get_online_users', async (data, cb) => {
       const { userIds } = data || {};
       if (!Array.isArray(userIds)) return cb?.({ error: 'userIds array required' });
-      const result = {};
-      userIds.forEach((id) => {
-        result[id] = onlineUsers.has(id) && onlineUsers.get(id).size > 0;
-      });
-      cb?.({ onlineUsers: result });
+      try {
+        let partners = await getSocketPartnerIds(socket);
+        const ids = userIds.slice(0, PRESENCE_QUERY_MAX_IDS).map(String);
+        // A partner from a chat created after the cache filled: refresh once, not per id.
+        if (ids.some((id) => !partners.has(id))) partners = await getSocketPartnerIds(socket, { maxAgeMs: 5000 });
+        const result = {};
+        ids.forEach((id) => {
+          result[id] = partners.has(id) && onlineUsers.has(id) && onlineUsers.get(id).size > 0;
+        });
+        cb?.({ onlineUsers: result });
+      } catch (err) {
+        logger.warn(`get_online_users failed: ${err.message}`);
+        cb?.({ error: 'Failed to load presence' });
+      }
     });
 
     socket.on('disconnect', () => {
@@ -399,43 +526,29 @@ const initSocket = (httpServer) => {
         sockets.delete(socket.id);
         if (sockets.size === 0) {
           onlineUsers.delete(userId);
-          io.emit('user_offline', { userId });
+          if (socket.partnerIds) emitToPartners(socket.partnerIds, 'user_offline', { userId });
 
-          // End any ongoing calls this user was in — covers browser close / network drop.
-          ChatCall.find({ participants: userId, status: 'ongoing' }).lean().then(async (ongoingCalls) => {
-            for (const call of ongoingCalls) {
-              await chatCallService.endCall(String(call._id)).catch(() => {});
-              if (call.livekitRoom) {
-                await deleteInterviewRoom(call.livekitRoom).catch(() => {});
-                if (call.conversation) {
-                  emitCallEnded(String(call.conversation), call.livekitRoom);
-                } else {
-                  const participantIds = await chatService.getCallNotifyParticipantIds(call);
-                  // `io` is module scope and assigned once in initSocket, never per iteration,
-                  // so the closure cannot capture a stale binding the way the rule assumes.
-                  // eslint-disable-next-line no-loop-func
-                  participantIds.forEach((pid) => {
-                    io.to(`user:${String(pid)}`).emit('call_ended', {
-                      callId: String(call._id),
-                      conversationId: '',
-                      roomName: call.livekitRoom,
-                    });
-                  });
-                }
-              }
-            }
-          }).catch((err) => logger.warn(`disconnect call cleanup failed: ${err?.message}`));
+          // Ongoing calls are deliberately NOT ended here: one participant's network drop must
+          // not end the call for everyone. LiveKit's room_finished webhook closes the row when
+          // the room empties, and expireStaleCalls is the backstop.
 
-          // Cancel any pre-accept calls this user initiated — without this, the
-          // call sits in "ringing" forever when the caller closes their tab
-          // before the callee answers/declines.
-          ChatCall.find({ caller: userId, status: { $in: ['initiated', 'ringing'] } }).lean().then(async (ringingCalls) => {
-            await Promise.all(ringingCalls.map(async (call) => {
-              const cancelled = await chatCallService.cancelCall(String(call._id), userId).catch(() => null);
-              if (!cancelled) return;
-              await emitCallCancelled(cancelled, userId);
-            }));
-          }).catch((err) => logger.warn(`disconnect ring cleanup failed: ${err?.message}`));
+          // Stop pre-accept calls this user initiated — without this, the callee keeps ringing
+          // when the caller closes the tab before anyone answers.
+          ChatCall.find({ caller: userId, status: { $in: chatCallService.PRE_CONNECT_STATUSES } })
+            .lean()
+            .then(async (ringingCalls) => {
+              await Promise.all(
+                ringingCalls.map(async (call) => {
+                  const ended = await chatCallService
+                    .cancelCall(String(call._id), userId, { status: 'no_answer' })
+                    .catch(() => null);
+                  if (!ended) return;
+                  await emitCallCancelled(ended, userId);
+                  await emitCallDismiss(ended, 'no_answer');
+                })
+              );
+            })
+            .catch((err) => logger.warn(`disconnect ring cleanup failed: ${err?.message}`));
         }
       }
     });
@@ -488,12 +601,42 @@ const emitNewMessage = async (conversationId, message) => {
       }
       const mentionedIds = new Set(mentionedUserIds(payload.mentions));
 
+      // Delivery receipt for every recipient with a live socket right now; the sender hears
+      // about it immediately instead of only when the recipient next opens the thread.
+      const onlineRecipients = participantIds.filter((id) => String(id) !== senderStr && isUserOnline(String(id)));
+      let delivered = [];
+      if (payload.id && onlineRecipients.length) {
+        try {
+          delivered = await chatService.markMessageDeliveredToUsers(payload.id, onlineRecipients);
+        } catch (err) {
+          logger.warn(`new_message deliver failed: ${err.message}`);
+        }
+      }
+      for (const d of delivered) {
+        io.to(`user:${senderStr}`).emit('message_delivered', {
+          conversationId: String(conversationId),
+          messageIds: [String(payload.id)],
+          messageId: String(payload.id),
+          userId: d.userId,
+          at: d.at,
+          deliveredAt: d.at,
+        });
+      }
+      const deliveredTo = [...(payload.deliveredTo || []), ...delivered.map((d) => ({ user: d.userId, at: d.at }))];
+      const lastMessageStatus = chatService.computeMessageReceiptStatus(
+        { sender: senderStr, readBy: payload.readBy, deliveredTo },
+        participantIds
+      );
+
       for (const uid of participantIds) {
         const uidStr = String(uid);
         // conversation_updated to all participants (sidebar badge/preview)
         io.to(`user:${uidStr}`).emit('conversation_updated', {
           conversationId,
           lastMessage: {
+            id: payload.id ? String(payload.id) : undefined,
+            senderId: senderStr || undefined,
+            status: lastMessageStatus,
             content: preview.text,
             sender: payload.sender?.name || '',
             createdAt: payload.createdAt,
@@ -587,6 +730,8 @@ const emitCallCancelled = async (call, cancelledBy) => {
     callId,
     ...(conversationId ? { conversationId } : {}),
     ...(cancelledBy != null ? { cancelledBy: String(cancelledBy) } : {}),
+    // no_answer = ring timeout / caller dropped; anything else stopped ringing on purpose.
+    reason: call.status === 'no_answer' ? 'no_answer' : 'cancelled',
   };
   try {
     const participantIds = await chatService.getCallNotifyParticipantIds(call);
@@ -595,6 +740,36 @@ const emitCallCancelled = async (call, cancelledBy) => {
     }
   } catch (err) {
     logger.warn(`call:cancelled emit failed: ${err?.message}`);
+  }
+};
+
+/**
+ * `call:dismiss` — the one event every client listens to in order to stop ringing.
+ * Sent to every member's user room by default (all their devices), or to `userIds` only.
+ * @param {object} call ChatCall (lean or populated); only _id/caller/participants are read
+ * @param {'accepted'|'declined'|'cancelled'|'no_answer'|'ended'|'answered_elsewhere'} reason
+ */
+const emitCallDismiss = async (call, reason, { userIds } = {}) => {
+  if (!io || !call) return;
+  const callId = String(call._id ?? call.id ?? '');
+  if (!callId) return;
+  const targets = userIds || chatCallService.callMemberIds(call);
+  for (const uid of targets) {
+    if (uid) io.to(`user:${String(uid)}`).emit('call:dismiss', { callId, reason });
+  }
+};
+
+/**
+ * A user lost access to a conversation (removed, left, or it was deleted): pull every one of
+ * their sockets out of the room first, so they stop receiving its traffic, then tell them.
+ */
+const evictUsersFromConversation = (conversationId, userIds) => {
+  if (!io || !conversationId) return;
+  const cid = String(conversationId);
+  for (const uid of userIds || []) {
+    if (!uid) continue;
+    io.in(`user:${String(uid)}`).socketsLeave(`conversation:${cid}`);
+    io.to(`user:${String(uid)}`).emit('conversation_removed', { conversationId: cid });
   }
 };
 
@@ -735,7 +910,7 @@ const emitMessageDeleted = async (conversationId, messageId, deleteFor, deletedB
     await Promise.all(
       targets.map(async (uid) => {
         const uidStr = String(uid);
-        const lastMessage = await chatService.getLastVisibleMessageForUser(conversationId, uidStr);
+        const lastMessage = await chatService.getLastVisibleMessageForUser(conversationId, uidStr, participantIds);
         io.to(`user:${uidStr}`).emit('conversation_updated', {
           conversationId,
           lastMessage,
@@ -847,6 +1022,8 @@ export {
   emitCallEnded,
   emitCallCancelled,
   emitCallDeclined,
+  emitCallDismiss,
+  evictUsersFromConversation,
   emitMessageDeleted,
   emitMessageReacted,
   emitMessagePinned,
