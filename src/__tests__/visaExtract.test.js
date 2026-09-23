@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyVisaNumber,
+  classifyVisaType,
   parseVisaDate,
   buildVisaFields,
 } from '../services/visaExtract.service.js';
@@ -50,6 +51,63 @@ test('classifyVisaNumber: sentinels become null', () => {
   assert.equal(classifyVisaNumber('N/A').value, null);
 });
 
+// --- classifyVisaType -----------------------------------------------------
+test('classifyVisaType: the specimen combined class maps to the dropdown value', () => {
+  const r = classifyVisaType('B1/B2');
+  assert.equal(r.value, 'B-1/B-2');
+  assert.equal(r.warning, null);
+});
+
+test('classifyVisaType: the printed class is hyphenated to match the dropdown', () => {
+  // The foil prints F1; the dropdown has always stored F-1. A raw copy would select
+  // nothing and leave the field blank after an apparently successful scan.
+  assert.equal(classifyVisaType('F1').value, 'F-1');
+  assert.equal(classifyVisaType('H1B').value, 'H-1B');
+  assert.equal(classifyVisaType('E3').value, 'E-3');
+});
+
+test('classifyVisaType: an already-hyphenated print still matches', () => {
+  assert.equal(classifyVisaType('H-1B').value, 'H-1B');
+});
+
+test('classifyVisaType: spacing and case are tolerated', () => {
+  assert.equal(classifyVisaType('  b1 / b2 ').value, 'B-1/B-2');
+});
+
+test('classifyVisaType: TN has no hyphen in either place', () => {
+  assert.equal(classifyVisaType('TN').value, 'TN');
+});
+
+test('classifyVisaType: an A/B sub-class collapses onto its parent', () => {
+  assert.equal(classifyVisaType('L1A').value, 'L-1');
+  assert.equal(classifyVisaType('O1B').value, 'O-1');
+});
+
+test('classifyVisaType: a class the dropdown lacks is refused and quoted back', () => {
+  const r = classifyVisaType('M1');
+  assert.equal(r.value, null);
+  assert.match(r.warning, /M1/);
+});
+
+test('classifyVisaType: the nationality box misread as a type is refused', () => {
+  // Nationality (CAN) sits directly under Visa Type on the specimen.
+  assert.equal(classifyVisaType('CAN').value, null);
+});
+
+test('classifyVisaType: the entries box misread as a type is refused', () => {
+  assert.equal(classifyVisaType('M').value, null);
+});
+
+test('classifyVisaType: nothing readable stays null and silent', () => {
+  const r = classifyVisaType(null);
+  assert.equal(r.value, null);
+  assert.equal(r.warning, null);
+});
+
+test('classifyVisaType: sentinels become null', () => {
+  assert.equal(classifyVisaType('N/A').value, null);
+});
+
 // --- parseVisaDate --------------------------------------------------------
 test('parseVisaDate: specimen dates parse as DD MMM YYYY', () => {
   assert.equal(parseVisaDate('01 FEB 2026'), '2026-02-01');
@@ -94,6 +152,7 @@ test('parseVisaDate: junk and sentinels are null', () => {
 const specimen = {
   isVisa: true,
   visaNumberRaw: '00000001',
+  visaTypeRaw: 'B1/B2',
   issueDateRaw: '01 FEB 2026',
   expiryDateRaw: '31 JAN 2036',
 };
@@ -102,6 +161,7 @@ test('buildVisaFields: the specimen visa reads cleanly end to end', () => {
   const r = buildVisaFields(specimen);
   assert.deepEqual(r.fields, {
     visaNumber: '00000001',
+    visaType: 'B-1/B-2',
     issueDate: '2026-02-01',
     expiryDate: '2036-01-31',
   });
@@ -111,7 +171,7 @@ test('buildVisaFields: the specimen visa reads cleanly end to end', () => {
 
 test('buildVisaFields: isVisa false returns nothing at all', () => {
   const r = buildVisaFields({ ...specimen, isVisa: false });
-  assert.deepEqual(r.fields, { visaNumber: null, issueDate: null, expiryDate: null });
+  assert.deepEqual(r.fields, { visaNumber: null, visaType: null, issueDate: null, expiryDate: null });
   assert.equal(r.warnings.length, 1);
   assert.match(r.warnings[0], /does not look like a visa/i);
 });
@@ -160,5 +220,19 @@ test('buildVisaFields: a flagged visa number is named in needsReview', () => {
 
 test('buildVisaFields: a missing payload does not throw', () => {
   const r = buildVisaFields(undefined);
-  assert.deepEqual(r.fields, { visaNumber: null, issueDate: null, expiryDate: null });
+  assert.deepEqual(r.fields, { visaNumber: null, visaType: null, issueDate: null, expiryDate: null });
+});
+
+test('buildVisaFields: an unlisted visa type is dropped, everything else survives', () => {
+  const r = buildVisaFields({ ...specimen, visaTypeRaw: 'M1' });
+  assert.equal(r.fields.visaType, null);
+  assert.equal(r.fields.visaNumber, '00000001');
+  assert.equal(r.fields.issueDate, '2026-02-01');
+  assert.match(r.warnings.join(' '), /M1/);
+});
+
+test('buildVisaFields: a visa type the model left null warns about nothing', () => {
+  const r = buildVisaFields({ ...specimen, visaTypeRaw: null });
+  assert.equal(r.fields.visaType, null);
+  assert.deepEqual(r.warnings, []);
 });

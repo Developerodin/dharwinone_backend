@@ -47,8 +47,13 @@ function getOpenAIClient() {
 const SYSTEM_PROMPT = `You read a visa foil pasted into a passport.
 Return ONLY values printed next to these exact labels:
   Visa Number      -> visaNumberRaw
+  Visa Type        -> visaTypeRaw      (copy exactly as printed, e.g. B1/B2, F1, H1B)
   Issue Date       -> issueDateRaw     (copy exactly as printed, do not reformat)
   Expiration Date  -> expiryDateRaw    (copy exactly as printed, do not reformat)
+
+NEVER return as visaTypeRaw the Nationality (a three-letter country code such as CAN),
+the Sex, or the Entries value (a single letter such as M). Read only what is printed
+under the "Visa Type" or "Visa Type/Class" label.
 
 NEVER return as visaNumberRaw:
   - the Passport No. (a letter followed by digits, e.g. P00000001)
@@ -76,10 +81,11 @@ const RESPONSE_SCHEMA = {
       properties: {
         isVisa: { type: 'boolean' },
         visaNumberRaw: { type: ['string', 'null'] },
+        visaTypeRaw: { type: ['string', 'null'] },
         issueDateRaw: { type: ['string', 'null'] },
         expiryDateRaw: { type: ['string', 'null'] },
       },
-      required: ['isVisa', 'visaNumberRaw', 'issueDateRaw', 'expiryDateRaw'],
+      required: ['isVisa', 'visaNumberRaw', 'visaTypeRaw', 'issueDateRaw', 'expiryDateRaw'],
     },
   },
 };
@@ -133,6 +139,65 @@ export function classifyVisaNumber(raw) {
   };
 }
 
+/**
+ * Printed class -> the value the form's Visa type dropdown stores.
+ *
+ * The foil prints the class without punctuation (B1/B2, F1, H1B); the dropdown has
+ * always stored it hyphenated (B-1, F-1, H-1B), so a raw copy would select nothing and
+ * leave the field blank after an apparently successful scan. Lookup keys are the
+ * printed form with every space, hyphen and slash stripped, so B1/B2, B-1/B-2 and
+ * "b1 / b2" all land on the same entry.
+ *
+ * L-1 and O-1 are printed with their A/B sub-class on most foils; the dropdown has no
+ * such split, so both collapse onto the parent class rather than failing to match.
+ */
+const VISA_TYPE_BY_CLASS = {
+  B1B2: 'B-1/B-2',
+  B1: 'B-1',
+  B2: 'B-2',
+  F1: 'F-1',
+  J1: 'J-1',
+  H1B: 'H-1B',
+  H2B: 'H-2B',
+  L1: 'L-1',
+  L1A: 'L-1',
+  L1B: 'L-1',
+  O1: 'O-1',
+  O1A: 'O-1',
+  O1B: 'O-1',
+  P1: 'P-1',
+  R1: 'R-1',
+  TN: 'TN',
+  E1: 'E-1',
+  E2: 'E-2',
+  E3: 'E-3',
+};
+
+/**
+ * Map the printed visa class onto a dropdown value.
+ *
+ * A class the dropdown does not carry (M-1, H-4, F-2, or a misread of the Nationality
+ * or Entries box) returns null and says what it read. Writing the raw text through
+ * would put a value in the field that no option matches, which renders as an empty
+ * select the user believes is filled — worse than leaving it plainly empty.
+ *
+ * @param {unknown} raw
+ * @returns {{ value: string|null, warning: string|null }}
+ */
+export function classifyVisaType(raw) {
+  const value = cleanRaw(raw);
+  if (!value) return { value: null, warning: null };
+
+  const key = value.replace(/[\s\-/]+/g, '').toUpperCase();
+  const mapped = VISA_TYPE_BY_CLASS[key];
+  if (mapped) return { value: mapped, warning: null };
+
+  return {
+    value: null,
+    warning: `Read the visa type as "${value}", which is not one of the listed types. Pick it by hand.`,
+  };
+}
+
 const MONTHS = {
   JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
   JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
@@ -169,11 +234,11 @@ export function parseVisaDate(raw) {
   return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
 }
 
-const EMPTY_FIELDS = { visaNumber: null, issueDate: null, expiryDate: null };
+const EMPTY_FIELDS = { visaNumber: null, visaType: null, issueDate: null, expiryDate: null };
 
 /**
  * Turn the model's raw reading into the fields the form consumes.
- * @param {{ isVisa?: boolean, visaNumberRaw?: unknown, issueDateRaw?: unknown, expiryDateRaw?: unknown }} parsed
+ * @param {{ isVisa?: boolean, visaNumberRaw?: unknown, visaTypeRaw?: unknown, issueDateRaw?: unknown, expiryDateRaw?: unknown }} parsed
  * @returns {{ fields: typeof EMPTY_FIELDS, needsReview: string[], warnings: string[] }}
  */
 export function buildVisaFields(parsed) {
@@ -191,6 +256,9 @@ export function buildVisaFields(parsed) {
   const number = classifyVisaNumber(parsed?.visaNumberRaw);
   if (number.warning) warnings.push(number.warning);
   if (number.needsReview) needsReview.push('visaNumber');
+
+  const type = classifyVisaType(parsed?.visaTypeRaw);
+  if (type.warning) warnings.push(type.warning);
 
   let issueDate = parseVisaDate(parsed?.issueDateRaw);
   let expiryDate = parseVisaDate(parsed?.expiryDateRaw);
@@ -214,14 +282,14 @@ export function buildVisaFields(parsed) {
   if (ordered.warning) warnings.push(ordered.warning);
 
   return {
-    fields: { visaNumber: number.value, issueDate, expiryDate },
+    fields: { visaNumber: number.value, visaType: type.value, issueDate, expiryDate },
     needsReview,
     warnings,
   };
 }
 
 /**
- * Read a visa image (or a short PDF of one) and return the three profile fields.
+ * Read a visa image (or a short PDF of one) and return the four profile fields.
  * Stateless: reads nothing from the database and writes nothing anywhere.
  *
  * @param {Buffer} buffer
@@ -294,10 +362,11 @@ export async function extractVisaFromBuffer(buffer, mimeType, filename) {
 
   // Booleans only. A visa number must never reach the logs.
   logger.info(
-    '[visaExtract] done model=%s isVisa=%s number=%s issue=%s expiry=%s warnings=%s',
+    '[visaExtract] done model=%s isVisa=%s number=%s type=%s issue=%s expiry=%s warnings=%s',
     completion.model || DEFAULT_MODEL,
     parsed?.isVisa,
     Boolean(result.fields.visaNumber),
+    Boolean(result.fields.visaType),
     Boolean(result.fields.issueDate),
     Boolean(result.fields.expiryDate),
     result.warnings.length
