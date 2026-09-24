@@ -32,7 +32,6 @@ function bolnaEntityId(doc) {
  * @param {Object} p.job
  * @param {Object} [p.application]
  * @param {string} [p.jobTitleOverride]
- * @param {string} [p.companyNameOverride]
  * @param {Object} [p.initiateExtras] - passed to bolnaService.initiateCall (e.g. fromPhoneNumber)
  */
 export async function initiateCandidateVerificationCall({
@@ -42,7 +41,6 @@ export async function initiateCandidateVerificationCall({
   job,
   application,
   jobTitleOverride,
-  companyNameOverride,
   initiateExtras = {},
 }) {
   if (bolnaJobAndCandidateAgentsCollide()) {
@@ -61,7 +59,6 @@ export async function initiateCandidateVerificationCall({
     application,
     formattedPhone,
     jobTitleOverride,
-    companyNameOverride,
   });
 
   let extra = settings.extraSystemInstructions || '';

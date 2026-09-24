@@ -82,6 +82,12 @@ export function resolveCandidateAgentGreeting(ctx, greetingOverride, opts = {}) 
  * survives all three. The real fix is not to interpolate untrusted text into
  * instructions at all, which the current prompt design requires.
  */
+/**
+ * The agent always calls on behalf of Dharwin. Speaking the job's organisation made one call
+ * say "Dharwin" in the greeting and "testing pvt" later (client report, issue 4).
+ */
+export const CALLER_COMPANY_NAME = 'Dharwin Business Solutions';
+
 export function promptSafe(value, maxLen = 120) {
   // Objects stringify to "[object Object]", which then reads out loud as a real value.
   // The job flow's asText() exists for exactly this; keep the two helpers in agreement.
@@ -204,13 +210,11 @@ async function findSkillMatchedJobs(candidateSkillNames, excludeJobId) {
 
     // Build TTS-safe spoken lines — no symbols, no URLs, short phrases
     const spokenLines = usable.map((j, i) => {
-      const rawOrg = j.organisation?.name ?? j.organisation;
-      const org = promptSafe(typeof rawOrg === 'string' ? rawOrg : '') || 'the company';
       const type = promptSafe(j.jobType, 40) || 'Full-time';
       const loc = promptSafe(j.location, 80) || 'location not specified';
       const exp = promptSafe(j.experienceLevel, 40);
       const title = promptSafe(j.title, 150) || 'a role';
-      return `${i + 1}. ${title} at ${org}. ${type}${exp ? `, ${exp}` : ''}. Based in ${loc}.`;
+      return `${i + 1}. ${title}. ${type}${exp ? `, ${exp}` : ''}. Based in ${loc}.`;
     });
 
     return {
@@ -237,7 +241,6 @@ async function findSkillMatchedJobs(candidateSkillNames, excludeJobId) {
  * @param {Object} [params.application] - Job application (for createdAt)
  * @param {string} params.formattedPhone - E.164
  * @param {string} [params.jobTitleOverride]
- * @param {string} [params.companyNameOverride]
  */
 export async function buildCandidateVerificationPromptContext({
   candidate,
@@ -245,10 +248,7 @@ export async function buildCandidateVerificationPromptContext({
   application,
   formattedPhone,
   jobTitleOverride,
-  companyNameOverride,
 }) {
-  const companyName =
-    companyNameOverride || job.organisation?.name || job.organisation || '';
 
   // Extract candidate skill names (plain strings, TTS-safe)
   const candidateSkillNames = (candidate.skills || [])
@@ -281,7 +281,7 @@ export async function buildCandidateVerificationPromptContext({
     ),
     candidate_skills: promptSafe(candidateSkillsReadable, 300),
     job_title: resolveCanonicalCandidateJobTitle(job, jobTitleOverride),
-    company_name: promptSafe(companyName, 150) || 'our company',
+    company_name: CALLER_COMPANY_NAME,
     // Skill-matched other opportunities
     matched_jobs_spoken: matchedJobsSpoken,
     matched_jobs_count: matchedJobsCount,

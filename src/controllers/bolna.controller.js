@@ -113,7 +113,6 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     countryCode,
     jobId,
     jobTitle,
-    companyName,
   } = req.body;
 
   const Employee = (await import('../models/employee.model.js')).default;
@@ -165,7 +164,6 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     job,
     application: null,
     jobTitleOverride: jobTitle,
-    companyNameOverride: companyName,
   });
 
   if (!result.success) {
