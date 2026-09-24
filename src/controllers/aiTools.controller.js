@@ -139,10 +139,30 @@ export const parseCallbackMinutes = (raw) => {
   return Number.isFinite(n) && n >= CALLBACK_MIN && n <= CALLBACK_MAX ? n : null;
 };
 
+const NUMBER_WORDS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
+];
+const TENS_WORDS = ['', '', 'twenty', 'thirty', 'forty', 'fifty'];
+
+/** Spells out 0-59 in words. TTS rule: digits break the prompt's "spell out numbers" instruction. */
+function numberToWords(n) {
+  if (n < 20) return NUMBER_WORDS[n];
+  const tens = TENS_WORDS[Math.floor(n / 10)];
+  const ones = n % 10;
+  return ones ? `${tens} ${NUMBER_WORDS[ones]}` : tens;
+}
+
 export const spokenDelay = (minutes) => {
-  if (minutes < 60) return `in about ${minutes} minutes`;
-  const h = Math.round(minutes / 60);
-  return `in about ${h} hour${h === 1 ? '' : 's'}`;
+  if (minutes < 60) return `in about ${numberToWords(minutes)} minutes`;
+  // Half-hour precision above an hour: round to the nearest 30-minute unit rather than
+  // truncating, so e.g. 90 reads as "one and a half hours" instead of a bare "one hour".
+  const halfHourUnits = Math.round(minutes / 30);
+  const hours = Math.floor(halfHourUnits / 2);
+  const isHalfPast = halfHourUnits % 2 === 1;
+  const hourWord = numberToWords(hours);
+  if (isHalfPast) return `in about ${hourWord} and a half hours`;
+  return `in about ${hourWord} hour${hours === 1 ? '' : 's'}`;
 };
 
 /** Applications created before this feature have no counter at all; `$lt` alone would never match them. */

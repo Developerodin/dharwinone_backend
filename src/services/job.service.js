@@ -1801,74 +1801,87 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
         } else {
           // Claim first, like the scheduler does, so its next tick skips this application
           // instead of dialling the candidate a second time while this call is being placed.
-          await JobApplication.updateOne(
-            { _id: application._id },
-            { $set: { verificationCallInitiatedAt: new Date() } }
-          );
-
-          initiateCandidateVerificationCall({
-            agentId: config.bolna.candidateAgentId,
-            formattedPhone,
-            candidate: fullCandidate,
-            job,
-            application,
-          })
-            .then((result) => {
-              if (result.success && result.executionId) {
-                JobApplication.updateOne(
-                  { _id: application._id },
-                  {
-                    $set: {
-                      verificationCallExecutionId: result.executionId,
-                      verificationCallInitiatedAt: new Date(),
-                      verificationCallStatus: 'pending',
-                    },
-                  }
-                ).catch((err) => {
-                  logger.error('Failed to update application with call details:', err);
-                });
-
-                callRecordService
-                  .createRecord({
-                    executionId: result.executionId,
-                    recipientPhone: formattedPhone,
-                    recipientName: fullName,
-                    recipientEmail: email,
-                    purpose: 'job_application_verification',
-                    relatedJobApplication: application._id,
-                    relatedJob: job._id,
-                    relatedCandidate: candidate._id,
-                    status: 'initiated',
-                  })
-                  .catch((err) => {
-                    logger.error('Failed to create call record:', err);
+          // Conditional: several awaits (including SMTP) already ran since JobApplication.create,
+          // so a scheduler tick can land in that gap and claim it first. If it did, this path
+          // must not dial too — the scheduler's dial already owns the candidate.
+          const claimed = await JobApplication.findOneAndUpdate(
+            {
+              _id: application._id,
+              verificationCallExecutionId: { $in: [null, ''] },
+              verificationCallInitiatedAt: { $in: [null] },
+            },
+            { $set: { verificationCallInitiatedAt: new Date() } },
+            { new: true, projection: { _id: 1 } }
+          ).lean();
+          if (!claimed) {
+            logger.info(
+              `Skipping public-apply dial for application ${application._id}: already claimed (likely the scheduler).`
+            );
+          } else {
+            initiateCandidateVerificationCall({
+              agentId: config.bolna.candidateAgentId,
+              formattedPhone,
+              candidate: fullCandidate,
+              job,
+              application,
+            })
+              .then((result) => {
+                if (result.success && result.executionId) {
+                  JobApplication.updateOne(
+                    { _id: application._id },
+                    {
+                      $set: {
+                        verificationCallExecutionId: result.executionId,
+                        verificationCallInitiatedAt: new Date(),
+                        verificationCallStatus: 'pending',
+                      },
+                    }
+                  ).catch((err) => {
+                    logger.error('Failed to update application with call details:', err);
                   });
 
-                logger.info(
-                  `✅ Verification call initiated for ${fullName} (${formattedPhone}) - Execution: ${result.executionId}`
-                );
-              } else {
-                logger.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
-                // B15 fix: surface Bolna failure on the JobApplication so the UI can stop showing
-                // "verification pending" forever. Status set to 'failed' (existing enum value).
+                  callRecordService
+                    .createRecord({
+                      executionId: result.executionId,
+                      recipientPhone: formattedPhone,
+                      recipientName: fullName,
+                      recipientEmail: email,
+                      purpose: 'job_application_verification',
+                      relatedJobApplication: application._id,
+                      relatedJob: job._id,
+                      relatedCandidate: candidate._id,
+                      status: 'initiated',
+                    })
+                    .catch((err) => {
+                      logger.error('Failed to create call record:', err);
+                    });
+
+                  logger.info(
+                    `✅ Verification call initiated for ${fullName} (${formattedPhone}) - Execution: ${result.executionId}`
+                  );
+                } else {
+                  logger.warn(`❌ Verification call failed for ${fullName}: ${result.error || 'unknown error'}`);
+                  // B15 fix: surface Bolna failure on the JobApplication so the UI can stop showing
+                  // "verification pending" forever. Status set to 'failed' (existing enum value).
+                  JobApplication.updateOne(
+                    { _id: application._id },
+                    { $set: { verificationCallStatus: 'failed' } }
+                  ).catch((err) => {
+                    logger.error('Failed to mark application verificationCallStatus=failed:', err);
+                  });
+                }
+              })
+              .catch((err) => {
+                logger.error('Failed to initiate verification call:', err);
+                // B15 fix: thrown errors should also surface — mark the application failed.
                 JobApplication.updateOne(
                   { _id: application._id },
                   { $set: { verificationCallStatus: 'failed' } }
-                ).catch((err) => {
-                  logger.error('Failed to mark application verificationCallStatus=failed:', err);
+                ).catch((updateErr) => {
+                  logger.error('Failed to mark application verificationCallStatus=failed:', updateErr);
                 });
-              }
-            })
-            .catch((err) => {
-              logger.error('Failed to initiate verification call:', err);
-              // B15 fix: thrown errors should also surface — mark the application failed.
-              JobApplication.updateOne(
-                { _id: application._id },
-                { $set: { verificationCallStatus: 'failed' } }
-              ).catch((updateErr) => {
-                logger.error('Failed to mark application verificationCallStatus=failed:', updateErr);
               });
-            });
+          }
         }
       }
     } catch (err) {

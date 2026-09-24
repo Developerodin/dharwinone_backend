@@ -161,35 +161,45 @@ async function dialApplication(application, phone, { isCallback = false } = {}) 
   });
 
   if (result.success && result.executionId) {
-    // Update application with call details
-    await JobApplication.updateOne(
-      { _id: application._id },
-      {
-        $set: {
-          verificationCallExecutionId: result.executionId,
-          verificationCallInitiatedAt: new Date(),
-          verificationCallStatus: 'pending',
-        },
-      }
-    );
+    // Bolna already placed the call at this point — a bookkeeping failure below must not
+    // turn into "the dial never happened": the callback path would then both ring the
+    // candidate AND send the fallback booking-link email. Log and move on instead of
+    // letting the write failure propagate as if the call itself failed.
+    try {
+      // Update application with call details
+      await JobApplication.updateOne(
+        { _id: application._id },
+        {
+          $set: {
+            verificationCallExecutionId: result.executionId,
+            verificationCallInitiatedAt: new Date(),
+            verificationCallStatus: 'pending',
+          },
+        }
+      );
 
-    // Create call record for tracking
-    await callRecordService.createRecord({
-      executionId: result.executionId,
-      recipientPhone: phone,
-      recipientName: candidate.fullName,
-      recipientEmail: candidate.email,
-      purpose: 'job_application_verification',
-      relatedJobApplication: application._id,
-      relatedJob: job._id,
-      relatedCandidate: candidate._id,
-      status: 'initiated',
-    });
+      // Create call record for tracking
+      await callRecordService.createRecord({
+        executionId: result.executionId,
+        recipientPhone: phone,
+        recipientName: candidate.fullName,
+        recipientEmail: candidate.email,
+        purpose: 'job_application_verification',
+        relatedJobApplication: application._id,
+        relatedJob: job._id,
+        relatedCandidate: candidate._id,
+        status: 'initiated',
+      });
 
-    logger.info(
-      `✅ Verification call initiated for ${candidate.fullName} (${phone}) - ` +
-      `Application: ${application._id}, Execution: ${result.executionId}`
-    );
+      logger.info(
+        `✅ Verification call initiated for ${candidate.fullName} (${phone}) - ` +
+        `Application: ${application._id}, Execution: ${result.executionId}`
+      );
+    } catch (bookkeepingErr) {
+      logger.error(
+        `Post-dial bookkeeping failed for application ${application._id} (call was placed, execution ${result.executionId}): ${bookkeepingErr.message}`
+      );
+    }
     return true;
   }
 
@@ -258,20 +268,32 @@ async function runApplicationVerificationCalls() {
 }
 
 /**
+ * A claimed callback older than this is not dialled — after an outage, a "call me in ten
+ * minutes" request must not ring the candidate hours late. Falls back to email instead.
+ */
+const CALLBACK_MAX_LATENESS_MS = 30 * 60 * 1000;
+
+/**
  * Dial applications whose candidate asked for a call back once the requested delay has passed.
  * Capped at MAX_CALLBACKS (see aiTools.controller.js) so a confused call cannot loop forever.
  */
 async function runDueCallbacks() {
-  const due = await JobApplication.find({
-    verificationCallbackAt: { $lte: new Date() },
-    status: { $nin: CLOSED_APPLICATION_STATUSES },
-    verificationCallStatus: { $ne: 'withdrawn' },
-  })
-    .sort({ verificationCallbackAt: 1 })
-    .populate(CANDIDATE_POPULATE)
-    .populate(JOB_POPULATE)
-    .limit(10)
-    .lean();
+  let due;
+  try {
+    due = await JobApplication.find({
+      verificationCallbackAt: { $lte: new Date() },
+      status: { $nin: CLOSED_APPLICATION_STATUSES },
+      verificationCallStatus: { $ne: 'withdrawn' },
+    })
+      .sort({ verificationCallbackAt: 1 })
+      .populate(CANDIDATE_POPULATE)
+      .populate(JOB_POPULATE)
+      .limit(10)
+      .lean();
+  } catch (error) {
+    logger.error(`Due callback lookup failed: ${error.message}`);
+    return;
+  }
 
   for (const app of due) {
     try {
@@ -283,23 +305,30 @@ async function runDueCallbacks() {
       ).lean();
       if (!claimed) continue;
 
+      const lateBy = Date.now() - new Date(app.verificationCallbackAt).getTime();
       let dialled = false;
-      try {
-        if (await withCallablePhone(app)) {
-          const phone = resolveCallablePhone(app);
-          if (phone) {
-            logger.info(`Placing requested callback for application ${app._id}`);
-            dialled = await dialApplication(app, phone, { isCallback: true });
+      if (lateBy > CALLBACK_MAX_LATENESS_MS) {
+        logger.warn(
+          `Callback for application ${app._id} is ${Math.round(lateBy / 60000)} minutes late; skipping the dial and emailing instead.`
+        );
+      } else {
+        try {
+          if (await withCallablePhone(app)) {
+            const phone = resolveCallablePhone(app);
+            if (phone) {
+              logger.info(`Placing requested callback for application ${app._id}`);
+              dialled = await dialApplication(app, phone, { isCallback: true });
+            }
           }
+        } catch (dialErr) {
+          logger.error(`Callback dial failed for application ${app._id}: ${dialErr.message}`);
         }
-      } catch (dialErr) {
-        logger.error(`Callback dial failed for application ${app._id}: ${dialErr.message}`);
       }
 
-      // A callback that was skipped (no callable phone) or failed at Bolna must not leave the
-      // candidate with nothing: the claim above already unset verificationCallbackAt, and the
-      // callSync guard already suppressed the original call's booking-link email once this
-      // callback was booked — there is no other retry path from here.
+      // A callback that was skipped (no callable phone, too late) or failed at Bolna must not
+      // leave the candidate with nothing: the claim above already unset verificationCallbackAt,
+      // and the callSync guard already suppressed the original call's booking-link email once
+      // this callback was booked — there is no other retry path from here.
       if (!dialled) {
         try {
           await sendBookingLinkEmail(app._id);
@@ -403,6 +432,11 @@ async function run() {
     await runApplicationVerificationCalls();
     await runDueCallbacks();
     await syncApplicationCallRecords();
+  } catch (error) {
+    // Each pass above already catches and logs its own errors; this is the final backstop.
+    // run() is invoked bare from setInterval, and src/index.js routes an unhandledRejection
+    // to an exit handler, so a rejection here would kill the whole backend on a single Mongo blip.
+    logger.error(`Application verification call scheduler run failed: ${error.message}`);
   } finally {
     inFlight = false;
   }
