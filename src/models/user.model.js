@@ -46,6 +46,9 @@ const userSchema = mongoose.Schema(
       },
       private: true, // used by the toJSON plugin
     },
+    /** Consecutive failed password sign-ins; reset on success. See LOGIN_MAX_FAILURES in auth.service. */
+    failedLoginCount: { type: Number, default: 0, private: true },
+    loginLockedUntil: { type: Date, private: true },
     isEmailVerified: {
       type: Boolean,
       default: false,
@@ -184,7 +187,11 @@ userSchema.statics.isEmailTaken = async function (email, excludeUserId) {
  */
 userSchema.methods.isPasswordMatch = async function (password) {
   const user = this;
-  return bcrypt.compare(password, user.password);
+  if (await bcrypt.compare(password, user.password)) return true;
+  // The `password` path has `trim: true`, so every stored hash is of the trimmed value.
+  // Without this, anyone whose password starts or ends with a space could never sign in.
+  const trimmed = String(password).trim();
+  return trimmed !== password && bcrypt.compare(trimmed, user.password);
 };
 
 userSchema.post('init', function postUserInit() {

@@ -82,6 +82,10 @@ const password = (value, helpers) => {
   if (value.length < 8) {
     return helpers.message('password must be at least 8 characters');
   }
+  // bcrypt only hashes the first 72 bytes; anything longer would be silently ignored.
+  if (Buffer.byteLength(value, 'utf8') > 72) {
+    return helpers.message('password must be at most 72 characters');
+  }
   if (!value.match(/\d/) || !value.match(/[A-Z]/)) {
     return helpers.message('password must contain at least 1 capital letter and 1 number');
   }

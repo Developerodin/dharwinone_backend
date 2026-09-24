@@ -135,10 +135,44 @@ async function healPendingCandidateAfterStaleVerify(user) {
 /**
  * Login with username and password. Does not update lastLoginAt; caller should do that after issuing tokens.
  */
+/**
+ * Per-account lockout, on top of the per-IP authLoginLimiter: guessing spread across many IPs
+ * still hits this. ponytail: the lock reveals that the email exists after LOGIN_MAX_FAILURES
+ * attempts; accepted, since the user needs to know why they cannot sign in.
+ */
+export const LOGIN_MAX_FAILURES = 10;
+export const LOGIN_LOCK_MINUTES = 15;
+
+const recordFailedLogin = async (userId) => {
+  const updated = await User.findOneAndUpdate(
+    { _id: userId },
+    { $inc: { failedLoginCount: 1 } },
+    { new: true, projection: { failedLoginCount: 1 } }
+  );
+  if (updated && updated.failedLoginCount >= LOGIN_MAX_FAILURES) {
+    // Conditional so two racing failures cannot extend or double-apply the lock.
+    await User.updateOne(
+      { _id: userId, failedLoginCount: { $gte: LOGIN_MAX_FAILURES } },
+      { $set: { failedLoginCount: 0, loginLockedUntil: new Date(Date.now() + LOGIN_LOCK_MINUTES * 60 * 1000) } }
+    );
+  }
+};
+
 const loginUserWithEmailAndPassword = async (email, password) => {
   const user = await getUserByEmail(email);
+  // Checked before the password so a locked account cannot keep being guessed.
+  if (user?.loginLockedUntil && user.loginLockedUntil > new Date()) {
+    throw new ApiError(
+      httpStatus.TOO_MANY_REQUESTS,
+      `Too many failed sign-in attempts. Please try again in ${LOGIN_LOCK_MINUTES} minutes or reset your password.`
+    );
+  }
   if (!user || !(await user.isPasswordMatch(password))) {
+    if (user) await recordFailedLogin(user._id);
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect email or password');
+  }
+  if (user.failedLoginCount || user.loginLockedUntil) {
+    await User.updateOne({ _id: user._id }, { $set: { failedLoginCount: 0 }, $unset: { loginLockedUntil: 1 } });
   }
   if (user.status === 'pending') {
     if (!user.isEmailVerified) {
@@ -333,7 +367,10 @@ const resetPassword = async (resetPasswordToken, newPassword) => {
       throw new Error();
     }
     await updateUserById(user.id, { password: newPassword });
-    await Token.deleteMany({ user: user.id, type: tokenTypes.RESET_PASSWORD });
+    // Revoke every session too: a reset is often the response to a compromised account,
+    // and leaving refresh tokens alive would keep the attacker signed in.
+    await Token.deleteMany({ user: user.id, type: { $in: [tokenTypes.RESET_PASSWORD, tokenTypes.REFRESH] } });
+    await User.updateOne({ _id: user.id }, { $set: { failedLoginCount: 0 }, $unset: { loginLockedUntil: 1 } });
   } catch (error) {
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Password reset failed');
   }

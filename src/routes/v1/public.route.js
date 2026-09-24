@@ -33,7 +33,7 @@ const router = express.Router();
  * User cannot login or access the system until an administrator sets status to 'active'.
  * No tokens or cookies are issued.
  */
-router.post('/register', publicRegistrationLimiter, validate(authValidation.register), authController.publicRegister);
+router.post('/register', publicRegistrationLimiter, verifyCaptcha, validate(authValidation.register), authController.publicRegister);
 
 /**
  * POST /v1/public/register-candidate

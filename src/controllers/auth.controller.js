@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import ApiError from '../utils/ApiError.js';
 import config from '../config/config.js';
+import logger from '../config/logger.js';
 import { createUser, getUserByEmail, getUserById, updateUserById } from '../services/user.service.js';
 import { generateAuthTokens, generateResetPasswordToken, generateVerifyEmailToken, getSessionsForUser } from '../services/token.service.js';
 import {
@@ -636,13 +637,20 @@ const refreshTokens = catchAsync(async (req, res) => {
   }
 });
 
+/**
+ * Always 204, whether or not the email has an account, so the endpoint cannot be used to
+ * discover registered emails. The email send is not awaited for the same reason: an awaited
+ * SMTP round-trip would make "exists" measurably slower than "does not exist".
+ */
 const forgotPassword = catchAsync(async (req, res) => {
-  const resetPasswordToken = await generateResetPasswordToken(req.body.email);
   const user = await getUserByEmail(req.body.email);
-  await sendResetPasswordEmail(req.body.email, resetPasswordToken, {
-    req,
-    recipientName: user?.name || 'there',
-  });
+  if (user) {
+    const resetPasswordToken = await generateResetPasswordToken(user.email);
+    sendResetPasswordEmail(user.email, resetPasswordToken, {
+      req,
+      recipientName: user.name || 'there',
+    }).catch((err) => logger.error(`[forgot-password] reset email failed for user ${user.id}: ${err?.message}`));
+  }
   res.status(httpStatus.NO_CONTENT).send();
 });
 
