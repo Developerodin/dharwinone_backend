@@ -16,7 +16,7 @@ export function getCandidateVerificationDispositionSpecs() {
     {
       name: 'Corrected Name',
       question:
-        'If the candidate said the name on file was wrong and gave a different name, return that corrected full name. Otherwise return empty.',
+        'Return the corrected full name only if the candidate said the name on file was wrong, gave a new name, and said yes when the agent read it back. If they rejected the read-back or never gave a name, return empty. If the conversation restarted or the answer changed, use the final confirmed answer.',
       category: CANDIDATE_VERIFICATION_CATEGORY,
       is_subjective: true,
       is_objective: false,
@@ -41,9 +41,9 @@ export function getCandidateVerificationDispositionSpecs() {
       subjective_type: 'text',
     },
     {
-      name: 'Current Location',
+      name: 'Confirmed Location',
       question:
-        'What current city or location did the candidate state? Return it. Empty if not provided.',
+        'Return the candidate current city only if they confirmed the city the agent read out, or gave a new city and said yes when the agent read it back. If the candidate said no to a city, never return that city. If the conversation restarted or the answer changed, use the final confirmed answer. Otherwise return empty.',
       category: CANDIDATE_VERIFICATION_CATEGORY,
       is_subjective: true,
       is_objective: false,

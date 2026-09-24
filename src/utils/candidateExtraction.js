@@ -9,11 +9,12 @@ const FIELD = {
   correctedName: 'Corrected Name',
   jobConfirmed: 'Job Confirmed',
   availability: 'Availability',
-  currentLocation: 'Current Location',
+  currentLocation: 'Confirmed Location',
   stillInterested: 'Still Interested',
   callOutcome: 'Call Outcome',
   interviewSlotOutcome: 'Interview Slot Outcome',
 };
+const LEGACY_LOCATION_FIELD = 'Current Location';
 const INTEREST = new Set(['interested', 'not_interested', 'withdrew']);
 export const INTERVIEW_SLOT_OUTCOMES = ['held', 'declined', 'wants_link', 'no_slots', 'not_offered'];
 const SLOT_OUTCOME = new Set(INTERVIEW_SLOT_OUTCOMES);
@@ -56,6 +57,12 @@ function toEnum(v, allowed) {
   return allowed.has(k) ? k : null;
 }
 
+/** Present = Bolna returned the entry at all, even empty. Only an absent new field falls back to the legacy one. */
+function readLocation(extractedData) {
+  const hasNew = !!extractedData?.[CATEGORY]?.[FIELD.currentLocation];
+  return readField(extractedData, hasNew ? FIELD.currentLocation : LEGACY_LOCATION_FIELD);
+}
+
 function hasStructuredVerificationCategory(extractedData) {
   const cat = extractedData && extractedData[CATEGORY];
   return !!(cat && typeof cat === 'object' && !Array.isArray(cat) && Object.keys(cat).length > 0);
@@ -78,7 +85,7 @@ export function parseCandidateExtraction(extractedData) {
     correctedName: readField(extractedData, FIELD.correctedName),
     jobConfirmed: readField(extractedData, FIELD.jobConfirmed),
     availability: readField(extractedData, FIELD.availability),
-    currentLocation: readField(extractedData, FIELD.currentLocation),
+    currentLocation: readLocation(extractedData),
     stillInterested: readField(extractedData, FIELD.stillInterested),
     callOutcome: readField(extractedData, FIELD.callOutcome),
     interviewSlotOutcome: readField(extractedData, FIELD.interviewSlotOutcome),
