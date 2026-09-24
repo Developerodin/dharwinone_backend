@@ -146,6 +146,7 @@ const envVarsSchema = Joi.object()
 
     // Bolna Calling
     BOLNA_API_KEY: Joi.string().optional().description('Bolna API key'),
+    BOLNA_TOOL_TOKEN: Joi.string().optional().allow('').description('Bearer token Bolna sends when calling /v1/ai-tools functions'),
     BOLNA_AGENT_ID: Joi.string().optional().description('Bolna agent ID'),
     BOLNA_CANDIDATE_AGENT_ID: Joi.string().optional().description('Bolna agent ID for candidate verification calls'),
     BOLNA_ADDITIONAL_AGENT_IDS: Joi.string()
@@ -612,6 +613,8 @@ const config = {
   },
   bolna: {
     apiKey: envVars.BOLNA_API_KEY || '',
+    /** Shared Bearer token for Bolna mid-call custom functions (/v1/ai-tools). Unset ⇒ tools return 503. */
+    toolToken: String(envVars.BOLNA_TOOL_TOKEN || '').trim(),
     /** Job posting / recruiter verification calls (no prompt PATCH in app). */
     agentId: String(envVars.BOLNA_AGENT_ID || '').trim(),
     /**

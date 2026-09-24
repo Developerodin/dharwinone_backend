@@ -118,6 +118,11 @@ export async function initiateCandidateVerificationCall({
     application_date: promptContext.application_date,
     matched_jobs_count: promptContext.matched_jobs_count ?? 0,
     matched_jobs_spoken: promptContext.matched_jobs_spoken || '',
+    // AI interview scheduling (Bolna custom functions bind %(application_id)s from here).
+    application_id: promptContext.application_id,
+    candidate_timezone: promptContext.candidate_timezone,
+    candidate_timezone_spoken: promptContext.candidate_timezone_spoken,
+    interview_scheduling_enabled: promptContext.interview_scheduling_enabled,
     // Legacy Bolna keys (initiateCall + remote disposition specs may still bind these).
     // Canonical prompt/extraction fields use candidate_verification_* above and in templateVars.
     candidate_name: promptContext.candidate_name,

@@ -11,7 +11,7 @@ function resolveCandidateAgentId(agentId) {
 }
 
 /**
- * Idempotently create Bolna dispositions for all seven Candidate Verification fields.
+ * Idempotently create Bolna dispositions for all Candidate Verification fields.
  * Uses bulk API when none exist; creates missing rows individually when partially configured.
  */
 export async function ensureCandidateVerificationExtractions(agentId) {

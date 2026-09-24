@@ -3,6 +3,7 @@ import authRoute from './auth.route.js';
 import userRoute from './user.route.js';
 import roleRoute from './role.route.js';
 import publicRoute from './public.route.js';
+import aiToolsRoute from './aiTools.route.js';
 import activityLogRoute from './activityLog.route.js';
 import categoryRoute from './category.route.js';
 import studentRoute from './student.route.js';
@@ -40,6 +41,7 @@ import livekitRoute from './livekit.route.js';
 import meetingRoute from './meeting.route.js';
 import rubricTemplateRoute from './rubricTemplate.route.js';
 import internalMeetingRoute from './internalMeeting.route.js';
+import interviewSchedulingRoute from './interviewScheduling.route.js';
 import agentInternalRoute from './agentInternal.route.js';
 import adminAiDlqRoute from './adminAiDlq.route.js';
 import aiHealthRoute from './aiHealth.route.js';
@@ -113,6 +115,10 @@ const defaultRoutes = [
   {
     path: '/public',
     route: publicRoute,
+  },
+  {
+    path: '/ai-tools',
+    route: aiToolsRoute,
   },
   {
     path: '/activity-logs',
@@ -322,6 +328,10 @@ const defaultRoutes = [
   {
     path: '/internal-meetings',
     route: internalMeetingRoute,
+  },
+  {
+    path: '/interview-scheduling',
+    route: interviewSchedulingRoute,
   },
   {
     path: '/internal',

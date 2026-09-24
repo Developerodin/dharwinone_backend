@@ -66,6 +66,27 @@ export function getCandidateVerificationDispositionSpecs() {
       ],
     },
     {
+      name: 'Interview Slot Outcome',
+      question:
+        'What happened when the agent tried to schedule an interview time? Select the best matching outcome.',
+      category: CANDIDATE_VERIFICATION_CATEGORY,
+      is_subjective: false,
+      is_objective: true,
+      objective_options: [
+        { value: 'held', condition: 'The agent reserved an interview time with the candidate' },
+        { value: 'declined', condition: 'Candidate did not want to schedule an interview now' },
+        {
+          value: 'wants_link',
+          condition: 'Candidate asked to receive a link or email to choose a time themselves',
+        },
+        {
+          value: 'no_slots',
+          condition: 'The agent said no interview times were available or that it will email options',
+        },
+        { value: 'not_offered', condition: 'The scheduling step never happened during the call' },
+      ],
+    },
+    {
       name: 'Call Outcome',
       question: 'Overall outcome of the verification call. Select the best matching outcome.',
       category: CANDIDATE_VERIFICATION_CATEGORY,

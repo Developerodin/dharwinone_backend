@@ -16,7 +16,9 @@ import {
   getArchivePresence,
 } from '../services/callRecordingArchive.service.js';
 import { ensureCandidateVerificationExtractions } from '../services/bolnaCandidateExtractionSetup.service.js';
+import { ensureCandidateInterviewTools } from '../services/bolnaCandidateToolsSetup.service.js';
 import { getJobById } from '../services/job.service.js';
+import { attachInterviewSlots } from '../services/interviewHold.service.js';
 import Job from '../models/job.model.js';
 import { isTerminal } from '../models/callRecord.model.js';
 import config from '../config/config.js';
@@ -287,7 +289,7 @@ const getCallRecords = catchAsync(async (req, res) => {
   const data = await callRecordService.listCallRecords(options);
   res.status(httpStatus.OK).send({
     success: true,
-    records: sanitizeCallRecords(data.results, callRecordAccessFlags(req)),
+    records: await attachInterviewSlots(sanitizeCallRecords(data.results, callRecordAccessFlags(req))),
     total: data.total,
     totalPages: data.totalPages,
     page: data.page,
@@ -460,7 +462,8 @@ const refreshCallRecord = catchAsync(async (req, res) => {
   const record =
     result.record || (await CallRecord.findOne({ executionId: String(executionId) }).lean());
   if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
-  res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
+  const [withSlot] = await attachInterviewSlots([sanitizeCallRecord(record, callRecordAccessFlags(req))]);
+  res.status(httpStatus.OK).send({ success: true, record: withSlot });
 });
 
 /**
@@ -474,12 +477,13 @@ const getCallRecord = catchAsync(async (req, res) => {
   const CallRecord = (await import('../models/callRecord.model.js')).default;
   const record = await CallRecord.findOne({ executionId: String(executionId) }).lean();
   if (!record) throw new ApiError(httpStatus.NOT_FOUND, 'Call record not found');
-  res.status(httpStatus.OK).send({ success: true, record: sanitizeCallRecord(record, callRecordAccessFlags(req)) });
+  const [withSlot] = await attachInterviewSlots([sanitizeCallRecord(record, callRecordAccessFlags(req))]);
+  res.status(httpStatus.OK).send({ success: true, record: withSlot });
 });
 
 /**
  * POST /bolna/candidate-agent/setup-extractions
- * Create the seven Candidate Verification dispositions on the Bolna candidate agent (idempotent).
+ * Create the Candidate Verification dispositions on the Bolna candidate agent (idempotent).
  */
 const setupCandidateVerificationExtractions = catchAsync(async (req, res) => {
   const result = await ensureCandidateVerificationExtractions(req.body?.agentId);
@@ -491,6 +495,17 @@ const setupCandidateVerificationExtractions = catchAsync(async (req, res) => {
       `agent=${result.agentId} count=${result.createdCount ?? 0}`
   );
   res.status(httpStatus.OK).send({ success: true, ...result });
+});
+
+/**
+ * POST /bolna/candidate-agent/setup-tools
+ * Push the AI interview-scheduling custom functions to the candidate agent, read back, and
+ * report `persisted`. Always returns the (token-masked) tools JSON for manual dashboard paste.
+ */
+const setupCandidateInterviewTools = catchAsync(async (req, res) => {
+  const result = await ensureCandidateInterviewTools(req.body?.agentId);
+  logger.info(`[Bolna] candidate interview tools setup agent=${result.agentId || '-'} persisted=${!!result.persisted}`);
+  res.status(result.success ? httpStatus.OK : httpStatus.BAD_GATEWAY).send(result);
 });
 
 const getCallRecordingSources = catchAsync(async (req, res) => {
@@ -708,6 +723,7 @@ export {
   receiveCandidateWebhook,
   syncMissingCallRecords,
   setupCandidateVerificationExtractions,
+  setupCandidateInterviewTools,
   deleteCallRecord,
   patchCallRecord,
   getBolnaDiagnostics,

@@ -149,6 +149,8 @@ const callRecordSchema = mongoose.Schema(
     conversationTranscript: String,
     duration: Number,
     recordingUrl: String,
+    /** Atomic claim so the interview booking-link email is sent at most once per call. */
+    bookingLinkSentAt: { type: Date, default: null },
     errorMessage: { type: String, default: null },
     completedAt: { type: Date, default: null },
     extractedData: mongoose.Schema.Types.Mixed,
@@ -163,6 +165,12 @@ const callRecordSchema = mongoose.Schema(
       callOutcome: {
         type: String,
         enum: ['fully_confirmed', 'partially_confirmed', 'refused', 'voicemail', 'no_data', null],
+        default: null,
+      },
+      /** What the agent's scheduling step produced (LLM extraction; the hold itself is authoritative). */
+      interviewSlotOutcome: {
+        type: String,
+        enum: ['held', 'declined', 'wants_link', 'no_slots', 'not_offered', null],
         default: null,
       },
       minConfidence: { type: Number, default: null },

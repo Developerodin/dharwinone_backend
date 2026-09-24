@@ -23,6 +23,8 @@ import Recording from './recording.model.js';
 import RubricTemplate from './rubricTemplate.model.js';
 import InterviewEvaluation from './interviewEvaluation.model.js';
 import EmailAccount from './emailAccount.model.js';
+import InterviewerAvailability from './interviewerAvailability.model.js';
+import InterviewHold from './interviewHold.model.js';
 
-export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, HolidayGroup, Shift, Employee, Meeting, JobApplication, EmployeeTransfer, Offer, Placement, EmployeePayrollDetail, AuditEvent, Recording, RubricTemplate, InterviewEvaluation, EmailAccount };
+export { Token, User, Role, Impersonation, ActivityLog, Category, Student, Mentor, Attendance, Holiday, StudentGroup, HolidayGroup, Shift, Employee, Meeting, JobApplication, EmployeeTransfer, Offer, Placement, EmployeePayrollDetail, AuditEvent, Recording, RubricTemplate, InterviewEvaluation, EmailAccount, InterviewerAvailability, InterviewHold };
 

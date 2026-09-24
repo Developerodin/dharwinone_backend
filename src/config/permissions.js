@@ -186,6 +186,10 @@ export const permissionAliases = {
     'communication.meetings:view,create,edit,delete',
   ],
   // ATS interviews (/meetings). Domain: ats.interviews → interviews.read / interviews.manage
+  // Settings → Interview Availability matrix row (settings.interview-availability:*).
+  // View opens own hours; create/edit saves them. Other people's hours stay interviews.manage.
+  'interview-availability.read': ['interview-availability.read', 'interview-availability.manage'],
+  'interview-availability.manage': ['interview-availability.manage'],
   'interviews.read': ['interviews.read'],
   'interviews.manage': ['interviews.manage'],
   'interviews.transcript.read': [

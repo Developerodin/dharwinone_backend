@@ -5,6 +5,7 @@ import {
 } from './internalMeeting.service.js';
 import { materializeDueSeries, sendDueOccurrenceInvites } from './meetingSeries.service.js';
 import logger from '../config/logger.js';
+import { expireHolds, remindExpiring } from './interviewHold.service.js';
 
 const DEFAULT_INTERVAL_MINUTES = 5;
 
@@ -72,6 +73,18 @@ const runInterviewConclusionNotifications = async () => {
   }
 };
 
+const runInterviewHoldMaintenance = async () => {
+  try {
+    const expired = await expireHolds();
+    const reminded = await remindExpiring();
+    if (expired || reminded) {
+      logger.info(`[Meeting scheduler] Interview holds — expired:${expired} reminded:${reminded}`);
+    }
+  } catch (err) {
+    logger.error('[Meeting scheduler] Interview hold maintenance failed:', err?.message || err);
+  }
+};
+
 export const startMeetingScheduler = () => {
   if (intervalId) return;
   const intervalMinutes = Math.max(1, Number(process.env.MEETING_SCHEDULER_INTERVAL_MINUTES) || DEFAULT_INTERVAL_MINUTES);
@@ -80,11 +93,13 @@ export const startMeetingScheduler = () => {
   runAutoEndMeetings();
   runUpcomingMeetingReminders();
   runInterviewConclusionNotifications();
+  runInterviewHoldMaintenance();
   intervalId = setInterval(() => {
     runSeriesMaterialization();
     runAutoEndMeetings();
     runUpcomingMeetingReminders();
     runInterviewConclusionNotifications();
+    runInterviewHoldMaintenance();
   }, intervalMs);
   logger.info(`[Meeting scheduler] Started (interval: ${intervalMinutes} min)`);
 };

@@ -16,6 +16,7 @@ import * as userController from '../../controllers/user.controller.js';
 import * as plivoController from '../../controllers/plivo.controller.js';
 import * as twilioVoiceController from '../../controllers/twilioVoice.controller.js';
 import { verifyTwilioWebhook } from '../../middlewares/verifyTwilioWebhook.js';
+import * as interviewBookingPublicController from '../../controllers/interviewBookingPublic.controller.js';
 import {
   uploadJobApplicationFiles,
   uploadPublicCandidateRegistration,
@@ -241,6 +242,14 @@ router.post(
   validate(jobValidation.publicApplyToJob),
   jobController.publicApplyToJob
 );
+
+/**
+ * GET|POST /v1/public/interview-booking/:token
+ * Candidate self-booking via emailed link (no auth; signed booking JWT in the path).
+ * POST creates a hold that a recruiter must still approve.
+ */
+router.get('/interview-booking/:token', publicWriteLimiter, interviewBookingPublicController.getBooking);
+router.post('/interview-booking/:token', publicWriteLimiter, interviewBookingPublicController.createBooking);
 
 /**
  * GET /v1/public/account-exists?email=

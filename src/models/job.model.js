@@ -194,6 +194,9 @@ const jobSchema = new mongoose.Schema(
       },
     ],
 
+    /** Users eligible to take AI-scheduled interviews for this job. */
+    interviewerPool: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
     // Template Reference (if created from template)
     templateId: {
       type: mongoose.Schema.Types.ObjectId,

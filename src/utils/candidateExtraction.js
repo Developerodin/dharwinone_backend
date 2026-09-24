@@ -12,8 +12,11 @@ const FIELD = {
   currentLocation: 'Current Location',
   stillInterested: 'Still Interested',
   callOutcome: 'Call Outcome',
+  interviewSlotOutcome: 'Interview Slot Outcome',
 };
 const INTEREST = new Set(['interested', 'not_interested', 'withdrew']);
+export const INTERVIEW_SLOT_OUTCOMES = ['held', 'declined', 'wants_link', 'no_slots', 'not_offered'];
+const SLOT_OUTCOME = new Set(INTERVIEW_SLOT_OUTCOMES);
 const OUTCOME = new Set(['fully_confirmed', 'partially_confirmed', 'refused', 'voicemail', 'no_data']);
 
 function readField(extractedData, name) {
@@ -78,6 +81,7 @@ export function parseCandidateExtraction(extractedData) {
     currentLocation: readField(extractedData, FIELD.currentLocation),
     stillInterested: readField(extractedData, FIELD.stillInterested),
     callOutcome: readField(extractedData, FIELD.callOutcome),
+    interviewSlotOutcome: readField(extractedData, FIELD.interviewSlotOutcome),
   };
   const out = {
     nameConfirmed: toBool(raw.nameConfirmed.value),
@@ -87,6 +91,7 @@ export function parseCandidateExtraction(extractedData) {
     currentLocation: toText(raw.currentLocation.value),
     stillInterested: toEnum(raw.stillInterested.value, INTEREST),
     callOutcome: toEnum(raw.callOutcome.value, OUTCOME),
+    interviewSlotOutcome: toEnum(raw.interviewSlotOutcome.value, SLOT_OUTCOME),
   };
   const confs = [];
   let present = 0;

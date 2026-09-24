@@ -28,6 +28,43 @@ import CallRecord, {
 } from '../models/callRecord.model.js';
 import CallEvent from '../models/callEvent.model.js';
 import callRecordService from './callRecord.service.js';
+
+/**
+ * AI interview scheduling hook, run after a verification is written. Fire-and-forget, never throws.
+ *  - interested + no active hold ⇒ atomically claim bookingLinkSentAt, then email the booking link
+ *    (claim-before-send makes poll + webhook double-sync send once; a failed send is NOT retried).
+ *  - withdrew ⇒ cancel any held slot for the application.
+ * Services are imported lazily so a scheduling-module failure can never break call sync.
+ */
+async function scheduleInterviewFollowUp(record) {
+  try {
+    const interest = record?.verification?.stillInterested;
+    if (!record?.candidate || !record?.job || (interest !== 'interested' && interest !== 'withdrew')) return;
+    const { default: JobApplication } = await import('../models/jobApplication.model.js');
+    const application = await JobApplication.findOne({ candidate: record.candidate, job: record.job }).select('_id').lean();
+    if (!application) return;
+    const applicationId = String(application._id);
+
+    if (interest === 'withdrew') {
+      const { cancelHoldsForApplication } = await import('./interviewHold.service.js');
+      await cancelHoldsForApplication(applicationId);
+      return;
+    }
+
+    const { default: InterviewHold } = await import('../models/interviewHold.model.js');
+    if (await InterviewHold.exists({ applicationId: application._id, status: { $in: ['held', 'approving', 'approved'] } })) return;
+    const claimed = await CallRecord.findOneAndUpdate(
+      { _id: record._id, bookingLinkSentAt: null },
+      { $set: { bookingLinkSentAt: new Date() } },
+      { new: true }
+    ).lean();
+    if (!claimed) return;
+    const { sendBookingLinkEmail } = await import('./interviewBooking.service.js');
+    await sendBookingLinkEmail(applicationId);
+  } catch (err) {
+    logger.warn(`[callSync] interview scheduling follow-up failed for ${record?.executionId}: ${err?.message || err}`);
+  }
+}
 import bolnaService from './bolna.service.js';
 
 // Lazy import — chatSocket.service.js loads chat.service.js which touches many
@@ -335,6 +372,11 @@ export async function applyEvent(payload, source, meta = {}) {
       `[callSync] applied ${eventId} → ${status} (rank=${incomingRank}, source=${source}) for ${executionId}`
     );
     emitUpdate(record);
+    if (set.verification) {
+      scheduleInterviewFollowUp(record).catch((err) =>
+        logger.warn(`[callSync] interview follow-up failed for ${executionId}: ${err?.message || err}`)
+      );
+    }
     return { record, applied: true };
   }
 

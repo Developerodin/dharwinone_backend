@@ -1,4 +1,7 @@
 import Job from '../models/job.model.js';
+import InterviewerAvailability from '../models/interviewerAvailability.model.js';
+import { guessCandidateTimezone, tzSpokenLabel } from './interviewBooking.service.js';
+import { signApplicationRef } from './interviewSlot.service.js';
 import { emailToSpokenForm } from '../utils/emailToSpokenForm.js';
 
 // ---------------------------------------------------------------------------
@@ -286,6 +289,16 @@ export async function buildCandidateVerificationPromptContext({
 
   promptContext.candidate_email_spoken = emailToSpokenForm(promptContext.candidate_email);
 
+  // AI interview scheduling: the agent passes application_id to the Bolna custom functions.
+  // 'none' (not '') so missingTemplateVars() does not treat an absent application as a bug.
+  // Signed ref (`<id>.<sig>`) — the tools reject raw/forged ids, so prompt injection can't target
+  // another candidate's application.
+  promptContext.application_id = application?._id ? signApplicationRef(String(application._id)) : 'none';
+  promptContext.candidate_timezone = guessCandidateTimezone(formattedPhone);
+  promptContext.candidate_timezone_spoken = tzSpokenLabel(promptContext.candidate_timezone);
+  promptContext.interview_scheduling_enabled =
+    promptContext.application_id !== 'none' && (await jobHasBookableInterviewer(job)) ? 'yes' : 'no';
+
   if (application?.createdAt) {
     promptContext.application_date = new Date(application.createdAt).toLocaleDateString('en-IN', {
       year: 'numeric',
@@ -479,6 +492,26 @@ Say: "Our team will be in touch if something suitable comes up. Have a great day
 // buildCandidateAgentTemplateVars(ctx) -> the rendered values to pass in user_data.
 
 /**
+ * True when the job's interviewerPool has at least one user with weekly availability set.
+ * Never throws: a lookup failure just disables scheduling for this call.
+ */
+async function jobHasBookableInterviewer(job) {
+  try {
+    let pool = job?.interviewerPool;
+    if (pool === undefined && (job?._id || job?.id)) {
+      const fresh = await Job.findById(job._id ?? job.id).select('interviewerPool').lean();
+      pool = fresh?.interviewerPool;
+    }
+    if (!Array.isArray(pool) || pool.length === 0) return false;
+    const ids = pool.map((u) => u?._id ?? u).filter(Boolean);
+    const hit = await InterviewerAvailability.exists({ user: { $in: ids }, 'weekly.0': { $exists: true } });
+    return !!hit;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Render the per-call values that fill the static prompt template.
  * These are sent to Bolna in `user_data` (NOT baked into the shared prompt).
  *
@@ -513,6 +546,10 @@ export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
     candidate_verification_additional_instructions: extra
       ? `\n## ADDITIONAL INSTRUCTIONS\n${extra}`
       : '',
+    application_id: ctx.application_id || 'none',
+    candidate_timezone: ctx.candidate_timezone || 'Asia/Kolkata',
+    candidate_timezone_spoken: ctx.candidate_timezone_spoken || 'India time',
+    interview_scheduling_enabled: ctx.interview_scheduling_enabled === 'yes' ? 'yes' : 'no',
   };
 }
 
@@ -628,7 +665,27 @@ Say: "{candidate_verification_q4_line}"
 Say: "{candidate_verification_q5_line}"
 
 - After their answer (whatever it is): "That is very helpful. Thank you for letting us know."
-Then move immediately to the CLOSING.
+Then move to INTERVIEW SCHEDULING.
+
+---
+
+### INTERVIEW SCHEDULING
+interview_scheduling_enabled for this call is "{interview_scheduling_enabled}".
+If it is "no", skip this section and go straight to the CLOSING.
+If it is "yes":
+1. Ask: "Are you still interested in moving forward with this role?"
+   - If not interested: "Understood. Thank you for letting us know." Go to the CLOSING.
+2. If interested, say: "Great. Let us pick a time for your interview."
+3. Confirm time zone. Say: "Should I share times in {candidate_timezone_spoken}?"
+   - If they name a different time zone, use that IANA time zone as tz in the functions below.
+   - Otherwise use tz {candidate_timezone}.
+4. Call the function get_interview_slots with application_id {application_id} and tz.
+5. Read out the options from the function's message. Offer no more than three options.
+6. When the candidate picks one, call hold_interview_slot with application_id {application_id}, the chosen slot_id, and tz.
+7. Speak the function's message. On success say: "Your time is reserved. You will get a confirmation by email once our team confirms it."
+   - If the function offers new options, read them and repeat step 6 once.
+8. If the candidate cannot pick, or any function fails, say: "No problem. We will email you a link to choose a time."
+Then move to the CLOSING.
 
 ---
 
@@ -712,11 +769,11 @@ If they say no or they do not know: "No problem at all. Thank you. Have a good d
 ---
 
 ## ABSOLUTE GUARDRAILS
-- Ask only the five confirmation questions in the main script. Do not add others.
+- Ask only the five confirmation questions in the main script, plus the INTERVIEW SCHEDULING section when enabled. Do not add others.
 - Do not evaluate, score, or judge any response the candidate gives.
 - Do not tell the candidate if they passed or failed anything.
 - Do not ask about skills, experience, salary, motivation, or qualifications during the main flow.
-- Do not make promises about timelines, selection, or outcomes.
+- Do not make promises about timelines, selection, or outcomes. The only exception is offering interview times in the INTERVIEW SCHEDULING section, and a reserved time is always pending team confirmation.
 - Do not repeat a question more than once. Move on gracefully if they cannot answer.
 - Never invent a job opening, company name, location, or salary. Use only the matched jobs listed above.
 - If a matched job's title or company is nothing but a placeholder word, meaning the whole title is just one of ${JUNK_LISTING_SPOKEN}, skip that one job silently. Do not read it aloud and do not mention that you skipped it. A real title that merely contains such a word, like "Test Engineer" or "Demo Specialist", is a genuine role. Read it normally.

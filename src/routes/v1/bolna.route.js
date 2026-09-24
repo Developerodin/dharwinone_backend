@@ -31,6 +31,11 @@ router
   .route('/candidate-agent/setup-extractions')
   .post(auth(), requirePermissions('call-ai.manage'), bolnaController.setupCandidateVerificationExtractions);
 
+// AI interview-scheduling custom functions — same gate as setup-extractions.
+router
+  .route('/candidate-agent/setup-tools')
+  .post(auth(), requirePermissions('call-ai.manage'), bolnaController.setupCandidateInterviewTools);
+
 router
   .route('/diagnostics')
   .get(auth(), requirePermissionOrAdministrator('calls.view'), bolnaController.getBolnaDiagnostics);

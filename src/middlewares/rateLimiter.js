@@ -83,6 +83,18 @@ const publicWriteLimiter = rateLimit({
   message: { message: 'Too many requests. Please try again later.' },
 });
 
+/**
+ * Bolna mid-call tools (/v1/ai-tools). Bolna calls from a few shared IPs, so the ceiling is per
+ * IP but generous. Replies 200 + spoken fallback so the agent never goes silent.
+ */
+const aiToolsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(200).json({ ok: false, message: "I'll email you a link to choose a time." }),
+});
+
 const attendancePunchLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -191,6 +203,7 @@ export {
   publicResumeParseLimiter,
   publicWriteLimiter,
   webhookLimiter,
+  aiToolsLimiter,
   attendancePunchLimiter,
   jobsBrowseLimiter,
   chatAssistantLimiter,
