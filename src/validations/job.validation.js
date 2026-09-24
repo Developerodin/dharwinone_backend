@@ -178,6 +178,7 @@ const createJob = {
     templateId: Joi.string().custom(objectId).optional(),
     templateVariables: Joi.object().optional(),
     interviewerPool: Joi.array().items(Joi.string().custom(objectId)).max(50).optional(),
+    assignedRecruiter: Joi.string().custom(objectId).allow(null).optional(),
   }).required(),
 };
 
@@ -270,6 +271,7 @@ const updateJob = {
     interviewRounds: interviewRoundsSchema.optional(),
       templateId: Joi.string().custom(objectId).optional(),
       interviewerPool: Joi.array().items(Joi.string().custom(objectId)).max(50).optional(),
+      assignedRecruiter: Joi.string().custom(objectId).allow(null).optional(),
     })
     .min(1),
 };

@@ -70,6 +70,9 @@ const orderLeastLoaded = async (interviewerIds, start) => {
 
 const isDuplicateKey = (err) => err?.code === 11000 || err?.code === 11001;
 
+/** Who approves an interview-hold request for this job: the assigned recruiter, else the job creator. */
+export const approverFor = (job) => job?.assignedRecruiter || job?.createdBy || null;
+
 /**
  * Reserve a slot for an application. Idempotent per application: an existing active hold is
  * returned with `existing: true` (retry / duplicate tool call).
@@ -131,14 +134,15 @@ export const createHold = async ({ applicationId, start, source, callRecordId, c
   const when = formatSpoken(startDate, candidateTimezone || 'Asia/Kolkata');
   const msg = `${candidate?.fullName || 'A candidate'} picked ${when} for ${job.title}. Approve or reject within 24h.`;
   const base = { type: 'meeting', title: 'Interview slot awaiting approval', message: msg, link: approvalsLink() };
-  safeNotify(job.createdBy, {
+  const approverId = approverFor(job);
+  safeNotify(approverId, {
     ...base,
     email: {
       subject: `Interview slot awaiting approval — ${job.title}`,
       text: `${msg}\n\n${String(config.frontendBaseUrl || '').replace(/\/$/, '')}${approvalsLink()}`,
     },
   });
-  if (String(hold.interviewerId) !== String(job.createdBy)) safeNotify(hold.interviewerId, base);
+  if (String(hold.interviewerId) !== String(approverId)) safeNotify(hold.interviewerId, base);
 
   return { hold, existing: false };
 };
@@ -254,7 +258,7 @@ export const expireHolds = async () => {
   return expired;
 };
 
-/** Scheduler: one reminder to job owner + interviewer when a hold is within 4h of expiry. */
+/** Scheduler: one reminder to the hold's approver (assigned recruiter, else job creator) + interviewer when a hold is within 4h of expiry. */
 export const remindExpiring = async () => {
   const now = new Date();
   const due = await InterviewHold.find({
@@ -274,15 +278,16 @@ export const remindExpiring = async () => {
     );
     if (!res.modifiedCount) continue;
     // eslint-disable-next-line no-await-in-loop
-    const job = await Job.findById(h.jobId).select('title createdBy').lean();
+    const job = await Job.findById(h.jobId).select('title createdBy assignedRecruiter').lean();
     const opts = {
       type: 'meeting',
       title: 'Interview hold expiring soon',
       message: `A candidate's interview slot for ${job?.title || 'a job'} expires in under 4 hours. Approve or reject it.`,
       link: approvalsLink(),
     };
-    safeNotify(job?.createdBy, opts);
-    if (String(h.interviewerId) !== String(job?.createdBy)) safeNotify(h.interviewerId, opts);
+    const approverId = approverFor(job);
+    safeNotify(approverId, opts);
+    if (String(h.interviewerId) !== String(approverId)) safeNotify(h.interviewerId, opts);
     sent += 1;
   }
   return sent;

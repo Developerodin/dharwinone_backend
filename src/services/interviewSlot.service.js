@@ -225,7 +225,7 @@ export const loadApplicationContext = async (applicationId) => {
     .select('job candidate status verificationCallStatus roundPlanSnapshot')
     .lean();
   if (!application) throw new ApiError(httpStatus.NOT_FOUND, 'Application not found');
-  const job = await Job.findById(application.job).select('title interviewerPool createdBy').lean();
+  const job = await Job.findById(application.job).select('title interviewerPool createdBy assignedRecruiter').lean();
   if (!job) throw new ApiError(httpStatus.NOT_FOUND, 'Job not found');
   return { application, job };
 };
