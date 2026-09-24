@@ -354,8 +354,18 @@ const LIST_JOBS_POPULATE = [
   { path: 'templateId', select: 'name' },
 ];
 
+/**
+ * The repair below is legacy cleanup, but it ran an unindexed updateMany plus an exists() on
+ * EVERY "all"/"external" list request — i.e. on every search keystroke. Once a minute per
+ * process is plenty; new external jobs are mirrored at creation, not here.
+ */
+const MIRROR_REPAIR_INTERVAL_MS = 60 * 1000;
+let lastMirrorRepairAt = 0;
+
 async function maybeRepairMirrorsForList(jobOriginMode) {
   if (jobOriginMode !== 'external' && jobOriginMode !== 'all') return;
+  if (Date.now() - lastMirrorRepairAt < MIRROR_REPAIR_INTERVAL_MS) return;
+  lastMirrorRepairAt = Date.now();
 
   await backfillExternalJobOrigin();
 

@@ -221,6 +221,7 @@ const getJobs = {
     sortBy: Joi.string().optional(),
     limit: boundedLimit(100).optional(),
     page: Joi.number().integer().min(1).optional(),
+    view: Joi.string().valid('list').optional(),
   }),
 };
 

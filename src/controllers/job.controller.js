@@ -144,6 +144,9 @@ const list = catchAsync(async (req, res) => {
   filter.platformSuperUser = req.user.platformSuperUser;
 
   const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  // view=list: the ATS table never shows the description, which is ~85% of a 100-job page
+  // (~420KB of ~500KB). The preview panel loads it per job on open.
+  if (req.query.view === 'list') options.select = '-jobDescription';
   const forCandidates = Boolean(filter.forCandidates);
   const result = await queryJobs(filter, options);
   if (!forCandidates) {
