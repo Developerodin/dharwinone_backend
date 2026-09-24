@@ -38,6 +38,37 @@ const unclaimedFilter = () => [
 
 let inFlight = false;
 
+const CANDIDATE_POPULATE = {
+  path: 'candidate',
+  select:
+    'fullName email phoneNumber countryCode owner qualifications experiences skills visaType customVisaType address shortBio salaryRange',
+};
+const JOB_POPULATE = {
+  path: 'job',
+  select: 'title organisation jobType location experienceLevel salaryRange jobOrigin jobDescription skillTags',
+};
+
+/** Returns the app with a callable phone patched onto app.candidate, or null. */
+async function withCallablePhone(app) {
+  if (app.job?.jobOrigin === 'external') return null;
+  let phone = app.candidate?.phoneNumber;
+  let cc = app.candidate?.countryCode;
+  // Candidate phone may be a placeholder from browseApply auto-create — fall back to User's phone.
+  if (!phone || isPlaceholderPhone(phone)) {
+    const ownerId = app.candidate?.owner?._id ?? app.candidate?.owner ?? app.appliedBy;
+    if (ownerId) {
+      const user = await User.findById(ownerId).select('phoneNumber countryCode').lean();
+      if (user?.phoneNumber && !isPlaceholderPhone(user.phoneNumber)) {
+        phone = user.phoneNumber;
+        cc = user.countryCode || cc;
+        app.candidate.phoneNumber = phone;
+        app.candidate.countryCode = cc;
+      }
+    }
+  }
+  return !phone || isPlaceholderPhone(phone) ? null : app;
+}
+
 async function findApplicationsNeedingCalls() {
   try {
     const eligibleSince = new Date(Date.now() - ELIGIBILITY_WINDOW_MS);
@@ -52,44 +83,104 @@ async function findApplicationsNeedingCalls() {
     })
       // Oldest first, so a backlog drains instead of starving behind limit(10).
       .sort({ createdAt: 1 })
-      .populate({
-        path: 'candidate',
-        select:
-          'fullName email phoneNumber countryCode owner qualifications experiences skills visaType customVisaType address shortBio salaryRange',
-      })
-      .populate({
-        path: 'job',
-        select:
-          'title organisation jobType location experienceLevel salaryRange jobOrigin jobDescription skillTags',
-      })
+      .populate(CANDIDATE_POPULATE)
+      .populate(JOB_POPULATE)
       .limit(10)
       .lean();
-    
+
     const filtered = [];
     for (const app of applications) {
-      if (app.job?.jobOrigin === 'external') continue;
-      let phone = app.candidate?.phoneNumber;
-      let cc = app.candidate?.countryCode;
-      // Candidate phone may be a placeholder from browseApply auto-create — fall back to User's phone.
-      if (!phone || isPlaceholderPhone(phone)) {
-        const ownerId = app.candidate?.owner?._id ?? app.candidate?.owner ?? app.appliedBy;
-        if (ownerId) {
-          const user = await User.findById(ownerId).select('phoneNumber countryCode').lean();
-          if (user?.phoneNumber && !isPlaceholderPhone(user.phoneNumber)) {
-            phone = user.phoneNumber;
-            cc = user.countryCode || cc;
-            app.candidate.phoneNumber = phone;
-            app.candidate.countryCode = cc;
-          }
-        }
-      }
-      if (!phone || isPlaceholderPhone(phone)) continue;
-      filtered.push(app);
+      if (await withCallablePhone(app)) filtered.push(app);
     }
     return filtered;
   } catch (error) {
     logger.error(`Error finding applications needing calls: ${error.message}`);
     return [];
+  }
+}
+
+/** Dial one already-claimed application and record the call. */
+async function dialApplication(application) {
+  const { candidate, job } = application;
+
+  if (!candidate || !job) {
+    logger.warn(`Skipping application ${application._id}: missing candidate or job data`);
+    return;
+  }
+
+  if (isPlaceholderPhone(candidate.phoneNumber)) {
+    logger.warn(
+      `Skipping application ${application._id}: candidate phone is a placeholder (${candidate.phoneNumber}).`
+    );
+    return;
+  }
+
+  const phone = normalizePhone(candidate.phoneNumber, candidate.countryCode || '');
+
+  if (!phone || !validatePhonePlausible(phone)) {
+    logger.warn(
+      `Skipping application ${application._id}: phone is not a valid callable number (${phone}). ` +
+        'Fix candidate phone or Bolna will reject the call.'
+    );
+    return;
+  }
+
+  logger.info(`Initiating verification call for application ${application._id} to ${phone}`);
+
+  const config = (await import('../config/config.js')).default;
+
+  const result = await initiateCandidateVerificationCall({
+    agentId: config.bolna.candidateAgentId,
+    formattedPhone: phone,
+    candidate,
+    job,
+    application,
+  });
+
+  if (result.success && result.executionId) {
+    // Update application with call details
+    await JobApplication.updateOne(
+      { _id: application._id },
+      {
+        $set: {
+          verificationCallExecutionId: result.executionId,
+          verificationCallInitiatedAt: new Date(),
+          verificationCallStatus: 'pending',
+        },
+      }
+    );
+
+    // Create call record for tracking
+    await callRecordService.createRecord({
+      executionId: result.executionId,
+      recipientPhone: phone,
+      recipientName: candidate.fullName,
+      recipientEmail: candidate.email,
+      purpose: 'job_application_verification',
+      relatedJobApplication: application._id,
+      relatedJob: job._id,
+      relatedCandidate: candidate._id,
+      status: 'initiated',
+    });
+
+    logger.info(
+      `✅ Verification call initiated for ${candidate.fullName} (${phone}) - ` +
+      `Application: ${application._id}, Execution: ${result.executionId}`
+    );
+  } else {
+    logger.warn(
+      `❌ Verification call failed for application ${application._id}: ${result.error || 'unknown error'}`
+    );
+
+    // Mark as failed
+    await JobApplication.updateOne(
+      { _id: application._id },
+      {
+        $set: {
+          verificationCallStatus: 'failed',
+        },
+      }
+    );
   }
 }
 
@@ -99,40 +190,16 @@ async function findApplicationsNeedingCalls() {
 async function runApplicationVerificationCalls() {
   try {
     const applications = await findApplicationsNeedingCalls();
-    
+
     if (applications.length === 0) {
       logger.debug('No new applications requiring verification calls');
       return;
     }
-    
+
     logger.info(`Found ${applications.length} applications needing verification calls`);
-    
+
     for (const application of applications) {
       try {
-        const { candidate, job } = application;
-        
-        if (!candidate || !job) {
-          logger.warn(`Skipping application ${application._id}: missing candidate or job data`);
-          continue;
-        }
-        
-        if (isPlaceholderPhone(candidate.phoneNumber)) {
-          logger.warn(
-            `Skipping application ${application._id}: candidate phone is a placeholder (${candidate.phoneNumber}).`
-          );
-          continue;
-        }
-
-        const phone = normalizePhone(candidate.phoneNumber, candidate.countryCode || '');
-
-        if (!phone || !validatePhonePlausible(phone)) {
-          logger.warn(
-            `Skipping application ${application._id}: phone is not a valid callable number (${phone}). ` +
-              'Fix candidate phone or Bolna will reject the call.'
-          );
-          continue;
-        }
-        
         // Claim before dialling. executionId was previously only written AFTER Bolna
         // returned, so a call that outlived the 2-minute tick was re-selected and the
         // candidate was rung twice. Whoever flips verificationCallInitiatedAt first owns
@@ -148,69 +215,46 @@ async function runApplicationVerificationCalls() {
         ).lean();
         if (!claimed) continue;
 
-        logger.info(`Initiating verification call for application ${application._id} to ${phone}`);
-
-        const config = (await import('../config/config.js')).default;
-
-        const result = await initiateCandidateVerificationCall({
-          agentId: config.bolna.candidateAgentId,
-          formattedPhone: phone,
-          candidate,
-          job,
-          application,
-        });
-        
-        if (result.success && result.executionId) {
-          // Update application with call details
-          await JobApplication.updateOne(
-            { _id: application._id },
-            {
-              $set: {
-                verificationCallExecutionId: result.executionId,
-                verificationCallInitiatedAt: new Date(),
-                verificationCallStatus: 'pending',
-              },
-            }
-          );
-          
-          // Create call record for tracking
-          await callRecordService.createRecord({
-            executionId: result.executionId,
-            recipientPhone: phone,
-            recipientName: candidate.fullName,
-            recipientEmail: candidate.email,
-            purpose: 'job_application_verification',
-            relatedJobApplication: application._id,
-            relatedJob: job._id,
-            relatedCandidate: candidate._id,
-            status: 'initiated',
-          });
-          
-          logger.info(
-            `✅ Verification call initiated for ${candidate.fullName} (${phone}) - ` +
-            `Application: ${application._id}, Execution: ${result.executionId}`
-          );
-        } else {
-          logger.warn(
-            `❌ Verification call failed for application ${application._id}: ${result.error || 'unknown error'}`
-          );
-          
-          // Mark as failed
-          await JobApplication.updateOne(
-            { _id: application._id },
-            {
-              $set: {
-                verificationCallStatus: 'failed',
-              },
-            }
-          );
-        }
+        await dialApplication(application);
       } catch (appError) {
         logger.error(`Error processing application ${application._id}: ${appError.message}`);
       }
     }
   } catch (error) {
     logger.error(`Application verification call scheduler error: ${error.message}`);
+  }
+}
+
+/**
+ * Dial applications whose candidate asked for a call back once the requested delay has passed.
+ * Capped at MAX_CALLBACKS (see aiTools.controller.js) so a confused call cannot loop forever.
+ */
+async function runDueCallbacks() {
+  const due = await JobApplication.find({
+    verificationCallbackAt: { $lte: new Date() },
+    status: { $ne: 'Rejected' },
+    verificationCallStatus: { $ne: 'withdrawn' },
+  })
+    .sort({ verificationCallbackAt: 1 })
+    .populate(CANDIDATE_POPULATE)
+    .populate(JOB_POPULATE)
+    .limit(10)
+    .lean();
+
+  for (const app of due) {
+    try {
+      // Whoever unsets this exact timestamp owns the dial; a second process finds nothing.
+      const claimed = await JobApplication.findOneAndUpdate(
+        { _id: app._id, verificationCallbackAt: app.verificationCallbackAt },
+        { $unset: { verificationCallbackAt: 1 } },
+        { projection: { _id: 1 } }
+      ).lean();
+      if (!claimed || !(await withCallablePhone(app))) continue;
+      logger.info(`Placing requested callback for application ${app._id}`);
+      await dialApplication(app);
+    } catch (err) {
+      logger.error(`Callback dial failed for application ${app._id}: ${err.message}`);
+    }
   }
 }
 
@@ -302,6 +346,7 @@ async function run() {
   try {
     logger.debug('Running application verification call scheduler...');
     await runApplicationVerificationCalls();
+    await runDueCallbacks();
     await syncApplicationCallRecords();
   } finally {
     inFlight = false;
@@ -342,6 +387,7 @@ export default {
   startApplicationVerificationCallScheduler,
   stopApplicationVerificationCallScheduler,
   runApplicationVerificationCalls,
+  runDueCallbacks,
   syncApplicationCallRecords,
   run,
 };

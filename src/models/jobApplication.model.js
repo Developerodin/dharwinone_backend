@@ -110,6 +110,10 @@ const jobApplicationSchema = new mongoose.Schema(
       type: String,
       enum: ['pending', 'initiated', 'completed', 'failed', 'no_answer', 'withdrawn'],
     },
+    /** Candidate asked the AI agent to call back; the verification scheduler dials once this passes. */
+    verificationCallbackAt: { type: Date, index: true, sparse: true },
+    /** Callbacks booked for this application. Capped so a confused call cannot loop forever. */
+    verificationCallbackCount: { type: Number },
   },
   { timestamps: true }
 );

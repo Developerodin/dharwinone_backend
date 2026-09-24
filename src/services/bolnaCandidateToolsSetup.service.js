@@ -3,7 +3,7 @@ import config from '../config/config.js';
 import logger from '../config/logger.js';
 
 /**
- * Push the two AI interview-scheduling custom functions onto the Bolna candidate agent.
+ * Push the three AI interview-scheduling custom functions onto the Bolna candidate agent.
  * Mirrors bolnaCandidateExtractionSetup.service.js.
  *
  * Bolna has been seen to 200 a task_config PATCH without persisting it, so we ALWAYS read the
@@ -48,6 +48,20 @@ export function buildCandidateApiTools(apiToken = `Bearer ${config.bolna.toolTok
           required: ['application_id', 'slot_id'],
         },
       },
+      {
+        name: 'schedule_callback',
+        key: 'custom_task',
+        description:
+          'Use when the candidate asks to be called back later. Books one call back after the given number of minutes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            application_id: { type: 'string', description: 'The application_id given in the prompt.' },
+            minutes: { type: 'string', description: 'Minutes from now, between 5 and 2880. Example: 10.' },
+          },
+          required: ['application_id', 'minutes'],
+        },
+      },
     ],
     tools_params: {
       get_interview_slots: {
@@ -62,11 +76,17 @@ export function buildCandidateApiTools(apiToken = `Bearer ${config.bolna.toolTok
         api_token: apiToken,
         param: JSON.stringify({ application_id: '%(application_id)s', slot_id: '%(slot_id)s', tz: '%(tz)s' }),
       },
+      schedule_callback: {
+        method: 'POST',
+        url: `${base}/callback`,
+        api_token: apiToken,
+        param: JSON.stringify({ application_id: '%(application_id)s', minutes: '%(minutes)s' }),
+      },
     },
   };
 }
 
-const TOOL_NAMES = ['get_interview_slots', 'hold_interview_slot'];
+const TOOL_NAMES = ['get_interview_slots', 'hold_interview_slot', 'schedule_callback'];
 
 function toolsPersisted(agent) {
   const tasks = agent?.tasks || agent?.agent_config?.tasks || [];

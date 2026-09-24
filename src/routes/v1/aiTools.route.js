@@ -13,4 +13,7 @@ router.post('/interview-slots', aiToolsController.getInterviewSlots);
 router.post('/interview-slots/hold', aiToolsController.holdInterviewSlot);
 router.get('/interview-slots/hold', aiToolsController.holdInterviewSlot);
 
+router.get('/callback', aiToolsController.scheduleCallback);
+router.post('/callback', aiToolsController.scheduleCallback);
+
 export default router;

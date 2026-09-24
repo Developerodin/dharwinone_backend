@@ -92,7 +92,8 @@ const aiToolsLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => res.status(200).json({ ok: false, message: "I'll email you a link to choose a time." }),
+  handler: (req, res) =>
+    res.status(200).json({ ok: false, message: 'Sorry, I cannot do that right now. Our team will follow up by email.' }),
 });
 
 const attendancePunchLimiter = rateLimit({

@@ -27,11 +27,11 @@ const candidateTz = (req, phone) => {
   return tz && isValidTimeZone(tz) ? tz : guessCandidateTimezone(phone);
 };
 
-const withBudget = (promise) =>
+const withBudget = (promise, fallback = FALLBACK) =>
   Promise.race([
     promise,
     new Promise((resolve) => {
-      setTimeout(() => resolve({ ok: false, message: FALLBACK, timedOut: true }), BUDGET_MS);
+      setTimeout(() => resolve({ ok: false, message: fallback, timedOut: true }), BUDGET_MS);
     }),
   ]);
 
@@ -114,16 +114,59 @@ async function holdSlotImpl(req) {
   }
 }
 
-const respond = (impl, label) => async (req, res) => {
+const respond = (impl, label, fallback = FALLBACK) => async (req, res) => {
   let result;
   try {
-    result = await withBudget(impl(req));
+    result = await withBudget(impl(req), fallback);
   } catch (err) {
     logger.warn(`[ai-tools] ${label} error: ${err?.message || err}`);
-    result = { ok: false, message: FALLBACK };
+    result = { ok: false, message: fallback };
   }
   res.status(200).json(result);
 };
 
 export const getInterviewSlots = respond(interviewSlotsImpl, 'interview-slots');
 export const holdInterviewSlot = respond(holdSlotImpl, 'interview-slots/hold');
+
+const CALLBACK_MIN = 5;
+const CALLBACK_MAX = 48 * 60;
+const MAX_CALLBACKS = 2;
+const CALLBACK_FAIL = 'I am sorry, I cannot book a call back right now. Our team will reach out to you by email.';
+
+export const parseCallbackMinutes = (raw) => {
+  const n = Math.round(Number(String(raw ?? '').trim() || NaN));
+  return Number.isFinite(n) && n >= CALLBACK_MIN && n <= CALLBACK_MAX ? n : null;
+};
+
+export const spokenDelay = (minutes) => {
+  if (minutes < 60) return `in about ${minutes} minutes`;
+  const h = Math.round(minutes / 60);
+  return `in about ${h} hour${h === 1 ? '' : 's'}`;
+};
+
+/** Applications created before this feature have no counter at all; `$lt` alone would never match them. */
+export const callbackClaimFilter = (applicationId) => ({
+  _id: applicationId,
+  $or: [{ verificationCallbackCount: { $exists: false } }, { verificationCallbackCount: { $lt: MAX_CALLBACKS } }],
+});
+
+async function scheduleCallbackImpl(req) {
+  const applicationId = verifyApplicationRef(param(req, 'application_id'));
+  const ctx = await loadContext(applicationId);
+  if (!ctx) return { ok: false, message: CALLBACK_FAIL };
+  const minutes = parseCallbackMinutes(param(req, 'minutes'));
+  if (minutes == null) {
+    return { ok: false, message: 'I can call you back from five minutes up to two days from now. When suits you?' };
+  }
+  // ponytail: dialled by the 2-minute scheduler tick, so a callback lands up to ~2 minutes late.
+  // No quiet-hours check; add one if candidates get called back at night.
+  const updated = await JobApplication.findOneAndUpdate(
+    callbackClaimFilter(applicationId),
+    { $set: { verificationCallbackAt: new Date(Date.now() + minutes * 60000) }, $inc: { verificationCallbackCount: 1 } },
+    { new: true, projection: { _id: 1 } }
+  ).lean();
+  if (!updated) return { ok: false, message: CALLBACK_FAIL };
+  return { ok: true, message: `Sure. I will call you back ${spokenDelay(minutes)}. Talk to you then.` };
+}
+
+export const scheduleCallback = respond(scheduleCallbackImpl, 'callback', CALLBACK_FAIL);

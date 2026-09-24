@@ -41,7 +41,9 @@ async function scheduleInterviewFollowUp(record) {
     const interest = record?.verification?.stillInterested;
     if (!record?.candidate || !record?.job || (interest !== 'interested' && interest !== 'withdrew')) return;
     const { default: JobApplication } = await import('../models/jobApplication.model.js');
-    const application = await JobApplication.findOne({ candidate: record.candidate, job: record.job }).select('_id').lean();
+    const application = await JobApplication.findOne({ candidate: record.candidate, job: record.job })
+      .select('_id verificationCallbackAt')
+      .lean();
     if (!application) return;
     const applicationId = String(application._id);
 
@@ -50,6 +52,9 @@ async function scheduleInterviewFollowUp(record) {
       await cancelHoldsForApplication(applicationId);
       return;
     }
+
+    // A call back is booked; that call offers interview times itself.
+    if (application.verificationCallbackAt) return;
 
     const { default: InterviewHold } = await import('../models/interviewHold.model.js');
     if (await InterviewHold.exists({ applicationId: application._id, status: { $in: ['held', 'approving', 'approved'] } })) return;
