@@ -30,8 +30,45 @@ export const bookingUrl = (applicationId) =>
 const escapeHtml = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-/** Emails the candidate a fresh booking link. Resolves false when there is no one to email. */
-export const sendBookingLinkEmail = async (applicationId) => {
+/**
+ * Candidate booking-link email copy, by why the link is being (re)sent.
+ * `reason` is undefined for the original "come pick a time" email; 'rejected' when the
+ * recruiter declined the picked time; 'expired' when 24h passed with no decision. The
+ * recruiter's freeform reject reason is internal and never appears here.
+ */
+export const bookingEmailCopy = ({ reason, name, jobTitle, url }) => {
+  if (reason === 'rejected') {
+    return {
+      subject: `Please choose another interview time — ${jobTitle}`,
+      text: `Hi ${name},\n\nThe interview time you picked for ${jobTitle} is no longer available. Please choose another time here:\n${url}\n\nThis link is valid for 7 days.`,
+      html: `<p>Hi ${escapeHtml(name)},</p><p>The interview time you picked for <strong>${escapeHtml(
+        jobTitle
+      )}</strong> is no longer available.</p><p><a href="${escapeHtml(url)}">Choose another time</a></p><p>This link is valid for 7 days.</p>`,
+    };
+  }
+  if (reason === 'expired') {
+    return {
+      subject: `Please choose a new interview time — ${jobTitle}`,
+      text: `Hi ${name},\n\nWe could not confirm the interview time you picked for ${jobTitle} in time. Please choose a new time here:\n${url}\n\nThis link is valid for 7 days.`,
+      html: `<p>Hi ${escapeHtml(name)},</p><p>We could not confirm the interview time you picked for <strong>${escapeHtml(
+        jobTitle
+      )}</strong> in time.</p><p><a href="${escapeHtml(url)}">Choose a new time</a></p><p>This link is valid for 7 days.</p>`,
+    };
+  }
+  return {
+    subject: `Choose your interview time — ${jobTitle}`,
+    text: `Hi ${name},\n\nThanks for your interest in ${jobTitle}. Please pick a time for your interview here:\n${url}\n\nThis link is valid for 7 days.`,
+    html: `<p>Hi ${escapeHtml(name)},</p><p>Thanks for your interest in <strong>${escapeHtml(
+      jobTitle
+    )}</strong>. Please pick a time for your interview:</p><p><a href="${escapeHtml(url)}">Choose an interview time</a></p><p>This link is valid for 7 days.</p>`,
+  };
+};
+
+/**
+ * Emails the candidate a fresh booking link. Resolves false when there is no one to email.
+ * `reason`: 'rejected' | 'expired' | undefined — selects the copy via bookingEmailCopy.
+ */
+export const sendBookingLinkEmail = async (applicationId, { reason } = {}) => {
   const application = await JobApplication.findById(applicationId).select('job candidate').lean();
   if (!application) return false;
   const [job, candidate] = await Promise.all([
@@ -45,11 +82,7 @@ export const sendBookingLinkEmail = async (applicationId) => {
   const url = bookingUrl(applicationId);
   const jobTitle = job?.title || 'the role';
   const name = candidate.fullName || 'there';
-  const subject = `Choose your interview time — ${jobTitle}`;
-  const text = `Hi ${name},\n\nThanks for your interest in ${jobTitle}. Please pick a time for your interview here:\n${url}\n\nThis link is valid for 7 days.`;
-  const html = `<p>Hi ${escapeHtml(name)},</p><p>Thanks for your interest in <strong>${escapeHtml(
-    jobTitle
-  )}</strong>. Please pick a time for your interview:</p><p><a href="${escapeHtml(url)}">Choose an interview time</a></p><p>This link is valid for 7 days.</p>`;
+  const { subject, text, html } = bookingEmailCopy({ reason, name, jobTitle, url });
   await sendEmail(candidate.email, subject, text, html, 'interview_booking_link', {
     applicationId: String(applicationId),
   });

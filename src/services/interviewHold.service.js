@@ -31,9 +31,40 @@ const safeNotify = (userId, options) => {
   );
 };
 
-const safeRelink = (applicationId, why) => {
-  sendBookingLinkEmail(applicationId).catch((err) =>
+/** `reason` ('rejected' | 'expired') selects the candidate email copy via bookingEmailCopy. */
+const safeRelink = (applicationId, why, reason) => {
+  sendBookingLinkEmail(applicationId, { reason }).catch((err) =>
     logger.warn(`[interviewHold] booking link email failed after ${why} (app=${applicationId}): ${err?.message || err}`)
+  );
+};
+
+/**
+ * Fire-and-forget: tell the interviewer a hold's slot is free again after a reject/expiry.
+ * Skipped when the acting user IS the interviewer (they already know). Never lets a lookup or
+ * notify failure break the reject/expire path.
+ */
+const notifyInterviewerSlotFreed = (hold, reason, actingUserId) => {
+  if (!hold?.interviewerId) return;
+  if (actingUserId && String(hold.interviewerId) === String(actingUserId)) return;
+  (async () => {
+    const [job, candidate, availability] = await Promise.all([
+      Job.findById(hold.jobId).select('title').lean(),
+      Employee.findById(hold.candidateId).select('fullName').lean(),
+      InterviewerAvailability.findOne({ user: hold.interviewerId }).select('timezone').lean(),
+    ]);
+    const tz = availability?.timezone || 'Asia/Kolkata';
+    const when = formatSpoken(hold.start, tz);
+    const candidateName = candidate?.fullName || 'A candidate';
+    const jobTitle = job?.title || 'a role';
+    const verb = reason === 'rejected' ? 'was declined' : 'was not approved in time';
+    safeNotify(hold.interviewerId, {
+      type: 'meeting',
+      title: 'Interview slot released',
+      message: `The ${when} slot with ${candidateName} for ${jobTitle} ${verb} and is free again.`,
+      link: approvalsLink(),
+    });
+  })().catch((err) =>
+    logger.warn(`[interviewHold] interviewer release notice failed (hold=${hold._id}): ${err?.message || err}`)
   );
 };
 
@@ -90,6 +121,11 @@ export const createHold = async ({ applicationId, start, source, callRecordId, c
   }
   const startDate = new Date(start);
   if (Number.isNaN(startDate.getTime()) || startDate.getTime() <= Date.now()) throw slotTakenError();
+
+  // A time the recruiter already rejected for this application is never re-offerable, even if
+  // it would otherwise compute as free.
+  const rejectedBefore = await InterviewHold.exists({ applicationId, status: 'rejected', start: startDate });
+  if (rejectedBefore) throw slotTakenError();
 
   const durationMinutes = durationFor(application);
   const pool = (job.interviewerPool || []).map(String);
@@ -219,13 +255,14 @@ export const approveHold = async (holdId, user) => {
 };
 
 export const rejectHold = async (holdId, user, reason) => {
+  const actingUserId = user?._id || user?.id;
   const hold = await InterviewHold.findOneAndUpdate(
     { _id: holdId, status: 'held' },
     {
       $set: {
         status: 'rejected',
         active: false,
-        decidedBy: user?._id || user?.id,
+        decidedBy: actingUserId,
         decidedAt: new Date(),
         rejectReason: reason || undefined,
       },
@@ -233,7 +270,8 @@ export const rejectHold = async (holdId, user, reason) => {
     { new: true }
   ).lean();
   if (!hold) throw new ApiError(httpStatus.CONFLICT, 'This hold was already decided or has expired');
-  safeRelink(hold.applicationId, 'reject');
+  safeRelink(hold.applicationId, 'reject', 'rejected');
+  notifyInterviewerSlotFreed(hold, 'rejected', actingUserId);
   return hold;
 };
 
@@ -245,14 +283,17 @@ export const cancelHoldsForApplication = async (applicationId) => {
 /** Scheduler: held holds past expiry become expired; the candidate is emailed a fresh link. */
 export const expireHolds = async () => {
   const now = new Date();
-  const due = await InterviewHold.find({ status: 'held', expiresAt: { $lte: now } }).select('_id applicationId').lean();
+  const due = await InterviewHold.find({ status: 'held', expiresAt: { $lte: now } })
+    .select('_id applicationId jobId candidateId interviewerId start')
+    .lean();
   let expired = 0;
   for (const h of due) {
     // eslint-disable-next-line no-await-in-loop
     const res = await InterviewHold.updateOne({ _id: h._id, status: 'held' }, { $set: { status: 'expired', active: false } });
     if (res.modifiedCount) {
       expired += 1;
-      safeRelink(h.applicationId, 'expiry');
+      safeRelink(h.applicationId, 'expiry', 'expired');
+      notifyInterviewerSlotFreed(h, 'expired');
     }
   }
   return expired;

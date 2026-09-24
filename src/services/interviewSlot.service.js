@@ -244,7 +244,11 @@ export const getFreeSlots = async ({ applicationId, from, to, limit = 3, tz = 'A
   if (!pool.length) return [];
   const durationMinutes = durationFor(application);
   const map = await computeFreeSlotMap({ interviewerIds: pool, from: fromD, to: toD, durationMinutes });
-  const starts = [...map.keys()].sort((a, b) => a - b);
+  // A time the recruiter already rejected for this application must not be re-offered, even
+  // though it now computes as free (expired holds are NOT excluded — that time may still be fine).
+  const rejectedStarts = await InterviewHold.find({ applicationId, status: 'rejected' }).distinct('start');
+  const rejectedMs = new Set(rejectedStarts.map((d) => new Date(d).getTime()));
+  const starts = [...map.keys()].filter((t) => !rejectedMs.has(t)).sort((a, b) => a - b);
 
   const picked = [];
   const seenDays = new Set();
