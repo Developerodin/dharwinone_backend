@@ -87,6 +87,7 @@
     "joi": "^17.3.0",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
+    "libphonenumber-js": "^1.13.13",
     "livekit-server-sdk": "^2.15.0",
     "mammoth": "^1.11.0",
     "mongodb": "^6.21.0",

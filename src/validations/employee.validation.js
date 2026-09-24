@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { objectId, password as passwordValidator } from './custom.validation.js';
+import { objectId, password as passwordValidator, optionalSupervisorContactE164 } from './custom.validation.js';
 import { EMPLOYMENT_TYPES } from '../constants/atsPipeline.js';
 
 const document = Joi.object({
@@ -117,7 +117,7 @@ const singleCandidateSchema = Joi.object().keys({
   countryCode: Joi.string().allow('', null),
   degree: Joi.string().allow('', null),
   supervisorName: Joi.string().allow('', null),
-  supervisorContact: Joi.string().allow('', null),
+  supervisorContact: optionalSupervisorContactE164,
   supervisorCountryCode: Joi.string().allow('', null),
   salaryRange: Joi.string().optional().trim(),
   address: Joi.object({
@@ -283,7 +283,7 @@ const updateCandidateBodyBase = {
   countryCode: Joi.string().allow('', null),
   degree: Joi.string().allow('', null),
   supervisorName: Joi.string().allow('', null),
-  supervisorContact: Joi.string().allow('', null),
+  supervisorContact: optionalSupervisorContactE164,
   supervisorCountryCode: Joi.string().allow('', null),
   department: Joi.string().trim().optional().allow('', null),
   departmentId: Joi.string().custom(objectId).optional().allow(null),

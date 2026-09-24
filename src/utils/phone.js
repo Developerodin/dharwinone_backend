@@ -2,6 +2,8 @@
  * Phone number normalization and validation (E.164).
  */
 
+import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
+
 /**
  * @param {string} phone - raw phone string
  * @param {string} [countryCode] - ISO country code hint (IN, US, GB, AU, CA …)
@@ -27,6 +29,26 @@ function normalizePhone(phone, countryCode) {
 
   if (phone.trim().startsWith('+')) return phone.trim();
   return `+${digits}`;
+}
+
+/**
+ * Optional contact phone → canonical E.164.
+ * Empty/nullish → ''; invalid for the given country → null (caller rejects).
+ *
+ * @param {string|null|undefined} phone
+ * @param {string} [countryCode] ISO 3166-1 alpha-2 (e.g. IN, US)
+ * @returns {string|null}
+ */
+function normalizeOptionalPhoneToE164(phone, countryCode) {
+  if (phone == null) return '';
+  const trimmed = String(phone).trim();
+  if (!trimmed) return '';
+  const iso = countryCode ? String(countryCode).trim().toUpperCase() : undefined;
+  const parsed = iso
+    ? parsePhoneNumberFromString(trimmed, /** @type {import('libphonenumber-js').CountryCode} */ (iso))
+    : parsePhoneNumberFromString(trimmed);
+  if (!parsed || !parsed.isValid()) return null;
+  return parsed.format('E.164');
 }
 
 /** Returns true when the number is an obvious placeholder (all zeros, repeated single digit, etc.). */
@@ -78,5 +100,10 @@ function validatePhonePlausible(phone) {
   return true;
 }
 
-export { normalizePhone, validatePhone, validatePhonePlausible, isPlaceholderPhone };
-
+export {
+  normalizePhone,
+  normalizeOptionalPhoneToE164,
+  validatePhone,
+  validatePhonePlausible,
+  isPlaceholderPhone,
+};

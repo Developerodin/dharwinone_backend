@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { normalizeOptionalPhoneToE164 } from '../utils/phone.js';
 
 // Keys mirror user.model.js notificationPreferences (email + *InApp variants).
 // Shared by auth.validation (self update) and user.validation (admin update).
@@ -87,5 +88,34 @@ const password = (value, helpers) => {
   return value;
 };
 
-export { objectId, devTicketRef, password, boundedLimit, notificationPreferencesSchema };
+/**
+ * Optional supervisor phone: empty allowed; otherwise must be valid for
+ * supervisorCountryCode (fallback countryCode) and is rewritten to E.164.
+ */
+const optionalSupervisorContactE164 = Joi.string()
+  .allow('', null)
+  .custom((value, helpers) => {
+    if (value == null || String(value).trim() === '') {
+      return value == null ? value : '';
+    }
+    const parent = helpers.state.ancestors[0] || {};
+    const country =
+      (parent.supervisorCountryCode && String(parent.supervisorCountryCode).trim()) ||
+      (parent.countryCode && String(parent.countryCode).trim()) ||
+      undefined;
+    const e164 = normalizeOptionalPhoneToE164(value, country);
+    if (!e164) {
+      return helpers.message('Enter a valid supervisor phone number');
+    }
+    return e164;
+  });
+
+export {
+  objectId,
+  devTicketRef,
+  password,
+  boundedLimit,
+  notificationPreferencesSchema,
+  optionalSupervisorContactE164,
+};
 

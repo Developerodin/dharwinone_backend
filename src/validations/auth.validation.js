@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { password, objectId, notificationPreferencesSchema } from './custom.validation.js';
+import { password, objectId, notificationPreferencesSchema, optionalSupervisorContactE164 } from './custom.validation.js';
 
 const register = {
   body: Joi.object().keys({
@@ -329,7 +329,7 @@ const updateMeWithCandidate = {
       countryCode: Joi.string().allow('', null),
       degree: Joi.string().allow('', null),
       supervisorName: Joi.string().allow('', null),
-      supervisorContact: Joi.string().allow('', null),
+      supervisorContact: optionalSupervisorContactE164,
       supervisorCountryCode: Joi.string().allow('', null),
       salaryRange: Joi.string().optional().trim(),
       address: Joi.object({
