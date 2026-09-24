@@ -36,6 +36,8 @@ const interviewHoldSchema = new mongoose.Schema(
 interviewHoldSchema.index({ applicationId: 1 }, { unique: true, partialFilterExpression: { active: true } });
 interviewHoldSchema.index({ interviewerId: 1, start: 1 }, { unique: true, partialFilterExpression: { active: true } });
 interviewHoldSchema.index({ status: 1, expiresAt: 1 });
+// Rejected-start lookup on every slot offer and hold (getFreeSlots, createHold).
+interviewHoldSchema.index({ applicationId: 1, status: 1 });
 // Call-records page looks up the hold per call (attachInterviewSlots).
 interviewHoldSchema.index({ callRecordId: 1, createdAt: -1 }, { partialFilterExpression: { callRecordId: { $exists: true } } });
 
