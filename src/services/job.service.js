@@ -1799,6 +1799,13 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
         if (!fullCandidate) {
           logger.warn(`⚠️ Candidate not found for Bolna call: ${candidate._id}`);
         } else {
+          // Claim first, like the scheduler does, so its next tick skips this application
+          // instead of dialling the candidate a second time while this call is being placed.
+          await JobApplication.updateOne(
+            { _id: application._id },
+            { $set: { verificationCallInitiatedAt: new Date() } }
+          );
+
           initiateCandidateVerificationCall({
             agentId: config.bolna.candidateAgentId,
             formattedPhone,
