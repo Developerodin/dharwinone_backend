@@ -13,6 +13,8 @@ import bolnaService from './bolna.service.js';
 import { normalizePhone, validatePhonePlausible, isPlaceholderPhone } from '../utils/phone.js';
 import callRecordService from './callRecord.service.js';
 import { initiateCandidateVerificationCall } from './bolnaCandidateVerification.service.js';
+import { sendBookingLinkEmail } from './interviewBooking.service.js';
+import { CLOSED_APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 /**
  * Find applications that need verification calls
@@ -99,20 +101,26 @@ async function findApplicationsNeedingCalls() {
   }
 }
 
-/** Dial one already-claimed application and record the call. */
-async function dialApplication(application) {
+/**
+ * Candidate/job presence + placeholder + E.164 format checks, in the original pre-claim order
+ * with the original log lines. Returns the callable phone, or null. Shared by both the
+ * first-call loop and the due-callback loop, and must run BEFORE either claims the
+ * application — a claim with no valid phone behind it locks the application for
+ * CLAIM_RETRY_MS with nothing to show for it.
+ */
+function resolveCallablePhone(application) {
   const { candidate, job } = application;
 
   if (!candidate || !job) {
     logger.warn(`Skipping application ${application._id}: missing candidate or job data`);
-    return;
+    return null;
   }
 
   if (isPlaceholderPhone(candidate.phoneNumber)) {
     logger.warn(
       `Skipping application ${application._id}: candidate phone is a placeholder (${candidate.phoneNumber}).`
     );
-    return;
+    return null;
   }
 
   const phone = normalizePhone(candidate.phoneNumber, candidate.countryCode || '');
@@ -122,8 +130,23 @@ async function dialApplication(application) {
       `Skipping application ${application._id}: phone is not a valid callable number (${phone}). ` +
         'Fix candidate phone or Bolna will reject the call.'
     );
-    return;
+    return null;
   }
+
+  return phone;
+}
+
+/**
+ * Dial one already-claimed application, given its already-validated phone (see
+ * resolveCallablePhone — callers must run that first). Returns true when the call was
+ * actually placed with Bolna, false otherwise.
+ *
+ * `isCallback`: a callback dial failure must NOT overwrite verificationCallStatus — that
+ * field already reflects the outcome of the original verification call, and clobbering it
+ * to 'failed' here would misreport a call that in fact went through.
+ */
+async function dialApplication(application, phone, { isCallback = false } = {}) {
+  const { candidate, job } = application;
 
   logger.info(`Initiating verification call for application ${application._id} to ${phone}`);
 
@@ -167,11 +190,14 @@ async function dialApplication(application) {
       `✅ Verification call initiated for ${candidate.fullName} (${phone}) - ` +
       `Application: ${application._id}, Execution: ${result.executionId}`
     );
-  } else {
-    logger.warn(
-      `❌ Verification call failed for application ${application._id}: ${result.error || 'unknown error'}`
-    );
+    return true;
+  }
 
+  logger.warn(
+    `❌ Verification call failed for application ${application._id}: ${result.error || 'unknown error'}`
+  );
+
+  if (!isCallback) {
     // Mark as failed
     await JobApplication.updateOne(
       { _id: application._id },
@@ -182,6 +208,7 @@ async function dialApplication(application) {
       }
     );
   }
+  return false;
 }
 
 /**
@@ -200,6 +227,11 @@ async function runApplicationVerificationCalls() {
 
     for (const application of applications) {
       try {
+        // Validate BEFORE claiming — a bad-phone application must not lock itself out for
+        // CLAIM_RETRY_MS with no dial to show for it.
+        const phone = resolveCallablePhone(application);
+        if (!phone) continue;
+
         // Claim before dialling. executionId was previously only written AFTER Bolna
         // returned, so a call that outlived the 2-minute tick was re-selected and the
         // candidate was rung twice. Whoever flips verificationCallInitiatedAt first owns
@@ -215,7 +247,7 @@ async function runApplicationVerificationCalls() {
         ).lean();
         if (!claimed) continue;
 
-        await dialApplication(application);
+        await dialApplication(application, phone);
       } catch (appError) {
         logger.error(`Error processing application ${application._id}: ${appError.message}`);
       }
@@ -232,7 +264,7 @@ async function runApplicationVerificationCalls() {
 async function runDueCallbacks() {
   const due = await JobApplication.find({
     verificationCallbackAt: { $lte: new Date() },
-    status: { $ne: 'Rejected' },
+    status: { $nin: CLOSED_APPLICATION_STATUSES },
     verificationCallStatus: { $ne: 'withdrawn' },
   })
     .sort({ verificationCallbackAt: 1 })
@@ -249,11 +281,34 @@ async function runDueCallbacks() {
         { $unset: { verificationCallbackAt: 1 } },
         { projection: { _id: 1 } }
       ).lean();
-      if (!claimed || !(await withCallablePhone(app))) continue;
-      logger.info(`Placing requested callback for application ${app._id}`);
-      await dialApplication(app);
+      if (!claimed) continue;
+
+      let dialled = false;
+      try {
+        if (await withCallablePhone(app)) {
+          const phone = resolveCallablePhone(app);
+          if (phone) {
+            logger.info(`Placing requested callback for application ${app._id}`);
+            dialled = await dialApplication(app, phone, { isCallback: true });
+          }
+        }
+      } catch (dialErr) {
+        logger.error(`Callback dial failed for application ${app._id}: ${dialErr.message}`);
+      }
+
+      // A callback that was skipped (no callable phone) or failed at Bolna must not leave the
+      // candidate with nothing: the claim above already unset verificationCallbackAt, and the
+      // callSync guard already suppressed the original call's booking-link email once this
+      // callback was booked — there is no other retry path from here.
+      if (!dialled) {
+        try {
+          await sendBookingLinkEmail(app._id);
+        } catch (emailErr) {
+          logger.warn(`Callback fallback booking-link email failed for application ${app._id}: ${emailErr.message}`);
+        }
+      }
     } catch (err) {
-      logger.error(`Callback dial failed for application ${app._id}: ${err.message}`);
+      logger.error(`Callback processing failed for application ${app._id}: ${err.message}`);
     }
   }
 }

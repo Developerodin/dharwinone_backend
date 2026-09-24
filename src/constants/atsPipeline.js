@@ -15,6 +15,14 @@ export const APPLICATION_STATUSES = freezeList([
   'Rejected',
 ]);
 
+/**
+ * Statuses past which the AI calling agent should not place or book further verification
+ * calls — the candidate has either been made an offer, hired, or rejected. Shared by
+ * aiTools.controller.js (refuses to book a callback) and applicationVerificationCall.scheduler.js
+ * (excludes these from the due-callback query) so the two stay in sync.
+ */
+export const CLOSED_APPLICATION_STATUSES = freezeList(['Offered', 'Hired', 'Rejected']);
+
 /** Meeting lifecycle status (Meeting.status). */
 export const INTERVIEW_STATUSES = freezeList(['scheduled', 'ended', 'cancelled']);
 

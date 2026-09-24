@@ -5,6 +5,7 @@ import { getFreeSlots, encodeSlotId, decodeSlotId, verifyApplicationRef } from '
 import { createHold } from '../services/interviewHold.service.js';
 import { formatSpoken, guessCandidateTimezone } from '../services/interviewBooking.service.js';
 import { isValidTimeZone } from '../utils/zonedTime.js';
+import { CLOSED_APPLICATION_STATUSES } from '../constants/atsPipeline.js';
 
 /**
  * Bolna mid-call custom functions. Contract: ALWAYS HTTP 200 with a spoken `message`, so the
@@ -150,16 +151,25 @@ export const callbackClaimFilter = (applicationId) => ({
   $or: [{ verificationCallbackCount: { $exists: false } }, { verificationCallbackCount: { $lt: MAX_CALLBACKS } }],
 });
 
+/** True once the pipeline has moved past active verification calling for this application. */
+export const isClosedForCallback = (application) =>
+  CLOSED_APPLICATION_STATUSES.includes(application?.status) || application?.verificationCallStatus === 'withdrawn';
+
 async function scheduleCallbackImpl(req) {
   const applicationId = verifyApplicationRef(param(req, 'application_id'));
   const ctx = await loadContext(applicationId);
   if (!ctx) return { ok: false, message: CALLBACK_FAIL };
+  if (isClosedForCallback(ctx.application)) return { ok: false, message: CALLBACK_FAIL };
   const minutes = parseCallbackMinutes(param(req, 'minutes'));
   if (minutes == null) {
     return { ok: false, message: 'I can call you back from five minutes up to two days from now. When suits you?' };
   }
   // ponytail: dialled by the 2-minute scheduler tick, so a callback lands up to ~2 minutes late.
-  // No quiet-hours check; add one if candidates get called back at night.
+  // No quiet-hours check; add one if candidates get called back at night. Same edge as the hold
+  // path above (see file header): if the 3s budget fires right as this findOneAndUpdate commits,
+  // the agent already said "I cannot book that" while the callback is in fact booked — harmless,
+  // the candidate just gets an unexpected call. A 5-minute callback can also ring while the
+  // current call is still live if the agent is slow to hang up.
   const updated = await JobApplication.findOneAndUpdate(
     callbackClaimFilter(applicationId),
     { $set: { verificationCallbackAt: new Date(Date.now() + minutes * 60000) }, $inc: { verificationCallbackCount: 1 } },
