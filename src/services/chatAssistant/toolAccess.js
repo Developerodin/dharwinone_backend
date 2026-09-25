@@ -9,7 +9,6 @@
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
-import { userIsAdmin } from '../../utils/roleHelpers.js';
 
 const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js canReadEmployees
 const OFFERS_READ = [ // offer.route.js canReadOffers
@@ -67,7 +66,7 @@ export const TOOL_ACCESS = {
   training_analytics: { note: 'person arg gated in handler (Task 3)' },
 
   // Admin config
-  fetch_roles: { anyOf: ['roles.read', 'roles.manage'] },
+  fetch_roles: { anyOf: ['roles.read'] }, // role.route.js GET — roles.read only, no .manage alias
 
   // Self-scoped / public
   fetch_current_user: {},
@@ -81,13 +80,11 @@ const hasAny = (permissions, required) =>
   !!permissions &&
   required.some((r) => getGrantingPermissions(r).some((p) => permissions.has(p)));
 
-export async function checkToolAccess(name, user, deps = {}) {
+export async function checkToolAccess(name, user) {
   const rule = TOOL_ACCESS[name];
   if (!rule) return { ok: false, reason: `Unknown tool ${name}.` };
   if (!rule.anyOf) return { ok: true };
   if (user?.platformSuperUser) return { ok: true };
-  const isAdmin = deps.isAdmin ?? ((u) => userIsAdmin({ roleIds: u?.roleIds || [] }));
-  if (await isAdmin(user)) return { ok: true };
   if (hasAny(user?.authContext?.permissions, rule.anyOf)) return { ok: true };
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
 }

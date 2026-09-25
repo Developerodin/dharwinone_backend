@@ -4489,6 +4489,20 @@ function buildCountBanner(fetchedData) {
   ].join('\n');
 }
 
+// Keys whose own `if (key === ...)` branch below already handles `data?.forbidden`
+// with tool-specific wording. The generic FORBIDDEN block above the per-key
+// branches must skip these so their bespoke message is not shadowed.
+const BESPOKE_FORBIDDEN_KEYS = new Set([
+  'referral_leads_analytics',
+  'fetch_tasks',
+  'fetch_projects',
+  'project_analytics',
+  'team_analytics',
+  'task_board_analytics',
+  'workload_analytics',
+  'org_structure_analytics',
+]);
+
 function summarizeData(fetchedData) {
   const parts = [];
   const banner = buildCountBanner(fetchedData);
@@ -4496,7 +4510,7 @@ function summarizeData(fetchedData) {
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
 
-    if (data?.forbidden) {
+    if (data?.forbidden && !BESPOKE_FORBIDDEN_KEYS.has(key)) {
       parts.push(
         `--- ${key} ---\nFORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
         'USER_FACING_REPLY: Tell the user they do not have access to this information in DharwinOne. Do not guess or give partial numbers.'

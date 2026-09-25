@@ -48,10 +48,14 @@ describe('toolAccess', () => {
     assert.equal(r.ok, true);
   });
 
-  it('admin and platformSuperUser always pass', async () => {
-    assert.equal((await checkToolAccess('fetch_roles', userWith(), admin)).ok, true);
+  it('platformSuperUser passes with no permissions', async () => {
     const su = { ...userWith(), platformSuperUser: true };
     assert.equal((await checkToolAccess('fetch_roles', su, notAdmin)).ok, true);
+  });
+
+  it('denies a user with no matching permission even if a hypothetical isAdmin would say true (no admin shortcut)', async () => {
+    const r = await checkToolAccess('fetch_roles', userWith(), admin);
+    assert.equal(r.ok, false);
   });
 
   it('self-scoped tools pass with no permissions', async () => {
