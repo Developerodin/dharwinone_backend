@@ -458,7 +458,15 @@ const buildJobListFilter = async (filter) => {
   else if (filter.jobOrigin === 'external') jobOriginMode = 'external';
   delete filter.jobOrigin;
 
-  await maybeRepairMirrorsForList(jobOriginMode);
+  // Internal-only: skips the mirror-repair side effect (updateMany + an ExternalJob sync
+  // pass) below. The Jobs page never sends this — its listing IS the reason mirrors need
+  // repairing — but a chatbot filter call has no such need and was paying for it on every
+  // "all"/"external" job query anyway (see resolveJobVisibilityFilter, jobRank.js).
+  const skipMirrorRepair = filter.skipMirrorRepair === true;
+  delete filter.skipMirrorRepair;
+  if (!skipMirrorRepair) {
+    await maybeRepairMirrorsForList(jobOriginMode);
+  }
 
   const salaryQueryOpts = {
     salaryNotSpecified: filter.salaryNotSpecified,
