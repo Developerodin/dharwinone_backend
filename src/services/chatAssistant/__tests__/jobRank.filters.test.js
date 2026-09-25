@@ -283,10 +283,6 @@ describe('extractJobTopicKeyword — "jobs of/for/with/related to X" and "X rela
     assert.equal(extractJobTopicKeyword('how many jobs for react do we have'), 'react');
   });
 
-  it('extracts the topic from "jobs with X"', () => {
-    assert.equal(extractJobTopicKeyword('how many jobs with react do we have'), 'react');
-  });
-
   it('extracts the topic from "jobs related to X"', () => {
     assert.equal(extractJobTopicKeyword('how many jobs related to react do we have'), 'react');
   });
@@ -299,5 +295,20 @@ describe('extractJobTopicKeyword — "jobs of/for/with/related to X" and "X rela
     assert.equal(extractJobTopicKeyword('how many jobs in Bangalore'), null);
     const filters = parseJobFilters('how many jobs in Bangalore');
     assert.equal(filters.city, 'Bangalore');
+  });
+
+  // Regression: "jobs for react are there" must not capture "react are there" — the
+  // capture stops at a stop word like "are"/"is"/"there" instead of running to the noun's
+  // trailing punctuation or the end of the sentence.
+  it('stops the capture at a trailing stop word ("are"/"is"/"there")', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs for react are there'), 'react');
+  });
+
+  // Regression: "with X" is dropped entirely — parseSkillFilter already owns "jobs with X"
+  // (skill) and parseExperienceYears already owns "N-M years" (experience); treating "with"
+  // as a topic preposition too double-counted the same phrase as a search term.
+  it('does not extract a topic from "jobs with X" — that is a skill/experience filter, not a topic', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs with react skills do we have'), null);
+    assert.equal(extractJobTopicKeyword('how many jobs with 3-5 years experience'), null);
   });
 });

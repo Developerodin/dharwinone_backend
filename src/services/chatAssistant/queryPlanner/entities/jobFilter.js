@@ -28,19 +28,45 @@ const JOB_TOPIC_MODIFIER_WORDS = new Set([
 /** Filler words that carry no topic meaning. */
 const JOB_TOPIC_FILLER_WORDS = new Set(['the', 'all', 'our', 'any', 'new', 'total', 'of', 'do', 'we', 'have']);
 
-/** "jobs of/for/with/related to X" — topic follows the noun + preposition, not before it. */
+/**
+ * Words that end a topic capture — the capture must not run past these into the rest of
+ * the sentence ("jobs for react are open" must not capture "react are open").
+ */
+const JOB_TOPIC_STOP_WORDS = new Set([
+  'are', 'is', 'there', 'available', 'open', 'opening', 'openings',
+  'in', 'at', 'with', 'over', 'above', 'below', 'under', 'and',
+  'right', 'now', 'currently', 'today',
+]);
+
+/**
+ * "jobs of/for/related to X" — topic follows the noun + preposition, not before it. No
+ * "with" branch: "jobs with X" is parseSkillFilter's territory ("jobs with React", "jobs
+ * with 3-5 years experience") — treating it as a topic too would search on a skill/
+ * experience phrase that's already a real filter.
+ */
 const JOB_TOPIC_AFTER_NOUN_RE =
-  /\b(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\s+(?:of|for|with|related\s+to)\s+([^?.!]+)/i;
+  /\b(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\s+(?:of|for|related\s+to)\s+([^?.!]+)/i;
 
 /** "X related jobs" — topic word(s) immediately precede "related" + the job noun. */
 const JOB_TOPIC_RELATED_BEFORE_RE =
   /\b([A-Za-z][\w+#.-]*(?:\s+[A-Za-z][\w+#.-]*){0,2})\s+related\s+(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\b/i;
 
-/** Drop filler/modifier words from a raw capture and join what's left; null if nothing remains. */
+/**
+ * Truncate a raw capture at the first stop word / digit / word with trailing punctuation,
+ * then drop filler/modifier words from what's left; null if nothing remains.
+ */
 function cleanJobTopicWords(text) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
-  const kept = words.filter((w) => {
-    const lower = w.toLowerCase().replace(/[?.!,]+$/, '');
+  const bounded = [];
+  for (const raw of words) {
+    const clean = raw.replace(/[?.!,]+$/, '');
+    const lower = clean.toLowerCase();
+    if (!lower || JOB_TOPIC_STOP_WORDS.has(lower) || /\d/.test(lower)) break;
+    bounded.push(clean);
+    if (raw !== clean) break; // trailing punctuation on this word ends the topic clause
+  }
+  const kept = bounded.filter((w) => {
+    const lower = w.toLowerCase();
     return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
   });
   return kept.join(' ').trim() || null;
