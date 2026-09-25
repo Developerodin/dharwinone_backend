@@ -7,6 +7,7 @@ import {
   scopeJobModel,
   verifyCompanyCandidate,
 } from '../queryPlanner/entities/jobRank.js';
+import { planJobFilterQuery, extractJobTopicKeyword } from '../queryPlanner/entities/jobFilter.js';
 
 describe('buildJobRankingMongoFilter — location', () => {
   it('maps a location arg to a location filter clause (case-insensitive)', () => {
@@ -166,5 +167,129 @@ describe('verifyCompanyCandidate — company regex over-capture guard', () => {
   it('rejects an empty/missing candidate without querying', async () => {
     assert.equal(await verifyCompanyCandidate('', { Job: fakeJobModel }), false);
     assert.equal(await verifyCompanyCandidate(null, { Job: fakeJobModel }), false);
+  });
+});
+
+describe('planJobFilterQuery — topic keyword extraction', () => {
+  it('extracts a bare topic word into filters.search ("how many ai jobs do we have")', () => {
+    const plan = planJobFilterQuery({ userMessage: 'how many ai jobs do we have' });
+    assert.equal(plan.filters.search, 'ai');
+    // Matches the Jobs page's own default — no status word was said, so it's Active, not
+    // every status (see "planJobFilterQuery — status defaults to Active" below).
+    assert.equal(plan.filters.status, 'Active');
+  });
+
+  it('strips already-parsed modifiers and keeps the topic\'s own casing', () => {
+    const plan = planJobFilterQuery({ userMessage: 'how many active remote AI jobs' });
+    assert.equal(plan.filters.status, 'Active');
+    assert.equal(plan.filters.remote, true);
+    assert.equal(plan.filters.search, 'AI');
+  });
+
+  it('sets no search for a plain "how many jobs" (still defaults status to Active)', () => {
+    const plan = planJobFilterQuery({ userMessage: 'how many jobs' });
+    assert.equal(plan.filters.search, undefined);
+    assert.equal(plan.filters.status, 'Active');
+  });
+
+  it('extracts a multi-word topic ("number of react developer positions")', () => {
+    const plan = planJobFilterQuery({ userMessage: 'number of react developer positions' });
+    assert.equal(plan.filters.search, 'react developer');
+  });
+
+  it('extracts a topic after "list" through the full pipeline ("list all sales jobs")', () => {
+    const plan = planJobFilterQuery({ userMessage: 'list all sales jobs' });
+    assert.equal(plan.filters.search, 'sales');
+  });
+
+  // "list sales openings" and "roles" as a job noun aren't recognized by the outer
+  // looksLikeJobFilterQuery gate (LIST_INTENT_RE requires "list" immediately followed by
+  // the noun; JOB_SUBJECT_RE doesn't include "roles") — pre-existing, out of scope here.
+  // Exercise extractJobTopicKeyword directly for those two examples instead.
+  it('extracts the topic word itself, independent of the outer gate', () => {
+    assert.equal(extractJobTopicKeyword('list sales openings'), 'sales');
+    assert.equal(extractJobTopicKeyword('any data science roles'), 'data science');
+  });
+});
+
+describe('planJobFilterQuery — fresh question vs. follow-up context inheritance', () => {
+  it('a fresh (non-follow-up) question does not inherit a prior status filter (defaults to Active instead)', () => {
+    // Closed (not Active) as the ctx marker so this can tell "ignored ctx and defaulted"
+    // apart from "ignored ctx and defaulting happened to land on the same value".
+    const ctx = { filters: { status: 'Closed' }, intent: 'count' };
+    const plan = planJobFilterQuery({ userMessage: 'how many external jobs are there', jobQueryContext: ctx });
+    assert.equal(plan.filters.status, 'Active');
+    assert.equal(plan.filters.jobOrigin, 'external');
+  });
+
+  it('an explicit follow-up still inherits the prior context filter', () => {
+    const ctx = { filters: { status: 'Closed' }, intent: 'count' };
+    const plan = planJobFilterQuery({ userMessage: 'and external?', jobQueryContext: ctx });
+    assert.equal(plan.filters.status, 'Closed');
+    assert.equal(plan.filters.jobOrigin, 'external');
+  });
+});
+
+describe('planJobFilterQuery — status defaults to Active (matches the Jobs page default)', () => {
+  it('defaults to Active when no status word is said', () => {
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs' }).filters.status, 'Active');
+    assert.equal(planJobFilterQuery({ userMessage: 'how many ai jobs' }).filters.status, 'Active');
+  });
+
+  it('still honours an explicit non-active status word instead of defaulting', () => {
+    assert.equal(planJobFilterQuery({ userMessage: 'how many closed jobs' }).filters.status, 'Closed');
+  });
+
+  it('maps to status "all" when the user asks for every status', () => {
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs across all statuses' }).filters.status, 'all');
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs, any status' }).filters.status, 'all');
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs including closed' }).filters.status, 'all');
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs have we ever posted' }).filters.status, 'all');
+    assert.equal(planJobFilterQuery({ userMessage: 'list all jobs' }).filters.status, 'all');
+  });
+
+  it('invariant: the AI-jobs filter is the "how many jobs" filter plus a search clause, so its count can only be <=', () => {
+    const jobsPlan = planJobFilterQuery({ userMessage: 'how many jobs' });
+    const aiPlan = planJobFilterQuery({ userMessage: 'how many ai jobs' });
+    assert.equal(jobsPlan.filters.status, 'Active');
+    assert.equal(aiPlan.filters.status, 'Active');
+    assert.equal(jobsPlan.filters.search, undefined);
+    assert.equal(aiPlan.filters.search, 'ai');
+
+    const jobsMongo = buildJobRankingMongoFilter(jobsPlan);
+    const aiMongo = buildJobRankingMongoFilter(aiPlan);
+    // Same base status restriction, plus an additional AND'd search clause — a strict
+    // narrowing of jobsMongo, so counting against aiMongo can never exceed jobsMongo's count.
+    assert.equal(jobsMongo.status, 'Active');
+    assert.ok(aiMongo.$and, 'the AI-jobs filter must AND the base status with the extra search clause');
+    assert.deepEqual(aiMongo.$and[0], jobsMongo, 'the base clause inside $and must be exactly the unfiltered plan\'s Mongo filter');
+  });
+});
+
+describe('extractJobTopicKeyword — "jobs of/for/with/related to X" and "X related jobs"', () => {
+  it('extracts the topic from "jobs of X" ("how many jobs of react do we have")', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs of react do we have'), 'react');
+  });
+
+  it('extracts the topic from "jobs for X"', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs for react do we have'), 'react');
+  });
+
+  it('extracts the topic from "jobs with X"', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs with react do we have'), 'react');
+  });
+
+  it('extracts the topic from "jobs related to X"', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs related to react do we have'), 'react');
+  });
+
+  it('extracts the topic from "X related jobs"', () => {
+    assert.equal(extractJobTopicKeyword('how many react related jobs do we have'), 'react');
+  });
+
+  it('"jobs in <city>" is not captured as a topic — location parsing owns that', () => {
+    assert.equal(extractJobTopicKeyword('how many jobs in Bangalore'), null);
+    const filters = parseJobFilters('how many jobs in Bangalore');
+    assert.equal(filters.city, 'Bangalore');
   });
 });
