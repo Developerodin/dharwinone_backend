@@ -6,7 +6,7 @@ import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import Role from '../models/role.model.js';
 import Job from '../models/job.model.js';
-import ExternalJob from '../models/externalJob.model.js';
+import ExternalJob, { EXTERNAL_JOB_SOURCES } from '../models/externalJob.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Attendance from '../models/attendance.model.js';
 import LeaveRequest from '../models/leaveRequest.model.js';
@@ -162,6 +162,13 @@ import {
   resolveJobPayload,
   buildJobResultEnvelope,
 } from './chatAssistant/jobResult.js';
+import { MIRROR_EXTERNAL_OR } from './job.service.js';
+import {
+  andMongoFilters,
+  resolveJobVisibilityFilter,
+  scopeJobModel,
+  buildJobRankingMongoFilter,
+} from './chatAssistant/queryPlanner/entities/jobRank.js';
 import { saveTaskQueryContext } from './chatAssistant/saveTaskQueryContext.js';
 import { queryTasks } from './task.service.js';
 import {
@@ -363,8 +370,9 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
       else if (/\b(draft|drafts?)\b.*\bjobs?\b/.test(t)) out.status = 'Draft';
       else if (/\b(archived)\b.*\bjobs?\b/.test(t)) out.status = 'Archived';
     }
-    if (/\binternal\b/.test(t)) out.jobOrigin = 'internal';
-    else if (/\bexternal\b/.test(t)) out.jobOrigin = 'external';
+    // Anchored to a job-noun so "internally" / "internal review" don't fire origin filters.
+    if (/\binternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies))\b/.test(t)) out.jobOrigin = 'internal';
+    else if (/\bexternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies)|listings?)\b/.test(t)) out.jobOrigin = 'external';
   }
   if (moduleName === 'fetch_leave_requests' || moduleName === 'fetch_backdated_attendance_requests') {
     if (!out.scope && !out.employee && userCtx?.isAdmin && isAdminCue.test(t)) {
@@ -1029,8 +1037,8 @@ const ROUTING_TOOLS = [
         type: 'object',
         properties: {
           search:          { type: 'string', description: 'Filter by job title (partial match)' },
-          status:          { type: 'string', description: 'Filter by status: Active, Closed, Draft, Archived' },
-          jobType:         { type: 'string', description: 'Filter by type: Full-time, Part-time, Contract, Internship, Freelance, Temporary' },
+          status:          { type: 'string', enum: ['Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status.' },
+          jobType:         { type: 'string', enum: ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'], description: 'Filter by type.' },
           location:        { type: 'string', description: 'Filter by location (partial match)' },
           experienceLevel: { type: 'string', description: 'Filter by level: Entry Level, Mid Level, Senior Level, Executive' },
           skill:           { type: 'string', description: 'Filter by required skill tag (e.g. "React", "Python")' },
@@ -1053,7 +1061,8 @@ const ROUTING_TOOLS = [
           search:          { type: 'string', description: 'Filter by job title, company, or description (semantic match)' },
           company:         { type: 'string', description: 'Filter by company name' },
           location:        { type: 'string', description: 'Filter by location' },
-          source:          { type: 'string', description: 'Filter by source: active-jobs-db, linkedin-job-search-api' },
+          status:          { type: 'string', enum: ['Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status. Default: Active.' },
+          source:          { type: 'string', enum: EXTERNAL_JOB_SOURCES, description: 'Filter by source: active-jobs-db, linkedin-job-search-api, linkedin-jobs-api' },
           limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
         },
         required: [],
@@ -1698,23 +1707,45 @@ function reconcileJobFetchedResults(fetched) {
     ...canonical,
     records: canonical.result?.jobs ?? canonical.records ?? [],
     total: canonical.result?.total ?? canonical.total,
-    counts: buildJobCountsFromResult(canonical),
+    // Prefer counts the fetch_jobs case handler already computed with real
+    // countDocuments calls (correct internal/external split even with no origin
+    // filter) — only fall back to the origin-only heuristic if none were set.
+    counts: canonical.counts ?? buildJobCountsFromResult(canonical),
     filters: canonical.query?.filters ?? canonical.filters,
   };
 
   return fetched;
 }
 
+/**
+ * Best-effort internal/external split from a payload alone (no DB access) — used only
+ * when the caller didn't already compute real counts. Correct when an origin filter
+ * narrows to one bucket; without one it can't know the other bucket's true size, so it
+ * reports the visible bucket as "internal" rather than fabricate an external count.
+ */
 function buildJobCountsFromResult(payload) {
   const total = Number(payload?.result?.total ?? payload?.total ?? 0);
   const origin = payload?.query?.filters?.jobOrigin ?? payload?.filters?.jobOrigin ?? null;
   if (origin === 'external') {
     return { internal: 0, external: total, externalListings: total, externalMirrored: total, total };
   }
-  if (origin === 'internal') {
-    return { internal: total, external: 0, externalListings: 0, externalMirrored: 0, total };
-  }
   return { internal: total, external: 0, externalListings: 0, externalMirrored: 0, total };
+}
+
+/**
+ * True internal/external split via two scoped countDocuments over the same base filter —
+ * a single total can't be un-mixed after the fact once no jobOrigin filter narrowed it.
+ * "External" matches the ATS Jobs page's own definition (job.service.js MIRROR_EXTERNAL_OR):
+ * jobOrigin 'external' OR a legacy externalRef-only row.
+ */
+async function computeJobOriginCounts(JobModel, baseFilterWithoutOrigin) {
+  const internalFilter = andMongoFilters(baseFilterWithoutOrigin, { jobOrigin: { $ne: 'external' } });
+  const externalFilter = andMongoFilters(baseFilterWithoutOrigin, MIRROR_EXTERNAL_OR);
+  const [internal, external] = await Promise.all([
+    JobModel.countDocuments(internalFilter),
+    JobModel.countDocuments(externalFilter),
+  ]);
+  return { internal, external, externalListings: external, externalMirrored: external, total: internal + external };
 }
 
 function validateTaskFetchedIntegrity(fetched, proseCount = null) {
@@ -2642,6 +2673,10 @@ async function fetchModule(name, args, user, uiContext = null) {
 
     case 'fetch_jobs': {
       const limit = Math.min(args.limit || 100, 200);
+      // Sage's job visibility must match the ATS Jobs page — non-privileged users only
+      // see their own internal jobs + external mirrors (job.service.js buildJobListFilter).
+      const visibilityFilter = await resolveJobVisibilityFilter(user);
+      const ScopedJob = scopeJobModel(Job, visibilityFilter);
       const structuredFilters = {
         status: args.status || null,
         jobOrigin: args.jobOrigin || null,
@@ -2649,11 +2684,16 @@ async function fetchModule(name, args, user, uiContext = null) {
         location: args.location || null,
         experienceLevel: args.experienceLevel || null,
         company: args.company || null,
+        skill: args.skill || null,
         ...(args.search ? { search: args.search } : {}),
       };
       const hasStructuredFilters = Object.values(structuredFilters).some(Boolean);
 
-      if (hasStructuredFilters && !args.skill) {
+      // Route skill (and every other structured filter) through the atomic path —
+      // buildJobRankingMongoFilter already supports `skill`, so rows and counts stay
+      // consistent. Semantic (Pinecone) ranking is dropped for these queries in favour
+      // of the atomic path's authoritative count+rows-from-one-query guarantee.
+      if (hasStructuredFilters) {
         const filters = Object.fromEntries(
           Object.entries(structuredFilters).filter(([, v]) => v),
         );
@@ -2661,9 +2701,15 @@ async function fetchModule(name, args, user, uiContext = null) {
           filters,
           limit,
           listIntent: true,
+          JobModel: ScopedJob,
         });
         const total = atomic.result.total;
-        const counts = buildJobCountsFromResult(atomic);
+        // With an explicit jobOrigin filter the atomic total already IS the one-bucket
+        // count; without one, a single total can't be un-mixed after the fact, so
+        // compute the real split with two more scoped countDocuments calls.
+        const counts = args.jobOrigin
+          ? buildJobCountsFromResult(atomic)
+          : await computeJobOriginCounts(ScopedJob, buildJobRankingMongoFilter({ filters }));
         logger.info(
           `[ChatAssistant][fetch_jobs] atomic origin=${args.jobOrigin || 'any'} status=${args.status || 'any'} ` +
           `returned=${atomic.result.jobs.length} total=${total} queryId=${atomic.queryId}`,
@@ -2732,7 +2778,7 @@ async function fetchModule(name, args, user, uiContext = null) {
         const ids = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
         if (ids.length) {
           const hQ = { ...hydrateFilter, _id: { $in: ids } };
-          const docs = await Job.find(hQ)
+          const docs = await ScopedJob.find(hQ)
             .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
             .sort({ createdAt: -1 })
             .lean();
@@ -2747,7 +2793,7 @@ async function fetchModule(name, args, user, uiContext = null) {
       // structured filters (status/title/etc.), serve those directly from Mongo
       // so the chatbot doesn't claim "no jobs" when there clearly are.
       if (merged.length === 0 && Object.keys(hydrateFilter).length > 0) {
-        const docs = await Job.find(hydrateFilter)
+        const docs = await ScopedJob.find(hydrateFilter)
           .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
           .sort({ createdAt: -1 })
           .limit(limit)
@@ -2767,8 +2813,8 @@ async function fetchModule(name, args, user, uiContext = null) {
         // user constrained to external — internal count should be 0
       }
       const [internalTotal, externalMirroredTotal] = await Promise.all([
-        wantInternal && args.jobOrigin !== 'external' ? Job.countDocuments(internalFilter) : 0,
-        wantExternal && args.jobOrigin !== 'internal' ? Job.countDocuments(externalFilter) : 0,
+        wantInternal && args.jobOrigin !== 'external' ? ScopedJob.countDocuments(internalFilter) : 0,
+        wantExternal && args.jobOrigin !== 'internal' ? ScopedJob.countDocuments(externalFilter) : 0,
       ]);
 
       const counts = {
@@ -2800,38 +2846,62 @@ async function fetchModule(name, args, user, uiContext = null) {
     }
 
     case 'fetch_external_jobs': {
-      // Redirected to mirrored Job rows (jobOrigin='external'). Raw ExternalJob collection
-      // (the ATS External Jobs page) is intentionally not exposed to the chatbot — only
-      // listings that have been mirrored into the ATS Jobs page are visible here.
+      // Redirected to mirrored Job rows (jobOrigin='external' OR legacy externalRef-only
+      // rows — MIRROR_EXTERNAL_OR, the same definition the ATS Jobs page uses). Raw
+      // ExternalJob collection (the ATS External Jobs page) is intentionally not exposed
+      // to the chatbot — only listings that have been mirrored into the ATS Jobs page are
+      // visible here.
       const limit = Math.min(args.limit || 100, 200);
+      const visibilityFilter = await resolveJobVisibilityFilter(user);
+      const ScopedJob = scopeJobModel(Job, visibilityFilter);
+      const statusFilter = args.status || 'Active';
+
+      let baseFilter = andMongoFilters(MIRROR_EXTERNAL_OR, { status: statusFilter });
+      if (args.company)  baseFilter = andMongoFilters(baseFilter, { 'organisation.name': { $regex: escapeRegex(args.company), $options: 'i' } });
+      if (args.location) baseFilter = andMongoFilters(baseFilter, { location: { $regex: escapeRegex(args.location), $options: 'i' } });
+      if (args.source)   baseFilter = andMongoFilters(baseFilter, { 'externalRef.source': args.source });
+
+      const select = 'title organisation location jobType experienceLevel status salaryRange skillTags externalRef externalPlatformUrl jobDescription createdAt';
+
       const queryParts = ['external mirrored job listing'];
       if (args.search)   queryParts.push(args.search);
       if (args.company)  queryParts.push(args.company);
       if (args.location) queryParts.push(args.location);
 
-      let matches = [];
+      let merged = [];
       try {
         const qEmb = await embedQuery(queryParts.join(' '));
         const pineconeFilter = { jobOrigin: { $eq: 'external' } };
-        matches = await pineconeQuery('jobs', qEmb, limit, pineconeFilter);
+        const matches = await pineconeQuery('jobs', qEmb, limit, pineconeFilter);
         logger.info(`[ChatAssistant][fetch_external_jobs] pinecone(jobs/external) matches=${matches.length}`);
+        const mongoIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
+        if (mongoIds.length) {
+          merged = await ScopedJob.find(andMongoFilters(baseFilter, { _id: { $in: mongoIds } }))
+            .select(select)
+            .sort({ createdAt: -1 })
+            .lean();
+        }
       } catch (err) {
         logger.warn(`[ChatAssistant][fetch_external_jobs] Pinecone error: ${err.message}`);
-        return [];
       }
 
-      const mongoIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-      if (!mongoIds.length) return [];
+      // Mongo fallback — Pinecone miss/error must not report zero external jobs when
+      // matching mirrors exist (this tool previously returned [] on any Pinecone miss).
+      if (!merged.length) {
+        merged = await ScopedJob.find(baseFilter)
+          .select(select)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean();
+      }
 
-      const hydrateQ = { _id: { $in: mongoIds }, jobOrigin: 'external' };
-      if (args.company)  hydrateQ['organisation.name'] = { $regex: escapeRegex(args.company), $options: 'i' };
-      if (args.location) hydrateQ.location = { $regex: escapeRegex(args.location), $options: 'i' };
-      if (args.source)   hydrateQ['externalRef.source'] = args.source;
+      const total = await ScopedJob.countDocuments(baseFilter);
 
-      return Job.find(hydrateQ)
-        .select('title organisation location jobType experienceLevel status salaryRange skillTags externalRef externalPlatformUrl jobDescription createdAt')
-        .sort({ createdAt: -1 })
-        .lean();
+      logger.info(
+        `[ChatAssistant][fetch_external_jobs] returned=${merged.length} total=${total} status=${statusFilter}`
+      );
+
+      return { records: merged, total, label: 'external job', statusFilter };
     }
 
     case 'fetch_job_applications': {
@@ -2843,7 +2913,12 @@ async function fetchModule(name, args, user, uiContext = null) {
         jobId = args.jobId;
       } else if (args.jobTitle) {
         const safe = escapeRegex(args.jobTitle);
-        const titleJobIds = await Job.find({
+        // Same visibility as the ATS Jobs page — a title lookup must not resolve to a
+        // Draft/other-user's job the caller couldn't otherwise see (job.service.js
+        // buildJobListFilter, via jobRank.js resolveJobVisibilityFilter).
+        const visibilityFilter = await resolveJobVisibilityFilter(user);
+        const ScopedJob = scopeJobModel(Job, visibilityFilter);
+        const titleJobIds = await ScopedJob.find({
           title: { $regex: safe, $options: 'i' },
         }).distinct('_id');
         if (!titleJobIds.length) {
@@ -4860,15 +4935,20 @@ function summarizeData(fetchedData) {
       // Result shape changed: { records, counts, label }. Backwards-compat with array shape.
       const jobs = Array.isArray(data) ? data : (data?.records ?? []);
       const counts = (data && data.counts) || null;
+      // "how many jobs" / "list all jobs" no longer silently defaults to Active — make the
+      // status scope explicit so the LLM never assumes one status when all are included.
+      const statusTag = data?.statusFilter || data?.filters?.status
+        ? `status: ${data.statusFilter || data.filters.status}`
+        : 'status: ALL (Draft, Active, Closed, Archived — no status filter applied)';
       let header;
       if (counts) {
         // Authoritative totals from Mongo countDocuments (not the top-K Pinecone slice).
         // Use these numbers when the user asks "how many jobs / how many internal / external".
-        header = `--- job postings (AUTHORITATIVE_TOTALS — internal: ${counts.internal}, external_listings: ${counts.externalListings}, mirrored_external_in_jobs: ${counts.externalMirrored}, total: ${counts.total} | showing ${jobs.length} most-relevant) ---`;
+        header = `--- job postings (AUTHORITATIVE_TOTALS — internal: ${counts.internal}, external_listings: ${counts.externalListings}, mirrored_external_in_jobs: ${counts.externalMirrored}, total: ${counts.total} | ${statusTag} | showing ${jobs.length} most-relevant) ---`;
       } else {
         const intCount = jobs.filter((j) => j.jobOrigin !== 'external').length;
         const extCount = jobs.length - intCount;
-        header = `--- job postings (${jobs.length} total — ${intCount} internal, ${extCount} external) ---`;
+        header = `--- job postings (${jobs.length} total — ${intCount} internal, ${extCount} external | ${statusTag}) ---`;
       }
       const lines = [header];
       for (const j of jobs) {
@@ -5844,8 +5924,13 @@ function summarizeData(fetchedData) {
       // Now sourced from Job collection (jobOrigin='external'), not raw ExternalJob.
       // Fields shifted: company → organisation.name, source → externalRef.source,
       // salaryMin/Max → salaryRange.{min,max}, isRemote not on Job.
-      const jobs = Array.isArray(data) ? data : [];
-      const lines = [`--- external job listings mirrored into ATS (${jobs.length} total) ---`];
+      const jobs = Array.isArray(data) ? data : (data?.records ?? []);
+      const authoritativeTotal = Array.isArray(data) ? null : data?.total;
+      const statusTag = !Array.isArray(data) && data?.statusFilter ? `, status: ${data.statusFilter}` : '';
+      const header = authoritativeTotal != null
+        ? `--- external job listings mirrored into ATS (AUTHORITATIVE_TOTAL: ${authoritativeTotal}${statusTag} | showing ${jobs.length}) ---`
+        : `--- external job listings mirrored into ATS (${jobs.length} total) ---`;
+      const lines = [header];
       for (const j of jobs) {
         const company = j.organisation?.name || j.company || 'N/A';
         const source = j.externalRef?.source || j.source || 'Unknown';
@@ -7476,6 +7561,9 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
   // "unrelated: clear and fall through" branches in this function's caller.
   const access = await checkToolAccess('fetch_jobs', user);
   if (!access.ok) return null;
+  // Same visibility as the ATS Jobs page — mirror fetch_jobs' scoping here too,
+  // since this route bypasses fetchModule and queries Job directly.
+  const visibilityFilter = await resolveJobVisibilityFilter(user);
 
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const userId = user?.id;
@@ -7493,7 +7581,7 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
         adminId,
         state: { entity: 'job', designation: posState.designation, source: 'title_ambiguity' },
       });
-      const resolved = await resolveJobByTitle(posState.designation);
+      const resolved = await resolveJobByTitle(posState.designation, { visibilityFilter });
       const out = await presentJobProfile({
         resolved,
         userMessage: lastUserMsg,
@@ -7510,7 +7598,7 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
     const sel = matchJobSelection(lastUserMsg, jobPending);
     if (sel.kind === 'select') {
       await clearPendingJob({ userId, adminId });
-      const fetched = await fetchJobById(sel.jobId);
+      const fetched = await fetchJobById(sel.jobId, { visibilityFilter });
       if (fetched) {
         const out = await presentJobProfile({
           resolved: { kind: 'unique', query: sel.title, job: fetched.job, raw: fetched.raw },
@@ -7539,7 +7627,7 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
   if (entitySubject?.entityType === 'job' && entitySubject.jobId) {
     const followUp = detectJobFollowUpIntent(lastUserMsg, entitySubject);
     if (followUp.intent) {
-      const fetched = await fetchJobById(entitySubject.jobId);
+      const fetched = await fetchJobById(entitySubject.jobId, { visibilityFilter });
       if (fetched) {
         const out = presentJobFollowUp({
           job: fetched.job,
@@ -7564,7 +7652,7 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
         meta: { kind: 'job_profile', entityType: 'job', deterministic: true, needsContext: true },
       }));
     }
-    const resolved = await resolveJobByTitle(jobQuery.title);
+    const resolved = await resolveJobByTitle(jobQuery.title, { visibilityFilter });
     if (resolved.kind === 'ambiguous') {
       await writePendingJob({ userId, adminId, query: resolved.query, matches: resolved.matches });
     }
@@ -7708,20 +7796,21 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
         adminId,
         state: { entity: 'job', designation: titlePending.query, source: 'title_ambiguity' },
       });
-      // resolveJobByTitle/fetchJobById take no user/viewer param — mirror
-      // fetch_jobs' jobs.read gate here; denied is treated as no job match
-      // so presentJobProfile renders its existing notFound reply.
+      // resolveJobByTitle/fetchJobById take no user/viewer param by default — mirror
+      // fetch_jobs' jobs.read gate and visibility scope here; denied is treated as no
+      // job match so presentJobProfile renders its existing notFound reply.
       const jobsAccess = await checkToolAccess('fetch_jobs', user);
       let resolved;
       if (!jobsAccess.ok) {
         resolved = { kind: 'notFound', query: titlePending.query };
       } else {
+        const visibilityFilter = await resolveJobVisibilityFilter(user);
         const fetched = titleSel.jobId
-          ? await fetchJobById(titleSel.jobId)
+          ? await fetchJobById(titleSel.jobId, { visibilityFilter })
           : null;
         resolved = fetched
           ? { kind: 'unique', query: titlePending.query, job: fetched.job, raw: fetched.raw }
-          : await resolveJobByTitle(titlePending.query);
+          : await resolveJobByTitle(titlePending.query, { visibilityFilter });
       }
       const out = await presentJobProfile({
         resolved,
@@ -7861,7 +7950,7 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
     if (titleRes.kind === 'unique' && titleRes.target === 'job') {
       const jobsAccess = await checkToolAccess('fetch_jobs', user);
       const resolved = jobsAccess.ok
-        ? await resolveJobByTitle(conv.subject)
+        ? await resolveJobByTitle(conv.subject, { visibilityFilter: await resolveJobVisibilityFilter(user) })
         : { kind: 'notFound', query: conv.subject };
       const out = await presentJobProfile({
         resolved,
