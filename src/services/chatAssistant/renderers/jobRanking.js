@@ -41,10 +41,18 @@ export function formatJobRankingReply(plan, result) {
   const jobs = result?.jobs ?? [];
   const total = result?.total ?? jobs.length;
   const filters = plan?.filters ?? {};
-  const statusLabel = filters.status ? `${filters.status.toLowerCase()} ` : 'active ';
+  // 'active ' when the plan's status is Active (or unset — a legacy safety net;
+  // planJobRankQuery now always sets one). status:'all' has no natural adjective form
+  // ("all jobs" reads as a jobType, not a status), so it's named as a trailing note instead.
+  const statusLabel = !filters.status
+    ? 'active '
+    : filters.status === 'all'
+      ? ''
+      : `${String(filters.status).toLowerCase()} `;
+  const allStatusesSuffix = filters.status === 'all' ? ' across all statuses' : '';
 
   if (!jobs.length) {
-    return `I couldn't find any ${statusLabel}jobs with a specified salary that match your filters.`;
+    return `I couldn't find any ${statusLabel}jobs with a specified salary that match your filters${allStatusesSuffix}.`;
   }
 
   const direction = plan?.direction === 'asc' ? 'lowest' : 'highest';
@@ -61,17 +69,17 @@ export function formatJobRankingReply(plan, result) {
     const salary = cell(formatSalaryRange(j.salaryRange));
     const orgPart = org ? ` at **${org}**` : '';
     if (ordinal) {
-      return `The ${ordinal}${direction}-paying ${statusLabel.trim()} job is **${cell(j.title)}**${orgPart} — salary **${salary}**.`;
+      return `The ${ordinal}${direction}-paying ${statusLabel}job is **${cell(j.title)}**${orgPart} — salary **${salary}**${allStatusesSuffix}.`;
     }
-    return `The ${direction}-paying ${statusLabel.trim()} job right now is **${cell(j.title)}**${orgPart} — salary **${salary}**.`;
+    return `The ${direction}-paying ${statusLabel}job right now is **${cell(j.title)}**${orgPart} — salary **${salary}**${allStatusesSuffix}.`;
   }
 
   const title =
     plan?.direction === 'asc'
-      ? `Lowest-paying ${statusLabel.trim()} jobs`
-      : `Top ${jobs.length} highest-paying ${statusLabel.trim()} jobs`;
+      ? `Lowest-paying ${statusLabel}jobs`
+      : `Top ${jobs.length} highest-paying ${statusLabel}jobs`;
 
-  const lead = `Here are the ${jobs.length} ${direction}-paying ${statusLabel.trim()} jobs (${total} with salary on file) — ranked list below.`;
+  const lead = `Here are the ${jobs.length} ${direction}-paying ${statusLabel}jobs (${total} with salary on file)${allStatusesSuffix} — ranked list below.`;
   return `${lead}\n\n**${title}**`;
 }
 
@@ -135,11 +143,12 @@ export function renderJobRanking(plan, result) {
     status: { v: cell(j.status), tone: statusTone(j.status) },
   }));
 
-  const statusLabel = plan?.filters?.status ? String(plan.filters.status).toLowerCase() : 'active';
+  const status = plan?.filters?.status;
+  const statusLabel = !status ? 'active ' : status === 'all' ? '' : `${String(status).toLowerCase()} `;
   const title =
     plan?.direction === 'asc'
-      ? `Lowest-paying ${statusLabel} jobs`
-      : `Top ${jobs.length} highest-paying ${statusLabel} jobs`;
+      ? `Lowest-paying ${statusLabel}jobs`
+      : `Top ${jobs.length} highest-paying ${statusLabel}jobs`;
 
   const block = {
     type: 'table',
