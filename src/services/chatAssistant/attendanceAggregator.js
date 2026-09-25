@@ -18,6 +18,12 @@ import { visibleUserStatusClause } from './visibilityRules.js';
 
 const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+/** Render a punch Date in IST (Mongo stores punches as UTC — org attendance summaries must show local clock time). */
+export function formatPunchIST(d) {
+  if (!d) return null;
+  return d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function synthesizeStatus({ recs, isWeekOff, holidayName, isFuture, beforeJoin, afterResign }) {
   if (recs.length) {
     let hadPresent = false;
@@ -190,8 +196,8 @@ export async function aggregateOrgAttendance({ adminId, from, to, statusFilter }
           email: u?.email || null,
           designation: profile.designation || null,
           status,
-          punchIn: earliest ? earliest.toISOString().slice(11, 16) : null,
-          punchOut: latest ? latest.toISOString().slice(11, 16) : null,
+          punchIn: formatPunchIST(earliest),
+          punchOut: formatPunchIST(latest),
           durationHours: totalMs ? +(totalMs / 3600000).toFixed(2) : 0,
         });
       }

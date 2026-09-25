@@ -215,6 +215,7 @@
   "./src/services/chatAssistant/__tests__/analyticsRouterGuards.test.js",
   "./src/services/chatAssistant/__tests__/toolAccess.test.js",
   "./src/services/chatAssistant/__tests__/pipelineLines.test.js",
+  "./src/services/chatAssistant/__tests__/attendanceAggregator.punchTime.test.js",
   "./src/services/chatAssistant/__tests__/attendanceAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/businessConcepts.test.js",
   "./src/services/chatAssistant/__tests__/columnVisibility.test.js",

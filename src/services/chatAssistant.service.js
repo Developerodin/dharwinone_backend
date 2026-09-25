@@ -3641,7 +3641,7 @@ async function fetchModule(name, args, user, uiContext = null) {
 
       // Leave requests in the asked window
       const leaves = ownerId
-        ? await LeaveRequest.find({ requestedBy: ownerId, createdAt: { $gte: window.from, $lte: window.to } })
+        ? await LeaveRequest.find({ requestedBy: ownerId, dates: { $elemMatch: { $gte: window.from, $lte: window.to } } })
             .select('leaveType dates status notes adminComment reviewedAt createdAt')
             .sort({ createdAt: -1 })
             .limit(20)
