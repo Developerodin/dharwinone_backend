@@ -6590,6 +6590,21 @@ async function prepareContext(client, history, user, uiContext = null) {
       };
     }
 
+    // Same gate + row scope/salary redaction the normal fetchModule('fetch_people', ...)
+    // path applies — this branch calls fetchPeople directly instead of going through
+    // executeFetches, so it must run both guards itself or it bypasses Task 1/Task 2
+    // entirely for every query the classifier routes here.
+    const access = await checkToolAccess('fetch_people', user);
+    if (!access.ok) {
+      logger.info(`[ChatAssistant][toolAccess] denied tool=fetch_people userId=${user?.id} reason=${access.reason}`);
+      const forbidden = { forbidden: true, reason: access.reason };
+      return {
+        dataContext: summarizeData({ fetch_people: forbidden }),
+        moduleCount: 1,
+        fetched: { fetch_people: forbidden, __classifier: classification },
+      };
+    }
+
     const fetchArgs = {
       role: effectiveRole,
       employmentScope: classification.employmentScope,
@@ -6597,11 +6612,14 @@ async function prepareContext(client, history, user, uiContext = null) {
       cursor: classification.continuation ? lastListing?.cursor || null : null,
       pageSize: lastListing?.pageSize || 25,
     };
-    const result = await fetchPeople({
+    const rawResult = await fetchPeople({
       adminId: user.adminId ?? user.id,
       ...fetchArgs,
       models: { Employee, User, Role, Student, JobApplication },
     });
+    // Guard BEFORE rendering — renderListing must only ever see the scoped
+    // records/page, never the unscoped fetchPeople() output.
+    const result = await guardToolResult('fetch_people', rawResult, user);
     const rendered = renderListing({
       records: result.records,
       page: result.page,
@@ -7335,6 +7353,14 @@ async function tryActivityQueryRoute({ history, user, adminId, stream = false, o
  * Pre-LLM gate for job profile lookups and job-context follow-ups.
  */
 async function tryJobConversationalRoute({ history, user, adminId, stream = false, onToken = null }) {
+  // This route queries Job directly (resolveJobByTitle/fetchJobById), bypassing
+  // fetchModule('fetch_jobs', ...) entirely — mirror its jobs.read gate here so
+  // a user without job access can't get a job profile through conversation.
+  // Denied → fall through (null) to normal routing, same as the other
+  // "unrelated: clear and fall through" branches in this function's caller.
+  const access = await checkToolAccess('fetch_jobs', user);
+  if (!access.ok) return null;
+
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const userId = user?.id;
   const emit = (payload) => {
