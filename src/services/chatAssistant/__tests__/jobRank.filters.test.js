@@ -365,3 +365,19 @@ describe('looksLikeJobFilterQuery / planJobFilterQuery — "roles" as a job noun
     }
   });
 });
+
+describe('verifyCompanyFilter — company vs city from the same "at X" words', () => {
+  it('keeps a real company and drops the duplicate city', async () => {
+    const { verifyCompanyFilter } = await import('../entityQuery/runJobEntityQuery.js');
+    const plan = { filters: { company: 'Acme', city: 'Acme', status: 'Active' } };
+    await verifyCompanyFilter(plan, { verifyCompanyCandidate: async () => true });
+    assert.deepEqual(plan.filters, { company: 'Acme', status: 'Active' });
+  });
+
+  it('drops an unverified company and keeps the city', async () => {
+    const { verifyCompanyFilter } = await import('../entityQuery/runJobEntityQuery.js');
+    const plan = { filters: { company: 'Bangalore', city: 'Bangalore', status: 'Active' } };
+    await verifyCompanyFilter(plan, { verifyCompanyCandidate: async () => false });
+    assert.deepEqual(plan.filters, { city: 'Bangalore', status: 'Active' });
+  });
+});

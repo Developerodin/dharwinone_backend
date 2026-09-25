@@ -24,6 +24,23 @@ import {
   saveJobQueryContext,
 } from '../conversationState/jobQueryContext.js';
 
+/**
+ * parseJobFilters' "at|for X" regex fills both company and city from the same words
+ * ("jobs at Acme" → company Acme + city Acme), and over-captures role nouns ("jobs for
+ * React devs"). Verify the company against real data: keep it and drop the duplicate city
+ * when it is a real org, otherwise drop the company and keep the city.
+ */
+export async function verifyCompanyFilter(plan, deps) {
+  if (!plan.filters?.company) return;
+  const verified = await (deps.verifyCompanyCandidate?.(plan.filters.company, { Job: deps.Job ?? Job }) ??
+    verifyCompanyCandidate(plan.filters.company, { Job: deps.Job ?? Job }));
+  plan.filters = { ...plan.filters };
+  if (!verified) delete plan.filters.company;
+  else if (plan.filters.city && plan.filters.city.toLowerCase() === plan.filters.company.toLowerCase()) {
+    delete plan.filters.city;
+  }
+}
+
 export { looksLikeJobRankingQuery, looksLikeJobFilterQuery, parseJobFollowUp };
 
 /**
@@ -42,16 +59,7 @@ export async function runJobFilterQuery({
 
   if (!plan) return null;
 
-  // parseJobFilters' company regex over-captures role nouns / locations ("jobs for React
-  // devs", "at Bangalore") — verify against real data before querying on it.
-  if (plan.filters?.company) {
-    const verified = await (deps.verifyCompanyCandidate?.(plan.filters.company, { Job: deps.Job ?? Job }) ??
-      verifyCompanyCandidate(plan.filters.company, { Job: deps.Job ?? Job }));
-    if (!verified) {
-      plan.filters = { ...plan.filters };
-      delete plan.filters.company;
-    }
-  }
+  await verifyCompanyFilter(plan, deps);
 
   const started = deps.now?.() ?? Date.now();
   const listIntent = plan.intent === 'list';
@@ -126,16 +134,7 @@ async function runJobRankQuery({
 
   if (!plan) return null;
 
-  // parseJobFilters' company regex over-captures role nouns / locations ("jobs for React
-  // devs", "at Bangalore") — verify against real data before querying on it.
-  if (plan.filters?.company) {
-    const verified = await (deps.verifyCompanyCandidate?.(plan.filters.company, { Job: deps.Job ?? Job }) ??
-      verifyCompanyCandidate(plan.filters.company, { Job: deps.Job ?? Job }));
-    if (!verified) {
-      plan.filters = { ...plan.filters };
-      delete plan.filters.company;
-    }
-  }
+  await verifyCompanyFilter(plan, deps);
 
   const started = deps.now?.() ?? Date.now();
 
