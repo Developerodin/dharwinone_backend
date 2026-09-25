@@ -172,6 +172,21 @@ export async function verifyCompanyCandidate(candidate, deps = {}) {
   return !!exists;
 }
 
+/**
+ * True when any job's location matches the "in X" capture — i.e. X is a place, not a
+ * topic ("jobs in Pune" vs "jobs in AI"). Whole-word, unlike the substring city filter
+ * clause, so "ai" doesn't pass as a place because "Mumbai"/"Chennai" contain it.
+ * @param {string|null|undefined} candidate
+ * @param {{ Job?: import('mongoose').Model }} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function verifyCityCandidate(candidate, deps = {}) {
+  const JobModel = deps.Job ?? Job;
+  const city = String(candidate || '').trim();
+  if (!city) return false;
+  return !!(await JobModel.exists({ location: { $regex: `(?<!\\w)${escapeRegex(city)}(?!\\w)`, $options: 'i' } }));
+}
+
 function basePlanFromContext(ctx) {
   return {
     entity: ENTITY_JOB,
@@ -252,7 +267,12 @@ function parseCityLocation(message) {
   const m = raw.match(
     /\b(?:in|at|located in|based in)\s+([A-Za-z][A-Za-z\s.-]{1,40}?)(?:\s+(?:jobs?|openings?|positions?)|[?.!,]|$)/i,
   );
-  return m?.[1]?.trim() || null;
+  // The lazy capture runs to end-of-sentence when no job noun follows ("jobs in ai do we
+  // have" → "ai do we have"); cut the trailing question filler.
+  const city = m?.[1]
+    ?.replace(/\s+(?:do|does|did|are|is|were|was|we|you|have|has|there|right|now|currently|today)\b.*$/i, '')
+    .trim();
+  return city || null;
 }
 
 /** Anchored to a job-noun so "internally" / "internal review" don't fire origin filters. */

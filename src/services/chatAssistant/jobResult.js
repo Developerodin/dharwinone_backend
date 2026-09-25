@@ -271,6 +271,9 @@ export function buildJobCountPhrase(filters = {}, total = 0) {
   // (jobFilter.js extractJobTopicKeyword) must show up in the reply, not just the total.
   if (filters.search) parts.push(String(filters.search).trim());
   parts.push(total === 1 ? 'job' : 'jobs');
+  if (filters.skill) parts.push(`with ${String(filters.skill).trim()}`);
+  if (filters.company) parts.push(`at ${String(filters.company).trim()}`);
+  if (filters.city) parts.push(`in ${String(filters.city).trim()}`);
   if (filters.status === 'all') parts.push('across all statuses');
   return parts.join(' ');
 }

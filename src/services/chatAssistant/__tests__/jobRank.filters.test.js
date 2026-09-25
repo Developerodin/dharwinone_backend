@@ -381,3 +381,37 @@ describe('verifyCompanyFilter — company vs city from the same "at X" words', (
     assert.deepEqual(plan.filters, { city: 'Bangalore', status: 'Active' });
   });
 });
+
+describe('"jobs in X" — place or topic', () => {
+  it('cuts trailing question filler from the city capture', () => {
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs in ai do we have' }).filters.city, 'ai');
+  });
+
+  it('turns an "in X" that matches no job location into the search term', async () => {
+    const { verifyCityFilter } = await import('../entityQuery/runJobEntityQuery.js');
+    const plan = { filters: { city: 'ai', status: 'Active' } };
+    await verifyCityFilter(plan, { verifyCityCandidate: async () => false });
+    assert.deepEqual(plan.filters, { search: 'ai', status: 'Active' });
+  });
+
+  it('keeps a real place as the city', async () => {
+    const { verifyCityFilter } = await import('../entityQuery/runJobEntityQuery.js');
+    const plan = { filters: { city: 'pune', search: 'ai', status: 'Active' } };
+    await verifyCityFilter(plan, { verifyCityCandidate: async () => true });
+    assert.deepEqual(plan.filters, { city: 'pune', search: 'ai', status: 'Active' });
+  });
+
+  it('checks the place as a whole word so "ai" is not "Mumbai"', async () => {
+    const { verifyCityCandidate } = await import('../queryPlanner/entities/jobRank.js');
+    let seen;
+    const Job = { exists: async (q) => { seen = q.location.$regex; return null; } };
+    assert.equal(await verifyCityCandidate('ai', { Job }), false);
+    assert.ok(!new RegExp(seen, 'i').test('Mumbai, Maharashtra'));
+    assert.ok(new RegExp(seen, 'i').test('AI Park, Pune'));
+  });
+
+  it('names city, company and search in the count reply', async () => {
+    const { buildJobCountPhrase } = await import('../jobResult.js');
+    assert.equal(buildJobCountPhrase({ status: 'Active', search: 'ai', city: 'Pune' }, 3), 'active ai jobs in Pune');
+  });
+});

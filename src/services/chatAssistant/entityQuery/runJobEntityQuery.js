@@ -6,6 +6,7 @@ import {
   planJobRankQuery,
   resolveJobVisibilityFilter,
   scopeJobModel,
+  verifyCityCandidate,
   verifyCompanyCandidate,
 } from '../queryPlanner/entities/jobRank.js';
 import { renderJobRanking } from '../renderers/jobRanking.js';
@@ -41,6 +42,22 @@ export async function verifyCompanyFilter(plan, deps) {
   }
 }
 
+/**
+ * "in X" is either a place ("jobs in Pune") or a topic ("jobs in AI") and the regex can't
+ * tell which. Check real job locations: no job located anywhere matching X means it is a
+ * topic, so it becomes the search term (unless the message already had one).
+ */
+export async function verifyCityFilter(plan, deps) {
+  if (!plan.filters?.city) return;
+  const city = String(plan.filters.city).trim();
+  const isPlace = await (deps.verifyCityCandidate?.(city, { Job: deps.Job ?? Job }) ??
+    verifyCityCandidate(city, { Job: deps.Job ?? Job }));
+  if (isPlace) return;
+  plan.filters = { ...plan.filters };
+  delete plan.filters.city;
+  if (!plan.filters.search) plan.filters.search = city;
+}
+
 export { looksLikeJobRankingQuery, looksLikeJobFilterQuery, parseJobFollowUp };
 
 /**
@@ -60,6 +77,7 @@ export async function runJobFilterQuery({
   if (!plan) return null;
 
   await verifyCompanyFilter(plan, deps);
+  await verifyCityFilter(plan, deps);
 
   const started = deps.now?.() ?? Date.now();
   const listIntent = plan.intent === 'list';
@@ -135,6 +153,7 @@ async function runJobRankQuery({
   if (!plan) return null;
 
   await verifyCompanyFilter(plan, deps);
+  await verifyCityFilter(plan, deps);
 
   const started = deps.now?.() ?? Date.now();
 
