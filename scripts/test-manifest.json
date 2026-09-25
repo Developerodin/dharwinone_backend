@@ -228,6 +228,7 @@
   "./src/services/chatAssistant/__tests__/factRenderer.employmentBreakdown.test.js",
   "./src/services/chatAssistant/__tests__/fallbackGenerator.test.js",
   "./src/services/chatAssistant/__tests__/interviewAnalytics.test.js",
+  "./src/services/chatAssistant/__tests__/jobRank.filters.test.js",
   "./src/services/chatAssistant/__tests__/jobResult.test.js",
   "./src/services/chatAssistant/__tests__/leaveIntentRouting.test.js",
   "./src/services/chatAssistant/__tests__/leaveRanking.test.js",

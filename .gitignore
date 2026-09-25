@@ -169,3 +169,4 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/__tests__/llmParams.test.js
 !src/services/chatAssistant/__tests__/pipelineLines.test.js
 !src/services/chatAssistant/__tests__/attendanceAggregator.punchTime.test.js
+!src/services/chatAssistant/__tests__/jobRank.filters.test.js
