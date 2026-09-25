@@ -50,6 +50,7 @@ export function buildTaskServiceFilter(user, options = {}) {
   if (options.sprintId) filter.sprintId = options.sprintId;
   if (options.assignedToMe) filter.assignedToMe = options.assignedToMe;
   if (options.unassigned) filter.unassigned = options.unassigned;
+  if (options.noDueDate) filter.noDueDate = options.noDueDate;
   if (options.leaving) filter.leaving = options.leaving;
   if (options.reassigned) filter.reassigned = options.reassigned;
   return filter;

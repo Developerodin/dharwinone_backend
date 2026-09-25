@@ -281,6 +281,15 @@ const queryTasks = async (filter, options) => {
     filter.dueDate = { $ne: null, $exists: true };
   }
   delete filter.hasDueDate;
+
+  /* Tasks with no deadline — dueDate was cleared (null) or never set (missing).
+     Mongo's equality match on a field already matches both null and a missing
+     field, so a plain { dueDate: null } covers it without an explicit $or
+     (which would collide with filter.$or set by the search branch below). */
+  if (isTruthyQueryFlag(filter.noDueDate)) {
+    filter.dueDate = null;
+  }
+  delete filter.noDueDate;
   applyCommaFilter(filter, 'sprintId', (id) => new mongoose.Types.ObjectId(id));
   applyCommaFilter(filter, 'createdBy', (id) => new mongoose.Types.ObjectId(id));
 

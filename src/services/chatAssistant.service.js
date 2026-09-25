@@ -3148,7 +3148,7 @@ async function fetchModule(name, args, user, uiContext = null) {
       if (args.sprintId) filters.sprintId = args.sprintId;
       if (args.search) filters.search = String(args.search).trim();
       if (args.unassigned) filters.unassigned = true; // use the key task.service.js reads
-      if (args.noDueDate) filters.dueDate = null;
+      if (args.noDueDate) filters.noDueDate = true; // same allow-list pattern — see taskAccess.js/task.service.js
 
       if (args.projectName) {
         const resolved = await resolveProjectByNameOrId(args.projectName, user);
