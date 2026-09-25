@@ -8,6 +8,52 @@ function detectListIntent(msg) {
   return LIST_INTENT_RE.test(msg);
 }
 
+/** Job-noun set for topic-keyword extraction below (adds "roles" to the entity's usual set). */
+const JOB_TOPIC_NOUN_RE = /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\b/i;
+
+/**
+ * A recognized count/list command phrase must lead the topic zone, or the leftover words
+ * aren't a topic at all — e.g. a salary-ranking question like "what's the highest paying
+ * job" has no topic to extract, and must not have "what's the highest paying" mistaken for one.
+ */
+const JOB_TOPIC_LEADIN_RE = /^\s*(?:how many|count|number of|total|list(?:\s+all)?|show(?:\s+me)?(?:\s+all)?|any)\b\s*/i;
+
+/** Status/type/origin modifier words parseJobFilters already extracts — not part of the topic. */
+const JOB_TOPIC_MODIFIER_WORDS = new Set([
+  'active', 'open', 'live', 'current', 'currently', 'closed', 'filled', 'draft', 'archived',
+  'remote', 'internal', 'external', 'intern', 'internship',
+  'full-time', 'fulltime', 'part-time', 'parttime', 'contract', 'temporary', 'freelance',
+]);
+
+/** Filler words that carry no topic meaning. */
+const JOB_TOPIC_FILLER_WORDS = new Set(['the', 'all', 'our', 'any', 'new', 'total', 'of', 'do', 'we', 'have']);
+
+/**
+ * Pull the topic word(s) between a count/list phrase and the job noun — "how many **AI**
+ * jobs" — into a search term. Without this, a topic like "AI" that isn't a recognized
+ * status/type/company/skill filter was silently dropped, so "how many AI jobs" counted
+ * every job instead of just AI jobs.
+ * @param {string} message
+ * @returns {string|null}
+ */
+export function extractJobTopicKeyword(message) {
+  const raw = String(message || '');
+  const nounMatch = raw.match(JOB_TOPIC_NOUN_RE);
+  if (!nounMatch) return null;
+
+  const before = raw.slice(0, nounMatch.index);
+  const leadinMatch = before.match(JOB_TOPIC_LEADIN_RE);
+  if (!leadinMatch) return null;
+
+  const words = before.slice(leadinMatch[0].length).split(/\s+/).filter(Boolean);
+  const topicWords = words.filter((w) => {
+    const lower = w.toLowerCase().replace(/[?.!,]+$/, '');
+    return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
+  });
+
+  return topicWords.join(' ').trim() || null;
+}
+
 const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
 
@@ -99,7 +145,13 @@ export function planJobFilterQuery({ userMessage, jobQueryContext = null }) {
 
   if (!looksLikeJobFilterQuery(message)) return null;
 
-  const filters = parseJobFilters(message, ctx);
+  // A fresh question must never seed from a prior turn's filters — only the follow-up
+  // path above (an explicit "and ...", "what about ...", etc.) inherits ctx. Passing ctx
+  // through here let a stray "active" from an earlier question leak into an unrelated
+  // new one (e.g. asking "how many jobs" right after "how many active jobs").
+  const filters = parseJobFilters(message, null);
+  const topic = extractJobTopicKeyword(message);
+  if (topic) filters.search = topic;
   const listIntent = detectListIntent(message);
 
   return {
