@@ -335,7 +335,7 @@ const envVarsSchema = Joi.object()
       .description('Qdrant collection prefix; defaults to PINECONE_INDEX so both backends share one naming scheme'),
 
     // Chatbot — two-stage pipeline (classifier + scoped fetcher)
-    CHATBOT_MODEL: Joi.string().default('gpt-6-luna').description('OpenAI model for Sage (router, replies, memory, role classifier). Set gpt-4o-mini to roll back.'),
+    CHATBOT_MODEL: Joi.string().required().description('OpenAI model for Sage (router, replies, memory, role classifier). No default: every environment sets it in .env.'),
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
     CHATBOT_ENTITY_QUERY_EMPLOYEES: Joi.boolean()
       .default(false)
