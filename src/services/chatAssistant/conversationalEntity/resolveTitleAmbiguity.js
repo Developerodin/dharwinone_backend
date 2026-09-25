@@ -6,6 +6,7 @@ import Position from '../../../models/position.model.js';
 import { designationRegexForPhrase } from '../managerCounts.js';
 import { cleanSubject } from './queryPatterns.js';
 import { checkToolAccess } from '../toolAccess.js';
+import { resolveJobVisibilityFilter, andMongoFilters } from '../queryPlanner/entities/jobRank.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -99,6 +100,8 @@ function slimEmployee(row) {
  * @param {object} [opts.Employee]
  * @param {object} [opts.Position]
  * @param {Function} [opts.checkAccess] - injectable for tests; defaults to checkToolAccess
+ * @param {object} [opts.visibilityFilter] - injectable for tests; defaults to
+ *   resolveJobVisibilityFilter(opts.viewer) — same job visibility as the Jobs page.
  */
 export async function resolveTitleAmbiguity(title, opts = {}) {
   const trimmed = String(title || '').trim();
@@ -124,12 +127,18 @@ export async function resolveTitleAmbiguity(title, opts = {}) {
     return { kind: 'notFound', jobMatches: [], employeeMatches: [] };
   }
 
+  // Same visibility as the Jobs page — checkToolAccess('fetch_jobs') only gates the
+  // permission, not which jobs the caller may see (Drafts / other users' jobs).
+  const jobVisibilityFilter = canSeeJobs
+    ? (opts.visibilityFilter ?? await resolveJobVisibilityFilter(opts.viewer))
+    : {};
+
   const [jobs, byDesignation, positions] = await Promise.all([
     canSeeJobs
-      ? JobModel.find({
+      ? JobModel.find(andMongoFilters({
           title: { $regex: safe, $options: 'i' },
           status: { $ne: 'Archived' },
-        })
+        }, jobVisibilityFilter))
           .select('_id title status jobType location organisation.name salaryRange')
           .limit(10)
           .lean()
