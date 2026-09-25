@@ -148,7 +148,7 @@ import {
   resolveSprintByNameOrId,
   buildProjectQueryContext,
 } from './chatAssistant/projectGraph.resolvers.js';
-import { resolveAssigneeByName, overdueTaskClause, blockedTaskClause, buildAccessibleTaskFilter, buildTaskServiceFilter, hasTaskReadAccess, extractTaskMemoryHints } from './chatAssistant/taskAccess.js';
+import { resolveAssigneeByName, buildAccessibleTaskFilter, buildTaskServiceFilter, hasTaskReadAccess, extractTaskMemoryHints } from './chatAssistant/taskAccess.js';
 import {
   executeAtomicTaskQuery,
   assertTaskResultIntegrity,
@@ -262,10 +262,25 @@ import {
 } from './chatAssistant/toolAccess.js';
 import { formatOfferLine, formatPlacementLine, formatTaskLine } from './chatAssistant/pipelineLines.js';
 import { meetingScope } from './visibilityScope.service.js';
+import { buildOfferVisibilityClause } from './offer.service.js';
+import { buildPlacementVisibilityClause } from './placement.service.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Parses a model-supplied date arg defensively. Returns a valid Date, or null
+// (never an Invalid Date) so callers can skip just that bound instead of
+// letting a bad model arg reach Mongoose as an Invalid Date, which throws a
+// CastError and silently drops the whole date-range section.
+const parseDateArg = (x) => {
+  const d = new Date(x);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+// Same, for an inclusive end-of-day bound — takes only the YYYY-MM-DD prefix
+// before appending the day-end suffix, so a full timestamp arg (or garbage)
+// can't be concatenated into an unparsable string.
+const parseDateArgEndOfDay = (x) => parseDateArg(`${String(x).slice(0, 10)}T23:59:59.999Z`);
 
 // ─── Timezone-safe date formatter (Asia/Kolkata / IST) ──────────────────────
 // Mongo stores dates as UTC; rendering them with raw `.toISOString().slice(0,10)`
@@ -2229,10 +2244,18 @@ async function fetchModule(name, args, user, uiContext = null) {
           authoritative: true,
         };
       }
-      const ownerIds = await User.find(
+      let ownerIds = await User.find(
         employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
         { _id: 1 }
       ).distinct('_id');
+      // Row-scope like the Employees page (I2): Agent/Sales Agent's Employees list
+      // is scoped, but every count/list below derives from ownerIds, so filtering
+      // it here scopes counts AND rows without a rowScope:'person' post-filter
+      // (which would zero out the count-only branches, e.g. paid_unpaid).
+      const employeeAnalyticsScope = await resolveRowScope(user);
+      if (employeeAnalyticsScope) {
+        ownerIds = ownerIds.filter((id) => employeeAnalyticsScope.has(String(id)));
+      }
 
       const rawMetric = String(args.metric || '').trim().toLowerCase();
       let metric = rawMetric;
@@ -3225,8 +3248,14 @@ async function fetchModule(name, args, user, uiContext = null) {
         }
       }
 
-      if (args.overdue) Object.assign(filters, overdueTaskClause());
-      if (args.blocked) Object.assign(filters, blockedTaskClause());
+      // Forwarded as boolean flags (I4) — buildTaskServiceFilter allow-lists them
+      // through to queryTasks, which builds the actual dueDate/tags clauses.
+      // Object.assign-ing the raw Mongo clause here never worked: it flows
+      // through queryTasks' applyCommaFilter, which stringifies a status
+      // object to "[object Object]" (overdue), and `tags` isn't in
+      // buildTaskServiceFilter's allow-list at all (blocked).
+      if (args.overdue) filters.overdue = true;
+      if (args.blocked) filters.blocked = true;
 
       const atomic = await executeAtomicTaskQuery(user, {
         filters,
@@ -4087,11 +4116,24 @@ async function fetchModule(name, args, user, uiContext = null) {
       }
 
       if (args.from || args.to) {
-        q.createdAt = {
-          ...(args.from && { $gte: new Date(args.from) }),
-          ...(args.to && { $lte: new Date(`${args.to}T23:59:59.999Z`) }),
-        };
+        const fromDate = args.from ? parseDateArg(args.from) : null;
+        const toDate = args.to ? parseDateArgEndOfDay(args.to) : null;
+        if (fromDate || toDate) {
+          q.createdAt = {
+            ...(fromDate && { $gte: fromDate }),
+            ...(toDate && { $lte: toDate }),
+          };
+        }
       }
+
+      // Row-scope like the portal offers list (offer.service.js queryOffers):
+      // no pipeline perm and not admin => own jobs' offers or self-created only.
+      // jobIdFilter is always null here — Sage's args.jobTitle can resolve to
+      // several jobs (q.job is a $in, not the portal's single-id equality), so
+      // the restriction below is ANDed onto q.job instead of replacing it.
+      const offerVis = await buildOfferVisibilityClause(user, null);
+      const offerVisClause = offerVis.orClause || (offerVis.createdBy ? { createdBy: offerVis.createdBy } : null);
+      if (offerVisClause) q.$and = (q.$and || []).concat([offerVisClause]);
 
       // Status breakdown (issue 5: chatbot must report exact totals per state).
       const baseQ = { ...q };
@@ -4173,11 +4215,23 @@ async function fetchModule(name, args, user, uiContext = null) {
       if (since && !args.candidateName) q.joiningDate = { $gte: since };
 
       if (args.joiningFrom || args.joiningTo) {
-        q.joiningDate = {
-          ...(args.joiningFrom && { $gte: new Date(args.joiningFrom) }),
-          ...(args.joiningTo && { $lte: new Date(`${args.joiningTo}T23:59:59.999Z`) }),
-        };
+        const joiningFromDate = args.joiningFrom ? parseDateArg(args.joiningFrom) : null;
+        const joiningToDate = args.joiningTo ? parseDateArgEndOfDay(args.joiningTo) : null;
+        if (joiningFromDate || joiningToDate) {
+          q.joiningDate = {
+            ...(joiningFromDate && { $gte: joiningFromDate }),
+            ...(joiningToDate && { $lte: joiningToDate }),
+          };
+        }
       }
+
+      // Row-scope like the portal placements list (placement.service.js
+      // queryPlacements): no pipeline perm and not admin => own jobs' placements
+      // or self-created only. Sage has no single-job filter for placements, so
+      // jobIdFilter is always null here.
+      const placementVis = await buildPlacementVisibilityClause(user, null);
+      const placementVisClause = placementVis.orClause || (placementVis.createdBy ? { createdBy: placementVis.createdBy } : null);
+      if (placementVisClause) q.$and = (q.$and || []).concat([placementVisClause]);
 
       const baseQ = { ...q };
       delete baseQ.status;
@@ -4782,15 +4836,21 @@ function summarizeData(fetchedData) {
         `RESULT_BREAKDOWN: pending=${b.byResult?.pending ?? 0}, selected=${b.byResult?.selected ?? 0}, rejected=${b.byResult?.rejected ?? 0}) ---`,
       ];
       for (const m of data?.records ?? []) {
+        // Minor 7: SCHEDULED_AT/reminder times are always rendered in IST by
+        // formatDateIST/formatTimeIST regardless of the meeting's recorded
+        // timezone, so the line must say so explicitly. TZ_RECORDED reports
+        // whatever is actually on the row (schema default is 'UTC', not
+        // 'Asia/Kolkata') — guessing a timezone here let the LLM pair an IST
+        // time with a fabricated label.
         let line =
-          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT: ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
+          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT (IST): ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
           `STATUS: ${m.status || 'N/A'} | RESULT: ${m.interviewResult || 'N/A'} | ` +
           `CANDIDATE: ${m.candidateName || 'N/A'}` +
           (m.jobPosition ? ` | JOB: ${m.jobPosition}` : '');
         const reminder = m.reminderSentAt
           ? `sent ${formatDateIST(m.reminderSentAt)} ${formatTimeIST(m.reminderSentAt)}`
           : m.remindAt ? `due ${formatDateIST(m.remindAt)} ${formatTimeIST(m.remindAt)}` : 'NOT_RECORDED';
-        line += ` | INTERVIEWERS: ${m.interviewerName} | TZ: ${m.timezone || 'Asia/Kolkata'} | SCHEDULED_BY: ${m.scheduledBy || 'NOT_RECORDED'} on ${formatDateIST(m.scheduledOn) || '?'} | REMINDER: ${reminder}`;
+        line += ` | INTERVIEWERS: ${m.interviewerName} | TZ_RECORDED: ${m.timezone || 'NOT_RECORDED'} | SCHEDULED_BY: ${m.scheduledBy || 'NOT_RECORDED'} on ${formatDateIST(m.scheduledOn) || '?'} | REMINDER (IST): ${reminder}`;
         lines.push(line);
       }
       parts.push(lines.join('\n'));
@@ -8202,7 +8262,9 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
 
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
-  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext })) {
+  // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
+  // through this early job-salary-ranking path even though fetch_jobs itself is gated.
+  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,
@@ -8539,7 +8601,9 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
 
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
-  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext })) {
+  // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
+  // through this early job-salary-ranking path even though fetch_jobs itself is gated.
+  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,
