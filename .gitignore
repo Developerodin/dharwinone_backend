@@ -162,3 +162,7 @@ attendance-status-backfill.*.journal.json
 !src/validations/__tests__/payrollDetail.validation.test.js
 !src/utils/__tests__/playlistSummary.util.test.js
 !src/__tests__/visaExtract.test.js
+
+# Sage tool gate (2026-09-25) — guards the BRD "never exceed user access" rule.
+!src/services/chatAssistant/__tests__/
+!src/services/chatAssistant/__tests__/toolAccess.test.js

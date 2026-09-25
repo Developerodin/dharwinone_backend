@@ -252,6 +252,7 @@ import {
   buildMemorySections,
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
+import { checkToolAccess } from './chatAssistant/toolAccess.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -1702,6 +1703,12 @@ async function fetchModule(name, args, user, uiContext = null) {
   // adminId on the user record points to their company admin;
   // if absent, the user IS the admin — use their own id for employee scoping.
   const adminId = user?.adminId ?? userId;
+
+  const access = await checkToolAccess(name, user);
+  if (!access.ok) {
+    logger.info(`[ChatAssistant][toolAccess] denied tool=${name} userId=${user?.id} reason=${access.reason}`);
+    return { forbidden: true, reason: access.reason };
+  }
 
   switch (name) {
     case 'fetch_employees': {
@@ -4488,6 +4495,14 @@ function summarizeData(fetchedData) {
   if (banner) parts.push(banner);
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
+
+    if (data?.forbidden) {
+      parts.push(
+        `--- ${key} ---\nFORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
+        'USER_FACING_REPLY: Tell the user they do not have access to this information in DharwinOne. Do not guess or give partial numbers.'
+      );
+      continue;
+    }
 
     // Future-date short-circuit (issue 11). Returned by all attendance handlers
     // when the user asks for tomorrow / next week / a future month. Emit a
