@@ -64,7 +64,7 @@ import {
   looksLikeOnLeaveTodayQuery,
 } from './chatAssistant/attendanceAnalytics.js';
 import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
-import { buildInterviewFilter, summarizeInterviewBreakdown } from './chatAssistant/interviewAnalytics.js';
+import { buildInterviewFilter, summarizeInterviewBreakdown, formatInterviewers } from './chatAssistant/interviewAnalytics.js';
 import {
   buildInternalMeetingFilter,
   countInternalMeetingsByStatus,
@@ -2418,7 +2418,11 @@ async function fetchModule(name, args, user, uiContext = null) {
         Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
         Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$interviewResult', count: { $sum: 1 } } }]),
         Meeting.find(scopedFilter)
-          .select('title scheduledAt status interviewResult interviewType candidate recruiter agents jobPosition')
+          .select(
+            'title scheduledAt status interviewResult interviewType candidate recruiter agents jobPosition ' +
+              'timezone createdBy createdAt remindAt reminderSentAt'
+          )
+          .populate({ path: 'createdBy', select: 'name' })
           .sort({ scheduledAt: -1 })
           .limit(limit)
           .lean(),
@@ -2432,8 +2436,12 @@ async function fetchModule(name, args, user, uiContext = null) {
         interviewType: m.interviewType,
         jobPosition: m.jobPosition || null,
         candidateName: m.candidate?.name || null,
-        interviewerName:
-          m.recruiter?.name || (Array.isArray(m.agents) ? m.agents.map((a) => a.name).filter(Boolean).join(', ') : '') || null,
+        interviewerName: formatInterviewers(m),
+        timezone: m.timezone || null,
+        scheduledBy: m.createdBy?.name || null,
+        scheduledOn: m.createdAt || null,
+        reminderSentAt: m.reminderSentAt || null,
+        remindAt: m.remindAt || null,
       }));
       return {
         total,
@@ -4774,12 +4782,16 @@ function summarizeData(fetchedData) {
         `RESULT_BREAKDOWN: pending=${b.byResult?.pending ?? 0}, selected=${b.byResult?.selected ?? 0}, rejected=${b.byResult?.rejected ?? 0}) ---`,
       ];
       for (const m of data?.records ?? []) {
-        lines.push(
+        let line =
           `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT: ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
           `STATUS: ${m.status || 'N/A'} | RESULT: ${m.interviewResult || 'N/A'} | ` +
-          `INTERVIEWER: ${m.interviewerName || 'N/A'} | CANDIDATE: ${m.candidateName || 'N/A'}` +
-          (m.jobPosition ? ` | JOB: ${m.jobPosition}` : '')
-        );
+          `CANDIDATE: ${m.candidateName || 'N/A'}` +
+          (m.jobPosition ? ` | JOB: ${m.jobPosition}` : '');
+        const reminder = m.reminderSentAt
+          ? `sent ${formatDateIST(m.reminderSentAt)} ${formatTimeIST(m.reminderSentAt)}`
+          : m.remindAt ? `due ${formatDateIST(m.remindAt)} ${formatTimeIST(m.remindAt)}` : 'NOT_RECORDED';
+        line += ` | INTERVIEWERS: ${m.interviewerName} | TZ: ${m.timezone || 'Asia/Kolkata'} | SCHEDULED_BY: ${m.scheduledBy || 'NOT_RECORDED'} on ${formatDateIST(m.scheduledOn) || '?'} | REMINDER: ${reminder}`;
+        lines.push(line);
       }
       parts.push(lines.join('\n'));
       continue;

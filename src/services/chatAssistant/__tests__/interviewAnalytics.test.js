@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildInterviewFilter,
   summarizeInterviewBreakdown,
+  formatInterviewers,
 } from '../interviewAnalytics.js';
 
 describe('interviewAnalytics (Epic D)', () => {
@@ -88,5 +89,17 @@ describe('interviewAnalytics (Epic D)', () => {
     assert.deepEqual(summary.byStatus, { scheduled: 0, ended: 0, cancelled: 0 });
     assert.deepEqual(summary.byResult, { pending: 0, selected: 0, rejected: 0 });
     assert.equal(summary.total, 0);
+  });
+});
+
+describe('formatInterviewers', () => {
+  it('lists recruiter and panel together, deduped', () => {
+    assert.equal(
+      formatInterviewers({ recruiter: { name: 'Asha' }, agents: [{ name: 'Ravi' }, { name: 'Asha' }] }),
+      'Asha (recruiter), Ravi'
+    );
+  });
+  it('returns NOT_RECORDED when nobody is set', () => {
+    assert.equal(formatInterviewers({}), 'NOT_RECORDED');
   });
 });

@@ -100,6 +100,20 @@ export function buildInterviewFilter(opts = {}) {
  * @param {Array<{ _id: string, count: number }>} [resultAgg]
  * @returns {{ total: number, byStatus: Record<string, number>, byResult: Record<string, number> }}
  */
+/**
+ * List the recruiter and any assigned panel agents together (deduped), so
+ * a recruiter set on the interview never hides the rest of the panel.
+ *
+ * @param {object} m - Meeting doc (or lean object) with `recruiter`/`agents`
+ * @returns {string} "Name (recruiter), Name2, ..." or 'NOT_RECORDED' if nobody is set
+ */
+export function formatInterviewers(m) {
+  const rec = m.recruiter?.name || null;
+  const panel = (Array.isArray(m.agents) ? m.agents : []).map((a) => a?.name).filter((n) => n && n !== rec);
+  const out = [rec && `${rec} (recruiter)`, ...new Set(panel)].filter(Boolean);
+  return out.length ? out.join(', ') : 'NOT_RECORDED';
+}
+
 export function summarizeInterviewBreakdown(statusAgg = [], resultAgg = []) {
   const byStatus = {};
   for (const s of INTERVIEW_STATUSES) byStatus[s] = 0;
