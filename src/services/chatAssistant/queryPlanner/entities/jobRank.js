@@ -35,6 +35,19 @@ const SALARY_SUPERLATIVE_RE =
 const LIST_JOBS_RE =
   /\b(list( all)? jobs?|show( me)? (all )?jobs?|how many jobs?|total jobs?)\b/i;
 
+/**
+ * Words indicating the user wants every status, not just the Sage/Jobs-page default
+ * (Active). Mirrors jobFilter.js's JOB_ALL_STATUSES_STRONG_RE / JOB_ALL_WORD_RE — kept as
+ * separate copies here (not imported) because jobFilter.js already imports from this
+ * module, and importing back would create a cycle. Keep the two in sync if these change.
+ * JOB_ALL_STATUSES_STRONG_RE wins even over a status word parseJobFilters also caught
+ * ("including closed" mentions "closed" but means the opposite of Closed-only); the bare
+ * "all" in JOB_ALL_WORD_RE only applies when no specific status was already said, so "list
+ * all closed jobs" still means Closed only.
+ */
+const JOB_ALL_STATUSES_STRONG_RE = /\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\b|\btotal\s+ever\s+posted\b/i;
+const JOB_ALL_WORD_RE = /\ball\b/i;
+
 /** Matches jobs with no meaningful salary (same semantics as ATS "Not specified"). */
 const SALARY_NOT_SPECIFIED_CLAUSE = {
   $or: [
@@ -109,6 +122,10 @@ export async function resolveJobVisibilityFilter(user, requestFilter = {}) {
     userRoleIds: user?.roleIds || [],
     userId: user?.id || user?._id,
     platformSuperUser: user?.platformSuperUser,
+    // Every chat message that touches jobs calls this — unlike the Jobs page HTTP route,
+    // it has no reason to run the mirror-repair side effect (updateMany + ExternalJob
+    // sync) inline on each call.
+    skipMirrorRepair: true,
   });
 }
 
@@ -140,9 +157,13 @@ export function scopeJobModel(JobModel, visibilityFilter) {
 /**
  * Verify a free-text company candidate against real data before treating it as a filter.
  * parseJobFilters' regex over-captures role nouns / locations ("jobs for React devs",
- * "at Bangalore") as a "company" with no way to tell from the regex alone — an exact,
+ * "at Bangalore") as a "company" with no way to tell from the regex alone — a substring,
  * case-insensitive match against real Job organisation.name values is the ground truth
- * the regex can't provide.
+ * the regex can't provide. Unanchored to match buildJobRankingMongoFilter's own company
+ * clause exactly (`{ $regex: escapeRegex(f.company), $options: 'i' }`, no `^$`) — an
+ * anchored exact match here rejected real, verified companies whenever the candidate was
+ * a substring of the full legal name ("Acme" vs. "Acme Technologies Pvt Ltd"), silently
+ * dropping the filter and returning every job instead of just that company's.
  * @param {string|null|undefined} candidate
  * @param {{ Job?: import('mongoose').Model }} [deps]
  * @returns {Promise<boolean>}
@@ -152,7 +173,7 @@ export async function verifyCompanyCandidate(candidate, deps = {}) {
   const name = String(candidate || '').trim();
   if (!name) return false;
   const exists = await JobModel.exists({
-    'organisation.name': { $regex: `^${escapeRegex(name)}$`, $options: 'i' },
+    'organisation.name': { $regex: escapeRegex(name), $options: 'i' },
   });
   return !!exists;
 }
@@ -322,7 +343,11 @@ export function buildJobRankingMongoFilter(plan) {
     filter.jobType = normalized || { $regex: `^${escapeRegex(f.jobType)}$`, $options: 'i' };
   }
   if (f.jobOrigin === 'internal') {
-    filter.jobOrigin = { $ne: 'external' };
+    // The true complement of MIRROR_EXTERNAL_OR, not `{ jobOrigin: { $ne: 'external' } }` —
+    // that missed the complement for a legacy row with jobOrigin!=='external' but a
+    // populated externalRef, which matched MIRROR_EXTERNAL_OR too (same fix already applied
+    // in chatAssistant.service.js's computeJobOriginCounts).
+    appendFilterClause(filter, { $nor: [MIRROR_EXTERNAL_OR] });
   } else if (f.jobOrigin === 'external') {
     // Same mirror-inclusive definition the Jobs page uses (job.service.js MIRROR_EXTERNAL_OR)
     // — a legacy externalRef-only row with no jobOrigin field set still counts as external.
@@ -468,6 +493,14 @@ export function planJobRankQuery({ userMessage, jobQueryContext = null }) {
   const offset = resolveRankOffset(message);
   const operation = resolveRankOperation(message, limit, offset, direction);
   const filters = parseJobFilters(message, ctx);
+
+  // Match the ATS Jobs page's own default: Active, unless the user named another status
+  // or explicitly asked for every status ("any status", "including closed", "ever", "all").
+  if (JOB_ALL_STATUSES_STRONG_RE.test(message)) {
+    filters.status = 'all';
+  } else if (!filters.status) {
+    filters.status = JOB_ALL_WORD_RE.test(message) ? 'all' : 'Active';
+  }
 
   return {
     entity: ENTITY_JOB,
