@@ -2312,6 +2312,8 @@ async function runVacancyAutoCloseTick({ now = new Date() } = {}) {
 export {
   createJob,
   queryJobs,
+  buildJobListFilter,
+  MIRROR_EXTERNAL_OR,
   queryJobsForExport,
   getJobFilterOptions,
   searchJobFacetValues,
