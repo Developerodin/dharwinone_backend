@@ -30,6 +30,24 @@ describe('toolAccess', () => {
     assert.deepEqual(missing, []);
   });
 
+  // ROUTING_TOOLS only lists tools the LLM can call directly — it missed
+  // designation_manager_analytics, which fetchModule dispatches internally
+  // from the manager-concept router and which fell through to "unknown tool,
+  // always denied" until it got a TOOL_ACCESS entry. Diff every `case` label
+  // inside fetchModule's switch instead, so an internally-dispatched tool
+  // can't go ungated the same way again.
+  it('every case label inside fetchModule has a TOOL_ACCESS entry', () => {
+    const start = svcSrc.indexOf('async function fetchModule(');
+    assert.ok(start >= 0, 'fetchModule not found in chatAssistant.service.js');
+    const nextFn = svcSrc.slice(start + 1).search(/\n(?:async )?function [A-Za-z0-9_]+\(/);
+    assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
+    const body = svcSrc.slice(start, start + 1 + nextFn);
+    const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
+    assert.ok(caseNames.length >= 39, `parsed ${caseNames.length} case labels`);
+    const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
+    assert.deepEqual(missing, []);
+  });
+
   it('denies unknown tools', async () => {
     const r = await checkToolAccess('fetch_everything', userWith('candidates.read'), notAdmin);
     assert.equal(r.ok, false);
@@ -63,6 +81,25 @@ describe('toolAccess', () => {
 
   it('denies a user with no matching permission even if a hypothetical isAdmin would say true (no admin shortcut)', async () => {
     const r = await checkToolAccess('fetch_roles', userWith(), admin);
+    assert.equal(r.ok, false);
+  });
+
+  // Minor 6: fetch_external_jobs is the ONE deliberate exception — its route
+  // (requireExternalJobsAccess.js) lets Administrator-by-name through with no
+  // external-jobs.* permission grant, so its TOOL_ACCESS rule carries
+  // adminByName and checkToolAccess must honor it for this tool only.
+  it('adminByName: admin-without-perm passes for fetch_external_jobs', async () => {
+    const r = await checkToolAccess('fetch_external_jobs', userWith(), admin);
+    assert.equal(r.ok, true);
+  });
+
+  it('adminByName: still denied without the permission when isAdmin is false', async () => {
+    const r = await checkToolAccess('fetch_external_jobs', userWith(), notAdmin);
+    assert.equal(r.ok, false);
+  });
+
+  it('adminByName is not a general admin shortcut: fetch_offers still denies an admin-without-perm user', async () => {
+    const r = await checkToolAccess('fetch_offers', userWith(), admin);
     assert.equal(r.ok, false);
   });
 

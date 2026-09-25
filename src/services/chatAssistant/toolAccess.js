@@ -7,10 +7,15 @@
  * No `anyOf` — the handler already enforces its own check (see `note`) or the
  * tool is self-scoped.
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
+ * `adminByName` — mirrors a route that also lets an Administrator-by-name user
+ * through with no permission grant (see requireExternalJobsAccess.js). This is
+ * the ONE deliberate exception to the no-admin-shortcut rule below; every other
+ * tool must pass via `anyOf` or platformSuperUser.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
 import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.scope.js';
 import Employee from '../../models/employee.model.js';
+import { userIsAdmin } from '../../utils/roleHelpers.js';
 
 const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js canReadEmployees
 const OFFERS_READ = [ // offer.route.js canReadOffers
@@ -29,6 +34,7 @@ export const TOOL_ACCESS = {
   // People — employee.route.js
   fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
   employee_analytics: { anyOf: PEOPLE_READ },
+  designation_manager_analytics: { anyOf: PEOPLE_READ, rowScope: 'person' },
   fetch_candidates: { anyOf: PEOPLE_READ, rowScope: 'person' },
   fetch_people: { anyOf: PEOPLE_READ, rowScope: 'person' },
   semantic_employee_search: { anyOf: PEOPLE_READ, rowScope: 'person' },
@@ -40,7 +46,9 @@ export const TOOL_ACCESS = {
   fetch_offers: { anyOf: OFFERS_READ },
   fetch_placements: { anyOf: PLACEMENTS_READ },
   fetch_jobs: { anyOf: ['jobs.read'] },
-  fetch_external_jobs: { anyOf: ['external-jobs.read', 'external-jobs.manage'] },
+  // requireExternalJobsAccess.js also lets Administrator-by-name through with
+  // no external-jobs.* permission grant — mirror that route exactly (Minor 6).
+  fetch_external_jobs: { anyOf: ['external-jobs.read', 'external-jobs.manage'], adminByName: true },
   fetch_job_applications: { note: 'applicantQuery.service applicationScope' },
   referral_leads_analytics: { note: 'referralLeadsAnalytics.js candidates.read' },
 
@@ -82,12 +90,16 @@ const hasAny = (permissions, required) =>
   !!permissions &&
   required.some((r) => getGrantingPermissions(r).some((p) => permissions.has(p)));
 
-export async function checkToolAccess(name, user) {
+export async function checkToolAccess(name, user, deps = {}) {
   const rule = TOOL_ACCESS[name];
   if (!rule) return { ok: false, reason: `Unknown tool ${name}.` };
   if (!rule.anyOf) return { ok: true };
   if (user?.platformSuperUser) return { ok: true };
   if (hasAny(user?.authContext?.permissions, rule.anyOf)) return { ok: true };
+  if (rule.adminByName) {
+    const isAdmin = deps.isAdmin ?? userIsAdmin;
+    if (await isAdmin(user)) return { ok: true };
+  }
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
 }
 

@@ -319,15 +319,18 @@ export function formatProactiveManagerAnswer({
     .filter(Boolean);
   const orgNames = (org.records || []).map((r) => r.name).filter(Boolean);
   const desigNames = (designation.records || []).map((r) => r.name).filter(Boolean);
-  const posLine =
-    `**Manager positions (Org Chart, OrgUnit.type=manager):** ${positions.count ?? positions.total ?? 0}` +
-    (posNames.length ? ` — ${posNames.join(', ')}` : '');
-  const orgLine =
-    `**People with direct reports (leadership chain):** ${org.total ?? 0}` +
-    (orgNames.length ? ` — ${orgNames.join(', ')}` : '');
-  const desigLine =
-    `**Employees titled "${designationPhrase}":** ${designation.total ?? 0}` +
-    (desigNames.length ? ` — ${desigNames.join(', ')}` : '');
+  const posLine = positions.forbidden
+    ? '**Manager positions (Org Chart, OrgUnit.type=manager):** not available for your access level'
+    : `**Manager positions (Org Chart, OrgUnit.type=manager):** ${positions.count ?? positions.total ?? 0}` +
+      (posNames.length ? ` — ${posNames.join(', ')}` : '');
+  const orgLine = org.forbidden
+    ? '**People with direct reports (leadership chain):** not available for your access level'
+    : `**People with direct reports (leadership chain):** ${org.total ?? 0}` +
+      (orgNames.length ? ` — ${orgNames.join(', ')}` : '');
+  const desigLine = designation.forbidden
+    ? `**Employees titled "${designationPhrase}":** not available for your access level`
+    : `**Employees titled "${designationPhrase}":** ${designation.total ?? 0}` +
+      (desigNames.length ? ` — ${desigNames.join(', ')}` : '');
 
   return (
     `${posLine}\n${orgLine}\n${desigLine}\n\n` +

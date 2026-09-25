@@ -278,6 +278,10 @@ export async function fetchDesignationManagersAnalytics(opts = {}) {
       employeeId: emp.employeeId || null,
       designation: emp.designation || null,
       department: emp.department || null,
+      // Keep key for TOOL_ACCESS rowScope:'person' (guardToolResult/rowMatchesAllowed) —
+      // without it every row here would be dropped for a scoped viewer instead of just
+      // the out-of-scope ones.
+      owner: emp.owner || null,
     };
   });
 
