@@ -29,17 +29,11 @@ const DISTANCE = 'Cosine';
  * cannot plan against the HNSW graph and degrades toward a scan whose cost grows
  * with total vectors rather than with the matching slice.
  *
- * Only `jobs` is queried with a filter today — chatAssistant.service.js:2671 and
- * :2756. The employees/students queries pass null, so indexing those collections
- * would cost memory and buy nothing; add entries here if a filter is added there.
- *
- * These must stay in step with the payload written by embeddingSync.scheduler.js
- * (`upsertJobs` and the Job post-save hook). An index on a field the payload never
- * writes is inert — it cannot make a clause match.
+ * No namespace is queried with a filter today (the jobs namespace, the only one that
+ * was, is gone — Sage reads jobs from Mongo). Add an entry here, matching the payload
+ * written by embeddingSync.scheduler.js, if a filtered query is added.
  */
-const INDEXED_PAYLOAD_FIELDS = {
-  jobs: ['status', 'jobOrigin', 'jobType', 'location', 'experienceLevel'],
-};
+const INDEXED_PAYLOAD_FIELDS = {};
 
 let _client = null;
 const _ensuredCollections = new Map();
@@ -143,10 +137,9 @@ async function ensureCollection(namespace) {
 }
 
 /** Namespaces mirrored from Pinecone; created up front so the first query never 404s. */
-// `external_jobs` was dropped: every ExternalJob is mirrored into a Job row and
-// already embedded in `jobs`, so the namespace held a duplicate nothing queried.
-// An existing collection is left in place — delete it by hand once confirmed.
-const KNOWN_NAMESPACES = ['students', 'jobs', 'employees', 'attendance', 'kb_chunks'];
+// `external_jobs` and `jobs` were dropped: Sage reads jobs from Mongo, so nothing
+// queried them. Existing collections are left in place — delete them by hand once confirmed.
+const KNOWN_NAMESPACES = ['students', 'employees', 'attendance', 'kb_chunks'];
 
 /** Parity with pinecone.util#ensureIndex — called once by the embedding sync scheduler. */
 export async function ensureIndex() {

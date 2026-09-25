@@ -94,7 +94,7 @@ export async function ensureIndex() {
 const PINECONE_UPSERT_BATCH = Number(process.env.PINECONE_UPSERT_BATCH || 100);
 
 /**
- * @param {string} namespace  'students' | 'jobs' | 'employees' | 'kb_chunks'
+ * @param {string} namespace  'students' | 'employees' | 'attendance' | 'kb_chunks'
  * @param {{ id: string, values: number[], metadata: Record<string,string|boolean> }[]} vectors
  */
 export async function pineconeUpsert(namespace, vectors) {

@@ -1,5 +1,4 @@
 import Student from '../models/student.model.js';
-import Job from '../models/job.model.js';
 import User from '../models/user.model.js';
 import Role from '../models/role.model.js';
 import Employee from '../models/employee.model.js';
@@ -58,38 +57,6 @@ function studentText(student, userName) {
   const skills = (student.skills ?? []).join(' ');
   const titles = (student.experience ?? []).map((e) => e.title).join(' ');
   return `${userName} ${skills} ${titles}`.trim();
-}
-
-function jobText(job) {
-  const tags = (job.skillTags ?? []).join(' ');
-  const skillReqs = (job.skillRequirements ?? [])
-    .map((s) => `${s.name ?? ''}${s.level ? ` ${s.level}` : ''}${s.required ? ' required' : ''}`)
-    .join(' ');
-  const org = job.organisation || {};
-  const salary = job.salaryRange
-    ? `${job.salaryRange.min ?? ''} ${job.salaryRange.max ?? ''} ${job.salaryRange.currency ?? ''}`.trim()
-    : '';
-  const origin = job.jobOrigin === 'external' ? 'external listing' : 'internal opening';
-  const extSource = job.externalRef?.source ?? '';
-  return [
-    job.title,
-    job.jobDescription ?? '',
-    tags,
-    skillReqs,
-    job.jobType ?? '',
-    job.location ?? '',
-    job.experienceLevel ?? '',
-    job.status ?? '',
-    org.name ?? '',
-    org.description ?? '',
-    org.address ?? '',
-    salary,
-    origin,
-    extSource,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .trim();
 }
 
 function employeeUserText(u, profile) {
@@ -179,42 +146,6 @@ async function upsertStudents(students) {
   });
 
   await pineconeUpsert('students', vectors);
-}
-
-async function upsertJobs(jobs) {
-  if (!jobs.length) return;
-  // Resolve each creator's top-level adminId so Pinecone filter works company-wide
-  const creatorIds = [...new Set(jobs.map((j) => String(j.createdBy)))];
-  const creators = await User.find({ _id: { $in: creatorIds } }, { _id: 1, adminId: 1 }).lean();
-  const creatorMap = Object.fromEntries(creators.map((u) => [String(u._id), u]));
-
-  const texts = jobs.map((j) => jobText(j) || 'job posting');
-  const embeddings = await embedTexts(texts);
-  const vectors = jobs.map((j, i) => {
-    const creator = creatorMap[String(j.createdBy)];
-    const adminId = creator?.adminId ? String(creator.adminId) : String(j.createdBy);
-    return {
-      id: `job_${j._id}`,
-      values: embeddings[i],
-      metadata: {
-        adminId,
-        mongoId: String(j._id),
-        // The chatbot filters on `status` (chatAssistant.service.js:2666) with the
-        // full Job enum — Draft|Active|Closed|Archived. This used to write a boolean
-        // `isActive` instead, which nothing read and which collapsed the three
-        // non-active states together, so every status-filtered query matched zero
-        // points and silently fell through to the unranked path.
-        status: String(j.status ?? ''),
-        jobOrigin: String(j.jobOrigin ?? 'internal'),
-        jobType: String(j.jobType ?? ''),
-        location: String(j.location ?? ''),
-        experienceLevel: String(j.experienceLevel ?? ''),
-        company: String(j.organisation?.name ?? ''),
-        externalSource: String(j.externalRef?.source ?? ''),
-      },
-    };
-  });
-  await pineconeUpsert('jobs', vectors);
 }
 
 async function upsertEmployeeUsers(users) {
@@ -333,23 +264,9 @@ export async function runEmbeddingBackfill() {
       'students'
     );
 
-    step = 'jobs';
-    await processCursor(
-      Job.find({}, {
-        title: 1, jobDescription: 1, skillTags: 1, skillRequirements: 1,
-        createdBy: 1, status: 1, jobType: 1, location: 1, experienceLevel: 1,
-        organisation: 1, salaryRange: 1, jobOrigin: 1, externalRef: 1, externalPlatformUrl: 1,
-      }),
-      upsertJobs,
-      BATCH_SIZE,
-      'jobs'
-    );
-
-    // No external_jobs step: every ExternalJob is mirrored into a Job row
-    // (jobOrigin: 'external'), and the `jobs` cursor above is unfiltered, so those
-    // listings are already embedded. Embedding them a second time into a namespace
-    // no query reads only doubled the API spend. The chatbot reaches external jobs
-    // through the mirrored rows — chatAssistant.service.js#fetch_external_jobs.
+    // No jobs step: Sage lists, counts and searches jobs straight from Mongo with the
+    // Jobs page filter (job.service.js#buildJobListFilter). A vector top-K can't give
+    // exact counts, and nothing reads a jobs namespace any more.
 
     step = 'employees';
     // Was gated on `adminId: { $exists: true, $ne: null }`, which silently skipped 65
@@ -443,42 +360,6 @@ export function registerEmbeddingHooks() {
       logger.error(`[EmbeddingSync] student hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
-
-  Job.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
-    try {
-      if (!doc) return;
-      const text = jobText(doc);
-      const [emb] = await embedTexts([text]);
-      const creator = doc.createdBy ? await User.findById(doc.createdBy, { adminId: 1 }).lean() : null;
-      const adminId = creator?.adminId ? String(creator.adminId) : String(doc.createdBy);
-      await pineconeUpsert('jobs', [
-        {
-          id: `job_${doc._id}`,
-          values: emb,
-          metadata: {
-            adminId,
-            mongoId: String(doc._id),
-            // Must match upsertJobs' payload exactly — this hook overwrites the
-            // backfill's point on every save, so a divergence here silently
-            // reverts the field the chatbot filters on.
-            status: String(doc.status ?? ''),
-            jobOrigin: String(doc.jobOrigin ?? 'internal'),
-            jobType: String(doc.jobType ?? ''),
-            location: String(doc.location ?? ''),
-            experienceLevel: String(doc.experienceLevel ?? ''),
-            company: String(doc.organisation?.name ?? ''),
-            externalSource: String(doc.externalRef?.source ?? ''),
-          },
-        },
-      ]);
-    } catch (err) {
-      logger.error(`[EmbeddingSync] job hook error: ${err?.stack || err?.message || String(err)}`);
-    }
-  });
-
-  // No ExternalJob hook: saving an ExternalJob does not need its own embedding.
-  // Publishing one creates/updates the mirrored Job row, and the Job hook above
-  // embeds that. See the backfill for why the second namespace was dropped.
 
   User.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
     try {
