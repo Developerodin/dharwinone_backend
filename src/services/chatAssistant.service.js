@@ -1032,19 +1032,28 @@ const ROUTING_TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_jobs',
-      description: 'Retrieve job postings from the ATS Jobs page (Job collection). Includes internal openings and external listings that have been mirrored into the ATS, distinguished by jobOrigin: "internal" (created in-app) or "external" (mirrored). Use jobOrigin filter when the user asks specifically for one. The raw ExternalJob collection (ATS External Jobs page) is intentionally NOT exposed.',
+      description: 'Retrieve job postings from the ATS Jobs page (Job collection). Includes internal openings and external listings that have been mirrored into the ATS, distinguished by jobOrigin: "internal" (created in-app) or "external" (mirrored). Use jobOrigin filter when the user asks specifically for one. The raw ExternalJob collection (ATS External Jobs page) is intentionally NOT exposed. Supports every filter the ATS Jobs page itself has.',
       parameters: {
         type: 'object',
         properties: {
-          search:          { type: 'string', description: 'Filter by job title (partial match)' },
-          status:          { type: 'string', enum: ['Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status.' },
-          jobType:         { type: 'string', enum: ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'], description: 'Filter by type.' },
-          location:        { type: 'string', description: 'Filter by location (partial match)' },
-          experienceLevel: { type: 'string', description: 'Filter by level: Entry Level, Mid Level, Senior Level, Executive' },
-          skill:           { type: 'string', description: 'Filter by required skill tag (e.g. "React", "Python")' },
-          jobOrigin:       { type: 'string', description: 'Filter by origin: "internal" (company-posted) or "external" (mirrored listing). Omit for both.' },
-          company:         { type: 'string', description: 'Filter by organisation name (partial match)' },
-          limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
+          search:             { type: 'string', description: 'Matches title, company, description, location and skill tags — like the Jobs page search box. Use for topics like "AI", "sales", "react developer".' },
+          titles:             { type: 'array', items: { type: 'string' }, description: 'Exact job titles to match (any of).' },
+          companies:          { type: 'array', items: { type: 'string' }, description: 'Exact organisation names to match (any of).' },
+          locations:          { type: 'array', items: { type: 'string' }, description: 'Exact locations to match (any of).' },
+          status:             { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status. "all" includes every status.' },
+          jobType:            { type: 'string', enum: ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'], description: 'Filter by type.' },
+          location:           { type: 'string', description: 'Filter by location (partial match)' },
+          experienceLevel:    { type: 'string', description: 'Filter by level: Entry Level, Mid Level, Senior Level, Executive' },
+          experienceMin:      { type: 'number', description: 'Minimum years of experience.' },
+          experienceMax:      { type: 'number', description: 'Maximum years of experience.' },
+          salaryMin:          { type: 'number', description: 'Minimum salary.' },
+          salaryMax:          { type: 'number', description: 'Maximum salary.' },
+          salaryNotSpecified: { type: 'boolean', description: 'Only jobs with no salary specified.' },
+          postingDate:        { type: 'string', description: 'Jobs posted on this date (YYYY-MM-DD).' },
+          skill:              { type: 'string', description: 'Filter by required skill tag (e.g. "React", "Python")' },
+          jobOrigin:          { type: 'string', description: 'Filter by origin: "internal" (company-posted) or "external" (mirrored listing). Omit for both.' },
+          company:            { type: 'string', description: 'Filter by organisation name (partial match)' },
+          limit:              { type: 'number', description: 'Max records to return (default 100, max 200)' },
         },
         required: [],
       },
@@ -2686,220 +2695,84 @@ async function fetchModule(name, args, user, uiContext = null) {
         jobOrigin: args.jobOrigin || null,
         jobType: args.jobType || null,
         location: args.location || null,
+        locations: args.locations || null,
+        titles: args.titles || null,
+        companies: args.companies || null,
         experienceLevel: args.experienceLevel || null,
+        experienceMin: args.experienceMin ?? null,
+        experienceMax: args.experienceMax ?? null,
+        salaryMin: args.salaryMin ?? null,
+        salaryMax: args.salaryMax ?? null,
+        salaryNotSpecified: args.salaryNotSpecified ?? null,
+        postingDate: args.postingDate || null,
         company: args.company || null,
         skill: args.skill || null,
         ...(args.search ? { search: args.search } : {}),
       };
-      const hasStructuredFilters = Object.values(structuredFilters).some(Boolean);
 
-      // Route skill (and every other structured filter) through the atomic path —
-      // buildJobRankingMongoFilter already supports `skill`, so rows and counts stay
-      // consistent. Semantic (Pinecone) ranking is dropped for these queries in favour
-      // of the atomic path's authoritative count+rows-from-one-query guarantee.
-      if (hasStructuredFilters) {
-        const filters = Object.fromEntries(
-          Object.entries(structuredFilters).filter(([, v]) => v),
-        );
-        const atomic = await executeAtomicJobQuery({
-          filters,
-          limit,
-          listIntent: true,
-          JobModel: ScopedJob,
-        });
-        const total = atomic.result.total;
-        // With an explicit jobOrigin filter the atomic total already IS the one-bucket
-        // count; without one, a single total can't be un-mixed after the fact, so
-        // compute the real split with two more scoped countDocuments calls.
-        const counts = args.jobOrigin
-          ? buildJobCountsFromResult(atomic)
-          : await computeJobOriginCounts(ScopedJob, buildJobRankingMongoFilter({ filters }));
-        logger.info(
-          `[ChatAssistant][fetch_jobs] atomic origin=${args.jobOrigin || 'any'} status=${args.status || 'any'} ` +
-          `returned=${atomic.result.jobs.length} total=${total} queryId=${atomic.queryId}`,
-        );
-        return {
-          ...atomic,
-          records: atomic.result.jobs,
-          total,
-          counts,
-          label: 'job',
-          statusFilter: args.status || null,
-          searchedFor: args.search || null,
-          wantDetail: !!(args.search || args.jobId) && atomic.result.jobs.length === 1,
-        };
-      }
-
-      const queryParts = ['job opening position'];
-      if (args.search)   queryParts.push(args.search);
-      if (args.skill)    queryParts.push(args.skill);
-      if (args.jobType)  queryParts.push(args.jobType);
-      if (args.location) queryParts.push(args.location);
-      if (args.experienceLevel) queryParts.push(args.experienceLevel);
-      if (args.company)  queryParts.push(args.company);
-      if (args.jobOrigin) queryParts.push(args.jobOrigin === 'external' ? 'external listing job board' : 'internal opening');
-
-      // Source of truth = Job collection only (the ATS Jobs page). External job-board
-      // entries from the separate ExternalJob collection (ATS External Jobs page) are
-      // intentionally excluded — only those that have been mirrored into Job
-      // (jobOrigin: 'external') are visible to the chatbot. This matches what the user
-      // sees on the Jobs page in the ATS.
-      const wantInternal = !args.jobOrigin || args.jobOrigin === 'internal';
-      const wantExternal = !args.jobOrigin || args.jobOrigin === 'external';
-      let qEmb;
-      try {
-        qEmb = await embedQuery(queryParts.join(' '));
-      } catch (err) {
-        logger.warn(`[ChatAssistant][fetch_jobs] embed error: ${err.message}`);
-        return [];
-      }
-
-      // Hydrate filter is the SOURCE OF TRUTH for filtering — Pinecone is a
-      // semantic-rank assist only. Build it once and reuse for both the
-      // record query and the authoritative counts so the chatbot can never
-      // claim "5 active jobs" while showing closed ones (issue 2).
-      const hydrateFilter = {};
-      if (args.jobType)         hydrateFilter.jobType = args.jobType;
-      if (args.experienceLevel) hydrateFilter.experienceLevel = args.experienceLevel;
-      if (args.status)          hydrateFilter.status = args.status; // Job.status enum: Draft|Active|Closed|Archived
-      if (args.jobOrigin)       hydrateFilter.jobOrigin = args.jobOrigin;
-      if (args.company)         hydrateFilter['organisation.name'] = { $regex: escapeRegex(args.company), $options: 'i' };
-      if (args.location)        hydrateFilter.location = { $regex: escapeRegex(args.location), $options: 'i' };
-      // Specific-job lookup: regex on title so "details of Software Engineer"
-      // returns only matching rows instead of the embedding's top-K (issue 3).
-      if (args.search)          hydrateFilter.title = { $regex: escapeRegex(args.search), $options: 'i' };
-
-      let merged = [];
-      let usedSemanticRank = false;
-      try {
-        const f = {};
-        if (args.status)          f.status = { $eq: args.status };
-        if (args.jobOrigin)       f.jobOrigin = { $eq: args.jobOrigin };
-        if (args.jobType)         f.jobType = { $eq: args.jobType };
-        if (args.location)        f.location = { $eq: args.location };
-        if (args.experienceLevel) f.experienceLevel = { $eq: args.experienceLevel };
-        const matches = await pineconeQuery('jobs', qEmb, limit, f);
-        const ids = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-        if (ids.length) {
-          const hQ = { ...hydrateFilter, _id: { $in: ids } };
-          const docs = await ScopedJob.find(hQ)
-            .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
-            .sort({ createdAt: -1 })
-            .lean();
-          merged = docs.map((d) => ({ ...d, _origin: d.jobOrigin === 'external' ? 'External (mirrored)' : 'Internal' }));
-          usedSemanticRank = true;
-        }
-      } catch (err) {
-        logger.warn(`[ChatAssistant][fetch_jobs] Pinecone error: ${err.message}`);
-      }
-
-      // Fallback: when Pinecone returned nothing but caller supplied explicit
-      // structured filters (status/title/etc.), serve those directly from Mongo
-      // so the chatbot doesn't claim "no jobs" when there clearly are.
-      if (merged.length === 0 && Object.keys(hydrateFilter).length > 0) {
-        const docs = await ScopedJob.find(hydrateFilter)
-          .select('title jobType location status salaryRange experienceLevel skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt')
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean();
-        merged = docs.map((d) => ({ ...d, _origin: d.jobOrigin === 'external' ? 'External (mirrored)' : 'Internal' }));
-      }
-
-      // Authoritative counts honour the same filter set. If args.status='Active'
-      // is passed, "how many jobs" must answer with the count of active jobs only.
-      const internalFilter = { ...hydrateFilter, jobOrigin: { $ne: 'external' } };
-      const externalFilter = { ...hydrateFilter, jobOrigin: 'external' };
-      // Reset any jobOrigin override coming from hydrateFilter so internal/external
-      // counts stay meaningful per-bucket.
-      if (args.jobOrigin === 'internal') {
-        // user constrained to internal — external count should be 0
-      } else if (args.jobOrigin === 'external') {
-        // user constrained to external — internal count should be 0
-      }
-      const [internalTotal, externalMirroredTotal] = await Promise.all([
-        wantInternal && args.jobOrigin !== 'external' ? ScopedJob.countDocuments(internalFilter) : 0,
-        wantExternal && args.jobOrigin !== 'internal' ? ScopedJob.countDocuments(externalFilter) : 0,
-      ]);
-
-      const counts = {
-        internal: internalTotal,
-        external: externalMirroredTotal,
-        externalListings: externalMirroredTotal,
-        externalMirrored: externalMirroredTotal,
-        total: internalTotal + externalMirroredTotal,
-      };
-
-      // Single-job detail signal — when caller searched by a specific title /
-      // origin and exactly one record remains, flag it so renderers/jobs.js
-      // can switch from a full TableBlock to a KV detail block (issue 3).
-      const wantDetail = !!(args.search || args.jobId) && merged.length === 1;
-
+      // Mongo only, one path — no Pinecone top-K (an arbitrary, uncountable subset).
+      // executeAtomicJobQuery/buildJobRankingMongoFilter is the SAME builder the
+      // deterministic counter uses, so a count here and the rows behind it are always
+      // consistent, and match what "how many ... jobs" reports for the same filters.
+      const filters = Object.fromEntries(
+        Object.entries(structuredFilters).filter(([, v]) => v),
+      );
+      const atomic = await executeAtomicJobQuery({
+        filters,
+        limit,
+        listIntent: true,
+        JobModel: ScopedJob,
+      });
+      const total = atomic.result.total;
+      // With an explicit jobOrigin filter the atomic total already IS the one-bucket
+      // count; without one, a single total can't be un-mixed after the fact, so
+      // compute the real split with two more scoped countDocuments calls.
+      const counts = args.jobOrigin
+        ? buildJobCountsFromResult(atomic)
+        : await computeJobOriginCounts(ScopedJob, buildJobRankingMongoFilter({ filters }));
       logger.info(
         `[ChatAssistant][fetch_jobs] origin=${args.jobOrigin || 'any'} status=${args.status || 'any'} ` +
-        `returned=${merged.length} semanticRank=${usedSemanticRank} wantDetail=${wantDetail} ` +
-        `counts=int:${counts.internal}+ext:${counts.external}=${counts.total} filter=${JSON.stringify(hydrateFilter)}`
+        `returned=${atomic.result.jobs.length} total=${total} queryId=${atomic.queryId}`,
       );
       return {
-        records: merged,
+        ...atomic,
+        records: atomic.result.jobs,
+        total,
         counts,
         label: 'job',
         statusFilter: args.status || null,
         searchedFor: args.search || null,
-        wantDetail,
+        wantDetail: !!(args.search || args.jobId) && atomic.result.jobs.length === 1,
       };
     }
 
     case 'fetch_external_jobs': {
       // Redirected to mirrored Job rows (jobOrigin='external' OR legacy externalRef-only
-      // rows — MIRROR_EXTERNAL_OR, the same definition the ATS Jobs page uses). Raw
-      // ExternalJob collection (the ATS External Jobs page) is intentionally not exposed
-      // to the chatbot — only listings that have been mirrored into the ATS Jobs page are
-      // visible here.
+      // rows — MIRROR_EXTERNAL_OR, the same definition the ATS Jobs page uses, applied via
+      // buildJobRankingMongoFilter -> job.service.js buildJobListFilter). Raw ExternalJob
+      // collection (the ATS External Jobs page) is intentionally not exposed to the
+      // chatbot — only listings that have been mirrored into the ATS Jobs page are visible.
       const limit = Math.min(args.limit || 100, 200);
       const visibilityFilter = await resolveJobVisibilityFilter(user);
       const ScopedJob = scopeJobModel(Job, visibilityFilter);
       const statusFilter = args.status || 'Active';
 
-      let baseFilter = andMongoFilters(MIRROR_EXTERNAL_OR, { status: statusFilter });
-      if (args.company)  baseFilter = andMongoFilters(baseFilter, { 'organisation.name': { $regex: escapeRegex(args.company), $options: 'i' } });
-      if (args.location) baseFilter = andMongoFilters(baseFilter, { location: { $regex: escapeRegex(args.location), $options: 'i' } });
-      if (args.source)   baseFilter = andMongoFilters(baseFilter, { 'externalRef.source': args.source });
+      const filters = {
+        jobOrigin: 'external',
+        status: statusFilter,
+        ...(args.company ? { company: args.company } : {}),
+        ...(args.location ? { location: args.location } : {}),
+        ...(args.search ? { search: args.search } : {}),
+      };
+      let baseFilter = buildJobRankingMongoFilter({ filters });
+      if (args.source) baseFilter = andMongoFilters(baseFilter, { 'externalRef.source': args.source });
 
       const select = 'title organisation location jobType experienceLevel status salaryRange skillTags externalRef externalPlatformUrl jobDescription createdAt';
 
-      const queryParts = ['external mirrored job listing'];
-      if (args.search)   queryParts.push(args.search);
-      if (args.company)  queryParts.push(args.company);
-      if (args.location) queryParts.push(args.location);
-
-      let merged = [];
-      try {
-        const qEmb = await embedQuery(queryParts.join(' '));
-        const pineconeFilter = { jobOrigin: { $eq: 'external' } };
-        const matches = await pineconeQuery('jobs', qEmb, limit, pineconeFilter);
-        logger.info(`[ChatAssistant][fetch_external_jobs] pinecone(jobs/external) matches=${matches.length}`);
-        const mongoIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-        if (mongoIds.length) {
-          merged = await ScopedJob.find(andMongoFilters(baseFilter, { _id: { $in: mongoIds } }))
-            .select(select)
-            .sort({ createdAt: -1 })
-            .lean();
-        }
-      } catch (err) {
-        logger.warn(`[ChatAssistant][fetch_external_jobs] Pinecone error: ${err.message}`);
-      }
-
-      // Mongo fallback — Pinecone miss/error must not report zero external jobs when
-      // matching mirrors exist (this tool previously returned [] on any Pinecone miss).
-      if (!merged.length) {
-        merged = await ScopedJob.find(baseFilter)
-          .select(select)
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean();
-      }
-
-      const total = await ScopedJob.countDocuments(baseFilter);
+      const [merged, total] = await Promise.all([
+        ScopedJob.find(baseFilter).select(select).sort({ createdAt: -1 }).limit(limit).lean(),
+        ScopedJob.countDocuments(baseFilter),
+      ]);
 
       logger.info(
         `[ChatAssistant][fetch_external_jobs] returned=${merged.length} total=${total} status=${statusFilter}`
