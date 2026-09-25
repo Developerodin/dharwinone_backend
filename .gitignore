@@ -170,3 +170,13 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/__tests__/pipelineLines.test.js
 !src/services/chatAssistant/__tests__/attendanceAggregator.punchTime.test.js
 !src/services/chatAssistant/__tests__/jobRank.filters.test.js
+
+# Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
+# formatting, status default, pager title, duplicate experience line.
+!src/services/chatAssistant/__tests__/jobResult.test.js
+!src/services/chatAssistant/__tests__/jobFieldMap.test.js
+!src/services/chatAssistant/renderers/__tests__/
+!src/services/chatAssistant/renderers/__tests__/jobs.test.js
+!src/services/chatAssistant/renderers/__tests__/jobRanking.test.js
+!src/services/chatAssistant/jobProfile/__tests__/
+!src/services/chatAssistant/jobProfile/__tests__/presentJobProfile.test.js
