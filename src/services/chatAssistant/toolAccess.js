@@ -113,16 +113,32 @@ export async function resolveRowScope(user, deps = {}) {
   return null;
 }
 
+const rowMatchesAllowed = (r, allowed) =>
+  [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
+
 // ponytail: post-filter, not query rewrite — fetch_employees has 5 query paths.
 // Ceiling: a scoped user only sees rows inside the handler's limit (max 1000);
 // move the owner filter into each query path if a scoped population ever exceeds that.
+//
+// Three result shapes reach this function: a bare array (semantic_employee_search),
+// { records: [...] } (fetch_employees/fetch_candidates/fetch_people), and
+// { job, candidates: [...] } (match_candidates_to_job). Each is filtered by the
+// same owner-id keys; only { records } carries count fields to rewrite.
 export function applyRowScope(result, allowed) {
-  if (!allowed || !result || !Array.isArray(result.records)) return result;
-  const keep = (r) =>
-    [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
-  const records = result.records.filter(keep);
-  const { breakdown, ...rest } = result;
-  return { ...rest, records, total: records.length, baseTotal: records.length, scopedToYou: true };
+  if (!allowed || !result) return result;
+  if (Array.isArray(result)) {
+    return result.filter((r) => rowMatchesAllowed(r, allowed));
+  }
+  if (Array.isArray(result.records)) {
+    const records = result.records.filter((r) => rowMatchesAllowed(r, allowed));
+    const { breakdown, ...rest } = result;
+    return { ...rest, records, total: records.length, baseTotal: records.length, scopedToYou: true };
+  }
+  if (Array.isArray(result.candidates)) {
+    const candidates = result.candidates.filter((r) => rowMatchesAllowed(r, allowed));
+    return { ...result, candidates, scopedToYou: true };
+  }
+  return result;
 }
 
 const stripKey = (v, key) => {

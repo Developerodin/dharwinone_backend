@@ -82,6 +82,19 @@ describe('row scope', () => {
     assert.equal(out.scopedToYou, true);
   });
 
+  it('filters a bare-array result (semantic_employee_search shape)', () => {
+    const r = [{ _id: 'a' }, { _id: 'b' }];
+    assert.deepEqual(applyRowScope(r, new Set(['a'])), [{ _id: 'a' }]);
+  });
+
+  it('filters a { candidates } result (match_candidates_to_job shape), dropping non-matching rows', () => {
+    const r = { job: 'Engineer', candidates: [{ userId: 'a', name: 'A' }, { userId: 'z', name: 'Z' }] };
+    const out = applyRowScope(r, new Set(['a']));
+    assert.deepEqual(out.candidates, [{ userId: 'a', name: 'A' }]);
+    assert.equal(out.job, 'Engineer');
+    assert.equal(out.scopedToYou, true);
+  });
+
   it('sales agent scope resolves to referred/assigned owners', async () => {
     const deps = {
       applyScope: async () => ({ salesAgentScopeUserId: 'sa1' }),

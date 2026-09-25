@@ -3481,6 +3481,8 @@ async function fetchModule(name, args, user, uiContext = null) {
             email: p.email || p.owner?.email || '',
             skills: skillNames,
             matchPct: scoreMatch(skillNames, jobSkills, pScore),
+            // Owner User id — guardToolResult's applyRowScope filters candidates by this.
+            userId: ownerId,
           };
         });
         ranked.sort((a, b) => b.matchPct - a.matchPct);
