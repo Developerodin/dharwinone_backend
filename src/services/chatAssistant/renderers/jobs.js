@@ -97,44 +97,46 @@ export function renderJobs(data, ctx = {}, fact) {
   const wantDetail = !!data?.wantDetail || records.length === 1;
   if (wantDetail && records.length === 1) {
     const r = records[0];
+    // KVBlock pairs are { label, value, tone? } on the wire (chatResponse.ts,
+    // KV.tsx reads p.label/p.value) — {k,v} silently rendered a blank card.
     const optionalPairs = [
-      { k: 'Company',    v: cell(formatOrg(r)) },
-      { k: 'Type',       v: cell(r.jobType) },
-      { k: 'Location',   v: cell(r.location) },
-      { k: 'Experience', v: cell(r.experienceLevel) },
-      { k: 'Salary',     v: cell(formatSalary(r)) },
-      { k: 'Openings',   v: cell(r.vacancies) },
-      { k: 'Deadline',   v: cell(isoDate(r.applicationDeadline)) },
-      { k: 'Posted',     v: cell(isoDate(r.createdAt)) },
-      { k: 'Recruiter',  v: cell(r.recruiterName) },
-      { k: 'Origin',     v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')) },
-    ].filter((p) => p.v && p.v !== '—');
+      { label: 'Company',    value: cell(formatOrg(r)) },
+      { label: 'Type',       value: cell(r.jobType) },
+      { label: 'Location',   value: cell(r.location) },
+      { label: 'Experience', value: cell(r.experienceLevel) },
+      { label: 'Salary',     value: cell(formatSalary(r)) },
+      { label: 'Openings',   value: cell(r.vacancies) },
+      { label: 'Deadline',   value: cell(isoDate(r.applicationDeadline)) },
+      { label: 'Posted',     value: cell(isoDate(r.createdAt)) },
+      { label: 'Recruiter',  value: cell(r.recruiterName) },
+      { label: 'Origin',     value: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')) },
+    ].filter((p) => p.value && p.value !== '—');
     const pairs = [
-      { k: 'Title',  v: cell(r.title) },
+      { label: 'Title',  value: cell(r.title) },
       // Status is never guessed — an unknown status shows '—' rather than
       // silently claiming "Active" (issue 5), so it stays out of the
       // emptiness filter that drops the other optional pairs above.
-      { k: 'Status', v: cell(r.status) },
+      { label: 'Status', value: cell(r.status) },
       ...optionalPairs,
     ];
     if (Array.isArray(r.skillTags) && r.skillTags.length) {
-      pairs.push({ k: 'Skills', v: r.skillTags.join(', ') });
+      pairs.push({ label: 'Skills', value: r.skillTags.join(', ') });
     }
     if (Array.isArray(r.skillRequirements) && r.skillRequirements.length) {
       const fmtSkill = (s) => (s.level ? `${s.name} (${s.level})` : s.name);
       const required = r.skillRequirements.filter((s) => s.required !== false).map(fmtSkill);
       const preferred = r.skillRequirements.filter((s) => s.required === false).map(fmtSkill);
-      if (required.length) pairs.push({ k: 'Required skills', v: required.join(', ') });
-      if (preferred.length) pairs.push({ k: 'Preferred skills', v: preferred.join(', ') });
+      if (required.length) pairs.push({ label: 'Required skills', value: required.join(', ') });
+      if (preferred.length) pairs.push({ label: 'Preferred skills', value: preferred.join(', ') });
     }
     if (r.jobDescription) {
-      pairs.push({ k: 'Description', v: String(r.jobDescription).replace(/\s+/g, ' ').slice(0, 480) });
+      pairs.push({ label: 'Description', value: String(r.jobDescription).replace(/\s+/g, ' ').slice(0, 480) });
     }
     if (r.jobUrl) {
-      pairs.push({ k: 'Job link', v: r.jobUrl });
+      pairs.push({ label: 'Job link', value: r.jobUrl });
     }
     if (r.externalPlatformUrl) {
-      pairs.push({ k: 'Source URL', v: r.externalPlatformUrl });
+      pairs.push({ label: 'Source URL', value: r.externalPlatformUrl });
     }
     const block = {
       type: 'kv',

@@ -23,18 +23,31 @@ const job = (overrides = {}) => ({
 });
 
 describe('renderJobs — single job detail (kv block)', () => {
+  it('emits pairs in the {label, value} wire shape the frontend KV.tsx reads (issue C1)', () => {
+    // KVBlock on the wire is { label: string; value: string; tone?: Tone }
+    // (chatResponse.ts, KV.tsx renders p.label/p.value) — {k,v} rendered a
+    // blank card since the frontend never finds label/value on the pair.
+    const { block } = renderJobs({ records: [job()] }, { listIntent: false }, null);
+    for (const p of block.pairs) {
+      assert.ok('label' in p, `pair missing "label": ${JSON.stringify(p)}`);
+      assert.ok('value' in p, `pair missing "value": ${JSON.stringify(p)}`);
+      assert.equal(typeof p.value, 'string');
+      assert.ok(!('k' in p) && !('v' in p), `pair still has legacy k/v: ${JSON.stringify(p)}`);
+    }
+  });
+
   it('includes the job link in the markdown reply, not just the block (issue 1)', () => {
     const { block, markdown } = renderJobs({ records: [job()] }, { listIntent: false }, null);
     assert.match(markdown, /\[Open job page\]\(http:\/\/localhost:3001\/ats\/jobs\?view=job1\)/);
-    const jobLinkPair = block.pairs.find((p) => p.k === 'Job link');
-    assert.equal(jobLinkPair.v, 'http://localhost:3001/ats/jobs?view=job1');
+    const jobLinkPair = block.pairs.find((p) => p.label === 'Job link');
+    assert.equal(jobLinkPair.value, 'http://localhost:3001/ats/jobs?view=job1');
   });
 
   it('shows Openings, Deadline and Posted (issue 2)', () => {
     const { block } = renderJobs({ records: [job()] }, { listIntent: false }, null);
-    assert.equal(block.pairs.find((p) => p.k === 'Openings').v, '3');
-    assert.equal(block.pairs.find((p) => p.k === 'Deadline').v, '2026-10-15T00:00:00.000Z');
-    assert.equal(block.pairs.find((p) => p.k === 'Posted').v, '2026-09-01T00:00:00.000Z');
+    assert.equal(block.pairs.find((p) => p.label === 'Openings').value, '3');
+    assert.equal(block.pairs.find((p) => p.label === 'Deadline').value, '2026-10-15T00:00:00.000Z');
+    assert.equal(block.pairs.find((p) => p.label === 'Posted').value, '2026-09-01T00:00:00.000Z');
   });
 
   it('renders required/preferred skills separately (issue 3)', () => {
@@ -45,20 +58,20 @@ describe('renderJobs — single job detail (kv block)', () => {
       ],
     });
     const { block } = renderJobs({ records: [j] }, { listIntent: false }, null);
-    assert.equal(block.pairs.find((p) => p.k === 'Required skills').v, 'Node (Advanced)');
-    assert.equal(block.pairs.find((p) => p.k === 'Preferred skills').v, 'GraphQL');
+    assert.equal(block.pairs.find((p) => p.label === 'Required skills').value, 'Node (Advanced)');
+    assert.equal(block.pairs.find((p) => p.label === 'Preferred skills').value, 'GraphQL');
   });
 
   it('shows Status as "—" instead of guessing "Active" (issue 5)', () => {
     const { block } = renderJobs({ records: [job({ status: undefined })] }, { listIntent: false }, null);
-    const statusPair = block.pairs.find((p) => p.k === 'Status');
+    const statusPair = block.pairs.find((p) => p.label === 'Status');
     assert.ok(statusPair, 'Status pair must still be present even when unknown');
-    assert.equal(statusPair.v, '—');
+    assert.equal(statusPair.value, '—');
   });
 
   it('formats the salary range with currency + en dash (issue 4)', () => {
     const { block } = renderJobs({ records: [job()] }, { listIntent: false }, null);
-    assert.equal(block.pairs.find((p) => p.k === 'Salary').v, '$50,000 – $80,000');
+    assert.equal(block.pairs.find((p) => p.label === 'Salary').value, '$50,000 – $80,000');
   });
 });
 
