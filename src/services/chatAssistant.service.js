@@ -253,7 +253,7 @@ import {
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
 import { checkToolAccess, guardToolResult, resolveRowScope, rowMatchesAllowed, redactSalary } from './chatAssistant/toolAccess.js';
-import { formatOfferLine, formatPlacementLine } from './chatAssistant/pipelineLines.js';
+import { formatOfferLine, formatPlacementLine, formatTaskLine } from './chatAssistant/pipelineLines.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -1207,6 +1207,9 @@ const ROUTING_TOOLS = [
           overdue: { type: 'boolean', description: 'When true, only past-due open tasks.' },
           blocked: { type: 'boolean', description: 'When true, only tasks tagged blocked.' },
           includeTeamContext: { type: 'boolean', description: 'When true, attach enrichedTeams on each task project.' },
+          search: { type: 'string', description: 'Task code (e.g. ABC-101) or words from the title/description.' },
+          unassigned: { type: 'boolean', description: 'When true, only tasks with no assignee.' },
+          noDueDate: { type: 'boolean', description: 'When true, only tasks without a deadline.' },
           limit: { type: 'number', description: 'Max records to return (default 50, max 100)' },
         },
         required: [],
@@ -3143,6 +3146,9 @@ async function fetchModule(name, args, user, uiContext = null) {
       if (args.status) filters.status = args.status;
       if (args.projectId) filters.projectId = args.projectId;
       if (args.sprintId) filters.sprintId = args.sprintId;
+      if (args.search) filters.search = String(args.search).trim();
+      if (args.unassigned) filters.unassigned = true; // use the key task.service.js reads
+      if (args.noDueDate) filters.dueDate = null;
 
       if (args.projectName) {
         const resolved = await resolveProjectByNameOrId(args.projectName, user);
@@ -3207,6 +3213,16 @@ async function fetchModule(name, args, user, uiContext = null) {
       });
 
       let records = atomic.records || [];
+
+      if (records.length) {
+        const ids = records.map((t) => t._id || t.id);
+        const withComments = await Task.find({ _id: { $in: ids } })
+          .select('comments')
+          .populate({ path: 'comments.commentedBy', select: 'name' })
+          .lean();
+        const byId = new Map(withComments.map((t) => [String(t._id), t.comments || []]));
+        for (const t of records) t.comments = byId.get(String(t._id || t.id)) || [];
+      }
 
       if (args.includeTeamContext && records.length) {
         const projectIds = [...new Set(records.map((t) => String(t.projectId?._id || t.projectId)).filter(Boolean))];
@@ -4841,17 +4857,7 @@ function summarizeData(fetchedData) {
         `provenance = ${data?.provenance || 'task.service.queryTasks'}`,
       ];
       for (const t of records) {
-        const assignees = Array.isArray(t.assignedTo) && t.assignedTo.length
-          ? t.assignedTo.map((a) => (typeof a === 'object' ? a.name : a)).filter(Boolean).join(', ')
-          : 'Unassigned';
-        const creator = typeof t.createdBy === 'object' ? t.createdBy?.name : (t.createdBy || 'N/A');
-        const due = formatDateIST(t.dueDate) || 'No deadline';
-        const created = formatDateIST(t.createdAt) || 'N/A';
-        const project = typeof t.projectId === 'object' ? (t.projectId?.name || '') : '';
-        let line = `TASK: ${t.title || 'N/A'} | CODE: ${t.taskCode || 'N/A'} | STATUS: ${t.status || 'N/A'} | CREATED: ${created} | DUE: ${due} | ASSIGNED_TO: ${assignees} | CREATED_BY: ${creator || 'N/A'}`;
-        if (project)                              line += ` | PROJECT: ${project}`;
-        if (Array.isArray(t.tags) && t.tags.length) line += ` | TAGS: ${t.tags.join(', ')}`;
-        lines.push(line);
+        lines.push(formatTaskLine(t, { fmtDate: formatDateIST }));
       }
       parts.push(lines.join('\n'));
       continue;
