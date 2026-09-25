@@ -28,31 +28,71 @@ const JOB_TOPIC_MODIFIER_WORDS = new Set([
 /** Filler words that carry no topic meaning. */
 const JOB_TOPIC_FILLER_WORDS = new Set(['the', 'all', 'our', 'any', 'new', 'total', 'of', 'do', 'we', 'have']);
 
+/** "jobs of/for/with/related to X" — topic follows the noun + preposition, not before it. */
+const JOB_TOPIC_AFTER_NOUN_RE =
+  /\b(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\s+(?:of|for|with|related\s+to)\s+([^?.!]+)/i;
+
+/** "X related jobs" — topic word(s) immediately precede "related" + the job noun. */
+const JOB_TOPIC_RELATED_BEFORE_RE =
+  /\b([A-Za-z][\w+#.-]*(?:\s+[A-Za-z][\w+#.-]*){0,2})\s+related\s+(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\b/i;
+
+/** Drop filler/modifier words from a raw capture and join what's left; null if nothing remains. */
+function cleanJobTopicWords(text) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const kept = words.filter((w) => {
+    const lower = w.toLowerCase().replace(/[?.!,]+$/, '');
+    return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
+  });
+  return kept.join(' ').trim() || null;
+}
+
 /**
- * Pull the topic word(s) between a count/list phrase and the job noun — "how many **AI**
- * jobs" — into a search term. Without this, a topic like "AI" that isn't a recognized
- * status/type/company/skill filter was silently dropped, so "how many AI jobs" counted
- * every job instead of just AI jobs.
+ * Pull a topic word/phrase out of a job count/list question into a search term — "how many
+ * **AI** jobs", "how many jobs of **react**", "**react** related jobs". Without this, a
+ * topic that isn't a recognized status/type/company/skill filter was silently dropped, so
+ * "how many AI jobs" counted every job instead of just AI jobs.
  * @param {string} message
  * @returns {string|null}
  */
 export function extractJobTopicKeyword(message) {
-  const raw = String(message || '');
-  const nounMatch = raw.match(JOB_TOPIC_NOUN_RE);
-  if (!nounMatch) return null;
+  const raw = String(message || '').trim();
 
-  const before = raw.slice(0, nounMatch.index);
-  const leadinMatch = before.match(JOB_TOPIC_LEADIN_RE);
+  // Strip a leading count/list command phrase up front so every pattern below reasons
+  // about "the rest of the sentence" without separately re-checking for it.
+  const leadinMatch = raw.match(JOB_TOPIC_LEADIN_RE);
+  const rest = leadinMatch ? raw.slice(leadinMatch[0].length) : raw;
+
+  // "jobs of/for/with/related to X" — a strong-enough marker on its own; no leadin needed.
+  const afterNoun = rest.match(JOB_TOPIC_AFTER_NOUN_RE);
+  if (afterNoun) return cleanJobTopicWords(afterNoun[1]);
+
+  // "X related jobs" — likewise unambiguous without a leadin phrase.
+  const relatedBefore = rest.match(JOB_TOPIC_RELATED_BEFORE_RE);
+  if (relatedBefore) return cleanJobTopicWords(relatedBefore[1]);
+
+  // Default: topic word(s) between the (already-stripped) leadin and the job noun — e.g.
+  // "AI jobs", "react developer positions". Requires the leadin: without one, leftover text
+  // before a job noun isn't reliably a topic (a salary-ranking question like "what's the
+  // highest paying job" would otherwise mistake "what's the highest paying" for one).
   if (!leadinMatch) return null;
-
-  const words = before.slice(leadinMatch[0].length).split(/\s+/).filter(Boolean);
-  const topicWords = words.filter((w) => {
-    const lower = w.toLowerCase().replace(/[?.!,]+$/, '');
-    return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
-  });
-
-  return topicWords.join(' ').trim() || null;
+  const nounMatch = rest.match(JOB_TOPIC_NOUN_RE);
+  if (!nounMatch) return null;
+  return cleanJobTopicWords(rest.slice(0, nounMatch.index));
 }
+
+/**
+ * Unambiguous "every status" phrases — these win even over a status word parseJobFilters
+ * also caught, e.g. "including closed" mentions "closed" but means the opposite of a
+ * status:'Closed'-only filter.
+ */
+const JOB_ALL_STATUSES_STRONG_RE = /\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\b|\btotal\s+ever\s+posted\b/i;
+
+/**
+ * Bare "all" as a generic quantifier ("list all jobs") only means "every status" when no
+ * specific status word was also said — "list all closed jobs" must still mean Closed only,
+ * not get overridden back to every status just because "all" also appears.
+ */
+const JOB_ALL_WORD_RE = /\ball\b/i;
 
 const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
@@ -152,6 +192,16 @@ export function planJobFilterQuery({ userMessage, jobQueryContext = null }) {
   const filters = parseJobFilters(message, null);
   const topic = extractJobTopicKeyword(message);
   if (topic) filters.search = topic;
+
+  // Match the ATS Jobs page's own default: Active, unless the user named another status
+  // (handled above by parseJobFilters) or explicitly asked for every status ("any status",
+  // "including closed", "ever", "all"), which maps to status 'all' (no restriction).
+  if (JOB_ALL_STATUSES_STRONG_RE.test(message)) {
+    filters.status = 'all';
+  } else if (!filters.status) {
+    filters.status = JOB_ALL_WORD_RE.test(message) ? 'all' : 'Active';
+  }
+
   const listIntent = detectListIntent(message);
 
   return {
