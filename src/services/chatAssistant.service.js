@@ -252,8 +252,16 @@ import {
   buildMemorySections,
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
-import { checkToolAccess, guardToolResult, resolveRowScope, rowMatchesAllowed, redactSalary } from './chatAssistant/toolAccess.js';
+import {
+  checkToolAccess,
+  guardToolResult,
+  resolveRowScope,
+  rowMatchesAllowed,
+  redactSalary,
+  canReadOtherTraining,
+} from './chatAssistant/toolAccess.js';
 import { formatOfferLine, formatPlacementLine, formatTaskLine } from './chatAssistant/pipelineLines.js';
+import { meetingScope } from './visibilityScope.service.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -2401,12 +2409,15 @@ async function fetchModule(name, args, user, uiContext = null) {
         status: args.status,
         interviewResult: args.interviewResult,
       });
+      // Interviews page parity: manage = all, read = own (meeting.service.queryMeetings).
+      const { filter: visibility } = await meetingScope(user, 'read');
+      const scopedFilter = { $and: [filter, visibility] };
       const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
       const [total, statusAgg, resultAgg, docs] = await Promise.all([
-        Meeting.countDocuments(filter),
-        Meeting.aggregate([{ $match: filter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-        Meeting.aggregate([{ $match: filter }, { $group: { _id: '$interviewResult', count: { $sum: 1 } } }]),
-        Meeting.find(filter)
+        Meeting.countDocuments(scopedFilter),
+        Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$interviewResult', count: { $sum: 1 } } }]),
+        Meeting.find(scopedFilter)
           .select('title scheduledAt status interviewResult interviewType candidate recruiter agents jobPosition')
           .sort({ scheduledAt: -1 })
           .limit(limit)
@@ -2447,6 +2458,10 @@ async function fetchModule(name, args, user, uiContext = null) {
         }
         if (resolvedPerson.kind === 'ambiguous') {
           return { ambiguous: true, matches: resolvedPerson.matches, searchedFor: args.person };
+        }
+        const isSelf = String(resolvedPerson.ownerUser?._id || resolvedPerson.employee?.owner || '') === String(user?.id);
+        if (!isSelf && !(await canReadOtherTraining(user))) {
+          return { forbidden: true, reason: "Viewing another person's training progress requires students.read." };
         }
         studentId = resolvedPerson.studentProfile?._id ? String(resolvedPerson.studentProfile._id) : null;
         personLabel =

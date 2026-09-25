@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TOOL_ACCESS, checkToolAccess, applyRowScope, resolveRowScope, redactSalary, rowMatchesAllowed } from '../toolAccess.js';
+import {
+  TOOL_ACCESS,
+  checkToolAccess,
+  applyRowScope,
+  resolveRowScope,
+  redactSalary,
+  rowMatchesAllowed,
+  canReadOtherTraining,
+} from '../toolAccess.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const svcSrc = fs.readFileSync(path.join(here, '..', '..', 'chatAssistant.service.js'), 'utf8');
@@ -60,6 +68,21 @@ describe('toolAccess', () => {
 
   it('self-scoped tools pass with no permissions', async () => {
     assert.equal((await checkToolAccess('fetch_current_user', userWith(), notAdmin)).ok, true);
+  });
+});
+
+describe('training person gate', () => {
+  it('denies reading another person without students.read', async () => {
+    assert.equal(await canReadOtherTraining(userWith('tasks.read')), false);
+  });
+
+  it('allows with students.read', async () => {
+    assert.equal(await canReadOtherTraining(userWith('students.read')), true);
+  });
+
+  it('platformSuperUser passes with no permissions', async () => {
+    const su = { ...userWith(), platformSuperUser: true };
+    assert.equal(await canReadOtherTraining(su), true);
   });
 });
 

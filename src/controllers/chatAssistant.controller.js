@@ -4,6 +4,7 @@ import * as chatAssistantService from '../services/chatAssistant.service.js';
 import { clearContextCache } from '../services/chatAssistant.service.js';
 import * as chatbotConfigService from '../services/chatbotConfig.service.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
+import { userIsAdmin } from '../utils/roleHelpers.js';
 
 /**
  * Normalize and validate messages before sending to service/OpenAI
@@ -154,6 +155,11 @@ export const getSettings = catchAsync(async (req, res) => {
  * Update chatbot settings
  */
 export const updateSettings = catchAsync(async (req, res) => {
+  const isAdmin = req.user?.platformSuperUser || (await userIsAdmin(req.user));
+  if (!isAdmin) {
+    return res.status(httpStatus.FORBIDDEN).json({ success: false, message: 'Only administrators can change chatbot settings.' });
+  }
+
   const { isGloballyEnabled, enabledPages } = req.body;
 
   const data = await chatbotConfigService.updateConfig(req.user, {

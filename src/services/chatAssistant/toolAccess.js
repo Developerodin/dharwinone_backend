@@ -91,6 +91,16 @@ export async function checkToolAccess(name, user) {
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
 }
 
+/**
+ * student.route.js reads other students' progress behind students.read.
+ * Same rule as checkToolAccess — platformSuperUser or a permission grant, no
+ * Administrator-by-name shortcut.
+ */
+export async function canReadOtherTraining(user) {
+  if (user?.platformSuperUser) return true;
+  return hasAny(user?.authContext?.permissions, ['students.read', 'students.manage']);
+}
+
 const idOf = (v) => (v == null ? null : String(v?._id ?? v));
 
 /**
