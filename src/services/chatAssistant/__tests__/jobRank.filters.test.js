@@ -7,7 +7,11 @@ import {
   scopeJobModel,
   verifyCompanyCandidate,
 } from '../queryPlanner/entities/jobRank.js';
-import { planJobFilterQuery, extractJobTopicKeyword } from '../queryPlanner/entities/jobFilter.js';
+import {
+  planJobFilterQuery,
+  extractJobTopicKeyword,
+  looksLikeJobFilterQuery,
+} from '../queryPlanner/entities/jobFilter.js';
 
 describe('buildJobRankingMongoFilter — location', () => {
   it('maps a location arg to a location filter clause (case-insensitive)', () => {
@@ -202,10 +206,9 @@ describe('planJobFilterQuery — topic keyword extraction', () => {
     assert.equal(plan.filters.search, 'sales');
   });
 
-  // "list sales openings" and "roles" as a job noun aren't recognized by the outer
-  // looksLikeJobFilterQuery gate (LIST_INTENT_RE requires "list" immediately followed by
-  // the noun; JOB_SUBJECT_RE doesn't include "roles") — pre-existing, out of scope here.
-  // Exercise extractJobTopicKeyword directly for those two examples instead.
+  // extractJobTopicKeyword itself, independent of the outer looksLikeJobFilterQuery gate
+  // (see the "roles as a job noun" describe block below for the full-pipeline versions of
+  // these same two examples).
   it('extracts the topic word itself, independent of the outer gate', () => {
     assert.equal(extractJobTopicKeyword('list sales openings'), 'sales');
     assert.equal(extractJobTopicKeyword('any data science roles'), 'data science');
@@ -327,5 +330,38 @@ describe('extractJobTopicKeyword — "jobs of/for/with/related to X" and "X rela
   it('does not extract a topic from "jobs with X" — that is a skill/experience filter, not a topic', () => {
     assert.equal(extractJobTopicKeyword('how many jobs with react skills do we have'), null);
     assert.equal(extractJobTopicKeyword('how many jobs with 3-5 years experience'), null);
+  });
+});
+
+describe('looksLikeJobFilterQuery / planJobFilterQuery — "roles" as a job noun, and its exclusions', () => {
+  it('routes "how many AI roles", "list sales openings", "show me react jobs" and "any data science roles" deterministically, search set, status Active', () => {
+    const cases = [
+      ['how many AI roles', 'AI'],
+      ['list sales openings', 'sales'],
+      ['show me react jobs', 'react'],
+      ['any data science roles', 'data science'],
+    ];
+    for (const [message, expectedSearch] of cases) {
+      const plan = planJobFilterQuery({ userMessage: message });
+      assert.ok(plan, `expected ${JSON.stringify(message)} to route deterministically`);
+      assert.equal(plan.filters.search, expectedSearch, `search for ${JSON.stringify(message)}`);
+      assert.equal(plan.filters.status, 'Active', `status for ${JSON.stringify(message)}`);
+    }
+  });
+
+  // Regression: "roles" is also the fetch_roles (RBAC) tool's own vocabulary — a job query
+  // must not steal "list roles and permissions" or "user/system/admin roles" just because
+  // they contain the word "roles".
+  it('does not steal RBAC-flavored "roles" questions from the fetch_roles tool', () => {
+    const nonJobQueries = [
+      'list roles and permissions',
+      'list user roles',
+      'show system roles',
+      'list admin roles',
+    ];
+    for (const message of nonJobQueries) {
+      assert.equal(looksLikeJobFilterQuery(message), false, `should not route: ${JSON.stringify(message)}`);
+      assert.equal(planJobFilterQuery({ userMessage: message }), null, `should not plan: ${JSON.stringify(message)}`);
+    }
   });
 });

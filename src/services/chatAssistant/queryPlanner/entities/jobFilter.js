@@ -1,12 +1,20 @@
 import { ENTITY_JOB } from '../../../../schemas/queryOperations.js';
 import { parseJobFilters, looksLikeJobRankingQuery } from './jobRank.js';
 
-const LIST_INTENT_RE = /\b(list|show|display|give|present|tell|enumerate)\s+(me\s+)?(all|every|each|complete|full|the)\b|\blist\s+(jobs?|openings?|positions?)\b|\bshow\s+(jobs?|openings?|positions?)\b/i;
+const LIST_INTENT_RE =
+  /\b(list|show|display|give|present|tell|enumerate)\s+(me\s+)?(all|every|each|complete|full|the)\b|\b(?:list|show(?:\s+me)?)\s+(?:all\s+|the\s+)?(?:[A-Za-z][\w-]*\s+){0,4}(?:jobs?|openings?|positions?|roles?|vacanc(?:y|ies))\b/i;
 
 function detectListIntent(msg) {
   if (!msg || typeof msg !== 'string') return false;
   return LIST_INTENT_RE.test(msg);
 }
+
+/**
+ * "any data science roles" — a bare "any ... <job noun>" question, same bounded shape as
+ * the list/show pattern above but without an explicit list/show verb.
+ */
+const ANY_JOB_QUERY_RE =
+  /\bany\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:jobs?|openings?|positions?|roles?|vacanc(?:y|ies))\b/i;
 
 /** Job-noun set for topic-keyword extraction below (adds "roles" to the entity's usual set). */
 const JOB_TOPIC_NOUN_RE = /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\b/i;
@@ -123,6 +131,26 @@ const JOB_ALL_STATUSES_STRONG_RE =
 const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
 
+/**
+ * "roles" is a job noun ("how many AI roles"), but the same word is also the fetch_roles
+ * tool's own vocabulary (RBAC roles) — "list roles and permissions", "user/system/admin
+ * roles" must not be stolen into a job query just because "roles" appears.
+ */
+const JOB_ROLES_NOUN_RE = /\broles?\b/i;
+const NON_JOB_ROLES_RE = /\b(?:user|system|admin)\s+roles?\b|\broles?\s+and\s+permissions\b/i;
+
+/**
+ * True if the message names a job-flavored noun — the usual set (jobs/openings/vacancies/
+ * positions/postings), or "roles" when it isn't obviously RBAC vocabulary instead.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasJobSubjectNoun(text) {
+  const t = String(text || '');
+  if (JOB_SUBJECT_RE.test(t)) return true;
+  return JOB_ROLES_NOUN_RE.test(t) && !NON_JOB_ROLES_RE.test(t);
+}
+
 const COUNT_INTENT_RE =
   /\b(how many|count|number of|total)\b/i;
 
@@ -198,10 +226,11 @@ export function parseJobFollowUp(message, ctx = null) {
 export function looksLikeJobFilterQuery(text) {
   if (!text || typeof text !== 'string') return false;
   const t = text.trim();
-  if (!JOB_SUBJECT_RE.test(t)) return false;
+  if (!hasJobSubjectNoun(t)) return false;
   if (looksLikeJobRankingQuery(t)) return false;
   if (COUNT_INTENT_RE.test(t)) return true;
   if (detectListIntent(t)) return true;
+  if (ANY_JOB_QUERY_RE.test(t)) return true;
   if (/\b(external|internal)\b/i.test(t)) return true;
   if (/\b(?:require|requiring|needs?|with)\s+[A-Za-z#+.]/i.test(t)) return true;
   if (/\b(?:over|above|more than|at least)\s*\$?\s*\d/i.test(t)) return true;
