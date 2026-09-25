@@ -252,7 +252,12 @@ const applyJobListFacetFilters = (filter, facetOpts = {}) => {
  */
 const buildJobSearchClause = (term, wholeWord = false) => {
   const escaped = escapeRegex(term);
-  const searchRegex = new RegExp(wholeWord ? `\\b${escaped}\\b` : escaped, 'i');
+  // \b requires a \w/\W transition, so it never matches next to a term that starts or ends
+  // with a non-word character ("C++", "C#") — "+"/"#" followed by whitespace or end-of-
+  // string is a \W-to-\W non-transition, so `\bC\+\+\b` never matched "C++" in a sentence.
+  // Lookaround checks the adjacent character directly instead of requiring a transition.
+  const pattern = wholeWord ? `(?<!\\w)${escaped}(?!\\w)` : escaped;
+  const searchRegex = new RegExp(pattern, 'i');
   return {
     $or: [
       { title: searchRegex },
