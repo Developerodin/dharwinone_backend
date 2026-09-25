@@ -60,7 +60,11 @@ export function renderJobProfileSummary({ job, fields, depth = 'brief' }) {
   }
 
   const keys = depth === 'full'
-    ? Object.keys(JOB_FIELD_BY_KEY)
+    // minExperience/maxExperience format through the same formatJobExperience
+    // combined string as experienceLevel — iterating all three prints the
+    // identical value three times over (issue 7), so only experienceLevel
+    // (which already folds min/max into one range) stays in the loop.
+    ? Object.keys(JOB_FIELD_BY_KEY).filter((k) => !['minExperience', 'maxExperience'].includes(k))
     : JOB_SUMMARY_KEYS.filter((k) => !['title', 'jobType', 'location', 'company'].includes(k));
 
   for (const k of keys) {
@@ -166,6 +170,12 @@ export async function presentJobProfile({
     reply = renderJobProfileSummary({ job: resolved.job, fields, depth });
   }
 
+  // The kv detail block below renders plain text, not markdown — this is the
+  // only surface where the job page link can actually be clickable (issue 1).
+  if (resolved.job.jobUrl) {
+    reply = `${reply} [Open job page](${resolved.job.jobUrl})`;
+  }
+
   const rendered = renderJobs(
     { records: [resolved.job], wantDetail: depth === 'full' },
     { listIntent: false },
@@ -208,9 +218,11 @@ export function presentJobFollowUp({ job, raw = null, userMessage, depth = 'brie
     jobId: job.jobId,
   });
 
+  const withJobLink = (reply) => (job?.jobUrl ? `${reply} [Open job page](${job.jobUrl})` : reply);
+
   if (followUp.intent === 'single_fact' && followUp.field) {
     return {
-      reply: renderJobSingleFact(fields, followUp.field, job.title),
+      reply: withJobLink(renderJobSingleFact(fields, followUp.field, job.title)),
       blocks: [],
       meta: { kind: 'job_profile', entityType: 'job', presentationIntent: 'single_fact', deterministic: true },
     };
@@ -219,7 +231,7 @@ export function presentJobFollowUp({ job, raw = null, userMessage, depth = 'brie
   if (followUp.intent === 'anything_else' || depth === 'full') {
     const rendered = renderJobs({ records: [job], wantDetail: true }, { listIntent: false }, null);
     return {
-      reply: renderJobProfileSummary({ job, fields, depth: 'full' }),
+      reply: withJobLink(renderJobProfileSummary({ job, fields, depth: 'full' })),
       blocks: rendered?.block ? [rendered.block] : [],
       meta: { kind: 'job_profile', entityType: 'job', presentationIntent: 'full_profile', deterministic: true },
     };
