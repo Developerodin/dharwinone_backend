@@ -40,6 +40,7 @@ import {
 } from './chatAssistant/leaveRanking.js';
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
+import { llmParams } from './chatAssistant/llmParams.js';
 import { resolveRoleIds, tagRoleNames } from './chatAssistant/roleResolver.js';
 import { resolveRole as registryResolveRole, listRoleSlugs, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
 import { resolveUserEntity } from './chatAssistant/entityResolver.js';
@@ -1600,9 +1601,7 @@ async function buildRoleUniverseHint() {
 async function routeQuery(client, messages) {
   const roleHint = await buildRoleUniverseHint();
   const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    temperature: 0.1,
-    max_tokens: 256,
+    ...llmParams(config.chatbot.model, { temperature: 0.1, maxTokens: 256 }),
     messages: [
       {
         role: 'system',
@@ -8129,9 +8128,7 @@ async function saveMemoryAsync(client, userId, adminId, history, reply, fetched)
     }
 
     const compression = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0,
-      max_tokens: 300,
+      ...llmParams(config.chatbot.model, { temperature: 0, maxTokens: 300 }),
       messages: [
         {
           role: 'system',
@@ -8410,9 +8407,7 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   const completion = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    temperature: 0.55,
-    max_tokens: 1500,
+    ...llmParams(config.chatbot.model, { temperature: 0.55, maxTokens: 1500 }),
     messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
   });
 
@@ -8761,9 +8756,7 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   const stream = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    temperature: 0.55,
-    max_tokens: 1500,
+    ...llmParams(config.chatbot.model, { temperature: 0.55, maxTokens: 1500 }),
     messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
     stream: true,
     stream_options: { include_usage: true },

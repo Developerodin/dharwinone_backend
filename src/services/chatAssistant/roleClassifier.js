@@ -1,4 +1,6 @@
 import { listRoleSlugs, resolveRole as registryResolveRole } from './roleRegistry.js';
+import config from '../../config/config.js';
+import { llmParams } from './llmParams.js';
 
 const VALID_SCOPES = ['active', 'resigned', 'all'];
 
@@ -127,9 +129,7 @@ export async function classifyRole({ openai, userTurn, history, lastEntities, la
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0,
-      max_tokens: 200,
+      ...llmParams(config.chatbot.model, { temperature: 0, maxTokens: 200 }),
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
