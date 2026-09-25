@@ -7,6 +7,25 @@ import ConversationMemory from '../models/conversationMemory.model.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
 /**
+ * Impersonation: req.user is a Mongoose document, so `{ ...req.user }` only
+ * copies own-enumerable properties and drops _id/id/roleIds (exposed via
+ * getters on the doc, not own-enumerable). That silently made
+ * applyEmployeeListScope's row-scope checks fail open once __impersonating
+ * was set. authContext is re-attached explicitly because auth.js sets it as a
+ * plain property on the doc instance (not a schema path), so it does not
+ * survive toObject() either.
+ */
+const buildImpersonationUser = (req) => {
+  const plain = req.user?.toObject ? req.user.toObject() : req.user;
+  return {
+    ...plain,
+    id: String(req.user?._id ?? req.user?.id ?? ''),
+    authContext: req.authContext,
+    __impersonating: true,
+  };
+};
+
+/**
  * Normalize and validate messages before sending to service/OpenAI
  */
 const normalizeMessages = (messages) => {
@@ -41,7 +60,7 @@ export const sendMessage = catchAsync(async (req, res) => {
 
   const result = await chatAssistantService.sendMessage({
     messages,
-    user: req.impersonation ? { ...req.user, __impersonating: true } : req.user,
+    user: req.impersonation ? buildImpersonationUser(req) : req.user,
     uiContext: req.body.uiContext || null,
     requestId: req.id,
   });
@@ -85,7 +104,7 @@ export const streamMessage = async (req, res) => {
   try {
     await chatAssistantService.streamMessage({
       messages,
-      user: req.impersonation ? { ...req.user, __impersonating: true } : req.user,
+      user: req.impersonation ? buildImpersonationUser(req) : req.user,
       uiContext: req.body.uiContext || null,
       requestId: req.id,
       onToken: (token) => send({ token }),

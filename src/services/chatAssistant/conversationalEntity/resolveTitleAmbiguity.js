@@ -5,6 +5,7 @@ import Employee from '../../../models/employee.model.js';
 import Position from '../../../models/position.model.js';
 import { designationRegexForPhrase } from '../managerCounts.js';
 import { cleanSubject } from './queryPatterns.js';
+import { checkToolAccess } from '../toolAccess.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -90,9 +91,14 @@ function slimEmployee(row) {
  * @param {string} title
  * @param {object} [opts]
  * @param {'job'|'employee'|'neutral'} [opts.intent]
+ * @param {object} [opts.viewer] - Sage tool-gate subject; only entity types the
+ *   viewer passes checkToolAccess for (fetch_jobs / fetch_employees) are
+ *   counted or mentioned (Minor 10) — this reply used to leak both counts
+ *   before any gate ran.
  * @param {object} [opts.Job]
  * @param {object} [opts.Employee]
  * @param {object} [opts.Position]
+ * @param {Function} [opts.checkAccess] - injectable for tests; defaults to checkToolAccess
  */
 export async function resolveTitleAmbiguity(title, opts = {}) {
   const trimmed = String(title || '').trim();
@@ -107,22 +113,39 @@ export async function resolveTitleAmbiguity(title, opts = {}) {
   const safe = escapeRegex(trimmed);
   const desigFilter = designationRegexForPhrase(trimmed);
 
+  const checkAccess = opts.checkAccess ?? checkToolAccess;
+  const [jobsAccess, employeesAccess] = await Promise.all([
+    checkAccess('fetch_jobs', opts.viewer),
+    checkAccess('fetch_employees', opts.viewer),
+  ]);
+  const canSeeJobs = !!jobsAccess?.ok;
+  const canSeeEmployees = !!employeesAccess?.ok;
+  if (!canSeeJobs && !canSeeEmployees) {
+    return { kind: 'notFound', jobMatches: [], employeeMatches: [] };
+  }
+
   const [jobs, byDesignation, positions] = await Promise.all([
-    JobModel.find({
-      title: { $regex: safe, $options: 'i' },
-      status: { $ne: 'Archived' },
-    })
-      .select('_id title status jobType location organisation.name salaryRange')
-      .limit(10)
-      .lean(),
-    EmployeeModel.find({ designation: desigFilter })
-      .select('_id fullName designation department owner employeeId')
-      .limit(10)
-      .lean(),
-    PositionModel.find({ name: desigFilter })
-      .select('_id name')
-      .limit(5)
-      .lean(),
+    canSeeJobs
+      ? JobModel.find({
+          title: { $regex: safe, $options: 'i' },
+          status: { $ne: 'Archived' },
+        })
+          .select('_id title status jobType location organisation.name salaryRange')
+          .limit(10)
+          .lean()
+      : [],
+    canSeeEmployees
+      ? EmployeeModel.find({ designation: desigFilter })
+          .select('_id fullName designation department owner employeeId')
+          .limit(10)
+          .lean()
+      : [],
+    canSeeEmployees
+      ? PositionModel.find({ name: desigFilter })
+          .select('_id name')
+          .limit(5)
+          .lean()
+      : [],
   ]);
 
   let byPosition = [];
