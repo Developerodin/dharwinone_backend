@@ -1,5 +1,6 @@
 import Job from '../../../models/job.model.js';
 import { mapJobRow } from '../jobResult.js';
+import { andMongoFilters } from '../queryPlanner/entities/jobRank.js';
 
 const JOB_PROFILE_SELECT =
   'title jobType location status salaryRange experienceLevel minExperience maxExperience skillTags skillRequirements organisation jobOrigin externalPlatformUrl jobDescription vacancies createdAt';
@@ -34,17 +35,21 @@ function scoreTitleMatch(query, doc) {
  * Resolve a job by partial title — unique, ambiguous, or not found.
  *
  * @param {string} query
- * @param {{ Job?: import('mongoose').Model, limit?: number, status?: string|null }} [opts]
+ * @param {{ Job?: import('mongoose').Model, limit?: number, status?: string|null, visibilityFilter?: object }} [opts]
  */
 export async function resolveJobByTitle(query, opts = {}) {
   const JobModel = opts.Job ?? Job;
   const trimmed = String(query || '').trim();
   if (!trimmed) return { kind: 'notFound', query: trimmed };
 
-  const mongoFilter = {
+  const titleFilter = {
     title: { $regex: escapeRegex(trimmed), $options: 'i' },
   };
-  if (opts.status) mongoFilter.status = opts.status;
+  if (opts.status) titleFilter.status = opts.status;
+  // Same visibility as the ATS Jobs page (jobRank.js resolveJobVisibilityFilter) —
+  // a job title lookup must never surface a Draft/other-user's job Sage's callers
+  // couldn't otherwise see.
+  const mongoFilter = andMongoFilters(titleFilter, opts.visibilityFilter || {});
 
   const docs = await JobModel.find(mongoFilter)
     .select(JOB_PROFILE_SELECT)
@@ -88,11 +93,12 @@ export async function resolveJobByTitle(query, opts = {}) {
 /**
  * Fetch one job by id for follow-up turns.
  * @param {string} jobId
- * @param {{ Job?: import('mongoose').Model }} [opts]
+ * @param {{ Job?: import('mongoose').Model, visibilityFilter?: object }} [opts]
  */
 export async function fetchJobById(jobId, opts = {}) {
   const JobModel = opts.Job ?? Job;
-  const doc = await JobModel.findById(jobId).select(JOB_PROFILE_SELECT).lean();
+  const mongoFilter = andMongoFilters({ _id: jobId }, opts.visibilityFilter || {});
+  const doc = await JobModel.findOne(mongoFilter).select(JOB_PROFILE_SELECT).lean();
   if (!doc) return null;
   return { job: mapJobRow(doc), raw: doc };
 }
