@@ -515,6 +515,36 @@ const hasOfferPipelinePerm = (currentUser) => {
   return !!(p && OFFER_PIPELINE_PERMS.some((perm) => p.has(perm)));
 };
 
+/**
+ * The exact non-admin/no-pipeline-perm visibility restriction queryOffers applies
+ * below: sees only offers on jobs they created, or offers they created themselves.
+ * `jobIdFilter` is an already-applied single-job restriction (query.job, from
+ * filter.jobId) — when set and outside the caller's own jobs, callers must show
+ * nothing (mirrors the early "no offers" return in queryOffers for that case).
+ * Returns { unrestricted: true }, { blocked: true } (jobIdFilter outside scope),
+ * { orClause } (job-owned OR self-created), or { createdBy } (no jobs owned).
+ * Extracted so callers other than the offers list (e.g. Sage) can apply the
+ * identical restriction instead of re-implementing it.
+ */
+export const buildOfferVisibilityClause = async (currentUser, jobIdFilter) => {
+  const { userIsAdmin: checkAdmin } = await import('../utils/roleHelpers.js');
+  const isAdmin = await checkAdmin(currentUser);
+  const rawUserId = currentUser?.id ?? currentUser?._id;
+  const userId = rawUserId && mongoose.Types.ObjectId.isValid(String(rawUserId))
+    ? new mongoose.Types.ObjectId(String(rawUserId))
+    : rawUserId;
+  if (isAdmin || !userId || hasOfferPipelinePerm(currentUser)) return { unrestricted: true };
+  const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
+  const myJobIds = myJobs.map((j) => j._id);
+  if (jobIdFilter) {
+    return myJobIds.some((jid) => jid.toString() === String(jobIdFilter))
+      ? { unrestricted: true }
+      : { blocked: true };
+  }
+  if (myJobIds.length > 0) return { orClause: { $or: [{ job: { $in: myJobIds } }, { createdBy: userId }] } };
+  return { createdBy: userId };
+};
+
 const ensureAccess = async (currentUser, offerOrJob) => {
   if (hasOfferPipelinePerm(currentUser)) return;
   let job;
@@ -1529,7 +1559,6 @@ const resolveOfferIdsForStages = async (stages) => {
  * Query offers with filter
  */
 const queryOffers = async (filter, options, currentUser) => {
-  const { userIsAdmin: checkAdmin } = await import('../utils/roleHelpers.js');
   const query = {};
 
   if (filter.jobId) query.job = filter.jobId;
@@ -1550,32 +1579,13 @@ const queryOffers = async (filter, options, currentUser) => {
     }
   }
 
-  const isAdmin = await checkAdmin(currentUser);
-  const rawUserId = currentUser?.id ?? currentUser?._id;
-  const userId = rawUserId && mongoose.Types.ObjectId.isValid(String(rawUserId))
-    ? new mongoose.Types.ObjectId(String(rawUserId))
-    : rawUserId;
-
-  if (!isAdmin && userId && !hasOfferPipelinePerm(currentUser)) {
-    const Job = (await import('../models/job.model.js')).default;
-    const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
-    const myJobIds = myJobs.map((j) => j._id);
-    if (query.job) {
-      if (!myJobIds.some((jid) => jid.toString() === String(query.job))) {
-        const limit = options.limit || 10;
-        return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
-      }
-    } else if (myJobIds.length > 0) {
-      // Show offers for jobs I own OR offers I created
-      query.$or = [
-        { job: { $in: myJobIds } },
-        { createdBy: userId },
-      ];
-    } else {
-      // User has no jobs – show only offers they created
-      query.createdBy = userId;
-    }
+  const visibility = await buildOfferVisibilityClause(currentUser, query.job);
+  if (visibility.blocked) {
+    const limit = options.limit || 10;
+    return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
   }
+  if (visibility.orClause) query.$or = visibility.orClause.$or;
+  if (visibility.createdBy) query.createdBy = visibility.createdBy;
 
   const searchTerm = filter.search != null ? String(filter.search).trim() : '';
   if (searchTerm) {

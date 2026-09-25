@@ -31,6 +31,34 @@ const hasAnyPipelinePerm = (currentUser) => {
   return !!(p && PIPELINE_PERMS.some((perm) => p.has(perm)));
 };
 
+/**
+ * The exact non-admin/no-pipeline-perm visibility restriction queryPlacements
+ * applies below: sees only placements on jobs they created, or placements they
+ * created themselves. `jobIdFilter` is an already-applied single-job restriction
+ * (query.job, from filter.jobId) — when set and outside the caller's own jobs,
+ * queryPlacements narrows to createdBy=self rather than returning early (matches
+ * its existing behavior, which can still combine with other filters).
+ * Returns { unrestricted: true }, { createdBy } (no jobs owned, or jobIdFilter
+ * outside scope), or { orClause } (job-owned OR self-created, AND-composable).
+ * Extracted so callers other than the placements list (e.g. Sage) can apply the
+ * identical restriction instead of re-implementing it.
+ */
+export const buildPlacementVisibilityClause = async (currentUser, jobIdFilter) => {
+  const { userIsAdmin } = await import('../utils/roleHelpers.js');
+  const isAdmin = await userIsAdmin(currentUser);
+  const rawUserId = currentUser?.id ?? currentUser?._id;
+  const userId = rawUserId && String(rawUserId).match(/^[0-9a-fA-F]{24}$/) ? rawUserId : null;
+  if (isAdmin || hasAnyPipelinePerm(currentUser) || !userId) return { unrestricted: true };
+  const Job = (await import('../models/job.model.js')).default;
+  const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
+  const myJobIds = myJobs.map((j) => j._id);
+  if (jobIdFilter) {
+    const jobAllowed = myJobIds.some((jid) => jid.toString() === String(jobIdFilter));
+    return jobAllowed ? { unrestricted: true } : { createdBy: userId };
+  }
+  return { orClause: { $or: [{ job: { $in: myJobIds } }, { createdBy: userId }] } };
+};
+
 /** UTC calendar day string YYYY-MM-DD for stable comparison of stored dates. */
 const joinDateYmdUtc = (d) => {
   const x = d instanceof Date ? d : new Date(d);
@@ -479,7 +507,6 @@ const applyStageFilter = (query, stage, statusNarrow) => {
  * Query placements with filter
  */
 const queryPlacements = async (filter, options, currentUser) => {
-  const { userIsAdmin } = await import('../utils/roleHelpers.js');
   const query = {};
 
   if (filter.jobId) query.job = filter.jobId;
@@ -501,25 +528,10 @@ const queryPlacements = async (filter, options, currentUser) => {
   }
   if (filter.preBoardingStatus) query.preBoardingStatus = filter.preBoardingStatus;
 
-  const isAdmin = await userIsAdmin(currentUser);
-  const rawUserId = currentUser?.id ?? currentUser?._id;
-  const userId = rawUserId && String(rawUserId).match(/^[0-9a-fA-F]{24}$/) ? rawUserId : null;
-  // Any pipeline-scope perm grants full-list visibility — same as admin.
-  const hasPipelineReadScope = hasAnyPipelinePerm(currentUser);
-  if (!isAdmin && !hasPipelineReadScope && userId) {
-    const Job = (await import('../models/job.model.js')).default;
-    const myJobs = await Job.find({ createdBy: userId }, { _id: 1 }).lean();
-    const myJobIds = myJobs.map((j) => j._id);
-    if (query.job) {
-      const jobAllowed = myJobIds.some((jid) => jid.toString() === String(query.job));
-      if (!jobAllowed) {
-        query.createdBy = userId;
-      }
-    } else {
-      // $and-wrapped so it composes with a stage $or (onboarding queue) instead of clobbering it.
-      pushAnd(query, { $or: [{ job: { $in: myJobIds } }, { createdBy: userId }] });
-    }
-  }
+  const visibility = await buildPlacementVisibilityClause(currentUser, query.job);
+  if (visibility.createdBy) query.createdBy = visibility.createdBy;
+  // $and-wrapped so it composes with a stage $or (onboarding queue) instead of clobbering it.
+  if (visibility.orClause) pushAnd(query, visibility.orClause);
 
   const narrow = await narrowPlacementQueryToValidCandidates(query, filter);
   if (!narrow.ok) {
