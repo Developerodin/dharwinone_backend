@@ -412,11 +412,13 @@ export function buildJobRankingMongoFilter(plan) {
     });
   }
   const searchTerm = f.search || f.title;
-  if (searchTerm) {
-    const term = String(searchTerm).trim();
+  // Several topics ("ml and ai jobs") arrive as an array and match any of them.
+  const terms = [].concat(searchTerm || []).map((t) => String(t).trim()).filter(Boolean);
+  if (terms.length) {
     // Short topic words ("AI"/"UI"/"QA"/"Go") need word-boundary matching or they match
     // substrings inside unrelated words ("email"/"maintenance"/"quality"/"Google").
-    appendFilterClause(filter, buildJobSearchClause(term, term.length <= 3));
+    const clauses = terms.map((term) => buildJobSearchClause(term, term.length <= 3));
+    appendFilterClause(filter, clauses.length === 1 ? clauses[0] : { $or: clauses });
   }
 
   return filter;

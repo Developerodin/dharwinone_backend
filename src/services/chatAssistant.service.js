@@ -193,8 +193,10 @@ import { buildFallback } from './chatAssistant/fallbackGenerator.js';
 import { runEmployeeEntityQuery, runAgentEmployeeQuery, useEmployeeEntityQuery, resolveEntity } from './chatAssistant/entityQuery/index.js';
 import {
   runJobEntityQuery,
+  runJobFilterQuery,
   shouldHandleJobEntityQuery,
   looksLikeJobRankingQuery,
+  parseJobFollowUp,
 } from './chatAssistant/entityQuery/runJobEntityQuery.js';
 import { readJobQueryContext, saveJobQueryContext, buildJobQueryContextFromResult } from './chatAssistant/conversationState/jobQueryContext.js';
 import { guardLegacyReply } from './chatAssistant/entityQuery/recordValidator.js';
@@ -7709,6 +7711,36 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
       // fetch_jobs' jobs.read gate and visibility scope here; denied is treated as no
       // job match so presentJobProfile renders its existing notFound reply.
       const jobsAccess = await checkToolAccess('fetch_jobs', user);
+      // "job" with several matches: answer with the job counter itself (same active/search
+      // filter the prompt's total came from) instead of opening the first posting.
+      if (jobsAccess.ok && titleSel.allJobs && (titlePending.jobTotal ?? titlePending.jobMatches.length) > 1) {
+        const jobResult = await runJobFilterQuery({
+          userMessage: lastUserMsg,
+          user,
+          deps: {
+            planJobFilterQuery: () => ({
+              entity: 'job',
+              operation: 'FILTER',
+              intent: 'list',
+              filters: { search: titlePending.query, status: 'Active' },
+              limit: 50,
+            }),
+          },
+        });
+        if (jobResult) {
+          return emit(envelope({
+            reply: jobResult.reply,
+            blocks: jobResult.blocks,
+            meta: {
+              kind: 'jobs',
+              intent: 'list',
+              total: typeof jobResult.total === 'number' ? jobResult.total : null,
+              queryId: jobResult.jobResult?.query?.queryId ?? null,
+              deterministic: true,
+            },
+          }));
+        }
+      }
       let resolved;
       if (!jobsAccess.ok) {
         resolved = { kind: 'notFound', query: titlePending.query };
@@ -7817,12 +7849,22 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
   }
 
   const convEntitySubject = await readEntitySubject({ userId, adminId });
-  const appQueryContext = readApplicationQueryContext(
-    userId && adminId
-      ? await ConversationMemory.findOne({ userId, adminId }).lean()
-      : null,
-  );
+  const convMemDoc = userId && adminId
+    ? await ConversationMemory.findOne({ userId, adminId }).lean()
+    : null;
+  const appQueryContext = readApplicationQueryContext(convMemDoc);
   if (detectWhatAboutEntitySwitch(lastUserMsg, { applicationQueryContext: appQueryContext })) {
+    return null;
+  }
+  // "what about ai" right after a job count is a job follow-up, not a person/title lookup —
+  // leave it to the job counter further down. Keyed on the previous reply being about jobs
+  // because jobQueryContext outlives the job conversation.
+  // ponytail: text check on the last reply; store a lastTurnKind if this misfires.
+  const prevAssistantMsg = history.filter((m) => m.role === 'assistant').pop()?.content ?? '';
+  if (
+    /\bjobs?\b/i.test(prevAssistantMsg) &&
+    parseJobFollowUp(lastUserMsg, readJobQueryContext(convMemDoc))
+  ) {
     return null;
   }
   const conv = detectConversationalQuery(lastUserMsg, {
@@ -7849,6 +7891,8 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
         query: conv.subject,
         jobMatches: titleRes.jobMatches,
         employeeMatches: titleRes.employeeMatches,
+        jobTotal: titleRes.jobTotal,
+        employeeTotal: titleRes.employeeTotal,
       });
       return emit(envelope({
         reply: renderTitleAmbiguity({ query: conv.subject, ...titleRes }),

@@ -269,7 +269,7 @@ export function buildJobCountPhrase(filters = {}, total = 0) {
   if (origin) parts.push(origin.toLowerCase());
   // Names what was actually counted, e.g. "active remote AI jobs" — a topic search term
   // (jobFilter.js extractJobTopicKeyword) must show up in the reply, not just the total.
-  if (filters.search) parts.push(String(filters.search).trim());
+  if (filters.search) parts.push([].concat(filters.search).map((t) => String(t).trim()).join(' or '));
   parts.push(total === 1 ? 'job' : 'jobs');
   if (filters.skill) parts.push(`with ${String(filters.skill).trim()}`);
   if (filters.company) parts.push(`at ${String(filters.company).trim()}`);

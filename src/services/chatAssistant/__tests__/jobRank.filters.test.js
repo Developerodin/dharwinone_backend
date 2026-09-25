@@ -11,7 +11,11 @@ import {
   planJobFilterQuery,
   extractJobTopicKeyword,
   looksLikeJobFilterQuery,
+  parseJobFollowUp,
 } from '../queryPlanner/entities/jobFilter.js';
+import { buildJobCountPhrase } from '../jobResult.js';
+import { renderTitleAmbiguity } from '../conversationPolicy/renderFacts.js';
+import { matchTitleSelection } from '../conversationalEntity/preRouter.js';
 
 describe('buildJobRankingMongoFilter — location', () => {
   it('maps a location arg to a location filter clause (case-insensitive)', () => {
@@ -413,5 +417,60 @@ describe('"jobs in X" — place or topic', () => {
   it('names city, company and search in the count reply', async () => {
     const { buildJobCountPhrase } = await import('../jobResult.js');
     assert.equal(buildJobCountPhrase({ status: 'Active', search: 'ai', city: 'Pune' }, 3), 'active ai jobs in Pune');
+  });
+});
+
+describe('job topics — several topics, bare follow-ups, title prompt totals', () => {
+  const ctx = { filters: { search: 'ml', status: 'Active' }, intent: 'count' };
+
+  it('"ml and ai jobs" searches both topics', () => {
+    const plan = planJobFilterQuery({ userMessage: 'how many ml and ai jobs do we have today' });
+    assert.deepEqual(plan.filters.search, ['ml', 'ai']);
+    assert.equal(buildJobCountPhrase(plan.filters, 5), 'active ml or ai jobs');
+  });
+
+  it('several topics become one OR clause, each whole-word when short', () => {
+    const filter = buildJobRankingMongoFilter({ filters: { search: ['ml', 'ai'] } });
+    const or = filter.$or ?? filter.$and?.[0]?.$or;
+    assert.equal(or.length, 2);
+    assert.ok(or[1].$or[0].title.test('Applied AI Engineer'));
+    assert.ok(!or[1].$or[0].title.test('Email Marketing'));
+  });
+
+  it('"what about ai" after a job count swaps the topic', () => {
+    assert.equal(parseJobFollowUp('what about ai', ctx).filters.search, 'ai');
+    assert.equal(parseJobFollowUp('ok what about next', ctx).filters.search, 'next');
+    assert.deepEqual(parseJobFollowUp('how about python and go', ctx).filters.search, ['python', 'go']);
+  });
+
+  it('modifier-only follow-ups keep the inherited topic', () => {
+    assert.equal(parseJobFollowUp('and remote?', ctx).filters.search, 'ml');
+    assert.equal(parseJobFollowUp('what about external', ctx).filters.search, 'ml');
+    const closed = parseJobFollowUp('what about closed ones', ctx).filters;
+    assert.equal(closed.search, 'ml');
+    assert.equal(closed.status, 'Closed');
+  });
+
+  it('"sort by salary" is not mistaken for a "so" opener', () => {
+    assert.equal(parseJobFollowUp('sort by salary', ctx), null);
+  });
+
+  it('title prompt reports real totals, not the capped match list', () => {
+    const text = renderTitleAmbiguity({
+      query: 'ai',
+      jobMatches: new Array(10).fill({ title: 'AI' }),
+      employeeMatches: [{ name: 'A' }],
+      jobTotal: 80,
+      employeeTotal: 8,
+    });
+    assert.match(text, /80 active jobs/);
+    assert.match(text, /8 employees/);
+  });
+
+  it('a bare "job" pick asks for every matching job', () => {
+    const pending = { jobMatches: [{ jobId: 'a' }, { jobId: 'b' }], employeeMatches: [{}] };
+    assert.equal(matchTitleSelection('job', pending).allJobs, true);
+    assert.equal(matchTitleSelection('jobs', pending).allJobs, true);
+    assert.equal(matchTitleSelection('first job', pending).allJobs, undefined);
   });
 });

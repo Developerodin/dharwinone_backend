@@ -28,7 +28,7 @@ const JOB_TOPIC_NOUN_RE = /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|posting
  * question does.
  */
 const JOB_TOPIC_LEADIN_RE =
-  /^\s*(?:how many|count|number of|total|list(?:\s+all)?|show(?:\s+me)?(?:\s+all)?|any|and|what about|only|just|filter(?:\s+to)?|limit(?:\s+to)?)\b\s*/i;
+  /^\s*(?:how many|count|number of|total|list(?:\s+all)?|show(?:\s+me)?(?:\s+all)?|any|and|what about|how about|only|just|filter(?:\s+to)?|limit(?:\s+to)?)\b\s*/i;
 
 /** Status/type/origin modifier words parseJobFilters already extracts — not part of the topic. */
 const JOB_TOPIC_MODIFIER_WORDS = new Set([
@@ -38,7 +38,13 @@ const JOB_TOPIC_MODIFIER_WORDS = new Set([
 ]);
 
 /** Filler words that carry no topic meaning. */
-const JOB_TOPIC_FILLER_WORDS = new Set(['the', 'all', 'our', 'any', 'new', 'total', 'of', 'do', 'we', 'have']);
+const JOB_TOPIC_FILLER_WORDS = new Set([
+  'the', 'all', 'our', 'any', 'new', 'total', 'of', 'do', 'we', 'have',
+  'one', 'ones', 'those', 'them', 'full', 'part', 'time',
+]);
+
+/** "ml and ai jobs" names two topics — split on these instead of stopping. */
+const JOB_TOPIC_SEPARATOR_WORDS = new Set(['and', 'or', '&']);
 
 /**
  * Words that end a topic capture — the capture must not run past these into the rest of
@@ -46,7 +52,7 @@ const JOB_TOPIC_FILLER_WORDS = new Set(['the', 'all', 'our', 'any', 'new', 'tota
  */
 const JOB_TOPIC_STOP_WORDS = new Set([
   'are', 'is', 'there', 'available', 'open', 'opening', 'openings',
-  'in', 'at', 'with', 'over', 'above', 'below', 'under', 'and',
+  'in', 'at', 'with', 'over', 'above', 'below', 'under',
   'right', 'now', 'currently', 'today',
 ]);
 
@@ -64,25 +70,43 @@ const JOB_TOPIC_RELATED_BEFORE_RE =
   /\b([A-Za-z][\w+#.-]*(?:\s+[A-Za-z][\w+#.-]*){0,2})\s+related\s+(?:jobs?|openings?|vacanc(?:y|ies)|positions?|postings?|roles?)\b/i;
 
 /**
- * Truncate a raw capture at the first stop word / digit / word with trailing punctuation,
- * then drop filler/modifier words from what's left; null if nothing remains.
+ * Truncate a raw capture at the first stop word / digit / sentence punctuation, split it
+ * into topics on and/or/commas ("ml and ai"), then drop filler/modifier words from each.
+ * Returns null (nothing left), one topic string, or an array of topics (matched as OR).
  */
 function cleanJobTopicWords(text) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
-  const bounded = [];
+  const groups = [[]];
   for (const raw of words) {
     const clean = raw.replace(/[?.!,]+$/, '');
     const lower = clean.toLowerCase();
+    if (JOB_TOPIC_SEPARATOR_WORDS.has(lower)) {
+      groups.push([]);
+      continue;
+    }
     if (!lower || JOB_TOPIC_STOP_WORDS.has(lower) || /\d/.test(lower)) break;
-    bounded.push(clean);
-    if (raw !== clean) break; // trailing punctuation on this word ends the topic clause
+    groups[groups.length - 1].push(clean);
+    if (/[?.!]$/.test(raw)) break; // sentence punctuation ends the topic clause
+    if (raw.endsWith(',')) groups.push([]); // "ml, ai jobs" lists topics
   }
-  const kept = bounded.filter((w) => {
-    const lower = w.toLowerCase();
-    return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
-  });
-  return kept.join(' ').trim() || null;
+  const topics = groups
+    .map((g) => g.filter((w) => {
+      const lower = w.toLowerCase();
+      return lower && !JOB_TOPIC_MODIFIER_WORDS.has(lower) && !JOB_TOPIC_FILLER_WORDS.has(lower);
+    }).join(' ').trim())
+    .filter(Boolean);
+  const unique = [...new Set(topics.map((t) => t.toLowerCase()))].map(
+    (lower) => topics.find((t) => t.toLowerCase() === lower),
+  );
+  if (!unique.length) return null;
+  return unique.length === 1 ? unique[0] : unique;
 }
+
+/** Conversational openers ("ok what about next") that must not hide a follow-up lead-in. */
+const FOLLOWUP_OPENER_RE = /^\s*(?:ok(?:ay)?|so|alright|hmm+|then)\b[,.!\s]*/i;
+
+/** Lead-ins whose bare remainder is a topic swap: "what about ai" after a job count. */
+const FOLLOWUP_TOPIC_LEADIN_RE = /^\s*(?:and|what about|how about|only|just)\s+/i;
 
 /**
  * Pull a topic word/phrase out of a job count/list question into a search term — "how many
@@ -90,7 +114,7 @@ function cleanJobTopicWords(text) {
  * topic that isn't a recognized status/type/company/skill filter was silently dropped, so
  * "how many AI jobs" counted every job instead of just AI jobs.
  * @param {string} message
- * @returns {string|null}
+ * @returns {string|string[]|null}
  */
 export function extractJobTopicKeyword(message) {
   const raw = String(message || '').trim();
@@ -155,7 +179,7 @@ const COUNT_INTENT_RE =
   /\b(how many|count|number of|total)\b/i;
 
 const FOLLOWUP_FILTER_RE =
-  /^\s*(?:and|what about|only|just|show(?:\s+me)?|filter(?:\s+to)?|limit(?:\s+to)?|also|with|over|above|pay(?:ing)?|salary|require|requiring)\b/i;
+  /^\s*(?:and|what about|how about|only|just|show(?:\s+me)?|filter(?:\s+to)?|limit(?:\s+to)?|also|with|over|above|pay(?:ing)?|salary|require|requiring)\b/i;
 
 const FOLLOWUP_SALARY_RE =
   /\b(?:over|above|more than|at least|pay(?:ing)?|salary)\b.*\d/i;
@@ -175,10 +199,11 @@ const FOLLOWUP_SHORT_RE =
  */
 export function parseJobFollowUp(message, ctx = null) {
   if (!ctx?.filters || !Object.keys(ctx.filters).length) return null;
-  const t = String(message || '').trim();
+  const t = String(message || '').replace(FOLLOWUP_OPENER_RE, '').trim();
+  message = t;
   const lower = t.toLowerCase();
 
-  let originMatch = t.match(/^\s*(?:and|what about|only|just|show(?:\s+me)?|filter(?:\s+to)?|limit(?:\s+to)?)\s+(external|internal)\b/i);
+  let originMatch = t.match(/^\s*(?:and|what about|how about|only|just|show(?:\s+me)?|filter(?:\s+to)?|limit(?:\s+to)?)\s+(external|internal)\b/i);
   if (!originMatch) originMatch = t.match(FOLLOWUP_SHORT_RE);
 
   const isFilterFollowUp =
@@ -197,7 +222,13 @@ export function parseJobFollowUp(message, ctx = null) {
 
   // A topic named in the follow-up itself replaces the inherited one — "how many ai jobs"
   // then "what about react jobs?" must search 'react', not keep 'ai' from ctx.
-  const topic = extractJobTopicKeyword(message);
+  // A bare "what about ai" has no job noun for extractJobTopicKeyword to anchor on, but in
+  // a follow-up the remainder itself is the new topic. Modifier/origin/skill/salary words
+  // are dropped by cleanJobTopicWords, so "what about remote" keeps the inherited topic.
+  const bareLeadin = originMatch ? null : t.match(FOLLOWUP_TOPIC_LEADIN_RE);
+  const topic =
+    extractJobTopicKeyword(message) ||
+    (bareLeadin && !hasJobSubjectNoun(t) ? cleanJobTopicWords(t.slice(bareLeadin[0].length)) : null);
   if (topic) mergedFilters.search = topic;
 
   // An unambiguous "every status" phrase in the follow-up itself overrides the inherited

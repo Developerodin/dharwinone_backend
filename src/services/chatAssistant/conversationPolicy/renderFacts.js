@@ -25,16 +25,18 @@ function joinOr(parts, opts = {}) {
  * @param {{ query?:string, matches:{ kind:'user'|'role', name:string, roles?:string[] }[] }} facts
  */
 /**
- * @param {{ query?: string, jobMatches?: { title: string }[], employeeMatches?: { name?: string }[] }} facts
+ * jobTotal/employeeTotal are real counts; the match arrays are capped pickers (10), so their
+ * length is only a fallback for callers that didn't count.
+ * @param {{ query?: string, jobMatches?: { title: string }[], employeeMatches?: { name?: string }[], jobTotal?: number, employeeTotal?: number }} facts
  */
 export function renderTitleAmbiguity(facts) {
   const title = facts.query || facts.jobMatches?.[0]?.title || 'that title';
-  const jobCount = facts.jobMatches?.length ?? 0;
-  const empCount = facts.employeeMatches?.length ?? 0;
-  const jobLabel = jobCount === 1 ? 'a job' : `${jobCount} jobs`;
+  const jobCount = facts.jobTotal || facts.jobMatches?.length || 0;
+  const empCount = facts.employeeTotal || facts.employeeMatches?.length || 0;
+  const jobLabel = jobCount === 1 ? 'an active job' : `${jobCount} active jobs`;
   const empLabel = empCount === 1 ? 'an employee' : `${empCount} employees`;
   return (
-    `I found both ${jobLabel} called **${title}** and ${empLabel} with that position. ` +
+    `I found both ${jobLabel} matching **${title}** and ${empLabel} with that position. ` +
     'Were you asking about the **job posting** or the **employees**?'
   );
 }

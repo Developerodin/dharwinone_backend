@@ -11,7 +11,7 @@ const ROLE_PICK_RE = /^\s*(?:the\s+)?role(?:\s+only)?\s*[.!]?\s*$/i;
 const USER_PICK_RE =
   /^\s*(?:the\s+)?(?:user|person|employee|student|candidate|one)\s*[.!]?\s*$/i;
 const JOB_PICK_RE =
-  /^\s*(?:the\s+)?(?:job|opening|posting|vacancy|position opening)\s*[.!]?\s*$/i;
+  /^\s*(?:the\s+)?(?:jobs?|openings?|postings?|vacanc(?:y|ies)|position opening)\s*[.!]?\s*$/i;
 const EMPLOYEES_PICK_RE =
   /^\s*(?:the\s+)?(?:employees?|people|staff|team members?)\s*[.!]?\s*$/i;
 const FIRST_EMPLOYEE_RE =
@@ -135,7 +135,8 @@ export function matchTitleSelection(message, pending = {}) {
 
   if (JOB_PICK_RE.test(text) || FIRST_JOB_RE.test(text) || ORDINAL_JOB_RE.test(text)) {
     const pick = selectJob();
-    if (pick.kind === 'select') return pick;
+    // A bare "job" names the side, not one posting — the caller lists all of them.
+    if (pick.kind === 'select') return JOB_PICK_RE.test(text) ? { ...pick, allJobs: true } : pick;
   }
   if (
     EMPLOYEES_PICK_RE.test(text) ||

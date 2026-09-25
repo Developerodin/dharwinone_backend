@@ -67,6 +67,8 @@ export async function writePendingTitle({
   query,
   jobMatches,
   employeeMatches,
+  jobTotal = null,
+  employeeTotal = null,
   ConversationMemory = ConversationMemoryModel,
 }) {
   await ConversationMemory.findOneAndUpdate(
@@ -77,6 +79,8 @@ export async function writePendingTitle({
           query,
           jobMatches: jobMatches.map(slimTitleMatch),
           employeeMatches: employeeMatches.map(slimTitleMatch),
+          jobTotal,
+          employeeTotal,
           createdAt: new Date(),
         },
       },

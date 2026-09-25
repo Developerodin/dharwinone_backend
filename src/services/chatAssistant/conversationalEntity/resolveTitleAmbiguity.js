@@ -6,7 +6,11 @@ import Position from '../../../models/position.model.js';
 import { designationRegexForPhrase } from '../managerCounts.js';
 import { cleanSubject } from './queryPatterns.js';
 import { checkToolAccess } from '../toolAccess.js';
-import { resolveJobVisibilityFilter, andMongoFilters } from '../queryPlanner/entities/jobRank.js';
+import {
+  resolveJobVisibilityFilter,
+  andMongoFilters,
+  buildJobRankingMongoFilter,
+} from '../queryPlanner/entities/jobRank.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -113,7 +117,9 @@ export async function resolveTitleAmbiguity(title, opts = {}) {
   const EmployeeModel = opts.Employee ?? Employee;
   const PositionModel = opts.Position ?? Position;
   const intent = opts.intent ?? 'neutral';
-  const safe = escapeRegex(trimmed);
+  // Short titles ("AI") match whole words only, same rule as the job counter's search, so
+  // "ai" doesn't pick up "Email Marketing" or "Maintenance".
+  const safe = trimmed.length <= 3 ? `(?<!\\w)${escapeRegex(trimmed)}(?!\\w)` : escapeRegex(trimmed);
   const desigFilter = designationRegexForPhrase(trimmed);
 
   const checkAccess = opts.checkAccess ?? checkToolAccess;
@@ -157,6 +163,23 @@ export async function resolveTitleAmbiguity(title, opts = {}) {
       : [],
   ]);
 
+  // The lists above are capped samples for the picker; the prompt reports real totals. The
+  // job total uses the job counter's own filter (active, whole search), so choosing "job"
+  // next shows the same number instead of a second, conflicting one.
+  const [jobTotal, employeeTotal] = await Promise.all([
+    jobs.length
+      ? JobModel.countDocuments(andMongoFilters(
+          buildJobRankingMongoFilter({ filters: { search: trimmed, status: 'Active' } }),
+          jobVisibilityFilter,
+        ))
+      : 0,
+    canSeeEmployees
+      ? EmployeeModel.countDocuments(positions.length
+          ? { $or: [{ designation: desigFilter }, { position: { $in: positions.map((p) => p._id) } }] }
+          : { designation: desigFilter })
+      : 0,
+  ]);
+
   let byPosition = [];
   if (positions.length) {
     byPosition = await EmployeeModel.find({ position: { $in: positions.map((p) => p._id) } })
@@ -184,7 +207,7 @@ export async function resolveTitleAmbiguity(title, opts = {}) {
   const hasJobs = jobMatches.length > 0;
   const hasEmployees = employeeMatches.length > 0;
   if (hasJobs && hasEmployees) {
-    return { kind: 'ambiguous', jobMatches, employeeMatches };
+    return { kind: 'ambiguous', jobMatches, employeeMatches, jobTotal, employeeTotal };
   }
   if (hasJobs) return { kind: 'unique', target: 'job', jobMatches, employeeMatches: [] };
   if (hasEmployees) return { kind: 'unique', target: 'employee', jobMatches: [], employeeMatches };
