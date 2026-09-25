@@ -122,16 +122,49 @@ export function projectJobFields(doc) {
   return out;
 }
 
-/** @param {object} fields */
-export function formatJobSalaryRange(fields) {
-  const sr = fields?.salaryRange;
+/**
+ * Format one salary bound as a localized currency amount. Falls back to a
+ * plain grouped number + currency code when `currency` isn't a valid ISO
+ * 4217 code Intl recognises (e.g. malformed data on an older job record).
+ * @param {number} amount
+ * @param {string} currency
+ */
+function formatCurrencyAmount(amount, currency) {
+  const code = String(currency || 'USD').toUpperCase();
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `${Number(amount).toLocaleString('en-US')} ${code}`;
+  }
+}
+
+/**
+ * Format a job's salaryRange sub-document into a display string.
+ * No `period` field exists on Job.salaryRange (min/max/currency only), so
+ * there is nothing to append there (e.g. "per year") — the schema would
+ * need that field first.
+ * @param {{min?:number|null,max?:number|null,currency?:string}|null} sr
+ */
+export function formatSalaryRange(sr) {
   if (!sr || typeof sr !== 'object') return null;
   const min = sr.min ?? null;
   const max = sr.max ?? null;
-  const cur = sr.currency || '';
   if (min == null && max == null) return null;
-  if (min != null && max != null) return `${cur}${min}–${max}`.trim();
-  return `${cur}${min ?? max}`.trim();
+  const currency = sr.currency || 'USD';
+  if (min != null && max != null) {
+    return `${formatCurrencyAmount(min, currency)} – ${formatCurrencyAmount(max, currency)}`;
+  }
+  if (min != null) return `from ${formatCurrencyAmount(min, currency)}`;
+  return `up to ${formatCurrencyAmount(max, currency)}`;
+}
+
+/** @param {object} fields */
+export function formatJobSalaryRange(fields) {
+  return formatSalaryRange(fields?.salaryRange);
 }
 
 /** @param {object} fields */

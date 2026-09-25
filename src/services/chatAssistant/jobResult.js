@@ -5,28 +5,54 @@
 
 import crypto from 'crypto';
 import Job from '../../models/job.model.js';
+import config from '../../config/config.js';
 import { buildJobRankingMongoFilter } from './queryPlanner/entities/jobRank.js';
 
 const JOB_SELECT =
-  'title jobType location status salaryRange experienceLevel skillTags organisation jobOrigin externalRef externalPlatformUrl jobDescription createdAt';
+  'title jobType location status salaryRange experienceLevel minExperience maxExperience skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription vacancies applicationDeadline createdAt assignedRecruiter';
+
+// Frontend job detail deep-link. `/ats/jobs` (the recruiter-facing list) opens
+// its JobPreviewPanel from a `?view=<jobId>` query param — see the "Deep-link"
+// effect in uat.dharwin.frontend app/(components)/(contentlayout)/ats/jobs/page.tsx.
+// There is no separate single-job "view" route to link to instead.
+const FRONTEND_BASE_URL = String(config.frontendBaseUrl || 'http://localhost:3001').replace(/\/$/, '');
+
+/** @param {string|null} jobId */
+export function buildJobPageUrl(jobId) {
+  if (!jobId) return null;
+  return `${FRONTEND_BASE_URL}/ats/jobs?view=${encodeURIComponent(jobId)}`;
+}
 
 /** @param {object} row */
 export function mapJobRow(row) {
   const origin = row.jobOrigin || 'internal';
+  const jobId = String(row._id || row.id || row.jobId || '');
+  const recruiter = row.assignedRecruiter;
+  const recruiterName =
+    recruiter && typeof recruiter === 'object' && recruiter.name ? recruiter.name : null;
   return {
-    jobId: String(row._id || row.id || row.jobId || ''),
+    jobId,
+    jobUrl: buildJobPageUrl(jobId),
     title: row.title,
     jobType: row.jobType,
     location: row.location,
     status: row.status,
     experienceLevel: row.experienceLevel,
+    minExperience: row.minExperience ?? null,
+    maxExperience: row.maxExperience ?? null,
     salaryRange: row.salaryRange,
     organisation: row.organisation,
     skillTags: row.skillTags || [],
+    skillRequirements: row.skillRequirements || [],
+    vacancies: row.vacancies ?? null,
+    applicationDeadline: row.applicationDeadline || null,
+    createdAt: row.createdAt || null,
     jobOrigin: origin,
     _origin: origin === 'external' ? 'External (mirrored)' : 'Internal',
     externalPlatformUrl: row.externalPlatformUrl || null,
+    externalRef: row.externalRef || null,
     jobDescription: row.jobDescription || null,
+    recruiterName,
   };
 }
 
@@ -166,7 +192,12 @@ export async function executeAtomicJobQuery(options = {}) {
   const [total, docs] = await Promise.all([
     JobModel.countDocuments(mongoFilter),
     queryLimit > 0
-      ? JobModel.find(mongoFilter).select(JOB_SELECT).sort({ createdAt: -1 }).limit(queryLimit).lean()
+      ? JobModel.find(mongoFilter)
+          .select(JOB_SELECT)
+          .populate({ path: 'assignedRecruiter', select: 'name' })
+          .sort({ createdAt: -1 })
+          .limit(queryLimit)
+          .lean()
       : Promise.resolve([]),
   ]);
 
