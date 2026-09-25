@@ -1739,8 +1739,12 @@ function buildJobCountsFromResult(payload) {
  * jobOrigin 'external' OR a legacy externalRef-only row.
  */
 async function computeJobOriginCounts(JobModel, baseFilterWithoutOrigin) {
-  const internalFilter = andMongoFilters(baseFilterWithoutOrigin, { jobOrigin: { $ne: 'external' } });
+  // Strict partition: external = MIRROR_EXTERNAL_OR, internal = NOT that — so the two
+  // always sum to the total. { jobOrigin: { $ne: 'external' } } was NOT the complement
+  // of MIRROR_EXTERNAL_OR (a legacy row with jobOrigin!=='external' but a populated
+  // externalRef matched both filters, double-counting it).
   const externalFilter = andMongoFilters(baseFilterWithoutOrigin, MIRROR_EXTERNAL_OR);
+  const internalFilter = andMongoFilters(baseFilterWithoutOrigin, { $nor: [MIRROR_EXTERNAL_OR] });
   const [internal, external] = await Promise.all([
     JobModel.countDocuments(internalFilter),
     JobModel.countDocuments(externalFilter),
@@ -3583,14 +3587,19 @@ async function fetchModule(name, args, user, uiContext = null) {
     case 'match_candidates_to_job': {
       const limit = Math.min(args.limit || 10, 25);
       let job = null;
+      // Same visibility as the Jobs page — the job title feeds straight into the
+      // response (`job: job.title`), so an unscoped lookup is an existence side
+      // channel for Drafts/other-user jobs.
+      const matchJobVisibilityFilter = await resolveJobVisibilityFilter(user);
       if (args.jobId && mongoose.Types.ObjectId.isValid(args.jobId)) {
-        job = await Job.findById(args.jobId).select('title skillTags skillRequirements').lean();
+        job = await Job.findOne(andMongoFilters({ _id: args.jobId }, matchJobVisibilityFilter))
+          .select('title skillTags skillRequirements').lean();
       } else if (args.jobTitle) {
         const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        job = await Job.findOne({
+        job = await Job.findOne(andMongoFilters({
           createdBy: { $in: companyUserIds },
           title: { $regex: escapeRegex(args.jobTitle), $options: 'i' },
-        }).select('title skillTags skillRequirements').lean();
+        }, matchJobVisibilityFilter)).select('title skillTags skillRequirements').lean();
       }
       if (!job) return { error: 'Job not found' };
 
@@ -4184,7 +4193,13 @@ async function fetchModule(name, args, user, uiContext = null) {
 
       if (args.jobTitle) {
         const safe = escapeRegex(args.jobTitle);
-        const jobIds = await Job.find({ title: { $regex: safe, $options: 'i' } }).distinct('_id');
+        // Same visibility as the Jobs page — an unscoped title→id lookup is an existence
+        // side channel: a Draft/other-user job's title would otherwise resolve offers
+        // instead of the expected notFound.
+        const jobVisibilityFilter = await resolveJobVisibilityFilter(user);
+        const jobIds = await Job.find(
+          andMongoFilters({ title: { $regex: safe, $options: 'i' } }, jobVisibilityFilter),
+        ).distinct('_id');
         if (jobIds.length) q.job = { $in: jobIds };
         else return { total: 0, records: [], notFound: true, searchedFor: args.jobTitle, label: 'offer' };
       }
@@ -6178,10 +6193,19 @@ async function buildSystemContext(adminId, userId, user) {
         })()
       : null,
     jobsAccess.ok
-      ? Job.find({ status: 'Active', createdBy: { $in: companyUserIds } })
-          .select('title location jobType experienceLevel')
-          .limit(20)
-          .lean()
+      ? (async () => {
+          // Same visibility as the Jobs page — a jobs.read gate alone isn't enough;
+          // this must not surface Drafts/other-user jobs the caller couldn't see there.
+          const visibilityFilter = await resolveJobVisibilityFilter(user);
+          const filter = andMongoFilters(
+            { status: 'Active', createdBy: { $in: companyUserIds } },
+            visibilityFilter,
+          );
+          return Job.find(filter)
+            .select('title location jobType experienceLevel')
+            .limit(20)
+            .lean();
+        })()
       : null,
     // Administrator → no per-user scope (mirrors site /apps/projects/project-list).
     // Employee → only assigned/created.
@@ -6769,7 +6793,7 @@ async function prepareContext(client, history, user, uiContext = null) {
   if (config.chatbot?.twoStage) {
     const lastTurn = [...history].reverse().find((m) => m.role === 'user')?.content || '';
     const memDoc = await ConversationMemory.findOne({ userId: user.id, adminId: user.adminId ?? user.id }).lean();
-    const lastEntities = await rehydrateLastEntities(memDoc?.lastEntities);
+    const lastEntities = await rehydrateLastEntities(memDoc?.lastEntities, user);
     const lastListing = memDoc?.lastListing || null;
     const classification = await classifyRole({
       openai: client,
@@ -7164,8 +7188,10 @@ async function prepareContext(client, history, user, uiContext = null) {
  *
  * Returns a new object with only the fields that still resolve, or null
  * when nothing remains.
+ * @param {object|null} le
+ * @param {object} [user] - resolves job visibility (Jobs page parity) for le.jobId
  */
-async function rehydrateLastEntities(le) {
+async function rehydrateLastEntities(le, user) {
   if (!le || typeof le !== 'object') return null;
   const out = {};
 
@@ -7233,7 +7259,14 @@ async function rehydrateLastEntities(le) {
 
   if (le.jobId) {
     try {
-      const j = await Job.findOne({ _id: le.jobId }, { _id: 1, title: 1 }).lean();
+      // Same visibility as the Jobs page — if the caller can no longer see this job
+      // (Draft'd, reassigned, etc.), treat the reference as gone like any other dead
+      // reference this function drops, rather than keep echoing its title.
+      const jobVisibilityFilter = await resolveJobVisibilityFilter(user);
+      const j = await Job.findOne(
+        andMongoFilters({ _id: le.jobId }, jobVisibilityFilter),
+        { _id: 1, title: 1 },
+      ).lean();
       if (j) {
         out.jobId = j._id;
         out.jobTitle = j.title || le.jobTitle || null;
@@ -7301,11 +7334,11 @@ async function rehydrateLastEntities(le) {
   return Object.values(out).some((v) => v !== null && v !== undefined) ? out : null;
 }
 
-async function loadMemory(userId, adminId) {
+async function loadMemory(userId, adminId, user) {
   try {
     const mem = await ConversationMemory.findOne({ userId, adminId }).lean();
     const le = mem?.lastEntities || null;
-    const rehydrated = await rehydrateLastEntities(le);
+    const rehydrated = await rehydrateLastEntities(le, user);
     return {
       summary: mem?.summary ?? '',
       lastEntities: rehydrated,
@@ -8435,7 +8468,7 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
 
   const [ctx, memory] = await Promise.all([
     prepareContext(client, history, user, uiContext),
-    loadMemory(userId, adminId),
+    loadMemory(userId, adminId, user),
   ]);
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;
   const issues = validateEntityConsistency(fetched);
@@ -8783,7 +8816,7 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
 
   const [ctx, memory] = await Promise.all([
     prepareContext(client, history, user, uiContext),
-    loadMemory(userId, adminId),
+    loadMemory(userId, adminId, user),
   ]);
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;
   const issues = validateEntityConsistency(fetched);
