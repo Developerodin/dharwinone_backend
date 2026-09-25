@@ -1040,7 +1040,7 @@ const ROUTING_TOOLS = [
           titles:             { type: 'array', items: { type: 'string' }, description: 'Exact job titles to match (any of).' },
           companies:          { type: 'array', items: { type: 'string' }, description: 'Exact organisation names to match (any of).' },
           locations:          { type: 'array', items: { type: 'string' }, description: 'Exact locations to match (any of).' },
-          status:             { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status. "all" includes every status.' },
+          status:             { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Defaults to Active, like the Jobs page. Pass "all" only when the user asks for every status (e.g. "all statuses", "including closed", "ever posted").' },
           jobType:            { type: 'string', enum: ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance'], description: 'Filter by type.' },
           location:           { type: 'string', description: 'Filter by location (partial match)' },
           experienceLevel:    { type: 'string', description: 'Filter by level: Entry Level, Mid Level, Senior Level, Executive' },
@@ -1070,7 +1070,7 @@ const ROUTING_TOOLS = [
           search:          { type: 'string', description: 'Filter by job title, company, or description (semantic match)' },
           company:         { type: 'string', description: 'Filter by company name' },
           location:        { type: 'string', description: 'Filter by location' },
-          status:          { type: 'string', enum: ['Draft', 'Active', 'Closed', 'Archived'], description: 'Filter by status. Default: Active.' },
+          status:          { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Defaults to Active. Pass "all" only when the user asks for every status.' },
           source:          { type: 'string', enum: EXTERNAL_JOB_SOURCES, description: 'Filter by source: active-jobs-db, linkedin-job-search-api, linkedin-jobs-api' },
           limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
         },
@@ -2690,8 +2690,11 @@ async function fetchModule(name, args, user, uiContext = null) {
       // see their own internal jobs + external mirrors (job.service.js buildJobListFilter).
       const visibilityFilter = await resolveJobVisibilityFilter(user);
       const ScopedJob = scopeJobModel(Job, visibilityFilter);
+      // Match the ATS Jobs page's own default (Active) — the LLM only sends 'all' when the
+      // user actually asked for every status; a missing arg must not mean "every status".
+      const statusFilter = args.status || 'Active';
       const structuredFilters = {
-        status: args.status || null,
+        status: statusFilter,
         jobOrigin: args.jobOrigin || null,
         jobType: args.jobType || null,
         location: args.location || null,
@@ -2731,7 +2734,7 @@ async function fetchModule(name, args, user, uiContext = null) {
         ? buildJobCountsFromResult(atomic)
         : await computeJobOriginCounts(ScopedJob, buildJobRankingMongoFilter({ filters }));
       logger.info(
-        `[ChatAssistant][fetch_jobs] origin=${args.jobOrigin || 'any'} status=${args.status || 'any'} ` +
+        `[ChatAssistant][fetch_jobs] origin=${args.jobOrigin || 'any'} status=${statusFilter} ` +
         `returned=${atomic.result.jobs.length} total=${total} queryId=${atomic.queryId}`,
       );
       return {
@@ -2740,7 +2743,7 @@ async function fetchModule(name, args, user, uiContext = null) {
         total,
         counts,
         label: 'job',
-        statusFilter: args.status || null,
+        statusFilter,
         searchedFor: args.search || null,
         wantDetail: !!(args.search || args.jobId) && atomic.result.jobs.length === 1,
       };
