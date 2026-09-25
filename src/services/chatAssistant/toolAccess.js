@@ -113,7 +113,10 @@ export async function resolveRowScope(user, deps = {}) {
   return null;
 }
 
-const rowMatchesAllowed = (r, allowed) =>
+// Exported so callers outside the guardToolResult pipeline (e.g. buildSystemContext's
+// general-query fallback, which queries User directly) can apply the identical
+// owner-id predicate instead of re-implementing it.
+export const rowMatchesAllowed = (r, allowed) =>
   [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
 
 // Precomputed on the whole (unscoped) population before the row filter runs —

@@ -252,7 +252,7 @@ import {
   buildMemorySections,
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
-import { checkToolAccess, guardToolResult } from './chatAssistant/toolAccess.js';
+import { checkToolAccess, guardToolResult, resolveRowScope, rowMatchesAllowed, redactSalary } from './chatAssistant/toolAccess.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -5966,28 +5966,46 @@ async function buildSystemContext(adminId, userId, user) {
   // Role-based admin check matches the site (queryProjects → userIsAdmin).
   const isAdminCtx = await userIsAdmin({ roleIds: user?.roleIds || [] });
 
+  // Same gate the dispatcher applies to fetch_employees/fetch_jobs — this
+  // fallback queries User/Job directly, so it must check for itself instead
+  // of inheriting fetchModule's check.
+  const employeesAccess = await checkToolAccess('fetch_employees', user);
+  const jobsAccess = await checkToolAccess('fetch_jobs', user);
+
   const [employees, openJobs, projects, tasks] = await Promise.all([
-    (async () => {
-      // Mirror fetch_employees: scope by Users-with-Employee-role globally
-      // (no Employee.adminId filter) so the cached headcount matches the ATS
-      // Employees page count.
-      const employeeRole =
-        (await Role.findOne({ name: { $regex: /^employee$/i } }, { _id: 1 }).lean()) ||
-        (await Role.findOne({ name: { $regex: /^candidate$/i } }, { _id: 1 }).lean());
-      const empQuery = { status: 'active' };
-      if (employeeRole) empQuery.roleIds = employeeRole._id;
-      const result = await User.find(empQuery)
-        .select('name email phoneNumber domain location status roleIds')
-        .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-        .limit(1000)
-        .lean();
-      logger.info(`[ChatAssistant][buildSystemContext] users fetched=${result.length}`);
-      return result;
-    })(),
-    Job.find({ status: 'Active', createdBy: { $in: companyUserIds } })
-      .select('title location jobType experienceLevel')
-      .limit(20)
-      .lean(),
+    employeesAccess.ok
+      ? (async () => {
+          // Mirror fetch_employees: scope by Users-with-Employee-role globally
+          // (no Employee.adminId filter) so the cached headcount matches the ATS
+          // Employees page count.
+          const employeeRole =
+            (await Role.findOne({ name: { $regex: /^employee$/i } }, { _id: 1 }).lean()) ||
+            (await Role.findOne({ name: { $regex: /^candidate$/i } }, { _id: 1 }).lean());
+          const empQuery = { status: 'active' };
+          if (employeeRole) empQuery.roleIds = employeeRole._id;
+          let result = await User.find(empQuery)
+            .select('name email phoneNumber domain location status roleIds')
+            .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
+            .limit(1000)
+            .lean();
+          // Same Employees-page scope fetch_employees/fetch_people apply —
+          // reuse the exact predicate applyRowScope filters records with,
+          // rather than re-implementing owner-id matching here.
+          const allowed = await resolveRowScope(user);
+          if (allowed) result = result.filter((r) => rowMatchesAllowed(r, allowed));
+          // No-op today (this select never fetches salaryRange), kept for
+          // parity with every other person-listing path in case that changes.
+          result = await redactSalary(result, user);
+          logger.info(`[ChatAssistant][buildSystemContext] users fetched=${result.length}`);
+          return result;
+        })()
+      : null,
+    jobsAccess.ok
+      ? Job.find({ status: 'Active', createdBy: { $in: companyUserIds } })
+          .select('title location jobType experienceLevel')
+          .limit(20)
+          .lean()
+      : null,
     // Administrator → no per-user scope (mirrors site /apps/projects/project-list).
     // Employee → only assigned/created.
     Project.find(
@@ -6010,25 +6028,31 @@ async function buildSystemContext(adminId, userId, user) {
 
   const lines = [];
 
-  lines.push(`=== EMPLOYEES (${employees.length}) ===`);
-  for (const e of employees) {
-    const domains = Array.isArray(e.domain) && e.domain.length ? e.domain.join(', ') : '';
-    const roles = Array.isArray(e.roleNames) && e.roleNames.length
-      ? e.roleNames.join(', ')
-      : (Array.isArray(e.roleIds) && e.roleIds.length
-          ? e.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean).join(', ')
-          : '');
-    lines.push(
-      `MEMBER: ${e.name || 'N/A'} | ROLE: ${roles || 'N/A'} | EMAIL: ${e.email || 'N/A'}` +
-      ` | PHONE: ${e.phoneNumber || 'N/A'} | LOCATION: ${e.location || 'N/A'}` +
-      (domains ? ` | DOMAINS: ${domains}` : '') +
-      ` | STATUS: ${e.status || 'N/A'}`
-    );
+  if (employees) {
+    lines.push(`=== EMPLOYEES (${employees.length}) ===`);
+    for (const e of employees) {
+      const domains = Array.isArray(e.domain) && e.domain.length ? e.domain.join(', ') : '';
+      const roles = Array.isArray(e.roleNames) && e.roleNames.length
+        ? e.roleNames.join(', ')
+        : (Array.isArray(e.roleIds) && e.roleIds.length
+            ? e.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean).join(', ')
+            : '');
+      lines.push(
+        `MEMBER: ${e.name || 'N/A'} | ROLE: ${roles || 'N/A'} | EMAIL: ${e.email || 'N/A'}` +
+        ` | PHONE: ${e.phoneNumber || 'N/A'} | LOCATION: ${e.location || 'N/A'}` +
+        (domains ? ` | DOMAINS: ${domains}` : '') +
+        ` | STATUS: ${e.status || 'N/A'}`
+      );
+    }
+  } else {
+    lines.push('Employee data: not available for your access level.');
   }
 
-  lines.push(`\n=== OPEN JOBS (${openJobs.length}) ===`);
-  for (const j of openJobs) {
-    lines.push(`JOB: ${j.title} | Location: ${j.location || 'N/A'} | Type: ${j.jobType} | Level: ${j.experienceLevel}`);
+  if (openJobs) {
+    lines.push(`\n=== OPEN JOBS (${openJobs.length}) ===`);
+    for (const j of openJobs) {
+      lines.push(`JOB: ${j.title} | Location: ${j.location || 'N/A'} | Type: ${j.jobType} | Level: ${j.experienceLevel}`);
+    }
   }
 
   const projHeader = isAdminCtx ? 'PROJECTS (COMPANY-WIDE)' : 'MY PROJECTS';
@@ -7538,7 +7562,13 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
     }
     if (sel.kind === 'select' && sel.entityType === 'role') {
       await clearPendingEntity({ userId, adminId });
-      const profile = await resolveRoleProfile({ roleId: sel.roleId });
+      // resolveRoleProfile has no RBAC of its own (returns the role's full
+      // permissions list) — mirror fetch_roles' roles.read gate here; denied
+      // renders through the same notFound path as "no role match".
+      const rolesAccess = await checkToolAccess('fetch_roles', user);
+      const profile = rolesAccess.ok
+        ? await resolveRoleProfile({ roleId: sel.roleId })
+        : { kind: 'notFound', entityType: 'role' };
       return emit(envelope({
         reply: renderRoleProfileReply(profile),
         blocks: [],
@@ -7586,12 +7616,21 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
         adminId,
         state: { entity: 'job', designation: titlePending.query, source: 'title_ambiguity' },
       });
-      const fetched = titleSel.jobId
-        ? await fetchJobById(titleSel.jobId)
-        : null;
-      const resolved = fetched
-        ? { kind: 'unique', query: titlePending.query, job: fetched.job, raw: fetched.raw }
-        : await resolveJobByTitle(titlePending.query);
+      // resolveJobByTitle/fetchJobById take no user/viewer param — mirror
+      // fetch_jobs' jobs.read gate here; denied is treated as no job match
+      // so presentJobProfile renders its existing notFound reply.
+      const jobsAccess = await checkToolAccess('fetch_jobs', user);
+      let resolved;
+      if (!jobsAccess.ok) {
+        resolved = { kind: 'notFound', query: titlePending.query };
+      } else {
+        const fetched = titleSel.jobId
+          ? await fetchJobById(titleSel.jobId)
+          : null;
+        resolved = fetched
+          ? { kind: 'unique', query: titlePending.query, job: fetched.job, raw: fetched.raw }
+          : await resolveJobByTitle(titlePending.query);
+      }
       const out = await presentJobProfile({
         resolved,
         userMessage: lastUserMsg,
@@ -7728,7 +7767,10 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
       }));
     }
     if (titleRes.kind === 'unique' && titleRes.target === 'job') {
-      const resolved = await resolveJobByTitle(conv.subject);
+      const jobsAccess = await checkToolAccess('fetch_jobs', user);
+      const resolved = jobsAccess.ok
+        ? await resolveJobByTitle(conv.subject)
+        : { kind: 'notFound', query: conv.subject };
       const out = await presentJobProfile({
         resolved,
         userMessage: lastUserMsg,
@@ -7783,10 +7825,13 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
   });
 
   if (resolved.kind === 'unique' && resolved.entityType === 'role') {
-    const profile = await resolveRoleProfile({
-      roleId: resolved.entity.roleId,
-      roleName: resolved.entity.name,
-    });
+    const rolesAccess = await checkToolAccess('fetch_roles', user);
+    const profile = rolesAccess.ok
+      ? await resolveRoleProfile({
+          roleId: resolved.entity.roleId,
+          roleName: resolved.entity.name,
+        })
+      : { kind: 'notFound', entityType: 'role' };
     return emit(envelope({
       reply: renderRoleProfileReply(profile),
       blocks: [],

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TOOL_ACCESS, checkToolAccess, applyRowScope, resolveRowScope, redactSalary } from '../toolAccess.js';
+import { TOOL_ACCESS, checkToolAccess, applyRowScope, resolveRowScope, redactSalary, rowMatchesAllowed } from '../toolAccess.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const svcSrc = fs.readFileSync(path.join(here, '..', '..', 'chatAssistant.service.js'), 'utf8');
@@ -124,6 +124,16 @@ describe('row scope', () => {
     assert.deepEqual(out.candidates, [{ userId: 'a' }]);
     assert.equal(out.page.total, 1);
     assert.equal(out.page.hasMore, false);
+  });
+
+  it('rowMatchesAllowed matches on _id/id/userId/owner (exported for reuse outside applyRowScope, e.g. buildSystemContext)', () => {
+    const allowed = new Set(['a']);
+    assert.equal(rowMatchesAllowed({ _id: 'a' }, allowed), true);
+    assert.equal(rowMatchesAllowed({ id: 'a' }, allowed), true);
+    assert.equal(rowMatchesAllowed({ userId: 'a' }, allowed), true);
+    assert.equal(rowMatchesAllowed({ owner: 'a' }, allowed), true);
+    assert.equal(rowMatchesAllowed({ owner: { _id: 'a' } }, allowed), true);
+    assert.equal(rowMatchesAllowed({ _id: 'z' }, allowed), false);
   });
 
   it('sales agent scope resolves to referred/assigned owners', async () => {
