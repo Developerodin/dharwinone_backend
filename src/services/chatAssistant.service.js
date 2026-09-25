@@ -8449,7 +8449,11 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   const completion = await client.chat.completions.create({
-    ...llmParams(config.chatbot.model, { temperature: 0.55, maxTokens: 1500 }),
+    ...llmParams(config.chatbot.model, {
+      temperature: 0.55,
+      maxTokens: 1500,
+      reasoningEffort: config.chatbot.reasoningEffort,
+    }),
     messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
   });
 
@@ -8798,7 +8802,11 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   const stream = await client.chat.completions.create({
-    ...llmParams(config.chatbot.model, { temperature: 0.55, maxTokens: 1500 }),
+    ...llmParams(config.chatbot.model, {
+      temperature: 0.55,
+      maxTokens: 1500,
+      reasoningEffort: config.chatbot.reasoningEffort,
+    }),
     messages: [{ role: 'system', content: buildSystemPrompt(user, dataContext, memory.summary, memory.lastEntities, viewerRoleNames) }, ...history],
     stream: true,
     stream_options: { include_usage: true },

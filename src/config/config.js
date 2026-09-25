@@ -335,6 +335,7 @@ const envVarsSchema = Joi.object()
       .description('Qdrant collection prefix; defaults to PINECONE_INDEX so both backends share one naming scheme'),
 
     // Chatbot — two-stage pipeline (classifier + scoped fetcher)
+    CHATBOT_REASONING_EFFORT: Joi.string().valid('none', 'low', 'medium', 'high').default('none').description("Reasoning effort for Sage's reply-writing calls (reasoning models only). The tool router always runs at none: chat completions rejects function tools with any other effort."),
     CHATBOT_MODEL: Joi.string().required().description('OpenAI model for Sage (router, replies, memory, role classifier). No default: every environment sets it in .env.'),
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
     CHATBOT_ENTITY_QUERY_EMPLOYEES: Joi.boolean()
@@ -833,6 +834,7 @@ const config = {
   chatbot: {
     /** When true, classifier+fetchPeople runs in prepareContext. entityQuery early gate still wins for employee queries when entityQueryEmployees is on. */
     model: envVars.CHATBOT_MODEL,
+    reasoningEffort: envVars.CHATBOT_REASONING_EFFORT,
     twoStage: envVars.CHATBOT_TWO_STAGE,
     entityQueryEmployees: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES,
     entityQueryEmployeesPercent: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT,

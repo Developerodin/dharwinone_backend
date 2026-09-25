@@ -19,6 +19,18 @@ describe('llmParams', () => {
     });
   });
 
+  it('passes a reasoning effort through with token headroom', () => {
+    assert.deepEqual(llmParams('gpt-6-luna', { maxTokens: 1500, reasoningEffort: 'medium' }), {
+      model: 'gpt-6-luna',
+      max_completion_tokens: 5500,
+      reasoning_effort: 'medium',
+    });
+  });
+
+  it('ignores reasoning effort for non-reasoning models', () => {
+    assert.equal(llmParams('gpt-4o', { maxTokens: 10, reasoningEffort: 'high' }).reasoning_effort, undefined);
+  });
+
   it('treats gpt-5 and o-series as reasoning models', () => {
     assert.equal(llmParams('gpt-5.4-mini', { maxTokens: 10 }).max_completion_tokens, 10);
     assert.equal(llmParams('o4-mini', { maxTokens: 10 }).reasoning_effort, 'none');
