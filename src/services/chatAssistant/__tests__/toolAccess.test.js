@@ -95,6 +95,37 @@ describe('row scope', () => {
     assert.equal(out.scopedToYou, true);
   });
 
+  it('strips company-wide aggregates and pre-rendered rosters, and cuts page.total to the filtered count', () => {
+    const r = {
+      total: 500, baseTotal: 500,
+      employmentBreakdown: { active: 480, resigned: 20, total: 500 },
+      rendered: '### 500 employees\n...(full unscoped markdown roster)...',
+      page: { from: 1, to: 500, total: 500, hasMore: true, nextCursor: { lastId: 'z' } },
+      records: [{ _id: 'a' }, { _id: 'b' }, { _id: 'z' }],
+    };
+    const out = applyRowScope(r, new Set(['a', 'b']));
+    assert.deepEqual(out.records.map((x) => x._id), ['a', 'b']);
+    assert.equal(out.employmentBreakdown, undefined);
+    assert.equal(out.rendered, undefined);
+    assert.equal(out.page.total, 2);
+    assert.equal(out.page.hasMore, false);
+    assert.equal(out.total, 2);
+    assert.equal(out.baseTotal, 2);
+    assert.equal(out.scopedToYou, true);
+  });
+
+  it('cuts page.total on a { candidates } result too', () => {
+    const r = {
+      job: 'Engineer',
+      page: { total: 10, hasMore: true },
+      candidates: [{ userId: 'a' }, { userId: 'z' }],
+    };
+    const out = applyRowScope(r, new Set(['a']));
+    assert.deepEqual(out.candidates, [{ userId: 'a' }]);
+    assert.equal(out.page.total, 1);
+    assert.equal(out.page.hasMore, false);
+  });
+
   it('sales agent scope resolves to referred/assigned owners', async () => {
     const deps = {
       applyScope: async () => ({ salesAgentScopeUserId: 'sa1' }),

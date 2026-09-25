@@ -116,6 +116,21 @@ export async function resolveRowScope(user, deps = {}) {
 const rowMatchesAllowed = (r, allowed) =>
   [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
 
+// Precomputed on the whole (unscoped) population before the row filter runs —
+// fetch_employees/fetch_people compute these from a company-wide Mongo count,
+// and fetch_people pre-renders a full markdown roster before guardToolResult
+// ever sees the result. Once rows are cut down, these siblings talk about a
+// population the caller can no longer see and must not survive the filter.
+const AGGREGATE_SIBLING_KEYS = ['breakdown', 'employmentBreakdown', 'rendered'];
+
+/** Drop stale company-wide aggregates/pre-rendered text and, if present, cut `page` down to the filtered count. */
+function stripAggregateSiblings(obj, filteredLength) {
+  const out = { ...obj };
+  for (const k of AGGREGATE_SIBLING_KEYS) delete out[k];
+  if (out.page) out.page = { ...out.page, total: filteredLength, hasMore: false };
+  return out;
+}
+
 // ponytail: post-filter, not query rewrite — fetch_employees has 5 query paths.
 // Ceiling: a scoped user only sees rows inside the handler's limit (max 1000);
 // move the owner filter into each query path if a scoped population ever exceeds that.
@@ -123,7 +138,9 @@ const rowMatchesAllowed = (r, allowed) =>
 // Three result shapes reach this function: a bare array (semantic_employee_search),
 // { records: [...] } (fetch_employees/fetch_candidates/fetch_people), and
 // { job, candidates: [...] } (match_candidates_to_job). Each is filtered by the
-// same owner-id keys; only { records } carries count fields to rewrite.
+// same owner-id keys; only the object shapes carry aggregate/pre-rendered
+// siblings (employmentBreakdown, rendered, page.total, ...) that must be
+// stripped/rewritten so they never describe the pre-scope population.
 export function applyRowScope(result, allowed) {
   if (!allowed || !result) return result;
   if (Array.isArray(result)) {
@@ -131,12 +148,13 @@ export function applyRowScope(result, allowed) {
   }
   if (Array.isArray(result.records)) {
     const records = result.records.filter((r) => rowMatchesAllowed(r, allowed));
-    const { breakdown, ...rest } = result;
+    const rest = stripAggregateSiblings(result, records.length);
     return { ...rest, records, total: records.length, baseTotal: records.length, scopedToYou: true };
   }
   if (Array.isArray(result.candidates)) {
     const candidates = result.candidates.filter((r) => rowMatchesAllowed(r, allowed));
-    return { ...result, candidates, scopedToYou: true };
+    const rest = stripAggregateSiblings(result, candidates.length);
+    return { ...rest, candidates, scopedToYou: true };
   }
   return result;
 }
