@@ -13,7 +13,15 @@ import {
   TOP_N_RE,
 } from '../rankPlan.js';
 import Job from '../../../../models/job.model.js';
-import { buildJobListFilter } from '../../../job.service.js';
+import {
+  buildJobListFilter,
+  buildJobSearchClause,
+  applyJobListFacetFilters,
+  applyJobSalaryQueryFilters,
+  applyJobExperienceQueryFilters,
+  applyPostingDateFilter,
+  MIRROR_EXTERNAL_OR,
+} from '../../../job.service.js';
 import { buildLocationFilterClause } from '../../../../utils/jobLocation.util.js';
 
 const JOB_SUBJECT_RE =
@@ -90,10 +98,14 @@ function normalizeJobType(value) {
  * non-privileged users see only their own internal jobs + external mirrors. Reused here
  * — not re-implemented — so Sage can never see more than the page does.
  * @param {{ roleIds?: any[], id?: string, _id?: string, platformSuperUser?: boolean }|null} user
+ * @param {object} [requestFilter] - Jobs-page-shaped request filter (status, search, ...) to
+ *   fold into the same buildJobListFilter call, so field constraints and visibility come back
+ *   as one combined Mongo filter. Defaults to {} — existing callers are unaffected.
  * @returns {Promise<object>} Mongo clause to AND into every job query ({} = unrestricted)
  */
-export async function resolveJobVisibilityFilter(user) {
+export async function resolveJobVisibilityFilter(user, requestFilter = {}) {
   return buildJobListFilter({
+    ...requestFilter,
     userRoleIds: user?.roleIds || [],
     userId: user?.id || user?._id,
     platformSuperUser: user?.platformSuperUser,
@@ -284,6 +296,14 @@ export function parseJobFilters(message, ctx = null) {
 }
 
 /**
+ * Sage's own Mongo filter builder. Fields the ATS Jobs page also exposes (status, jobType,
+ * jobOrigin, location, experienceMin/Max, salaryMin/Max/NotSpecified, postingDate,
+ * titles/companies/locations, search) reuse job.service.js's own clause-building helpers —
+ * the same functions buildJobListFilter calls — so a filter value produces the identical
+ * Mongo query whether it came from the Jobs page or a chatbot request, and Sage's counts
+ * can never drift from what the page itself would show. `remote`, `skill`, `company`
+ * (free-text substring) and `department` are Sage-only extras the Jobs page has no
+ * equivalent for, so they stay as local clauses ANDed on top.
  * @param {object} plan
  * @returns {object}
  */
@@ -291,7 +311,9 @@ export function buildJobRankingMongoFilter(plan) {
   const filter = {};
   const f = plan.filters || {};
 
-  if (f.status) {
+  if (f.status === 'all') {
+    // no status filter — matches buildJobListFilter's 'all' handling
+  } else if (f.status) {
     const normalized = normalizeStatus(f.status);
     filter.status = normalized || { $regex: `^${escapeRegex(f.status)}$`, $options: 'i' };
   }
@@ -299,8 +321,13 @@ export function buildJobRankingMongoFilter(plan) {
     const normalized = normalizeJobType(f.jobType);
     filter.jobType = normalized || { $regex: `^${escapeRegex(f.jobType)}$`, $options: 'i' };
   }
-  if (f.jobOrigin === 'internal') filter.jobOrigin = { $ne: 'external' };
-  else if (f.jobOrigin === 'external') filter.jobOrigin = 'external';
+  if (f.jobOrigin === 'internal') {
+    filter.jobOrigin = { $ne: 'external' };
+  } else if (f.jobOrigin === 'external') {
+    // Same mirror-inclusive definition the Jobs page uses (job.service.js MIRROR_EXTERNAL_OR)
+    // — a legacy externalRef-only row with no jobOrigin field set still counts as external.
+    appendFilterClause(filter, MIRROR_EXTERNAL_OR);
+  }
   if (f.company) {
     filter['organisation.name'] = { $regex: escapeRegex(f.company), $options: 'i' };
   }
@@ -324,35 +351,17 @@ export function buildJobRankingMongoFilter(plan) {
       ],
     });
   }
-  if (f.salaryMin != null && Number.isFinite(Number(f.salaryMin))) {
-    appendFilterClause(filter, {
-      $or: [
-        { 'salaryRange.max': { $gte: Number(f.salaryMin) } },
-        { 'salaryRange.min': { $gte: Number(f.salaryMin) } },
-      ],
-    });
-  }
-  if (f.experienceMin != null && Number.isFinite(Number(f.experienceMin))) {
-    appendFilterClause(filter, {
-      $or: [
-        { minExperience: { $gte: Number(f.experienceMin) } },
-        { maxExperience: { $gte: Number(f.experienceMin) } },
-        {
-          minExperience: { $exists: false },
-          maxExperience: { $exists: false },
-          experienceLevel: { $in: ['Mid Level', 'Senior Level', 'Executive'] },
-        },
-      ],
-    });
-  }
-  if (f.experienceMax != null && Number.isFinite(Number(f.experienceMax))) {
-    appendFilterClause(filter, {
-      $or: [
-        { maxExperience: { $lte: Number(f.experienceMax) } },
-        { minExperience: { $lte: Number(f.experienceMax) } },
-      ],
-    });
-  }
+  applyJobListFacetFilters(filter, { titles: f.titles, companies: f.companies, locations: f.locations });
+  applyPostingDateFilter(filter, f.postingDate);
+  applyJobSalaryQueryFilters(filter, {
+    salaryNotSpecified: f.salaryNotSpecified,
+    salaryMin: f.salaryMin,
+    salaryMax: f.salaryMax,
+  });
+  applyJobExperienceQueryFilters(filter, {
+    experienceMin: f.experienceMin,
+    experienceMax: f.experienceMax,
+  });
   if (f.department) {
     const dept = escapeRegex(f.department);
     appendFilterClause(filter, {
@@ -363,9 +372,12 @@ export function buildJobRankingMongoFilter(plan) {
       ],
     });
   }
-  if (f.search || f.title) {
-    const term = escapeRegex(f.search || f.title);
-    filter.title = { $regex: term, $options: 'i' };
+  const searchTerm = f.search || f.title;
+  if (searchTerm) {
+    const term = String(searchTerm).trim();
+    // Short topic words ("AI"/"UI"/"QA"/"Go") need word-boundary matching or they match
+    // substrings inside unrelated words ("email"/"maintenance"/"quality"/"Google").
+    appendFilterClause(filter, buildJobSearchClause(term, term.length <= 3));
   }
 
   return filter;
