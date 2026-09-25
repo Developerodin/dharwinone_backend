@@ -1,4 +1,5 @@
 import { formatJobSalary } from '../queryPlanner/entities/jobRank.js';
+import { buildJobPageUrl } from '../jobResult.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -8,6 +9,19 @@ const formatOrg = (r) => {
   if (typeof o === 'string') return o;
   return o.name || '';
 };
+
+// ISO string so the frontend's `format: 'date'` cell renderer (IST-safe;
+// see StructuredResponse.tsx) can parse it.
+const isoDate = (d) => {
+  if (!d) return null;
+  const dt = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+};
+
+// These ranked job objects come from jobRank.js's own `.lean()` query, not
+// jobResult.js's mapJobRow, so there's no `jobId` field — but Mongoose
+// `.lean()` docs always carry `_id` regardless of `.select()`.
+const jobIdOf = (j) => (j?._id ? String(j._id) : j?.jobId ? String(j.jobId) : null);
 
 const statusTone = (s) => {
   const v = String(s || '').toLowerCase();
@@ -76,16 +90,21 @@ export function renderJobRanking(plan, result) {
 
   if (jobs.length === 1 && (plan?.limit === 1 || plan?.operation === 'MAX' || plan?.operation === 'MIN' || plan?.operation === 'RANK')) {
     const j = jobs[0];
-    const pairs = [
-      { k: 'Title', v: cell(j.title) },
+    const optionalPairs = [
       { k: 'Company', v: cell(formatOrg(j)) },
       { k: 'Type', v: cell(j.jobType) },
       { k: 'Location', v: cell(j.location) },
       { k: 'Experience', v: cell(j.experienceLevel) },
       { k: 'Salary', v: cell(formatJobSalary(j)) },
-      { k: 'Status', v: cell(j.status || 'Active') },
+      { k: 'Posted', v: cell(isoDate(j.createdAt)) },
       { k: 'Origin', v: cell(j._origin || (j.jobOrigin === 'external' ? 'External' : 'Internal')) },
     ].filter((p) => p.v && p.v !== '—');
+    const pairs = [
+      { k: 'Title', v: cell(j.title) },
+      // Never guess a status — unknown shows '—' rather than "Active" (issue 5).
+      { k: 'Status', v: cell(j.status) },
+      ...optionalPairs,
+    ];
 
     const block = {
       type: 'kv',
@@ -93,7 +112,11 @@ export function renderJobRanking(plan, result) {
       title: `Job: ${cell(j.title)}`,
       pairs,
     };
-    return { block, markdown: reply };
+    // kv cells render plain text, not markdown — the link only becomes
+    // clickable in the reply text itself (issue 1).
+    const jobUrl = buildJobPageUrl(jobIdOf(j));
+    const markdown = jobUrl ? `${reply} [Open job page](${jobUrl})` : reply;
+    return { block, markdown };
   }
 
   const rows = jobs.map((j) => ({
@@ -103,7 +126,7 @@ export function renderJobRanking(plan, result) {
     jobType: cell(j.jobType),
     location: cell(j.location),
     salary: cell(j.salaryLabel || formatJobSalary(j)),
-    status: { v: cell(j.status || 'Active'), tone: statusTone(j.status) },
+    status: { v: cell(j.status), tone: statusTone(j.status) },
   }));
 
   const statusLabel = plan?.filters?.status ? String(plan.filters.status).toLowerCase() : 'active';

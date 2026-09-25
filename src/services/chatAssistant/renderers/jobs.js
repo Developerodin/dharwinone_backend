@@ -9,6 +9,7 @@ import {
   buildJobCountPhrase,
   jobMatchesOrigin,
 } from '../jobResult.js';
+import { formatSalaryRange } from '../jobFieldMap.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -26,16 +27,10 @@ const originTone = (o) => {
   return 'neutral';
 };
 
-const formatSalary = (r) => {
-  const sr = r.salaryRange;
-  if (!sr || typeof sr !== 'object') return '';
-  const min = sr.min ?? sr.from ?? null;
-  const max = sr.max ?? sr.to ?? null;
-  const cur = sr.currency || '';
-  if (min == null && max == null) return '';
-  if (min != null && max != null) return `${cur}${min}–${max}`.trim();
-  return `${cur}${min ?? max}`.trim();
-};
+// Reuse the canonical formatter (jobFieldMap.js) instead of a second,
+// slightly different implementation living here — that duplication is what
+// produced the unformatted "USD50000–80000" bug (issue 4).
+const formatSalary = (r) => formatSalaryRange(r.salaryRange);
 
 const formatOrg = (r) => {
   const o = r.organisation;
@@ -44,16 +39,41 @@ const formatOrg = (r) => {
   return o.name || '';
 };
 
+// ISO string so the frontend's `format: 'date'` cell renderer (IST-safe;
+// see StructuredResponse.tsx) can parse it; raw Mongo Date objects stringify
+// to a verbose, timezone-ambiguous form.
+const isoDate = (d) => {
+  if (!d) return null;
+  const dt = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+};
+
 const JOB_COLUMNS = [
-  { key: 'title',           label: 'Title',      priority: 'primary' },
-  { key: 'organisation',    label: 'Company',    priority: 'secondary' },
-  { key: 'jobType',         label: 'Type',       priority: 'secondary' },
-  { key: 'location',        label: 'Location',   priority: 'secondary' },
-  { key: 'experienceLevel', label: 'Experience', priority: 'secondary' },
-  { key: 'salary',          label: 'Salary',     priority: 'secondary' },
-  { key: 'origin',          label: 'Origin',     priority: 'secondary' },
-  { key: 'status',          label: 'Status',     priority: 'primary', format: 'badge' },
+  { key: 'title',               label: 'Title',      priority: 'primary' },
+  { key: 'organisation',        label: 'Company',    priority: 'secondary' },
+  { key: 'jobType',             label: 'Type',       priority: 'secondary' },
+  { key: 'location',            label: 'Location',   priority: 'secondary' },
+  { key: 'experienceLevel',     label: 'Experience', priority: 'secondary' },
+  { key: 'salary',              label: 'Salary',     priority: 'secondary' },
+  { key: 'vacancies',           label: 'Openings',   priority: 'secondary', format: 'number' },
+  { key: 'applicationDeadline', label: 'Deadline',   priority: 'secondary', format: 'date' },
+  { key: 'createdAt',           label: 'Posted',     priority: 'secondary', format: 'date' },
+  { key: 'origin',              label: 'Origin',     priority: 'secondary' },
+  { key: 'status',              label: 'Status',     priority: 'primary', format: 'badge' },
 ];
+
+/**
+ * Table/list title. When fewer rows were returned than actually match (the
+ * list is capped, e.g. 50 of 237), the title must say so — otherwise it
+ * reads as if all matches are in the table (issue 6).
+ * @param {string} noun
+ * @param {number} rowCount
+ * @param {number} total
+ */
+function buildListTitle(noun, rowCount, total) {
+  if (rowCount < total) return `${noun} — showing first ${rowCount} of ${total}`;
+  return `${noun} (${total})`;
+}
 
 /**
  * @param {{ records?: object[], counts?: { internal:number, external:number, total:number }, label?: string }} data
@@ -77,21 +97,41 @@ export function renderJobs(data, ctx = {}, fact) {
   const wantDetail = !!data?.wantDetail || records.length === 1;
   if (wantDetail && records.length === 1) {
     const r = records[0];
-    const pairs = [
-      { k: 'Title',      v: cell(r.title) },
+    const optionalPairs = [
       { k: 'Company',    v: cell(formatOrg(r)) },
       { k: 'Type',       v: cell(r.jobType) },
       { k: 'Location',   v: cell(r.location) },
       { k: 'Experience', v: cell(r.experienceLevel) },
       { k: 'Salary',     v: cell(formatSalary(r)) },
-      { k: 'Status',     v: cell(r.status || 'Active') },
+      { k: 'Openings',   v: cell(r.vacancies) },
+      { k: 'Deadline',   v: cell(isoDate(r.applicationDeadline)) },
+      { k: 'Posted',     v: cell(isoDate(r.createdAt)) },
+      { k: 'Recruiter',  v: cell(r.recruiterName) },
       { k: 'Origin',     v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')) },
     ].filter((p) => p.v && p.v !== '—');
+    const pairs = [
+      { k: 'Title',  v: cell(r.title) },
+      // Status is never guessed — an unknown status shows '—' rather than
+      // silently claiming "Active" (issue 5), so it stays out of the
+      // emptiness filter that drops the other optional pairs above.
+      { k: 'Status', v: cell(r.status) },
+      ...optionalPairs,
+    ];
     if (Array.isArray(r.skillTags) && r.skillTags.length) {
       pairs.push({ k: 'Skills', v: r.skillTags.join(', ') });
     }
+    if (Array.isArray(r.skillRequirements) && r.skillRequirements.length) {
+      const fmtSkill = (s) => (s.level ? `${s.name} (${s.level})` : s.name);
+      const required = r.skillRequirements.filter((s) => s.required !== false).map(fmtSkill);
+      const preferred = r.skillRequirements.filter((s) => s.required === false).map(fmtSkill);
+      if (required.length) pairs.push({ k: 'Required skills', v: required.join(', ') });
+      if (preferred.length) pairs.push({ k: 'Preferred skills', v: preferred.join(', ') });
+    }
     if (r.jobDescription) {
       pairs.push({ k: 'Description', v: String(r.jobDescription).replace(/\s+/g, ' ').slice(0, 480) });
+    }
+    if (r.jobUrl) {
+      pairs.push({ k: 'Job link', v: r.jobUrl });
     }
     if (r.externalPlatformUrl) {
       pairs.push({ k: 'Source URL', v: r.externalPlatformUrl });
@@ -102,19 +142,27 @@ export function renderJobs(data, ctx = {}, fact) {
       title: `Job: ${cell(r.title)}`,
       pairs,
     };
-    const markdown = `Here are the details for **${cell(r.title)}** — see below.`;
+    // Table/kv cells render plain text, not markdown (StructuredResponse.tsx
+    // / KV.tsx) — the reply/markdown "twin" is the only surface that renders
+    // a real, clickable link (issue 1), so that's where it goes.
+    const markdown = r.jobUrl
+      ? `Here are the details for **${cell(r.title)}** — see below. [Open job page](${r.jobUrl})`
+      : `Here are the details for **${cell(r.title)}** — see below.`;
     return { block, markdown };
   }
 
   const rows = records.map((r) => ({
-    title:           cell(r.title),
-    organisation:    cell(formatOrg(r)),
-    jobType:         cell(r.jobType),
-    location:        cell(r.location),
-    experienceLevel: cell(r.experienceLevel),
-    salary:          cell(formatSalary(r)),
-    origin:          { v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')), tone: originTone(r.jobOrigin) },
-    status:          { v: cell(r.status || 'Active'), tone: statusTone(r.status) },
+    title:               cell(r.title),
+    organisation:        cell(formatOrg(r)),
+    jobType:             cell(r.jobType),
+    location:            cell(r.location),
+    experienceLevel:     cell(r.experienceLevel),
+    salary:              cell(formatSalary(r)),
+    vacancies:           cell(r.vacancies),
+    applicationDeadline: cell(isoDate(r.applicationDeadline)),
+    createdAt:           cell(isoDate(r.createdAt)),
+    origin:              { v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')), tone: originTone(r.jobOrigin) },
+    status:              { v: cell(r.status), tone: statusTone(r.status) },
   }));
 
   const columns = JOB_COLUMNS.filter((col) => {
@@ -130,7 +178,7 @@ export function renderJobs(data, ctx = {}, fact) {
     return fact ? renderGenericCount(fact, ctx) : null;
   }
 
-  const title = `Jobs (${totalKnown})`;
+  const title = buildListTitle('Jobs', rows.length, totalKnown);
   const block = {
     type: 'table',
     id: 'jobs',
@@ -194,11 +242,14 @@ export function renderJobResult(payload, ctx = {}) {
     location: cell(r.location),
     experienceLevel: cell(r.experienceLevel),
     salary: cell(formatSalary(r)),
+    vacancies: cell(r.vacancies),
+    applicationDeadline: cell(isoDate(r.applicationDeadline)),
+    createdAt: cell(isoDate(r.createdAt)),
     origin: {
       v: cell(r._origin || (r.jobOrigin === 'external' ? 'External' : 'Internal')),
       tone: originTone(r.jobOrigin),
     },
-    status: { v: cell(r.status || 'Active'), tone: statusTone(r.status) },
+    status: { v: cell(r.status), tone: statusTone(r.status) },
   }));
 
   const columns = JOB_COLUMNS.filter((col) =>
@@ -213,9 +264,7 @@ export function renderJobResult(payload, ctx = {}) {
     return { block: null, markdown: `Found **${total}** ${countNoun}.` };
   }
 
-  const title = originLabel
-    ? `${originLabel} Jobs (${total})`
-    : `Jobs (${total})`;
+  const title = buildListTitle(originLabel ? `${originLabel} Jobs` : 'Jobs', rows.length, total);
 
   const block = {
     type: 'table',
