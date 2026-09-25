@@ -228,6 +228,23 @@ describe('planJobFilterQuery — fresh question vs. follow-up context inheritanc
     assert.equal(plan.filters.status, 'Closed');
     assert.equal(plan.filters.jobOrigin, 'external');
   });
+
+  // Regression: a new topic named in the follow-up itself must replace the inherited one,
+  // not just add to it — "how many ai jobs" then "what about react jobs?" means react jobs,
+  // not "ai jobs that are also react".
+  it('a new topic in the follow-up replaces the inherited search', () => {
+    const ctx = { filters: { search: 'ai', status: 'Active' }, intent: 'count' };
+    const plan = planJobFilterQuery({ userMessage: 'what about react jobs?', jobQueryContext: ctx });
+    assert.equal(plan.filters.search, 'react');
+  });
+
+  // Regression: the strong "every status" phrases override the inherited status in a
+  // follow-up too, not just on a fresh question.
+  it('an unambiguous "every status" phrase in the follow-up overrides the inherited status', () => {
+    const ctx = { filters: { status: 'Active' }, intent: 'count' };
+    const plan = planJobFilterQuery({ userMessage: 'and including closed?', jobQueryContext: ctx });
+    assert.equal(plan.filters.status, 'all');
+  });
 });
 
 describe('planJobFilterQuery — status defaults to Active (matches the Jobs page default)', () => {

@@ -14,9 +14,13 @@ const JOB_TOPIC_NOUN_RE = /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|posting
 /**
  * A recognized count/list command phrase must lead the topic zone, or the leftover words
  * aren't a topic at all — e.g. a salary-ranking question like "what's the highest paying
- * job" has no topic to extract, and must not have "what's the highest paying" mistaken for one.
+ * job" has no topic to extract, and must not have "what's the highest paying" mistaken for
+ * one. Includes the follow-up lead-ins too (and/what about/only/just/filter to/limit to) so
+ * a follow-up like "what about react jobs?" can extract "react" the same way a fresh
+ * question does.
  */
-const JOB_TOPIC_LEADIN_RE = /^\s*(?:how many|count|number of|total|list(?:\s+all)?|show(?:\s+me)?(?:\s+all)?|any)\b\s*/i;
+const JOB_TOPIC_LEADIN_RE =
+  /^\s*(?:how many|count|number of|total|list(?:\s+all)?|show(?:\s+me)?(?:\s+all)?|any|and|what about|only|just|filter(?:\s+to)?|limit(?:\s+to)?)\b\s*/i;
 
 /** Status/type/origin modifier words parseJobFilters already extracts — not part of the topic. */
 const JOB_TOPIC_MODIFIER_WORDS = new Set([
@@ -162,6 +166,18 @@ export function parseJobFollowUp(message, ctx = null) {
 
   const mergedFilters = parseJobFilters(message, ctx);
   if (originMatch) mergedFilters.jobOrigin = originMatch[1].toLowerCase();
+
+  // A topic named in the follow-up itself replaces the inherited one — "how many ai jobs"
+  // then "what about react jobs?" must search 'react', not keep 'ai' from ctx.
+  const topic = extractJobTopicKeyword(message);
+  if (topic) mergedFilters.search = topic;
+
+  // An unambiguous "every status" phrase in the follow-up itself overrides the inherited
+  // status too, same as a fresh question — "and including closed?" means 'all', not
+  // whatever status the prior turn was scoped to.
+  if (JOB_ALL_STATUSES_STRONG_RE.test(message)) {
+    mergedFilters.status = 'all';
+  }
 
   const listIntent = detectListIntent(t) || ctx.intent === 'list';
   const countIntent = COUNT_INTENT_RE.test(t) || ctx.intent === 'count' || !listIntent;
