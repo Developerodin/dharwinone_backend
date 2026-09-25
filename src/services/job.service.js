@@ -243,6 +243,27 @@ const applyJobListFacetFilters = (filter, facetOpts = {}) => {
   }
 };
 
+/**
+ * Search-box OR-clause: title | organisation.name | jobDescription | location | skillTags.
+ * Shared with jobRank.js (Sage) so the "search" field means exactly the same Mongo query
+ * whether it came from the ATS Jobs page or a chatbot count/list request.
+ * @param {string} term
+ * @param {boolean} [wholeWord=false] - anchor to word boundaries instead of a bare substring.
+ */
+const buildJobSearchClause = (term, wholeWord = false) => {
+  const escaped = escapeRegex(term);
+  const searchRegex = new RegExp(wholeWord ? `\\b${escaped}\\b` : escaped, 'i');
+  return {
+    $or: [
+      { title: searchRegex },
+      { 'organisation.name': searchRegex },
+      { jobDescription: searchRegex },
+      { location: searchRegex },
+      { skillTags: { $in: [searchRegex] } },
+    ],
+  };
+};
+
 const applyJobSalaryQueryFilters = (filter, salaryOpts = {}) => {
   const notSpecified =
     salaryOpts.salaryNotSpecified === true || salaryOpts.salaryNotSpecified === 'true';
@@ -481,20 +502,16 @@ const buildJobListFilter = async (filter) => {
 
   const searchTerm = filter.search != null ? String(filter.search).trim() : '';
   const locationTerm = filter.location != null ? String(filter.location).trim() : '';
+  // Internal-only: Sage sets this for short (<=3 char) topic words ("AI"/"UI"/"QA") so they
+  // match as whole words, not substrings inside "email"/"maintenance"/"quality". The Jobs
+  // page never sends it, so its own search behaviour (substring) is unchanged.
+  const searchWholeWord = filter.searchWholeWord === true;
   delete filter.search;
   delete filter.location;
+  delete filter.searchWholeWord;
 
   if (searchTerm) {
-    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
-    appendFilterClause(filter, {
-      $or: [
-        { title: searchRegex },
-        { 'organisation.name': searchRegex },
-        { jobDescription: searchRegex },
-        { location: searchRegex },
-        { skillTags: { $in: [searchRegex] } },
-      ],
-    });
+    appendFilterClause(filter, buildJobSearchClause(searchTerm, searchWholeWord));
   }
 
   if (locationTerm) {
@@ -2313,6 +2330,11 @@ export {
   createJob,
   queryJobs,
   buildJobListFilter,
+  buildJobSearchClause,
+  applyJobListFacetFilters,
+  applyJobSalaryQueryFilters,
+  applyJobExperienceQueryFilters,
+  applyPostingDateFilter,
   MIRROR_EXTERNAL_OR,
   queryJobsForExport,
   getJobFilterOptions,
