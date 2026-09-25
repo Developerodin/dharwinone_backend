@@ -84,17 +84,22 @@ describe('toolAccess', () => {
     assert.equal(r.ok, false);
   });
 
-  // Minor 6: fetch_external_jobs is the ONE deliberate exception — its route
-  // (requireExternalJobsAccess.js) lets Administrator-by-name through with no
-  // external-jobs.* permission grant, so its TOOL_ACCESS rule carries
-  // adminByName and checkToolAccess must honor it for this tool only.
-  it('adminByName: admin-without-perm passes for fetch_external_jobs', async () => {
-    const r = await checkToolAccess('fetch_external_jobs', userWith(), admin);
+  // fetch_external_jobs reads Job mirrors (jobOrigin='external'), the same collection
+  // fetch_jobs already exposes — not the raw ExternalJob collection guarded by
+  // requireExternalJobsAccess.js' external-jobs.* permission. Its rule mirrors
+  // fetch_jobs exactly: jobs.read, no adminByName shortcut.
+  it('allows fetch_external_jobs with jobs.read (mirrors fetch_jobs — it reads Job mirrors, not the raw ExternalJob collection)', async () => {
+    const r = await checkToolAccess('fetch_external_jobs', userWith('jobs.read'), notAdmin);
     assert.equal(r.ok, true);
   });
 
-  it('adminByName: still denied without the permission when isAdmin is false', async () => {
+  it('denies fetch_external_jobs to a user with no jobs.read', async () => {
     const r = await checkToolAccess('fetch_external_jobs', userWith(), notAdmin);
+    assert.equal(r.ok, false);
+  });
+
+  it('denies fetch_external_jobs to an admin-without-perm user (no adminByName shortcut)', async () => {
+    const r = await checkToolAccess('fetch_external_jobs', userWith(), admin);
     assert.equal(r.ok, false);
   });
 

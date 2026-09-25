@@ -8,9 +8,10 @@
  * tool is self-scoped.
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  * `adminByName` — mirrors a route that also lets an Administrator-by-name user
- * through with no permission grant (see requireExternalJobsAccess.js). This is
- * the ONE deliberate exception to the no-admin-shortcut rule below; every other
- * tool must pass via `anyOf` or platformSuperUser.
+ * through with no permission grant. No tool currently needs this (fetch_external_jobs
+ * dropped it — it reads Job mirrors under jobs.read, not requireExternalJobsAccess.js'
+ * external-jobs.* gate); kept as a documented escape hatch should a route legitimately
+ * need it. Every tool must otherwise pass via `anyOf` or platformSuperUser.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
 import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.scope.js';
@@ -46,9 +47,11 @@ export const TOOL_ACCESS = {
   fetch_offers: { anyOf: OFFERS_READ },
   fetch_placements: { anyOf: PLACEMENTS_READ },
   fetch_jobs: { anyOf: ['jobs.read'] },
-  // requireExternalJobsAccess.js also lets Administrator-by-name through with
-  // no external-jobs.* permission grant — mirror that route exactly (Minor 6).
-  fetch_external_jobs: { anyOf: ['external-jobs.read', 'external-jobs.manage'], adminByName: true },
+  // Reads Job mirrors (jobOrigin='external' / externalRef), the same collection and
+  // origin fetch_jobs already exposes — not the raw ExternalJob collection that
+  // requireExternalJobsAccess.js's external-jobs.* gate protects. Mirror fetch_jobs'
+  // rule exactly rather than a permission this tool doesn't actually read behind.
+  fetch_external_jobs: { anyOf: ['jobs.read'] },
   fetch_job_applications: { note: 'applicantQuery.service applicationScope' },
   referral_leads_analytics: { note: 'referralLeadsAnalytics.js candidates.read' },
 
