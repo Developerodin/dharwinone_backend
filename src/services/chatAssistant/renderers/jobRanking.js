@@ -1,5 +1,5 @@
-import { formatJobSalary } from '../queryPlanner/entities/jobRank.js';
 import { buildJobPageUrl } from '../jobResult.js';
+import { formatSalaryRange } from '../jobFieldMap.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -58,7 +58,7 @@ export function formatJobRankingReply(plan, result) {
   if (jobs.length === 1 && (plan?.limit === 1 || plan?.operation === 'MAX' || plan?.operation === 'MIN' || plan?.operation === 'RANK')) {
     const j = jobs[0];
     const org = formatOrg(j);
-    const salary = formatJobSalary(j);
+    const salary = cell(formatSalaryRange(j.salaryRange));
     const orgPart = org ? ` at **${org}**` : '';
     if (ordinal) {
       return `The ${ordinal}${direction}-paying ${statusLabel.trim()} job is **${cell(j.title)}**${orgPart} — salary **${salary}**.`;
@@ -90,19 +90,21 @@ export function renderJobRanking(plan, result) {
 
   if (jobs.length === 1 && (plan?.limit === 1 || plan?.operation === 'MAX' || plan?.operation === 'MIN' || plan?.operation === 'RANK')) {
     const j = jobs[0];
+    // KVBlock pairs are { label, value, tone? } on the wire (chatResponse.ts,
+    // KV.tsx reads p.label/p.value) — {k,v} silently rendered a blank card.
     const optionalPairs = [
-      { k: 'Company', v: cell(formatOrg(j)) },
-      { k: 'Type', v: cell(j.jobType) },
-      { k: 'Location', v: cell(j.location) },
-      { k: 'Experience', v: cell(j.experienceLevel) },
-      { k: 'Salary', v: cell(formatJobSalary(j)) },
-      { k: 'Posted', v: cell(isoDate(j.createdAt)) },
-      { k: 'Origin', v: cell(j._origin || (j.jobOrigin === 'external' ? 'External' : 'Internal')) },
-    ].filter((p) => p.v && p.v !== '—');
+      { label: 'Company', value: cell(formatOrg(j)) },
+      { label: 'Type', value: cell(j.jobType) },
+      { label: 'Location', value: cell(j.location) },
+      { label: 'Experience', value: cell(j.experienceLevel) },
+      { label: 'Salary', value: cell(formatSalaryRange(j.salaryRange)) },
+      { label: 'Posted', value: cell(isoDate(j.createdAt)) },
+      { label: 'Origin', value: cell(j._origin || (j.jobOrigin === 'external' ? 'External' : 'Internal')) },
+    ].filter((p) => p.value && p.value !== '—');
     const pairs = [
-      { k: 'Title', v: cell(j.title) },
+      { label: 'Title', value: cell(j.title) },
       // Never guess a status — unknown shows '—' rather than "Active" (issue 5).
-      { k: 'Status', v: cell(j.status) },
+      { label: 'Status', value: cell(j.status) },
       ...optionalPairs,
     ];
 
@@ -125,7 +127,11 @@ export function renderJobRanking(plan, result) {
     organisation: cell(formatOrg(j)),
     jobType: cell(j.jobType),
     location: cell(j.location),
-    salary: cell(j.salaryLabel || formatJobSalary(j)),
+    // Recompute from salaryRange rather than trusting j.salaryLabel — that
+    // field (set upstream in runJobEntityQuery.js/decorateRankedJobRows, out
+    // of scope here) is pre-formatted through jobRank.js's own unformatted
+    // formatJobSalary and would still print "USD50000-80000".
+    salary: cell(formatSalaryRange(j.salaryRange)),
     status: { v: cell(j.status), tone: statusTone(j.status) },
   }));
 
