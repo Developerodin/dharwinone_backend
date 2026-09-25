@@ -253,6 +253,7 @@ import {
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
 import { checkToolAccess, guardToolResult, resolveRowScope, rowMatchesAllowed, redactSalary } from './chatAssistant/toolAccess.js';
+import { formatOfferLine, formatPlacementLine } from './chatAssistant/pipelineLines.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -1425,6 +1426,8 @@ const ROUTING_TOOLS = [
           status:        { type: 'string', description: 'Filter by status: Draft, Active, Sent, Under Negotiation, Accepted, Rejected' },
           candidateName: { type: 'string', description: 'Filter by candidate name (partial match)' },
           jobTitle:      { type: 'string', description: 'Filter by job title (partial match)' },
+          from:          { type: 'string', description: 'ISO date; only offers created on/after (from) or on/before (to).' },
+          to:            { type: 'string', description: 'ISO date; only offers created on/after (from) or on/before (to).' },
           limit:         { type: 'number', description: 'Max records (default 25, max 100)' },
         },
         required: [],
@@ -1439,9 +1442,11 @@ const ROUTING_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          status:        { type: 'string', description: 'Filter by status: Pending, Joined, Deferred, Cancelled' },
+          status:        { type: 'string', description: 'Filter by status: Pending, Onboarding, Joined, Deferred, Cancelled' },
           candidateName: { type: 'string', description: 'Filter by candidate name (partial match)' },
           days:          { type: 'number', description: 'Look-back window in days for joiningDate (default 90)' },
+          joiningFrom:   { type: 'string', description: 'ISO date. Use for who is joining today/tomorrow/this week (future dates allowed).' },
+          joiningTo:     { type: 'string', description: 'ISO date. Use for who is joining today/tomorrow/this week (future dates allowed).' },
           limit:         { type: 'number', description: 'Max records (default 25, max 100)' },
         },
         required: [],
@@ -4042,6 +4047,13 @@ async function fetchModule(name, args, user, uiContext = null) {
         else return { total: 0, records: [], notFound: true, searchedFor: args.jobTitle, label: 'offer' };
       }
 
+      if (args.from || args.to) {
+        q.createdAt = {
+          ...(args.from && { $gte: new Date(args.from) }),
+          ...(args.to && { $lte: new Date(`${args.to}T23:59:59.999Z`) }),
+        };
+      }
+
       // Status breakdown (issue 5: chatbot must report exact totals per state).
       const baseQ = { ...q };
       delete baseQ.status;
@@ -4052,12 +4064,12 @@ async function fetchModule(name, args, user, uiContext = null) {
           .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
           .populate({ path: 'job', select: 'title location' })
           .populate({ path: 'createdBy', select: 'name' })
-          .select('offerCode status joiningDate offerValidityDate ctcBreakdown jobType workLocation sentAt acceptedAt rejectedAt rejectionReason createdAt')
+          .select('offerCode status joiningDate offerValidityDate ctcBreakdown jobType workLocation sentAt acceptedAt rejectedAt rejectionReason createdAt positionTitle offerLetterUrl offerLetterGeneratedAt createdBy')
           .sort({ createdAt: -1 })
           .limit(limit)
           .lean(),
       ]);
-      const breakdown = { Draft: 0, Sent: 0, Accepted: 0, Rejected: 0, Withdrawn: 0, Expired: 0 };
+      const breakdown = { Draft: 0, Sent: 0, 'Under Negotiation': 0, Accepted: 0, Rejected: 0, Withdrawn: 0, Expired: 0 };
       for (const row of statusAgg) {
         if (row?._id) breakdown[row._id] = (breakdown[row._id] || 0) + row.count;
       }
@@ -4121,6 +4133,13 @@ async function fetchModule(name, args, user, uiContext = null) {
       // Apply the date window only when the caller asked for one.
       if (since && !args.candidateName) q.joiningDate = { $gte: since };
 
+      if (args.joiningFrom || args.joiningTo) {
+        q.joiningDate = {
+          ...(args.joiningFrom && { $gte: new Date(args.joiningFrom) }),
+          ...(args.joiningTo && { $lte: new Date(`${args.joiningTo}T23:59:59.999Z`) }),
+        };
+      }
+
       const baseQ = { ...q };
       delete baseQ.status;
       const [total, statusAgg, records] = await Promise.all([
@@ -4130,7 +4149,7 @@ async function fetchModule(name, args, user, uiContext = null) {
           .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
           .populate({ path: 'job', select: 'title location' })
           .populate({ path: 'offer', select: 'offerCode' })
-          .select('status preBoardingStatus joiningDate joinedAt employeeId backgroundVerification onboardingCompletedAt deferredAt cancelledAt createdAt')
+          .select('status preBoardingStatus joiningDate joinedAt employeeId backgroundVerification onboardingCompletedAt deferredAt cancelledAt createdAt enteredOnboardingAt')
           .sort({ joiningDate: -1, createdAt: -1 })
           .limit(limit)
           .lean(),
@@ -5312,17 +5331,7 @@ function summarizeData(fetchedData) {
       const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
       const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
       const lines = [`--- offers (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many offers" / "total offers". Do not count rows. | BREAKDOWN: ${bdStr}${filterTag} — ENTITY_TYPE: candidate) ---`];
-      for (const o of records) {
-        const candName = o.candidate?.owner?.name ?? o.candidate?.fullName ?? 'N/A';
-        const candEmail = o.candidate?.owner?.email ?? 'N/A';
-        const empId = o.candidate?.employeeId ?? 'N/A';
-        const jobTitle = o.job?.title ?? 'N/A';
-        const join = formatDateIST(o.joiningDate) || 'N/A';
-        const ctc = o.ctcBreakdown?.gross ? `${o.ctcBreakdown.gross} ${o.ctcBreakdown.currency || ''}`.trim() : 'N/A';
-        let line = `OFFER: ${o.offerCode || 'N/A'} | CANDIDATE: ${candName} (${empId}) | EMAIL: ${candEmail} | JOB: ${jobTitle} | STATUS: ${o.status || 'N/A'} | JOINING: ${join} | CTC: ${ctc}`;
-        if (o.rejectionReason) line += ` | REJECT_REASON: ${o.rejectionReason}`;
-        lines.push(line);
-      }
+      for (const o of records) lines.push(formatOfferLine(o, { fmtDate: formatDateIST }));
       parts.push(lines.join('\n'));
       continue;
     }
@@ -5339,16 +5348,7 @@ function summarizeData(fetchedData) {
       const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
       const windowTag = data?.windowDays ? ` | WINDOW: last ${data.windowDays}d` : ' | WINDOW: lifetime (no joining-date filter)';
       const lines = [`--- placements (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many placements" / "total placements" / "total joiners". Do not count rows. | BREAKDOWN: ${bdStr}${windowTag} — ENTITY_TYPE: candidate) ---`];
-      for (const p of records) {
-        const candName = p.candidate?.owner?.name ?? p.candidate?.fullName ?? 'N/A';
-        const empId = p.employeeId ?? p.candidate?.employeeId ?? 'N/A';
-        const jobTitle = p.job?.title ?? 'N/A';
-        const join = formatDateIST(p.joiningDate) || 'N/A';
-        const joined = formatDateIST(p.joinedAt) || '—';
-        let line = `PLACEMENT: ${p.offer?.offerCode || 'N/A'} | CANDIDATE: ${candName} (${empId}) | JOB: ${jobTitle} | STATUS: ${p.status || 'N/A'} | PRE_BOARDING: ${p.preBoardingStatus || 'N/A'} | JOINING_DATE: ${join} | JOINED_AT: ${joined}`;
-        if (p.backgroundVerification?.status) line += ` | BGV: ${p.backgroundVerification.status}`;
-        lines.push(line);
-      }
+      for (const p of records) lines.push(formatPlacementLine(p, { fmtDate: formatDateIST }));
       parts.push(lines.join('\n'));
       continue;
     }
