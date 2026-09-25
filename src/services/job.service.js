@@ -515,16 +515,11 @@ const buildJobListFilter = async (filter) => {
 
   const searchTerm = filter.search != null ? String(filter.search).trim() : '';
   const locationTerm = filter.location != null ? String(filter.location).trim() : '';
-  // Internal-only: Sage sets this for short (<=3 char) topic words ("AI"/"UI"/"QA") so they
-  // match as whole words, not substrings inside "email"/"maintenance"/"quality". The Jobs
-  // page never sends it, so its own search behaviour (substring) is unchanged.
-  const searchWholeWord = filter.searchWholeWord === true;
   delete filter.search;
   delete filter.location;
-  delete filter.searchWholeWord;
 
   if (searchTerm) {
-    appendFilterClause(filter, buildJobSearchClause(searchTerm, searchWholeWord));
+    appendFilterClause(filter, buildJobSearchClause(searchTerm));
   }
 
   if (locationTerm) {

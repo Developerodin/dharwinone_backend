@@ -109,14 +109,10 @@ function normalizeJobType(value) {
  * non-privileged users see only their own internal jobs + external mirrors. Reused here
  * — not re-implemented — so Sage can never see more than the page does.
  * @param {{ roleIds?: any[], id?: string, _id?: string, platformSuperUser?: boolean }|null} user
- * @param {object} [requestFilter] - Jobs-page-shaped request filter (status, search, ...) to
- *   fold into the same buildJobListFilter call, so field constraints and visibility come back
- *   as one combined Mongo filter. Defaults to {} — existing callers are unaffected.
  * @returns {Promise<object>} Mongo clause to AND into every job query ({} = unrestricted)
  */
-export async function resolveJobVisibilityFilter(user, requestFilter = {}) {
+export async function resolveJobVisibilityFilter(user) {
   return buildJobListFilter({
-    ...requestFilter,
     userRoleIds: user?.roleIds || [],
     userId: user?.id || user?._id,
     platformSuperUser: user?.platformSuperUser,
