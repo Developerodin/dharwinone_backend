@@ -4,6 +4,9 @@ import {
   decorateRankedJobRows,
   looksLikeJobRankingQuery,
   planJobRankQuery,
+  resolveJobVisibilityFilter,
+  scopeJobModel,
+  verifyCompanyCandidate,
 } from '../queryPlanner/entities/jobRank.js';
 import { renderJobRanking } from '../renderers/jobRanking.js';
 import {
@@ -39,19 +42,40 @@ export async function runJobFilterQuery({
 
   if (!plan) return null;
 
+  // parseJobFilters' company regex over-captures role nouns / locations ("jobs for React
+  // devs", "at Bangalore") — verify against real data before querying on it.
+  if (plan.filters?.company) {
+    const verified = await (deps.verifyCompanyCandidate?.(plan.filters.company, { Job: deps.Job ?? Job }) ??
+      verifyCompanyCandidate(plan.filters.company, { Job: deps.Job ?? Job }));
+    if (!verified) {
+      plan.filters = { ...plan.filters };
+      delete plan.filters.company;
+    }
+  }
+
   const started = deps.now?.() ?? Date.now();
   const listIntent = plan.intent === 'list';
+
+  // Sage's job visibility must match the ATS Jobs page — non-privileged users only see
+  // their own internal jobs + external mirrors. executeAtomicJobQuery (jobResult.js)
+  // builds/owns its Mongo filter internally, so it's scoped via a wrapped JobModel
+  // rather than by threading the filter through plan.filters.
+  const visibilityFilter =
+    (await deps.resolveJobVisibilityFilter?.(user)) ?? (await resolveJobVisibilityFilter(user));
+  const ScopedJob = scopeJobModel(deps.Job ?? Job, visibilityFilter);
 
   const envelope =
     (await deps.executeAtomicJobQuery?.({
       filters: plan.filters,
       limit: plan.limit ?? 50,
       listIntent,
+      JobModel: ScopedJob,
     })) ??
     (await executeAtomicJobQuery({
       filters: plan.filters,
       limit: plan.limit ?? 50,
       listIntent,
+      JobModel: ScopedJob,
     }));
 
   assertJobResultIntegrity(envelope);
@@ -102,11 +126,26 @@ async function runJobRankQuery({
 
   if (!plan) return null;
 
+  // parseJobFilters' company regex over-captures role nouns / locations ("jobs for React
+  // devs", "at Bangalore") — verify against real data before querying on it.
+  if (plan.filters?.company) {
+    const verified = await (deps.verifyCompanyCandidate?.(plan.filters.company, { Job: deps.Job ?? Job }) ??
+      verifyCompanyCandidate(plan.filters.company, { Job: deps.Job ?? Job }));
+    if (!verified) {
+      plan.filters = { ...plan.filters };
+      delete plan.filters.company;
+    }
+  }
+
   const started = deps.now?.() ?? Date.now();
 
+  // Sage's job visibility must match the ATS Jobs page — see runJobFilterQuery above.
+  const visibilityFilter =
+    (await deps.resolveJobVisibilityFilter?.(user)) ?? (await resolveJobVisibilityFilter(user));
+
   const rawResult =
-    (await deps.executeRankQuery?.(plan, { Job: deps.Job ?? Job })) ??
-    (await executeRankQuery(plan, { Job: deps.Job ?? Job }));
+    (await deps.executeRankQuery?.(plan, { Job: deps.Job ?? Job, visibilityFilter })) ??
+    (await executeRankQuery(plan, { Job: deps.Job ?? Job, visibilityFilter }));
 
   const jobs = decorateRankedJobRows(rawResult.items, (plan.offset ?? 0) + 1);
   const result = { ...rawResult, jobs, total: rawResult.total };
