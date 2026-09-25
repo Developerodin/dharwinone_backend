@@ -9,6 +9,8 @@
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
+import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.scope.js';
+import Employee from '../../models/employee.model.js';
 
 const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js canReadEmployees
 const OFFERS_READ = [ // offer.route.js canReadOffers
@@ -87,4 +89,66 @@ export async function checkToolAccess(name, user) {
   if (user?.platformSuperUser) return { ok: true };
   if (hasAny(user?.authContext?.permissions, rule.anyOf)) return { ok: true };
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
+}
+
+const idOf = (v) => (v == null ? null : String(v?._id ?? v));
+
+/**
+ * Same scope the Employees page applies (employee.controller.js list):
+ * Agent → assignedAgent, Sales Agent → referredByUserId | currentSalesAgentUserId,
+ * no org-wide read → self. Returns allowed owner User ids, or null = unrestricted.
+ */
+export async function resolveRowScope(user, deps = {}) {
+  const applyScope = deps.applyScope ?? ((u) => applyEmployeeListScope({}, u, u?.authContext));
+  const distinctOwners = deps.distinctOwners ?? ((q) => Employee.find(q).distinct('owner'));
+  const s = await applyScope(user);
+  if (s.agentIds) return new Set((await distinctOwners({ assignedAgent: s.agentIds })).map(String));
+  if (s.salesAgentScopeUserId) {
+    const uid = s.salesAgentScopeUserId;
+    return new Set(
+      (await distinctOwners({ $or: [{ referredByUserId: uid }, { currentSalesAgentUserId: uid }] })).map(String)
+    );
+  }
+  if (s.owner) return new Set([String(s.owner)]);
+  return null;
+}
+
+// ponytail: post-filter, not query rewrite — fetch_employees has 5 query paths.
+// Ceiling: a scoped user only sees rows inside the handler's limit (max 1000);
+// move the owner filter into each query path if a scoped population ever exceeds that.
+export function applyRowScope(result, allowed) {
+  if (!allowed || !result || !Array.isArray(result.records)) return result;
+  const keep = (r) =>
+    [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
+  const records = result.records.filter(keep);
+  const { breakdown, ...rest } = result;
+  return { ...rest, records, total: records.length, baseTotal: records.length, scopedToYou: true };
+}
+
+const stripKey = (v, key) => {
+  if (Array.isArray(v)) return v.map((x) => stripKey(x, key));
+  if (v && typeof v === 'object' && !(v instanceof Date) && v.constructor === Object) {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) if (k !== key) out[k] = stripKey(val, key);
+    return out;
+  }
+  return v;
+};
+
+/**
+ * personProfile gates compensation on employees.manage; apply the same to every
+ * person tool. Same rule as checkToolAccess — platformSuperUser or a permission
+ * grant, no userIsAdmin shortcut.
+ */
+export async function redactSalary(result, user) {
+  if (!result || user?.platformSuperUser) return result;
+  if (hasAny(user?.authContext?.permissions, ['employees.manage'])) return result;
+  return stripKey(result, 'salaryRange');
+}
+
+export async function guardToolResult(name, result, user, deps = {}) {
+  if (!result || result.forbidden) return result;
+  if (TOOL_ACCESS[name]?.rowScope !== 'person') return result;
+  const scoped = applyRowScope(result, await resolveRowScope(user, deps));
+  return redactSalary(scoped, user);
 }

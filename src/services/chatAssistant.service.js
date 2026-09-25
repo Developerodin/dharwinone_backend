@@ -252,7 +252,7 @@ import {
   buildMemorySections,
 } from './chatAssistant/sage/persona.js';
 import { guardSageReply } from './chatAssistant/sage/qualityGuard.js';
-import { checkToolAccess } from './chatAssistant/toolAccess.js';
+import { checkToolAccess, guardToolResult } from './chatAssistant/toolAccess.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
@@ -1605,7 +1605,7 @@ async function executeFetches(toolCalls, user, uiContext = null) {
         /* use empty args */
       }
       try {
-        results[name] = await fetchModule(name, args, user, uiContext);
+        results[name] = await guardToolResult(name, await fetchModule(name, args, user, uiContext), user);
       } catch (err) {
         logger.warn(`[ChatAssistant] fetch failed for ${name}: ${err.message}`);
         results[name] = null;
@@ -4599,9 +4599,10 @@ function summarizeData(fetchedData) {
       const partialTag = data?.partialList
         ? ` | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number when the user asks "how many" or "total". The records list below is a partial view (only ${shown} rendered).`
         : ` | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number when the user asks "how many" or "total". Do not count NAME lines yourself.`;
+      const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
       const header = total > shown
-        ? `--- employees (${shown} shown of ${total} total${ebTag}${partialTag}) ---`
-        : `--- employees (${total} total${ebTag}${partialTag}) ---`;
+        ? `--- employees (${shown} shown of ${total} total${ebTag}${partialTag}${scopeTag}) ---`
+        : `--- employees (${total} total${ebTag}${partialTag}${scopeTag}) ---`;
       const lines = [header];
       const fmtDate = formatDateIST;
       for (const e of records) {
@@ -5550,9 +5551,10 @@ function summarizeData(fetchedData) {
       const records = data?.records ?? [];
       const total = data?.total ?? records.length;
       const shown = records.length;
+      const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
       const header = total > shown
-        ? `--- candidates (${shown} shown of ${total} total — these users hold the Candidate role) ---`
-        : `--- candidates (${total} total — these users hold the Candidate role) ---`;
+        ? `--- candidates (${shown} shown of ${total} total — these users hold the Candidate role${scopeTag}) ---`
+        : `--- candidates (${total} total — these users hold the Candidate role${scopeTag}) ---`;
       const lines = [header];
       for (const c of records) {
         const domains = Array.isArray(c.domain) && c.domain.length ? c.domain.join(', ') : 'None';
@@ -5765,8 +5767,11 @@ function summarizeData(fetchedData) {
 
     const label = key.replace('fetch_', '').replace(/_/g, ' ');
     const count = Array.isArray(data) ? ` (${data.length} record${data.length !== 1 ? 's' : ''})` : '';
+    // fetch_people has no bespoke branch above — it lands here, so the same
+    // scope tag fetch_employees/fetch_candidates get is added here too.
+    const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
     const safe = key === 'resolve_person_profile' ? fenceProfileFreeText(data) : data;
-    parts.push(`--- ${label}${count} ---\n${JSON.stringify(safe, null, 2)}`);
+    parts.push(`--- ${label}${count}${scopeTag} ---\n${JSON.stringify(safe, null, 2)}`);
   }
   let combined = parts.join('\n\n');
   if (combined.length > MAX_CONTEXT_CHARS) {
