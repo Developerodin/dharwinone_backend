@@ -63,14 +63,29 @@ export function hashJobFilters(filters) {
 }
 
 /**
+ * JS-side mirror of job.service.js's MIRROR_EXTERNAL_OR — same "external" definition
+ * (jobOrigin==='external' OR a legacy externalRef-only row), for an already-loaded job
+ * object instead of a Mongo query. A plain `jobOrigin !== 'external'` check for "internal"
+ * isn't the true complement — a legacy row with jobOrigin unset but a populated externalRef
+ * is external by MIRROR_EXTERNAL_OR's own definition, and would otherwise double-count.
+ * @param {object} job
+ * @returns {boolean}
+ */
+function isMirroredExternal(job) {
+  if (job?.jobOrigin === 'external') return true;
+  const ref = job?.externalRef;
+  return !!(ref && ref.externalId != null && ref.externalId !== '' && ref.source != null && ref.source !== '');
+}
+
+/**
  * @param {object} job
  * @param {string|null} jobOriginFilter
  */
 export function jobMatchesOrigin(job, jobOriginFilter) {
   if (!jobOriginFilter) return true;
-  const origin = job.jobOrigin || 'internal';
-  if (jobOriginFilter === 'external') return origin === 'external';
-  if (jobOriginFilter === 'internal') return origin !== 'external';
+  const external = isMirroredExternal(job);
+  if (jobOriginFilter === 'external') return external;
+  if (jobOriginFilter === 'internal') return !external;
   return true;
 }
 
@@ -246,7 +261,9 @@ export function resolveJobPayload(fetched) {
 /** @param {object} filters @param {number} total */
 export function buildJobCountPhrase(filters = {}, total = 0) {
   const parts = [];
-  if (filters.status) parts.push(String(filters.status).toLowerCase());
+  // status:'all' means the user explicitly asked for every status — named as a suffix
+  // below instead of here, so it doesn't read as "all jobs" (ambiguous with jobType/count).
+  if (filters.status && filters.status !== 'all') parts.push(String(filters.status).toLowerCase());
   if (filters.remote) parts.push('remote');
   const origin = originLabelFromFilters(filters);
   if (origin) parts.push(origin.toLowerCase());
@@ -254,5 +271,6 @@ export function buildJobCountPhrase(filters = {}, total = 0) {
   // (jobFilter.js extractJobTopicKeyword) must show up in the reply, not just the total.
   if (filters.search) parts.push(String(filters.search).trim());
   parts.push(total === 1 ? 'job' : 'jobs');
+  if (filters.status === 'all') parts.push('across all statuses');
   return parts.join(' ');
 }
