@@ -53,6 +53,8 @@ export function buildTaskServiceFilter(user, options = {}) {
   if (options.noDueDate) filter.noDueDate = options.noDueDate;
   if (options.leaving) filter.leaving = options.leaving;
   if (options.reassigned) filter.reassigned = options.reassigned;
+  if (options.overdue) filter.overdue = options.overdue;
+  if (options.blocked) filter.blocked = options.blocked;
   return filter;
 }
 

@@ -290,6 +290,34 @@ const queryTasks = async (filter, options) => {
     filter.dueDate = null;
   }
   delete filter.noDueDate;
+
+  /* Overdue: dueDate strictly before today (UTC) and not null, and not
+     "completed" — mirrors chatAssistant/taskAccess.js's overdueTaskClause().
+     A raw { dueDate, status } clause used to be Object.assign-ed onto the
+     chat filter directly, but that flowed through applyCommaFilter('status')
+     above, which stringifies a non-string value to "[object Object]" and
+     silently zeroed every overdue query. Handling the boolean flag here
+     avoids that. Applied after noDueDate so overdue wins if a caller somehow
+     sets both — the two conditions are mutually exclusive, and "last one
+     wins" matches how hasDueDate/noDueDate above already resolve. */
+  if (isTruthyQueryFlag(filter.overdue)) {
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+    filter.dueDate = { $lt: startOfToday, $ne: null };
+    filter.status = { $ne: 'completed' };
+  }
+  delete filter.overdue;
+
+  /* Blocked: same tags regex as chatAssistant/taskAccess.js's
+     blockedTaskClause() — `tags` isn't on buildTaskServiceFilter's allow-list,
+     so a raw clause never reached here before and blocked filtering was a
+     no-op. A plain field, so it composes with filter.$or from the search
+     branch below instead of colliding with it. */
+  if (isTruthyQueryFlag(filter.blocked)) {
+    filter.tags = { $regex: /^blocked$/i };
+  }
+  delete filter.blocked;
+
   applyCommaFilter(filter, 'sprintId', (id) => new mongoose.Types.ObjectId(id));
   applyCommaFilter(filter, 'createdBy', (id) => new mongoose.Types.ObjectId(id));
 

@@ -13,9 +13,7 @@ import {
 } from './projectGraph.resolvers.js';
 import {
   buildAccessibleTaskFilter,
-  blockedTaskClause,
   isBlockedTask,
-  overdueTaskClause,
   resolveAssigneeByName,
 } from './taskAccess.js';
 import {
@@ -363,11 +361,15 @@ export async function fetchTaskBoardAnalytics({ user, args = {}, uiContext = nul
     extra.assignedTo = assignee.userIds[0];
   }
 
+  // Boolean flags (I4) — this goes through executeAtomicTaskQuery ->
+  // buildTaskServiceFilter -> queryTasks, same as fetch_tasks, so it needs the
+  // same allow-listed flags rather than the raw Mongo clause (which queryTasks'
+  // applyCommaFilter/allow-list silently mangles or drops).
   if (metric === 'overdue') {
-    Object.assign(extra, overdueTaskClause());
+    extra.overdue = true;
   }
   if (metric === 'blocked') {
-    Object.assign(extra, blockedTaskClause());
+    extra.blocked = true;
   }
 
   if (metric === 'stage_count' && status) {
