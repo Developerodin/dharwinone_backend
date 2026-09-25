@@ -12,6 +12,9 @@ import {
   RANK_CUE_RE,
   TOP_N_RE,
 } from '../rankPlan.js';
+import Job from '../../../../models/job.model.js';
+import { buildJobListFilter } from '../../../job.service.js';
+import { buildLocationFilterClause } from '../../../../utils/jobLocation.util.js';
 
 const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
@@ -44,6 +47,102 @@ const JOB_SELECT =
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Job.status enum (job.model.js) keyed by lowercased common phrasing. */
+const STATUS_ALIASES = {
+  draft: 'Draft',
+  active: 'Active',
+  open: 'Active',
+  live: 'Active',
+  closed: 'Closed',
+  filled: 'Closed',
+  archived: 'Archived',
+};
+
+/** Job.jobType enum (job.model.js) keyed by lowercased, whitespace/hyphen-stripped phrasing. */
+const JOB_TYPE_ALIASES = {
+  fulltime: 'Full-time',
+  parttime: 'Part-time',
+  contract: 'Contract',
+  temporary: 'Temporary',
+  temp: 'Temporary',
+  internship: 'Internship',
+  intern: 'Internship',
+  freelance: 'Freelance',
+};
+
+/** @param {string} value @returns {string|null} canonical Job.status, or null if unrecognized */
+function normalizeStatus(value) {
+  if (!value) return null;
+  return STATUS_ALIASES[String(value).trim().toLowerCase()] || null;
+}
+
+/** @param {string} value @returns {string|null} canonical Job.jobType, or null if unrecognized */
+function normalizeJobType(value) {
+  if (!value) return null;
+  const key = String(value).trim().toLowerCase().replace(/[\s-]+/g, '');
+  return JOB_TYPE_ALIASES[key] || null;
+}
+
+/**
+ * Sage's job visibility must match the ATS Jobs page (job.service.js buildJobListFilter):
+ * non-privileged users see only their own internal jobs + external mirrors. Reused here
+ * — not re-implemented — so Sage can never see more than the page does.
+ * @param {{ roleIds?: any[], id?: string, _id?: string, platformSuperUser?: boolean }|null} user
+ * @returns {Promise<object>} Mongo clause to AND into every job query ({} = unrestricted)
+ */
+export async function resolveJobVisibilityFilter(user) {
+  return buildJobListFilter({
+    userRoleIds: user?.roleIds || [],
+    userId: user?.id || user?._id,
+    platformSuperUser: user?.platformSuperUser,
+  });
+}
+
+/** AND two Mongo filter clauses together; an empty `{}` on either side is a no-op. */
+export function andMongoFilters(a = {}, b = {}) {
+  const aEmpty = !a || Object.keys(a).length === 0;
+  const bEmpty = !b || Object.keys(b).length === 0;
+  if (aEmpty && bEmpty) return {};
+  if (aEmpty) return b;
+  if (bEmpty) return a;
+  return { $and: [a, b] };
+}
+
+/**
+ * Wrap a Job-like model so every countDocuments/find call ANDs in a visibility filter —
+ * lets callers that build and own their Mongo filter internally (e.g. jobResult.js's
+ * executeAtomicJobQuery) stay scoped without threading the filter through their own args.
+ * @param {import('mongoose').Model} JobModel
+ * @param {object} visibilityFilter - {} = unrestricted (returns JobModel unwrapped)
+ */
+export function scopeJobModel(JobModel, visibilityFilter) {
+  if (!visibilityFilter || Object.keys(visibilityFilter).length === 0) return JobModel;
+  return {
+    countDocuments: (filter) => JobModel.countDocuments(andMongoFilters(filter, visibilityFilter)),
+    find: (filter) => JobModel.find(andMongoFilters(filter, visibilityFilter)),
+  };
+}
+
+/**
+ * Verify a free-text company candidate against real data before treating it as a filter.
+ * parseJobFilters' regex over-captures role nouns / locations ("jobs for React devs",
+ * "at Bangalore") as a "company" with no way to tell from the regex alone — an exact,
+ * case-insensitive match against real Job organisation.name values is the ground truth
+ * the regex can't provide.
+ * @param {string|null|undefined} candidate
+ * @param {{ Job?: import('mongoose').Model }} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function verifyCompanyCandidate(candidate, deps = {}) {
+  const JobModel = deps.Job ?? Job;
+  const name = String(candidate || '').trim();
+  if (!name) return false;
+  const exists = await JobModel.exists({
+    'organisation.name': { $regex: `^${escapeRegex(name)}$`, $options: 'i' },
+  });
+  return !!exists;
 }
 
 function basePlanFromContext(ctx) {
@@ -129,6 +228,10 @@ function parseCityLocation(message) {
   return m?.[1]?.trim() || null;
 }
 
+/** Anchored to a job-noun so "internally" / "internal review" don't fire origin filters. */
+const JOB_ORIGIN_INTERNAL_RE = /\binternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies))\b/i;
+const JOB_ORIGIN_EXTERNAL_RE = /\bexternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies)|listings?)\b/i;
+
 export function parseJobFilters(message, ctx = null) {
   const t = String(message || '').toLowerCase();
   const filters = { ...(ctx?.filters || {}) };
@@ -137,7 +240,9 @@ export function parseJobFilters(message, ctx = null) {
     if (/\bclosed\b|\bfilled\b/.test(t)) filters.status = 'Closed';
     else if (/\barchived\b/.test(t)) filters.status = 'Archived';
     else if (/\bdraft\b/.test(t)) filters.status = 'Draft';
-  } else if (/\b(right now|currently|active|open|live)\b/.test(t) || !filters.status) {
+  } else if (/\b(right now|currently|active|open|live)\b/.test(t)) {
+    // Only default to Active when the message expresses open/active intent — a plain
+    // "how many jobs" / "list all jobs" must cover every status, and say so downstream.
     filters.status = 'Active';
   }
 
@@ -159,8 +264,8 @@ export function parseJobFilters(message, ctx = null) {
   );
   if (deptMatch) filters.department = deptMatch[1].trim();
 
-  if (/\binternal\b/.test(t)) filters.jobOrigin = 'internal';
-  else if (/\bexternal\b/.test(t)) filters.jobOrigin = 'external';
+  if (JOB_ORIGIN_INTERNAL_RE.test(t)) filters.jobOrigin = 'internal';
+  else if (JOB_ORIGIN_EXTERNAL_RE.test(t)) filters.jobOrigin = 'external';
 
   const skill = parseSkillFilter(message);
   if (skill) filters.skill = skill;
@@ -186,8 +291,14 @@ export function buildJobRankingMongoFilter(plan) {
   const filter = {};
   const f = plan.filters || {};
 
-  if (f.status) filter.status = f.status;
-  if (f.jobType) filter.jobType = f.jobType;
+  if (f.status) {
+    const normalized = normalizeStatus(f.status);
+    filter.status = normalized || { $regex: `^${escapeRegex(f.status)}$`, $options: 'i' };
+  }
+  if (f.jobType) {
+    const normalized = normalizeJobType(f.jobType);
+    filter.jobType = normalized || { $regex: `^${escapeRegex(f.jobType)}$`, $options: 'i' };
+  }
   if (f.jobOrigin === 'internal') filter.jobOrigin = { $ne: 'external' };
   else if (f.jobOrigin === 'external') filter.jobOrigin = 'external';
   if (f.company) {
@@ -195,8 +306,14 @@ export function buildJobRankingMongoFilter(plan) {
   }
   if (f.remote) {
     filter.location = { $regex: /remote/i };
+  } else if (f.location) {
+    const clause = buildLocationFilterClause(f.location);
+    if (clause) appendFilterClause(filter, clause);
   } else if (f.city) {
     filter.location = { $regex: escapeRegex(f.city), $options: 'i' };
+  }
+  if (f.experienceLevel) {
+    filter.experienceLevel = { $regex: `^${escapeRegex(f.experienceLevel)}$`, $options: 'i' };
   }
   if (f.skill) {
     const skill = escapeRegex(f.skill);
@@ -354,7 +471,7 @@ export function planJobRankQuery({ userMessage, jobQueryContext = null }) {
 
 /**
  * @param {object} plan
- * @param {{ Job?: import('mongoose').Model }} deps
+ * @param {{ Job?: import('mongoose').Model, visibilityFilter?: object }} deps
  * @returns {Promise<{ success: boolean, jobs: object[], total: number, plan: object, filters: object }>}
  */
 export async function executeJobRank(plan, deps = {}) {
@@ -364,7 +481,8 @@ export async function executeJobRank(plan, deps = {}) {
   }
 
   const baseFilter = buildJobRankingMongoFilter(plan);
-  const filter = buildSalarySpecifiedFilter(baseFilter);
+  const salaryFilter = buildSalarySpecifiedFilter(baseFilter);
+  const filter = andMongoFilters(salaryFilter, deps.visibilityFilter || {});
   const sort = sortSpec(plan.direction ?? 'desc');
   const limit = Math.max(1, plan.limit ?? 1);
   const offset = Math.max(0, plan.offset ?? 0);
