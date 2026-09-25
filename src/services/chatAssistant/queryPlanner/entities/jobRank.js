@@ -37,16 +37,14 @@ const LIST_JOBS_RE =
 
 /**
  * Words indicating the user wants every status, not just the Sage/Jobs-page default
- * (Active). Mirrors jobFilter.js's JOB_ALL_STATUSES_STRONG_RE / JOB_ALL_WORD_RE — kept as
- * separate copies here (not imported) because jobFilter.js already imports from this
- * module, and importing back would create a cycle. Keep the two in sync if these change.
- * JOB_ALL_STATUSES_STRONG_RE wins even over a status word parseJobFilters also caught
- * ("including closed" mentions "closed" but means the opposite of Closed-only); the bare
- * "all" in JOB_ALL_WORD_RE only applies when no specific status was already said, so "list
- * all closed jobs" still means Closed only.
+ * (Active). Mirrors jobFilter.js's JOB_ALL_STATUSES_STRONG_RE — kept as a separate copy
+ * here (not imported) because jobFilter.js already imports from this module, and importing
+ * back would create a cycle. Keep the two in sync if this changes. Deliberately does NOT
+ * include a bare "all" — "list all AI jobs" uses "all" as a generic quantifier, not a
+ * request for every status, and must still default to Active.
  */
-const JOB_ALL_STATUSES_STRONG_RE = /\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\b|\btotal\s+ever\s+posted\b/i;
-const JOB_ALL_WORD_RE = /\ball\b/i;
+const JOB_ALL_STATUSES_STRONG_RE =
+  /\ball\s+status(?:es)?\b|\bevery\s+status(?:es)?\b|\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\s+posted\b/i;
 
 /** Matches jobs with no meaningful salary (same semantics as ATS "Not specified"). */
 const SALARY_NOT_SPECIFIED_CLAUSE = {
@@ -494,12 +492,13 @@ export function planJobRankQuery({ userMessage, jobQueryContext = null }) {
   const operation = resolveRankOperation(message, limit, offset, direction);
   const filters = parseJobFilters(message, ctx);
 
-  // Match the ATS Jobs page's own default: Active, unless the user named another status
-  // or explicitly asked for every status ("any status", "including closed", "ever", "all").
+  // Match the ATS Jobs page's own default: Active, unless the user named another status or
+  // explicitly asked for every status ("all statuses", "any status", "including closed",
+  // "every status", "ever posted").
   if (JOB_ALL_STATUSES_STRONG_RE.test(message)) {
     filters.status = 'all';
   } else if (!filters.status) {
-    filters.status = JOB_ALL_WORD_RE.test(message) ? 'all' : 'Active';
+    filters.status = 'Active';
   }
 
   return {

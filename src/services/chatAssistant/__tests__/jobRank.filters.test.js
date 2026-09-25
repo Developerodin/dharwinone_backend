@@ -240,12 +240,20 @@ describe('planJobFilterQuery — status defaults to Active (matches the Jobs pag
     assert.equal(planJobFilterQuery({ userMessage: 'how many closed jobs' }).filters.status, 'Closed');
   });
 
-  it('maps to status "all" when the user asks for every status', () => {
+  it('maps to status "all" only for an unambiguous "every status" phrase', () => {
     assert.equal(planJobFilterQuery({ userMessage: 'how many jobs across all statuses' }).filters.status, 'all');
     assert.equal(planJobFilterQuery({ userMessage: 'how many jobs, any status' }).filters.status, 'all');
     assert.equal(planJobFilterQuery({ userMessage: 'how many jobs including closed' }).filters.status, 'all');
     assert.equal(planJobFilterQuery({ userMessage: 'how many jobs have we ever posted' }).filters.status, 'all');
-    assert.equal(planJobFilterQuery({ userMessage: 'list all jobs' }).filters.status, 'all');
+    assert.equal(planJobFilterQuery({ userMessage: 'how many jobs, every status' }).filters.status, 'all');
+  });
+
+  // Regression: a bare "all" is a generic quantifier ("every one"), not a request for every
+  // status — it must not be confused with "all statuses"/"every status"/etc.
+  it('a bare "all" does NOT switch to every status — stays Active', () => {
+    assert.equal(planJobFilterQuery({ userMessage: 'show me all jobs' }).filters.status, 'Active');
+    assert.equal(planJobFilterQuery({ userMessage: 'list all AI jobs' }).filters.status, 'Active');
+    assert.equal(planJobFilterQuery({ userMessage: 'list all jobs' }).filters.status, 'Active');
   });
 
   it('invariant: the AI-jobs filter is the "how many jobs" filter plus a search clause, so its count can only be <=', () => {

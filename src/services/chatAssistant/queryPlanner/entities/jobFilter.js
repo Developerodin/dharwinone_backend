@@ -83,16 +83,12 @@ export function extractJobTopicKeyword(message) {
 /**
  * Unambiguous "every status" phrases — these win even over a status word parseJobFilters
  * also caught, e.g. "including closed" mentions "closed" but means the opposite of a
- * status:'Closed'-only filter.
+ * status:'Closed'-only filter. Deliberately does NOT include a bare "all" — "show me all
+ * jobs" / "list all AI jobs" use "all" as a generic quantifier ("every one"), not a request
+ * for every status, and must still default to Active like the Jobs page does.
  */
-const JOB_ALL_STATUSES_STRONG_RE = /\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\b|\btotal\s+ever\s+posted\b/i;
-
-/**
- * Bare "all" as a generic quantifier ("list all jobs") only means "every status" when no
- * specific status word was also said — "list all closed jobs" must still mean Closed only,
- * not get overridden back to every status just because "all" also appears.
- */
-const JOB_ALL_WORD_RE = /\ball\b/i;
+const JOB_ALL_STATUSES_STRONG_RE =
+  /\ball\s+status(?:es)?\b|\bevery\s+status(?:es)?\b|\bany\s+status(?:es)?\b|\bincluding\s+closed\b|\bever\s+posted\b/i;
 
 const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
@@ -194,12 +190,13 @@ export function planJobFilterQuery({ userMessage, jobQueryContext = null }) {
   if (topic) filters.search = topic;
 
   // Match the ATS Jobs page's own default: Active, unless the user named another status
-  // (handled above by parseJobFilters) or explicitly asked for every status ("any status",
-  // "including closed", "ever", "all"), which maps to status 'all' (no restriction).
+  // (handled above by parseJobFilters) or explicitly asked for every status ("all statuses",
+  // "any status", "including closed", "every status", "ever posted"), which maps to status
+  // 'all' (no restriction).
   if (JOB_ALL_STATUSES_STRONG_RE.test(message)) {
     filters.status = 'all';
   } else if (!filters.status) {
-    filters.status = JOB_ALL_WORD_RE.test(message) ? 'all' : 'Active';
+    filters.status = 'Active';
   }
 
   const listIntent = detectListIntent(message);
