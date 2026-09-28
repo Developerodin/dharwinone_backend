@@ -35,6 +35,7 @@ export const BASE_INSTRUCTIONS = [
   'You may call several tools at once when the question needs them.',
   'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
   'If no available tool fits the question, call `handoff` with a short reason instead of answering.',
+  'Greetings, thanks and small talk ("hi", "thanks") are not questions for you: call `handoff`.',
   'Reply in plain, concise markdown.',
 ].join('\n');
 
