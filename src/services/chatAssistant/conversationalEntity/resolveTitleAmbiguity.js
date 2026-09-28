@@ -60,7 +60,9 @@ export function parseDesignationFromMessage(message) {
   hit = text.match(POSITION_COUNT_RE);
   if (hit) {
     const phrase = cleanSubject(hit[1]);
-    if (phrase && !/^(active|resigned|paid|unpaid|current|former|working|all)$/i.test(phrase)) {
+    // The lazy capture swallows the entity noun itself ("how many employees do we have" → "employees"),
+    // which is never a designation.
+    if (phrase && !/^(active|resigned|paid|unpaid|current|former|working|all|employees?|staff|people|team(?:\s+members?)?|workers?|users?|candidates?)$/i.test(phrase)) {
       return phrase;
     }
   }
