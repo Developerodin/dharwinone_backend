@@ -6893,8 +6893,10 @@ async function prepareContext(client, history, user, uiContext = null, { request
         toolName = 'fetch_employees';
         toolArgs.role = lastRole;
       }
-      // Agent on: a jobs continuation isn't forced onto fetch_jobs — routing below decides.
-      if (agentEnabled() && AGENT_JOB_TOOLS.has(toolName)) toolName = null;
+      // Agent on and not yet tried this turn: a jobs continuation isn't forced onto
+      // fetch_jobs — routing below decides (and may hand it to the agent). Once the
+      // agent attempted and didn't answer, the turn takes the full legacy path.
+      if (agentEnabled() && !agentAttempted && AGENT_JOB_TOOLS.has(toolName)) toolName = null;
       if (toolName) {
         const argsJson = JSON.stringify(toolArgs);
         const fetched = await executeFetches(
@@ -6914,9 +6916,12 @@ async function prepareContext(client, history, user, uiContext = null, { request
   }
 
   // 1. Fast path — regex pre-routing: skip the LLM routing call for obvious intents.
-  // Agent on: the jobs fast path is skipped so the turn reaches LLM routing and its agent fallback.
+  // Agent on and not yet tried this turn: the jobs fast path is skipped so the turn
+  // reaches LLM routing and its agent fallback. After a failed attempt it runs as before.
+  // Ceiling: a gate-rejected turn whose router-fallback attempt also fails still misses
+  // this fast path (it was skipped before routing) and gets router-picked fetch_jobs.
   const detectedIntent = detectIntent(effectiveUserMsg, uiContext);
-  const intent = agentEnabled() && detectedIntent?.modules?.some((m) => AGENT_JOB_TOOLS.has(m))
+  const intent = agentEnabled() && !agentAttempted && detectedIntent?.modules?.some((m) => AGENT_JOB_TOOLS.has(m))
     ? null
     : detectedIntent;
   if (intent?.clarify) {
@@ -7889,7 +7894,7 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
   // Agent on: also when the agent answered the last turn (fresh ledger). It keeps its
   // filters in the ledger, not jobQueryContext — so parseJobFollowUp gets a stand-in
   // context and only tests the message's follow-up shape. The legacy check stays for
-  // job answers the agent handed off (those write no ledger).
+  // job answers the agent handed off (a handoff closes the ledger window).
   const prevAssistantMsg = history.filter((m) => m.role === 'assistant').pop()?.content ?? '';
   if (
     (agentEnabled() &&
@@ -8343,8 +8348,9 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
   // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
   // through this early job-salary-ranking path even though fetch_jobs itself is gated.
-  // Agent on: job questions belong to tryAgentRoute; its null falls through to LLM routing.
-  if (!agentEnabled() && shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
+  // Agent on: an agent answer already returned above, so reaching here means it did not
+  // answer (skipped, handoff or failure) — run the same deterministic path as flag-off.
+  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,
@@ -8698,8 +8704,9 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
   // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
   // through this early job-salary-ranking path even though fetch_jobs itself is gated.
-  // Agent on: job questions belong to tryAgentRoute; its null falls through to LLM routing.
-  if (!agentEnabled() && shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
+  // Agent on: an agent answer already returned above, so reaching here means it did not
+  // answer (skipped, handoff or failure) — run the same deterministic path as flag-off.
+  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,

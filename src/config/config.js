@@ -351,6 +351,16 @@ const envVarsSchema = Joi.object()
       .min(0)
       .default(8000)
       .description('Per-tool-call timeout (ms) for Sage agent loop tool execution'),
+    CHATBOT_AGENT_STEP_TIMEOUT_MS: Joi.number()
+      .integer()
+      .min(1)
+      .default(20000)
+      .description('Per-model-call timeout (ms) for a Sage agent loop step; no SDK retries'),
+    CHATBOT_AGENT_TURN_TIMEOUT_MS: Joi.number()
+      .integer()
+      .min(1)
+      .default(30000)
+      .description('Deadline (ms) for one Sage agent loop turn; past it the turn falls back to the legacy pipeline'),
     CHATBOT_AGENT_INPUT_BUDGET: Joi.number()
       .integer()
       .min(0)
@@ -864,6 +874,8 @@ const config = {
       enabled: envVars.CHATBOT_AGENT,
       maxSteps: envVars.CHATBOT_AGENT_MAX_STEPS,
       toolTimeoutMs: envVars.CHATBOT_AGENT_TOOL_TIMEOUT_MS,
+      stepTimeoutMs: envVars.CHATBOT_AGENT_STEP_TIMEOUT_MS,
+      turnTimeoutMs: envVars.CHATBOT_AGENT_TURN_TIMEOUT_MS,
       inputBudget: envVars.CHATBOT_AGENT_INPUT_BUDGET,
     },
   },

@@ -18,10 +18,21 @@ import config from '../../../config/config.js';
  * @param {Array} args.tools Responses-format function tool schemas
  * @param {'auto'|'none'} [args.toolChoice]
  * @param {number} [args.maxOutputTokens]
+ * @param {number} [args.timeoutMs] per-request timeout; defaults to chatbot.agent.stepTimeoutMs
  * @returns {Promise<{status:string|null, text:string, toolCalls:Array<{callId:string,name:string,arguments:string}>, outputItems:Array, usage:object|null}>}
  *   Provider errors propagate — the loop owns the fallback.
  */
-export async function step({ client, instructions, input, tools, toolChoice = 'auto', maxOutputTokens = 6000 }) {
+export async function step({
+  client,
+  instructions,
+  input,
+  tools,
+  toolChoice = 'auto',
+  maxOutputTokens = 6000,
+  timeoutMs = config.chatbot.agent.stepTimeoutMs,
+}) {
+  // SDK defaults are a 10-minute timeout with 2 retries; the agent must fail fast
+  // so the legacy pipeline can still answer. No retries: the loop falls back instead.
   const res = await client.responses.create({
     model: config.chatbot.model,
     instructions,
@@ -33,7 +44,7 @@ export async function step({ client, instructions, input, tools, toolChoice = 'a
     store: false,
     include: ['reasoning.encrypted_content'],
     max_output_tokens: maxOutputTokens,
-  });
+  }, { timeout: timeoutMs, maxRetries: 0 });
 
   const outputItems = Array.isArray(res?.output) ? res.output : [];
   const toolCalls = outputItems

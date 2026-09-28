@@ -47,6 +47,17 @@ describe('hasRecentAgentTurn', () => {
     assert.equal(hasRecentAgentTurn({ agentLedger: [{ calls: [] }] }, NOW), false);
     assert.equal(hasRecentAgentTurn({ agentLedger: [{ at: 'not a date' }] }, NOW), false);
   });
+
+  it('a handoff marker as the last entry closes the window', () => {
+    const memDoc = {
+      agentLedger: [
+        { at: new Date(NOW.getTime() - 5 * 60 * 1000), calls: [{ tool: 'count_jobs', args: {}, total: 3 }] },
+        { at: new Date(NOW.getTime() - 60 * 1000), handoff: true },
+      ],
+    };
+    assert.equal(hasRecentAgentTurn(memDoc, NOW), false);
+    assert.equal(isAgentTurn('and the remote ones?', memDoc, NOW), false);
+  });
 });
 
 describe('hasPendingPick', () => {
@@ -77,17 +88,23 @@ describe('hasPendingPick', () => {
 describe('tryAgentTurn', () => {
   const user = { id: 'u1' };
   const jobQ = [{ role: 'user', content: 'how many open jobs' }];
-  const answer = { reply: 'There are 3 open jobs.', blocks: [], meta: { steps: 1, toolCalls: ['count_jobs'], ms: 5 }, ledgerEntry: { at: new Date(), calls: [] } };
+  const answer = {
+    reply: 'There are 3 open jobs.',
+    blocks: [],
+    meta: { steps: 1, toolCalls: ['count_jobs'], ms: 5 },
+    ledgerEntry: { at: new Date(), calls: [{ tool: 'count_jobs', args: {}, total: 3 }] },
+  };
 
   function deps(over = {}) {
-    const calls = { load: 0, access: 0, run: 0, append: 0 };
+    const calls = { load: 0, access: 0, run: 0, append: 0, entries: [] };
     const d = {
       enabled: () => true,
       loadMemDoc: async () => { calls.load += 1; return null; },
       checkAccess: async () => { calls.access += 1; return { ok: true }; },
       pendingPick: async () => false,
       run: async () => { calls.run += 1; return answer; },
-      appendLedger: async () => { calls.append += 1; },
+      appendLedger: async ({ entry }) => { calls.append += 1; calls.entries.push(entry); },
+      now: () => NOW,
       ...over,
     };
     return { d, calls };
@@ -96,7 +113,7 @@ describe('tryAgentTurn', () => {
   it('flag off → skip without any I/O', async () => {
     const { d, calls } = deps({ enabled: () => false });
     assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d }), { result: null, attempted: false });
-    assert.deepEqual(calls, { load: 0, access: 0, run: 0, append: 0 });
+    assert.deepEqual(calls, { load: 0, access: 0, run: 0, append: 0, entries: [] });
   });
 
   it('answers a gated turn and persists its ledger entry', async () => {
@@ -134,6 +151,23 @@ describe('tryAgentTurn', () => {
     const { d, calls } = deps({ run: async () => null });
     assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d }), { result: null, attempted: true });
     assert.equal(calls.append, 0);
+  });
+
+  it('a no-tool answer writes no ledger entry, so it cannot re-arm the window', async () => {
+    const noTool = { ...answer, reply: 'MERN is a stack.', ledgerEntry: { at: NOW, calls: [] } };
+    const { d, calls } = deps({ run: async () => noTool });
+    const out = await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d });
+    assert.equal(out.result, noTool);
+    assert.equal(calls.append, 0);
+  });
+
+  it('a handoff inside the recency window appends a closing marker', async () => {
+    const open = ledgerAt(5 * 60 * 1000);
+    const { d, calls } = deps({ loadMemDoc: async () => open, run: async () => null });
+    const out = await tryAgentTurn({ user, adminId: 'a1', history: [{ role: 'user', content: 'and on leave?' }], deps: d });
+    assert.deepEqual(out, { result: null, attempted: true });
+    assert.deepEqual(calls.entries, [{ at: NOW, handoff: true }]);
+    assert.equal(hasRecentAgentTurn({ agentLedger: [...open.agentLedger, ...calls.entries] }, NOW), false);
   });
 
   it('a throwing memory read or ledger write never goes dark', async () => {

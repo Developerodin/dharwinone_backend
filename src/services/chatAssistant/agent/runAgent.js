@@ -29,7 +29,8 @@ const MAX_FAILURES_PER_TOOL = 2;
 export const BASE_INSTRUCTIONS = [
   "You are Sage, the assistant inside this company's HR and recruiting platform.",
   'Facts about the company data (counts, jobs, people, statuses) come only from the tools — never from memory.',
-  'General knowledge that is not company data — what a term, acronym or tech stack means (e.g. "MERN") — answer directly without tools.',
+  'Only general knowledge that is the same at every company — what a generic term, acronym or tech stack means (e.g. "MERN") — may be answered directly without tools.',
+  'Anything about THIS company — its policies, people, numbers or data (e.g. "our notice period", "how many employees do we have") — is never general knowledge: use a tool, or call `handoff` if none fits.',
   'Every number in your reply must come from a tool result returned in THIS turn. Earlier replies and "Previous tool calls" totals are context only: for a follow-up question, call the tool again with the changed arguments — never reuse an old number.',
   'You may call several tools at once when the question needs them.',
   'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
@@ -111,11 +112,26 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
     });
     const { instructions } = built;
     let { input } = built;
-    const { maxSteps, inputBudget } = config.chatbot.agent;
+    const { maxSteps, inputBudget, stepTimeoutMs, turnTimeoutMs } = config.chatbot.agent;
 
+    // Turn deadline: a slow provider must not delay the legacy fallback. Each step
+    // gets at most the time left, so the whole turn stays near turnTimeoutMs
+    // (plus at most one tool batch, bounded by toolTimeoutMs).
     const runStep = async (toolChoice) => {
+      const remaining = turnTimeoutMs - (Date.now() - startedAt);
+      if (remaining <= 0) {
+        outcome = 'deadline';
+        throw new Error('turn deadline exceeded');
+      }
       steps += 1;
-      const res = await step({ client, instructions, input, tools: registry.schemas, toolChoice });
+      const res = await step({
+        client,
+        instructions,
+        input,
+        tools: registry.schemas,
+        toolChoice,
+        timeoutMs: Math.min(stepTimeoutMs, remaining),
+      });
       addUsage(usage, res.usage);
       return res;
     };
@@ -183,6 +199,14 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
     }
     if (!text || !text.trim()) {
       outcome = 'empty';
+      return null;
+    }
+    // enforceCounts can only correct numbers against facts from this turn's tools.
+    // With no successful tool call there are no facts, so a number in the reply
+    // is unchecked (e.g. a from-memory "our notice period is 30 days") — let the
+    // legacy pipeline answer instead. Digit-free replies (definitions) still ship.
+    if (!executed.some((c) => c.ok) && /\d/.test(text)) {
+      outcome = 'untooled_number';
       return null;
     }
 

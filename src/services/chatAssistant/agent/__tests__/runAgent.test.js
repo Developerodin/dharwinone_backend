@@ -96,6 +96,8 @@ describe('runAgent', () => {
     original = { ...config.chatbot.agent };
     config.chatbot.agent.maxSteps = 5;
     config.chatbot.agent.inputBudget = 60000;
+    config.chatbot.agent.stepTimeoutMs = 20000;
+    config.chatbot.agent.turnTimeoutMs = 30000;
   });
   afterEach(() => {
     Object.assign(config.chatbot.agent, original);
@@ -404,5 +406,57 @@ describe('runAgent', () => {
     assert.equal(out.reply, 'I can help with jobs.');
     assert.deepEqual(out.blocks, []);
     assert.deepEqual(out.ledgerEntry.calls, []);
+  });
+
+  it('a number with no tool call this turn -> null (nothing to check it against)', async () => {
+    const registry = fakeRegistry();
+    const step = scriptedStep([stepResult({ text: 'Our notice period is 30 days.' })]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(out, null);
+  });
+
+  it('a number after only failed tool calls -> null', async () => {
+    const registry = fakeRegistry({ count_jobs: () => ({ ok: false, error: 'bad filter' }) });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('c1', 'count_jobs', { search: 'x' })] }),
+      stepResult({ text: 'There are 5 jobs.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(out, null);
+  });
+
+  it('base instructions send company-specific questions to a tool or handoff; definitions still answer', async () => {
+    const registry = fakeRegistry();
+    const step = scriptedStep([stepResult({ text: 'MERN is MongoDB, Express, React and Node.' })]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(out.reply, 'MERN is MongoDB, Express, React and Node.');
+    assert.match(step.requests[0].instructions, /THIS company.*`handoff`/);
+  });
+
+  it('each step gets the step timeout, capped to the time left in the turn', async () => {
+    config.chatbot.agent.stepTimeoutMs = 20000;
+    config.chatbot.agent.turnTimeoutMs = 5000;
+    const registry = fakeRegistry();
+    const step = scriptedStep([stepResult({ text: 'Hello.' })]);
+    await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    const t = step.requests[0].timeoutMs;
+    assert.ok(t > 0 && t <= 5000, `timeoutMs ${t}`);
+  });
+
+  it('turn deadline passed -> null without another model step', async () => {
+    config.chatbot.agent.turnTimeoutMs = 30;
+    const registry = fakeRegistry({
+      count_jobs: async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return { ok: true, result: { total: 3 } };
+      },
+    });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('c1', 'count_jobs')] }),
+      stepResult({ text: 'There are 3 jobs.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(out, null);
+    assert.equal(step.requests.length, 1);
   });
 });

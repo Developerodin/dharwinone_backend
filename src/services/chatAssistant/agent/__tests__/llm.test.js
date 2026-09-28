@@ -5,11 +5,14 @@ import { step } from '../llm.js';
 
 function fakeClient(response) {
   const calls = [];
+  const options = [];
   return {
     calls,
+    options,
     responses: {
-      create: async (req) => {
+      create: async (req, opts) => {
         calls.push(req);
+        options.push(opts);
         return response;
       },
     },
@@ -47,6 +50,19 @@ describe('llm.step', () => {
       include: ['reasoning.encrypted_content'],
       max_output_tokens: 6000,
     });
+  });
+
+  it('sends a per-request timeout (config default or override) with SDK retries off', async () => {
+    const saved = config.chatbot.agent.stepTimeoutMs;
+    config.chatbot.agent.stepTimeoutMs = 1234;
+    try {
+      const client = fakeClient({ output: [], output_text: 'x' });
+      await step({ client, instructions: 'I', input: [], tools: [] });
+      await step({ client, instructions: 'I', input: [], tools: [], timeoutMs: 50 });
+      assert.deepEqual(client.options, [{ timeout: 1234, maxRetries: 0 }, { timeout: 50, maxRetries: 0 }]);
+    } finally {
+      config.chatbot.agent.stepTimeoutMs = saved;
+    }
   });
 
   it('passes toolChoice and maxOutputTokens through', async () => {

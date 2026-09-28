@@ -20,20 +20,26 @@ import { runAgent } from './runAgent.js';
 // answered the last turn if its ledger entry is this fresh.
 export const AGENT_TURN_WINDOW_MS = 30 * 60 * 1000;
 
+// Appended when an attempted turn is handed back to the legacy pipeline while the
+// window is open: the window means "the agent answered the last tool-backed turn",
+// so a handoff closes it. Carries no `calls`, so ledger replay skips it.
+const windowClosedEntry = (at) => ({ at, handoff: true });
+
 // "what about jobs" after a job-vs-employee title prompt: tryJobConversationalRoute
 // opens that title's job profile. Shared so the gate can leave the turn to it.
 export const JOB_ENTITY_SWITCH_RE = /^\s*(?:ok\s+)?what about\s+jobs?\s*[.!]?\s*$/i;
 
 /**
- * True when the agent's last ledger entry is younger than AGENT_TURN_WINDOW_MS.
+ * True when the agent's last ledger entry is younger than AGENT_TURN_WINDOW_MS
+ * and is not a handoff (window-closed) marker.
  * @param {{agentLedger?:Array}|null|undefined} memDoc ConversationMemory doc
  * @param {Date} [now]
  * @returns {boolean}
  */
 export function hasRecentAgentTurn(memDoc, now = new Date()) {
-  const at = readAgentLedger(memDoc).at(-1)?.at;
-  if (!at) return false;
-  const age = now.getTime() - new Date(at).getTime();
+  const last = readAgentLedger(memDoc).at(-1);
+  if (!last?.at || last.handoff) return false;
+  const age = now.getTime() - new Date(last.at).getTime();
   return Number.isFinite(age) && age >= 0 && age < AGENT_TURN_WINDOW_MS;
 }
 
@@ -112,9 +118,18 @@ export async function tryAgentTurn({ client, user, adminId, history, requestId =
     if (await pendingPick(lastUserMsg, memDoc)) return skip;
 
     const result = await run({ client, user, history, memDoc, requestId });
+    // An answer with no tool calls (a definition) writes nothing: it must not
+    // re-arm the window. A handoff/null closes an open window, so the following
+    // noun-less turns stop paying an agent attempt.
+    let entry = null;
     if (result) {
+      if (result.ledgerEntry?.calls?.length) entry = result.ledgerEntry;
+    } else if (hasRecentAgentTurn(memDoc, now())) {
+      entry = windowClosedEntry(now());
+    }
+    if (entry) {
       try {
-        await appendLedger({ userId, adminId, entry: result.ledgerEntry });
+        await appendLedger({ userId, adminId, entry });
       } catch (err) {
         logger.warn(`[agentGate] ledger persist failed user=${userId} requestId=${requestId ?? 'none'}: ${err.message}`);
       }

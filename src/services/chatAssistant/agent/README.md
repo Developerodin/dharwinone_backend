@@ -34,15 +34,19 @@ legacy pipeline only, with no other changes.
    the first 8 gets a canned `{"error":"too many calls in one step"}` output instead of
    actually running — or a final text answer.
 6. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
-   the facts are merged and passed to `enforceCounts` so every number in the reply traces
-   back to a tool result from this turn.
+   the facts are merged and passed to `enforceCounts`, which corrects counts against this
+   turn's tool totals. A reply with a digit but no successful tool call is rejected (step 8).
 7. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; `tryAgentTurn` persists
-   `ledgerEntry` onto `ConversationMemory.agentLedger` via `appendAgentLedger` — `runAgent`
-   itself never writes to the DB.
+   `ledgerEntry` onto `ConversationMemory.agentLedger` via `appendAgentLedger` when it holds
+   at least one tool call (a no-tool answer writes nothing) — `runAgent` itself never writes
+   to the DB.
 8. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, the
-   same tool failing twice, or an empty final reply that's still empty after one
-   `tool_choice:'none'` retry — makes `runAgent` return `null`, and the caller falls through
-   to the legacy pipeline. Sage never goes dark because of the agent.
+   same tool failing twice, an empty final reply that's still empty after one
+   `tool_choice:'none'` retry, a digit in a reply with no successful tool call, or the turn
+   deadline — makes `runAgent` return `null`, and the caller falls through to the legacy
+   pipeline, which then runs exactly as with the flag off. If the recency window was open,
+   `tryAgentTurn` appends a `{ at, handoff: true }` marker that closes it, so the next
+   noun-less turn goes straight to legacy. Sage never goes dark because of the agent.
 
 ```
 service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
@@ -186,7 +190,14 @@ See memory `project_backend_tests_not_versioned` for why this is 3 steps, not 1.
 
 `agent/gate.js`'s `isAgentTurn` only recognizes job nouns today (Phase 1). A new domain's
 questions won't reach the loop until its nouns are added to that check (or the user's last
-turn was a recent agent turn — see `hasRecentAgentTurn`).
+turn was a recent agent turn — see `hasRecentAgentTurn`). Two more places in `gate.js` are
+job-only and must be widened with it:
+- **`hasPendingPick`** reads only the job, title and entity pending picks. Add the new
+  domain's pending-pick readers, or the agent will take a bare "1" / "the first one" meant
+  for that domain's disambiguation while the recency window is open.
+- **The access check in `tryAgentTurn`** is hard-coded to `checkToolAccess('fetch_jobs', user)`.
+  Replace it with a check for the domain being asked about (or "any agent tool the user can
+  call"), or users without `jobs.read` never reach the agent for any domain.
 
 ## Rules that keep it safe
 
@@ -194,8 +205,17 @@ turn was a recent agent turn — see `hasRecentAgentTurn`).
   never sees them); `registry.execute` re-checks access on every call regardless, because
   the model can still name a tool it was never shown.
 - **Numbers only come from this turn's tools.** `runAgent` merges `render()`'s `facts` and
-  runs `enforceCounts` on the final text — a number the model invents from memory gets
-  overwritten.
+  runs `enforceCounts` on the final text, which rewrites a count that disagrees with a
+  tool's total. That only covers counts a tool reported: it cannot check a number when no
+  tool ran. So a reply containing any digit with **no successful tool call** this turn is
+  not shipped — `runAgent` returns `null` (outcome `untooled_number`) and the legacy
+  pipeline answers. Digit-free no-tool replies (e.g. defining "MERN") still ship; keeping
+  those from being company facts rests on `BASE_INSTRUCTIONS` (company policies, people and
+  data → tool or `handoff`).
+- **Turns are time-boxed.** Each model step has a per-request timeout
+  (`CHATBOT_AGENT_STEP_TIMEOUT_MS`, SDK retries off) and the turn has a deadline
+  (`CHATBOT_AGENT_TURN_TIMEOUT_MS`); each step gets at most the time left. Past the deadline
+  `runAgent` returns `null` (outcome `deadline`) and the legacy pipeline answers.
 - **Results are size-capped, but only at the top level.** The registry's `shrinkToFit`
   (`MAX_RESULT_CHARS = 20000`) only shrinks the largest top-level **array** property,
   tagging `truncated: true`. A single large scalar field (e.g. `get_job`'s job description)
@@ -238,7 +258,9 @@ Per-step model input is `[stable prefix] + [turn context] + [history] + [this tu
   (`context.js`'s `trimToLastTurns`).
 - **Tool ledger** — every agent turn's successful tool calls are summarized
   (`summarizeCalls`) and appended to `ConversationMemory.agentLedger`, capped to the last 6
-  turns (`appendAgentLedger`). This is how a bare follow-up ("what about ai?") gets
+  entries (`appendAgentLedger`). Turns with no tool calls append nothing; a handoff inside
+  the recency window appends a `{ at, handoff: true }` marker (no `calls`, skipped on replay)
+  that closes the window. This is how a bare follow-up ("what about ai?") gets
   resolved: the model sees `count_jobs({"search":"ml"}) → total 12` in turn context and
   re-calls with changed args — it never reuses a stale number from the ledger itself
   (`BASE_INSTRUCTIONS` says so explicitly).
@@ -258,6 +280,8 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 | `CHATBOT_AGENT` | `chatbot.agent.enabled` | `false` | Enables the tool-calling agent loop. Off by default — each host opts in explicitly. Unset/`false` runs the legacy deterministic pipeline entirely; `gate.js` is never consulted. |
 | `CHATBOT_AGENT_MAX_STEPS` | `chatbot.agent.maxSteps` | `5` | Max tool-call steps per agent turn before it's forced to answer with `tool_choice: 'none'`. |
 | `CHATBOT_AGENT_TOOL_TIMEOUT_MS` | `chatbot.agent.toolTimeoutMs` | `8000` | Per-tool-call timeout in the registry; `0` disables the timeout. |
+| `CHATBOT_AGENT_STEP_TIMEOUT_MS` | `chatbot.agent.stepTimeoutMs` | `20000` | Per-request timeout for one model step (`responses.create`), with SDK retries disabled. A timeout is a thrown error → legacy fallback. |
+| `CHATBOT_AGENT_TURN_TIMEOUT_MS` | `chatbot.agent.turnTimeoutMs` | `30000` | Deadline for the whole agent turn. Checked before each step, and each step's timeout is capped to the time left; past it the turn falls back to legacy. |
 | `CHATBOT_AGENT_INPUT_BUDGET` | `chatbot.agent.inputBudget` | `60000` | Max characters of this-turn tool items before `compactTurnItems` starts summarizing the oldest ones; `0` disables the budget. |
 
 ## Deploy notes

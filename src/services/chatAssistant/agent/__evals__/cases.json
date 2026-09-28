@@ -216,5 +216,34 @@
     "id": "define-term-no-tools",
     "question": "do you know the meaning of mern",
     "expect": { "tools": [], "answer": true }
+  },
+  {
+    "id": "define-generic-notice-period",
+    "question": "what does notice period mean?",
+    "expect": { "tools": [], "answer": true }
+  },
+  {
+    "id": "handoff-company-notice-period",
+    "history": [
+      { "role": "user", "content": "how many react jobs are there?" },
+      { "role": "assistant", "content": "There are 6 jobs matching react." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "react" } }, "total": 6 }] }
+    ],
+    "question": "what is our notice period?",
+    "expect": { "handoff": true }
+  },
+  {
+    "id": "handoff-employee-headcount-in-window",
+    "history": [
+      { "role": "user", "content": "how many react jobs are there?" },
+      { "role": "assistant", "content": "There are 6 jobs matching react." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "react" } }, "total": 6 }] }
+    ],
+    "question": "how many employees do we have?",
+    "expect": { "handoff": true }
   }
 ]

@@ -138,6 +138,31 @@ describe('buildAgentInput — turn-context message', () => {
     assert.ok(!content.includes('\\"'), `expected no escaped quotes (double-encoding), got: ${content}`);
   });
 
+  it('skips handoff (window-closed) markers, which carry no calls', () => {
+    const ledger = [
+      { at: new Date('2026-09-28T09:00:00Z'), calls: [{ tool: 'count_jobs', args: { search: 'ml' }, total: 12 }] },
+      { at: new Date('2026-09-28T09:05:00Z'), handoff: true },
+    ];
+    const content = buildAgentInput({
+      instructions: BASE_INSTRUCTIONS,
+      user: { name: 'Prakhar' },
+      history: [],
+      ledger,
+      now: new Date('2026-09-28T10:00:00Z'),
+    }).input[0].content;
+    assert.ok(content.includes('count_jobs({"search":"ml"}) → total 12'), content);
+    assert.doesNotMatch(content, /handoff|unknown_tool/);
+
+    const onlyMarker = buildAgentInput({
+      instructions: BASE_INSTRUCTIONS,
+      user: { name: 'Prakhar' },
+      history: [],
+      ledger: [{ at: new Date('2026-09-28T09:05:00Z'), handoff: true }],
+      now: new Date('2026-09-28T10:00:00Z'),
+    }).input[0].content;
+    assert.doesNotMatch(onlyMarker, /Previous tool calls/);
+  });
+
   it('omits the ledger section entirely when there is no ledger history', () => {
     const out = buildAgentInput({
       instructions: BASE_INSTRUCTIONS,
