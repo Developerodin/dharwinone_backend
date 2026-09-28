@@ -1,4 +1,5 @@
 import jobs from './jobs/index.js';
+import people from './people/index.js';
 
 // Domain modules for Sage's tool registry (agent/toolRegistry.js); each entry is { domain, instructions, tools }.
-export default [jobs];
+export default [jobs, people];

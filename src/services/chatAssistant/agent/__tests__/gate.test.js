@@ -27,7 +27,7 @@ describe('isAgentTurn', () => {
   it('skips a non-job message with no ledger', () => {
     assert.equal(isAgentTurn('who is on leave today', null, NOW), false);
     assert.equal(isAgentTurn('who is on leave today', { agentLedger: [] }, NOW), false);
-    assert.equal(isAgentTurn('list user roles and permissions', {}, NOW), false);
+    assert.equal(isAgentTurn("show me today's attendance summary", {}, NOW), false);
   });
 });
 
