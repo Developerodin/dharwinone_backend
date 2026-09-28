@@ -35,6 +35,44 @@ const defaultDomains = toolDomains;
 // Fail at boot, not mid-chat, if two domains ever define the same tool name.
 assertUniqueToolNames([...defaultDomains.flatMap((d) => d.tools), handoffTool]);
 
+/**
+ * Domain names whose registered index exports a `matchesTurn(text)` that returns
+ * true for this turn — e.g. jobs' `matchesTurn` is the noun/ranking-query test
+ * agent/gate.js used to hard-code. A domain with no `matchesTurn` never matches
+ * here (see agent/README.md's "widen the gate" section for wiring one up).
+ * @param {string} text
+ * @param {object} [options]
+ * @param {Array<{domain:string, matchesTurn?:Function}>} [options.domains] defaults to every registered domain module
+ * @returns {string[]}
+ */
+export function matchedDomains(text, { domains = defaultDomains } = {}) {
+  return domains.filter((d) => typeof d.matchesTurn === 'function' && d.matchesTurn(text)).map((d) => d.domain);
+}
+
+/**
+ * True when `user` is permitted to call at least one tool belonging to
+ * `domainNames` — or, when `domainNames` is `null`, at least one tool in ANY
+ * registered domain (agent/gate.js's "recent agent turn, no domain named this
+ * turn" case).
+ * @param {object} user
+ * @param {string[]|null} domainNames
+ * @param {object} [options]
+ * @param {Array<{domain:string, tools:Array}>} [options.domains] defaults to every registered domain module
+ * @param {object} [options.deps] forwarded to checkAccessRule (toolAccess.js)
+ * @returns {Promise<{ok:boolean, reason?:string}>}
+ */
+export async function hasAgentToolAccess(user, domainNames, { domains = defaultDomains, deps } = {}) {
+  const tools = domains
+    .filter((d) => domainNames === null || domainNames.includes(d.domain))
+    .flatMap((d) => d.tools);
+  for (const tool of tools) {
+    // eslint-disable-next-line no-await-in-loop
+    const access = await checkAccessRule(tool.access, user, deps);
+    if (access.ok) return { ok: true };
+  }
+  return { ok: false, reason: 'No permitted tool in the matched domain(s).' };
+}
+
 function toResponsesSchema(tool) {
   return { type: 'function', name: tool.name, description: tool.description, parameters: tool.jsonSchema, strict: false };
 }

@@ -18,13 +18,19 @@ legacy pipeline only, with no other changes.
    "the first one" in reply to a person pick always resolves that pick, never reaches the
    agent.
 2. `tryAgentRoute` (`chatAssistant.service.js`) calls `tryAgentTurn` (`agent/gate.js`) — the
-   real gate. In order: the `CHATBOT_AGENT` flag, then `isAgentTurn(lastUserMsg, memDoc)`
-   (skipped when the caller already routed here via `routerPicked`), then `checkAccess`
-   (`checkToolAccess('fetch_jobs', user)`), then `hasPendingPick(lastUserMsg, memDoc)` —
-   which checks the **job**, **title**, and **entity** (user-vs-role) disambiguation readers
-   (`readPendingJob`, `readPendingTitle`, `readPendingEntity`) plus a "what about jobs"
-   switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of these being open skips the agent for
-   this turn. The whole gate runs in one `try/catch`; a thrown error also skips the agent.
+   real gate. In order: the `CHATBOT_AGENT` flag, then a domain-generic turn test (skipped
+   when the caller already routed here via `routerPicked`) — the turn matches when
+   `agent/toolRegistry.js`'s `matchedDomains(lastUserMsg)` names at least one registered
+   domain (each domain's own `matchesTurn(text)`, e.g. `jobs`') or the agent answered
+   the last tool-backed turn recently (`hasRecentAgentTurn`) — then `checkAccess`, which is
+   `hasAgentToolAccess(user, matchedDomains)`: the user must be able to call at least one tool
+   in a matched domain, or — when no domain was named this turn (a noun-less recency-window
+   follow-up) — at least one agent tool at all. Then `hasPendingPick(lastUserMsg, memDoc)` —
+   which checks the **job**, **title**, **entity** (user-vs-role), and **person** disambiguation
+   readers (`readPendingJob`, `readPendingTitle`, `readPendingEntity`, `personProfile/pendingPerson.js`'s
+   `readPending`) plus a "what about jobs" switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of
+   these being open skips the agent for this turn. The whole gate runs in one `try/catch`; a
+   thrown error also skips the agent.
 3. Only past all of that does `tryAgentTurn` call `runAgent(...)` (`agent/runAgent.js`).
 4. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
    permission-filtered so the model never sees a tool the user can't call.
@@ -50,7 +56,7 @@ legacy pipeline only, with no other changes.
 
 ```
 service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
-                                       flag -> isAgentTurn -> checkAccess -> hasPendingPick(job/title/entity)
+                                       flag -> matchedDomains/isAgentTurn -> checkAccess -> hasPendingPick(job/title/entity/person)
                                                                                   |
                                                                                   v
                                                         runAgent --getAgentTools--> llm.step (loop, <=8 calls/step) --> registry.execute
@@ -188,16 +194,24 @@ See memory `project_backend_tests_not_versioned` for why this is 3 steps, not 1.
 
 ### 5. Widen the gate for a new domain
 
-`agent/gate.js`'s `isAgentTurn` only recognizes job nouns today (Phase 1). A new domain's
-questions won't reach the loop until its nouns are added to that check (or the user's last
-turn was a recent agent turn — see `hasRecentAgentTurn`). Two more places in `gate.js` are
-job-only and must be widened with it:
-- **`hasPendingPick`** reads only the job, title and entity pending picks. Add the new
-  domain's pending-pick readers, or the agent will take a bare "1" / "the first one" meant
-  for that domain's disambiguation while the recency window is open.
-- **The access check in `tryAgentTurn`** is hard-coded to `checkToolAccess('fetch_jobs', user)`.
-  Replace it with a check for the domain being asked about (or "any agent tool the user can
-  call"), or users without `jobs.read` never reach the agent for any domain.
+`agent/gate.js` is domain-generic: it doesn't hard-code any domain's nouns. A domain index
+(`agent/tools/<domain>/index.js`) may export an optional `matchesTurn(text) => boolean` —
+jobs' is the noun/ranking-query test (`hasJobSubjectNoun(text) || looksLikeJobRankingQuery(text)`),
+moved out of `gate.js` and into `agent/tools/jobs/index.js`. `agent/toolRegistry.js`'s
+`matchedDomains(text)` runs every registered domain's `matchesTurn` and returns the names of
+the ones that matched; a domain with no `matchesTurn` export never matches this way. So:
+adding `matchesTurn` to a new domain's `index.js` is enough to widen `gate.js`'s
+`isAgentTurn` (any domain matches, or the user's last turn was a recent agent turn — see
+`hasRecentAgentTurn`) and the access check (`hasAgentToolAccess(user, matchedDomains)`:
+≥1 permitted tool in a matched domain, or — with no domain named this turn — ≥1 permitted
+agent tool at all) for free. No `gate.js` edit needed for either.
+
+One place still needs a manual addition per domain:
+- **`hasPendingPick`** reads a fixed list of pending-pick readers — job, title, entity, and
+  now person (`personProfile/pendingPerson.js`'s `readPending`). A new domain with its own
+  disambiguation flow (e.g. "which John did you mean?") needs its reader added here too, or
+  the agent will take a bare "1" / "the first one" meant for that domain's disambiguation
+  while the recency window is open.
 
 ## Rules that keep it safe
 
@@ -234,14 +248,18 @@ job-only and must be widened with it:
   dozens of parallel calls in one step when its tools don't fit the question, so only the
   first 8 actually run; the rest get a `{"error":"too many calls in one step"}` output so
   every call still has a matching result and the model sees the cap was hit.
-- **The agent never runs while a pick is pending, but the check is split across two
-  places.** `chatAssistant.service.js` resolves an open **person** disambiguation
+- **The agent never runs while a pick is pending, and the person check is now doubled up
+  on purpose.** `chatAssistant.service.js` resolves an open **person** disambiguation
   (`readPending`) before `tryAgentRoute` is even called. `agent/gate.js`'s `tryAgentTurn`
-  separately checks `hasPendingPick` — **job**, **title**, and **entity** (user-vs-role)
-  picks, plus the `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the *last* gate
-  condition, right before calling `runAgent` (after `isAgentTurn` and `checkAccess`, not
-  before). Either way, a bare "1" or "the first one" always resolves the open pick instead
-  of being handed to the loop as a fresh question.
+  separately checks `hasPendingPick` — **job**, **title**, **entity** (user-vs-role), and
+  **person** (`personProfile/pendingPerson.js`'s `readPending`, off the already-loaded
+  `memDoc`) picks, plus the `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the
+  *last* gate condition, right before calling `runAgent` (after the domain-match/recency
+  test and `checkAccess`, not before). The person check exists at both layers deliberately:
+  `chatAssistant.service.js`'s is the one that actually runs first in the request flow, and
+  `hasPendingPick`'s is defense in depth for `tryAgentTurn` itself (and for any future caller
+  that skips the service.js check). Either way, a bare "1" or "the first one" always resolves
+  the open pick instead of being handed to the loop as a fresh question.
 
 ## Context & memory
 
@@ -311,5 +329,6 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 - **Legacy domains still route through the old pipeline** until migrated one at a time.
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
-  knowledge base/roles. `jobs` is the only migrated domain so far; `gate.js` only recognizes
-  job nouns accordingly.
+  knowledge base/roles. `jobs` is the only migrated domain so far; `gate.js` itself is
+  domain-generic (§5), so a new domain reaches it by exporting `matchesTurn`, not by
+  editing `gate.js`.

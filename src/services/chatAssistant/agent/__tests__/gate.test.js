@@ -71,6 +71,20 @@ describe('hasPendingPick', () => {
     assert.equal(await hasPendingPick('the first one', entity), true);
   });
 
+  it('(d) is true while a person disambiguation pick is open', async () => {
+    const person = {
+      lastEntities: {
+        pendingPersonDisambiguation: {
+          query: 'john',
+          matches: [{ userId: 'u1', name: 'John Doe', roles: [] }],
+          createdAt: fresh,
+        },
+      },
+    };
+    assert.equal(await hasPendingPick('1', person), true);
+    assert.equal(await hasPendingPick('the first one', person), true);
+  });
+
   it('ignores an expired pick', async () => {
     const stale = new Date(Date.now() - 60 * 60 * 1000);
     const title = { lastEntities: { pendingTitleDisambiguation: { query: 'x', jobMatches: [{ kind: 'job' }], createdAt: stale } } };
@@ -176,5 +190,84 @@ describe('tryAgentTurn', () => {
     const ledgerFail = deps({ appendLedger: async () => { throw new Error('write failed'); } });
     const out = await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: ledgerFail.d });
     assert.equal(out.result, answer);
+  });
+});
+
+// The people domain doesn't exist yet (a separate task builds it against this
+// gate). These exercise the domain-generic mechanism end to end through a stub
+// domain injected via deps.domains, standing in for a real migrated domain.
+describe('tryAgentTurn — domain-generic gate', () => {
+  const usersDomain = {
+    domain: 'users',
+    instructions: 'Users: user accounts and roles.',
+    matchesTurn: (text) => /\busers?\b|\broles?\b/i.test(text),
+    tools: [{ name: 'count_users', domain: 'users', access: { anyOf: ['users.read'] } }],
+  };
+  const withUsersRead = { id: 'u2', authContext: { permissions: new Set(['users.read']) } };
+  const withoutUsersRead = { id: 'u3', authContext: { permissions: new Set(['jobs.read']) } };
+  const usersQ = [{ role: 'user', content: 'how many users do we have' }];
+  const stubAnswer = {
+    reply: 'There are 3 users.',
+    blocks: [],
+    meta: { steps: 1, toolCalls: ['count_users'], ms: 5 },
+    ledgerEntry: { at: NOW, calls: [{ tool: 'count_users', args: {}, total: 3 }] },
+  };
+
+  function stubDeps(over = {}) {
+    const calls = { run: 0 };
+    const d = {
+      enabled: () => true,
+      loadMemDoc: async () => null,
+      domains: [usersDomain],
+      pendingPick: async () => false,
+      run: async () => { calls.run += 1; return stubAnswer; },
+      appendLedger: async () => {},
+      now: () => NOW,
+      ...over,
+    };
+    return { d, calls };
+  }
+
+  it('(a) a users/roles turn reaches the agent when the user holds users.read', async () => {
+    const { d, calls } = stubDeps();
+    const out = await tryAgentTurn({ user: withUsersRead, adminId: 'a1', history: usersQ, deps: d });
+    assert.equal(out.attempted, true);
+    assert.equal(calls.run, 1);
+  });
+
+  it('(b) the same turn stays on the legacy pipeline when the user lacks users.read', async () => {
+    const { d, calls } = stubDeps();
+    const out = await tryAgentTurn({ user: withoutUsersRead, adminId: 'a1', history: usersQ, deps: d });
+    assert.deepEqual(out, { result: null, attempted: false });
+    assert.equal(calls.run, 0);
+  });
+
+  it('(c) a job turn still reaches the agent against the real registry, unchanged', async () => {
+    const jobsUser = { id: 'u1', authContext: { permissions: new Set(['jobs.read']) } };
+    const jobQ = [{ role: 'user', content: 'how many open jobs' }];
+    let runCalls = 0;
+    const d = {
+      enabled: () => true,
+      loadMemDoc: async () => null,
+      pendingPick: async () => false,
+      run: async () => { runCalls += 1; return stubAnswer; },
+      appendLedger: async () => {},
+      now: () => NOW,
+    };
+    const out = await tryAgentTurn({ user: jobsUser, adminId: 'a1', history: jobQ, deps: d });
+    assert.equal(out.attempted, true);
+    assert.equal(runCalls, 1);
+  });
+
+  it('(e) an unmatched turn with no recent agent turn stays on the legacy pipeline', async () => {
+    const { d, calls } = stubDeps();
+    const out = await tryAgentTurn({
+      user: withUsersRead,
+      adminId: 'a1',
+      history: [{ role: 'user', content: 'what is the weather today' }],
+      deps: d,
+    });
+    assert.deepEqual(out, { result: null, attempted: false });
+    assert.equal(calls.run, 0);
   });
 });

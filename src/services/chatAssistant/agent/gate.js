@@ -2,17 +2,19 @@
 // never how to answer. A false positive costs one agent attempt (runAgent hands
 // off → old pipeline); a false negative leaves the turn on the old pipeline.
 //
-// Phase 1 = job nouns. Each migrated domain widens the noun test here; the end
-// state is the agent as the default entry and this gate going away.
+// Domain-generic: a turn matches when any registered domain's `matchesTurn(text)`
+// says so (agent/toolRegistry.js's matchedDomains), or a noun-less follow-up
+// lands inside the recency window of the agent's last answered turn. Adding a
+// domain is now just exporting `matchesTurn` from its `agent/tools/<domain>/index.js`
+// — see agent/README.md's "widen the gate" section.
 
 import config from '../../../config/config.js';
 import logger from '../../../config/logger.js';
 import ConversationMemory from '../../../models/conversationMemory.model.js';
-import { hasJobSubjectNoun } from '../queryPlanner/entities/jobFilter.js';
-import { looksLikeJobRankingQuery } from '../queryPlanner/entities/jobRank.js';
-import { checkToolAccess } from '../toolAccess.js';
 import { readPendingJob } from '../jobProfile/pendingJob.js';
 import { readPendingEntity, readPendingTitle } from '../conversationalEntity/pendingEntity.js';
+import { readPending as readPendingPerson } from '../personProfile/pendingPerson.js';
+import { matchedDomains, hasAgentToolAccess } from './toolRegistry.js';
 import { readAgentLedger, appendAgentLedger } from './context.js';
 import { runAgent } from './runAgent.js';
 
@@ -44,6 +46,9 @@ export function hasRecentAgentTurn(memDoc, now = new Date()) {
 }
 
 /**
+ * True when the turn names a registered domain (any domain's `matchesTurn`,
+ * via toolRegistry.js's matchedDomains) or the agent answered the last
+ * tool-backed turn recently.
  * @param {string} lastUserMsg
  * @param {{agentLedger?:Array}|null|undefined} memDoc ConversationMemory doc
  * @param {Date} [now]
@@ -51,27 +56,28 @@ export function hasRecentAgentTurn(memDoc, now = new Date()) {
  */
 export function isAgentTurn(lastUserMsg, memDoc, now = new Date()) {
   const text = String(lastUserMsg || '');
-  return hasJobSubjectNoun(text) || looksLikeJobRankingQuery(text) || hasRecentAgentTurn(memDoc, now);
+  return matchedDomains(text).length > 0 || hasRecentAgentTurn(memDoc, now);
 }
 
 /**
- * An open disambiguation pick ("the job", "2", "the first job") belongs to its
- * handler further down the pipeline, never to the agent — the handler also
- * clears the pick, and a pick left open would catch a later "1".
- * Reads the pending state off the already-loaded memDoc through the readers'
- * injectable model, so their TTL rules apply without extra queries.
+ * An open disambiguation pick ("the job", "2", "the first job", "the first
+ * person") belongs to its handler further down the pipeline, never to the
+ * agent — the handler also clears the pick, and a pick left open would catch
+ * a later "1". Reads the pending state off the already-loaded memDoc through
+ * the readers' injectable model, so their TTL rules apply without extra queries.
  * @param {string} lastUserMsg
  * @param {object|null} memDoc
  * @returns {Promise<boolean>}
  */
 export async function hasPendingPick(lastUserMsg, memDoc) {
   const fromMemDoc = { findOne: () => ({ lean: async () => memDoc }) };
-  const [job, title, entity] = await Promise.all([
+  const [job, title, entity, person] = await Promise.all([
     readPendingJob({ ConversationMemory: fromMemDoc }),
     readPendingTitle({ ConversationMemory: fromMemDoc }),
     readPendingEntity({ ConversationMemory: fromMemDoc }),
+    readPendingPerson({ ConversationMemory: fromMemDoc }),
   ]);
-  if (job || title || entity) return true;
+  if (job || title || entity || person) return true;
   return JOB_ENTITY_SWITCH_RE.test(String(lastUserMsg || ''))
     && !!memDoc?.lastEntities?.positionConversationState?.designation;
 }
@@ -93,6 +99,8 @@ export async function hasPendingPick(lastUserMsg, memDoc) {
  * @param {string|null} [args.requestId]
  * @param {boolean} [args.routerPicked]
  * @param {object} [args.deps] test overrides
+ * @param {Array<{domain:string, matchesTurn?:Function, tools:Array}>} [args.deps.domains] stub
+ *   domain registry for tests; real registered domains (agent/tools/index.js) when omitted
  * @returns {Promise<{result:null|object, attempted:boolean}>}
  */
 export async function tryAgentTurn({ client, user, adminId, history, requestId = null, routerPicked = false, deps = {} }) {
@@ -100,7 +108,11 @@ export async function tryAgentTurn({ client, user, adminId, history, requestId =
     enabled = () => !!config.chatbot?.agent?.enabled,
     loadMemDoc = ({ userId, adminId: aId }) =>
       (userId && aId ? ConversationMemory.findOne({ userId, adminId: aId }).lean() : null),
-    checkAccess = (u) => checkToolAccess('fetch_jobs', u),
+    domains,
+    // Access = the user can call >=1 tool in a matched domain; with no domain
+    // named this turn (a noun-less recency-window follow-up), any permitted
+    // agent tool at all. Replaces the old hard-coded checkToolAccess('fetch_jobs').
+    checkAccess = (u, matched) => hasAgentToolAccess(u, matched, domains ? { domains } : {}),
     pendingPick = hasPendingPick,
     run = runAgent,
     appendLedger = appendAgentLedger,
@@ -113,8 +125,9 @@ export async function tryAgentTurn({ client, user, adminId, history, requestId =
   try {
     const memDoc = await loadMemDoc({ userId, adminId });
     const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-    if (!routerPicked && !isAgentTurn(lastUserMsg, memDoc, now())) return skip;
-    if (!(await checkAccess(user)).ok) return skip;
+    const matched = matchedDomains(lastUserMsg, domains ? { domains } : {});
+    if (!routerPicked && !(matched.length > 0 || hasRecentAgentTurn(memDoc, now()))) return skip;
+    if (!(await checkAccess(user, matched.length > 0 ? matched : null)).ok) return skip;
     if (await pendingPick(lastUserMsg, memDoc)) return skip;
 
     const result = await run({ client, user, history, memDoc, requestId });
