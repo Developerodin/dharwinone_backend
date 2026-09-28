@@ -8,14 +8,20 @@ export const JOBS_ACCESS = Object.freeze({ anyOf: ['jobs.read'] });
  * The Job model and the caller's Jobs-page visibility clause for one tool call.
  * Every job tool ANDs `visibilityFilter` into each query it runs, so Sage never sees
  * more jobs than the ATS Jobs page shows this user. `ctx.deps` swaps either in tests.
+ * Throws without a user id: buildJobListFilter returns {} (unrestricted) when it has no
+ * userId, so a missing id must fail closed, not widen visibility. The registry turns the
+ * throw into a tool error.
  * @param {{ user: object, deps?: { Job?: object, resolveJobVisibilityFilter?: Function } }} ctx
  */
 export async function jobScope(ctx) {
-  const deps = ctx?.deps || {};
+  if (!ctx?.user?.id && !ctx?.user?._id) {
+    throw new Error('job tools need an authenticated user with an id');
+  }
+  const deps = ctx.deps || {};
   const resolveVisibility = deps.resolveJobVisibilityFilter ?? resolveJobVisibilityFilter;
   return {
     Job: deps.Job ?? JobModel,
-    visibilityFilter: await resolveVisibility(ctx?.user),
+    visibilityFilter: await resolveVisibility(ctx.user),
   };
 }
 

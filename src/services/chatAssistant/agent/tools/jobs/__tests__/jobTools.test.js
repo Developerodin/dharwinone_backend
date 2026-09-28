@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import countJobs from '../countJobs.tool.js';
 import listJobs from '../listJobs.tool.js';
-import getJob from '../getJob.tool.js';
+import getJob, { MAX_DESCRIPTION_CHARS } from '../getJob.tool.js';
 import rankJobsBySalary from '../rankJobsBySalary.tool.js';
 import jobsDomain from '../index.js';
 import allDomains from '../../index.js';
@@ -25,8 +25,9 @@ function contains(filter, clause) {
 
 /**
  * Fake Job model recording every filter/pipeline it receives. `find()` returns a
- * chainable query whose terminal `lean()` resolves `docs`; `cast()` returns the
- * filter unchanged (the real one casts string ids to ObjectIds).
+ * chainable query whose terminal `lean()` resolves `docs`; `cast()` returns a copy
+ * marked `__cast` (the real one casts string ids to ObjectIds) so tests can tell the
+ * cast filter from the raw one.
  */
 function fakeJob({ count = 7, docs = [], groups = [], one = null, countFn } = {}) {
   const calls = { countDocuments: [], find: [], findOne: [], aggregate: [], limit: [] };
@@ -41,7 +42,7 @@ function fakeJob({ count = 7, docs = [], groups = [], one = null, countFn } = {}
         return q;
       },
       lean: async () => result,
-      cast: () => filter,
+      cast: () => ({ ...filter, __cast: true }),
     };
     return q;
   };
@@ -113,6 +114,8 @@ describe('count_jobs', () => {
     });
     const out = await countJobs.execute({ filters: {}, groupBy: 'jobType' }, ctxFor(Job));
     const [pipeline] = calls.aggregate;
+    assert.equal(pipeline[0].$match.__cast, true, '$match must be the model-cast filter');
+    assert.deepEqual(pipeline[0].$match, { ...calls.find[0], __cast: true });
     assert.ok(contains(pipeline[0].$match, VIS), 'visibility clause missing from $match');
     assert.ok(contains(pipeline[0].$match, { status: 'Active' }));
     assert.deepEqual(pipeline[1], { $group: { _id: '$jobType', count: { $sum: 1 } } });
@@ -155,6 +158,18 @@ describe('count_jobs', () => {
       { value: 'internal', count: 5 },
       { value: 'external', count: 3 },
     ]);
+  });
+
+  it('fails closed without a user id instead of running unrestricted', async () => {
+    for (const user of [undefined, null, {}, { roleIds: [] }]) {
+      const { Job, calls } = fakeJob();
+      const ctx = { ...ctxFor(Job), user };
+      await assert.rejects(() => countJobs.execute({}, ctx), /user with an id/);
+      assert.equal(calls.countDocuments.length, 0);
+    }
+    const { Job } = fakeJob();
+    const out = await countJobs.execute({}, { ...ctxFor(Job), user: { _id: 'user-1' } });
+    assert.equal(out.total, 7);
   });
 
   it('renders a total fact when ungrouped, and a table (no count facts) when grouped', () => {
@@ -250,6 +265,33 @@ describe('get_job', () => {
     assert.deepEqual(await getJob.execute({ title: 'Nope' }, ctxFor(none.Job)), { notFound: true });
   });
 
+  it('bounds a long description and flags it; leaves a short one alone', async () => {
+    const long = 'x'.repeat(MAX_DESCRIPTION_CHARS + 1000);
+    const big = fakeJob({ one: { _id: JOB_ID, title: 'ML Engineer', jobDescription: long } });
+    const out = await getJob.execute({ jobId: JOB_ID }, ctxFor(big.Job));
+    assert.equal(out.job.jobDescription.length, MAX_DESCRIPTION_CHARS);
+    assert.equal(out.job.descriptionTruncated, true);
+
+    const byTitle = fakeJob({ docs: [{ _id: JOB_ID, title: 'ML Engineer', jobDescription: long }] });
+    const t = await getJob.execute({ title: 'ML Engineer' }, ctxFor(byTitle.Job));
+    assert.equal(t.job.jobDescription.length, MAX_DESCRIPTION_CHARS);
+    assert.equal(t.job.descriptionTruncated, true);
+
+    const small = fakeJob({ one: { _id: JOB_ID, title: 'ML Engineer', jobDescription: 'short' } });
+    const s = await getJob.execute({ jobId: JOB_ID }, ctxFor(small.Job));
+    assert.equal(s.job.jobDescription, 'short');
+    assert.equal('descriptionTruncated' in s.job, false);
+  });
+
+  it('renders the job detail card, and nothing for matches / notFound', () => {
+    const out = getJob.render({ job: { jobId: JOB_ID, title: 'ML Engineer', status: 'Active' } });
+    assert.equal(out.blocks[0].type, 'kv');
+    assert.equal(out.blocks[0].id, 'job-detail');
+    assert.deepEqual(out.facts.counts, []);
+    assert.equal(getJob.render({ notFound: true }), null);
+    assert.equal(getJob.render({ matches: [] }), null);
+  });
+
   it('falls back to the title when the id is not found', async () => {
     const { Job } = fakeJob({ one: null, docs: [{ _id: JOB_ID, title: 'ML Engineer' }] });
     const out = await getJob.execute({ jobId: JOB_ID, title: 'ML Engineer' }, ctxFor(Job));
@@ -270,6 +312,22 @@ describe('rank_jobs_by_salary', () => {
     assert.ok(contains(calls.find[0], VIS));
     assert.ok(contains(calls.find[0], { status: 'Active' }));
     assert.deepEqual(calls.limit, [1]);
+  });
+
+  it('renders the ranking table with 1-based ranks', () => {
+    const out = rankJobsBySalary.render({
+      total: 9,
+      direction: 'desc',
+      filtersApplied: { status: 'Active' },
+      jobs: [
+        { jobId: JOB_ID, title: 'Staff ML', status: 'Active', salaryRange: { min: 100, max: 200 } },
+        { jobId: '64b7f0c2a1b2c3d4e5f60719', title: 'ML', status: 'Active', salaryRange: { min: 50, max: 90 } },
+      ],
+    });
+    assert.equal(out.blocks[0].type, 'table');
+    assert.equal(out.blocks[0].id, 'job-ranking');
+    assert.deepEqual(out.blocks[0].rows.map((r) => [r.rank, r.title]), [['1', 'Staff ML'], ['2', 'ML']]);
+    assert.equal(rankJobsBySalary.render({ total: 0, direction: 'desc', jobs: [] }), null);
   });
 
   it('clamps limit at 20', async () => {

@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import { executeRankQuery } from '../../../queryPlanner/executeRank.js';
+import { renderJobRanking } from '../../../renderers/jobRanking.js';
 import { ENTITY_JOB, JOB_SALARY_METRIC } from '../../../../../schemas/queryOperations.js';
 import { filters, withDefaultStatus } from './filters.js';
 import { JOBS_ACCESS, jobScope, jobRow } from './common.js';
@@ -43,5 +44,13 @@ export default defineTool({
       { Job, visibilityFilter },
     );
     return { total: ranked.total, direction, jobs: ranked.items.map(jobRow), filtersApplied };
+  },
+  render(result) {
+    const jobs = (result?.jobs ?? []).map((j, i) => ({ ...j, rank: i + 1 }));
+    if (!jobs.length) return null;
+    // Same ranking table (or single-job card) the legacy salary-ranking path renders.
+    const plan = { direction: result.direction, limit: jobs.length, filters: result.filtersApplied };
+    const { block } = renderJobRanking(plan, { jobs, total: result.total });
+    return { blocks: block ? [block] : [], facts: { counts: [], primary: null } };
   },
 });
