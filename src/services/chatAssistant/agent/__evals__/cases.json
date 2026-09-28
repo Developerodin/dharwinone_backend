@@ -245,5 +245,111 @@
     ],
     "question": "how many employees do we have?",
     "expect": { "handoff": true }
+  },
+  {
+    "id": "count-users-plain",
+    "question": "how many users are there?",
+    "expect": {
+      "tools": ["count_users"]
+    }
+  },
+  {
+    "id": "count-users-active-vs-pending",
+    "question": "how many users are active vs pending?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_users"], "maxCalls": 5 },
+        { "tools": ["count_users", "list_users"], "maxCalls": 6 }
+      ]
+    }
+  },
+  {
+    "id": "count-users-by-role",
+    "question": "give me a breakdown of users by role",
+    "expect": {
+      "tools": ["count_users"],
+      "args": { "count_users": { "groupBy": "role" } }
+    }
+  },
+  {
+    "id": "count-sales-agents",
+    "question": "how many sales agents are there?",
+    "expect": {
+      "tools": ["count_users"]
+    }
+  },
+  {
+    "id": "list-recruiters-pune",
+    "question": "list recruiters in Pune",
+    "expect": {
+      "tools": ["list_users"],
+      "args": { "list_users": { "filters": { "location": "Pune" } } }
+    }
+  },
+  {
+    "id": "who-is-name",
+    "question": "who is Priya Sharma?",
+    "expect": {
+      "tools": ["get_user"],
+      "args": { "get_user": { "name": "Priya Sharma" } }
+    }
+  },
+  {
+    "id": "who-is-ambiguous-name",
+    "question": "who is Alex?",
+    "expect": {
+      "tools": ["get_user"],
+      "args": { "get_user": { "name": "Alex" } }
+    }
+  },
+  {
+    "id": "get-role-admin-permissions",
+    "question": "what permissions does the Admin role have?",
+    "expect": {
+      "tools": ["get_role"]
+    }
+  },
+  {
+    "id": "list-roles-plain",
+    "question": "list all the roles in the system",
+    "expect": {
+      "tools": ["list_roles"]
+    }
+  },
+  {
+    "id": "list-roles-inactive",
+    "question": "show me the inactive roles",
+    "expect": {
+      "tools": ["list_roles"],
+      "args": { "list_roles": { "status": "inactive" } }
+    }
+  },
+  {
+    "id": "followup-and-pending",
+    "history": [
+      { "role": "user", "content": "how many active users are there?" },
+      { "role": "assistant", "content": "There are 24 active users." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_users", "args": { "filters": { "status": "active" } }, "total": 24 }] }
+    ],
+    "question": "and pending?",
+    "expect": {
+      "tools": ["count_users"],
+      "args": { "count_users": { "filters": { "status": "pending" } } }
+    }
+  },
+  {
+    "id": "handoff-greeting-people-domain",
+    "question": "good morning!",
+    "expect": { "handoff": true }
+  },
+  {
+    "id": "get-role-sales-agent-permissions",
+    "question": "what can a sales agent do?",
+    "expect": {
+      "tools": ["get_role"],
+      "args": { "get_role": { "name": "Sales Agent" } }
+    }
   }
 ]

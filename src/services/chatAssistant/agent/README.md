@@ -66,6 +66,36 @@ service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
     +--> legacy pipeline (fallback)
 ```
 
+## Registered domains
+
+### jobs
+
+The reference domain (`agent/tools/jobs/`): `count_jobs`, `list_jobs`, `get_job`,
+`rank_jobs_by_salary`. Access is `jobs.read`.
+
+### people
+
+`agent/tools/people/` (`CONTRACT.md` in that directory is the binding spec). Covers user
+accounts (logins) in the Users directory and the roles those accounts hold — **not**
+Employee/Candidate/Student/etc. profile data beyond what `get_user` surfaces. Status
+defaults to `active` for user counts/lists unless the caller asks for another status or
+"all".
+
+| Tool | Purpose | Key args | Access |
+|---|---|---|---|
+| `count_users` | Count user accounts, optionally grouped by `role` or `status`. | `filters` (search/status/role/location/domain/education), `groupBy` | `users.read` |
+| `list_users` | List user accounts (name, email, roles, status, last login), newest first. | `filters`, `limit` (default 10, max 25) | `users.read` |
+| `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Ambiguous name → `{ matches }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
+| `list_roles` | List the roles defined in the system, with how many active users hold each. | `status` (`active`\|`inactive`) | `roles.read` |
+| `get_role` | One role's definition: name, aliases, status, full permission list. | `name` (required) | `roles.read` |
+
+Routing notes (see `agent/tools/people/index.js`'s `instructions` for the full text the
+model reads): "how many admins/recruiters/sales agents" and "who has role X" are
+`count_users`/`list_users` with a `role` filter, **not** `list_roles`; "what can a Sales
+Agent do" / "what permissions does X role have" is `get_role`; a short follow-up that's
+just a person's name is a `get_user` call, not a filter on the previous `count_users`/
+`list_users` call.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -329,6 +359,6 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 - **Legacy domains still route through the old pipeline** until migrated one at a time.
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
-  knowledge base/roles. `jobs` is the only migrated domain so far; `gate.js` itself is
-  domain-generic (§5), so a new domain reaches it by exporting `matchesTurn`, not by
-  editing `gate.js`.
+  knowledge base/roles. `jobs` and `people` (users + roles; see "Registered domains" above)
+  are migrated so far — employees/candidates are next. `gate.js` itself is domain-generic
+  (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.

@@ -145,7 +145,7 @@ function evaluateExpect(expect, ctx) {
 const FAKE_USER = Object.freeze({
   id: 'eval-user-0000000000000001',
   name: 'Eval User',
-  authContext: { permissions: new Set(['jobs.read']) },
+  authContext: { permissions: new Set(['jobs.read', 'users.read', 'roles.read']) },
 });
 
 function jobRow(i, overrides = {}) {
@@ -163,6 +163,22 @@ function jobRow(i, overrides = {}) {
     vacancies: 1,
     ...overrides,
   };
+}
+
+function evalUserRow(i, overrides = {}) {
+  return {
+    id: `eval-user-${i}`,
+    name: `Eval Person ${i}`,
+    email: `eval.person${i}@example.com`,
+    roles: ['Recruiter'],
+    status: 'active',
+    lastLoginAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function evalRoleRow(name, overrides = {}) {
+  return { id: `eval-role-${name}`, name, aliases: [], status: 'active', userCount: 3, ...overrides };
 }
 
 /**
@@ -199,6 +215,44 @@ function cannedResult(name, args) {
       };
     case 'get_job':
       return { job: jobRow(1, { title: args?.title || 'Eval Job', jobDescription: 'Eval-only canned description.' }) };
+    case 'count_users': {
+      if (args?.groupBy) {
+        return {
+          total: 24,
+          groupBy: args.groupBy,
+          groups: [
+            { value: 'alpha', count: 14 },
+            { value: 'beta', count: 10 },
+          ],
+          filtersApplied: args.filters ?? {},
+        };
+      }
+      return { total: 24, filtersApplied: args?.filters ?? {} };
+    }
+    case 'list_users':
+      return {
+        total: 4,
+        users: [evalUserRow(1), evalUserRow(2), evalUserRow(3)],
+        filtersApplied: args?.filters ?? {},
+      };
+    case 'get_user':
+      return {
+        kind: 'unique',
+        identity: { userId: 'eval-user-1', name: args?.name || 'Eval Person', email: 'eval.person@example.com' },
+        roles: [{ name: 'Recruiter', slug: 'recruiter', aliases: [], status: 'active', permissions: [] }],
+        profiles: {},
+        availableSections: [],
+      };
+    case 'list_roles':
+      return { roles: [evalRoleRow('Administrator'), evalRoleRow('Recruiter'), evalRoleRow('Sales Agent')] };
+    case 'get_role':
+      return {
+        name: args?.name || 'Eval Role',
+        slug: 'eval-role',
+        aliases: [],
+        status: 'active',
+        permissions: ['users.read', 'jobs.read'],
+      };
     default:
       return { handoff: true };
   }
