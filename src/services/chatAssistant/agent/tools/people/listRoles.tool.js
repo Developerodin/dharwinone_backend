@@ -10,6 +10,9 @@ export default defineTool({
   description:
     'List the roles defined in the system (name, aliases, status, how many active users hold each). Use ' +
     'for "what roles exist" — not user headcounts by role, which is count_users with a role filter.',
+  measure:
+    "ROLE definitions, every role status unless status is set; each role's userCount is ACTIVE user " +
+      'accounts holding it.',
   input: Joi.object({
     status: getRoles.query.extract('status'),
   }),

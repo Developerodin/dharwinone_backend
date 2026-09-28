@@ -73,8 +73,13 @@ export async function hasAgentToolAccess(user, domainNames, { domains = defaultD
   return { ok: false, reason: 'No permitted tool in the matched domain(s).' };
 }
 
+/** The model-facing description: the tool's own text plus its measure, when it declares one. */
+function modelDescription(tool) {
+  return tool.measure ? `${tool.description} Measure: ${tool.measure}` : tool.description;
+}
+
 function toResponsesSchema(tool) {
-  return { type: 'function', name: tool.name, description: tool.description, parameters: tool.jsonSchema, strict: false };
+  return { type: 'function', name: tool.name, description: modelDescription(tool), parameters: tool.jsonSchema, strict: false };
 }
 
 function sizeOf(value) {
@@ -214,9 +219,14 @@ export async function getAgentTools(user, { domains = defaultDomains, deps } = {
 
       const guarded = await guardResultForRule(tool.access, result, user, deps);
       const capped = shrinkToFit(guarded, MAX_RESULT_CHARS);
+      // The result is what reaches the model (runAgent serialises it as the
+      // function_call_output), so the measure rides on it for the reply to quote.
+      const withMeasure = tool.measure && capped && typeof capped === 'object' && !Array.isArray(capped)
+        ? { ...capped, measure: tool.measure }
+        : capped;
 
       ok = true;
-      return { ok: true, result: capped };
+      return { ok: true, result: withMeasure };
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
     } finally {

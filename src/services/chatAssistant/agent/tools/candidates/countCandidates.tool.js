@@ -10,6 +10,10 @@ export default defineTool({
   domain: 'candidates',
   kind: 'read',
   description: 'Count CANDIDATES (the Candidate role — never employees). Use for "how many candidates…".',
+  measure:
+    'Candidate PROFILES whose account holds the Candidate role and is active or pending ' +
+      '(disabled/deleted accounts excluded). For candidate ACCOUNTS of every status (the Users page ' +
+      'number) use count_users with role Candidate and status all.',
   input: Joi.object({ filters: candidateFilters }),
   access: EMPLOYEES_ACCESS,
   async execute({ filters } = {}, ctx) {

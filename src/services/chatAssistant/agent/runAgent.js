@@ -32,6 +32,8 @@ export const BASE_INSTRUCTIONS = [
   'Only general knowledge that is the same at every company — what a generic term, acronym or tech stack means (e.g. "MERN") — may be answered directly without tools.',
   'Anything about THIS company — its policies, people, numbers or data (e.g. "our notice period", "how many employees do we have") — is never general knowledge: use a tool, or call `handoff` if none fits.',
   'Every number in your reply must come from a tool result returned in THIS turn. Earlier replies and "Previous tool calls" totals are context only: for a follow-up question, call the tool again with the changed arguments — never reuse an old number.',
+  'Every number in your reply names what it counts and its status scope, taken from the tool result\'s `measure` (e.g. "23 accounts with the Candidate role, all statuses" vs "20 candidate profiles, active and pending accounts"). Never put counts of different measures in one sentence without saying they measure different things.',
+  'When the user questions a number ("are you sure", "I mean all of them"), do not repeat it: re-check with a different measure or status scope (accounts vs profiles, active vs all) and explain why the numbers differ.',
   'You may call several tools at once when the question needs them.',
   'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
   'If no available tool fits the question, call `handoff` with a short reason instead of answering.',

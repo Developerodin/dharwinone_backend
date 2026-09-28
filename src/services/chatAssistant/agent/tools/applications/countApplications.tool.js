@@ -12,6 +12,9 @@ export default defineTool({
   description:
     'Count job applications, optionally for one applicant, one job, or one status. Also returns a ' +
     'breakdown by status. Use for "how many jobs has X applied to", "how many applications for job Y".',
+  measure:
+    'Job application RECORDS (one per applicant per job) you are allowed to see, every application ' +
+      'status unless filters.status is set; internal relay/test applicants excluded.',
   input: Joi.object({ filters: applicationFilters }),
   access: APPLICATIONS_ACCESS,
   async execute({ filters } = {}, ctx) {

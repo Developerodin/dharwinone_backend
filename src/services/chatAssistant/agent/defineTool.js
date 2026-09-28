@@ -28,9 +28,15 @@ function isValidAccess(access) {
  * Defines one agent tool (`agent/tools/<domain>/<name>.tool.js`). Validates the
  * definition and computes its JSON Schema up front so a bad tool throws at
  * load time, never mid-chat. See architecture.md §1.
+ *
+ * `measure` (optional; required by convention for count_* / list_* tools — see
+ * tools/people/CONTRACT.md) is one sentence naming WHAT is counted (accounts vs
+ * profiles vs records) and the default status scope. The registry appends it to
+ * the description the model sees and to every result the tool returns, so a
+ * reply can say which measure a number is.
  */
 export function defineTool(def) {
-  const { name, domain, kind, description, input, access, execute, render } = def || {};
+  const { name, domain, kind, description, measure, input, access, execute, render } = def || {};
 
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
     fail(name, `name must match ${NAME_RE} (got ${JSON.stringify(name)})`);
@@ -43,6 +49,9 @@ export function defineTool(def) {
   }
   if (typeof description !== 'string' || description.length === 0) {
     fail(name, 'description is required (non-empty string)');
+  }
+  if (measure !== undefined && (typeof measure !== 'string' || measure.trim().length === 0)) {
+    fail(name, 'measure must be a non-empty string when present');
   }
   if (!isJoiObjectSchema(input)) {
     fail(name, 'input must be a Joi object schema');
@@ -64,7 +73,7 @@ export function defineTool(def) {
     fail(name, `input schema conversion failed: ${err.message}`);
   }
 
-  return Object.freeze({ name, domain, kind, description, input, access, execute, render, jsonSchema });
+  return Object.freeze({ name, domain, kind, description, measure, input, access, execute, render, jsonSchema });
 }
 
 /**

@@ -216,6 +216,20 @@ function cannedResult(name, args) {
     case 'get_job':
       return { job: jobRow(1, { title: args?.title || 'Eval Job', jobDescription: 'Eval-only canned description.' }) };
     case 'count_users': {
+      // Real role names, so a "how many of them are employees/candidates" case can be answered from the
+      // groups without the model going back for per-role counts.
+      if (args?.groupBy === 'role') {
+        return {
+          total: 24,
+          groupBy: 'role',
+          groups: [
+            { value: 'Employee', count: 15 },
+            { value: 'Candidate', count: 6 },
+            { value: 'Administrator', count: 3 },
+          ],
+          filtersApplied: args.filters ?? {},
+        };
+      }
       if (args?.groupBy) {
         return {
           total: 24,

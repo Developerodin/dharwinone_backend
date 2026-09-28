@@ -614,6 +614,7 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 | R12 | `get_user`'s name path excludes `platformSuperUser` (unless the viewer is one) and deleted accounts from `queryUsers`, mirroring `getUserByIdForRequester`'s own exclusions on the id path. |
 | R13 | `get_user`'s name path prefers a single exact name/email match over the full `matches` disambiguation list, since `queryUsers`' search is partial-match. |
 | R14 | A unique `get_user` result is written as the conversation subject (`lastEntities.currentEntitySubject`, via `writeEntitySubject`) — the one write it makes. A follow-up the agent hands to the legacy pipeline ("which jobs has this user applied to") needs to know who "this user" is. Ambiguous or empty results write nothing. |
+| R15 | **Applies to every domain, not just people.** Every `count_*`/`list_*` tool declares `measure` in `defineTool`: one sentence naming what it counts (ACCOUNTS vs PROFILES vs RECORDS) and its default status scope. The registry appends it to the model-facing description and to every result, so a reply can say which number it is. `toolRegistry.test.js` fails on a count/list tool without one. Added after Sage reported 20 candidate profiles (active/pending accounts) as if it were the Users page's 23 candidate accounts. |
 
 ## Open risks (not resolved by this contract — flagging for awareness)
 

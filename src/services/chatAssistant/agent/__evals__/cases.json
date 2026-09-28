@@ -424,7 +424,58 @@
   {
     "id": "users-and-employees-together",
     "question": "how many users do we have and how many of them are employees",
-    "expect": { "tools": ["count_users", "count_employees"], "maxCalls": 2 }
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_users"], "maxCalls": 2, "args": { "count_users": { "groupBy": "role" } } },
+        { "tools": ["count_users"], "maxCalls": 2, "args": { "count_users": { "filters": { "role": "Employee" } } } },
+        { "tools": ["count_users"], "maxCalls": 2, "args": { "count_users": { "filters": { "role": ["Employee"] } } } }
+      ]
+    }
+  },
+  {
+    "id": "users-employees-candidates-breakdown",
+    "question": "how many total users do we have and among them how many are employees and how many are candidates",
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_users"], "maxCalls": 2, "args": { "count_users": { "groupBy": "role" } } },
+        {
+          "tools": ["count_users"],
+          "maxCalls": 3,
+          "args": { "count_users": [{ "filters": { "role": "Employee" } }, { "filters": { "role": "Candidate" } }] }
+        }
+      ]
+    }
+  },
+  {
+    "id": "candidates-total-all-statuses",
+    "question": "how many candidates do we have in total, across all statuses",
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_users"], "args": { "count_users": { "filters": { "role": "Candidate", "status": "all" } } } },
+        { "tools": ["count_users"], "args": { "count_users": { "filters": { "role": ["Candidate"], "status": "all" } } } }
+      ]
+    }
+  },
+  {
+    "id": "candidates-count-challenged",
+    "history": [
+      { "role": "user", "content": "how many candidates do we have" },
+      { "role": "assistant", "content": "There are 20 candidate profiles (active and pending accounts)." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_candidates", "args": {}, "total": 20 }] }
+    ],
+    "question": "are you sure there are only 20? i am not talking about active candidates but all total candidates",
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_users"], "args": { "count_users": { "filters": { "role": "Candidate", "status": "all" } } } },
+        { "tools": ["count_users"], "args": { "count_users": { "filters": { "role": ["Candidate"], "status": "all" } } } },
+        {
+          "tools": ["count_candidates", "count_users"],
+          "args": { "count_users": { "filters": { "role": "Candidate", "status": "all" } } }
+        }
+      ]
+    }
   },
   {
     "id": "people-list-recruiters",

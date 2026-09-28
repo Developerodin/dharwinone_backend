@@ -13,6 +13,10 @@ export default defineTool({
   description:
     'List CANDIDATES (never employees). total is the full count even when fewer rows come back. ' +
     'For one person\'s full profile use get_user.',
+  measure:
+    'Candidate PROFILES whose account holds the Candidate role and is active or pending ' +
+      '(disabled/deleted accounts excluded). For candidate ACCOUNTS of every status (the Users page ' +
+      'number) use count_users with role Candidate and status all.',
   input: Joi.object({
     filters: candidateFilters,
     page: Joi.number().integer().min(1).default(1),

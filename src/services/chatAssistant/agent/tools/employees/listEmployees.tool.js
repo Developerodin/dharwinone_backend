@@ -13,6 +13,10 @@ export default defineTool({
   description:
     'List EMPLOYEES (never candidates) with their designation, department and employment type. ' +
     'total is the full count even when fewer rows come back. For one person\'s full profile use get_user.',
+  measure:
+    'Employee PROFILES whose account holds the Employee role and is active or pending ' +
+      '(disabled/deleted accounts excluded); current (not resigned) employees unless ' +
+      'filters.employmentStatus is set.',
   input: Joi.object({
     filters: employeeFilters,
     page: Joi.number().integer().min(1).default(1),

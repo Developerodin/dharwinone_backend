@@ -12,8 +12,19 @@ const instructions = [
   '- "How many sales agents" → count_users with a role filter (users, not roles).',
   '- "List all recruiters" / "show me agents" / "how many students" → list_users/count_users with that ' +
     'role (Student, Agent, Recruiter, Administrator and Sales Agent are all user roles).',
-  '- Status defaults to active for user counts/lists. When you did not pass a status, say the numbers are ' +
-    'for active accounts.',
+  '- Users vs profiles: a headcount framed as users or accounts — "how many users", "users by role", "total ' +
+    'users and how many of them are employees/candidates", "among the users how many are X" — is count_users ' +
+    'with groupBy "role" (ONE call — its groups already hold each role\'s count and its total is the user ' +
+    'total, so do not also count or list each role) or filters.role. That matches the Users page. count_employees/' +
+    'count_candidates count PROFILES instead: use them only when the question filters on a profile field ' +
+    '(skills, location, designation, department, employment type/status, joining/resign dates, agent, ' +
+    'paid/unpaid) or asks for current/resigned employees.',
+  '- Status defaults to active for user counts/lists. A headcount asked "in total", "across all statuses", ' +
+    '"including inactive/disabled", or a push-back that the user means every account → filters.status "all". ' +
+    '"list all recruiters" / "show all users" alone means every matching person, not every status. When you ' +
+    'did not pass a status, say the numbers are for active accounts.',
+  '- Phrase account counts as "N accounts with the <Role> role" and profile counts as "N candidate profiles" / ' +
+    '"N employee profiles".',
   "- groupBy:'role' on count_users counts a user once per role they hold — a user with 2 roles counts in " +
     'both groups; a user with no role is excluded from every group.',
   '- A short follow-up that\'s just a person\'s name ("what about Priya") is a get_user call, not a ' +

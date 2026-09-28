@@ -53,6 +53,9 @@ export default defineTool({
   description:
     'Count job postings on the ATS Jobs page (internal openings and mirrored external listings). ' +
     'Use for "how many jobs…" and for breakdowns: "jobs by/per/for each X" → groupBy X.',
+  measure:
+    'Job POSTINGS on the ATS Jobs page you can see; status Active unless filters.status is set (a ' +
+      'groupBy status covers every status).',
   input: Joi.object({
     filters,
     groupBy: Joi.string()

@@ -13,6 +13,9 @@ export default defineTool({
   description:
     'List job applications with applicant, job title and status. Use for "which jobs has X applied to", ' +
     '"who applied to job Y". total is the full count even when fewer rows come back.',
+  measure:
+    'Job application RECORDS (one per applicant per job) you are allowed to see, every application ' +
+      'status unless filters.status is set; internal relay/test applicants excluded.',
   input: Joi.object({
     filters: applicationFilters,
     limit: Joi.number().integer().min(1).max(MAX_LIST_LIMIT).default(20),

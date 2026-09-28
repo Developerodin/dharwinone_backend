@@ -4,6 +4,7 @@ import Joi from 'joi';
 import { defineTool } from '../defineTool.js';
 import { getAgentTools, HANDOFF_TOOL_NAME, matchedDomains, hasAgentToolAccess } from '../toolRegistry.js';
 import config from '../../../../config/config.js';
+import registeredDomains from '../tools/index.js';
 
 const userWith = (...perms) => ({ id: 'u1', roleIds: [], authContext: { permissions: new Set(perms) } });
 
@@ -382,5 +383,42 @@ describe('hasAgentToolAccess', () => {
   it('platformSuperUser passes with no permissions granted', async () => {
     const result = await hasAgentToolAccess({ ...userWith(), platformSuperUser: true }, ['domain_a'], { domains });
     assert.equal(result.ok, true);
+  });
+});
+
+// ─── Measure ────────────────────────────────────────────────────────────────
+
+describe('getAgentTools — measure', () => {
+  const measuredTool = defineTool({
+    name: 'fake_measured',
+    domain: 'domain_m',
+    kind: 'read',
+    description: 'Counts fake things.',
+    measure: 'Fake RECORDS, active unless filters.status is set.',
+    input: Joi.object({}),
+    access: { anyOf: ['m.read'] },
+    execute: async () => ({ total: 3 }),
+  });
+  const domains = [{ domain: 'domain_m', instructions: 'M.', tools: [measuredTool] }];
+
+  it('appends the measure to the model-facing description and to the result', async () => {
+    const { schemas, execute } = await getAgentTools(userWith('m.read'), { domains });
+    const schema = schemas.find((s) => s.name === 'fake_measured');
+    assert.equal(schema.description, 'Counts fake things. Measure: Fake RECORDS, active unless filters.status is set.');
+    assert.deepEqual(await execute('fake_measured', {}), {
+      ok: true,
+      result: { total: 3, measure: 'Fake RECORDS, active unless filters.status is set.' },
+    });
+  });
+
+  // Guard: a count/list tool without a measure is how "20 candidates" got reported as if it were the
+  // Users page's number. Every future domain's count_*/list_* tool must say what it counts.
+  it('every registered count_*/list_* read tool declares a non-empty measure', () => {
+    const missing = registeredDomains
+      .flatMap((d) => d.tools)
+      .filter((t) => t.kind === 'read' && /^(count|list)_/.test(t.name))
+      .filter((t) => typeof t.measure !== 'string' || !t.measure.trim())
+      .map((t) => t.name);
+    assert.deepEqual(missing, []);
   });
 });

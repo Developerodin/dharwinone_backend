@@ -14,6 +14,10 @@ export default defineTool({
     'Count EMPLOYEES (people on the Employees page — never candidates). Use for "how many employees/' +
     'staff/interns/people", and breakdowns: groupBy department, designation, employmentType, ' +
     'compensationType (paid/unpaid) or employmentStatus (current vs resigned).',
+  measure:
+    'Employee PROFILES whose account holds the Employee role and is active or pending ' +
+      '(disabled/deleted accounts excluded); current (not resigned) employees unless ' +
+      'filters.employmentStatus is set.',
   input: Joi.object({
     filters: employeeFilters,
     groupBy: Joi.string()

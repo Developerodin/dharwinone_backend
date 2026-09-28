@@ -16,6 +16,8 @@ export default defineTool({
   description:
     'List job postings on the ATS Jobs page, newest first, with the total that match. Returns compact ' +
     'rows (title, company, type, location, status, salary, link); use get_job for one job\'s full detail.',
+  measure:
+    'Job POSTINGS on the ATS Jobs page you can see; status Active unless filters.status is set.',
   input: Joi.object({
     filters,
     limit: Joi.number()

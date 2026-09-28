@@ -5,8 +5,9 @@ const instructions = [
   'Employees: people on the Employees page (the Employee role). Candidates are a DIFFERENT role — never ' +
     'answer an employee question with candidate tools or the reverse, and label numbers with the tool\'s noun.',
   '- "people", "staff", "team", "headcount", "interns" mean employees.',
-  '- Any employee count — including "how many of them are employees" right after a users question — is ' +
-    'count_employees, never count_users with role "Employee".',
+  '- A plain employee headcount ("how many employees do we have") is count_employees — current employee ' +
+    'profiles, like the Employees page. When the question is framed as users/accounts ("how many users and how ' +
+    'many of them are employees") it is a role breakdown: count_users with role "Employee" or groupBy "role".',
   '- employmentStatus defaults to current. When you did not pass it, say the numbers are for current employees.',
   '- "each/per/by X" → count_employees with groupBy X. If X is not a groupBy value, say so and name the ones that exist.',
   '- "Resigned vs current/still working" → ONE count_employees call with groupBy employmentStatus; it already ' +
