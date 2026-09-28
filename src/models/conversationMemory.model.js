@@ -178,6 +178,12 @@ const conversationMemorySchema = new mongoose.Schema(
       lastQuery:        { type: String, default: null, trim: true },
       updatedAt:        { type: Date, default: null },
     },
+    /**
+     * Tool-call ledger for Sage's agent loop — capped to the last 6 agent
+     * turns, feeds follow-ups. Raw tool outputs are never stored here, only
+     * compact { tool, args, total } summaries (see chatAssistant/agent/context.js).
+     */
+    agentLedger: { type: [mongoose.Schema.Types.Mixed], default: undefined },
     expiresAt: { type: Date, default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
   },
   { timestamps: true }
