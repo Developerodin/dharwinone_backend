@@ -413,5 +413,6 @@
   "./src/services/chatAssistant/agent/tools/people/__tests__/roleTools.test.js",
   "./src/services/__tests__/employeeOwnerRoleScope.test.js",
   "./src/services/chatAssistant/agent/tools/employees/__tests__/employeeTools.test.js",
-  "./src/services/chatAssistant/agent/tools/candidates/__tests__/candidateTools.test.js"
+  "./src/services/chatAssistant/agent/tools/candidates/__tests__/candidateTools.test.js",
+  "./src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js"
 ]

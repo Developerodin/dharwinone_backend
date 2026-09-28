@@ -17,6 +17,7 @@ const instructions = [
   '- A short follow-up that\'s just a person\'s name ("what about Priya") is a get_user call, not a ' +
     'count_users/list_users filter, even right after a users answer — the name would land in search by ' +
     'mistake.',
+  '- "Tell me about <person>" → get_user.',
 ].join('\n');
 
 // Noun test for this domain's turns — mirrors gate.js's job-noun test (README
@@ -45,6 +46,9 @@ const ROLE_CAPABILITY_RE = /\bwhat can (?:a|an|the)\s+[\w\s]+?\s+do\b/i;
 // (capitalized in the ORIGINAL text — case-sensitive on purpose), so this
 // doesn't open "who is on leave today" or similar non-people turns.
 const WHO_IS_NAME_RE = /\b[Ww]ho(?:'s|\s+(?:is|are|has|holds))\s+[A-Z]/;
+// "tell me about <Name>" — same capitalised-name rule as WHO_IS_NAME_RE, so "tell me about leave
+// policy" does not open the people domain.
+const TELL_ME_ABOUT_NAME_RE = /\b(?:tell me about|details (?:of|for)|profile of)\s+[A-Z][a-z]+/;
 // Bare "agent" collides with the Employees/Candidates agent-assignment flow
 // ("how many candidates are assigned to agent Rahul") — only "sales agent"
 // and the actual admin/recruiter role words count as a headcount noun here.
@@ -64,6 +68,7 @@ export function matchesTurn(text) {
     || ROLE_PERMISSIONS_RE.test(t)
     || ROLE_CAPABILITY_RE.test(t)
     || WHO_IS_NAME_RE.test(t)
+    || TELL_ME_ABOUT_NAME_RE.test(t)
     || ROLE_HEADCOUNT_RE.test(t);
 }
 
