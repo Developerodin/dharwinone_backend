@@ -440,6 +440,9 @@ export function buildJobRankingMongoFilter(plan) {
     const clauses = terms.map((term) => buildJobSearchClause(term, term.length <= 3));
     appendFilterClause(filter, clauses.length === 1 ? clauses[0] : { $or: clauses });
   }
+  // searchAll: every term must match ("react and node jobs", a MERN stack's parts).
+  [].concat(f.searchAll || []).map((t) => String(t).trim()).filter(Boolean)
+    .forEach((term) => appendFilterClause(filter, buildJobSearchClause(term, term.length <= 3)));
 
   return filter;
 }

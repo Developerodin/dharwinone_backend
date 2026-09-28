@@ -202,5 +202,19 @@
       "tools": ["count_jobs"],
       "args": { "count_jobs": { "groupBy": "origin" } }
     }
+  },
+  {
+    "id": "count-stack-acronym-mern",
+    "question": "how many mern jobs do we have",
+    "expect": {
+      "tools": ["count_jobs"],
+      "maxCalls": 2,
+      "args": { "count_jobs": { "filters": { "searchAll": ["react", "node"] } } }
+    }
+  },
+  {
+    "id": "define-term-no-tools",
+    "question": "do you know the meaning of mern",
+    "expect": { "tools": [], "answer": true }
   }
 ]

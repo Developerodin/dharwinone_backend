@@ -22,6 +22,13 @@ export const filters = Joi.object({
         'Use for topics like "AI", "sales", "react developer". Pass an array to match ANY of several ' +
         'topics: "ml and ai jobs" → ["ml", "ai"].',
     ),
+  searchAll: Joi.array()
+    .items(Joi.string().min(1))
+    .max(6)
+    .description(
+      'Like search, but a job must match EVERY term: "react and node jobs" → ["react", "node"]. ' +
+        'Use for a tech stack\'s core parts: MERN → ["react", "node"].',
+    ),
   status: page('status').description(
     'Defaults to Active, like the Jobs page. Pass "all" only when the user asks for every status ' +
       '(e.g. "all statuses", "including closed", "ever posted").',

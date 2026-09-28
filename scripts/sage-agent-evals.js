@@ -121,6 +121,9 @@ function evaluateExpect(expect, ctx) {
     return true;
   }
 
+  // `answer: true` = Sage must reply itself (e.g. a definition), not hand off.
+  if (expect.answer && ctx.handoffCalled) return false;
+
   const toolCalls = ctx.calls.filter((c) => c.name !== 'handoff');
   if (expect.tools && !toolCallsMatch(toolCalls, expect.tools, expect.maxCalls)) return false;
 
