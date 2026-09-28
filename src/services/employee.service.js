@@ -809,11 +809,15 @@ const buildAdvancedFilter = (filter) => {
 
 /**
  * Resolve owner-user role scope for ATS list queries.
- * @param {'employee'|'jobSeeker'} ownerUserRole
- * @returns {'employee'|'jobSeeker'}
+ * 'candidate' is Candidate-role owners only — Candidate and Employee are distinct roles and are
+ * never merged (Sage's candidates tools rely on this). It is not exposed on the REST route.
+ * @param {'employee'|'jobSeeker'|'candidate'} ownerUserRole
+ * @returns {'employee'|'jobSeeker'|'candidate'}
  */
-const normalizeOwnerUserRoleScope = (ownerUserRole) =>
-  ownerUserRole === 'jobSeeker' ? 'jobSeeker' : 'employee';
+const normalizeOwnerUserRoleScope = (ownerUserRole) => {
+  if (ownerUserRole === 'jobSeeker' || ownerUserRole === 'candidate') return ownerUserRole;
+  return 'employee';
+};
 
 /**
  * Repair historical drift: active/pending users in scope must have an ATS profile.
@@ -828,8 +832,9 @@ const ensureProfilesForActiveAtsRoleUsers = async (ownerUserRole = 'jobSeeker') 
   if (scope === 'jobSeeker') {
     roleIds = await getAtsJobSeekerRoleIds();
   } else {
-    const employeeRole = await getRoleByName('Employee');
-    roleIds = employeeRole?._id ? [employeeRole._id] : null;
+    // Exact role name — getRoleByName matches ^name$ case-insensitively, never previousNames.
+    const role = await getRoleByName(scope === 'candidate' ? 'Candidate' : 'Employee');
+    roleIds = role?._id ? [role._id] : null;
   }
   if (!roleIds?.length) return null;
 
@@ -848,7 +853,8 @@ const ensureProfilesForActiveAtsRoleUsers = async (ownerUserRole = 'jobSeeker') 
   const missingOwnerIds = ownerIdsWithRole.filter((id) => !ownersWithProfile.has(String(id)));
 
   if (missingOwnerIds.length > 0) {
-    const scopeLabel = scope === 'employee' ? 'Employee-role' : 'Employee/Candidate-role';
+    const scopeLabel = { employee: 'Employee-role', candidate: 'Candidate-role' }[scope]
+      ?? 'Employee/Candidate-role';
     logger.warn(
       `Reconciling ${missingOwnerIds.length} missing ATS profile(s) for active/pending ${scopeLabel} user(s)`
     );
@@ -979,13 +985,17 @@ const buildEmployeeListMongoFilter = async (filterInput) => {
   }
 
   const ownerUserRole =
-    filter.ownerUserRole === 'jobSeeker' || filter.ownerUserRole === 'employee'
+    filter.ownerUserRole === 'jobSeeker' || filter.ownerUserRole === 'employee' || filter.ownerUserRole === 'candidate'
       ? filter.ownerUserRole
       : filter.owner
         ? 'jobSeeker'
         : 'employee';
   const ownerIdsWithScopedRole = await ensureProfilesForActiveAtsRoleUsers(ownerUserRole);
-  if (ownerIdsWithScopedRole !== null) {
+  if (ownerIdsWithScopedRole === null && ownerUserRole === 'candidate') {
+    // No Candidate role in this DB: match nothing. Falling through would drop the owner filter
+    // and answer a candidates question with every employee.
+    mongoFilter.owner = { $in: [] };
+  } else if (ownerIdsWithScopedRole !== null) {
     if (filter.owner) {
       const ownerStr = String(filter.owner);
       const hasRole = ownerIdsWithScopedRole.some((id) => String(id) === ownerStr);
@@ -4355,6 +4365,7 @@ export {
   createCandidate,
   queryCandidates,
   buildEmployeeListMongoFilter,
+  normalizeOwnerUserRoleScope,
   countEmployeeCandidates,
   getCandidateById,
   updateCandidateById,
