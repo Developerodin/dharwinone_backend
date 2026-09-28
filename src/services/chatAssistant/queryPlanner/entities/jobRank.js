@@ -149,6 +149,26 @@ export function scopeJobModel(JobModel, visibilityFilter) {
 }
 
 /**
+ * True internal/external split via two scoped countDocuments over the same base filter —
+ * a single total can't be un-mixed after the fact once no jobOrigin filter narrowed it.
+ * "External" matches the ATS Jobs page's own definition (job.service.js MIRROR_EXTERNAL_OR):
+ * jobOrigin 'external' OR a legacy externalRef-only row.
+ */
+export async function computeJobOriginCounts(JobModel, baseFilterWithoutOrigin) {
+  // Strict partition: external = MIRROR_EXTERNAL_OR, internal = NOT that — so the two
+  // always sum to the total. { jobOrigin: { $ne: 'external' } } was NOT the complement
+  // of MIRROR_EXTERNAL_OR (a legacy row with jobOrigin!=='external' but a populated
+  // externalRef matched both filters, double-counting it).
+  const externalFilter = andMongoFilters(baseFilterWithoutOrigin, MIRROR_EXTERNAL_OR);
+  const internalFilter = andMongoFilters(baseFilterWithoutOrigin, { $nor: [MIRROR_EXTERNAL_OR] });
+  const [internal, external] = await Promise.all([
+    JobModel.countDocuments(internalFilter),
+    JobModel.countDocuments(externalFilter),
+  ]);
+  return { internal, external, externalListings: external, externalMirrored: external, total: internal + external };
+}
+
+/**
  * Verify a free-text company candidate against real data before treating it as a filter.
  * parseJobFilters' regex over-captures role nouns / locations ("jobs for React devs",
  * "at Bangalore") as a "company" with no way to tell from the regex alone — a substring,
