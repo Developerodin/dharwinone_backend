@@ -400,5 +400,7 @@
   "./src/services/__tests__/trainingModule.queryEmployeesForModule.test.js",
   "./src/services/__tests__/position.roster.studentCount.test.js",
   "./src/models/__tests__/position.autoEnroll.test.js",
-  "./src/services/__tests__/position.roster.query.test.js"
+  "./src/services/__tests__/position.roster.query.test.js",
+  "./src/services/chatAssistant/agent/__tests__/toJsonSchema.test.js",
+  "./src/services/chatAssistant/agent/__tests__/defineTool.test.js"
 ]
