@@ -339,8 +339,8 @@ const envVarsSchema = Joi.object()
     CHATBOT_AGENT: Joi.boolean()
       .truthy('true', '1')
       .falsy('false', '0')
-      .default(true)
-      .description('Enable Sage tool-calling agent loop (vs deterministic routing)'),
+      .default(false)
+      .description('Enable Sage tool-calling agent loop (vs deterministic routing). Off unless a host opts in.'),
     CHATBOT_AGENT_MAX_STEPS: Joi.number()
       .integer()
       .min(1)

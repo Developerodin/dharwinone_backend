@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isAgentTurn, hasRecentAgentTurn, AGENT_TURN_WINDOW_MS } from '../gate.js';
+import { isAgentTurn, hasRecentAgentTurn, hasPendingPick, tryAgentTurn, AGENT_TURN_WINDOW_MS } from '../gate.js';
 
 const NOW = new Date('2026-09-28T12:00:00Z');
 const ledgerAt = (msAgo) => ({ agentLedger: [{ at: new Date(NOW.getTime() - msAgo), calls: [] }] });
@@ -46,5 +46,101 @@ describe('hasRecentAgentTurn', () => {
     assert.equal(hasRecentAgentTurn({ agentLedger: [{ at: new Date(NOW.getTime() - 1000).toISOString() }] }, NOW), true);
     assert.equal(hasRecentAgentTurn({ agentLedger: [{ calls: [] }] }, NOW), false);
     assert.equal(hasRecentAgentTurn({ agentLedger: [{ at: 'not a date' }] }, NOW), false);
+  });
+});
+
+describe('hasPendingPick', () => {
+  const fresh = new Date();
+  it('is true while a job, title or entity pick is open', async () => {
+    const title = { lastEntities: { pendingTitleDisambiguation: { query: 'Data Analyst', jobMatches: [{ kind: 'job' }], employeeMatches: [], createdAt: fresh } } };
+    const job = { lastEntities: { pendingJobDisambiguation: { query: 'dev', matches: [{ jobId: 'j1' }], createdAt: fresh } } };
+    const entity = { lastEntities: { pendingEntityDisambiguation: { query: 'x', matches: [{ kind: 'role' }], createdAt: fresh } } };
+    assert.equal(await hasPendingPick('the job', title), true);
+    assert.equal(await hasPendingPick('2', job), true);
+    assert.equal(await hasPendingPick('the first one', entity), true);
+  });
+
+  it('ignores an expired pick', async () => {
+    const stale = new Date(Date.now() - 60 * 60 * 1000);
+    const title = { lastEntities: { pendingTitleDisambiguation: { query: 'x', jobMatches: [{ kind: 'job' }], createdAt: stale } } };
+    assert.equal(await hasPendingPick('the job', title), false);
+  });
+
+  it('leaves "what about jobs" to the title switch only when a designation is on the table', async () => {
+    const withTitle = { lastEntities: { positionConversationState: { designation: 'Data Analyst' } } };
+    assert.equal(await hasPendingPick('what about jobs', withTitle), true);
+    assert.equal(await hasPendingPick('what about jobs', {}), false);
+    assert.equal(await hasPendingPick('how many open jobs', withTitle), false);
+  });
+});
+
+describe('tryAgentTurn', () => {
+  const user = { id: 'u1' };
+  const jobQ = [{ role: 'user', content: 'how many open jobs' }];
+  const answer = { reply: 'There are 3 open jobs.', blocks: [], meta: { steps: 1, toolCalls: ['count_jobs'], ms: 5 }, ledgerEntry: { at: new Date(), calls: [] } };
+
+  function deps(over = {}) {
+    const calls = { load: 0, access: 0, run: 0, append: 0 };
+    const d = {
+      enabled: () => true,
+      loadMemDoc: async () => { calls.load += 1; return null; },
+      checkAccess: async () => { calls.access += 1; return { ok: true }; },
+      pendingPick: async () => false,
+      run: async () => { calls.run += 1; return answer; },
+      appendLedger: async () => { calls.append += 1; },
+      ...over,
+    };
+    return { d, calls };
+  }
+
+  it('flag off → skip without any I/O', async () => {
+    const { d, calls } = deps({ enabled: () => false });
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d }), { result: null, attempted: false });
+    assert.deepEqual(calls, { load: 0, access: 0, run: 0, append: 0 });
+  });
+
+  it('answers a gated turn and persists its ledger entry', async () => {
+    const { d, calls } = deps();
+    const out = await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d });
+    assert.equal(out.result, answer);
+    assert.equal(out.attempted, true);
+    assert.equal(calls.append, 1);
+  });
+
+  it('access denied → skip, agent not run', async () => {
+    const { d, calls } = deps({ checkAccess: async () => ({ ok: false }) });
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d }), { result: null, attempted: false });
+    assert.equal(calls.run, 0);
+  });
+
+  it('pending pick → skip, agent not run', async () => {
+    const { d, calls } = deps({ pendingPick: async () => true });
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: [{ role: 'user', content: 'the job' }], deps: d }), { result: null, attempted: false });
+    assert.equal(calls.run, 0);
+  });
+
+  it('gate rejects a non-job turn at the entry, but the router fallback may try it', async () => {
+    const leave = [{ role: 'user', content: 'who is on leave today' }];
+    const entry = deps();
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: leave, deps: entry.d }), { result: null, attempted: false });
+    assert.equal(entry.calls.run, 0);
+    const fallback = deps();
+    const out = await tryAgentTurn({ user, adminId: 'a1', history: leave, routerPicked: true, deps: fallback.d });
+    assert.equal(fallback.calls.run, 1);
+    assert.equal(out.attempted, true);
+  });
+
+  it('a handoff is still an attempt (router fallback must not retry)', async () => {
+    const { d, calls } = deps({ run: async () => null });
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: d }), { result: null, attempted: true });
+    assert.equal(calls.append, 0);
+  });
+
+  it('a throwing memory read or ledger write never goes dark', async () => {
+    const boom = deps({ loadMemDoc: async () => { throw new Error('db down'); } });
+    assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: boom.d }), { result: null, attempted: false });
+    const ledgerFail = deps({ appendLedger: async () => { throw new Error('write failed'); } });
+    const out = await tryAgentTurn({ user, adminId: 'a1', history: jobQ, deps: ledgerFail.d });
+    assert.equal(out.result, answer);
   });
 });

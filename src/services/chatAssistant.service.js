@@ -200,9 +200,7 @@ import {
 } from './chatAssistant/entityQuery/runJobEntityQuery.js';
 import { readJobQueryContext, saveJobQueryContext, buildJobQueryContextFromResult } from './chatAssistant/conversationState/jobQueryContext.js';
 import { guardLegacyReply } from './chatAssistant/entityQuery/recordValidator.js';
-import { runAgent } from './chatAssistant/agent/runAgent.js';
-import { appendAgentLedger } from './chatAssistant/agent/context.js';
-import { isAgentTurn, hasRecentAgentTurn } from './chatAssistant/agent/gate.js';
+import { tryAgentTurn, hasRecentAgentTurn, JOB_ENTITY_SWITCH_RE } from './chatAssistant/agent/gate.js';
 import { resolvePersonProfile } from './chatAssistant/personProfile/index.js';
 import { assertRelatedToolsExist } from './chatAssistant/personProfile/providers/index.js';
 import { matchSelection, detectDepth } from './chatAssistant/personProfile/preRouter.js';
@@ -6641,7 +6639,7 @@ async function executeManagerConceptRoute(managerRoute, lastUserMsg, user) {
 // fast path (INTENT_PATTERNS) / continuation map, or trigger the router fallback.
 const AGENT_JOB_TOOLS = new Set(['fetch_jobs', 'fetch_external_jobs']);
 
-async function prepareContext(client, history, user, uiContext = null, requestId = null) {
+async function prepareContext(client, history, user, uiContext = null, { requestId = null, agentAttempted = false } = {}) {
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const adminId = user?.adminId ?? user?.id;
 
@@ -6986,9 +6984,10 @@ async function prepareContext(client, history, user, uiContext = null, requestId
     logger.warn(`[ChatAssistant] routing failed: ${err.message}`);
   }
 
-  // Router fallback: the LLM router picked a job tool for a turn the entry gate skipped.
-  if (agentEnabled() && toolCalls.some((tc) => AGENT_JOB_TOOLS.has(tc.function?.name))) {
-    const agentEnvelope = await tryAgentRoute({ client, history, user, adminId, requestId, routerPicked: true });
+  // Router fallback: the LLM router picked a job tool for a turn the entry route didn't
+  // try on the agent. One attempt per turn: the entry's decision is passed in, not redone.
+  if (agentEnabled() && !agentAttempted && toolCalls.some((tc) => AGENT_JOB_TOOLS.has(tc.function?.name))) {
+    const { envelope: agentEnvelope } = await tryAgentRoute({ client, history, user, adminId, requestId, routerPicked: true });
     if (agentEnvelope) return { dataContext: '', moduleCount: 0, fetched: {}, agentEnvelope };
   }
 
@@ -7465,39 +7464,28 @@ function agentEnabled() {
 }
 
 /**
- * Sage's agent loop as an entry route. agent/gate.js decides whether to try it;
- * runAgent answers or returns null, and null always means "continue the old
- * pipeline". `routerPicked` = the LLM router chose a job tool (prepareContext):
- * then only turns the gate REJECTED get an attempt, since a gated turn already
- * had its one attempt at the entry and handed off.
- * Like the other early-return routes, no saveMemoryAsync: the agent's memory is
- * its ledger entry.
+ * Sage's agent loop as an entry route. agent/gate.js decides whether to try it
+ * and runs it (never throws); an unanswered turn continues the old pipeline.
+ * Returns `attempted` so the router fallback in prepareContext never makes a
+ * second attempt on the same turn. Like the other early-return routes, no
+ * saveMemoryAsync: the agent's memory is its ledger entry.
+ * @returns {Promise<{envelope: object|null, attempted: boolean}>}
  */
 async function tryAgentRoute({ client, history, user, adminId, requestId = null, routerPicked = false, stream = false, onToken = null }) {
-  if (!agentEnabled()) return null;
-  const userId = user?.id;
-  const memDoc = userId && adminId ? await ConversationMemory.findOne({ userId, adminId }).lean() : null;
-  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-  if (isAgentTurn(lastUserMsg, memDoc) === routerPicked) return null;
-  if (!(await checkToolAccess('fetch_jobs', user)).ok) return null;
-
-  const result = await runAgent({ client, user, history, memDoc, requestId });
-  if (!result) return null;
-
-  try {
-    await appendAgentLedger({ userId, adminId, entry: result.ledgerEntry });
-  } catch (err) {
-    logger.warn(`[ChatAssistant] agent ledger persist failed user=${userId} requestId=${requestId ?? 'none'}: ${err.message}`);
-  }
+  const { result, attempted } = await tryAgentTurn({ client, user, adminId, history, requestId, routerPicked });
+  if (!result) return { envelope: null, attempted };
   logger.info(
-    `[ChatAssistant${stream ? ':stream' : ''}] user=${userId} mode=agent routerPicked=${routerPicked} steps=${result.meta.steps} tools=[${result.meta.toolCalls}] requestId=${requestId ?? 'none'}`
+    `[ChatAssistant${stream ? ':stream' : ''}] user=${user?.id} mode=agent routerPicked=${routerPicked} steps=${result.meta.steps} tools=[${result.meta.toolCalls}] requestId=${requestId ?? 'none'}`
   );
   if (stream && onToken) onToken(result.reply);
-  return envelope({
-    reply: result.reply,
-    blocks: result.blocks,
-    meta: { kind: 'jobs', deterministic: false, tookMs: result.meta.ms },
-  });
+  return {
+    envelope: envelope({
+      reply: result.reply,
+      blocks: result.blocks,
+      meta: { kind: 'jobs', deterministic: false, tookMs: result.meta.ms },
+    }),
+    attempted,
+  };
 }
 
 /**
@@ -7522,7 +7510,6 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
     return envelope(payload);
   };
 
-  const JOB_ENTITY_SWITCH_RE = /^\s*(?:ok\s+)?what about\s+jobs?\s*[.!]?\s*$/i;
   if (JOB_ENTITY_SWITCH_RE.test(lastUserMsg)) {
     const posState = await readPositionConversationState({ userId, adminId });
     if (posState?.designation) {
@@ -7899,15 +7886,17 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
   // leave it to the job counter further down. Keyed on the previous reply being about jobs
   // because jobQueryContext outlives the job conversation.
   // ponytail: text check on the last reply; store a lastTurnKind if this misfires.
-  // Agent on: the agent answered the last turn if its ledger is fresh, and it keeps its
+  // Agent on: also when the agent answered the last turn (fresh ledger). It keeps its
   // filters in the ledger, not jobQueryContext — so parseJobFollowUp gets a stand-in
-  // context and only tests the message's follow-up shape.
+  // context and only tests the message's follow-up shape. The legacy check stays for
+  // job answers the agent handed off (those write no ledger).
   const prevAssistantMsg = history.filter((m) => m.role === 'assistant').pop()?.content ?? '';
   if (
-    agentEnabled()
-      ? hasRecentAgentTurn(convMemDoc) && parseJobFollowUp(lastUserMsg, { filters: { status: 'Active' } })
-      : /\bjobs?\b/i.test(prevAssistantMsg) &&
-        parseJobFollowUp(lastUserMsg, readJobQueryContext(convMemDoc))
+    (agentEnabled() &&
+      hasRecentAgentTurn(convMemDoc) &&
+      parseJobFollowUp(lastUserMsg, { filters: { status: 'Active' } })) ||
+    (/\bjobs?\b/i.test(prevAssistantMsg) &&
+      parseJobFollowUp(lastUserMsg, readJobQueryContext(convMemDoc)))
   ) {
     return null;
   }
@@ -8312,9 +8301,11 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
     }
   }
 
+  let agentAttempted = false;
   {
     const agentRoute = await tryAgentRoute({ client, history, user, adminId, requestId });
-    if (agentRoute) return agentRoute;
+    agentAttempted = agentRoute.attempted;
+    if (agentRoute.envelope) return agentRoute.envelope;
   }
 
   {
@@ -8437,7 +8428,7 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user, uiContext, requestId),
+    prepareContext(client, history, user, uiContext, { requestId, agentAttempted }),
     loadMemory(userId, adminId, user),
   ]);
   if (ctx.agentEnvelope) return ctx.agentEnvelope;
@@ -8640,12 +8631,14 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
     }
   }
 
+  let agentAttempted = false;
   {
     const agentRoute = await tryAgentRoute({
       client, history, user, adminId, requestId, stream: true, onToken,
     });
-    if (agentRoute) {
-      onDone(agentRoute);
+    agentAttempted = agentRoute.attempted;
+    if (agentRoute.envelope) {
+      onDone(agentRoute.envelope);
       return;
     }
   }
@@ -8801,7 +8794,7 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user, uiContext, requestId),
+    prepareContext(client, history, user, uiContext, { requestId, agentAttempted }),
     loadMemory(userId, adminId, user),
   ]);
   if (ctx.agentEnvelope) {
