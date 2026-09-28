@@ -169,7 +169,7 @@ const NON_JOB_ROLES_RE = /\b(?:user|system|admin)\s+roles?\b|\broles?\s+and\s+pe
  * @param {string} text
  * @returns {boolean}
  */
-function hasJobSubjectNoun(text) {
+export function hasJobSubjectNoun(text) {
   const t = String(text || '');
   if (JOB_SUBJECT_RE.test(t)) return true;
   return JOB_ROLES_NOUN_RE.test(t) && !NON_JOB_ROLES_RE.test(t);

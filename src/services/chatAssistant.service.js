@@ -200,6 +200,9 @@ import {
 } from './chatAssistant/entityQuery/runJobEntityQuery.js';
 import { readJobQueryContext, saveJobQueryContext, buildJobQueryContextFromResult } from './chatAssistant/conversationState/jobQueryContext.js';
 import { guardLegacyReply } from './chatAssistant/entityQuery/recordValidator.js';
+import { runAgent } from './chatAssistant/agent/runAgent.js';
+import { appendAgentLedger } from './chatAssistant/agent/context.js';
+import { isAgentTurn, hasRecentAgentTurn } from './chatAssistant/agent/gate.js';
 import { resolvePersonProfile } from './chatAssistant/personProfile/index.js';
 import { assertRelatedToolsExist } from './chatAssistant/personProfile/providers/index.js';
 import { matchSelection, detectDepth } from './chatAssistant/personProfile/preRouter.js';
@@ -6634,7 +6637,11 @@ async function executeManagerConceptRoute(managerRoute, lastUserMsg, user) {
 
 // ─── Shared context preparation (routing + fetch) ────────────────────────────
 
-async function prepareContext(client, history, user, uiContext = null) {
+// Legacy job tools that, with the agent on, go to the agent instead of the regex
+// fast path (INTENT_PATTERNS) / continuation map, or trigger the router fallback.
+const AGENT_JOB_TOOLS = new Set(['fetch_jobs', 'fetch_external_jobs']);
+
+async function prepareContext(client, history, user, uiContext = null, requestId = null) {
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const adminId = user?.adminId ?? user?.id;
 
@@ -6888,6 +6895,8 @@ async function prepareContext(client, history, user, uiContext = null) {
         toolName = 'fetch_employees';
         toolArgs.role = lastRole;
       }
+      // Agent on: a jobs continuation isn't forced onto fetch_jobs — routing below decides.
+      if (agentEnabled() && AGENT_JOB_TOOLS.has(toolName)) toolName = null;
       if (toolName) {
         const argsJson = JSON.stringify(toolArgs);
         const fetched = await executeFetches(
@@ -6907,7 +6916,11 @@ async function prepareContext(client, history, user, uiContext = null) {
   }
 
   // 1. Fast path — regex pre-routing: skip the LLM routing call for obvious intents.
-  const intent = detectIntent(effectiveUserMsg, uiContext);
+  // Agent on: the jobs fast path is skipped so the turn reaches LLM routing and its agent fallback.
+  const detectedIntent = detectIntent(effectiveUserMsg, uiContext);
+  const intent = agentEnabled() && detectedIntent?.modules?.some((m) => AGENT_JOB_TOOLS.has(m))
+    ? null
+    : detectedIntent;
   if (intent?.clarify) {
     return {
       dataContext:
@@ -6971,6 +6984,12 @@ async function prepareContext(client, history, user, uiContext = null) {
     toolCalls = await routeQuery(client, history);
   } catch (err) {
     logger.warn(`[ChatAssistant] routing failed: ${err.message}`);
+  }
+
+  // Router fallback: the LLM router picked a job tool for a turn the entry gate skipped.
+  if (agentEnabled() && toolCalls.some((tc) => AGENT_JOB_TOOLS.has(tc.function?.name))) {
+    const agentEnvelope = await tryAgentRoute({ client, history, user, adminId, requestId, routerPicked: true });
+    if (agentEnvelope) return { dataContext: '', moduleCount: 0, fetched: {}, agentEnvelope };
   }
 
   if (toolCalls.length > 0) {
@@ -7441,6 +7460,46 @@ async function tryActivityQueryRoute({ history, user, adminId, stream = false, o
   return emit(result);
 }
 
+function agentEnabled() {
+  return !!config.chatbot?.agent?.enabled;
+}
+
+/**
+ * Sage's agent loop as an entry route. agent/gate.js decides whether to try it;
+ * runAgent answers or returns null, and null always means "continue the old
+ * pipeline". `routerPicked` = the LLM router chose a job tool (prepareContext):
+ * then only turns the gate REJECTED get an attempt, since a gated turn already
+ * had its one attempt at the entry and handed off.
+ * Like the other early-return routes, no saveMemoryAsync: the agent's memory is
+ * its ledger entry.
+ */
+async function tryAgentRoute({ client, history, user, adminId, requestId = null, routerPicked = false, stream = false, onToken = null }) {
+  if (!agentEnabled()) return null;
+  const userId = user?.id;
+  const memDoc = userId && adminId ? await ConversationMemory.findOne({ userId, adminId }).lean() : null;
+  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
+  if (isAgentTurn(lastUserMsg, memDoc) === routerPicked) return null;
+  if (!(await checkToolAccess('fetch_jobs', user)).ok) return null;
+
+  const result = await runAgent({ client, user, history, memDoc, requestId });
+  if (!result) return null;
+
+  try {
+    await appendAgentLedger({ userId, adminId, entry: result.ledgerEntry });
+  } catch (err) {
+    logger.warn(`[ChatAssistant] agent ledger persist failed user=${userId} requestId=${requestId ?? 'none'}: ${err.message}`);
+  }
+  logger.info(
+    `[ChatAssistant${stream ? ':stream' : ''}] user=${userId} mode=agent routerPicked=${routerPicked} steps=${result.meta.steps} tools=[${result.meta.toolCalls}] requestId=${requestId ?? 'none'}`
+  );
+  if (stream && onToken) onToken(result.reply);
+  return envelope({
+    reply: result.reply,
+    blocks: result.blocks,
+    meta: { kind: 'jobs', deterministic: false, tookMs: result.meta.ms },
+  });
+}
+
 /**
  * Pre-LLM gate for job profile lookups and job-context follow-ups.
  */
@@ -7840,10 +7899,15 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
   // leave it to the job counter further down. Keyed on the previous reply being about jobs
   // because jobQueryContext outlives the job conversation.
   // ponytail: text check on the last reply; store a lastTurnKind if this misfires.
+  // Agent on: the agent answered the last turn if its ledger is fresh, and it keeps its
+  // filters in the ledger, not jobQueryContext — so parseJobFollowUp gets a stand-in
+  // context and only tests the message's follow-up shape.
   const prevAssistantMsg = history.filter((m) => m.role === 'assistant').pop()?.content ?? '';
   if (
-    /\bjobs?\b/i.test(prevAssistantMsg) &&
-    parseJobFollowUp(lastUserMsg, readJobQueryContext(convMemDoc))
+    agentEnabled()
+      ? hasRecentAgentTurn(convMemDoc) && parseJobFollowUp(lastUserMsg, { filters: { status: 'Active' } })
+      : /\bjobs?\b/i.test(prevAssistantMsg) &&
+        parseJobFollowUp(lastUserMsg, readJobQueryContext(convMemDoc))
   ) {
     return null;
   }
@@ -8249,6 +8313,11 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   {
+    const agentRoute = await tryAgentRoute({ client, history, user, adminId, requestId });
+    if (agentRoute) return agentRoute;
+  }
+
+  {
     const jobRoute = await tryJobConversationalRoute({ history, user, adminId });
     if (jobRoute) return jobRoute;
   }
@@ -8283,7 +8352,8 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
   // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
   // through this early job-salary-ranking path even though fetch_jobs itself is gated.
-  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
+  // Agent on: job questions belong to tryAgentRoute; its null falls through to LLM routing.
+  if (!agentEnabled() && shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,
@@ -8367,9 +8437,10 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user, uiContext),
+    prepareContext(client, history, user, uiContext, requestId),
     loadMemory(userId, adminId, user),
   ]);
+  if (ctx.agentEnvelope) return ctx.agentEnvelope;
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;
   const issues = validateEntityConsistency(fetched);
   const baseContext = issues.length
@@ -8570,6 +8641,16 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   {
+    const agentRoute = await tryAgentRoute({
+      client, history, user, adminId, requestId, stream: true, onToken,
+    });
+    if (agentRoute) {
+      onDone(agentRoute);
+      return;
+    }
+  }
+
+  {
     const jobRoute = await tryJobConversationalRoute({
       history, user, adminId, stream: true, onToken,
     });
@@ -8624,7 +8705,8 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   // Early gate — job salary ranking before prepareContext / fetch_jobs.
   // I5: runJobEntityQuery had no gate — fetch_jobs.read-less users could reach jobs data
   // through this early job-salary-ranking path even though fetch_jobs itself is gated.
-  if (shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
+  // Agent on: job questions belong to tryAgentRoute; its null falls through to LLM routing.
+  if (!agentEnabled() && shouldHandleJobEntityQuery(lastUserMsg, { jobQueryContext }) && (await checkToolAccess('fetch_jobs', user)).ok) {
     const jobResult = await runJobEntityQuery({
       userMessage: lastUserMsg,
       user,
@@ -8719,9 +8801,14 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   const [ctx, memory] = await Promise.all([
-    prepareContext(client, history, user, uiContext),
+    prepareContext(client, history, user, uiContext, requestId),
     loadMemory(userId, adminId, user),
   ]);
+  if (ctx.agentEnvelope) {
+    onToken(ctx.agentEnvelope.reply);
+    onDone(ctx.agentEnvelope);
+    return;
+  }
   const { dataContext: rawCtx, moduleCount, fetched } = ctx;
   const issues = validateEntityConsistency(fetched);
   const baseContext = issues.length
