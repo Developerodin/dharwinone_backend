@@ -235,7 +235,7 @@
     "expect": { "handoff": true }
   },
   {
-    "id": "handoff-employee-headcount-in-window",
+    "id": "employee-headcount-in-window",
     "history": [
       { "role": "user", "content": "how many react jobs are there?" },
       { "role": "assistant", "content": "There are 6 jobs matching react." }
@@ -244,7 +244,7 @@
       { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "react" } }, "total": 6 }] }
     ],
     "question": "how many employees do we have?",
-    "expect": { "handoff": true }
+    "expect": { "tools": ["count_employees"] }
   },
   {
     "id": "count-users-plain",
@@ -351,5 +351,79 @@
       "tools": ["get_role"],
       "args": { "get_role": { "name": "Sales Agent" } }
     }
+  },
+  {
+    "id": "employees-count",
+    "question": "how many employees do we have",
+    "expect": { "tools": ["count_employees"] }
+  },
+  {
+    "id": "employees-interns-by-dept",
+    "question": "unpaid interns by department",
+    "expect": {
+      "tools": ["count_employees"],
+      "args": {
+        "count_employees": {
+          "groupBy": "department",
+          "filters": { "employmentType": "Internship", "compensationType": "unpaid" }
+        }
+      }
+    }
+  },
+  {
+    "id": "employees-resigned-vs-current",
+    "question": "how many employees have resigned vs still working",
+    "expect": {
+      "tools": ["count_employees"],
+      "args": { "count_employees": { "groupBy": "employmentStatus" } }
+    }
+  },
+  {
+    "id": "employees-list-designation",
+    "question": "list the react developers",
+    "expect": { "tools": ["list_employees"] }
+  },
+  {
+    "id": "candidates-count",
+    "question": "how many candidates do we have",
+    "expect": { "tools": ["count_candidates"] }
+  },
+  {
+    "id": "candidates-not-employees",
+    "question": "show me candidates with react skills",
+    "expect": {
+      "tools": ["list_candidates"],
+      "args": { "list_candidates": { "filters": { "skills": ["react"] } } }
+    }
+  },
+  {
+    "id": "applications-by-name",
+    "question": "which jobs has Ranveer Singh applied to",
+    "expect": {
+      "tools": ["list_applications"],
+      "args": { "list_applications": { "filters": { "applicantName": "Ranveer Singh" } } }
+    }
+  },
+  {
+    "id": "applications-pronoun-followup",
+    "history": [
+      { "role": "user", "content": "tell me about Ranveer Singh" },
+      { "role": "assistant", "content": "Ranveer Singh is a Candidate. Email: ranveer@example.com." }
+    ],
+    "question": "how many jobs has he applied to",
+    "expect": {
+      "tools": ["count_applications"],
+      "args": { "count_applications": { "filters": { "applicantName": "Ranveer Singh" } } }
+    }
+  },
+  {
+    "id": "people-tell-me-about",
+    "question": "tell me about Ranveer Singh",
+    "expect": { "tools": ["get_user"] }
+  },
+  {
+    "id": "users-and-employees-together",
+    "question": "how many users do we have and how many of them are employees",
+    "expect": { "tools": ["count_users", "count_employees"], "maxCalls": 2 }
   }
 ]

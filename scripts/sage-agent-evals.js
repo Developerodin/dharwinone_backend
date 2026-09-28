@@ -145,7 +145,7 @@ function evaluateExpect(expect, ctx) {
 const FAKE_USER = Object.freeze({
   id: 'eval-user-0000000000000001',
   name: 'Eval User',
-  authContext: { permissions: new Set(['jobs.read', 'users.read', 'roles.read']) },
+  authContext: { permissions: new Set(['jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read']) },
 });
 
 function jobRow(i, overrides = {}) {
@@ -253,6 +253,29 @@ function cannedResult(name, args) {
         status: 'active',
         permissions: ['users.read', 'jobs.read'],
       };
+    case 'count_employees':
+      if (args?.groupBy === 'employmentStatus') {
+        return { total: 42, groupBy: args.groupBy, groups: [{ value: 'current', count: 38 }, { value: 'resigned', count: 4 }] };
+      }
+      return args?.groupBy
+        ? { total: 42, groupBy: args.groupBy, groups: [{ value: 'Engineering', count: 30 }, { value: 'Sales', count: 12 }] }
+        : { total: 42, filtersApplied: args?.filters ?? {} };
+    case 'list_employees':
+      return { total: 2, page: 1, hasNextPage: false, records: [
+        { id: 'e1', name: 'Asha Rao', designation: 'React Developer', department: 'Engineering', employmentType: 'Full-time' },
+        { id: 'e2', name: 'Vikram Shah', designation: 'Sales Lead', department: 'Sales', employmentType: 'Full-time' },
+      ] };
+    case 'count_candidates':
+      return { total: 17, filtersApplied: args?.filters ?? {} };
+    case 'list_candidates':
+      return { total: 1, page: 1, hasNextPage: false, records: [{ id: 'c1', name: 'Ravi Kumar', designation: 'QA' }] };
+    case 'count_applications':
+      return { total: 3, baseTotal: 3, breakdown: { Applied: 2, Interview: 1 }, filtersApplied: args?.filters ?? {} };
+    case 'list_applications':
+      return { total: 2, records: [
+        { id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer', status: 'Applied' },
+        { id: 'a2', applicant: 'Ranveer Singh', job: 'QA Engineer', status: 'Interview' },
+      ] };
     default:
       return { handoff: true };
   }

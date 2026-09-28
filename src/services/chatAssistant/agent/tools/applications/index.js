@@ -6,6 +6,8 @@ const instructions = [
   '- "he", "she", "they", "this user", "this person" in a follow-up mean the person from the previous turn. ' +
     'Put that person\'s real name in filters.applicantName (or their id in applicantUserId). Never pass the ' +
     'pronoun itself. If no person was discussed, ask which person.',
+  '- When the person\'s name is already in the conversation, call the application tool directly with it — ' +
+    'do not look the person up with get_user first.',
   '- "How many jobs has X applied to" → count_applications. "Which jobs" → list_applications.',
   '- If a result has notFound "applicant", say you could not find that person\'s applications — not "0 jobs".',
 ].join('\n');

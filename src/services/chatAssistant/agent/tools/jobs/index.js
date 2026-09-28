@@ -9,6 +9,8 @@ const instructions = [
   'Jobs: job postings on the ATS Jobs page, internal openings and mirrored external listings.',
   '- "each/per/by X" or "breakdown by X" → count_jobs with groupBy X. If X is not one of the groupBy ' +
     'values, say jobs have no such field and name the ones that exist instead of guessing.',
+  '- A technology or topic word ("react jobs", "python jobs") → filters.search. Use filters.skill only when ' +
+    'the user explicitly asks for a required skill tag.',
   '- Several topics at once ("ml and ai jobs") → one call with filters.search as an array: ["ml", "ai"].',
   '- Jobs needing several things at once ("react and node jobs") → filters.searchAll: ["react", "node"].',
   '- Stack acronyms (MERN, MEAN, LAMP) are rarely written in postings. Query the stack\'s core parts with ' +

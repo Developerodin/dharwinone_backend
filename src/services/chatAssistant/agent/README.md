@@ -96,6 +96,31 @@ Agent do" / "what permissions does X role have" is `get_role`; a short follow-up
 just a person's name is a `get_user` call, not a filter on the previous `count_users`/
 `list_users` call. Full rulings and rationale: `agent/tools/people/CONTRACT.md`.
 
+### employees
+
+`agent/tools/employees/`: `count_employees`, `list_employees` — Employee-role profiles only
+(`ownerUserRole: 'employee'`), current employees unless `filters.employmentStatus` says
+otherwise. `count_employees` can `groupBy` `department`, `designation`, `employmentType`,
+`compensationType` or `employmentStatus`. Both run through `executeEmployeeQuery`, so row
+scope and salary masking match the Employees page. Access: the Employees page read/manage
+permissions (`EMPLOYEE_QUERY_READ_PERMISSIONS`).
+
+### candidates
+
+`agent/tools/candidates/`: `count_candidates`, `list_candidates` — Candidate-role profiles
+only (`ownerUserRole: 'candidate'`). Candidate and Employee are distinct roles and are never
+aliased or merged; a missing Candidate role matches nothing. Same executor and access as
+`employees`.
+
+### applications
+
+`agent/tools/applications/`: `count_applications`, `list_applications` — job applications by
+applicant, job title/id or status, via `applicantQuery.service`'s `searchApplications`. Access
+is delegated to its `applicationScope` (admin / recruiter / sales agent / self), so the tools
+declare an access note rather than an `anyOf`.
+
+Single-person lookups for any of these stay on `get_user`.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -359,6 +384,6 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 - **Legacy domains still route through the old pipeline** until migrated one at a time.
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
-  knowledge base/roles. `jobs` and `people` (users + roles; see "Registered domains" above)
-  are migrated so far — employees/candidates are next. `gate.js` itself is domain-generic
+  knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates` and
+  `applications` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.
