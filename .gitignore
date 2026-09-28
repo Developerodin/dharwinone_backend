@@ -187,6 +187,10 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, Task 4 — tool registry (access filter, timeout, size cap).
 !src/services/chatAssistant/agent/__tests__/toolRegistry.test.js
 
+# Sage agent loop, Task 5 — model adapter + agent loop.
+!src/services/chatAssistant/agent/__tests__/llm.test.js
+!src/services/chatAssistant/agent/__tests__/runAgent.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js

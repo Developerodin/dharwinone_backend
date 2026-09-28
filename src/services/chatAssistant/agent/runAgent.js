@@ -1,0 +1,215 @@
+// Sage's tool-calling agent loop (architecture.md §3, §7a, §7b).
+//
+// Contract: returns an answer envelope, or null. Null ALWAYS means "let the old
+// pipeline answer" — handoff, repeated bad args, empty output, any thrown error.
+// Sage must never go dark because of the agent.
+//
+// No DB writes here: the caller (entry gate) persists `ledgerEntry`.
+
+import config from '../../../config/config.js';
+import logger from '../../../config/logger.js';
+import { step as llmStep } from './llm.js';
+import { getAgentTools as defaultGetAgentTools } from './toolRegistry.js';
+import { buildAgentInput, compactTurnItems, summarizeCalls, readAgentLedger } from './context.js';
+import { resolveViewerRoleNames as defaultResolveViewerRoleNames } from '../columnVisibility.js';
+import { enforceCounts } from '../responseValidator.js';
+
+// The model can emit dozens of parallel calls when its tools don't fit the
+// question (task-2-report, check 3). Only the first MAX_CALLS_PER_STEP run; the
+// rest still get an output, because every function_call needs a
+// function_call_output or the API rejects the next request.
+const MAX_CALLS_PER_STEP = 8;
+const TOO_MANY_CALLS_OUTPUT = JSON.stringify({ error: 'too many calls in one step' });
+
+// Same tool failing this many times in one turn = the model isn't converging.
+const MAX_FAILURES_PER_TOOL = 2;
+
+// Domain-neutral; domain guidance comes from the registry. Part of the stable
+// prefix — nothing per-user or time-varying belongs here.
+export const BASE_INSTRUCTIONS = [
+  "You are Sage, the assistant inside this company's HR and recruiting platform.",
+  'Answer only by using the tools provided. Never answer from memory or general knowledge about the company data.',
+  'Every number in your reply must come from a tool result returned in THIS turn. Earlier replies and "Previous tool calls" totals are context only: for a follow-up question, call the tool again with the changed arguments — never reuse an old number.',
+  'You may call several tools at once when the question needs them.',
+  'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
+  'If no available tool fits the question, call `handoff` with a short reason instead of answering.',
+  'Reply in plain, concise markdown.',
+].join('\n');
+
+function parseArgsForLedger(raw) {
+  if (typeof raw !== 'string') return raw ?? {};
+  try {
+    return raw.trim() === '' ? {} : JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function addUsage(totals, usage) {
+  if (!usage) return;
+  totals.inputTokens += usage.input_tokens ?? 0;
+  totals.outputTokens += usage.output_tokens ?? 0;
+  totals.cachedTokens += usage.input_tokens_details?.cached_tokens ?? 0;
+}
+
+/**
+ * Merge count facts from every rendered call this turn. All calls of one tool
+ * share a label (e.g. 'jobs'), and enforceCounts rewrites EVERY "N <label>" in
+ * the reply to the fact's total — so two calls with different totals for the
+ * same label ("9 internships, 4 contract jobs") must not be enforced at all,
+ * or the first number gets overwritten with the second.
+ */
+function mergeCountFacts(factsList) {
+  const byKey = new Map();
+  for (const facts of factsList) {
+    for (const fact of facts?.counts ?? []) {
+      if (typeof fact?.total !== 'number') continue;
+      const key = fact.role ? `role:${String(fact.role).toLowerCase()}` : `label:${fact.label}`;
+      if (!byKey.has(key)) byKey.set(key, { fact, totals: new Set() });
+      byKey.get(key).totals.add(fact.total);
+    }
+  }
+  const counts = [...byKey.values()].filter((g) => g.totals.size === 1).map((g) => g.fact);
+  return { counts, primary: null };
+}
+
+/**
+ * @param {object} args
+ * @param {{responses:{create:Function}}} args.client OpenAI client
+ * @param {object} args.user req.user
+ * @param {Array<{role:string, content:string}>} args.history this request's messages (current question last)
+ * @param {{agentLedger?:Array}|null} args.memDoc ConversationMemory doc (read-only here)
+ * @param {string} [args.requestId]
+ * @param {{step?:Function, getAgentTools?:Function, resolveViewerRoleNames?:Function, now?:Function}} [args.deps]
+ * @returns {Promise<null | {reply:string, blocks:Array, meta:{steps:number, toolCalls:string[], ms:number}, ledgerEntry:object}>}
+ */
+export async function runAgent({ client, user, history, memDoc, requestId, deps = {} }) {
+  const {
+    step = llmStep,
+    getAgentTools = defaultGetAgentTools,
+    resolveViewerRoleNames = defaultResolveViewerRoleNames,
+    now = () => new Date(),
+  } = deps;
+
+  const startedAt = Date.now();
+  const usage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  const executed = []; // { name, args, ok, result }
+  let steps = 0;
+  let outcome = 'error';
+
+  try {
+    const registry = await getAgentTools(user);
+    const roleNames = await resolveViewerRoleNames(user);
+    const built = buildAgentInput({
+      instructions: `${BASE_INSTRUCTIONS}\n\n${registry.instructions}`,
+      user,
+      roleNames,
+      history,
+      ledger: readAgentLedger(memDoc),
+      now: now(),
+    });
+    const { instructions } = built;
+    let { input } = built;
+    const { maxSteps, inputBudget } = config.chatbot.agent;
+
+    const runStep = async (toolChoice) => {
+      steps += 1;
+      const res = await step({ client, instructions, input, tools: registry.schemas, toolChoice });
+      addUsage(usage, res.usage);
+      return res;
+    };
+
+    const failuresByTool = new Map();
+    let text = null;
+
+    for (let i = 0; i < maxSteps && text === null; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await runStep('auto');
+
+      if (!res.toolCalls.length) {
+        text = res.text;
+        if (!text.trim()) {
+          // Empty output is a failure, not an answer: one text-only retry.
+          input = [...input, ...res.outputItems];
+          // eslint-disable-next-line no-await-in-loop
+          text = (await runStep('none')).text;
+        }
+        break;
+      }
+
+      if (res.toolCalls.some((c) => registry.isHandoff(c.name))) {
+        outcome = 'handoff';
+        return null;
+      }
+
+      const allowed = res.toolCalls.slice(0, MAX_CALLS_PER_STEP);
+      // eslint-disable-next-line no-await-in-loop
+      const settled = await Promise.allSettled(
+        allowed.map((c) => registry.execute(c.name, c.arguments, { requestId }))
+      );
+
+      const outputs = res.toolCalls.map((c, idx) => {
+        if (idx >= allowed.length) {
+          return { type: 'function_call_output', call_id: c.callId, output: TOO_MANY_CALLS_OUTPUT };
+        }
+        const s = settled[idx];
+        const r = s.status === 'fulfilled' ? s.value : { ok: false, error: s.reason?.message || String(s.reason) };
+        executed.push({ name: c.name, args: parseArgsForLedger(c.arguments), ok: !!r.ok, result: r.result });
+        if (!r.ok) failuresByTool.set(c.name, (failuresByTool.get(c.name) ?? 0) + 1);
+        const output = JSON.stringify(r.ok ? r.result : { error: r.error });
+        return { type: 'function_call_output', call_id: c.callId, output };
+      });
+
+      if ([...failuresByTool.values()].some((n) => n >= MAX_FAILURES_PER_TOOL)) {
+        outcome = 'repeated_tool_failure';
+        return null;
+      }
+
+      input = compactTurnItems([...input, ...res.outputItems, ...outputs], inputBudget);
+    }
+
+    if (text === null) {
+      // Step cap hit while still calling tools: answer from what was gathered.
+      text = (await runStep('none')).text;
+    }
+    if (!text || !text.trim()) {
+      outcome = 'empty';
+      return null;
+    }
+
+    let blocks = [];
+    const factsList = [];
+    for (const call of executed) {
+      if (!call.ok) continue;
+      const rendered = registry.render(call.name, call.result);
+      if (!rendered) continue;
+      blocks = rendered.blocks ?? [];
+      if (rendered.facts) factsList.push(rendered.facts);
+    }
+    const facts = mergeCountFacts(factsList);
+    const reply = facts.counts.length ? enforceCounts(text, facts).reply : text;
+
+    outcome = 'answer';
+    const successful = executed.filter((c) => c.ok);
+    return {
+      reply,
+      blocks,
+      meta: { steps, toolCalls: executed.map((c) => c.name), ms: Date.now() - startedAt },
+      ledgerEntry: summarizeCalls(successful.map((c) => ({ name: c.name, args: c.args, output: c.result }))),
+    };
+  } catch (err) {
+    logger.warn(`[runAgent] falling back to legacy pipeline: ${JSON.stringify({ requestId, error: err?.message || String(err) })}`);
+    return null;
+  } finally {
+    logger.info(
+      `[runAgent] ${JSON.stringify({
+        requestId,
+        outcome,
+        steps,
+        tools: executed.map((c) => c.name),
+        ms: Date.now() - startedAt,
+        usage,
+      })}`
+    );
+  }
+}

@@ -405,5 +405,7 @@
   "./src/services/chatAssistant/agent/__tests__/defineTool.test.js",
   "./src/services/chatAssistant/agent/__tests__/context.test.js",
   "./src/services/chatAssistant/agent/tools/jobs/__tests__/jobTools.test.js",
-  "./src/services/chatAssistant/agent/__tests__/toolRegistry.test.js"
+  "./src/services/chatAssistant/agent/__tests__/toolRegistry.test.js",
+  "./src/services/chatAssistant/agent/__tests__/llm.test.js",
+  "./src/services/chatAssistant/agent/__tests__/runAgent.test.js"
 ]
