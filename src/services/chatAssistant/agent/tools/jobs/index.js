@@ -12,6 +12,9 @@ const instructions = [
   '- A specific job by id or title → get_job. If it returns matches, ask which one the user meant.',
   '- Highest/lowest paying → rank_jobs_by_salary. Listing jobs → list_jobs; its total is the full count ' +
     'even when fewer rows come back.',
+  '- A short follow-up that\'s just a person\'s name ("what about John", "and Priya?") is not a job filter, ' +
+    'even right after a job answer — call handoff instead of putting the name into search, company, or any ' +
+    'other filter.',
 ].join('\n');
 
 export default {

@@ -173,6 +173,7 @@
       "anyOf": [
         {
           "tools": ["count_jobs"],
+          "maxCalls": 2,
           "args": {
             "count_jobs": [{ "filters": { "jobType": "Internship" } }, { "filters": { "jobType": "Contract" } }]
           }

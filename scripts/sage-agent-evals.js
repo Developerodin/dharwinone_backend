@@ -70,10 +70,24 @@ const RULES = {
     !calls.some((c) => c.name === 'count_jobs' && c.args?.groupBy && !VALID_GROUP_BY.includes(c.args.groupBy)),
 };
 
-function sameNameSet(names, expected) {
-  const a = [...new Set(names)].sort();
-  const b = [...expected].sort();
-  return a.length === b.length && a.every((v, i) => v === b[i]);
+/**
+ * Exact-name-set check PLUS a call-count ceiling: the total number of
+ * non-handoff calls must not exceed `expected.length` (one call per expected
+ * tool), unless `maxCalls` raises that ceiling for a case that legitimately
+ * needs more than one call to the same tool (e.g. comparing two filters).
+ * `new Set(names)` alone would dedupe repeat calls to an already-expected
+ * tool and miss them entirely — this keeps that name-set check but also
+ * counts.
+ */
+function toolCallsMatch(toolCalls, expected, maxCalls) {
+  const names = toolCalls.map((c) => c.name);
+  const distinctActual = [...new Set(names)].sort();
+  const distinctExpected = [...expected].sort();
+  const sameNames =
+    distinctActual.length === distinctExpected.length && distinctActual.every((v, i) => v === distinctExpected[i]);
+  if (!sameNames) return false;
+  const ceiling = maxCalls ?? expected.length;
+  return names.length <= ceiling;
 }
 
 const SEARCHABLE_JOB_TOOLS = ['count_jobs', 'list_jobs', 'rank_jobs_by_salary', 'get_job'];
@@ -81,15 +95,20 @@ const SEARCHABLE_JOB_TOOLS = ['count_jobs', 'list_jobs', 'rank_jobs_by_salary', 
 /**
  * True if any job-tool call leaked a person's name into a job query — e.g. the
  * model searching jobs for "John" instead of handing off a people question.
- * Checks filters.search (string or array) on count/list/rank, and title on get_job.
+ * Scans EVERY string value anywhere in the call's args, recursively (filters.search,
+ * filters.company, filters.city, title, ...) rather than a fixed field list — the
+ * reproduced leak used filters.company, not filters.search, so a fixed list would
+ * have missed it on a parallel call that also called `handoff`.
  */
 function containsSearchTerm(calls, term) {
   const needle = term.toLowerCase();
-  return calls.some((c) => {
-    if (!SEARCHABLE_JOB_TOOLS.includes(c.name)) return false;
-    const candidates = [c.args?.filters?.search, c.args?.title].flatMap((v) => (Array.isArray(v) ? v : [v]));
-    return candidates.some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
-  });
+  const hasTerm = (value) => {
+    if (typeof value === 'string') return value.toLowerCase().includes(needle);
+    if (Array.isArray(value)) return value.some(hasTerm);
+    if (value && typeof value === 'object') return Object.values(value).some(hasTerm);
+    return false;
+  };
+  return calls.some((c) => SEARCHABLE_JOB_TOOLS.includes(c.name) && hasTerm(c.args));
 }
 
 /** @param {object} expect one case's `expect`, or one `anyOf` alternative */
@@ -103,7 +122,7 @@ function evaluateExpect(expect, ctx) {
   }
 
   const toolCalls = ctx.calls.filter((c) => c.name !== 'handoff');
-  if (expect.tools && !sameNameSet(toolCalls.map((c) => c.name), expect.tools)) return false;
+  if (expect.tools && !toolCallsMatch(toolCalls, expect.tools, expect.maxCalls)) return false;
 
   if (expect.args) {
     for (const [tool, spec] of Object.entries(expect.args)) {
