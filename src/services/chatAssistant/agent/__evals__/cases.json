@@ -1,0 +1,205 @@
+[
+  {
+    "id": "count-plain-react",
+    "question": "how many react jobs are there?",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "filters": { "search": "react" } } }
+    }
+  },
+  {
+    "id": "count-multi-term-ml-ai",
+    "question": "how many ml and ai jobs are open?",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "filters": { "search": ["ml", "ai"] } } }
+    }
+  },
+  {
+    "id": "breakdown-jobtype",
+    "question": "give me a breakdown of jobs by type",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "groupBy": "jobType" } }
+    }
+  },
+  {
+    "id": "breakdown-unsupported-category",
+    "question": "how many jobs are there in each category?",
+    "expect": {
+      "rule": "no_invalid_groupby"
+    }
+  },
+  {
+    "id": "list-ai-jobs",
+    "question": "show me all ai jobs",
+    "expect": {
+      "tools": ["list_jobs"],
+      "args": { "list_jobs": { "filters": { "search": "ai" } } }
+    }
+  },
+  {
+    "id": "detail-by-title",
+    "question": "give me the full details for the Senior Backend Engineer job",
+    "expect": {
+      "tools": ["get_job"],
+      "args": { "get_job": { "title": "senior backend engineer" } }
+    }
+  },
+  {
+    "id": "rank-highest-react",
+    "question": "what's the highest paying react job?",
+    "expect": {
+      "tools": ["rank_jobs_by_salary"],
+      "args": { "rank_jobs_by_salary": { "filters": { "search": "react" } } }
+    }
+  },
+  {
+    "id": "count-status-closed",
+    "question": "how many closed jobs are there?",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "filters": { "status": "Closed" } } }
+    }
+  },
+  {
+    "id": "count-remote",
+    "question": "how many remote jobs do we have?",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "filters": { "remote": true } } }
+    }
+  },
+  {
+    "id": "followup-what-about-ai",
+    "history": [
+      { "role": "user", "content": "how many ml jobs are there?" },
+      { "role": "assistant", "content": "There are 12 jobs matching ml." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "ml" } }, "total": 12 }] }
+    ],
+    "question": "what about ai",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "filters": { "search": "ai" } } }
+    }
+  },
+  {
+    "id": "followup-and-remote",
+    "history": [
+      { "role": "user", "content": "show me all react jobs" },
+      { "role": "assistant", "content": "Here are the open react jobs, 8 in total." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "list_jobs", "args": { "filters": { "search": "react" } }, "total": 8 }] }
+    ],
+    "question": "and remote?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["list_jobs"],
+          "args": { "list_jobs": { "filters": { "search": "react", "remote": true } } }
+        },
+        {
+          "tools": ["count_jobs"],
+          "args": { "count_jobs": { "filters": { "search": "react", "remote": true } } }
+        }
+      ]
+    }
+  },
+  {
+    "id": "followup-rank-next",
+    "history": [
+      { "role": "user", "content": "what's the highest paying react job?" },
+      { "role": "assistant", "content": "The highest paying react job is Senior React Developer at 18,00,000." }
+    ],
+    "ledger": [
+      {
+        "calls": [
+          { "tool": "rank_jobs_by_salary", "args": { "filters": { "search": "react" }, "limit": 1 }, "total": 5 }
+        ]
+      }
+    ],
+    "question": "ok what about next",
+    "expect": {
+      "tools": ["rank_jobs_by_salary"],
+      "args": { "rank_jobs_by_salary": { "filters": { "search": "react" } } }
+    }
+  },
+  {
+    "id": "handoff-person-name",
+    "history": [
+      { "role": "user", "content": "what's the highest paying react job?" },
+      { "role": "assistant", "content": "The highest paying react job is Senior React Developer at 18,00,000." }
+    ],
+    "ledger": [
+      {
+        "calls": [{ "tool": "rank_jobs_by_salary", "args": { "filters": { "search": "react" } }, "total": 5 }]
+      }
+    ],
+    "question": "what about John",
+    "expect": { "handoff": true, "forbidSearchTerm": "John" }
+  },
+  {
+    "id": "handoff-employees-leave",
+    "question": "how many employees are on leave today?",
+    "expect": { "handoff": true }
+  },
+  {
+    "id": "handoff-greeting",
+    "question": "hi",
+    "expect": { "handoff": true }
+  },
+  {
+    "id": "handoff-john-position",
+    "question": "what position is John in",
+    "expect": { "handoff": true, "forbidSearchTerm": "John" }
+  },
+  {
+    "id": "handoff-john-role",
+    "question": "what's John's role",
+    "expect": { "handoff": true, "forbidSearchTerm": "John" }
+  },
+  {
+    "id": "handoff-priya-roles",
+    "question": "which roles does Priya have",
+    "expect": { "handoff": true, "forbidSearchTerm": "Priya" }
+  },
+  {
+    "id": "mixed-two-counts",
+    "question": "how many internships and how many contract jobs are there?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["count_jobs"],
+          "args": {
+            "count_jobs": [{ "filters": { "jobType": "Internship" } }, { "filters": { "jobType": "Contract" } }]
+          }
+        },
+        {
+          "tools": ["count_jobs"],
+          "args": { "count_jobs": { "groupBy": "jobType" } }
+        }
+      ]
+    }
+  },
+  {
+    "id": "count-city-bangalore",
+    "question": "how many jobs are open in Bangalore?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["count_jobs"], "args": { "count_jobs": { "filters": { "city": "Bangalore" } } } },
+        { "tools": ["count_jobs"], "args": { "count_jobs": { "filters": { "location": "Bangalore" } } } }
+      ]
+    }
+  },
+  {
+    "id": "breakdown-origin",
+    "question": "how many jobs are internal vs external?",
+    "expect": {
+      "tools": ["count_jobs"],
+      "args": { "count_jobs": { "groupBy": "origin" } }
+    }
+  }
+]

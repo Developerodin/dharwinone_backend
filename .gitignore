@@ -31,6 +31,8 @@ scripts/*
 !scripts/run-tests.mjs
 !scripts/test-manifest.json
 !scripts/backfill-student-positions.js
+# Sage agent loop, Task 7 — tool-pick eval runner (report-only, no DB writes).
+!scripts/sage-agent-evals.js
 tests/
 graphify-out/
 
