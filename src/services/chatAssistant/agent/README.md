@@ -12,32 +12,46 @@ legacy pipeline only, with no other changes.
 
 ## Request flow
 
-1. `chatAssistant.service.js` first checks for a pending person/job/title pick (e.g.
-   `readPending`'s person-disambiguation state) — an open pick always outranks the agent
-   and every other routing path, so a bare "1" in reply to "did you mean X or Y?" never
-   reaches the loop. Only once nothing is pending does it call `isAgentTurn(lastUserMsg,
-   memDoc)` (`agent/gate.js`) — a cheap noun/recency check, not a real router. True → try
-   the agent this turn.
-2. `tryAgentRoute` calls `runAgent(...)` (`agent/runAgent.js`).
-3. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
+1. `chatAssistant.service.js` checks for an open **person** disambiguation pick
+   (`readPending`, from `personProfile/pendingPerson.js`) before `tryAgentRoute` is even
+   called (`chatAssistant.service.js:8264` and the streaming path's `:8585`) — a bare "1" or
+   "the first one" in reply to a person pick always resolves that pick, never reaches the
+   agent.
+2. `tryAgentRoute` (`chatAssistant.service.js`) calls `tryAgentTurn` (`agent/gate.js`) — the
+   real gate. In order: the `CHATBOT_AGENT` flag, then `isAgentTurn(lastUserMsg, memDoc)`
+   (skipped when the caller already routed here via `routerPicked`), then `checkAccess`
+   (`checkToolAccess('fetch_jobs', user)`), then `hasPendingPick(lastUserMsg, memDoc)` —
+   which checks the **job**, **title**, and **entity** (user-vs-role) disambiguation readers
+   (`readPendingJob`, `readPendingTitle`, `readPendingEntity`) plus a "what about jobs"
+   switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of these being open skips the agent for
+   this turn. The whole gate runs in one `try/catch`; a thrown error also skips the agent.
+3. Only past all of that does `tryAgentTurn` call `runAgent(...)` (`agent/runAgent.js`).
+4. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
    permission-filtered so the model never sees a tool the user can't call.
-4. `runAgent` loops `llm.step(...)` (`agent/llm.js`, the OpenAI Responses API) up to
+5. `runAgent` loops `llm.step(...)` (`agent/llm.js`, the OpenAI Responses API) up to
    `CHATBOT_AGENT_MAX_STEPS` times: each step may return tool calls, which the registry's
-   `execute(name, args)` runs, or a final text answer.
-5. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
+   `execute(name, args)` runs — capped at `MAX_CALLS_PER_STEP = 8` per step; any call beyond
+   the first 8 gets a canned `{"error":"too many calls in one step"}` output instead of
+   actually running — or a final text answer.
+6. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
    the facts are merged and passed to `enforceCounts` so every number in the reply traces
    back to a tool result from this turn.
-6. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; the **caller** persists
+7. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; `tryAgentTurn` persists
    `ledgerEntry` onto `ConversationMemory.agentLedger` via `appendAgentLedger` — `runAgent`
    itself never writes to the DB.
-7. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, an
-   empty final reply — makes `runAgent` return `null`, and the caller falls through to the
-   legacy pipeline. Sage never goes dark because of the agent.
+8. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, the
+   same tool failing twice, or an empty final reply that's still empty after one
+   `tool_choice:'none'` retry — makes `runAgent` return `null`, and the caller falls through
+   to the legacy pipeline. Sage never goes dark because of the agent.
 
 ```
-service.js --isAgentTurn--> runAgent --getAgentTools--> llm.step (loop) --tool calls--> registry.execute
-    ^                                                                                          |
-    |<--------------------------- null (handoff/error/empty) ---------------------------------|
+service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
+                                       flag -> isAgentTurn -> checkAccess -> hasPendingPick(job/title/entity)
+                                                                                  |
+                                                                                  v
+                                                        runAgent --getAgentTools--> llm.step (loop, <=8 calls/step) --> registry.execute
+    ^                                                                                                                          |
+    |<----------------------------------- null (gate skip / handoff / error / empty) ----------------------------------------|
     |
     +--> legacy pipeline (fallback)
 ```
@@ -58,7 +72,7 @@ import { MY_DOMAIN_ACCESS, myDomainScope } from './common.js';
 
 export default defineTool({
   name: 'count_widgets',           // must match /^[a-z][a-z0-9_]{2,63}$/, unique across ALL domains
-  domain: 'widgets',               // groups instructions + schemas; drives §7's find_tools upgrade later
+  domain: 'widgets',               // groups instructions + schemas; drives the find_tools/allowed_tools upgrade path (see Known limits below)
   kind: 'read',                    // 'read' runs in the loop; 'write' is refused by the loop (see below)
   description: 'Count widgets the user can see. Use for "how many widgets…".', // the MODEL reads this — be specific about when to call it
   input: Joi.object({
@@ -66,7 +80,9 @@ export default defineTool({
   }),
   // { anyOf: [...] } (>=1 permission string) or { note: '...' } when a handler
   // already enforces its own check — same shape as toolAccess.js TOOL_ACCESS entries.
-  access: { anyOf: ['widgets.read'] },
+  // Co-locate it as a constant in common.js (like jobs' JOBS_ACCESS) so every tool in
+  // the domain shares one definition.
+  access: MY_DOMAIN_ACCESS,
   async execute({ filters } = {}, ctx) {
     // ctx = { user, requestId, deps } — no chat objects (registry.js is chat-agnostic).
     const { Widget, visibilityFilter } = await myDomainScope(ctx);
@@ -142,6 +158,16 @@ model with the real registry and real loop, but fake tool executors (no DB), and
 tool-pick accuracy + latency. Add at least one case for every new tool. Run it before
 merging tool changes — it costs real tokens, so it isn't in unit test CI.
 
+`expect.tools` is the exact set of tool names expected (order-independent, one call per
+tool). By default a case fails if the actual call count exceeds `expect.tools.length` —
+add an optional `expect.maxCalls` to raise that ceiling for a case that legitimately needs
+more calls than distinct tools (e.g. two calls to `count_jobs` to compare two filters):
+
+```json
+{ "id": "compare-two-searches", "question": "how many react jobs vs how many vue jobs?",
+  "expect": { "tools": ["count_jobs"], "maxCalls": 2 } }
+```
+
 ### 4. Register the test file (3-step trap)
 
 A new `*.test.js` under `agent/__tests__/` or `agent/tools/<domain>/__tests__/` is already
@@ -179,14 +205,23 @@ turn was a recent agent turn — see `hasRecentAgentTurn`).
   `registry.execute` returns an error ("write tools require confirmation") if the loop ever
   tries to run one. The confirm-first flow (`POST /v1/chat-assistant/actions/:key/confirm`)
   is not built yet — this repo has the contract, not the implementation.
-- **Agent failure never means a dead chat.** Handoff, a thrown error, an empty final reply,
-  or the same tool failing twice in one turn all make `runAgent` return `null`; the caller
+- **Agent failure never means a dead chat.** Handoff, a thrown error, or the same tool
+  failing twice in one turn all make `runAgent` return `null` immediately. An empty final
+  reply gets one retry first — `runAgent.js` re-asks with `tool_choice:'none'` on the same
+  input — and only returns `null` if that retry is *also* empty. Either way, the caller
   always falls back to the legacy pipeline.
-- **The agent never runs while a person/job/title pick is pending.** `chatAssistant.service.js`
-  checks for an open disambiguation (person, job, or title) before it ever reaches
-  `isAgentTurn`/`tryAgentRoute`; pick handlers keep precedence so a bare "1" or "the first
-  one" always resolves the pending pick instead of being handed to the loop as a fresh
-  question.
+- **Per-step tool-call cap.** `runAgent.js`'s `MAX_CALLS_PER_STEP = 8`: the model can emit
+  dozens of parallel calls in one step when its tools don't fit the question, so only the
+  first 8 actually run; the rest get a `{"error":"too many calls in one step"}` output so
+  every call still has a matching result and the model sees the cap was hit.
+- **The agent never runs while a pick is pending, but the check is split across two
+  places.** `chatAssistant.service.js` resolves an open **person** disambiguation
+  (`readPending`) before `tryAgentRoute` is even called. `agent/gate.js`'s `tryAgentTurn`
+  separately checks `hasPendingPick` — **job**, **title**, and **entity** (user-vs-role)
+  picks, plus the `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the *last* gate
+  condition, right before calling `runAgent` (after `isAgentTurn` and `checkAccess`, not
+  before). Either way, a bare "1" or "the first one" always resolves the open pick instead
+  of being handed to the loop as a fresh question.
 
 ## Context & memory
 
@@ -204,7 +239,7 @@ Per-step model input is `[stable prefix] + [turn context] + [history] + [this tu
 - **Tool ledger** — every agent turn's successful tool calls are summarized
   (`summarizeCalls`) and appended to `ConversationMemory.agentLedger`, capped to the last 6
   turns (`appendAgentLedger`). This is how a bare follow-up ("what about ai?") gets
-  resolved: the model sees `count_jobs({search:'ml'}) → total 12` in turn context and
+  resolved: the model sees `count_jobs({"search":"ml"}) → total 12` in turn context and
   re-calls with changed args — it never reuses a stale number from the ledger itself
   (`BASE_INSTRUCTIONS` says so explicitly).
 - **This turn's tool items** grow within the loop (function calls + outputs). If the
@@ -250,6 +285,7 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   `output_text` once the Responses API call resolves. The legacy pipeline's streaming path
   is untouched.
 - **Legacy domains still route through the old pipeline** until migrated one at a time.
-  Order: employees → candidates/offers → attendance/leave → interviews/tasks/projects →
-  analytics → knowledge base. `jobs` (this repo) is the only migrated domain so far;
-  `gate.js` only recognizes job nouns accordingly.
+  Order: jobs → employees/people → candidates/applications/placements/offers →
+  attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
+  knowledge base/roles. `jobs` is the only migrated domain so far; `gate.js` only recognizes
+  job nouns accordingly.
