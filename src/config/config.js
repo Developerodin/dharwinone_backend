@@ -336,6 +336,26 @@ const envVarsSchema = Joi.object()
 
     // Chatbot — two-stage pipeline (classifier + scoped fetcher)
     CHATBOT_REASONING_EFFORT: Joi.string().valid('none', 'low', 'medium', 'high').default('none').description("Reasoning effort for Sage's reply-writing calls (reasoning models only). The tool router always runs at none: chat completions rejects function tools with any other effort."),
+    CHATBOT_AGENT: Joi.boolean()
+      .truthy('true', '1')
+      .falsy('false', '0')
+      .default(true)
+      .description('Enable Sage tool-calling agent loop (vs deterministic routing)'),
+    CHATBOT_AGENT_MAX_STEPS: Joi.number()
+      .integer()
+      .min(1)
+      .default(5)
+      .description('Max tool-call steps per Sage agent loop turn'),
+    CHATBOT_AGENT_TOOL_TIMEOUT_MS: Joi.number()
+      .integer()
+      .min(0)
+      .default(8000)
+      .description('Per-tool-call timeout (ms) for Sage agent loop tool execution'),
+    CHATBOT_AGENT_INPUT_BUDGET: Joi.number()
+      .integer()
+      .min(0)
+      .default(60000)
+      .description('Max input characters budgeted per Sage agent loop turn'),
     CHATBOT_MODEL: Joi.string().required().description('OpenAI model for Sage (router, replies, memory, role classifier). No default: every environment sets it in .env.'),
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
     CHATBOT_ENTITY_QUERY_EMPLOYEES: Joi.boolean()
@@ -839,6 +859,13 @@ const config = {
     entityQueryEmployees: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES,
     entityQueryEmployeesPercent: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT,
     queryAuditDebug: envVars.CHATBOT_QUERY_AUDIT_DEBUG,
+    /** Sage tool-calling agent loop knobs (see .superpowers/sdd/2026-09-28-sage-agent-loop). */
+    agent: {
+      enabled: envVars.CHATBOT_AGENT,
+      maxSteps: envVars.CHATBOT_AGENT_MAX_STEPS,
+      toolTimeoutMs: envVars.CHATBOT_AGENT_TOOL_TIMEOUT_MS,
+      inputBudget: envVars.CHATBOT_AGENT_INPUT_BUDGET,
+    },
   },
   ai: {
     summaryModel: envVars.OPENAI_MODEL_SUMMARY,
