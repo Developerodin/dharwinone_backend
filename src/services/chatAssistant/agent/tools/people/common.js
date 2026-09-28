@@ -1,8 +1,10 @@
+import mongoose from 'mongoose';
 import UserModel from '../../../../../models/user.model.js';
 import RoleModel, { slugifyRole } from '../../../../../models/role.model.js';
 import {
   buildUserListMongoFilter as realBuildUserListMongoFilter,
   getUserByIdForRequester as realGetUserByIdForRequester,
+  queryUsers as realQueryUsers,
 } from '../../../../user.service.js';
 import { queryRoles as realQueryRoles } from '../../../../role.service.js';
 import { resolvePersonProfile as realResolvePersonProfile } from '../../../personProfile/index.js';
@@ -46,6 +48,7 @@ export function peopleDeps(ctx) {
     Role: deps.Role ?? RoleModel,
     buildUserListMongoFilter: deps.buildUserListMongoFilter ?? realBuildUserListMongoFilter,
     getUserByIdForRequester: deps.getUserByIdForRequester ?? realGetUserByIdForRequester,
+    queryUsers: deps.queryUsers ?? realQueryUsers,
     resolvePersonProfile: deps.resolvePersonProfile ?? realResolvePersonProfile,
     resolveRowScope: deps.resolveRowScope ?? realResolveRowScope,
     viewerSeesHiddenUsers: deps.viewerSeesHiddenUsers ?? realViewerSeesHiddenUsers,
@@ -135,6 +138,11 @@ export async function buildUserMongoFilter(rawFilters, { groupBy, user, deps } =
     ...(status !== 'all' ? { status } : {}),
   };
   const mongoFilter = { ...(await deps.buildUserListMongoFilter(svcFilter, user)), ...EXCLUDE_PLATFORM_SUPER };
-  if (roleIds.length) mongoFilter.roleIds = { $in: roleIds };
+  // Cast to ObjectId here, not left as the strings resolveRoleNames returns:
+  // countDocuments/find cast a filter automatically, but User.aggregate's
+  // $match does not (same class of bug as the recorded "pipeline updates skip
+  // Mongoose cast" incident) — count_users' groupBy path would silently match
+  // zero documents on a role-filtered aggregate otherwise.
+  if (roleIds.length) mongoFilter.roleIds = { $in: roleIds.map((id) => new mongoose.Types.ObjectId(id)) };
   return { mongoFilter, filtersApplied };
 }

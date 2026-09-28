@@ -11,7 +11,7 @@ export default defineTool({
     'Sales Agent do" / "what permissions does X role have" — not user headcounts, which is count_users.',
   input: Joi.object({
     name: Joi.string().min(1).required()
-      .description('Role name, or part of it — matches name, alias, or a former name.'),
+      .description('Role name — exact match against its name, alias, or a former name (no partial match).'),
   }),
   access: ROLES_ACCESS,
   async execute({ name } = {}, ctx) {

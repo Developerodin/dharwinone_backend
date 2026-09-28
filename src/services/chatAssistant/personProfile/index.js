@@ -25,18 +25,21 @@ function realLoadUserById(id) {
  * @param {object} a.viewer           req.user
  * @param {boolean} [a.impersonating] true when req.impersonation is present
  * @param {any} a.adminId
+ * @param {boolean} [a.persist] false skips writePending/writeCurrentPerson entirely
+ *   (a read-only caller, e.g. Sage's get_user tool — see toolAccess.js). Defaults
+ *   to true, so every existing caller keeps writing exactly as before.
  * @param {object} [a.deps]           injection seam for tests
  */
 export async function resolvePersonProfile({
-  person, userId = null, depth = 'brief', viewer, impersonating = false, adminId, deps = {},
+  person, userId = null, depth = 'brief', viewer, impersonating = false, adminId, persist = true, deps = {},
 }) {
   const resolveEntity = deps.resolveUserEntity ?? realResolve;
   const permCtxOf     = deps.getUserPermissionContext ?? realPermCtx;
   const nameTagger    = deps.tagRoleDisplayNames ?? realNames;
   const slugTagger    = deps.tagRoleSlugs ?? realSlugs;
   const pickProviders = deps.selectProviders ?? realSelect;
-  const savePending   = deps.writePending ?? realWritePending;
-  const saveCurrent   = deps.writeCurrentPerson ?? realWriteCurrent;
+  const savePending   = persist ? (deps.writePending ?? realWritePending) : async () => {};
+  const saveCurrent   = persist ? (deps.writeCurrentPerson ?? realWriteCurrent) : async () => {};
   const loadUser      = deps.loadUserById ?? realLoadUserById;
   const viewerId      = viewer?.id ?? viewer?._id;
 
@@ -79,18 +82,13 @@ export async function resolvePersonProfile({
 
   const canReadAny = READ_NAMESPACES.some((ns) =>
     hasApiPermissionFromContext(permissions, platformSuperUser, `${ns}.read`));
-  if (!canReadAny && !isSelfTarget) {
-    // Additive: `target` is already resolved at this point on both the userId
-    // and person paths. A caller whose tool-level gate is broader than
-    // READ_NAMESPACES (e.g. Sage's get_user, reachable via users.read aliases
-    // that don't grant employees/candidates/students/mentors/recruiters/agents
-    // .read) can still confirm who this is without seeing any profile section.
-    // Every existing caller only branches on `kind`, so this is additive.
-    return {
-      kind: 'notAuthorized',
-      identity: { userId: target.userId, name: target.name, email: target.email ?? null },
-    };
-  }
+  // Deliberately no identity/name/email on this branch: the legacy
+  // resolve_person_profile tool (chatAssistant.service.js, no `anyOf` access
+  // gate — any Sage user can call it) forwards this object's fields straight
+  // into the model's context. Any caller that already knows who the target is
+  // (e.g. Sage's get_user tool) must build its own scalar identity from its
+  // own requester-scoped lookup, not from here (CONTRACT.md Ruling R10).
+  if (!canReadAny && !isSelfTarget) return { kind: 'notAuthorized' };
 
   const slugMap = await slugTagger(target.roleIds || []);
   const roleSlugs = [...slugMap.values()];

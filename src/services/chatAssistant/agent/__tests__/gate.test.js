@@ -29,6 +29,10 @@ describe('isAgentTurn', () => {
     assert.equal(isAgentTurn('who is on leave today', { agentLedger: [] }, NOW), false);
     assert.equal(isAgentTurn("show me today's attendance summary", {}, NOW), false);
   });
+
+  it('pins the RBAC-phrasing behavior change: "list user roles and permissions" now matches the people domain (review fix round 1, m-3)', () => {
+    assert.equal(isAgentTurn('list user roles and permissions', {}, NOW), true);
+  });
 });
 
 describe('hasRecentAgentTurn', () => {

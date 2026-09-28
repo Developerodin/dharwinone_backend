@@ -22,17 +22,33 @@ const instructions = [
 // Noun test for this domain's turns — mirrors gate.js's job-noun test (README
 // §"Widen the gate for a new domain"). A false positive costs one wasted agent
 // attempt; a false negative leaves the turn on the legacy pipeline, so this
-// errs broad rather than narrow.
-const USER_ACCOUNT_RE =
-  /\b(users?|user\s*accounts?|accounts?|logins?|log[\s-]?ins?|sign[\s-]?ins?|portal\s*access)\b/i;
-const ROLE_NOUN_RE = /\b(roles?|permissions?)\b/i;
-// "who is <Name>" / "who's <Name>" — a bare "who is" is too generic on its own
-// (it also opens "who is on leave today", an attendance question, and plenty
-// of other non-people turns), so this only fires when the next word looks like
-// a proper name (capitalized in the ORIGINAL text — case-sensitive on purpose).
-const WHO_IS_NAME_RE = /\bwho(?:'s|\s+(?:is|are|has|holds))\s+[A-Z]/;
-const ROLE_HEADCOUNT_RE =
-  /\bhow many\b.{0,40}\b(admins?|administrators?|recruiters?|sales\s*agents?|agents?)\b/i;
+// errs broad by default — but a few specific phrasings belong clearly enough
+// to OTHER, not-yet-migrated flows (login-activity reports, the
+// Employees/Candidates agent-assignment flow, everyday "permission to <do
+// something>") that matching them would likely produce a wrong answer rather
+// than a safe handoff, so those are excluded explicitly (review fix round 1, I-4).
+const USER_ACCOUNT_RE = /\b(users?|portal\s*access)\b/i;
+// "logged in"/"login history"/"login activity" are activity reports —
+// count_users/list_users have no login-date filter and would answer with the
+// wrong number (an active-user count) instead of handing off.
+const LOGIN_ACTIVITY_RE = /\blogged\s+in\b|\blogin\s+(?:history|activity)\b/i;
+// Bare "role"/"roles" is specific enough to keep matching on its own ("what
+// roles exist", "who has the recruiter role"). Bare "permission(s)" is not —
+// it collides with everyday phrases ("permission to take leave") — so it only
+// counts in role/RBAC context.
+const ROLE_NOUN_RE = /\broles?\b/i;
+const ROLE_PERMISSIONS_RE = /\b(?:role\s+permissions?|access\s+permissions?|permissions?\s+(?:of|for|does)\b)/i;
+// "what can a/an/the <role> do" — the brief's own get_role routing example.
+const ROLE_CAPABILITY_RE = /\bwhat can (?:a|an|the)\s+[\w\s]+?\s+do\b/i;
+// "who is <Name>" / "who's <Name>" — "who" is case-insensitive (a sentence-start
+// "Who" must still match), but the following word must look like a proper name
+// (capitalized in the ORIGINAL text — case-sensitive on purpose), so this
+// doesn't open "who is on leave today" or similar non-people turns.
+const WHO_IS_NAME_RE = /\b[Ww]ho(?:'s|\s+(?:is|are|has|holds))\s+[A-Z]/;
+// Bare "agent" collides with the Employees/Candidates agent-assignment flow
+// ("how many candidates are assigned to agent Rahul") — only "sales agent"
+// and the actual admin/recruiter role words count as a headcount noun here.
+const ROLE_HEADCOUNT_RE = /\bhow many\b.{0,40}\b(admins?|administrators?|recruiters?|sales\s*agents?)\b/i;
 
 /**
  * True for turns the people domain's tools can plausibly answer. Used by the
@@ -43,7 +59,12 @@ const ROLE_HEADCOUNT_RE =
  */
 export function matchesTurn(text) {
   const t = String(text || '');
-  return USER_ACCOUNT_RE.test(t) || ROLE_NOUN_RE.test(t) || WHO_IS_NAME_RE.test(t) || ROLE_HEADCOUNT_RE.test(t);
+  return (USER_ACCOUNT_RE.test(t) && !LOGIN_ACTIVITY_RE.test(t))
+    || ROLE_NOUN_RE.test(t)
+    || ROLE_PERMISSIONS_RE.test(t)
+    || ROLE_CAPABILITY_RE.test(t)
+    || WHO_IS_NAME_RE.test(t)
+    || ROLE_HEADCOUNT_RE.test(t);
 }
 
 export default {

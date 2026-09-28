@@ -5,6 +5,8 @@ import {
   OBJECT_ID_RE, PEOPLE_PROFILE_ACCESS, peopleScope, peopleDeps, adminIdOf, peopleCountFacts,
 } from './common.js';
 
+const MAX_NAME_MATCHES = 10;
+
 /**
  * Fresh, direct User.roleIds -> Role lookup — deliberately NOT
  * profile.identity.roleSlugs/roles (those come from roleRegistry's active-only,
@@ -22,6 +24,11 @@ async function loadRoleDefs(userId, deps) {
   return roleDocs.map(({ name, slug, aliases, status, permissions }) => ({
     name, slug, aliases, status, permissions,
   }));
+}
+
+/** Safe scalar fields only — never spreads a raw doc (password/failedLoginCount/loginLockedUntil). */
+function scalarIdentity(doc) {
+  return { userId: String(doc._id ?? doc.id), name: doc.name ?? null, email: doc.email ?? null };
 }
 
 export default defineTool({
@@ -42,33 +49,49 @@ export default defineTool({
     const deps = peopleDeps(ctx);
     const adminId = adminIdOf(user);
 
-    let targetId = null;
+    // Resolve to exactly one target user ourselves first, via requester-scoped
+    // reads only (getUserByIdForRequester / queryUsers) — never resolvePersonProfile's
+    // own free-text resolver, which writes a pending-person disambiguation pick
+    // on ambiguity (review fix round 1, I-2: get_user must perform no DB writes).
+    // This also gives us a safe scalar identity (name/email/userId) up front, so
+    // the notAuthorized branch below never has to trust resolvePersonProfile for
+    // identity (review fix round 1, C-1).
+    let targetDoc;
     if (id) {
       // A malformed id would throw a CastError in getUserByIdForRequester; treat
       // it as not found, same convention as get_job's jobId handling.
       if (!OBJECT_ID_RE.test(id)) return { matches: [] };
       try {
         // Ruling R6: go through the same hidden/platform-super check GET
-        // /users/:userId uses before ever calling resolvePersonProfile with this
-        // id — its own userId-path loader skips that check.
-        await deps.getUserByIdForRequester(id, user);
+        // /users/:userId uses, before this id is used for anything else.
+        targetDoc = await deps.getUserByIdForRequester(id, user);
       } catch {
         return { matches: [] };
       }
-      targetId = id;
+    } else if (name) {
+      const page = await deps.queryUsers({ search: name }, { limit: MAX_NAME_MATCHES, page: 1 }, user);
+      const results = page?.results || [];
+      if (results.length === 0) return { matches: [] };
+      if (results.length > 1) {
+        return { matches: results.map((r) => scalarIdentity(r)) };
+      }
+      [targetDoc] = results;
+    } else {
+      return { matches: [] };
     }
-    if (!targetId && !name) return { matches: [] };
+
+    const identity = scalarIdentity(targetDoc);
 
     const profile = await deps.resolvePersonProfile({
-      ...(targetId ? { userId: targetId } : { person: name }),
+      userId: identity.userId,
       depth: 'full',
       viewer: user,
       impersonating: !!user.__impersonating,
       adminId,
+      persist: false, // I-2: get_user must perform no DB writes (no pending pick, no "current person" rebind)
       deps: ctx.deps,
     });
 
-    if (profile.kind === 'ambiguous') return { matches: profile.matches };
     if (profile.kind === 'notFound') return { matches: [] };
     if (profile.kind === 'unavailable') return { error: 'unavailable' };
 
@@ -79,11 +102,15 @@ export default defineTool({
       // between "can call this tool" and "can read a profile section", not a
       // bug to route around: never abort with an error (the caller asked a
       // legitimate question) and never bypass the check either. Fall back to
-      // the user scalar identity + full role definitions only.
-      const roles = await loadRoleDefs(profile.identity.userId, deps);
+      // the SAFE scalar identity we already resolved ourselves above (C-1 —
+      // resolvePersonProfile's notAuthorized result carries no identity, on
+      // purpose: the legacy resolve_person_profile tool has no access gate of
+      // its own and would otherwise leak name/email through it) + full role
+      // definitions.
+      const roles = await loadRoleDefs(identity.userId, deps);
       return {
         kind: 'unique',
-        identity: { ...profile.identity, roles: roles.map((r) => r.name) },
+        identity: { ...identity, roles: roles.map((r) => r.name) },
         roles,
         profiles: null,
         profileNote: 'not permitted',
@@ -91,21 +118,41 @@ export default defineTool({
     }
 
     // profile.kind === 'unique'
-    const roles = await loadRoleDefs(profile.identity.userId, deps);
+    const roles = await loadRoleDefs(identity.userId, deps);
 
     let profiles = profile.profiles;
+    let { availableSections } = profile;
     // Ruling R7/R8: the registry's automatic rowScope:'person' guard doesn't
     // recognize this result shape, so the Employees/Candidates row-scope check
     // must be hand-implemented here. Only employee/candidate sections are
     // gated — student/mentor/recruiter/agent/administrator have no ownership
     // scoping concept anywhere in this codebase to mirror.
     const allowedOwners = await deps.resolveRowScope(user);
-    if (allowedOwners && !allowedOwners.has(String(profile.identity.userId))) {
+    let profileNote;
+    if (allowedOwners && !allowedOwners.has(identity.userId)) {
       const { employee, candidate, ...rest } = profiles;
+      if (employee || candidate) profileNote = 'employee/candidate profile not visible to you';
       profiles = rest;
+      // availableSections is a flat union of section names across every
+      // provider (fieldProjector's section keys — 'identity', 'employment', …
+      // — are shared, not role-prefixed), so it can't be filtered by string
+      // match against 'employee'/'candidate'. Recompute it from the REMAINING
+      // providers' own per-provider `.sections` instead — correct even when a
+      // section name (e.g. 'identity') is also contributed by a provider that
+      // wasn't stripped.
+      if (profileNote) {
+        availableSections = [...new Set(Object.values(profiles).flatMap((p) => p?.sections || []))];
+      }
     }
 
-    return { kind: 'unique', identity: profile.identity, roles, profiles, availableSections: profile.availableSections };
+    return {
+      kind: 'unique',
+      identity: profile.identity,
+      roles,
+      profiles,
+      availableSections,
+      ...(profileNote ? { profileNote } : {}),
+    };
   },
   render(result) {
     if (result?.kind !== 'unique') return null;

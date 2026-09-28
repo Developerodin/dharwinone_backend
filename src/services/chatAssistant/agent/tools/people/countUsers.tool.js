@@ -37,7 +37,8 @@ export default defineTool({
       .description(
         'Break the count down by this field. groupBy:role counts a user once per role they hold (a user ' +
           'with 2 roles is counted in both groups — say so). A user with NO role is excluded from every ' +
-          'group (unlike the ungrouped total).'
+          'group (unlike the ungrouped total). With groupBy:role, total is the distinct user count, not ' +
+          'the sum of the groups.'
       ),
   }),
   access: PEOPLE_ACCESS,
@@ -60,14 +61,21 @@ export default defineTool({
 
     // groupBy === 'role' — $unwind drops users with an empty roleIds array, so
     // they are silently excluded from every group (documented on the input above).
-    const rows = await deps.User.aggregate([
-      { $match: mongoFilter },
-      { $unwind: '$roleIds' },
-      { $group: { _id: '$roleIds', count: { $sum: 1 } } },
+    // A user with 2 roles is counted in both role groups, so the sum of group
+    // counts overstates the real user total (review fix round 1, I-3): `total`
+    // here is a fresh distinct-user count on the same filter, not the sum.
+    const [totalUsers, rows] = await Promise.all([
+      deps.User.countDocuments(mongoFilter),
+      deps.User.aggregate([
+        { $match: mongoFilter },
+        { $unwind: '$roleIds' },
+        { $group: { _id: '$roleIds', count: { $sum: 1 } } },
+      ]),
     ]);
     const names = await roleNamesForIds(rows.map((r) => r._id), { Role: deps.Role });
     const named = rows.map((r) => ({ _id: names.get(String(r._id)) ?? String(r._id), count: r.count }));
-    return { ...shapeGroups(named), groupBy, filtersApplied };
+    const shaped = shapeGroups(named);
+    return { ...shaped, total: totalUsers, assignmentCount: shaped.total, groupBy, filtersApplied };
   },
   render(result) {
     if (!result?.groups) {
@@ -75,11 +83,14 @@ export default defineTool({
     }
     const rows = result.groups.map((g) => ({ value: g.value, count: String(g.count) }));
     if (result.otherCount) rows.push({ value: 'Other', count: String(result.otherCount) });
+    const overlapNote = result.groupBy === 'role'
+      ? ' — a user with several roles appears in each role\'s row'
+      : '';
     const block = {
       type: 'table',
       id: 'user-breakdown',
       tableType: 'user-breakdown',
-      title: `Users by ${GROUP_LABELS[result.groupBy].toLowerCase()} (${result.total})`,
+      title: `Users by ${GROUP_LABELS[result.groupBy].toLowerCase()} (${result.total})${overlapNote}`,
       columns: [
         { key: 'value', label: GROUP_LABELS[result.groupBy], priority: 'primary' },
         { key: 'count', label: 'Users', priority: 'primary', format: 'number' },

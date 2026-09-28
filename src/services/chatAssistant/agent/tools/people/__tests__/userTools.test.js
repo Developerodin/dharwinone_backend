@@ -1,11 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
 import countUsers from '../countUsers.tool.js';
 import listUsers from '../listUsers.tool.js';
 import getUser from '../getUser.tool.js';
 import { buildUserMongoFilter, PEOPLE_ACCESS, PEOPLE_PROFILE_ACCESS } from '../common.js';
 import { tagRoleSlugs, bustRoleRegistry } from '../../../../roleRegistry.js';
 import { selectProviders } from '../../../../personProfile/selectProviders.js';
+import { resolvePersonProfile } from '../../../../personProfile/index.js';
+
+const ROLE_ID_1 = '64b7f0c2a1b2c3d4e5f60001';
+const ROLE_ID_2 = '64b7f0c2a1b2c3d4e5f60002';
 
 /** Chainable query stub: every method returns itself except the terminal lean(). */
 function chainable(result) {
@@ -74,6 +79,7 @@ function ctxFor(overrides = {}) {
       Role: fakeRole().Role,
       buildUserListMongoFilter: async (filter) => ({ ...filter }),
       getUserByIdForRequester: async () => ({}),
+      queryUsers: async () => ({ results: [] }),
       resolvePersonProfile: async () => ({ kind: 'notFound' }),
       resolveRowScope: async () => null,
       viewerSeesHiddenUsers: () => false,
@@ -127,9 +133,9 @@ describe('buildUserMongoFilter (CONTRACT.md Rulings R1-R5)', () => {
     assert.deepEqual(svcFilterSeen[0].education, ['MBA']);
   });
 
-  it('resolves a role filter to roleIds and never sets buildUserListMongoFilter\'s own role key', async () => {
+  it('resolves a role filter to roleIds, cast to ObjectId (I-1), and never sets buildUserListMongoFilter\'s own role key', async () => {
     const { Role } = fakeRole([
-      { _id: 'r1', name: 'Administrator', slug: 'administrator', aliases: [], previousNames: [], status: 'active' },
+      { _id: ROLE_ID_1, name: 'Administrator', slug: 'administrator', aliases: [], previousNames: [], status: 'active' },
     ]);
     const svcFilterSeen = [];
     const deps = {
@@ -141,12 +147,14 @@ describe('buildUserMongoFilter (CONTRACT.md Rulings R1-R5)', () => {
     };
     const { mongoFilter } = await buildUserMongoFilter({ role: 'Administrator' }, { user: VIEWER, deps });
     assert.equal('role' in svcFilterSeen[0], false);
-    assert.deepEqual(mongoFilter.roleIds, { $in: ['r1'] });
+    assert.equal(mongoFilter.roleIds.$in.length, 1);
+    assert.ok(mongoFilter.roleIds.$in[0] instanceof mongoose.Types.ObjectId, 'roleIds.$in must hold ObjectId instances, not strings');
+    assert.equal(mongoFilter.roleIds.$in[0].toString(), ROLE_ID_1);
   });
 
   it('throws a tool error listing valid role names for an unknown role', async () => {
     const { Role } = fakeRole([
-      { _id: 'r1', name: 'Administrator', slug: 'administrator', aliases: [], previousNames: [], status: 'active' },
+      { _id: ROLE_ID_1, name: 'Administrator', slug: 'administrator', aliases: [], previousNames: [], status: 'active' },
     ]);
     const deps = { Role, buildUserListMongoFilter: async (f) => f };
     await assert.rejects(
@@ -175,12 +183,27 @@ describe('count_users', () => {
     assert.equal(out.filtersApplied.status, 'all');
   });
 
-  it('groupBy role resolves role ids to names via one batched lookup', async () => {
+  it('groupBy role: total is a distinct user count, not the sum of groups (I-3)', async () => {
     const { Role } = fakeRole([{ _id: 'r1', name: 'Recruiter' }, { _id: 'r2', name: 'Administrator' }]);
-    const { User, calls } = fakeUser({ aggregateResults: [{ _id: 'r1', count: 4 }, { _id: 'r2', count: 2 }] });
+    // 5 distinct active users, 12 of them (well, some) hold 2 roles — group
+    // counts sum to 6 (4 + 2), but only 5 distinct users match the filter.
+    const { User, calls } = fakeUser({ count: 5, aggregateResults: [{ _id: 'r1', count: 4 }, { _id: 'r2', count: 2 }] });
     const out = await countUsers.execute({ groupBy: 'role' }, ctxFor({ User, Role }));
     assert.deepEqual(calls.aggregate[0][1], { $unwind: '$roleIds' });
     assert.deepEqual(out.groups, [{ value: 'Recruiter', count: 4 }, { value: 'Administrator', count: 2 }]);
+    assert.equal(out.total, 5, 'total must be the distinct countDocuments result, not the group sum');
+    assert.equal(out.assignmentCount, 6, 'the old sum-of-groups number is kept, separately labeled');
+    assert.equal(calls.countDocuments.length, 1);
+  });
+
+  it('groupBy role + a role filter: the aggregate $match holds ObjectIds, not strings (I-1)', async () => {
+    const { Role } = fakeRole([
+      { _id: ROLE_ID_1, name: 'Recruiter', slug: 'recruiter', aliases: [], previousNames: [], status: 'active' },
+    ]);
+    const { User, calls } = fakeUser({ count: 4, aggregateResults: [{ _id: ROLE_ID_1, count: 4 }] });
+    await countUsers.execute({ filters: { role: 'Recruiter' }, groupBy: 'status' }, ctxFor({ User, Role }));
+    const $match = calls.aggregate[0][0].$match;
+    assert.ok($match.roleIds.$in[0] instanceof mongoose.Types.ObjectId);
   });
 
   it('caps groups at 25 with otherCount', async () => {
@@ -213,6 +236,15 @@ describe('count_users', () => {
     const grouped = countUsers.render({ total: 5, groupBy: 'role', groups: [{ value: 'Recruiter', count: 5 }] });
     assert.equal(grouped.blocks[0].type, 'table');
     assert.deepEqual(grouped.facts.counts, []);
+  });
+
+  it('groupBy role render title notes that a user with several roles appears in each role\'s row (I-3)', () => {
+    const grouped = countUsers.render({
+      total: 5, assignmentCount: 6, groupBy: 'role', groups: [{ value: 'Recruiter', count: 4 }],
+    });
+    assert.match(grouped.blocks[0].title, /appears in each/);
+    const byStatus = countUsers.render({ total: 5, groupBy: 'status', groups: [{ value: 'active', count: 5 }] });
+    assert.doesNotMatch(byStatus.blocks[0].title, /appears in each/);
   });
 });
 
@@ -261,7 +293,10 @@ describe('list_users', () => {
 
 describe('get_user', () => {
   it('returns no matches for a malformed id without calling any service', async () => {
-    const ctx = ctxFor({ getUserByIdForRequester: async () => { throw new Error('must not be called'); } });
+    const ctx = ctxFor({
+      getUserByIdForRequester: async () => { throw new Error('must not be called'); },
+      queryUsers: async () => { throw new Error('must not be called'); },
+    });
     assert.deepEqual(await getUser.execute({ id: 'not-an-id' }, ctx), { matches: [] });
   });
 
@@ -273,12 +308,12 @@ describe('get_user', () => {
     assert.deepEqual(await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx), { matches: [] });
   });
 
-  it('CONTRACT.md Ruling R6 — id path goes through getUserByIdForRequester before calling resolvePersonProfile with userId', async () => {
+  it('id path: resolvePersonProfile is called with the requester-scoped userId and persist:false (I-2)', async () => {
     const calls = [];
     const ctx = ctxFor({
       getUserByIdForRequester: async (id) => {
         calls.push(['getUserByIdForRequester', id]);
-        return { _id: id };
+        return { _id: id, name: 'Priya', email: 'priya@x.com' };
       },
       resolvePersonProfile: async (args) => {
         calls.push(['resolvePersonProfile', args]);
@@ -288,77 +323,115 @@ describe('get_user', () => {
     await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(calls[0][0], 'getUserByIdForRequester');
     assert.equal(calls[1][1].userId, '64b7f0c2a1b2c3d4e5f60718');
+    assert.equal(calls[1][1].persist, false);
     assert.equal('person' in calls[1][1], false);
   });
 
-  it('the name path passes person, not userId', async () => {
-    let seen;
-    const ctx = ctxFor({ resolvePersonProfile: async (args) => { seen = args; return { kind: 'notFound' }; } });
-    await getUser.execute({ name: 'Priya' }, ctx);
-    assert.equal(seen.person, 'Priya');
-    assert.equal('userId' in seen, false);
+  it('name path: no queryUsers match returns matches:[] without calling resolvePersonProfile', async () => {
+    const ctx = ctxFor({
+      queryUsers: async () => ({ results: [] }),
+      resolvePersonProfile: async () => { throw new Error('must not be called'); },
+    });
+    assert.deepEqual(await getUser.execute({ name: 'Nobody' }, ctx), { matches: [] });
   });
 
-  it('forwards ambiguous / notFound / unavailable as-is', async () => {
-    const ambiguous = await getUser.execute(
-      { name: 'A' },
-      ctxFor({ resolvePersonProfile: async () => ({ kind: 'ambiguous', matches: [{ name: 'A1' }] }) })
-    );
-    assert.deepEqual(ambiguous, { matches: [{ name: 'A1' }] });
+  it('name path: more than one queryUsers match returns a scalar matches list without calling resolvePersonProfile', async () => {
+    const seenArgs = [];
+    const ctx = ctxFor({
+      queryUsers: async (filter, options, requester) => {
+        seenArgs.push({ filter, options, requester });
+        return { results: [{ _id: 'u1', name: 'Priya A', email: 'a@x.com' }, { _id: 'u2', name: 'Priya B', email: 'b@x.com' }] };
+      },
+      resolvePersonProfile: async () => { throw new Error('must not be called'); },
+    });
+    const out = await getUser.execute({ name: 'Priya' }, ctx);
+    assert.deepEqual(out, {
+      matches: [
+        { userId: 'u1', name: 'Priya A', email: 'a@x.com' },
+        { userId: 'u2', name: 'Priya B', email: 'b@x.com' },
+      ],
+    });
+    assert.equal(seenArgs[0].filter.search, 'Priya');
+    assert.equal(seenArgs[0].requester, VIEWER);
+  });
 
+  it('name path: exactly one queryUsers match resolves through resolvePersonProfile with that user\'s id', async () => {
+    const calls = [];
+    const ctx = ctxFor({
+      queryUsers: async () => ({ results: [{ _id: 'u1', name: 'Priya', email: 'p@x.com' }] }),
+      resolvePersonProfile: async (args) => {
+        calls.push(args);
+        return { kind: 'notFound' };
+      },
+    });
+    await getUser.execute({ name: 'Priya' }, ctx);
+    assert.equal(calls[0].userId, 'u1');
+    assert.equal(calls[0].persist, false);
+  });
+
+  it('forwards notFound / unavailable as-is', async () => {
     const notFound = await getUser.execute(
-      { name: 'nobody' },
-      ctxFor({ resolvePersonProfile: async () => ({ kind: 'notFound' }) })
+      { id: '64b7f0c2a1b2c3d4e5f60718' },
+      ctxFor({
+        getUserByIdForRequester: async (id) => ({ _id: id }),
+        resolvePersonProfile: async () => ({ kind: 'notFound' }),
+      })
     );
     assert.deepEqual(notFound, { matches: [] });
 
     const unavailable = await getUser.execute(
-      { name: 'x' },
-      ctxFor({ resolvePersonProfile: async () => ({ kind: 'unavailable' }) })
+      { id: '64b7f0c2a1b2c3d4e5f60718' },
+      ctxFor({
+        getUserByIdForRequester: async (id) => ({ _id: id }),
+        resolvePersonProfile: async () => ({ kind: 'unavailable' }),
+      })
     );
     assert.deepEqual(unavailable, { error: 'unavailable' });
   });
 
-  it('CONTRACT.md R10 — notAuthorized degrades to scalar + full role definitions, never an error, never a bypass', async () => {
-    const { Role } = fakeRole([{ _id: 'r1', name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: ['x'] }]);
+  it('C-1 — notAuthorized never carries identity from resolvePersonProfile; get_user builds it from its own requester-scoped lookup', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: ['x'] }]);
     const { User } = fakeUser();
-    User.findById = () => chainable({ roleIds: ['r1'] });
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
     const ctx = ctxFor({
       User,
       Role,
-      resolvePersonProfile: async () => ({
-        kind: 'notAuthorized',
-        identity: { userId: 'u1', name: 'Priya', email: 'priya@x.com' },
-      }),
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya', email: 'priya@x.com' }),
+      // The real resolvePersonProfile's notAuthorized branch carries no identity
+      // (reverted — see personProfile/index.js). Simulating that exact shape here.
+      resolvePersonProfile: async () => ({ kind: 'notAuthorized' }),
     });
-    const out = await getUser.execute({ name: 'Priya' }, ctx);
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(out.kind, 'unique');
     assert.equal(out.profiles, null);
     assert.equal(out.profileNote, 'not permitted');
+    assert.equal(out.identity.userId, '64b7f0c2a1b2c3d4e5f60718');
+    assert.equal(out.identity.name, 'Priya');
+    assert.equal(out.identity.email, 'priya@x.com');
     assert.deepEqual(out.roles.map((r) => r.name), ['Employee']);
-    assert.deepEqual(out.identity.roles, ['Employee']);
     assert.equal('error' in out, false);
   });
 
   it('unique: roles[] comes from a fresh User.roleIds -> Role lookup (active + inactive), not identity.roleSlugs', async () => {
     const { Role } = fakeRole([
-      { _id: 'r1', name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: ['employees.read'] },
-      { _id: 'r2', name: 'Old Inactive Role', slug: 'oldinactiverole', aliases: [], status: 'inactive', permissions: [] },
+      { _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: ['employees.read'] },
+      { _id: ROLE_ID_2, name: 'Old Inactive Role', slug: 'oldinactiverole', aliases: [], status: 'inactive', permissions: [] },
     ]);
     const { User } = fakeUser();
-    User.findById = () => chainable({ roleIds: ['r1', 'r2'] });
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1, ROLE_ID_2] });
     const ctx = ctxFor({
       User,
       Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya', email: 'p@x.com' }),
       resolvePersonProfile: async () => ({
         kind: 'unique',
-        identity: { userId: 'u1', name: 'Priya', email: 'p@x.com', roles: ['Employee'], roleSlugs: ['employee'] },
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', email: 'p@x.com', roles: ['Employee'], roleSlugs: ['employee'] },
         profiles: { employee: { fields: {}, visibleFields: [] }, student: { fields: {}, visibleFields: [] } },
-        availableSections: [],
+        availableSections: ['employee-identity', 'student-identity'],
       }),
       resolveRowScope: async () => new Set(['someone-else']),
     });
-    const out = await getUser.execute({ name: 'Priya' }, ctx);
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(out.kind, 'unique');
     assert.deepEqual(out.roles.map((r) => r.name).sort(), ['Employee', 'Old Inactive Role']);
     // Ruling R7/R8 — row scope strips employee/candidate only; student is untouched.
@@ -366,36 +439,126 @@ describe('get_user', () => {
     assert.equal('student' in out.profiles, true);
   });
 
-  it('unique: leaves profiles untouched when the viewer is in the allowed row-scope set, or scope is unrestricted (null)', async () => {
-    const { Role } = fakeRole([{ _id: 'r1', name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
+  it('m-1 — a stripped employee/candidate profile is dropped from availableSections too, with a profileNote; a section a remaining provider still contributes (e.g. "identity") stays listed', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
     const { User } = fakeUser();
-    User.findById = () => chainable({ roleIds: ['r1'] });
-
-    const scopedIn = await getUser.execute({ name: 'Priya' }, ctxFor({
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    const ctx = ctxFor({
       User,
       Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
       resolvePersonProfile: async () => ({
         kind: 'unique',
-        identity: { userId: 'u1', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
-        profiles: { employee: {} },
-        availableSections: [],
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
+        // fieldProjector's section keys ('identity', 'employment', …) are not
+        // role-prefixed and can be shared across providers — here both the
+        // (stripped) employee provider and the (kept) student provider
+        // contribute an 'identity' section.
+        profiles: {
+          employee: { fields: {}, visibleFields: ['name'], sections: ['identity', 'employment'] },
+          student: { fields: {}, visibleFields: ['name'], sections: ['identity'] },
+        },
+        availableSections: ['identity', 'employment'],
       }),
-      resolveRowScope: async () => new Set(['u1']),
+      resolveRowScope: async () => new Set(['someone-else']),
+    });
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal('employee' in out.profiles, false);
+    assert.ok('student' in out.profiles);
+    // 'employment' only ever came from employee (stripped) — gone. 'identity'
+    // is still contributed by student (kept) — stays.
+    assert.deepEqual(out.availableSections, ['identity']);
+    assert.equal(out.profileNote, 'employee/candidate profile not visible to you');
+  });
+
+  it('m-1 — no profileNote and availableSections untouched when nothing was stripped', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    const ctx = ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
+        profiles: { student: { fields: {}, visibleFields: ['name'], sections: ['identity'] } },
+        availableSections: ['identity'],
+      }),
+      // Row-scoped out, but there was never an employee/candidate section to strip.
+      resolveRowScope: async () => new Set(['someone-else']),
+    });
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal('profileNote' in out, false);
+    assert.deepEqual(out.availableSections, ['identity']);
+  });
+
+  it('unique: leaves profiles and availableSections untouched when the viewer is in the allowed row-scope set, or scope is unrestricted (null)', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+
+    const scopedIn = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
+        profiles: { employee: {} },
+        availableSections: ['employee-identity'],
+      }),
+      resolveRowScope: async () => new Set(['64b7f0c2a1b2c3d4e5f60718']),
     }));
     assert.ok('employee' in scopedIn.profiles);
+    assert.deepEqual(scopedIn.availableSections, ['employee-identity']);
+    assert.equal('profileNote' in scopedIn, false);
 
-    const unrestricted = await getUser.execute({ name: 'Priya' }, ctxFor({
+    const unrestricted = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctxFor({
       User,
       Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
       resolvePersonProfile: async () => ({
         kind: 'unique',
-        identity: { userId: 'u1', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Employee'], roleSlugs: ['employee'] },
         profiles: { employee: {} },
-        availableSections: [],
+        availableSections: ['employee-identity'],
       }),
       resolveRowScope: async () => null,
     }));
     assert.ok('employee' in unrestricted.profiles);
+  });
+
+  it('I-2 — performs no DB writes: the real resolvePersonProfile, called with persist:false, never invokes its writers', async () => {
+    const throwIfCalled = (label) => async () => { throw new Error(`must not call ${label} — get_user performs no DB writes`); };
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+
+    const ctx = {
+      user: VIEWER,
+      requestId: 'req-1',
+      deps: {
+        User,
+        Role,
+        getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya', email: 'priya@x.com' }),
+        resolveRowScope: async () => null,
+        // resolvePersonProfile itself is intentionally NOT stubbed here — peopleDeps
+        // falls back to the REAL implementation, exercised end to end with its own
+        // sub-dependencies (which get_user forwards unchanged via `deps: ctx.deps`).
+        getUserPermissionContext: async () => ({ isAdmin: false, permissions: new Set(['employees.read']) }),
+        tagRoleSlugs: async () => new Map([[ROLE_ID_1, 'employee']]),
+        tagRoleDisplayNames: async () => new Map([[ROLE_ID_1, 'Employee']]),
+        selectProviders: () => [],
+        loadUserById: async (id) => ({ _id: id, name: 'Priya', email: 'priya@x.com', roleIds: [ROLE_ID_1] }),
+        resolveUserEntity: throwIfCalled('resolveUserEntity (get_user never resolves by free text itself)'),
+        writePending: throwIfCalled('writePending'),
+        writeCurrentPerson: throwIfCalled('writeCurrentPerson'),
+      },
+    };
+
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal(out.kind, 'unique');
   });
 
   it('has users.read + person row-scope access', () => {
@@ -415,9 +578,53 @@ describe('get_user', () => {
   });
 });
 
+describe('personProfile.resolvePersonProfile — direct coverage of the C-1/I-2 fix', () => {
+  const NOT_AUTH_VIEWER = { id: 'viewer-1', roleIds: [] };
+
+  it('C-1 regression — the default notAuthorized result carries no identity', async () => {
+    const profile = await resolvePersonProfile({
+      person: 'Someone',
+      viewer: NOT_AUTH_VIEWER,
+      adminId: 'a1',
+      deps: {
+        resolveUserEntity: async () => ({
+          kind: 'unique',
+          match: { userId: 'p9', name: 'Someone', email: 'someone@x.com', roleIds: [] },
+        }),
+        getUserPermissionContext: async () => ({ isAdmin: false, permissions: new Set() }),
+      },
+    });
+    assert.deepEqual(profile, { kind: 'notAuthorized' });
+  });
+
+  it('I-2 — persist:false skips writePending/writeCurrentPerson; the default (unset) still writes', async () => {
+    const writeCalls = [];
+    const deps = {
+      resolveUserEntity: async () => ({
+        kind: 'unique',
+        match: { userId: 'p1', name: 'Abhishek', roleIds: ['r-emp'] },
+      }),
+      getUserPermissionContext: async () => ({ isAdmin: false, permissions: new Set(['employees.read']) }),
+      tagRoleDisplayNames: async () => new Map([['r-emp', 'Employee']]),
+      tagRoleSlugs: async () => new Map([['r-emp', 'employee']]),
+      selectProviders: () => [],
+      writePending: async () => { writeCalls.push('writePending'); },
+      writeCurrentPerson: async () => { writeCalls.push('writeCurrentPerson'); },
+    };
+
+    const noWrite = await resolvePersonProfile({ person: 'Abhishek', viewer: NOT_AUTH_VIEWER, adminId: 'a1', persist: false, deps });
+    assert.equal(noWrite.kind, 'unique');
+    assert.deepEqual(writeCalls, []);
+
+    const defaultWrite = await resolvePersonProfile({ person: 'Abhishek', viewer: NOT_AUTH_VIEWER, adminId: 'a1', deps });
+    assert.equal(defaultWrite.kind, 'unique');
+    assert.deepEqual(writeCalls, ['writeCurrentPerson']);
+  });
+});
+
 describe('CONTRACT.md R11 — Employee/Candidate provider selection is id-based, not name-based', () => {
   it('a role named Employee whose previousNames include "Candidate" still tags as the employee slug via id lookup, so selectProviders never runs the candidate provider for it', async () => {
-    const employeeRoleId = '64b7f0c2a1b2c3d4e5f60001';
+    const employeeRoleId = ROLE_ID_1;
     const fakeRoleModel = {
       find: () => ({
         lean: async () => [{

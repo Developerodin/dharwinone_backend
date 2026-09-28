@@ -176,15 +176,19 @@ describe('people domain module', () => {
     assert.ok(allDomains.includes(peopleDomain));
   });
 
-  it('matchesTurn is true for user/role/who-is/headcount turns and false for unrelated ones', () => {
+  it('matchesTurn is true for user/role/who-is/headcount/capability turns and false for unrelated or other-domain ones (review fix round 1, I-4)', () => {
     for (const text of [
       'how many users do we have',
       'list all user accounts',
       'who has the recruiter role',
       'how many admins are there',
       'who is Priya Sharma',
+      'Who is Priya Sharma?', // sentence-start capital "Who" must also match
       'what roles exist',
       'what permissions does Sales Agent have',
+      'what can a sales agent do', // the brief's own get_role routing example
+      'what can an administrator do',
+      'what are the permissions for the recruiter role', // "permissions of/for <X>"
     ]) {
       assert.ok(matchesTurn(text), `expected matchesTurn to be true for: ${text}`);
     }
@@ -192,7 +196,13 @@ describe('people domain module', () => {
       'how many jobs are open',
       'list active job postings',
       'who is on leave today',
+      'Who is on leave today?',
       "show me today's attendance summary",
+      'how many users logged in today', // login-activity report, not a headcount
+      'show login history for Rahul', // ditto
+      'how many candidates are assigned to agent Rahul', // Employees/Candidates agent-assignment flow
+      'permission to take leave', // everyday phrasing, not RBAC
+      'my account settings', // everyday phrasing, not a user-directory lookup
       '',
     ]) {
       assert.equal(matchesTurn(text), false, `expected matchesTurn to be false for: ${text}`);
