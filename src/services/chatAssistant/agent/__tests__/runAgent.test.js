@@ -319,6 +319,84 @@ describe('runAgent', () => {
     assert.equal(out.reply, 'You have 6 jobs.');
   });
 
+  it('a later count call with empty blocks keeps the earlier list block', async () => {
+    const registry = fakeRegistry({
+      list_jobs: () => ({ ok: true, result: { total: 3, jobs: [{}, {}, {}] } }),
+      count_jobs: () => ({ ok: true, result: { total: 3 } }),
+    });
+    registry.render = (name, result) => {
+      if (name === 'list_jobs') return { blocks: [{ type: 'list', id: 'job-list' }], facts: jobFacts(result.total) };
+      if (name === 'count_jobs') return { blocks: [], facts: jobFacts(result.total) };
+      return null;
+    };
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'list_jobs', { search: 'ml' }), call('b', 'count_jobs', { search: 'ml' })] }),
+      stepResult({ text: 'There are 3 ML jobs.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.deepEqual(out.blocks, [{ type: 'list', id: 'job-list' }]);
+  });
+
+  it('empty-text retry does not replay that response\'s output items', async () => {
+    const registry = fakeRegistry();
+    const emptyWithReasoning = { ...stepResult({ text: '' }), outputItems: [{ type: 'reasoning', id: 'rs_lone' }] };
+    const step = scriptedStep([emptyWithReasoning, stepResult({ text: 'Recovered.' })]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(step.requests[1].toolChoice, 'none');
+    assert.ok(!step.requests[1].input.some((i) => i.type === 'reasoning'));
+    assert.deepEqual(step.requests[1].input, step.requests[0].input);
+    assert.equal(out.reply, 'Recovered.');
+  });
+
+  it('an execute that rejects becomes an { error } output; sibling calls are unaffected', async () => {
+    const registry = fakeRegistry({ count_jobs: () => ({ ok: true, result: { total: 2 } }) });
+    const baseExecute = registry.execute;
+    registry.execute = async (name, rawArgs, opts) => {
+      if (name === 'list_jobs') throw new Error('registry exploded');
+      return baseExecute(name, rawArgs, opts);
+    };
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'list_jobs'), call('b', 'count_jobs')] }),
+      stepResult({ text: 'There are 2 jobs.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    const outputs = outputsIn(step.requests[1].input);
+    assert.deepEqual(JSON.parse(outputs.find((o) => o.call_id === 'a').output), { error: 'registry exploded' });
+    assert.deepEqual(JSON.parse(outputs.find((o) => o.call_id === 'b').output), { total: 2 });
+    assert.equal(out.reply, 'There are 2 jobs.');
+    assert.deepEqual(out.ledgerEntry.calls, [{ tool: 'count_jobs', args: {}, total: 2 }]);
+  });
+
+  it('two failures of one tool in the SAME step count once: the model sees the errors and recovers', async () => {
+    let n = 0;
+    const registry = fakeRegistry({
+      count_jobs: () => {
+        n += 1;
+        return n <= 2 ? { ok: false, error: 'bad args' } : { ok: true, result: { total: 7 } };
+      },
+    });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'count_jobs', { x: 1 }), call('b', 'count_jobs', { x: 2 })] }),
+      stepResult({ toolCalls: [call('c', 'count_jobs', { search: 'ml' })] }),
+      stepResult({ text: 'There are 7 jobs.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.ok(out);
+    assert.equal(out.reply, 'There are 7 jobs.');
+  });
+
+  it('same-step double failure, then the same tool fails again in a later step → null', async () => {
+    const registry = fakeRegistry({ count_jobs: () => ({ ok: false, error: 'bad args' }) });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'count_jobs', { x: 1 }), call('b', 'count_jobs', { x: 2 })] }),
+      stepResult({ toolCalls: [call('c', 'count_jobs', { x: 3 })] }),
+      stepResult({ text: 'should not get here' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(out, null);
+    assert.equal(step.requests.length, 2);
+  });
+
   it('answer without any tool call → reply as-is, no blocks, empty ledger', async () => {
     const registry = fakeRegistry();
     const step = scriptedStep([stepResult({ text: 'I can help with jobs.' })]);

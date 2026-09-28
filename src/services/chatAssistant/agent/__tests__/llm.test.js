@@ -84,6 +84,25 @@ describe('llm.step', () => {
     assert.equal(res.usage, null);
   });
 
+  it('exposes status; a completed response keeps its text', async () => {
+    const client = fakeClient({ status: 'completed', output: [], output_text: 'All done.' });
+    const res = await step({ client, instructions: 'I', input: [], tools: [] });
+    assert.equal(res.status, 'completed');
+    assert.equal(res.text, 'All done.');
+  });
+
+  it('an incomplete (truncated) response yields empty text so the loop retries or falls back', async () => {
+    const client = fakeClient({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [],
+      output_text: 'There are 12 jobs and the list is',
+    });
+    const res = await step({ client, instructions: 'I', input: [], tools: [] });
+    assert.equal(res.status, 'incomplete');
+    assert.equal(res.text, '');
+  });
+
   it('propagates provider errors to the caller', async () => {
     const client = { responses: { create: async () => { throw new Error('429 rate limited'); } } };
     await assert.rejects(step({ client, instructions: 'I', input: [], tools: [] }), /429/);

@@ -129,8 +129,9 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
       if (!res.toolCalls.length) {
         text = res.text;
         if (!text.trim()) {
-          // Empty output is a failure, not an answer: one text-only retry.
-          input = [...input, ...res.outputItems];
+          // Empty (or truncated) output is a failure, not an answer: one text-only
+          // retry on the SAME input. Its outputItems are not replayed — a lone
+          // reasoning item without its following item makes the API 400.
           // eslint-disable-next-line no-await-in-loop
           text = (await runStep('none')).text;
         }
@@ -148,6 +149,9 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
         allowed.map((c) => registry.execute(c.name, c.arguments, { requestId }))
       );
 
+      // A tool counts at most one failure per step: parallel failures of one tool
+      // in the same step must reach the model before the turn is abandoned.
+      const failedThisStep = new Set();
       const outputs = res.toolCalls.map((c, idx) => {
         if (idx >= allowed.length) {
           return { type: 'function_call_output', call_id: c.callId, output: TOO_MANY_CALLS_OUTPUT };
@@ -155,16 +159,20 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
         const s = settled[idx];
         const r = s.status === 'fulfilled' ? s.value : { ok: false, error: s.reason?.message || String(s.reason) };
         executed.push({ name: c.name, args: parseArgsForLedger(c.arguments), ok: !!r.ok, result: r.result });
-        if (!r.ok) failuresByTool.set(c.name, (failuresByTool.get(c.name) ?? 0) + 1);
+        if (!r.ok) failedThisStep.add(c.name);
         const output = JSON.stringify(r.ok ? r.result : { error: r.error });
         return { type: 'function_call_output', call_id: c.callId, output };
       });
+      for (const name of failedThisStep) failuresByTool.set(name, (failuresByTool.get(name) ?? 0) + 1);
 
       if ([...failuresByTool.values()].some((n) => n >= MAX_FAILURES_PER_TOOL)) {
         outcome = 'repeated_tool_failure';
         return null;
       }
 
+      // Ceiling: compaction shrinks the OLDEST outputs first, so under a very long
+      // history it can also shrink this step's fresh outputs; upgrade = exempt the
+      // latest step's outputs in compactTurnItems.
       input = compactTurnItems([...input, ...res.outputItems, ...outputs], inputBudget);
     }
 
@@ -183,7 +191,9 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
       if (!call.ok) continue;
       const rendered = registry.render(call.name, call.result);
       if (!rendered) continue;
-      blocks = rendered.blocks ?? [];
+      // Only a render WITH blocks replaces them: a plain count renders `blocks: []`
+      // and must not wipe a list shown by an earlier call ("how many ML jobs, show them").
+      if (rendered.blocks?.length) blocks = rendered.blocks;
       if (rendered.facts) factsList.push(rendered.facts);
     }
     const facts = mergeCountFacts(factsList);
