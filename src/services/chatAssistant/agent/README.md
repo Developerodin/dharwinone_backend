@@ -83,18 +83,18 @@ defaults to `active` for user counts/lists unless the caller asks for another st
 
 | Tool | Purpose | Key args | Access |
 |---|---|---|---|
-| `count_users` | Count user accounts, optionally grouped by `role` or `status`. | `filters` (search/status/role/location/domain/education), `groupBy` | `users.read` |
-| `list_users` | List user accounts (name, email, roles, status, last login), newest first. | `filters`, `limit` (default 10, max 25) | `users.read` |
-| `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Ambiguous name → `{ matches }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
+| `count_users` | Count user accounts, optionally grouped by `role` or `status`. With `groupBy:'role'`, `total` is a distinct-user count (never the sum of the groups — a user with 2 roles counts in both groups, so the raw sum is kept separately as `assignmentCount`); with `groupBy:'status'` the sum is the correct total, since status is exclusive. | `filters` (search/status/role/location/domain/education), `groupBy` (`role`\|`status`) | `users.read` |
+| `list_users` | List user accounts (`id`, `name`, `email`, `roles`, `status`, `lastLoginAt`), newest first; `total` is always the full filtered count. | `filters`, `limit` (default 10, max 25) | `users.read` |
+| `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Name resolution excludes the platform-super account (unless the viewer is one) and deleted accounts, and prefers a single exact name/email match over asking to disambiguate. Ambiguous name → `{ matches }`; no match → `{ matches: [] }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
 | `list_roles` | List the roles defined in the system, with how many active users hold each. | `status` (`active`\|`inactive`) | `roles.read` |
-| `get_role` | One role's definition: name, aliases, status, full permission list. | `name` (required) | `roles.read` |
+| `get_role` | One role's definition: name, aliases, status, full permission list. Exact match only (name, alias, or a former name) — no partial match. | `name` (required) | `roles.read` |
 
 Routing notes (see `agent/tools/people/index.js`'s `instructions` for the full text the
 model reads): "how many admins/recruiters/sales agents" and "who has role X" are
 `count_users`/`list_users` with a `role` filter, **not** `list_roles`; "what can a Sales
 Agent do" / "what permissions does X role have" is `get_role`; a short follow-up that's
 just a person's name is a `get_user` call, not a filter on the previous `count_users`/
-`list_users` call.
+`list_users` call. Full rulings and rationale: `agent/tools/people/CONTRACT.md`.
 
 ## How to add a tool
 

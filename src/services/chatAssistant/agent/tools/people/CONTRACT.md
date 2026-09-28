@@ -352,60 +352,92 @@ validation time in `toolRegistry.execute`.)
 
 - **Access:** `PEOPLE_PROFILE_ACCESS` (`{ anyOf: ['users.read'], rowScope: 'person' }`).
 
-**Ruling R6 — the `id` path must go through `getUserByIdForRequester` before
-calling `resolvePersonProfile`; it must not pass `userId` straight through.**
-`resolvePersonProfile`'s `userId`-path loader (`realLoadUserById` /
-`makeUserScalarProvider`'s `load`) is an unconditional `User.findById(...).lean()`
-— it does not check `hideFromDirectory` or `platformSuperUser` the way the
-`person`-path (`resolveUserEntity`) does. That means `get_user({ id })` on a
-directory-hidden or platform-super target's id would currently leak a full
-profile that `get_user({ name: "..." })` for the same person would correctly
-refuse. Fix, mirroring what `GET /users/:userId` already does via
-`getUserByIdForRequester`:
+**Ruling R6 — `get_user` resolves its target itself, via requester-scoped reads
+only, before ever calling `resolvePersonProfile`; it must not pass `userId` or
+`person` straight through to it.** `resolvePersonProfile`'s `userId`-path
+loader (`realLoadUserById` / `makeUserScalarProvider`'s `load`) is an
+unconditional `User.findById(...).lean()` — it does not check
+`hideFromDirectory` or `platformSuperUser`. Its `person`-path
+(`resolveUserEntity`) does check those, but also writes a pending-person
+disambiguation pick on an ambiguous result (see Ruling R10) — a DB write this
+read-only tool must not make. So both the `id` and `name` paths resolve to
+exactly one target through `get_user`'s own requester-scoped lookups first —
+`getUserByIdForRequester` (mirrors what `GET /users/:userId` does) and
+`queryUsers` (mirrors `GET /users`, with the `platformSuperUser`/`deleted`
+exclusion Ruling R12 adds) — and only then call `resolvePersonProfile` with
+that single resolved `userId`, `persist: false` (Ruling R10). Current shape
+(`getUser.tool.js`, elided for length — read the file for the exact code):
 ```js
 async execute({ id, name } = {}, ctx) {
   const user = peopleScope(ctx);
+  const deps = peopleDeps(ctx);
   const adminId = adminIdOf(user);
 
-  let targetId = null;
+  let targetDoc;
   if (id) {
     if (!OBJECT_ID_RE.test(id)) return { matches: [] };
     try {
-      await getUserByIdForRequester(id, user); // throws NOT_FOUND if missing, or hidden/platform-super and viewer isn't self/platform-super
+      // throws if missing, or hidden/platform-super and viewer isn't self/platform-super
+      targetDoc = await deps.getUserByIdForRequester(id, user);
     } catch {
       return { matches: [] };
     }
-    targetId = id;
+  } else if (name) {
+    // Ruling R12 — excludes platformSuperUser (unless the viewer is one) and
+    // deleted accounts, the same population getUserByIdForRequester exposes.
+    const filter = { search: name, status: { $ne: 'deleted' } };
+    if (!user.platformSuperUser) filter.platformSuperUser = { $ne: true };
+    const page = await deps.queryUsers(filter, { limit: MAX_NAME_MATCHES, page: 1 }, user);
+    const results = page?.results || [];
+    if (results.length === 0) return { matches: [] };
+    if (results.length > 1) return { matches: results.map(scalarIdentity) };
+    [targetDoc] = results;
+  } else {
+    return { matches: [] };
   }
 
-  const profile = await resolvePersonProfile({
-    ...(targetId ? { userId: targetId } : { person: name }),
+  const identity = scalarIdentity(targetDoc); // { userId, name, email } only — never a raw doc
+
+  const profile = await deps.resolvePersonProfile({
+    userId: identity.userId,
     depth: 'full',
     viewer: user,
     impersonating: !!user.__impersonating,
     adminId,
+    persist: false, // Ruling R10 — get_user performs no DB writes
     deps: ctx.deps,
   });
 
-  if (profile.kind === 'ambiguous') return { matches: profile.matches };
   if (profile.kind === 'notFound') return { matches: [] };
-  if (profile.kind === 'notAuthorized') return { error: 'not_authorized' };
   if (profile.kind === 'unavailable') return { error: 'unavailable' };
 
-  // profile.kind === 'unique' — enrich with full role definitions, then row-scope.
-  const row = await User.findById(profile.identity.userId).select('roleIds').lean();
-  const roleDocs = await Role.find({ _id: { $in: row?.roleIds || [] } })
-    .select('name slug aliases status permissions').lean();
-  const roles = roleDocs.map(({ name, slug, aliases, status, permissions }) => ({ name, slug, aliases, status, permissions }));
-
-  let profiles = profile.profiles;
-  const allowedOwners = await resolveRowScope(user);
-  if (allowedOwners && !allowedOwners.has(String(profile.identity.userId))) {
-    const { employee, candidate, ...rest } = profiles;
-    profiles = rest;
+  if (profile.kind === 'notAuthorized') {
+    // Ruling R10 — no identity comes back from resolvePersonProfile on this
+    // branch; fall back to the identity get_user already resolved itself above.
+    const roles = await loadRoleDefs(identity.userId, deps);
+    return {
+      kind: 'unique',
+      identity: { ...identity, roles: roles.map((r) => r.name) },
+      roles, profiles: null, profileNote: 'not permitted',
+    };
   }
 
-  return { kind: 'unique', identity: profile.identity, roles, profiles, availableSections: profile.availableSections };
+  // profile.kind === 'unique' — enrich with full role definitions, then row-scope.
+  const roles = await loadRoleDefs(identity.userId, deps);
+
+  let profiles = profile.profiles;
+  let availableSections = profile.availableSections;
+  const allowedOwners = await deps.resolveRowScope(user);
+  let profileNote;
+  if (allowedOwners && !allowedOwners.has(identity.userId)) {
+    const { employee, candidate, ...rest } = profiles;
+    if (employee || candidate) profileNote = 'employee/candidate profile not visible to you';
+    profiles = rest;
+    if (profileNote) availableSections = [...new Set(Object.values(profiles).flatMap((p) => p?.sections || []))];
+  }
+
+  return { kind: 'unique', identity: profile.identity, roles, profiles, availableSections,
+           ...(profileNote ? { profileNote } : {}) };
 }
 ```
 - **`profile.identity.userId`, not `row.roleIds`, drives which Role docs get
@@ -573,10 +605,14 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 | R3 | Role filter never sets `buildUserListMongoFilter`'s `role` key; resolved ids go in as `roleIds: { $in: [...] }` instead. |
 | R4 | `filters.location`/`domain`/`education` (singular) map to `buildUserListMongoFilter`'s `locations`/`domains`/`education` (plural/list) keys. |
 | R5 | `status: 'all'` is a Sage-only sentinel stripped before calling `buildUserListMongoFilter` — never sent as a literal string. |
-| R6 | `get_user({ id })` must call `getUserByIdForRequester` before `resolvePersonProfile({ userId })`, because the `userId`-path loader skips the `hideFromDirectory`/`platformSuperUser` check that the `person`-path already has. |
+| R6 | `get_user` resolves its target itself (id path via `getUserByIdForRequester`, name path via `queryUsers`/R12) before ever calling `resolvePersonProfile({ userId })` — never `{ person }` — because neither the `userId`-path loader's missing `hideFromDirectory`/`platformSuperUser` check nor the `person`-path's disambiguation write (R10) are acceptable here. |
 | R7 | `get_user`'s `rowScope: 'person'` access flag only buys the automatic `redactSalary` pass (shape-agnostic); the Employees/Candidates row-scope check itself must be hand-implemented in `execute()`, because `applyRowScope` doesn't recognize `get_user`'s result shape. |
 | R8 | Row-scope stripping in `get_user` applies only to `profiles.employee`/`profiles.candidate` — Student/Mentor/etc. have no ownership-scoping concept anywhere in this codebase to mirror. |
 | R9 | `list_roles.userCount` is computed by a fresh aggregate matching `count_users`' own default scoping (active, hidden-excluded, platform-super-excluded) — not a reuse of `role.service.js`'s existing `assigneeCountTotal`/`assigneeCountActivePending`, which lack hidden-user exclusion and don't default to "active". |
+| R10 | `resolvePersonProfile`'s `notAuthorized` result carries no identity, ever — `get_user` builds its own fallback scalar identity from its own requester-scoped lookup (R6/R12), and calls `resolvePersonProfile` with `persist: false` so it never writes a pending-person pick or rebinds the legacy "current person". |
+| R11 | Employee-vs-Candidate provider selection is verified id-based (`roleRegistry.tagRoleSlugs`), not name-based — a `previousNames` collision cannot mis-route a profile. |
+| R12 | `get_user`'s name path excludes `platformSuperUser` (unless the viewer is one) and deleted accounts from `queryUsers`, mirroring `getUserByIdForRequester`'s own exclusions on the id path. |
+| R13 | `get_user`'s name path prefers a single exact name/email match over the full `matches` disambiguation list, since `queryUsers`' search is partial-match. |
 
 ## Open risks (not resolved by this contract — flagging for awareness)
 
@@ -606,29 +642,48 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 
 ## Addendum (implementation review, 2026-09-28)
 
-Two gaps found while implementing Tasks 3/4, resolved as follows — binding, same
-as every other ruling in this document.
+Gaps found while implementing and reviewing Tasks 3/4, resolved as follows —
+binding, same as every other ruling in this document. R10 was revised in the
+first fix round (its original text described a leak that has since been
+reverted); R12/R13 were added in the final fix round.
 
 **R10 — `get_user`'s `users.read` gate is broader than `resolvePersonProfile`'s
-READ_NAMESPACES; a `notAuthorized` result must degrade, never abort or bypass.**
-`config/permissions.js`'s `users.read` alias list includes `recruiters.read` /
-`ats.recruiters:*`, and `users.read` itself is granted to callers who only hold
-things like `kanban.read` / `tasks.read` / `interviews.read` through other
-permission bundles — none of which is in `resolvePersonProfile`'s
+READ_NAMESPACES; a `notAuthorized` result must degrade, never abort or bypass,
+and must never leak identity through the shared `resolvePersonProfile`
+function.** `config/permissions.js`'s `users.read` alias list includes
+`recruiters.read` / `ats.recruiters:*`, and `users.read` itself is granted to
+callers who only hold things like `kanban.read` / `tasks.read` /
+`interviews.read` through other permission bundles — none of which is in
+`resolvePersonProfile`'s
 `READ_NAMESPACES = ['employees','candidates','students','mentors','recruiters','agents']`.
 So a viewer can legitimately pass `PEOPLE_PROFILE_ACCESS`'s `anyOf: ['users.read']`
-check and still get `resolvePersonProfile → { kind: 'notAuthorized' }` back for a
-target that isn't themself. Fix, additive on both sides:
-- `personProfile/index.js`'s `notAuthorized` return now also carries
-  `identity: { userId, name, email }` — the `target` object is already resolved
-  (on both the `userId` and `person` paths) before the permission check runs, so
-  this costs nothing extra and is backward compatible: every existing caller
-  (`chatAssistant.service.js`, `renderFacts.js`, `activityQueryHandler.js`) only
-  branches on `profile.kind`, never inspects other keys on this branch.
-- `get_user.tool.js` never returns `{ error: ... }` for `notAuthorized`. It
-  builds `roles[]` the normal way (fresh `User.roleIds` → `Role.find`, Ruling
-  R6) off `profile.identity.userId`, and returns
-  `{ kind: 'unique', identity, roles, profiles: null, profileNote: 'not permitted' }`
+check and still get `resolvePersonProfile → { kind: 'notAuthorized' }` back for
+a target that isn't themself.
+
+**`personProfile/index.js`'s `notAuthorized` return carries NO identity** —
+`return { kind: 'notAuthorized' };`, unchanged from before this contract. An
+earlier draft of this ruling had it additively return
+`identity: { userId, name, email }` on this branch; that was reverted (review
+fix round 1, finding C-1) because the same object also reaches the legacy,
+gate-less `resolve_person_profile` tool (`chatAssistant.service.js`, `toolAccess.js`'s
+`TOOL_ACCESS.resolve_person_profile` has no `anyOf`, so any Sage user can call
+it), which forwards it straight into the model's context — a PII leak for any
+target a viewer can't otherwise look up. **`get_user` must never rely on
+`resolvePersonProfile` for identity on this branch.** Instead:
+- `get_user` resolves its target itself, via `getUserByIdForRequester` /
+  `queryUsers` (Ruling R6, R12), *before* it ever calls `resolvePersonProfile`
+  — so it already holds a safe `{ userId, name, email }` scalar regardless of
+  what `resolvePersonProfile` returns.
+- It calls `resolvePersonProfile({ userId, ..., persist: false })` —
+  `persist` is an additive parameter on `resolvePersonProfile` (default
+  `true`, so every other caller's behavior is unchanged); `false` no-ops both
+  `writePending` and `writeCurrentPerson`, because a read-only tool must not
+  write a pending-person disambiguation pick or rebind the legacy pipeline's
+  "current person" (review fix round 1, finding I-2).
+- On `notAuthorized`, `get_user` builds `roles[]` the normal way (fresh
+  `User.roleIds` → `Role.find`, Ruling R6) off its own resolved `userId`, and
+  returns
+  `{ kind: 'unique', identity: <its own scalar>, roles, profiles: null, profileNote: 'not permitted' }`
   — the caller learns who the person is and what roles they hold, never their
   Employee/Candidate/Student/etc. profile data. `render()` still emits the
   compact identity/roles table (via `buildProfileTableBlock`, which degrades
@@ -651,4 +706,33 @@ Role document named "Employee" whose `previousNames` includes `{ name:
 `resolveRoleIds`, a name-matching resolver, for this purpose) cannot occur
 through this path. No code change required; documented here per the review, and
 covered by a stub-level test (`selectProviders` fed a slug map built the same
-id-based way) in `__tests__/peopleTools.test.js`.
+id-based way) in `agent/tools/people/__tests__/userTools.test.js`.
+
+**R12 — `get_user`'s name path excludes `platformSuperUser` (unless the viewer
+is one) and deleted accounts, mirroring `getUserByIdForRequester`.** Found in
+the final whole-branch review (finding B-I1): the fix-round I-2 change replaced
+`resolveUserEntity` (which drops `platformSuperUser`/`hideFromDirectory` for
+non-super viewers and excludes non-visible statuses) with `queryUsers` →
+`buildUserListMongoFilter`, which per §0's documented fact excludes only
+`hideFromDirectory`, not `platformSuperUser`, and applies no status filter at
+all. That reopened the exact asymmetry Ruling R6 closed for the `id` path: a
+non-super viewer asking `get_user({ name: '<seed owner>' })` would get the
+platform-super account's full identity, roles and profile, while
+`get_user({ id: '<same id>' })` correctly refused with `matches: []`. Deleted
+accounts were also surfacing in `matches`, so a name shared with one was always
+reported ambiguous. Fix: the name-path filter passed to `queryUsers` is
+`{ search: name, status: { $ne: 'deleted' } }`, plus `platformSuperUser: { $ne: true }`
+when the viewer is not platform-super themself (a platform-super viewer can
+still find/see that account, same self/platform-super exception
+`getUserByIdForRequester` already makes).
+
+**R13 — an exact name/email match, if unique, is preferred over the full
+`matches` list.** `queryUsers`' `search` is a partial-match regex
+(`applySearchFilter`), so a query like "John Smith" also matches "John
+Smithson" and would otherwise always return `matches` for two people even when
+one is an exact hit. When exactly one result's `name` or `email`
+case-insensitively equals the input string, `get_user` resolves to that one
+result directly instead of asking the model to disambiguate. This does not
+change the `>1` result behavior when no result is an exact match, or when
+more than one result matches exactly (e.g. two accounts named "John Smith" —
+still `matches`).

@@ -69,13 +69,33 @@ export default defineTool({
         return { matches: [] };
       }
     } else if (name) {
-      const page = await deps.queryUsers({ search: name }, { limit: MAX_NAME_MATCHES, page: 1 }, user);
+      // CONTRACT.md Ruling R12: queryUsers -> buildUserListMongoFilter excludes
+      // only hideFromDirectory, never platformSuperUser, and applies no status
+      // filter at all — so without this, a name search would surface the
+      // platform-super account and deleted accounts that getUserByIdForRequester
+      // (the id path, above) correctly refuses. Platform-super stays visible to
+      // a platform-super viewer only (same self/platform-super exception
+      // getUserByIdForRequester already makes).
+      const filter = { search: name, status: { $ne: 'deleted' } };
+      if (!user.platformSuperUser) filter.platformSuperUser = { $ne: true };
+      const page = await deps.queryUsers(filter, { limit: MAX_NAME_MATCHES, page: 1 }, user);
       const results = page?.results || [];
       if (results.length === 0) return { matches: [] };
       if (results.length > 1) {
-        return { matches: results.map((r) => scalarIdentity(r)) };
+        // Ruling R13: queryUsers' search is partial-match, so a query like
+        // "John Smith" also returns "John Smithson" — prefer a single exact
+        // name/email hit over asking the model to disambiguate.
+        const wanted = name.trim().toLowerCase();
+        const exact = results.filter((r) =>
+          (r.name || '').trim().toLowerCase() === wanted || (r.email || '').trim().toLowerCase() === wanted);
+        if (exact.length === 1) {
+          [targetDoc] = exact;
+        } else {
+          return { matches: results.map((r) => scalarIdentity(r)) };
+        }
+      } else {
+        [targetDoc] = results;
       }
-      [targetDoc] = results;
     } else {
       return { matches: [] };
     }

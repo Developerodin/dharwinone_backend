@@ -355,6 +355,72 @@ describe('get_user', () => {
     assert.equal(seenArgs[0].requester, VIEWER);
   });
 
+  it('CONTRACT.md Ruling R12 (review-final B-I1) — the name path excludes platformSuperUser and deleted accounts, mirroring getUserByIdForRequester', async () => {
+    const seenArgs = [];
+    const ctx = ctxFor({
+      queryUsers: async (filter) => {
+        seenArgs.push(filter);
+        return { results: [] };
+      },
+    });
+    await getUser.execute({ name: 'Priya' }, ctx);
+    assert.equal(seenArgs[0].platformSuperUser.$ne, true);
+    assert.equal(seenArgs[0].status.$ne, 'deleted');
+  });
+
+  it('R12 — a platform-super viewer is not excluded from their own name search', async () => {
+    const seenArgs = [];
+    const superViewer = { id: 'super-1', roleIds: [], platformSuperUser: true };
+    const ctx = {
+      ...ctxFor({
+        queryUsers: async (filter) => {
+          seenArgs.push(filter);
+          return { results: [] };
+        },
+      }),
+      user: superViewer,
+    };
+    await getUser.execute({ name: 'Owner' }, ctx);
+    assert.equal('platformSuperUser' in seenArgs[0], false);
+    assert.equal(seenArgs[0].status.$ne, 'deleted');
+  });
+
+  it('CONTRACT.md Ruling R13 (review-final m-4) — a single exact name/email match is preferred over the full matches list', async () => {
+    const calls = [];
+    const ctx = ctxFor({
+      queryUsers: async () => ({
+        results: [
+          { _id: 'u1', name: 'John Smith', email: 'john@x.com' },
+          { _id: 'u2', name: 'John Smithson', email: 'smithson@x.com' },
+        ],
+      }),
+      resolvePersonProfile: async (args) => {
+        calls.push(args);
+        return { kind: 'notFound' };
+      },
+    });
+    await getUser.execute({ name: 'John Smith' }, ctx);
+    assert.equal(calls[0]?.userId, 'u1', 'must resolve the exact match, not ask to disambiguate');
+  });
+
+  it('R13 — falls back to the full matches list when more than one result matches exactly, or none does', async () => {
+    const twoExact = await getUser.execute({ name: 'John Smith' }, ctxFor({
+      queryUsers: async () => ({
+        results: [{ _id: 'u1', name: 'John Smith', email: 'a@x.com' }, { _id: 'u2', name: 'John Smith', email: 'b@x.com' }],
+      }),
+      resolvePersonProfile: async () => { throw new Error('must not be called'); },
+    }));
+    assert.equal(twoExact.matches.length, 2);
+
+    const noExact = await getUser.execute({ name: 'Smith' }, ctxFor({
+      queryUsers: async () => ({
+        results: [{ _id: 'u1', name: 'John Smith', email: 'a@x.com' }, { _id: 'u2', name: 'Jane Smith', email: 'b@x.com' }],
+      }),
+      resolvePersonProfile: async () => { throw new Error('must not be called'); },
+    }));
+    assert.equal(noExact.matches.length, 2);
+  });
+
   it('name path: exactly one queryUsers match resolves through resolvePersonProfile with that user\'s id', async () => {
     const calls = [];
     const ctx = ctxFor({
