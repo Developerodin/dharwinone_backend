@@ -9,9 +9,43 @@ import {
   EMPLOYEE_QUERY_READ_PERMISSIONS,
 } from '../../../../../schemas/employees/employeeQuery.rbac.js';
 import { buildEmployeeListMongoFilter as realBuildEmployeeListMongoFilter } from '../../../../employee.service.js';
+import { userCanViewPreBoardingDocs } from '../../../../../controllers/employee.controller.js';
 
 // Same permissions the Employees page list route accepts (employee.route.js canReadEmployees).
 export const EMPLOYEES_ACCESS = Object.freeze({ anyOf: [...EMPLOYEE_QUERY_READ_PERMISSIONS] });
+
+// Who may open ANOTHER employee's salary slips: employee.controller.js downloadSalarySlip sets
+// canManageCandidates from exactly these two, and getSalarySlipDownloadUrl refuses anyone else.
+const SALARY_SLIP_VIEW_PERMISSIONS = ['candidates.manage', 'employees.manage'];
+
+/**
+ * The document filters reveal who has / hasn't uploaded a file, so they need the same permission
+ * as opening those files on the Employees page. Returns an error message, or null when allowed.
+ * Documents: userCanViewPreBoardingDocs (employee.controller.js — the getCandidateDocuments gate).
+ */
+export function documentFilterAccessError(filters, user) {
+  if (user?.platformSuperUser) return null;
+  const perms = user?.authContext?.permissions;
+  if (filters?.missingSalarySlip !== undefined && !SALARY_SLIP_VIEW_PERMISSIONS.some((p) => perms?.has(p))) {
+    return 'You do not have permission to see employees\' salary slips (needs candidates.manage or employees.manage).';
+  }
+  if (filters?.missingDocument !== undefined && !userCanViewPreBoardingDocs(perms)) {
+    return 'You do not have permission to see employees\' documents (needs candidates.manage, employees.manage ' +
+      'or a pre-boarding permission).';
+  }
+  return null;
+}
+
+/** "Salary slip Sep 2026" / "Any salary slip" / "Resume (approved)" — or null when no document filter is set. */
+export function missingLabel(filters = {}) {
+  const parts = [];
+  const slip = filters.missingSalarySlip;
+  if (slip === true) parts.push('Any salary slip');
+  else if (slip) parts.push(`Salary slip ${String(slip.month).slice(0, 3)} ${slip.year}`);
+  const doc = filters.missingDocument;
+  if (doc) parts.push(`${doc.type}${doc.approvedOnly ? ' (approved)' : ''}`);
+  return parts.length ? parts.join(', ') : null;
+}
 
 const MAX_GROUPS = 25;
 const NOT_SET = 'Not set';
@@ -176,6 +210,7 @@ export function personBreakdownBlock(result, { label, id }) {
 }
 
 export function personListBlock(result, { label, id }) {
+  const hasMissing = result.records.some((r) => r.missing);
   return {
     type: 'table',
     id,
@@ -187,6 +222,7 @@ export function personListBlock(result, { label, id }) {
       { key: 'designation', label: 'Designation', priority: 'primary' },
       { key: 'department', label: 'Department', priority: 'secondary' },
       { key: 'employmentType', label: 'Type', priority: 'secondary' },
+      ...(hasMissing ? [{ key: 'missing', label: 'Missing', priority: 'primary' }] : []),
     ],
     rows: result.records.map((r) => ({
       name: r.name ?? '—',
@@ -194,6 +230,7 @@ export function personListBlock(result, { label, id }) {
       designation: r.designation ?? '—',
       department: r.department ?? '—',
       employmentType: r.employmentType ?? '—',
+      ...(hasMissing ? { missing: r.missing ?? '—' } : {}),
     })),
     layout: 'auto',
   };

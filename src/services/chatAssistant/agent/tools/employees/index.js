@@ -16,6 +16,10 @@ const instructions = [
     'employees with that designation → list_employees/count_employees with filters.designation. Job postings ' +
     'are only meant when the user says job(s), opening(s), vacancy or posting.',
   '- Interns → filters.employmentType "Internship". Unpaid/paid → filters.compensationType.',
+  '- "Haven\'t uploaded their salary slip(s)" → filters.missingSalarySlip ({ month, year } for one month, ' +
+    'true for none at all). "Without a resume / PAN / <document>" → filters.missingDocument { type }; add ' +
+    'approvedOnly when they mean not yet approved/verified. These check upload records only — you cannot read, ' +
+    'summarise or link the files themselves; say so if asked.',
   '- One named person\'s details → get_user, not list_employees.',
 ].join('\n');
 

@@ -4,6 +4,7 @@ import countEmployees from '../countEmployees.tool.js';
 import listEmployees from '../listEmployees.tool.js';
 import { EMPLOYEES_ACCESS } from '../common.js';
 import { matchesTurn } from '../index.js';
+import { employeeDocumentConditions } from '../../../../../employee.service.js';
 
 const VIEWER = { id: 'viewer-1', _id: 'viewer-1', authContext: { permissions: new Set(['employees.read']) } };
 
@@ -123,5 +124,90 @@ describe('employees matchesTurn', () => {
     for (const t of ['how many candidates applied', 'show me react jobs']) {
       assert.equal(matchesTurn(t), false, t);
     }
+  });
+});
+
+describe('document metadata filters', () => {
+  const MANAGER = { id: 'm-1', _id: 'm-1', authContext: { permissions: new Set(['employees.read', 'employees.manage']) } };
+  const PREBOARDING = { id: 'p-1', _id: 'p-1', authContext: { permissions: new Set(['employees.read', 'pre-boarding.read']) } };
+  const SEP_2026 = { month: 'September', year: 2026 };
+
+  it('builds a no-slip-for-that-month condition that matches the stored month forms', () => {
+    const [cond] = employeeDocumentConditions({ missingSalarySlip: SEP_2026 });
+    const { month, year } = cond.salarySlips.$not.$elemMatch;
+    assert.equal(year, 2026);
+    for (const m of ['September', 'sep', '9', '09']) assert.equal(month.test(m), true, m);
+    for (const m of ['October', '19', 'Sept 2026']) assert.equal(month.test(m), false, m);
+  });
+
+  it('missingSalarySlip true means no slips at all; no document keys means no conditions', () => {
+    assert.deepEqual(employeeDocumentConditions({ missingSalarySlip: true }), [{ 'salarySlips.0': { $exists: false } }]);
+    assert.deepEqual(employeeDocumentConditions({ employmentType: 'Internship' }), []);
+  });
+
+  it('missingDocument Resume covers CV/Resume and the resume slot; approvedOnly needs status 1', () => {
+    assert.deepEqual(employeeDocumentConditions({ missingDocument: { type: 'Resume', approvedOnly: true } }), [{
+      $nor: [
+        { documents: { $elemMatch: { type: { $in: ['Resume', 'CV/Resume'] }, status: 1 } } },
+        { documents: { $elemMatch: { logicalSlot: 'resume', status: 1 } } },
+      ],
+    }]);
+    assert.deepEqual(employeeDocumentConditions({ missingDocument: { type: 'PAN' } }), [
+      { $nor: [{ documents: { $elemMatch: { type: 'PAN' } } }] },
+    ]);
+  });
+
+  it('refuses the salary-slip filter without candidates.manage/employees.manage, before querying', async () => {
+    let called = false;
+    const ctx = ctxFor({ executeEmployeeQuery: async () => { called = true; return { success: true, total: 0 }; } });
+    const out = await countEmployees.execute({ filters: { missingSalarySlip: SEP_2026 } }, ctx);
+    assert.match(out.error, /salary slips/);
+    assert.equal(called, false);
+  });
+
+  it('refuses the document filter without a document-view permission; pre-boarding.read is enough', async () => {
+    const denied = await listEmployees.execute({ filters: { missingDocument: { type: 'Resume' } } }, ctxFor());
+    assert.match(denied.error, /documents/);
+    const allowed = await countEmployees.execute(
+      { filters: { missingDocument: { type: 'Resume' } } },
+      { ...ctxFor({ executeEmployeeQuery: async () => ({ success: true, total: 4, records: [] }) }), user: PREBOARDING },
+    );
+    assert.equal(allowed.total, 4);
+  });
+
+  it('keeps the Employee-role, current-employee default scope (no employmentStatus is forced)', async () => {
+    let seen;
+    const ctx = {
+      ...ctxFor({ executeEmployeeQuery: async (q) => { seen = q; return { success: true, total: 3, records: [] }; } }),
+      user: MANAGER,
+    };
+    await countEmployees.execute({ filters: { missingSalarySlip: SEP_2026 } }, ctx);
+    assert.equal(seen.filters.ownerUserRole, 'employee');
+    assert.deepEqual(seen.filters.missingSalarySlip, SEP_2026);
+    assert.equal('employmentStatus' in seen.filters, false);
+
+    let built;
+    const groupCtx = {
+      ...ctxFor({ buildEmployeeListMongoFilter: async (f) => { built = f; return { mongoFilter: {} }; } }),
+      user: MANAGER,
+    };
+    await countEmployees.execute({ filters: { missingSalarySlip: true }, groupBy: 'department' }, groupCtx);
+    assert.equal(built.missingSalarySlip, true);
+    assert.equal('employmentStatus' in built, false);
+  });
+
+  it('list rows carry a missing label only when a document filter is used', async () => {
+    const ctx = {
+      ...ctxFor({ executeEmployeeQuery: async () => ({ success: true, total: 1, records: [{ _id: 'e1', fullName: 'Asha' }] }) }),
+      user: MANAGER,
+    };
+    const out = await listEmployees.execute({ filters: { missingSalarySlip: SEP_2026 } }, ctx);
+    assert.equal(out.records[0].missing, 'Salary slip Sep 2026');
+    const block = listEmployees.render(out).blocks[0];
+    assert.equal(block.columns.at(-1).key, 'missing');
+
+    const plain = await listEmployees.execute({}, ctx);
+    assert.equal('missing' in plain.records[0], false);
+    assert.equal(listEmployees.render(plain).blocks[0].columns.some((c) => c.key === 'missing'), false);
   });
 });

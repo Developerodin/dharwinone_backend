@@ -478,6 +478,28 @@
     }
   },
   {
+    "id": "employees-missing-salary-slip-month",
+    "question": "which employees haven't uploaded their salary slips for September 2026?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_employees"], "args": { "list_employees": { "filters": { "missingSalarySlip": { "month": "September", "year": 2026 } } } } },
+        { "tools": ["list_employees"], "args": { "list_employees": { "filters": { "missingSalarySlip": { "month": 9, "year": 2026 } } } } },
+        { "tools": ["count_employees", "list_employees"], "args": { "list_employees": { "filters": { "missingSalarySlip": { "month": "September", "year": 2026 } } } } },
+        { "tools": ["count_employees", "list_employees"], "args": { "list_employees": { "filters": { "missingSalarySlip": { "month": 9, "year": 2026 } } } } }
+      ]
+    }
+  },
+  {
+    "id": "employees-without-resume",
+    "question": "show me employees without a resume",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_employees"], "args": { "list_employees": { "filters": { "missingDocument": { "type": "Resume" } } } } },
+        { "tools": ["list_employees"], "args": { "list_employees": { "filters": { "missingDocument": { "type": "CV/Resume" } } } } }
+      ]
+    }
+  },
+  {
     "id": "people-list-recruiters",
     "question": "list all recruiters",
     "expect": { "tools": ["list_users"] }

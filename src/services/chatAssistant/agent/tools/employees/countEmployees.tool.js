@@ -3,7 +3,7 @@ import { defineTool } from '../../defineTool.js';
 import { employeeFilters } from './filters.js';
 import {
   EMPLOYEES_ACCESS, personRecordsScope, personRecordsDeps,
-  runPersonCount, runPersonGroupBy, personCountFacts, personBreakdownBlock,
+  runPersonCount, runPersonGroupBy, personCountFacts, personBreakdownBlock, documentFilterAccessError,
 } from './common.js';
 
 export default defineTool({
@@ -13,11 +13,13 @@ export default defineTool({
   description:
     'Count EMPLOYEES (people on the Employees page — never candidates). Use for "how many employees/' +
     'staff/interns/people", and breakdowns: groupBy department, designation, employmentType, ' +
-    'compensationType (paid/unpaid) or employmentStatus (current vs resigned).',
+    'compensationType (paid/unpaid) or employmentStatus (current vs resigned). filters.missingSalarySlip / ' +
+    'missingDocument count who has NOT uploaded a salary slip or document (upload records only — never file ' +
+    'contents or links).',
   measure:
     'Employee PROFILES whose account holds the Employee role and is active or pending ' +
       '(disabled/deleted accounts excluded); current (not resigned) employees unless ' +
-      'filters.employmentStatus is set.',
+      'filters.employmentStatus is set. Document filters test upload records, not file contents.',
   input: Joi.object({
     filters: employeeFilters,
     groupBy: Joi.string()
@@ -28,6 +30,8 @@ export default defineTool({
   async execute({ filters, groupBy } = {}, ctx) {
     const user = personRecordsScope(ctx);
     const deps = personRecordsDeps(ctx);
+    const denied = documentFilterAccessError(filters, user);
+    if (denied) return { error: denied };
     if (groupBy) return runPersonGroupBy({ filters, ownerUserRole: 'employee', groupBy, user, deps });
     return runPersonCount({ filters, ownerUserRole: 'employee', user, deps });
   },

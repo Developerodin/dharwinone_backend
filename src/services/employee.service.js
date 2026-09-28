@@ -923,6 +923,68 @@ const computeCompensationCounts = async (mongoFilter) => {
   };
 };
 
+const SLIP_MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** "September" / "sep" / "sept" / "9" / 9 → 8 (0-based), or -1 when unrecognised. */
+const slipMonthIndex = (month) => {
+  const raw = String(month ?? '').trim().toLowerCase();
+  if (/^\d{1,2}$/.test(raw)) {
+    const n = Number(raw);
+    return n >= 1 && n <= 12 ? n - 1 : -1;
+  }
+  if (raw.length < 3) return -1;
+  return SLIP_MONTHS.findIndex((m) => m.toLowerCase().startsWith(raw));
+};
+
+/** Salary-slip month in the stored form ("September"), or null when unrecognised. */
+const normalizeSlipMonth = (month) => SLIP_MONTHS[slipMonthIndex(month)] ?? null;
+
+/**
+ * Document-METADATA conditions for the Employees list/count filter (Sage "who hasn't uploaded X").
+ * Reads only the presence/type/status of salarySlips[] and documents[] entries — never URLs,
+ * keys or contents. Returns [] when neither key is set, so existing callers are unaffected.
+ *
+ * - missingSalarySlip: true → no salary slips at all; { month, year } → no slip for that month/year.
+ *   The UI stores month as the full English name ("September"); the short and numeric forms are
+ *   matched too so a differently-formatted import is not reported as missing by format alone.
+ * - missingDocument: { type, approvedOnly } → no documents[] entry of that type. approvedOnly
+ *   counts pending (0) and rejected (2) entries as missing — only approved (1) satisfies it.
+ *   'Resume' and 'CV/Resume' are one thing to the user, and the versioned resume slot counts too.
+ * @param {object} filter
+ * @returns {object[]} conditions to AND into the mongo filter
+ */
+const employeeDocumentConditions = (filter = {}) => {
+  const out = [];
+  const slip = filter.missingSalarySlip;
+  if (slip === true) {
+    out.push({ 'salarySlips.0': { $exists: false } });
+  } else if (slip && typeof slip === 'object') {
+    const idx = slipMonthIndex(slip.month);
+    const year = Number(slip.year);
+    if (idx < 0 || !Number.isInteger(year)) throw new Error('missingSalarySlip needs a valid month and year');
+    const name = SLIP_MONTHS[idx];
+    const monthRe = new RegExp(`^(${name}|${name.slice(0, 3)}|0?${idx + 1})$`, 'i');
+    out.push({ salarySlips: { $not: { $elemMatch: { month: monthRe, year } } } });
+  }
+
+  const doc = filter.missingDocument;
+  if (doc && doc.type) {
+    const approved = doc.approvedOnly === true ? { status: 1 } : {};
+    const isResume = doc.type === 'Resume' || doc.type === 'CV/Resume';
+    const has = isResume
+      ? [
+        { documents: { $elemMatch: { type: { $in: ['Resume', 'CV/Resume'] }, ...approved } } },
+        { documents: { $elemMatch: { logicalSlot: 'resume', ...approved } } },
+      ]
+      : [{ documents: { $elemMatch: { type: doc.type, ...approved } } }];
+    out.push({ $nor: has });
+  }
+  return out;
+};
+
 /**
  * Shared list/count Mongo filter — all post-`buildAdvancedFilter` steps used by queryCandidates and countDocuments.
  * @param {object} filterInput - API filter shape (post applyEmployeeListScope / toApiFilter)
@@ -974,6 +1036,11 @@ const buildEmployeeListMongoFilter = async (filterInput) => {
       ...(mongoFilter.$and || []),
       { $or: [{ referredByUserId: uid }, { currentSalesAgentUserId: uid }] },
     ];
+  }
+
+  const documentConditions = employeeDocumentConditions(filter);
+  if (documentConditions.length) {
+    mongoFilter.$and = [...(mongoFilter.$and || []), ...documentConditions];
   }
 
   // isActive is a derived mirror of resignDate (employee.model.js pre-save hook +
@@ -4365,6 +4432,8 @@ export {
   createCandidate,
   queryCandidates,
   buildEmployeeListMongoFilter,
+  employeeDocumentConditions,
+  normalizeSlipMonth,
   normalizeOwnerUserRoleScope,
   countEmployeeCandidates,
   getCandidateById,

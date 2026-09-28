@@ -29,7 +29,7 @@ const experienceSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const DOCUMENT_TYPES = [
+export const DOCUMENT_TYPES = [
   'Resume',
   'Aadhar',
   'PAN',
