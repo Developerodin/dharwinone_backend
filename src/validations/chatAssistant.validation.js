@@ -32,6 +32,9 @@ export const sendMessage = {
         /** Employees (Advanced Search) — mirrors employeeFilter.schema.json */
         employmentStatus: Joi.string().valid('current', 'resigned', 'all'),
         compensationType: Joi.string().valid('paid', 'unpaid').allow(''),
+        employmentType: Joi.string()
+          .valid('Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Freelance')
+          .allow(''),
         search: Joi.string().max(500).allow(null),
       }).unknown(false),
       visibleCounts: Joi.object().keys({
