@@ -6,6 +6,7 @@ export const PRONOUN_RE = /\b(he|him|his|she|her|they|them|their)\b/i;
  * when the message names nobody ("Abdul Zaid, you don't have this employee?" names Abdul).
  */
 const DEICTIC_PERSON_RE = /\b(?:this|that)\s+(?:user|person|employee|candidate)\b/i;
+const isDeicticPhrase = (name) => /^(?:this|that)\s+(?:user|person|employee|candidate)$/i.test(String(name).trim());
 
 const JOB_APPLICATION_RE =
   /\b(applied to|has applied|have applied|did apply|job applications?|any jobs?\b|what jobs?\s+(?:has|have|did)|what positions?\s+(?:has|have|did)|show me .+? applications?)\b/i;
@@ -293,7 +294,26 @@ export function resolveActivityEntitySubject(message, intent, ctx = {}) {
     return { name: entitySwitch.name, userId: null, fromContext: false };
   }
 
-  if (intent === 'job_applications' && ctx.applicationQueryContext?.applicantName) {
+  const stored = ctx.currentEntitySubject;
+  const personState = ctx.personConversationState;
+  const contextSubject = stored || (personState?.entityId
+    ? {
+        userId: String(personState.entityId),
+        name: personState.name,
+        entityType: personState.entityType || 'user',
+      }
+    : null);
+
+  // "this user" means the person most recently looked up. The subject is rewritten on
+  // every lookup (get_user and the applications route), while the saved application
+  // context below still names whoever was asked about last time.
+  if (DEICTIC_PERSON_RE.test(text) && contextSubject && !extractPersonNameFromMessage(text)) {
+    return { ...contextSubject, fromContext: true };
+  }
+
+  // A context saved before "this user" was understood holds the phrase as a name.
+  const appCtxName = ctx.applicationQueryContext?.applicantName;
+  if (intent === 'job_applications' && appCtxName && !isDeicticPhrase(appCtxName)) {
     const appCtx = ctx.applicationQueryContext;
     if (
       APPLICATION_COUNT_CHALLENGE_RE.test(text)
@@ -306,16 +326,6 @@ export function resolveActivityEntitySubject(message, intent, ctx = {}) {
       };
     }
   }
-
-  const stored = ctx.currentEntitySubject;
-  const personState = ctx.personConversationState;
-  const contextSubject = stored || (personState?.entityId
-    ? {
-        userId: String(personState.entityId),
-        name: personState.name,
-        entityType: personState.entityType || 'user',
-      }
-    : null);
 
   if (usesPronoun(message) && contextSubject) {
     return { ...contextSubject, fromContext: true };
@@ -330,12 +340,6 @@ export function resolveActivityEntitySubject(message, intent, ctx = {}) {
       return { ...contextSubject, name: contextSubject.name, fromContext: true };
     }
     return { name: extracted, userId: contextSubject?.userId ?? null, fromContext: false };
-  }
-
-  // Without this, "which jobs has this user applied to" searched applications
-  // for someone literally named "this user".
-  if (DEICTIC_PERSON_RE.test(text) && contextSubject) {
-    return { ...contextSubject, fromContext: true };
   }
 
   if (contextSubject?.name) {
