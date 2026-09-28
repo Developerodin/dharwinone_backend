@@ -157,14 +157,14 @@
     "expect": { "handoff": true, "forbidSearchTerm": "John" }
   },
   {
-    "id": "handoff-john-role",
+    "id": "users-john-role",
     "question": "what's John's role",
-    "expect": { "handoff": true, "forbidSearchTerm": "John" }
+    "expect": { "tools": ["get_user"] }
   },
   {
-    "id": "handoff-priya-roles",
+    "id": "users-priya-roles",
     "question": "which roles does Priya have",
-    "expect": { "handoff": true, "forbidSearchTerm": "Priya" }
+    "expect": { "tools": ["get_user"] }
   },
   {
     "id": "mixed-two-counts",
