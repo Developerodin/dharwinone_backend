@@ -404,7 +404,7 @@ async execute({ id, name } = {}, ctx) {
     viewer: user,
     impersonating: !!user.__impersonating,
     adminId,
-    persist: false, // Ruling R10 — get_user performs no DB writes
+    persist: false, // Ruling R10/R14 — no pending pick, no lastEntities.person write
     deps: ctx.deps,
   });
 
@@ -613,6 +613,7 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 | R11 | Employee-vs-Candidate provider selection is verified id-based (`roleRegistry.tagRoleSlugs`), not name-based — a `previousNames` collision cannot mis-route a profile. |
 | R12 | `get_user`'s name path excludes `platformSuperUser` (unless the viewer is one) and deleted accounts from `queryUsers`, mirroring `getUserByIdForRequester`'s own exclusions on the id path. |
 | R13 | `get_user`'s name path prefers a single exact name/email match over the full `matches` disambiguation list, since `queryUsers`' search is partial-match. |
+| R14 | A unique `get_user` result is written as the conversation subject (`lastEntities.currentEntitySubject`, via `writeEntitySubject`) — the one write it makes. A follow-up the agent hands to the legacy pipeline ("which jobs has this user applied to") needs to know who "this user" is. Ambiguous or empty results write nothing. |
 
 ## Open risks (not resolved by this contract — flagging for awareness)
 

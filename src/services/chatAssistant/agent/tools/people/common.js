@@ -8,6 +8,7 @@ import {
 } from '../../../../user.service.js';
 import { queryRoles as realQueryRoles } from '../../../../role.service.js';
 import { resolvePersonProfile as realResolvePersonProfile } from '../../../personProfile/index.js';
+import { writeEntitySubject as realWriteEntitySubject } from '../../../conversationState/entitySubject.js';
 import { resolveRowScope as realResolveRowScope } from '../../../toolAccess.js';
 import {
   viewerSeesHiddenUsers as realViewerSeesHiddenUsers,
@@ -54,6 +55,7 @@ export function peopleDeps(ctx) {
     viewerSeesHiddenUsers: deps.viewerSeesHiddenUsers ?? realViewerSeesHiddenUsers,
     getDirectoryHiddenUserIds: deps.getDirectoryHiddenUserIds ?? realGetDirectoryHiddenUserIds,
     queryRoles: deps.queryRoles ?? realQueryRoles,
+    writeEntitySubject: deps.writeEntitySubject ?? realWriteEntitySubject,
   };
 }
 

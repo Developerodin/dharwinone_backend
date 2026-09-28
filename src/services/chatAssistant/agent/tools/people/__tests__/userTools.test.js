@@ -84,6 +84,7 @@ function ctxFor(overrides = {}) {
       resolveRowScope: async () => null,
       viewerSeesHiddenUsers: () => false,
       getDirectoryHiddenUserIds: async () => [],
+      writeEntitySubject: async () => {},
       ...overrides,
     },
   };
@@ -595,7 +596,7 @@ describe('get_user', () => {
     assert.ok('employee' in unrestricted.profiles);
   });
 
-  it('I-2 — performs no DB writes: the real resolvePersonProfile, called with persist:false, never invokes its writers', async () => {
+  it('I-2 — no pending pick or current-person write: the real resolvePersonProfile, called with persist:false, never invokes its writers', async () => {
     const throwIfCalled = (label) => async () => { throw new Error(`must not call ${label} — get_user performs no DB writes`); };
     const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
     const { User } = fakeUser();
@@ -620,11 +621,40 @@ describe('get_user', () => {
         resolveUserEntity: throwIfCalled('resolveUserEntity (get_user never resolves by free text itself)'),
         writePending: throwIfCalled('writePending'),
         writeCurrentPerson: throwIfCalled('writeCurrentPerson'),
+        writeEntitySubject: async () => {},
       },
     };
 
     const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(out.kind, 'unique');
+  });
+
+  it('a unique find becomes the conversation subject, so a handed-off "this user" follow-up knows who it is', async () => {
+    const writes = [];
+    const ctx = ctxFor({
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Ranveer Singh', email: 'r@x.com' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Ranveer Singh' },
+        profiles: {},
+        availableSections: [],
+      }),
+      writeEntitySubject: async (args) => { writes.push(args); },
+    });
+    await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].userId, 'viewer-1');
+    assert.equal(writes[0].subject.userId, '64b7f0c2a1b2c3d4e5f60718');
+    assert.equal(writes[0].subject.name, 'Ranveer Singh');
+  });
+
+  it('several name matches write no conversation subject', async () => {
+    const ctx = ctxFor({
+      queryUsers: async () => ({ results: [{ _id: 'a', name: 'Ranveer Singh' }, { _id: 'b', name: 'Ranveer Sinha' }] }),
+      writeEntitySubject: async () => { throw new Error('must not write on ambiguity'); },
+    });
+    const out = await getUser.execute({ name: 'Ranveer' }, ctx);
+    assert.equal(out.matches.length, 2);
   });
 
   it('has users.read + person row-scope access', () => {

@@ -1,6 +1,12 @@
 /** Pronoun follow-ups inherit the conversation entity subject. */
 export const PRONOUN_RE = /\b(he|him|his|she|her|they|them|their)\b/i;
 
+/**
+ * "this user" / "that person" also refer back to the conversation subject, but only
+ * when the message names nobody ("Abdul Zaid, you don't have this employee?" names Abdul).
+ */
+const DEICTIC_PERSON_RE = /\b(?:this|that)\s+(?:user|person|employee|candidate)\b/i;
+
 const JOB_APPLICATION_RE =
   /\b(applied to|has applied|have applied|did apply|job applications?|any jobs?\b|what jobs?\s+(?:has|have|did)|what positions?\s+(?:has|have|did)|show me .+? applications?)\b/i;
 
@@ -262,7 +268,7 @@ export function extractPersonNameFromMessage(message) {
 function cleanExtractedName(raw) {
   return String(raw || '')
     .replace(/\?+$/, '')
-    .replace(/\b(this|that|the)\s+employee\b/i, '')
+    .replace(/\b(this|that|the)\s+(?:employee|user|person|candidate)\b/i, '')
     .replace(/['']s\s+applications?\s*$/i, '')
     .replace(/\s+applications?\s*$/i, '')
     .replace(/\b(any|some)\s+jobs?\b.*$/i, '')
@@ -324,6 +330,12 @@ export function resolveActivityEntitySubject(message, intent, ctx = {}) {
       return { ...contextSubject, name: contextSubject.name, fromContext: true };
     }
     return { name: extracted, userId: contextSubject?.userId ?? null, fromContext: false };
+  }
+
+  // Without this, "which jobs has this user applied to" searched applications
+  // for someone literally named "this user".
+  if (DEICTIC_PERSON_RE.test(text) && contextSubject) {
+    return { ...contextSubject, fromContext: true };
   }
 
   if (contextSubject?.name) {

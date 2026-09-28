@@ -4,6 +4,7 @@ import { buildProfileTableBlock } from '../../../personProfile/profileTableBlock
 import {
   OBJECT_ID_RE, PEOPLE_PROFILE_ACCESS, peopleScope, peopleDeps, adminIdOf, peopleCountFacts,
 } from './common.js';
+import { subjectFromProfile } from '../../../conversationState/entitySubject.js';
 
 const MAX_NAME_MATCHES = 10;
 
@@ -52,7 +53,7 @@ export default defineTool({
     // Resolve to exactly one target user ourselves first, via requester-scoped
     // reads only (getUserByIdForRequester / queryUsers) — never resolvePersonProfile's
     // own free-text resolver, which writes a pending-person disambiguation pick
-    // on ambiguity (review fix round 1, I-2: get_user must perform no DB writes).
+    // on ambiguity (review fix round 1, I-2: get_user never writes a pending pick; R14).
     // This also gives us a safe scalar identity (name/email/userId) up front, so
     // the notAuthorized branch below never has to trust resolvePersonProfile for
     // identity (review fix round 1, C-1).
@@ -108,7 +109,7 @@ export default defineTool({
       viewer: user,
       impersonating: !!user.__impersonating,
       adminId,
-      persist: false, // I-2: get_user must perform no DB writes (no pending pick, no "current person" rebind)
+      persist: false, // I-2: no pending pick, no lastEntities.person write (R14: subject written below)
       deps: ctx.deps,
     });
 
@@ -163,6 +164,15 @@ export default defineTool({
       if (profileNote) {
         availableSections = [...new Set(Object.values(profiles).flatMap((p) => p?.sections || []))];
       }
+    }
+
+    // Only write this tool makes: the person just looked up becomes the
+    // conversation subject, so a follow-up the agent hands to the legacy
+    // pipeline ("which jobs has this user applied to") knows who "this user" is.
+    // No pending pick is ever written (I-2 still holds for ambiguity).
+    const subject = subjectFromProfile(profile);
+    if (subject && user.id) {
+      await deps.writeEntitySubject({ userId: user.id, adminId, subject });
     }
 
     return {
