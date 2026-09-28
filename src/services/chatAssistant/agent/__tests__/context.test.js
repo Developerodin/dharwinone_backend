@@ -14,14 +14,16 @@ describe('buildAgentInput — stable prefix', () => {
   it('returns the instructions string byte-identical for two different users / dates', () => {
     const out1 = buildAgentInput({
       instructions: BASE_INSTRUCTIONS,
-      user: { name: 'Prakhar', roleIds: [{ name: 'Administrator' }] },
+      user: { name: 'Prakhar' },
+      roleNames: ['Administrator'],
       history: [],
       ledger: [],
       now: new Date('2026-09-28T10:00:00Z'),
     });
     const out2 = buildAgentInput({
       instructions: BASE_INSTRUCTIONS,
-      user: { name: 'Someone Else', roleIds: [{ name: 'Employee' }] },
+      user: { name: 'Someone Else' },
+      roleNames: ['Employee'],
       history: [],
       ledger: [],
       now: new Date('2027-01-01T00:00:00Z'),
@@ -55,26 +57,17 @@ describe('buildAgentInput — turn-context message', () => {
     assert.match(newYork.input[0].content, /2026-09-28/);
   });
 
-  it('includes the user\'s display name and role name(s), read defensively', () => {
-    const withPopulatedRoles = buildAgentInput({
+  it('includes the user\'s display name and the caller-supplied role names', () => {
+    const withRoleNames = buildAgentInput({
       instructions: BASE_INSTRUCTIONS,
-      user: { name: 'Prakhar', roleIds: [{ name: 'Administrator' }, { name: 'Employee' }] },
+      user: { name: 'Prakhar' },
+      roleNames: ['Administrator', 'Employee'],
       history: [],
       ledger: [],
       now: new Date('2026-09-28T10:00:00Z'),
     });
-    assert.match(withPopulatedRoles.input[0].content, /Prakhar/);
-    assert.match(withPopulatedRoles.input[0].content, /Administrator \+ Employee/);
-
-    const withStringRole = buildAgentInput({
-      instructions: BASE_INSTRUCTIONS,
-      user: { name: 'Asha', role: 'admin' },
-      history: [],
-      ledger: [],
-      now: new Date('2026-09-28T10:00:00Z'),
-    });
-    assert.match(withStringRole.input[0].content, /Asha/);
-    assert.match(withStringRole.input[0].content, /admin/);
+    assert.match(withRoleNames.input[0].content, /Prakhar/);
+    assert.match(withRoleNames.input[0].content, /Administrator \+ Employee/);
 
     const withNothing = buildAgentInput({
       instructions: BASE_INSTRUCTIONS,
@@ -84,6 +77,22 @@ describe('buildAgentInput — turn-context message', () => {
       now: new Date('2026-09-28T10:00:00Z'),
     });
     assert.doesNotThrow(() => withNothing.input[0].content);
+    assert.match(withNothing.input[0].content, /role: User/);
+  });
+
+  it('never guesses a role from raw user.roleIds/user.role — falls back to "User" when roleNames is omitted', () => {
+    // Real req.user.roleIds are unpopulated ObjectIds in production (no .name),
+    // and a legacy user.role string must not be treated as a resolved name.
+    const out = buildAgentInput({
+      instructions: BASE_INSTRUCTIONS,
+      user: { name: 'Prakhar', roleIds: ['64f1a2b3c4d5e6f7a8b9c0d1'], role: 'admin' },
+      history: [],
+      ledger: [],
+      now: new Date('2026-09-28T10:00:00Z'),
+    });
+    assert.match(out.input[0].content, /Prakhar/);
+    assert.match(out.input[0].content, /role: User/);
+    assert.doesNotMatch(out.input[0].content, /admin/);
   });
 
   it('renders a "Previous tool calls" section from the ledger, most recent turn last', () => {
@@ -106,6 +115,27 @@ describe('buildAgentInput — turn-context message', () => {
     assert.ok(content.includes(mlLine), content);
     // most recent turn (ml) rendered after the older turn (php)
     assert.ok(content.indexOf(phpLine) < content.indexOf(mlLine));
+  });
+
+  it('renders a capped (already-stringified) ledger arg without double-encoding it', () => {
+    // summarizeCalls' capArgs stores a truncated JSON *string* in place of an
+    // oversized args object. renderLedgerLine must not JSON.stringify that
+    // string again — doing so would wrap it in quotes and escape every `"`.
+    const hugeArgs = { search: 'x'.repeat(500) };
+    const entry = summarizeCalls([{ name: 'count_jobs', args: hugeArgs, output: { total: 7 } }]);
+    assert.equal(typeof entry.calls[0].args, 'string', 'test fixture sanity: capArgs must have kicked in');
+
+    const out = buildAgentInput({
+      instructions: BASE_INSTRUCTIONS,
+      user: { name: 'Prakhar' },
+      history: [],
+      ledger: [entry],
+      now: new Date('2026-09-28T10:00:00Z'),
+    });
+    const content = out.input[0].content;
+    assert.ok(content.includes('count_jobs('), content);
+    assert.ok(content.includes('total 7'), content);
+    assert.ok(!content.includes('\\"'), `expected no escaped quotes (double-encoding), got: ${content}`);
   });
 
   it('omits the ledger section entirely when there is no ledger history', () => {

@@ -32,25 +32,25 @@ function formatDateInTimezone(date, timezone) {
 }
 
 /**
- * Read the user's role label defensively. `roleIds` may or may not be
- * populated (Role docs have `.name`); a plain `role` string field exists on
- * some req.user shapes (e.g. JWT payloads). This never hits the DB — the
- * caller decides whether roles are populated before calling in.
+ * Render the user's role label from already-resolved role names. This module
+ * never hits the DB itself — `req.user.roleIds` are raw unpopulated
+ * ObjectIds in production, so there is nothing usable to "read defensively"
+ * off `user` here. The caller resolves names once (e.g. via
+ * `resolveViewerRoleNames(user)` in columnVisibility.js, which the loop
+ * already awaits alongside the rest of the request setup) and passes the
+ * resulting string array in.
  */
-function resolveRoleLabel(user) {
-  if (!user) return 'User';
-  if (Array.isArray(user.roleIds) && user.roleIds.length) {
-    const names = user.roleIds
-      .map((r) => (r && typeof r === 'object' ? r.name : null))
-      .filter(Boolean);
-    if (names.length) return names.join(' + ');
-  }
-  if (typeof user.role === 'string' && user.role.trim()) return user.role.trim();
+function resolveRoleLabel(roleNames) {
+  if (Array.isArray(roleNames) && roleNames.length) return roleNames.join(' + ');
   return 'User';
 }
 
 function safeStringifyArgs(args) {
   if (args === undefined) return '{}';
+  // Already a string — e.g. summarizeCalls' capArgs stored a truncated JSON
+  // string in place of an oversized object. Render it as-is; JSON.stringify
+  // would wrap it in quotes and escape every embedded `"`, corrupting it.
+  if (typeof args === 'string') return args;
   try {
     return JSON.stringify(args);
   } catch {
@@ -76,12 +76,12 @@ function renderLedgerSection(ledger) {
   return `Previous tool calls:\n${lines.join('\n')}`;
 }
 
-function buildTurnContextMessage({ user, ledger, now, timezone }) {
+function buildTurnContextMessage({ user, roleNames, ledger, now, timezone }) {
   const effectiveNow = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   const tz = timezone || DEFAULT_TIMEZONE;
   const todayIso = formatDateInTimezone(effectiveNow, tz);
   const name = user?.name || 'there';
-  const roleLabel = resolveRoleLabel(user);
+  const roleLabel = resolveRoleLabel(roleNames);
 
   const parts = [
     `Today's date: ${todayIso} (${tz}).`,
@@ -135,15 +135,20 @@ function trimToLastTurns(history, maxTurns) {
  * @param {string} args.instructions stable prefix (base instructions + domain
  *   snippets + sorted tool schemas) — returned unchanged so OpenAI's prompt
  *   cache hits across users/turns. Nothing per-user/time-varying belongs here.
- * @param {{name?:string, roleIds?:Array, role?:string}} [args.user]
+ * @param {{name?:string}} [args.user]
+ * @param {string[]} [args.roleNames] the user's resolved role names, e.g.
+ *   `await resolveViewerRoleNames(user)` (columnVisibility.js) — this module
+ *   stays sync/pure and does not resolve them itself. Empty/omitted renders
+ *   as 'User'; never guessed from `user.roleIds`/`user.role` (those are raw
+ *   unpopulated ObjectIds on a real req.user, not names).
  * @param {Array<{role:string, content:*}>} [args.history] this request's chat messages
  * @param {Array<{at:Date, calls:Array}>} [args.ledger] prior agent turns' tool ledger
  * @param {Date} [args.now]
  * @param {string} [args.timezone] default 'Asia/Kolkata'
  * @returns {{instructions:string, input:Array}}
  */
-export function buildAgentInput({ instructions, user, history, ledger, now, timezone } = {}) {
-  const turnContext = buildTurnContextMessage({ user, ledger, now, timezone });
+export function buildAgentInput({ instructions, user, roleNames, history, ledger, now, timezone } = {}) {
+  const turnContext = buildTurnContextMessage({ user, roleNames, ledger, now, timezone });
   const trimmedHistory = trimToLastTurns(history, HISTORY_TURNS);
   return {
     instructions,
