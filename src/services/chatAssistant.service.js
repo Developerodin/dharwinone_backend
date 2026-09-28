@@ -41,7 +41,7 @@ import {
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { llmParams } from './chatAssistant/llmParams.js';
-import { resolveRoleIds, tagRoleNames } from './chatAssistant/roleResolver.js';
+import { tagRoleNames } from './chatAssistant/roleResolver.js';
 import { resolveRole as registryResolveRole, listRoleSlugs, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
 import { resolveUserEntity } from './chatAssistant/entityResolver.js';
 import { fetchPeople } from './chatAssistant/peopleFetcher.js';
@@ -79,7 +79,6 @@ import {
 import {
   hasOrgReadAccess,
   looksLikeOrgStructureQuery,
-  guardFetchEmployeesOrgRoute,
   extractOrgStructureArgs,
   buildOrgStructureAnalyticsPayload,
   looksLikeOrgStructureContinuation,
@@ -109,7 +108,6 @@ import {
   fetchManagerConceptCounts,
   fetchOrgManagersAnalytics,
   fetchDesignationManagersAnalytics,
-  designationRegexForPhrase,
 } from './chatAssistant/managerCounts.js';
 import {
   fetchProjectAnalytics,
@@ -178,7 +176,6 @@ import {
 } from './orgStructure.service.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
-  visibleUserStatusClause,
   employeeOwnerQuery,
   canUserBeVisible,
   overridesFromArgs,
@@ -245,11 +242,9 @@ import {
   clearPendingJob,
   matchJobSelection,
 } from './chatAssistant/jobProfile/pendingJob.js';
-import { handleActivityQuery } from './chatAssistant/intent/activityQueryHandler.js';
 import { detectWhatAboutEntitySwitch } from './chatAssistant/intent/activityIntents.js';
 import { readApplicationQueryContext } from './chatAssistant/conversationState/applicationQueryContext.js';
 import { handleReferralLeadQuery } from './chatAssistant/intent/referralLeadQueryHandler.js';
-import { searchApplications } from './applicantQuery.service.js';
 import {
   detectPresentationIntent,
   filterBlocksForPresentation,
@@ -340,17 +335,6 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
   if (!userMsg || !moduleName) return out;
   const t = String(userMsg).toLowerCase();
   const isAdminCue = /\b(company|company[\s-]?wide|all employees?|whole (team|company|org)|org[- ]?wide|everyone'?s|everyones|every employee|team[- ]?wide|across (the )?(company|team|org)|all (leave|leaves|requests?|backdated|missed))\b/i;
-  if (moduleName === 'fetch_employees') {
-    if (!out.employmentStatus) {
-      if (/\b(resigned|retired|former|past employees?|left|ex[\s-]?employees?|ex[\s-]?staff)\b/.test(t)) {
-        out.employmentStatus = 'resigned';
-      } else if (/\ball (employees?|staff|people)\b/.test(t) || /\bboth (active and resigned|current and resigned)\b/.test(t)) {
-        out.employmentStatus = 'all';
-      } else if (/\b(currently[- ]?working|on[- ]?roll|on[- ]?the[- ]?rolls?|active employees?|current employees?)\b/.test(t)) {
-        out.employmentStatus = 'active';
-      }
-    }
-  }
   if (moduleName === 'employee_analytics') {
     if (!out.metric) {
       if (/\b(paid|unpaid)\b/.test(t)) out.metric = 'paid_unpaid';
@@ -518,8 +502,6 @@ export const ROLE_GROUPS = {
   admin:      ['Administrator'],
 };
 
-const ADMIN_ROLE_NAMES = ROLE_GROUPS.admin;
-
 /**
  * Which owner population a profile-backed query should scope to.
  *
@@ -546,22 +528,6 @@ export function normalizeRole(input) {
   // Legacy fallback so the function still works before the registry warms.
   const k = String(input).trim().toLowerCase().replace(/\s+/g, ' ');
   return ROLE_ALIAS_MAP[k] || ROLE_ALIAS_MAP[k.replace(/\s+/g, '_')] || ROLE_ALIAS_MAP[k.replace(/[\s_-]/g, '')] || null;
-}
-
-// Resolve a Role document via the registry (handles slug, current name,
-// alias, and previousNames). Falls back to a one-off regex query when the
-// registry is cold or the input doesn't match anything cached — keeps
-// behaviour stable during boot or right after a bust.
-async function resolveRoleDoc(input) {
-  if (!input) return null;
-  const r = await registryResolveRole(input);
-  if (r.canonical && r.ids[0]) {
-    return { _id: r.ids[0], name: r.names[0] || r.canonical };
-  }
-  return Role.findOne(
-    { name: { $regex: new RegExp(`^${escapeRegex(String(input).trim())}$`, 'i') } },
-    { _id: 1, name: 1 }
-  ).lean();
 }
 
 // Resolve a time window from tool-call args. Returns { from, to, label, missing }.
@@ -709,35 +675,6 @@ export function clearContextCache(adminId) {
 // ─── Tool definitions for intent routing ────────────────────────────────────
 
 const ROUTING_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_employees',
-      description:
-        'Retrieve company team members — headcount, names, roles, domains/skills, location, joiningDate, resignDate. ' +
-        'For single-person lookups (≤25 results) also returns rich profile: skills, designation, department, qualifications, experiences, joiningDate, resignDate, address, shortBio. ' +
-        'Set employmentStatus="active" for current employees, "resigned" for past employees, "all" for both. ' +
-        'Set role to filter by job role. "Agent" and "SalesAgent" are DISTINCT — agent → Agent, sales agent / sales_agent → SalesAgent, candidate/applicant → Candidate, student → Student. ' +
-        'Use for: "how many employees", "list resigned employees", "current employees", "tell me about <name>", "show details of <name>", "list agents", "show students". ' +
-        'When the user uses pronouns ("him","her","they","this person") referring to someone named earlier, call this with search=<that name>.',
-      parameters: {
-        type: 'object',
-        properties: {
-          search:           { type: 'string', description: 'Filter by name, email, phone number, or employeeId. Cross-role — finds people regardless of role.' },
-          role:             { type: 'string', description: 'Filter by role. "Agent" and "SalesAgent" are SEPARATE roles. Aliases: "agent" → Agent, "sales agent"/"sales_agent" → SalesAgent, "candidate"/"applicant" → Candidate, "student" → Student. Also accepts "Employee", "Administrator", "Recruiter".' },
-          domain:           { type: 'string', description: 'Filter by skill/domain area (e.g. "Node.js", "Python", "HR")' },
-          location:         { type: 'string', description: 'Filter by city or location (e.g. "Mumbai", "Remote")' },
-          status:           { type: 'string', description: 'User account status filter: active | pending | disabled | archived. Default visibility = active+pending. Pass "disabled" or "archived" to surface hidden users explicitly.' },
-          includeDisabled:  { type: 'boolean', description: 'When true, also count + list users with status=disabled. Default false. Use when the user asks for "hidden", "deactivated", "blocked", or explicitly "disabled" people.' },
-          includeArchived:  { type: 'boolean', description: 'When true, also count + list archived users. Default false.' },
-          employmentStatus: { type: 'string', description: 'Employment status: "active" (default — currently employed), "resigned" (past / retired / former / left employees — all collapse to "resigned"), "all" (both). When the user says "retired", "ex-employees", "former", "past", or "left", pass "resigned".' },
-          designation:      { type: 'string', description: 'Filter by job title/designation (e.g. "Manager", "HR Manager"). Use for designation-based headcount — NOT the User role field.' },
-          limit:            { type: 'number', description: 'Max records to return (default 200, max 500)' },
-        },
-        required: [],
-      },
-    },
-  },
   {
     type: 'function',
     function: {
@@ -1013,27 +950,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_people',
-      description:
-        'Two-stage fetch (use only when CHATBOT_TWO_STAGE is enabled). REQUIRES role parameter. ' +
-        'Returns paginated list of people scoped to a single role with no cross-role mixing. ' +
-        'For continuation ("next", "more"), pass cursor from the prior turn\'s lastListing.',
-      parameters: {
-        type: 'object',
-        properties: {
-          role:             { type: 'string', description: 'REQUIRED — role slug or display name. Available role slugs are listed in the system prompt (DB-driven, may include custom roles added by an admin).' },
-          employmentScope:  { type: 'string', enum: ['active', 'resigned', 'all'], description: 'Default "active". Use "resigned" for retired/former/past employees.' },
-          search:           { type: 'string', description: 'Optional name / employeeId / email fragment.' },
-          cursor:           { type: 'object', description: 'Keyset cursor from prior turn lastListing.cursor.' },
-          pageSize:         { type: 'number', description: 'Page size (10–200, default 50). Pass 200 when the user asks for "all", "every", "complete list", or otherwise expects the full roster — the UI paginates client-side, so larger pages avoid forcing the user to ask "next" repeatedly.' },
-        },
-        required: ['role'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_jobs',
       description: 'Retrieve job postings from the ATS Jobs page (Job collection). Includes internal openings and external listings that have been mirrored into the ATS, distinguished by jobOrigin: "internal" (created in-app) or "external" (mirrored). Use jobOrigin filter when the user asks specifically for one. The raw ExternalJob collection (ATS External Jobs page) is intentionally NOT exposed. Supports every filter the ATS Jobs page itself has.',
       parameters: {
@@ -1076,31 +992,6 @@ const ROUTING_TOOLS = [
           status:          { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Defaults to Active. Pass "all" only when the user asks for every status.' },
           source:          { type: 'string', enum: EXTERNAL_JOB_SOURCES, description: 'Filter by source: active-jobs-db, linkedin-job-search-api, linkedin-jobs-api' },
           limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_job_applications',
-      description:
-        'Retrieve candidate applications — pipeline stages, hiring status, applicant count, applicant detail. ' +
-        'Returns total application count, breakdown by status, and a list of applicants with name, email, status, application date, and job title. ' +
-        'Filter by jobId (Mongo _id), jobTitle (partial match), or applicantName (partial match) to drill into a specific job\'s applicants or a specific candidate\'s applications. ' +
-        'STRICT RULE: when the user names a specific job (e.g. "applicants for Senior Engineer", "candidates of the Marketing role", "who applied to <Title>"), YOU MUST set jobTitle to that exact phrase. Without it the query returns every application company-wide, which is almost never what the user wants. If the user is referring back to a job named in a previous turn ("applicants for that job", "show their candidates"), reuse the prior turn\'s jobTitle from Last referenced entities. ' +
-        'Use for: "how many applications", "applicants for <job>", "applicants for jobId X", "show me John Doe\'s applications", "applicant details", "applicant pipeline".',
-      parameters: {
-        type: 'object',
-        properties: {
-          jobId:         { type: 'string', description: 'Mongo _id of the job — fetches all applicants for that job.' },
-          jobTitle:      { type: 'string', description: 'Job title (partial match) — fetches all applicants for matching jobs.' },
-          applicantName: { type: 'string', description: 'Candidate name (partial match) — fetches that candidate\'s applications.' },
-          applicantUserId: { type: 'string', description: 'Resolved User _id for the applicant — preferred over name-only lookup.' },
-          applicantEmail: { type: 'string', description: 'Applicant email — used with applicantUserId to find all candidate Employee rows.' },
-          status:        { type: 'string', description: 'Filter by status: Applied, Screening, Shortlisted, Interview, Offered, Hired, Rejected' },
-          limit:         { type: 'number', description: 'Max records to return (default 50, max 200)' },
         },
         required: [],
       },
@@ -1312,25 +1203,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_candidates',
-      description:
-        'Retrieve candidates — users with the Candidate role (referral leads in ATS, pre-employees who have not yet joined). ' +
-        'Use for: "list candidates", "how many candidates", "candidates with Python skills", "find candidates from Mumbai", "referral leads".',
-      parameters: {
-        type: 'object',
-        properties: {
-          query:    { type: 'string', description: 'Natural language search, e.g. "React developers with 3 years experience"' },
-          location: { type: 'string', description: 'Filter by city or location' },
-          domain:   { type: 'string', description: 'Filter by skill/domain area' },
-          limit:    { type: 'number', description: 'Max records to return (default 100, max 200)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'match_candidates_to_job',
       description: 'Find the best-matching candidates for a specific job — returns ranked candidates by skill overlap score. ' +
         'Use when asked "who fits this role", "best candidates for job X", "rank candidates for Senior React Developer".',
@@ -1342,22 +1214,6 @@ const ROUTING_TOOLS = [
           limit:    { type: 'number', description: 'Max candidates to return (default 10, max 25)' },
         },
         required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'semantic_employee_search',
-      description: 'Semantic skill search on employees — ranked by relevance to a natural-language query. ' +
-        'Prefer over fetch_employees when the query is skill/expertise-focused: "who knows Kubernetes", "best Python engineers".',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Natural language query, e.g. "senior backend engineers who know Postgres"' },
-          limit: { type: 'number', description: 'Max records to return (default 10, max 25)' },
-        },
-        required: ['query'],
       },
     },
   },
@@ -1382,29 +1238,6 @@ const ROUTING_TOOLS = [
           toDate:   { type: 'string', description: 'End date inclusive in YYYY-MM-DD.' },
         },
         required: ['employee'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'resolve_person_profile',
-      description:
-        'Who a person is. Resolves a name, email or employee ID to one person, discovers every role they hold, ' +
-        'and returns the profile fields the requester is permitted to see. ' +
-        'Use for: "who is <person>", "tell me about <person>", "tell me everything about <person>", "<person>\'s department / designation / manager / joining date". ' +
-        'Returns per-role fields plus availableFields, visibleFields, missing, redacted and notApplicable. ' +
-        'Never state a value that is not in `fields`. A key in `redacted` exists but is withheld — say it is not available to the requester, never that it is unrecorded. ' +
-        'A key in `missing` genuinely has no value — say it is not recorded. A key in `notApplicable` does not exist for that role — say nothing about it. ' +
-        'Does NOT return projects, tasks, attendance, leaves or shifts — use the tools named in relatedTools for those.',
-      parameters: {
-        type: 'object',
-        properties: {
-          person: { type: 'string', description: 'Name, email, or employee ID.' },
-          depth:  { type: 'string', enum: ['brief', 'full'],
-                    description: 'brief = lead with summaryFields and offer availableSections; full = report every key in fields.' },
-        },
-        required: [],
       },
     },
   },
@@ -1595,32 +1428,7 @@ assertRelatedToolsExist(ROUTING_TOOLS.map((t) => t.function.name));
 
 // ─── Phase 1: Route query to relevant data modules ───────────────────────────
 
-/**
- * Build the role-universe blurb injected into the router system prompt.
- * Lets the LLM know which slugs / display names are valid this turn without
- * baking them into a static enum.
- */
-async function buildRoleUniverseHint() {
-  try {
-    const roles = await listRoleSlugs();
-    if (!roles.length) return '';
-    const lines = roles.map((r) => {
-      const aliases = r.aliases?.length ? ` (aliases: ${r.aliases.join(', ')})` : '';
-      return `  - ${r.slug} → ${r.name}${aliases}`;
-    });
-    return [
-      '',
-      'Available roles for the `role` parameter on fetch_people / fetch_employees ' +
-        '(slug → display name). Pass the slug. Aliases also accepted.',
-      ...lines,
-    ].join('\n');
-  } catch {
-    return '';
-  }
-}
-
 async function routeQuery(client, messages) {
-  const roleHint = await buildRoleUniverseHint();
   const response = await client.chat.completions.create({
     ...llmParams(config.chatbot.model, { temperature: 0.1, maxTokens: 256 }),
     messages: [
@@ -1628,14 +1436,11 @@ async function routeQuery(client, messages) {
         role: 'system',
         content:
           "You are a query router for an HR platform. Select the tools needed to answer the user's question. " +
-          'For greetings or questions not related to HR data (employees, jobs, attendance, leave), call NO tools.' +
-          roleHint,
+          'For greetings or questions not related to HR data (employees, jobs, attendance, leave), call NO tools.',
       },
       ...messages.slice(-4),
     ],
-    tools: config.chatbot?.twoStage
-      ? ROUTING_TOOLS
-      : ROUTING_TOOLS.filter((t) => t.function.name !== 'fetch_people'),
+    tools: ROUTING_TOOLS,
     tool_choice: 'auto',
   });
 
@@ -1768,488 +1573,6 @@ async function fetchModule(name, args, user, uiContext = null) {
   }
 
   switch (name) {
-    case 'fetch_employees': {
-      const limit = Math.min(args.limit || 500, 1000);
-      // Never treat User role=Manager as a population — manager is ambiguous (org vs designation).
-      if (args.role && /^managers?$/i.test(String(args.role).trim())) {
-        return {
-          needsClarification: true,
-          clarifyingQuestion:
-            '"Manager" can mean two things in Dharwin:\n' +
-            '• **Organizational managers** (people with direct reports)\n' +
-            '• **Employees whose designation is "Manager"**\n' +
-            'Which one did you mean?',
-          authoritative: true,
-        };
-      }
-      // Per-query visibility override: caller can opt-in disabled / archived.
-      // Default = active+pending (visibleUserStatusClause).
-      const visOverride = overridesFromArgs(args);
-      logger.info(`[ChatAssistant][fetch_employees] userId=${userId} adminId=${adminId} limit=${limit} args=${JSON.stringify(args)} visOverride=${JSON.stringify(visOverride)}`);
-
-      // ─── MongoDB is source of truth for "employees" ─────────────────────────
-      // Mirrors site /v1/employees → queryCandidates exactly: drives the list
-      // from the Employee collection scoped by owner Users carrying the
-      // Employee/Candidate role, then hydrates each owner via User (best-effort
-      // — falls back to Employee.fullName when owner User is missing or
-      // deleted, matches the site's orphan handling). Site does NOT use
-      // Employee.adminId — keeping parity. Role-only paths (Agent / Recruiter
-      // / Administrator) skip the Employee join because those roles don't
-      // have Employee profiles.
-      const roleArg = args.role ? await resolveRoleDoc(args.role) : null;
-      const canonicalRole = args.role ? normalizeRole(args.role) : null;
-      const designationFilter = args.designation ? designationRegexForPhrase(args.designation) : null;
-      // Employee path triggers when:
-      //  • caller passed no role + no search (default headcount), OR
-      //  • caller asked for "Employee" / "Candidate" (legacy alias) — even if
-      //    the Role doc is missing (some seeds drop the role record).
-      // canonicalRole here is from normalizeRole() which preserves 'Candidate'
-      // as a distinct token (matching the DB Role doc name). Both roles use the
-      // Employee *profile collection* path below, but owner scoping stays
-      // STRICTLY separate via profileRoleNamesFor — Candidate and Employee are
-      // never merged (see ROLE_GROUPS).
-      const isEmployeeRoleQuery =
-        designationFilter ||
-        (!args.search && (
-          !args.role ||
-          canonicalRole === 'Employee' ||
-          canonicalRole === 'Candidate'
-        ));
-
-      // Employment status — accepts "active" | "current" | "resigned" |
-      // "retired" | "former" | "past" | "all". Synonyms collapse so LLM phrasing
-      // doesn't bypass the filter.
-      const rawEmp = String(args.employmentStatus || '').trim().toLowerCase();
-      let empStatus;
-      if (rawEmp === 'current' || rawEmp === 'active') empStatus = 'active';
-      else if (rawEmp === 'resigned' || rawEmp === 'retired' || rawEmp === 'former' || rawEmp === 'past' || rawEmp === 'ex' || rawEmp === 'left') empStatus = 'resigned';
-      else if (rawEmp === 'all' || rawEmp === 'both') empStatus = 'all';
-      else empStatus = rawEmp;
-
-      let baseQuery;
-      let total;
-      const tenantOwnerIds = null;
-
-      // Build the Employee filter once — reused for the count, the record
-      // list, and the owner-User hydrate step. Mirrors site queryCandidates
-      // exactly: scope by owner Users with the Employee/Candidate role
-      // (status active|pending). Site does NOT use Employee.adminId — keeping
-      // parity so the chatbot count matches the ATS Employees page (126 etc.).
-      let empMongoFilter = null;
-      // Owners held back purely by account state — surfaced in the breakdown
-      // so the reply can disclose them rather than silently shrinking counts.
-      let hiddenAccountOwnerIds = [];
-      if (isEmployeeRoleQuery) {
-        const today = new Date();
-        // Account visibility is the SAME for every employment scope. This used
-        // to widen to `{ $ne: 'deleted' }` for resigned/all, contradicting the
-        // parity comment directly above and pulling disabled accounts into the
-        // answer: "how many resigned employees" replied 35 where the Employees
-        // page showed 34. Employment scope is expressed only through
-        // Employee.resignDate below. Widen deliberately via
-        // CHATBOT_INCLUDE_DISABLED or an explicit includeDisabled arg.
-        // Scope owners to the population the caller ACTUALLY asked for.
-        // Strict name-equality on Role.name, deliberately NOT resolveRoleIds:
-        // the registry resolves previousNames, and post Candidate→Employee
-        // rename history that pulls the Employee doc into a Candidate lookup —
-        // which is the very leak this fixes. Same guard as fetch_candidates.
-        const profileRoleNames = profileRoleNamesFor(canonicalRole);
-        const profileRoleDocs = await Role.find(
-          { name: { $in: profileRoleNames }, status: 'active' },
-          { _id: 1 }
-        ).lean();
-        const profileRoleIds = profileRoleDocs.map((d) => d._id);
-
-        // Fail CLOSED on a missing Role doc. This previously left ownerIds
-        // null, which dropped the owner clause entirely and returned every
-        // profile in the collection — reintroducing the cross-population leak
-        // by another route.
-        if (!profileRoleIds.length) {
-          logger.warn(`[ChatAssistant][fetch_employees] role_missing role=${profileRoleNames.join('|')}`);
-          return { total: 0, records: [], notFound: true, searchedFor: profileRoleNames[0] };
-        }
-
-        const ownerIdsWithProfileRole = await User.find(
-          employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
-          { _id: 1 }
-        ).distinct('_id');
-
-        // Owners excluded ONLY because their account is disabled/archived.
-        // These are real resigned people; dropping them without a word is what
-        // made the chatbot say 36 while the Employees page said 35, with no
-        // explanation offered. Keep them out of the count (site parity) but
-        // report how many there are so the answer can say so out loud.
-        hiddenAccountOwnerIds = await User.find(
-          {
-            roleIds: { $in: profileRoleIds },
-            status: { $in: ['disabled', 'archived'] },
-            platformSuperUser: { $ne: true },
-            _id: { $nin: ownerIdsWithProfileRole },
-          },
-          { _id: 1 }
-        ).distinct('_id');
-
-        empMongoFilter = buildEmployeeEmploymentFilter({
-          ownerIds: ownerIdsWithProfileRole,
-          employmentStatus: empStatus === 'resigned' || empStatus === 'all' ? empStatus : 'active',
-          today,
-        });
-        if (designationFilter) {
-          empMongoFilter.designation = designationFilter;
-        }
-        // Authoritative count: one row per Employee profile (matches site
-        // /v1/employees behavior — does NOT collapse on owner duplicates).
-        total = await Employee.countDocuments(empMongoFilter);
-        // baseQuery is only used by Path 1 (name search) / Path 2 (semantic).
-        baseQuery = { status: visibleUserStatusClause(visOverride) };
-      } else if (canonicalRole) {
-        // Specific non-Employee role — Agent / Recruiter / Administrator / etc.
-        // No adminId filter — global fetch (D1 in spec 2026-05-06-employee-fetch-isolation-design).
-        const { ids: roleIdSet } = await resolveRoleIds(canonicalRole);
-        if (!roleIdSet.length) {
-          logger.info(`[ChatAssistant][fetch_employees] role_not_found canonicalRole=${canonicalRole}`);
-          return { total: 0, records: [], notFound: true, searchedFor: canonicalRole };
-        }
-        // visibleUserStatusClause is THE source of truth — count, list, and
-        // direct lookup all use it so they can never disagree.
-        baseQuery = {
-          status: visibleUserStatusClause(visOverride),
-          roleIds: { $in: roleIdSet },
-          platformSuperUser: { $ne: true },
-        };
-        // Strict-group guard: when asking for Students, exclude users who also
-        // carry an Administrator role so admins never bleed into the student
-        // list (regression fix — student docs sometimes link to admin owners).
-        // Apply the same guard whenever a non-admin role is requested.
-        if (!ADMIN_ROLE_NAMES.includes(canonicalRole)) {
-          const adminRoleIdSet = new Set();
-          for (const adminName of ADMIN_ROLE_NAMES) {
-            const r = await resolveRoleIds(adminName);
-            for (const id of r.ids) adminRoleIdSet.add(String(id));
-          }
-          if (adminRoleIdSet.size) {
-            const adminIds = [...adminRoleIdSet].map((id) => new mongoose.Types.ObjectId(id));
-            baseQuery.roleIds = { $in: roleIdSet, $nin: adminIds };
-          }
-        }
-        total = await User.countDocuments(baseQuery);
-      } else {
-        // Name search or fallback — span all roles for cross-role lookup.
-        // No adminId filter — global cross-role search (S1/D1 in spec).
-        baseQuery = {
-          status: visibleUserStatusClause(visOverride),
-          platformSuperUser: { $ne: true },
-        };
-        total = 0; // deferred — actual count is records.length after the regex match
-      }
-
-      if (args.status === 'active' || args.status === 'pending' || args.status === 'disabled') {
-        baseQuery.status = args.status;
-      }
-
-      const hasNameSearch = !!args.search;
-      const hasSemantic = !!(args.domain || args.location);
-      let records;
-      let source = 'mongo';
-
-      // Path 1: name search → direct MongoDB regex on name/email/phone.
-      // Pinecone is unreliable for exact-name lookups (returns top-K by cosine, not exact match).
-      if (hasNameSearch) {
-        const safe = escapeRegex(args.search);
-        const nameQuery = {
-          ...baseQuery,
-          $or: [
-            { name:        { $regex: safe, $options: 'i' } },
-            { email:       { $regex: safe, $options: 'i' } },
-            { phoneNumber: { $regex: safe, $options: 'i' } },
-          ],
-        };
-        records = await User.find(nameQuery)
-          .select('name email phoneNumber domain location status roleIds profileSummary education')
-          .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-          .limit(limit)
-          .lean();
-        source = 'mongo:name';
-
-        // For Employee-side fallbacks, no Employee.adminId filter is applied — the
-        // Employee collection is scoped via owner Users carrying the Employee role
-        // (matches site /v1/employees behavior, which does NOT filter by Employee.adminId).
-        // Don't re-filter on the User side beyond status, since User.roleIds may not be
-        // in sync with the Employee profile (Candidate-role users with Employee profiles,
-        // legacy seeds with missing role assignments, etc.).
-
-        // Fallback: search Employee.fullName / employeeId
-        if (records.length === 0) {
-          // Normalise possible employeeId queries — "dbs 172" / "DBS-172" → "DBS172"
-          const compact = String(args.search).replace(/[\s\-_]+/g, '');
-          const safeCompact = escapeRegex(compact);
-          const empOr = [
-            { fullName:   { $regex: safe, $options: 'i' } },
-            { employeeId: { $regex: safe, $options: 'i' } },
-          ];
-          if (compact && compact !== args.search) {
-            empOr.push({ employeeId: { $regex: safeCompact, $options: 'i' } });
-          }
-          // Site /v1/employees → queryCandidates uses no Employee.adminId filter — admin
-          // sees all candidates regardless of which admin owns the profile. Mirror that
-          // for targeted name lookups so search parity with the site is exact.
-          const empMatch = await Employee.find(
-            { $or: empOr },
-            { owner: 1, fullName: 1, employeeId: 1, adminId: 1 }
-          ).limit(50).lean();
-          const ownerIds = empMatch.map((e) => e.owner).filter(Boolean);
-          if (ownerIds.length) {
-            records = await User.find({ _id: { $in: ownerIds }, status: visibleUserStatusClause(visOverride) })
-              .select('name email phoneNumber domain location status roleIds profileSummary education')
-              .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-              .lean();
-            source = `mongo:employeeFullName(matched=${empMatch.length},users=${records.length})`;
-
-            // If owner Users were deleted/missing, synthesise records from Employee profile
-            // so the chatbot doesn't claim "not found" when the employee clearly exists.
-            if (records.length === 0) {
-              records = empMatch.map((e) => ({
-                _id: e.owner,
-                name: e.fullName || 'N/A',
-                email: 'N/A',
-                phoneNumber: 'N/A',
-                domain: [],
-                location: '',
-                status: 'unknown',
-                roleIds: [],
-              }));
-              source = `mongo:employeeFullName(orphan,${empMatch.length})`;
-            }
-          }
-        }
-
-        // Final fallback: skills/designation/department/shortBio
-        if (records.length === 0) {
-          const empMatch = await Employee.find(
-            {
-              $or: [
-                { 'skills.name': { $regex: safe, $options: 'i' } },
-                { designation:   { $regex: safe, $options: 'i' } },
-                { department:    { $regex: safe, $options: 'i' } },
-                { shortBio:      { $regex: safe, $options: 'i' } },
-              ],
-            },
-            { owner: 1 }
-          ).limit(50).lean();
-          const ownerIds = empMatch.map((e) => e.owner).filter(Boolean);
-          if (ownerIds.length) {
-            records = await User.find({ _id: { $in: ownerIds }, status: visibleUserStatusClause(visOverride) })
-              .select('name email phoneNumber domain location status roleIds profileSummary education')
-              .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-              .lean();
-            source = 'mongo:employeeProfile';
-          }
-        }
-      } else if (hasSemantic) {
-        // Path 2: semantic ranking (domain/location) — Pinecone, then Mongo intersect
-        try {
-          const queryParts = ['employee'];
-          if (args.domain)   queryParts.push(args.domain);
-          if (args.location) queryParts.push(args.location);
-          const qEmb = await embedQuery(queryParts.join(' '));
-          // Cap topK at 50 — large topK with no score threshold returns the whole namespace.
-          const topK = Math.min(limit, 50);
-          const matches = await pineconeQuery('employees', qEmb, topK, null);
-          const ids = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-          logger.info(`[ChatAssistant][fetch_employees] pinecone matches=${ids.length}`);
-          if (ids.length) {
-            records = await User.find({ ...baseQuery, _id: { $in: ids } })
-              .select('name email phoneNumber domain location status roleIds profileSummary education')
-              .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-              .lean();
-            source = 'pinecone+mongo';
-          }
-        } catch (err) {
-          logger.warn(`[ChatAssistant][fetch_employees] Pinecone error: ${err.message}`);
-        }
-      }
-
-      // Path 3 / fallback: full list.
-      // For Employee role queries we drive directly off the Employee collection
-      // (scoped by owner Users carrying the Employee role — no Employee.adminId
-      // filter, matching site /v1/employees) so every Employee profile becomes a
-      // row. Owner User is hydrated best-effort — when missing/deleted, the row is
-      // built from Employee.fullName/email/phoneNumber.
-      if (!records) {
-        if (isEmployeeRoleQuery) {
-          const employees = await Employee.find(empMongoFilter)
-            .select('owner fullName email phoneNumber employeeId designation department joiningDate resignDate isActive shortBio skills qualifications experiences address salaryRange')
-            .limit(limit)
-            .lean();
-          const ownerIds = employees.map((e) => e.owner).filter(Boolean);
-          // Hydrate without status filter — resigned employees often have
-          // status set to 'disabled' or 'deleted' on the User side. We've
-          // already validated they belong to the Employee population via the
-          // owner-role filter (no Employee.adminId filter is applied here),
-          // so all owner Users are safe to include.
-          const owners = ownerIds.length
-            ? await User.find({ _id: { $in: ownerIds } })
-                .select('name email phoneNumber domain location status roleIds')
-                .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-                .lean()
-            : [];
-          const userByOwner = new Map(owners.map((u) => [String(u._id), u]));
-          records = employees.map((e) => {
-            const u = userByOwner.get(String(e.owner));
-            return {
-              _id: u?._id || e.owner,
-              name: u?.name || e.fullName || 'N/A',
-              email: u?.email || e.email || 'N/A',
-              phoneNumber: u?.phoneNumber || e.phoneNumber || 'N/A',
-              domain: u?.domain || [],
-              location: u?.location || '',
-              status: u?.status || 'orphan',
-              // Account state kept on its own key so the renderer never has to
-              // guess whether `status` means "employed" or "can sign in".
-              accountState: u?.status || 'orphan',
-              roleIds: u?.roleIds || [],
-              employeeId: e.employeeId,
-              designation: e.designation,
-              department: e.department,
-              shortBio: e.shortBio,
-              skills: (e.skills ?? []).map((s) => ({ name: s.name, level: s.level, category: s.category })),
-              qualifications: e.qualifications,
-              experiences: e.experiences,
-              joiningDate: e.joiningDate,
-              resignDate: e.resignDate,
-              isActiveEmployee: e.isActive,
-              employmentState: e.resignDate && new Date(e.resignDate) <= new Date() ? 'resigned' : 'active',
-              address: e.address,
-              salaryRange: e.salaryRange,
-              _enriched: true,
-            };
-          });
-          source = `mongo:employee(owner,${employees.length})`;
-        } else {
-          records = await User.find(baseQuery)
-            .select('name email phoneNumber domain location status roleIds profileSummary education')
-            .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-            .limit(limit)
-            .lean();
-        }
-      }
-
-      // Enrich with Employee profile when result is small (single-person or narrow query).
-      // Skip when records already came from Employee-driven Path 3 (already enriched).
-      const alreadyEnriched = records.length > 0 && records.every((r) => r._enriched);
-      if (!alreadyEnriched && records.length > 0 && records.length <= 25) {
-        const ownerIds = records.map((r) => r._id);
-        const profiles = await Employee.find(
-          { owner: { $in: ownerIds } },
-          {
-            owner: 1, employeeId: 1, designation: 1, department: 1, shortBio: 1,
-            skills: 1, qualifications: 1, experiences: 1, joiningDate: 1,
-            resignDate: 1, isActive: 1, address: 1, salaryRange: 1,
-          }
-        ).lean();
-        const profMap = Object.fromEntries(profiles.map((p) => [String(p.owner), p]));
-        records = records.map((r) => {
-          const p = profMap[String(r._id)];
-          if (!p) return r;
-          return {
-            ...r,
-            employeeId: p.employeeId,
-            designation: p.designation,
-            department: p.department,
-            shortBio: p.shortBio,
-            skills: (p.skills ?? []).map((s) => ({ name: s.name, level: s.level, category: s.category })),
-            qualifications: p.qualifications,
-            experiences: p.experiences,
-            joiningDate: p.joiningDate,
-            resignDate: p.resignDate,
-            isActiveEmployee: p.isActive,
-            employmentState: p.resignDate && new Date(p.resignDate) <= new Date() ? 'resigned' : 'active',
-            address: p.address,
-            salaryRange: p.salaryRange,
-          };
-        });
-      }
-
-      // Drop records where all identity fields are null — phantom User docs with no data.
-      records = records.filter((r) => r.name || r.email || r.phoneNumber);
-
-      const safeTotal = Math.max(total, records.length);
-      // Employment breakdown — full active/resigned counts for the tenant,
-      // independent of the employmentStatus filter the caller chose. Lets the
-      // chatbot answer "how many resigned" even when the current view is
-      // restricted to active.
-      let employmentBreakdown = null;
-      if (!args.search && isEmployeeRoleQuery) {
-        const today = new Date();
-        // Same owner scope as the records above so the breakdown reconciles.
-        const baseEmpFilter = empMongoFilter && empMongoFilter.owner ? { owner: empMongoFilter.owner } : {};
-        const hiddenFilter = hiddenAccountOwnerIds.length ? { owner: { $in: hiddenAccountOwnerIds } } : null;
-        const [activeCount, resignedCount, hiddenActive, hiddenResigned] = await Promise.all([
-          Employee.countDocuments({
-            ...baseEmpFilter,
-            $or: [{ resignDate: null }, { resignDate: { $exists: false } }, { resignDate: { $gt: today } }],
-          }),
-          Employee.countDocuments({ ...baseEmpFilter, resignDate: { $ne: null, $lte: today } }),
-          hiddenFilter
-            ? Employee.countDocuments({
-                ...hiddenFilter,
-                $or: [{ resignDate: null }, { resignDate: { $exists: false } }, { resignDate: { $gt: today } }],
-              })
-            : 0,
-          hiddenFilter
-            ? Employee.countDocuments({ ...hiddenFilter, resignDate: { $ne: null, $lte: today } })
-            : 0,
-        ]);
-        employmentBreakdown = {
-          active: activeCount,
-          resigned: resignedCount,
-          total: activeCount + resignedCount,
-          // Real people held back because their ACCOUNT is disabled/archived,
-          // not because of their employment state. Reported so the answer can
-          // name them instead of leaving the reader to wonder why the chatbot
-          // and the Employees page disagree.
-          hiddenDisabledActive: hiddenActive,
-          hiddenDisabledResigned: hiddenResigned,
-          hiddenDisabledTotal: hiddenActive + hiddenResigned,
-        };
-      }
-
-      logger.info(`[ChatAssistant][fetch_employees] isEmployeeRoleQuery=${isEmployeeRoleQuery} empStatus=${empStatus || 'default'} total=${safeTotal} fetched=${records.length} source=${source} empBreakdown=${JSON.stringify(employmentBreakdown)} filter=${JSON.stringify(empMongoFilter)}`);
-      if (records[0]) {
-        const r0 = records[0];
-        logger.info(`[ChatAssistant][fetch_employees] sample record: name=${r0.name} | empId=${r0.employeeId} | desig=${r0.designation} | owner=${r0._id} | status=${r0.status}`);
-      }
-      // Guardrail: records < total. Tag the result so summarizeData renders an
-      // explicit "showing N of M" warning the LLM cannot miss.
-      const partialList = records.length < safeTotal;
-
-      if (records.length === 0 && args.search) {
-        return { total: 0, records: [], notFound: true, searchedFor: args.search };
-      }
-      // requestedRole — preserves what the caller asked for. factExtractor
-      // reads this so the deterministic renderer says "7 agents", not the
-      // multi-role-derived fallback "7 employees".
-      const requestedRoleName = canonicalRole
-        || (roleArg ? roleArg.name : null)
-        || (isEmployeeRoleQuery ? 'Employee' : null);
-      const isPersonSearch = !!args.search && !args.role;
-      let entityType = 'employee';
-      if (isPersonSearch) entityType = 'user';
-      else if (canonicalRole && !isEmployeeRoleQuery) entityType = 'user';
-      return {
-        total: safeTotal,
-        records,
-        source,
-        employmentBreakdown,
-        employmentFilter: empStatus || null,
-        partialList,
-        requestedRole: requestedRoleName,
-        requestedRoleSlug: requestedRoleName ? requestedRoleName.toLowerCase() : null,
-        entityType,
-        isPersonSearch,
-      };
-    }
-
     case 'employee_analytics': {
       // Employee-role population ONLY — never Candidate / referral / placement.
       const visOverride = overridesFromArgs(args);
@@ -2633,40 +1956,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       });
     }
 
-    case 'fetch_people': {
-      const resolved = await registryResolveRole(args.role);
-      if (!resolved.canonical) {
-        const available = await listRoleSlugs();
-        return {
-          records: [],
-          page: { from: 0, to: 0, total: 0, hasMore: false, nextCursor: null },
-          error: 'role_not_found',
-          requestedRole: args.role || null,
-          availableRoles: available.map((r) => ({ slug: r.slug, name: r.name })),
-          rendered: `Role '${args.role}' is not configured. Available roles: ${available.map((r) => r.name).join(', ')}.`,
-        };
-      }
-      const canonicalDisplay = resolved.names[0] || resolved.canonical;
-      const result = await fetchPeople({
-        adminId,
-        role: canonicalDisplay,
-        employmentScope: args.employmentScope || 'active',
-        cursor: args.cursor || null,
-        pageSize: args.pageSize || 50,
-        search: args.search || null,
-        models: { Employee, User, Role, Student, JobApplication },
-      });
-      const rendered = renderListing({
-        records: result.records,
-        page: result.page,
-        role: canonicalDisplay,
-        notFound: result.notFound,
-        searchedFor: result.searchedFor,
-      });
-      logger.info(`[ChatAssistant][fetch_people] requested=${args.role} canonical=${canonicalDisplay} scope=${args.employmentScope || 'active'} fetched=${result.records.length}/${result.page?.total ?? 0} hasMore=${result.page?.hasMore} source=${result.source || 'n/a'}`);
-      return { ...result, rendered };
-    }
-
     case 'fetch_jobs': {
       const limit = Math.min(args.limit || 100, 200);
       // Sage's job visibility must match the ATS Jobs page — non-privileged users only
@@ -2765,70 +2054,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       );
 
       return { records: merged, total, label: 'external job', statusFilter };
-    }
-
-    case 'fetch_job_applications': {
-      const limit = Math.min(args.limit || 50, 200);
-      let jobId = null;
-      let jobIds = null;
-
-      if (args.jobId && mongoose.Types.ObjectId.isValid(args.jobId)) {
-        jobId = args.jobId;
-      } else if (args.jobTitle) {
-        const safe = escapeRegex(args.jobTitle);
-        // Same visibility as the ATS Jobs page — a title lookup must not resolve to a
-        // Draft/other-user's job the caller couldn't otherwise see (job.service.js
-        // buildJobListFilter, via jobRank.js resolveJobVisibilityFilter).
-        const visibilityFilter = await resolveJobVisibilityFilter(user);
-        const ScopedJob = scopeJobModel(Job, visibilityFilter);
-        const titleJobIds = await ScopedJob.find({
-          title: { $regex: safe, $options: 'i' },
-        }).distinct('_id');
-        if (!titleJobIds.length) {
-          return { total: 0, records: [], notFound: true, searchedFor: args.jobTitle, label: 'job application' };
-        }
-        if (titleJobIds.length === 1) {
-          jobId = String(titleJobIds[0]);
-        } else {
-          jobIds = titleJobIds.map(String);
-        }
-      }
-
-      const hasApplicantFilter = args.applicantUserId || args.applicantEmail || args.applicantName;
-
-      // Uses same queryApplicants as GET /job-applications
-      const result = await searchApplications({
-        q: args.applicantName,
-        userId: args.applicantUserId,
-        email: args.applicantEmail,
-        status: args.status,
-        jobId,
-        jobIds,
-        user,
-        limit,
-        requireApplicantQ: !!hasApplicantFilter,
-      });
-
-      if (result.notFound) {
-        return {
-          total: 0,
-          records: [],
-          notFound: true,
-          searchedFor: args.applicantName || args.applicantUserId || args.applicantEmail,
-          label: 'job application',
-        };
-      }
-
-      logger.info(
-        `[ChatAssistant][fetch_job_applications] total=${result.total} ` +
-        `fetched=${result.records.length} statusFilter=${args.status || 'none'} ` +
-        `source=queryApplicants q=${args.applicantName || args.applicantEmail || args.applicantUserId || 'none'}`
-      );
-
-      return {
-        ...result,
-        scopedJobIds: jobIds?.length ?? (jobId ? 1 : undefined),
-      };
     }
 
     case 'fetch_attendance': {
@@ -3372,77 +2597,6 @@ async function fetchModule(name, args, user, uiContext = null) {
 
     // ─── Semantic / vector tools ─────────────────────────────────────────────
 
-    case 'fetch_candidates': {
-      const limit = Math.min(args.limit || 100, 200);
-      logger.info(`[ChatAssistant][fetch_candidates] userId=${userId} adminId=${adminId} limit=${limit} args=${JSON.stringify(args)}`);
-
-      // Candidate role lookup: strict name-equality on Role.name. The registry's
-      // resolveRoleIds resolves previousNames too, which (post Candidate→Employee
-      // rename history) pulls the Employee role doc into Candidate lookups —
-      // listing employees under "candidates". Direct Role.find keeps the two
-      // populations strictly separate.
-      const candidateRoleDocs = await Role.find(
-        { name: { $in: ROLE_GROUPS.candidate }, status: 'active' },
-        { _id: 1, name: 1 }
-      ).lean();
-      const candidateRoleIdList = candidateRoleDocs.map((d) => d._id);
-      logger.info(`[ChatAssistant][fetch_candidates] candidateRoleIds=${candidateRoleIdList.length} names=${candidateRoleDocs.map((d) => d.name).join(',')}`);
-
-      if (!candidateRoleIdList.length) {
-        return { total: 0, records: [], notFound: true, searchedFor: 'Candidate role', label: 'candidate' };
-      }
-
-      // Parity with fetch_employees: NO adminId filter (global), use
-      // visibleUserStatusClause so pending candidates also surface — matches
-      // the Users module list exactly. The legacy adminId+status='active' pair
-      // excluded most candidates → total=0 even with 16 candidates on file.
-      const baseQuery = {
-        status: visibleUserStatusClause(),
-        platformSuperUser: { $ne: true },
-        roleIds: { $in: candidateRoleIdList },
-      };
-      if (args.domain)   baseQuery.domain   = { $regex: escapeRegex(args.domain),   $options: 'i' };
-      if (args.location) baseQuery.location = { $regex: escapeRegex(args.location), $options: 'i' };
-
-      const total = await User.countDocuments(baseQuery);
-      let records;
-      let source = 'mongo';
-
-      // Optional semantic ranking — only when caller passes free-text query
-      if (args.query) {
-        try {
-          const qEmb = await embedQuery(args.query);
-          const matches = await pineconeQuery('employees', qEmb, Math.min(limit, 50), null);
-          const ids = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-          if (ids.length) {
-            records = await User.find({ ...baseQuery, _id: { $in: ids } })
-              .select('name email phoneNumber domain location status roleIds education profileSummary')
-              .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-              .lean();
-            source = 'pinecone+mongo';
-          }
-        } catch (err) {
-          logger.warn(`[ChatAssistant][fetch_candidates] Pinecone error: ${err.message}`);
-        }
-      }
-
-      // Default / fallback: full Mongo list — guaranteed accurate count
-      if (!records || records.length === 0) {
-        records = await User.find(baseQuery)
-          .select('name email phoneNumber domain location status roleIds education profileSummary')
-          .populate({ path: 'roleIds', select: 'name', options: { lean: true } })
-          .limit(limit)
-          .lean();
-        source = 'mongo';
-      }
-
-      records = records.filter((r) => r.name || r.email || r.phoneNumber);
-      const safeTotal = Math.max(total, records.length);
-      logger.info(`[ChatAssistant][fetch_candidates] total=${safeTotal} fetched=${records.length} source=${source}`);
-
-      return { total: safeTotal, records, source, label: 'candidate' };
-    }
-
     case 'match_candidates_to_job': {
       const limit = Math.min(args.limit || 10, 25);
       let job = null;
@@ -3506,45 +2660,6 @@ async function fetchModule(name, args, user, uiContext = null) {
         logger.warn(`[ChatAssistant] match_candidates_to_job Pinecone error: ${err.message}`);
         return { error: 'Vector search unavailable', job: job.title };
       }
-    }
-
-    case 'semantic_employee_search': {
-      const limit = Math.min(args.limit || 10, 25);
-      const query = args.query || '';
-      try {
-        const qEmb = await embedQuery(query);
-        const matches = await pineconeQuery('employees', qEmb, limit, null);
-        const mongoIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-        if (!mongoIds.length) return [];
-        return User.find({ _id: { $in: mongoIds } })
-          .select('name email phoneNumber domain location status profileSummary')
-          .lean();
-      } catch (err) {
-        logger.warn(`[ChatAssistant] semantic_employee_search Pinecone error: ${err.message}`);
-        const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        const safe = escapeRegex(query);
-        return User.find({
-          _id: { $in: companyUserIds },
-          status: { $in: ['active', 'pending'] },
-          $or: [
-            { name:   { $regex: safe, $options: 'i' } },
-            { domain: { $regex: safe, $options: 'i' } },
-          ],
-        })
-          .select('name email phoneNumber domain location status profileSummary')
-          .limit(limit)
-          .lean();
-      }
-    }
-
-    case 'resolve_person_profile': {
-      return resolvePersonProfile({
-        person: args.person,
-        depth: args.depth ?? 'brief',
-        viewer: user,
-        impersonating: !!user?.__impersonating,
-        adminId,
-      });
     }
 
     case 'fetch_employee_overview': {
@@ -6195,20 +5310,11 @@ const INTENT_PATTERNS = [
                                                                               modules: ['employee_analytics'], args: { metric: 'resign' } },
   { re: /\b(paid|unpaid)\s+employees?\b/i,                                    modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
   { re: /\b(how many|count)\b.*\b(paid|unpaid)\b.*\bemployees?\b/i,           modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
-  // Staff / headcount — general list/count queries only (specific lookups bail out above)
-  { re: /\b(employees?|headcount|staff|team members?|workforce)\b/i,               modules: ['fetch_employees'] },
-  // Role-specific shortcuts — pass role arg so the legacy fetch_employees branch
-  // routes to the matching User population (canonicalRole drives the $in lookup).
-  { re: /\bsales\s*agents?\b/i,                                                    modules: ['fetch_employees'], args: { role: 'SalesAgent' } },
-  { re: /\bagents?\b/i,                                                            modules: ['fetch_employees'], args: { role: 'Agent' } },
-  { re: /\b(administrators?|admins?)\b/i,                                          modules: ['fetch_employees'], args: { role: 'Administrator' } },
-  { re: /\brecruiters?\b/i,                                                        modules: ['fetch_employees'], args: { role: 'Recruiter' } },
-  // Training / course progress (Epic F, Student population) — must come BEFORE
-  // the generic "students?" role pattern below so course-progress asks route to
-  // the analytics tool instead of an unscoped Student-role headcount list.
+  // Employee / candidate / role headcounts and lists are answered by the agent's
+  // people, employees and candidates tools — no legacy fast path for them.
+  // Training / course progress (Epic F, Student population).
   { re: /\b(my courses?|course progress|training progress|training status|courses? (completed|enrolled|in progress|dropped)|how many courses)\b/i,
                                                                                     modules: ['training_analytics'] },
-  { re: /\bstudents?\b/i,                                                          modules: ['fetch_employees'], args: { role: 'Student' } },
   // Org structure / chart (Epic G) — manager/supervisor/group/chart asks.
   // Bare "how many managers" → manager POSITIONS (org_structure_analytics).
   { re: /\b(how many|count|number of|total)\b.{0,40}\bmanagers?\b/i,
@@ -6218,16 +5324,10 @@ const INTENT_PATTERNS = [
   { re: /\b(unassigned employees?|employees?\s+unassigned|org(anisation|anization)?\s*chart|org(anisation|anization)?\s*structure|structure coverage|chart coverage|supervisor coverage|do we have a supervisor|department(s)? (without|missing) (a )?(node|chart)|group\s+[a-z0-9])/i,
                                                                                       modules: ['org_structure_analytics'] },
   { re: /\b(supervisors?)\b/i,                                                      modules: ['org_structure_analytics'] },
-  { re: /\b(developer|engineer|designer|analyst|intern)\b/i,                       modules: ['fetch_employees'] },
-  { re: /\b(user roles?|role of|who has role|people with role)\b/i,                modules: ['fetch_employees'] },
-  { re: /\b(department|team (in|of|members)|people in)\b/i,                        modules: ['fetch_employees'] },
-  // Hiring tunnel snapshot (Epic C) — must come BEFORE the generic candidates
-  // pattern below so funnel/tunnel/pre-boarding asks route to the authoritative
-  // bucket snapshot instead of an unscoped candidate list.
+  // Hiring tunnel snapshot (Epic C) — funnel/tunnel/pre-boarding asks route to the
+  // authoritative bucket snapshot.
   { re: /\b(hiring tunnel|hiring funnel|referral funnel|referral tunnel|candidate (hiring )?(pipeline|funnel|tunnel) snapshot|pre-?boarding (count|status|candidates?))\b/i,
                                                                             modules: ['referral_leads_analytics'] },
-  // Candidates (User+Candidate role — pre-employees)
-  { re: /\b(candidates?|referral leads?|applicants?|prospective hires?|new joiners?)\b/i, modules: ['fetch_candidates'] },
   // External jobs (saved from job boards)
   { re: /\b(external jobs?|saved jobs?|linkedin jobs?|scraped jobs?|job board|external listing|aggregated jobs?)\b/i, modules: ['fetch_external_jobs'] },
   // Jobs (internal company postings)
@@ -6245,7 +5345,7 @@ const INTENT_PATTERNS = [
   { re: /\bhow many tasks?\b/i, modules: ['fetch_tasks'] },
   { re: /\b(how many|count|number of|total)\b.{0,60}\btasks?\b/i, modules: ['fetch_tasks'] },
   { re: /\b(list|show|give|tell)\b.{0,50}\btasks?\b/i, modules: ['fetch_tasks'] },
-  // PM workforce teams (TeamGroup) — must come BEFORE fetch_employees department pattern.
+  // PM workforce teams (TeamGroup).
   { re: /\b(how many|count|number of|total)\b.{0,40}\bteams?\b/i,
     modules: ['team_analytics'], args: { metric: 'count' } },
   { re: /\b(list|show|give|tell)\b.{0,50}\b(teams?|team groups?|workforce teams?)\b/i,
@@ -6265,12 +5365,8 @@ const INTENT_PATTERNS = [
     modules: ['project_analytics'], args: { metric: 'assignment_summary' } },
   { re: /\bhow many projects?\b/i, modules: ['fetch_projects'] },
   { re: /\b(projects? (of|by|for|status)|active projects?|list projects?)\b/i, modules: ['fetch_projects'] },
-  // Interviews (Meeting collection) — must come BEFORE the generic application
-  // pattern below so "interviews on Monday" / "who interviewed X" don't fall
-  // through to the job-application pipeline tool.
+  // Interviews (Meeting collection).
   { re: /\b(interviews?|interviewed|interviewer|interview schedule|interview result|interview status)\b/i, modules: ['fetch_interviews'] },
-  // Applications
-  { re: /\b(application|candidate pipeline|hiring pipeline)\b/i,           modules: ['fetch_job_applications'] },
   // Leave-request queue. The "on leave today" and leave-ranking intents are
   // resolved by guards at the top of detectIntent, so anything reaching this
   // rule is genuinely a question about filings. Fast-path only when no specific
@@ -6410,17 +5506,6 @@ export function detectIntent(text, uiContext = null) {
         funnelGuard?.block
       ) {
         continue;
-      }
-      // Never let fetch_employees answer org-chart manager/supervisor/group asks.
-      const orgGuard = guardFetchEmployeesOrgRoute(text);
-      if (
-        pattern.modules.includes('fetch_employees') &&
-        orgGuard?.block
-      ) {
-        return {
-          modules: orgGuard.preferModules,
-          args: extractOrgStructureArgs(text),
-        };
       }
       return { modules: pattern.modules, args: pattern.args || {} };
     }
@@ -6796,7 +5881,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         adminId,
       }).lean();
       const le = memDoc?.lastEntities || {};
-      const lastRole = le.role;
       const lastTopic = (le.lastTopic || '').toLowerCase();
       // Map remembered topic → tool name so "give detail" after "placements"
       // re-runs the placements query rather than dropping to the cached
@@ -6806,11 +5890,7 @@ async function prepareContext(client, history, user, uiContext = null, { request
         placements: 'fetch_placements',
         offer:      'fetch_offers',
         offers:     'fetch_offers',
-        application: 'fetch_job_applications',
-        applications: 'fetch_job_applications',
-        applicant:  'fetch_job_applications',
-        applicants: 'fetch_job_applications',
-        job:        'fetch_jobs',
+        job:       'fetch_jobs',
         jobs:       'fetch_jobs',
         task:       'task_board_analytics',
         tasks:      'task_board_analytics',
@@ -6883,15 +5963,10 @@ async function prepareContext(client, history, user, uiContext = null, { request
           toolArgs.phrase = effectiveUserMsg;
         }
         // Carry forward identity hints so the same record set is fetched.
-        if (le.jobTitle && toolName === 'fetch_job_applications') toolArgs.jobTitle = le.jobTitle;
-        if (le.jobId && toolName === 'fetch_job_applications')    toolArgs.jobId = le.jobId;
         if (le.person && (toolName === 'fetch_leave_requests' || toolName === 'fetch_backdated_attendance_requests')) {
           toolArgs.employee = le.person;
         }
         if (le.lastDate && (toolName === 'fetch_attendance_summary')) toolArgs.date = le.lastDate;
-      } else if (lastRole) {
-        toolName = 'fetch_employees';
-        toolArgs.role = lastRole;
       }
       // Agent on and not yet tried this turn: a jobs continuation isn't forced onto
       // fetch_jobs — routing below decides (and may hand it to the agent). Once the
@@ -7009,13 +6084,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         let parsed = {};
         try { parsed = JSON.parse(tc.function?.arguments || '{}'); } catch { /* keep empty */ }
         const name = tc.function?.name;
-        if (name === 'fetch_job_applications') {
-          if (!parsed.jobId && !parsed.jobTitle && !parsed.applicantName) {
-            if (le.jobId)         parsed.jobId = String(le.jobId);
-            else if (le.jobTitle) parsed.jobTitle = le.jobTitle;
-            else if (le.person)   parsed.applicantName = le.person;
-          }
-        }
         if (name === 'fetch_offers' || name === 'fetch_placements') {
           if (!parsed.candidateName && !parsed.jobTitle) {
             if (le.person)        parsed.candidateName = le.person;
@@ -7430,34 +6498,6 @@ async function tryReferralLeadQueryRoute({ history, user, adminId, stream = fals
     adminId,
     userId,
     deps: { memoryDoc: memDoc, currentEntitySubject },
-  });
-
-  if (!result) return null;
-  return emit(result);
-}
-
-async function tryActivityQueryRoute({ history, user, adminId, stream = false, onToken = null }) {
-  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-  const userId = user?.id;
-  const emit = (payload) => {
-    if (stream && onToken) onToken(payload.reply);
-    return envelope(payload);
-  };
-
-  const memDoc = userId && adminId
-    ? await ConversationMemory.findOne({ userId, adminId }).lean()
-    : null;
-
-  const result = await handleActivityQuery({
-    userMessage: lastUserMsg,
-    user,
-    adminId,
-    userId,
-    deps: {
-      memoryDoc: memDoc,
-      fetchJobApplications: (args, viewer) =>
-        fetchModule('fetch_job_applications', args, viewer),
-    },
   });
 
   if (!result) return null;
@@ -8324,11 +7364,6 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   {
-    const activityRoute = await tryActivityQueryRoute({ history, user, adminId });
-    if (activityRoute) return activityRoute;
-  }
-
-  {
     const convRoute = await tryConversationalEntityRoute({ history, user, adminId });
     if (convRoute) return convRoute;
   }
@@ -8665,16 +7700,6 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
     });
     if (referralLeadRoute) {
       onDone(referralLeadRoute);
-      return;
-    }
-  }
-
-  {
-    const activityRoute = await tryActivityQueryRoute({
-      history, user, adminId, stream: true, onToken,
-    });
-    if (activityRoute) {
-      onDone(activityRoute);
       return;
     }
   }

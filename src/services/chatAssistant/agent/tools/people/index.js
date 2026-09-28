@@ -10,6 +10,8 @@ const instructions = [
     'role filter — not list_roles.',
   '- "What can a Sales Agent do" / "what permissions does X role have" → get_role.',
   '- "How many sales agents" → count_users with a role filter (users, not roles).',
+  '- "List all recruiters" / "show me agents" / "how many students" → list_users/count_users with that ' +
+    'role (Student, Agent, Recruiter, Administrator and Sales Agent are all user roles).',
   '- Status defaults to active for user counts/lists. When you did not pass a status, say the numbers are ' +
     'for active accounts.',
   "- groupBy:'role' on count_users counts a user once per role they hold — a user with 2 roles counts in " +
@@ -53,6 +55,13 @@ const TELL_ME_ABOUT_NAME_RE = /\b(?:tell me about|details (?:of|for)|profile of)
 // ("how many candidates are assigned to agent Rahul") — only "sales agent"
 // and the actual admin/recruiter role words count as a headcount noun here.
 const ROLE_HEADCOUNT_RE = /\bhow many\b.{0,40}\b(admins?|administrators?|recruiters?|sales\s*agents?)\b/i;
+// "list all recruiters" / "show me agents" / "how many students": a role noun as the direct object
+// of a list/count verb (only an article/"our"/"active" between them). Bare "agent" is safe here
+// because it must follow the verb — "candidates assigned to agent Rahul" does not match. These used
+// to reach the legacy fetch_employees role fast path, which is gone since round 2.
+const ROLE_LIST_COUNT_RE = /\b(?:how many|count|list|show(?:\s+me)?|who are|all)(?:\s+(?:all|the|of|our|active))*\s+(?:admins?|administrators?|recruiters?|sales\s*agents?|agents?|students?)\b/i;
+// Course/training asks about students stay with training analytics, not a user headcount.
+const TRAINING_RE = /\b(courses?|training|modules?|enrolled|progress)\b/i;
 
 /**
  * True for turns the people domain's tools can plausibly answer. Used by the
@@ -69,7 +78,8 @@ export function matchesTurn(text) {
     || ROLE_CAPABILITY_RE.test(t)
     || WHO_IS_NAME_RE.test(t)
     || TELL_ME_ABOUT_NAME_RE.test(t)
-    || ROLE_HEADCOUNT_RE.test(t);
+    || ROLE_HEADCOUNT_RE.test(t)
+    || (ROLE_LIST_COUNT_RE.test(t) && !TRAINING_RE.test(t));
 }
 
 export default {

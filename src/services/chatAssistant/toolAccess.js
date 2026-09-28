@@ -33,14 +33,13 @@ const PLACEMENTS_READ = [ // placement.route.js canReadPlacements
 
 export const TOOL_ACCESS = {
   // People — employee.route.js
-  fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
   employee_analytics: { anyOf: PEOPLE_READ },
   designation_manager_analytics: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  fetch_candidates: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  fetch_people: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  semantic_employee_search: { anyOf: PEOPLE_READ, rowScope: 'person' },
   match_candidates_to_job: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  resolve_person_profile: { note: 'per-field requires in personProfile/index.js' },
+  // Permission keys only — no router tool by these names since round 2; kept for
+  // resolveTitleAmbiguity, buildSystemContext and the two-stage people path.
+  fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
+  fetch_people: { anyOf: PEOPLE_READ, rowScope: 'person' },
 
   // ATS pipeline
   fetch_interviews: { anyOf: ['interviews.read'], note: 'rows scoped by meetingScope in handler' },
@@ -52,7 +51,6 @@ export const TOOL_ACCESS = {
   // requireExternalJobsAccess.js's external-jobs.* gate protects. Mirror fetch_jobs'
   // rule exactly rather than a permission this tool doesn't actually read behind.
   fetch_external_jobs: { anyOf: ['jobs.read'] },
-  fetch_job_applications: { note: 'applicantQuery.service applicationScope' },
   referral_leads_analytics: { note: 'referralLeadsAnalytics.js candidates.read' },
 
   // Org / PM

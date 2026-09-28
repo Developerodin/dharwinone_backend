@@ -208,4 +208,29 @@ describe('people domain module', () => {
       assert.equal(matchesTurn(text), false, `expected matchesTurn to be false for: ${text}`);
     }
   });
+
+  it('matchesTurn opens on a role noun that is the object of a list/count verb (round 2: no legacy role fast path)', () => {
+    for (const text of [
+      'list all recruiters',
+      'list recruiters',
+      'show me agents',
+      'show me all the sales agents',
+      'who are the admins',
+      'list all administrators',
+      'how many students do we have',
+      'count the students',
+      'how many agents',
+    ]) {
+      assert.ok(matchesTurn(text), `expected matchesTurn to be true for: ${text}`);
+    }
+    for (const text of [
+      'how many candidates are assigned to agent Rahul', // agent-assignment flow, "agent" is not the verb's object
+      'show candidates assigned to agent Rahul',
+      'how many students completed the course', // training analytics
+      'list students enrolled in React basics',
+      'agent performance this week', // no list/count verb
+    ]) {
+      assert.equal(matchesTurn(text), false, `expected matchesTurn to be false for: ${text}`);
+    }
+  });
 });

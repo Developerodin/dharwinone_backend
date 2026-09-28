@@ -425,5 +425,15 @@
     "id": "users-and-employees-together",
     "question": "how many users do we have and how many of them are employees",
     "expect": { "tools": ["count_users", "count_employees"], "maxCalls": 2 }
+  },
+  {
+    "id": "people-list-recruiters",
+    "question": "list all recruiters",
+    "expect": { "tools": ["list_users"] }
+  },
+  {
+    "id": "people-count-students",
+    "question": "how many students do we have",
+    "expect": { "tools": ["count_users"] }
   }
 ]

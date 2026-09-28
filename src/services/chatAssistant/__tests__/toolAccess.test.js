@@ -25,7 +25,7 @@ describe('toolAccess', () => {
     const start = svcSrc.indexOf('const ROUTING_TOOLS = [');
     const end = svcSrc.indexOf('\n];', start);
     const names = [...svcSrc.slice(start, end).matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]);
-    assert.ok(names.length >= 39, `parsed ${names.length} tool names`);
+    assert.ok(names.length >= 33, `parsed ${names.length} tool names`);
     const missing = names.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -43,7 +43,7 @@ describe('toolAccess', () => {
     assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
     const body = svcSrc.slice(start, start + 1 + nextFn);
     const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
-    assert.ok(caseNames.length >= 39, `parsed ${caseNames.length} case labels`);
+    assert.ok(caseNames.length >= 34, `parsed ${caseNames.length} case labels`);
     const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -53,14 +53,14 @@ describe('toolAccess', () => {
     assert.equal(r.ok, false);
   });
 
-  it('denies fetch_candidates to a user with no candidate/employee read', async () => {
-    const r = await checkToolAccess('fetch_candidates', userWith('tasks.read'), notAdmin);
+  it('denies fetch_employees to a user with no candidate/employee read', async () => {
+    const r = await checkToolAccess('fetch_employees', userWith('tasks.read'), notAdmin);
     assert.equal(r.ok, false);
     assert.match(r.reason, /candidates/i);
   });
 
-  it('allows fetch_candidates with candidates.read', async () => {
-    const r = await checkToolAccess('fetch_candidates', userWith('candidates.read'), notAdmin);
+  it('allows fetch_employees with candidates.read', async () => {
+    const r = await checkToolAccess('fetch_employees', userWith('candidates.read'), notAdmin);
     assert.equal(r.ok, true);
   });
 

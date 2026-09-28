@@ -45,7 +45,7 @@ export default {
   ns: 'candidates',
   store: Employee,
   key: 'owner',
-  relatedTools: ['fetch_job_applications', 'fetch_interviews', 'fetch_offers'],
+  relatedTools: ['fetch_interviews', 'fetch_offers'],
   FIELDS: CANDIDATE_FIELDS,
   deriveFns: { employmentStatus, eadNumber: eadDisplayValue },
   load: (target) => Employee.findOne({ owner: target.userId }).lean(),

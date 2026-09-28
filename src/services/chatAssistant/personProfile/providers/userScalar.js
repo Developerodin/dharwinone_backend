@@ -18,7 +18,7 @@ const USER_SCALAR_FIELDS = {
 };
 
 const RELATED = {
-  recruiter:     ['fetch_candidates', 'fetch_job_applications'],
+  recruiter:     [],
   agent:         [],
   administrator: [],
 };

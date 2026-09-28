@@ -27,7 +27,7 @@ export const MANAGER_MEANINGS = Object.freeze({
     label: 'employees whose job title/designation is Manager',
     shortLabel: 'designation',
     description: 'Active employees whose designation matches the requested title',
-    tool: 'fetch_employees',
+    tool: 'designation_manager_analytics',
     metric: 'designation',
   },
 });
@@ -380,10 +380,9 @@ export function buildManagerRoutingIntent(meaning, text = '') {
     return { modules: ['org_manager_analytics'], args: { metric: 'org_managers', phrase: text } };
   }
   return {
-    modules: ['fetch_employees'],
+    modules: ['designation_manager_analytics'],
     args: {
       designation: designationPhrase,
-      employmentStatus: 'active',
       phrase: text,
     },
   };

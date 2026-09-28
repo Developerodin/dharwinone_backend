@@ -75,16 +75,6 @@ const ENTITY_ROUTE = {
     toolName: 'team_analytics',
     toolArgs: { metric: 'list' },
   },
-  employee: {
-    listPhrase: 'list all employees',
-    toolName: 'fetch_employees',
-    toolArgs: {},
-  },
-  employees: {
-    listPhrase: 'list all employees',
-    toolName: 'fetch_employees',
-    toolArgs: {},
-  },
   unassigned: {
     listPhrase: 'list unassigned employees',
     toolName: 'org_structure_analytics',
@@ -191,10 +181,9 @@ export function resolveReferences(text, memory = null, { entityQueryEnabled = fa
   const entityType = inferEntityTypeFromMemory(memory);
   if (!entityType) return base;
 
-  const route = ENTITY_ROUTE[entityType];
-  if (!route) return base;
-
   // Employee entityQuery follow-up — replay lastContext filters; do not fetch unfiltered list.
+  // Checked before the route lookup: employees have no ENTITY_ROUTE entry since the legacy
+  // fetch_employees tool was deleted.
   if (
     entityQueryEnabled &&
     entityType === 'employees' &&
@@ -213,12 +202,12 @@ export function resolveReferences(text, memory = null, { entityQueryEnabled = fa
     };
   }
 
+  const route = ENTITY_ROUTE[entityType];
+  if (!route) return base;
+
   // Pronoun list follow-ups: "list them", "show those", etc.
   if (RESOLVED_FOLLOWUP_RE.test(original)) {
     const toolArgs = { ...route.toolArgs, phrase: route.listPhrase };
-    if (entityType === 'employees' && memory?.role) {
-      toolArgs.role = memory.role;
-    }
     if (entityType === 'tasks' && memory?.lastTaskFilter) {
       toolArgs.metric = memory.lastTaskFilter;
     }
