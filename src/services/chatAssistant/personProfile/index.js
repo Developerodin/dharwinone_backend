@@ -79,7 +79,18 @@ export async function resolvePersonProfile({
 
   const canReadAny = READ_NAMESPACES.some((ns) =>
     hasApiPermissionFromContext(permissions, platformSuperUser, `${ns}.read`));
-  if (!canReadAny && !isSelfTarget) return { kind: 'notAuthorized' };
+  if (!canReadAny && !isSelfTarget) {
+    // Additive: `target` is already resolved at this point on both the userId
+    // and person paths. A caller whose tool-level gate is broader than
+    // READ_NAMESPACES (e.g. Sage's get_user, reachable via users.read aliases
+    // that don't grant employees/candidates/students/mentors/recruiters/agents
+    // .read) can still confirm who this is without seeing any profile section.
+    // Every existing caller only branches on `kind`, so this is additive.
+    return {
+      kind: 'notAuthorized',
+      identity: { userId: target.userId, name: target.name, email: target.email ?? null },
+    };
+  }
 
   const slugMap = await slugTagger(target.roleIds || []);
   const roleSlugs = [...slugMap.values()];

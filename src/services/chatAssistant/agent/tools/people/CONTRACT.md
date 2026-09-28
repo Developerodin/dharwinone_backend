@@ -603,3 +603,52 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
   between them would surface as `get_user` disagreeing with `count_users`/
   `list_users` about what the same viewer can see. Not observed, not a change
   made here — noted for whoever debugs that class of bug first.
+
+## Addendum (implementation review, 2026-09-28)
+
+Two gaps found while implementing Tasks 3/4, resolved as follows — binding, same
+as every other ruling in this document.
+
+**R10 — `get_user`'s `users.read` gate is broader than `resolvePersonProfile`'s
+READ_NAMESPACES; a `notAuthorized` result must degrade, never abort or bypass.**
+`config/permissions.js`'s `users.read` alias list includes `recruiters.read` /
+`ats.recruiters:*`, and `users.read` itself is granted to callers who only hold
+things like `kanban.read` / `tasks.read` / `interviews.read` through other
+permission bundles — none of which is in `resolvePersonProfile`'s
+`READ_NAMESPACES = ['employees','candidates','students','mentors','recruiters','agents']`.
+So a viewer can legitimately pass `PEOPLE_PROFILE_ACCESS`'s `anyOf: ['users.read']`
+check and still get `resolvePersonProfile → { kind: 'notAuthorized' }` back for a
+target that isn't themself. Fix, additive on both sides:
+- `personProfile/index.js`'s `notAuthorized` return now also carries
+  `identity: { userId, name, email }` — the `target` object is already resolved
+  (on both the `userId` and `person` paths) before the permission check runs, so
+  this costs nothing extra and is backward compatible: every existing caller
+  (`chatAssistant.service.js`, `renderFacts.js`, `activityQueryHandler.js`) only
+  branches on `profile.kind`, never inspects other keys on this branch.
+- `get_user.tool.js` never returns `{ error: ... }` for `notAuthorized`. It
+  builds `roles[]` the normal way (fresh `User.roleIds` → `Role.find`, Ruling
+  R6) off `profile.identity.userId`, and returns
+  `{ kind: 'unique', identity, roles, profiles: null, profileNote: 'not permitted' }`
+  — the caller learns who the person is and what roles they hold, never their
+  Employee/Candidate/Student/etc. profile data. `render()` still emits the
+  compact identity/roles table (via `buildProfileTableBlock`, which degrades
+  gracefully when `profiles` is empty) and the `get_user` count fact (this is
+  still "found 1 person", just with a restricted profile).
+
+**R11 — verified: Employee-vs-Candidate provider selection is id-based, not
+name-based, so a previousName collision cannot mis-route a profile.**
+`resolvePersonProfile` selects providers via `selectProviders(roleSlugs)`, where
+`roleSlugs = [...  (await tagSlugs(target.roleIds)).values()]` — `roleRegistry.js`'s
+`tagRoleSlugs(roleIds)` looks up each id with `reg.byId.get(String(rid))` (a
+`Map` keyed by `Role._id`), never by name/alias/previousName string matching.
+That string-matching path (`resolveRole`/`bySlug`) exists only for resolving
+**free-form input** (e.g. this contract's own `resolveRoleNames`/`get_role`) — it
+is never used to go from a `User.roleIds` entry to a provider. Consequently a
+Role document named "Employee" whose `previousNames` includes `{ name:
+'Candidate' }` still tags as slug `employee` for any user holding that id, and
+`selectProviders` runs the `employee` provider only (not `candidate`) — the
+"previousNames regression" the briefs warn against (never use `roleResolver.js`'s
+`resolveRoleIds`, a name-matching resolver, for this purpose) cannot occur
+through this path. No code change required; documented here per the review, and
+covered by a stub-level test (`selectProviders` fed a slug map built the same
+id-based way) in `__tests__/peopleTools.test.js`.

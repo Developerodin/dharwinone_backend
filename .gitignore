@@ -196,6 +196,10 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, Task 8 — entry gate.
 !src/services/chatAssistant/agent/__tests__/gate.test.js
 
+# Sage agent loop, Task 3 — people domain: user tools.
+!src/services/chatAssistant/agent/tools/people/__tests__/
+!src/services/chatAssistant/agent/tools/people/__tests__/userTools.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js
