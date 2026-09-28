@@ -187,7 +187,7 @@ import { blocksFromFacts } from './chatAssistant/renderers/index.js';
 import { envelope } from './chatAssistant/renderers/types.js';
 import { resolveViewerRole, resolveViewerRoleNames } from './chatAssistant/columnVisibility.js';
 import { buildFallback } from './chatAssistant/fallbackGenerator.js';
-import { runEmployeeEntityQuery, runAgentEmployeeQuery, useEmployeeEntityQuery, resolveEntity } from './chatAssistant/entityQuery/index.js';
+import { useEmployeeEntityQuery } from './chatAssistant/entityQuery/index.js';
 import {
   runJobEntityQuery,
   runJobFilterQuery,
@@ -204,34 +204,24 @@ import { matchSelection, detectDepth } from './chatAssistant/personProfile/preRo
 import { readPending, clearPending } from './chatAssistant/personProfile/pendingPerson.js';
 import { delimitUntrusted } from './chatAssistant/personProfile/outputGuard.js';
 import { detectConversationalQuery } from './chatAssistant/conversationalEntity/queryPatterns.js';
-import { resolveConversationalEntity } from './chatAssistant/conversationalEntity/resolveConversationalEntity.js';
 import {
   readPendingEntity,
   clearPendingEntity,
-  writePendingEntity,
   readPendingTitle,
   clearPendingTitle,
   writePendingTitle,
 } from './chatAssistant/conversationalEntity/pendingEntity.js';
-import {
-  matchEntitySelection,
-  matchTitleSelection,
-  renderEntityDisambiguationPrompt,
-} from './chatAssistant/conversationalEntity/preRouter.js';
+import { matchTitleSelection } from './chatAssistant/conversationalEntity/preRouter.js';
 import {
   detectTitleIntent,
   resolveTitleAmbiguity,
 } from './chatAssistant/conversationalEntity/resolveTitleAmbiguity.js';
 import { renderPersonDisambiguation, renderTitleAmbiguity } from './chatAssistant/conversationPolicy/renderFacts.js';
-import { resolveRoleProfile, renderRoleProfileReply } from './chatAssistant/roleProfile/index.js';
 import { presentPersonProfile } from './chatAssistant/personProfile/presentPersonProfile.js';
-import { readPersonConversationState } from './chatAssistant/conversationState/personConversationState.js';
 import {
   readPositionConversationState,
   writePositionConversationState,
-  buildDesignationEmployeeLastContext,
 } from './chatAssistant/conversationState/positionConversationState.js';
-import { employeeResultEnvelope } from './chatAssistant/conversationalEntity/titleQueryHelpers.js';
 import { readEntitySubject } from './chatAssistant/conversationState/entitySubject.js';
 import { detectJobProfileQuery, detectJobFollowUpIntent } from './chatAssistant/jobProfile/detectJobQuery.js';
 import { resolveJobByTitle, fetchJobById } from './chatAssistant/jobProfile/resolveJobByTitle.js';
@@ -682,7 +672,7 @@ const ROUTING_TOOLS = [
       description:
         'Authoritative EMPLOYEE-role analytics only (not ATS candidates / referral leads / placements). ' +
         'Counts resignations, joins, headcount, or paid/unpaid employees inside a date window. ' +
-        'Prefer over fetch_employees when the user asks "how many resigned/joined in July", "before July", "paid vs unpaid employees". ' +
+        'Use when the user asks "how many resigned/joined in July", "before July", "paid vs unpaid employees". ' +
         'NEVER use for hiring funnel, referral leads, applicants, offers, or placement Joined — those are different populations. ' +
         'If "joined" is ambiguous (employment vs placement vs Hired), ask the user instead of calling this tool.',
       parameters: {
@@ -1223,7 +1213,7 @@ const ROUTING_TOOLS = [
       name: 'fetch_employee_overview',
       description:
         'Admin-only: time-scoped HR data for a specific employee — shift assignment, week-off days, assigned holidays, admin-assigned leaves, leave requests in the asked period, FUTURE leaves (today onward), backdated attendance correction requests, and CandidateGroup / StudentGroup memberships. ' +
-        'Does NOT return identity, department, designation, joining or resign dates, or whether they are active or resigned — use resolve_person_profile for those. ' +
+        'Does NOT return identity, department, designation, joining or resign dates, or whether they are active or resigned. ' +
         'When the user asks for "shift", "week off", "holidays", "groups", or generic profile info only, no time period is needed. ' +
         'When the user asks specifically for "attendance summary" or "past leaves" with no time period, ask them which date / month / range first. ' +
         'For a single specific day pass {date: "YYYY-MM-DD"}; for a month pass {month: "YYYY-MM"}; for a range pass {fromDate, toDate}. ' +
@@ -5094,7 +5084,7 @@ function buildSystemPrompt(user, dataContext, memorySummary, lastEntities, viewe
     `13. COUNT-LIST CONSISTENCY: the number you state in your reply (e.g. "We have 6 agents") MUST equal the section header "total" returned by the tool. Never state a count from memory or guess. After listing people, re-check the list length against the stated count — if they differ, your previous count was wrong: correct it in the same reply using the tool's authoritative total. Never present "We have N" followed by N+k or N-k names.\n` +
     `14. TEMPORAL + TOPIC CARRY-OVER: when the user follows up with a question that lacks a date (or topic) but the prior turn carried one, REUSE the carried date/topic from "Last referenced entities" instead of asking again. Examples: prior turn "company attendance yesterday" → carried date set; follow-up "what about Akash" → call fetch_employee_attendance_calendar with {employee:"Akash", date:<carried-date>}. Prior turn "leaves of Saad in April" → follow-up "and Mohammad?" → fetch_leave_requests with {employee:"Mohammad", month:<carried-month>}. Never ask for a date the conversation already specified.\n` +
     `15. ATTENDANCE TOOL CHOICE: org-wide questions ("how many present", "how many absent", "company attendance for X") MUST call fetch_attendance_summary. Per-employee questions MUST call fetch_employee_attendance_calendar (preferred) or fetch_employee_attendance. The personal fetch_attendance tool is ONLY for the logged-in user asking about themselves. Never use fetch_attendance to answer a "how many" org-level question.\n` +
-    `16. UNIFIED VISIBILITY: by default the chatbot only sees users with status active or pending. Disabled / archived / deleted users are HIDDEN from every query — counts, lists, AND direct lookups all agree. If the user explicitly asks for "disabled", "deactivated", "archived", "hidden", or "blocked" people, you MUST call fetch_employees with includeDisabled=true (or includeArchived=true). Never claim someone "does not exist" if the same name later surfaces — instead, when you find a record whose STATUS field is not "active", say so out loud: "Found <Name>, but their account is <status> so they were excluded from the visible list." This rule keeps direct lookups, role lists, and headcounts mathematically consistent.\n` +
+    `16. UNIFIED VISIBILITY: by default the chatbot only sees users with status active or pending. Disabled / archived / deleted users are HIDDEN from every query — counts, lists, AND direct lookups all agree. If the user explicitly asks for "disabled", "deactivated", "archived", "hidden", or "blocked" people, say those accounts are hidden from these results rather than reporting zero. Never claim someone "does not exist" if the same name later surfaces — instead, when you find a record whose STATUS field is not "active", say so out loud: "Found <Name>, but their account is <status> so they were excluded from the visible list." This rule keeps direct lookups, role lists, and headcounts mathematically consistent.\n` +
     `17. STRICT FACTUAL MODE FOR COUNTS: numeric facts (employee counts, agent counts, attendance totals, leave counts, candidate counts, applicant counts, project totals, role counts, offer/placement totals, attendance breakdown numbers) MUST be quoted EXACTLY from the section headers / AUTHORITATIVE_COUNT_FOR_HOW_MANY tags / EMPLOYMENT_TOTALS lines. NEVER use words like "approximately", "around", "about", "roughly", "estimated", or "summarised". NEVER recompute by counting NAME lines. NEVER round. If two numbers conflict in the data context, prefer the AUTHORITATIVE tag and surface the conflict in the reply (one short sentence). The post-LLM validator will overwrite any number you produce that disagrees with the retrieval layer — saving you from being wrong, but you should not rely on it.\n` +
     `18. ENTITY-TYPE LOCK: when the retrieval call carried a specific role (Agent, Recruiter, Administrator, SalesAgent, Student, Candidate) the noun in your reply MUST be that role — never a parent category. "How many agents?" with retrieval role=Agent must answer "7 agents", NEVER "7 employees" even if every agent is also an employee. The "Last referenced entities → role" line in this prompt and any non-empty <role> in the data section header are LOCKED for the entire turn AND for follow-up turns ("are you sure?", "list them", "show me", "yes") until the user names a different role. Mixing entity types ("agents" → "employees" → "people") between count and list within the SAME conversation is a hallucination — the retrieval layer always returns ONE entity type per call.\n` +
     `19. USER_FACING_TEMPLATE: when a section contains a "USER_FACING_TEMPLATE:" block, prefer that prose over the generic fallback in rule 6. Mirror it: keep the contextual reasons, the suggested next actions, and the specific query name. You may lightly rewrite tone for the current conversation, but do NOT add new reasons, do NOT change the suggested actions, and do NOT invent details not present in the template.\n` +
@@ -6652,44 +6642,6 @@ async function tryJobConversationalRoute({ history, user, adminId, stream = fals
 }
 
 /**
- * Run a designation-scoped employee query and persist position conversation state.
- */
-async function runDesignationEmployeeQuery({
-  designation,
-  userMessage,
-  user,
-  userId,
-  adminId,
-  operation = 'list',
-}) {
-  await writePositionConversationState({
-    userId,
-    adminId,
-    state: { entity: 'employee', designation, source: 'title_ambiguity' },
-  });
-
-  const defaultMsg =
-    operation === 'count'
-      ? `how many employees with designation ${designation}`
-      : `list employees with designation ${designation}`;
-
-  const lastContext = {
-    ...buildDesignationEmployeeLastContext(designation, { operation }),
-    positionConversationState: {
-      entity: 'employee',
-      designation,
-      source: 'title_ambiguity',
-    },
-  };
-
-  return runEmployeeEntityQuery({
-    userMessage: userMessage || defaultMsg,
-    user,
-    lastContext,
-  });
-}
-
-/**
  * Pre-LLM gate for conversational person/role lookups ("tell me about X").
  * Returns an envelope when handled; null to fall through.
  */
@@ -6701,64 +6653,12 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
     return envelope(payload);
   };
 
-  // Open entity disambiguation (user vs role) outranks fresh routing.
-  const entityPending = await readPendingEntity({ userId, adminId });
-  if (entityPending) {
-    const sel = matchEntitySelection(lastUserMsg, entityPending.matches);
-    if (sel.kind === 'select' && sel.entityType === 'user') {
-      await clearPendingEntity({ userId, adminId });
-      const profile = await resolvePersonProfile({
-        userId: sel.userId,
-        depth: detectDepth(lastUserMsg),
-        viewer: user,
-        impersonating: !!user?.__impersonating,
-        adminId,
-      });
-      return emit(await presentPersonProfileEnvelope(profile, {
-        userMessage: lastUserMsg,
-        userId,
-        adminId,
-        selectionKind: 'select',
-        depth: detectDepth(lastUserMsg),
-      }));
-    }
-    if (sel.kind === 'select' && sel.entityType === 'role') {
-      await clearPendingEntity({ userId, adminId });
-      // resolveRoleProfile has no RBAC of its own (returns the role's full
-      // permissions list) — mirror fetch_roles' roles.read gate here; denied
-      // renders through the same notFound path as "no role match".
-      const rolesAccess = await checkToolAccess('fetch_roles', user);
-      const profile = rolesAccess.ok
-        ? await resolveRoleProfile({ roleId: sel.roleId })
-        : { kind: 'notFound', entityType: 'role' };
-      return emit(envelope({
-        reply: renderRoleProfileReply(profile),
-        blocks: [],
-        meta: { kind: 'role_profile', entityType: 'role', deterministic: true },
-      }));
-    }
-    if (sel.kind === 'reask') {
-      return emit(envelope({
-        reply: renderEntityDisambiguationPrompt(entityPending),
-        blocks: [],
-        meta: { kind: 'entity_disambiguation', deterministic: true },
-      }));
-    }
-    if (sel.kind === 'cancel') {
-      await clearPendingEntity({ userId, adminId });
-      return emit(envelope({
-        reply: `No problem — dropping the question about ${entityPending.query}.`,
-        blocks: [],
-        meta: { kind: 'entity_disambiguation', deterministic: true },
-      }));
-    }
-    // Unmatched reply while disambiguation is open — re-ask; never fall through to LLM/entityQuery.
-  return emit(envelope({
-    reply: renderEntityDisambiguationPrompt(entityPending),
-    blocks: [],
-    meta: { kind: 'entity_disambiguation', deterministic: true },
-  }));
-}
+  // A stale user-vs-role pick (written before the person/role routes moved to the
+  // agent) is cleared, not answered: the agent takes the turn from here.
+  if (await readPendingEntity({ userId, adminId })) {
+    await clearPendingEntity({ userId, adminId });
+    return null;
+  }
 
   const titlePending = await readPendingTitle({ userId, adminId });
   if (titlePending) {
@@ -6833,89 +6733,15 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
       });
       return emit(out);
     }
+    // "employee": the agent's count_employees/list_employees answer it next turn.
     if (titleSel.kind === 'select' && titleSel.target === 'employee') {
       await clearPendingTitle({ userId, adminId });
-      const designation = titlePending.query;
-      const matches = titlePending.employeeMatches || [];
-      if (matches.length === 1 && matches[0].owner) {
-        await writePositionConversationState({
-          userId,
-          adminId,
-          state: { entity: 'employee', designation, source: 'title_ambiguity' },
-        });
-        const profile = await resolvePersonProfile({
-          userId: matches[0].owner,
-          depth: detectDepth(lastUserMsg),
-          viewer: user,
-          impersonating: !!user?.__impersonating,
-          adminId,
-        });
-        return emit(await presentPersonProfileEnvelope(profile, {
-          userMessage: lastUserMsg,
-          userId,
-          adminId,
-          depth: detectDepth(lastUserMsg),
-        }));
-      }
-      if (useEmployeeEntityQuery(user)) {
-        const entityResult = await runDesignationEmployeeQuery({
-          designation,
-          userMessage: lastUserMsg,
-          user,
-          userId,
-          adminId,
-          operation: 'list',
-        });
-        const wrapped = employeeResultEnvelope(entityResult);
-        if (wrapped) return emit(wrapped);
-      }
-      const n = matches.length;
-      return emit(envelope({
-        reply: `There ${n === 1 ? 'is' : 'are'} **${n}** employee${n === 1 ? '' : 's'} with the position **${titlePending.query}**.`,
-        blocks: [],
-        meta: { kind: 'title_employees', deterministic: true, total: n },
-      }));
+      return null;
     }
     return emit(envelope({
       reply: renderTitleAmbiguity(titlePending),
       blocks: [],
       meta: { kind: 'title_disambiguation', deterministic: true },
-    }));
-  }
-
-  const personState = await readPersonConversationState({ userId, adminId });
-  const followUp = detectPresentationIntent(lastUserMsg, {
-    hasPriorCommunication: !!(personState?.communicatedFields?.length),
-    hasSubject: !!personState?.entityId,
-  });
-  if (followUp.intent === 'anything_else' && personState?.entityId) {
-    const profile = await resolvePersonProfile({
-      userId: personState.entityId,
-      depth: 'full',
-      viewer: user,
-      impersonating: !!user?.__impersonating,
-      adminId,
-    });
-    return emit(await presentPersonProfileEnvelope(profile, {
-      userMessage: lastUserMsg,
-      userId,
-      adminId,
-      depth: 'full',
-    }));
-  }
-  if (followUp.intent === 'single_fact' && personState?.entityId) {
-    const profile = await resolvePersonProfile({
-      userId: personState.entityId,
-      depth: detectDepth(lastUserMsg),
-      viewer: user,
-      impersonating: !!user?.__impersonating,
-      adminId,
-    });
-    return emit(await presentPersonProfileEnvelope(profile, {
-      userMessage: lastUserMsg,
-      userId,
-      adminId,
-      depth: detectDepth(lastUserMsg),
     }));
   }
 
@@ -6992,132 +6818,10 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
       });
       return emit(out);
     }
-    if (titleRes.kind === 'unique' && titleRes.target === 'employee') {
-      const matches = titleRes.employeeMatches || [];
-      if (matches.length === 1 && matches[0].owner) {
-        const profile = await resolvePersonProfile({
-          userId: matches[0].owner,
-          depth: detectDepth(lastUserMsg),
-          viewer: user,
-          impersonating: !!user?.__impersonating,
-          adminId,
-        });
-        return emit(await presentPersonProfileEnvelope(profile, {
-          userMessage: lastUserMsg,
-          userId,
-          adminId,
-          depth: detectDepth(lastUserMsg),
-        }));
-      }
-      if (useEmployeeEntityQuery(user)) {
-        const entityResult = await runDesignationEmployeeQuery({
-          designation: conv.subject,
-          userMessage: lastUserMsg,
-          user,
-          userId,
-          adminId,
-          operation: 'list',
-        });
-        const wrapped = employeeResultEnvelope(entityResult);
-        if (wrapped) return emit(wrapped);
-      }
-      const n = matches.length;
-      return emit(envelope({
-        reply: `There ${n === 1 ? 'is' : 'are'} **${n}** employee${n === 1 ? '' : 's'} with the position **${conv.subject}**.`,
-        blocks: [],
-        meta: { kind: 'title_employees', deterministic: true, total: n },
-    }));
-  }
-}
-
-  const resolved = await resolveConversationalEntity({
-    subject: conv.subject,
-    intent: conv.intent === 'role' ? 'role' : 'person',
-    viewer: user,
-  });
-
-  if (resolved.kind === 'unique' && resolved.entityType === 'role') {
-    const rolesAccess = await checkToolAccess('fetch_roles', user);
-    const profile = rolesAccess.ok
-      ? await resolveRoleProfile({
-          roleId: resolved.entity.roleId,
-          roleName: resolved.entity.name,
-        })
-      : { kind: 'notFound', entityType: 'role' };
-    return emit(envelope({
-      reply: renderRoleProfileReply(profile),
-      blocks: [],
-      meta: { kind: 'role_profile', entityType: 'role', deterministic: true },
-    }));
   }
 
-  if (resolved.kind === 'unique' && resolved.entityType === 'user') {
-    const profile = await resolvePersonProfile({
-      person: conv.subject,
-      userId: resolved.entity.userId,
-      depth: detectDepth(lastUserMsg),
-      viewer: user,
-      impersonating: !!user?.__impersonating,
-      adminId,
-    });
-    return emit(await presentPersonProfileEnvelope(profile, {
-      userMessage: lastUserMsg,
-      userId,
-      adminId,
-      depth: detectDepth(lastUserMsg),
-    }));
-  }
-
-  if (resolved.kind === 'ambiguous') {
-    await writePendingEntity({ userId, adminId, query: conv.subject, matches: resolved.matches });
-    const pending = { query: conv.subject, matches: resolved.matches };
-    return emit(envelope({
-      reply: renderEntityDisambiguationPrompt(pending),
-      blocks: [],
-      meta: { kind: 'entity_disambiguation', deterministic: true },
-    }));
-  }
-
-  if (resolved.kind === 'user_only_ambiguous') {
-    const profile = await resolvePersonProfile({
-      person: conv.subject,
-      depth: detectDepth(lastUserMsg),
-      viewer: user,
-      impersonating: !!user?.__impersonating,
-      adminId,
-    });
-    if (profile.kind === 'ambiguous') {
-      return emit(envelope({
-        reply: renderDisambiguationPrompt({ query: conv.subject, matches: profile.matches }),
-        blocks: [],
-        meta: { kind: 'person_disambiguation', entityType: 'user', deterministic: true },
-      }));
-    }
-    if (profile.kind === 'unique' || profile.kind === 'notFound' || profile.kind === 'notAuthorized' || profile.kind === 'unavailable') {
-      return emit(await presentPersonProfileEnvelope(profile, {
-        userMessage: lastUserMsg,
-        userId,
-        adminId,
-        depth: detectDepth(lastUserMsg),
-      }));
-    }
-  }
-
-  if (resolved.kind === 'notFound') {
-    if (conv.intent === 'role') {
-      return emit(envelope({
-        reply: "I couldn't find that role.",
-        blocks: [],
-        meta: { kind: 'role_profile', entityType: 'role', deterministic: true },
-      }));
-    }
-    return emit(envelope({
-      reply: "I couldn't find anyone or any role by that name.",
-      blocks: [],
-      meta: { kind: 'conversational_entity', deterministic: true },
-    }));
-  }
-
+  // Person and role lookups (and a title that is only an employee designation) are
+  // answered by the agent's get_user / get_role / list_roles / count_employees tools.
   return null;
 }
 
@@ -7369,14 +7073,6 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   const memDocForQuery = await ConversationMemory.findOne({ userId, adminId }).lean();
-  const positionConversationState = memDocForQuery?.lastEntities?.positionConversationState ?? null;
-  const storedLastContext = memDocForQuery?.lastEntities?.lastContext ?? null;
-  const lastContext = storedLastContext || positionConversationState
-    ? {
-        ...(storedLastContext || { entity: 'employees' }),
-        positionConversationState,
-      }
-    : null;
   const jobQueryContext = readJobQueryContext(memDocForQuery);
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
 
@@ -7408,63 +7104,6 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
           tookMs: jobResult.tookMs ?? null,
         },
       });
-    }
-  }
-
-  // Early gate — agent ↔ employee assignment queries (before resolveEntity users/employees split).
-  if (useEmployeeEntityQuery(user)) {
-    const agentEmpResult = await runAgentEmployeeQuery({
-      userMessage: lastUserMsg,
-      user,
-      uiContext,
-      lastContext,
-      requestId,
-    });
-    if (agentEmpResult?.deterministic) {
-      logger.info(
-        `[ChatAssistant] user=${user?.id} mode=agentEmployeeQuery deterministic=true requestId=${requestId ?? 'none'}`
-      );
-      return envelope({
-        reply: agentEmpResult.reply,
-        blocks: agentEmpResult.blocks,
-        meta: {
-          kind: 'employees',
-          total: typeof agentEmpResult.total === 'number' ? agentEmpResult.total : null,
-          deterministic: true,
-          tookMs: agentEmpResult.tookMs ?? null,
-        },
-      });
-    }
-  }
-
-  // Early gate — employee entityQuery before prepareContext (skips INTENT_PATTERNS / LLM / saveMemoryAsync).
-  if (useEmployeeEntityQuery(user)) {
-    const entity = resolveEntity(lastUserMsg, lastContext);
-    if (entity === 'employees') {
-      const entityResult = await runEmployeeEntityQuery({
-        userMessage: lastUserMsg,
-        user,
-        uiContext,
-        lastContext,
-        requestId,
-      });
-      if (entityResult?.deterministic) {
-        logger.info(
-          `[ChatAssistant] user=${user?.id} mode=entityQuery deterministic=true requestId=${requestId ?? 'none'}`
-        );
-        return envelope({
-          reply: entityResult.reply,
-          blocks: entityResult.blocks,
-          meta: entityResult.meta ?? {
-            kind: 'employees',
-            entityType: 'employees',
-            queryId: entityResult.structuredQuery?.queryId ?? null,
-            total: typeof entityResult.total === 'number' ? entityResult.total : null,
-            deterministic: true,
-            tookMs: entityResult.tookMs ?? null,
-          },
-        });
-      }
     }
   }
 
@@ -7715,14 +7354,6 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
   }
 
   const memDocForQuery = await ConversationMemory.findOne({ userId, adminId }).lean();
-  const positionConversationState = memDocForQuery?.lastEntities?.positionConversationState ?? null;
-  const storedLastContext = memDocForQuery?.lastEntities?.lastContext ?? null;
-  const lastContext = storedLastContext || positionConversationState
-    ? {
-        ...(storedLastContext || { entity: 'employees' }),
-        positionConversationState,
-      }
-    : null;
   const jobQueryContext = readJobQueryContext(memDocForQuery);
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
 
@@ -7757,71 +7388,6 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
         })
       );
       return;
-    }
-  }
-
-  // Early gate — agent ↔ employee assignment queries (before resolveEntity users/employees split).
-  if (useEmployeeEntityQuery(user)) {
-    const agentEmpResult = await runAgentEmployeeQuery({
-      userMessage: lastUserMsg,
-      user,
-      uiContext,
-      lastContext,
-      requestId,
-    });
-    if (agentEmpResult?.deterministic) {
-      logger.info(
-        `[ChatAssistant:stream] user=${user?.id} mode=agentEmployeeQuery deterministic=true requestId=${requestId ?? 'none'}`
-      );
-      onToken(agentEmpResult.reply);
-      onDone(
-        envelope({
-          reply: agentEmpResult.reply,
-          blocks: agentEmpResult.blocks,
-          meta: {
-            kind: 'employees',
-            total: typeof agentEmpResult.total === 'number' ? agentEmpResult.total : null,
-            deterministic: true,
-            tookMs: agentEmpResult.tookMs ?? null,
-          },
-        })
-      );
-      return;
-    }
-  }
-
-  // Early gate — mirrors sendMessage; streams deterministic entityQuery in one chunk.
-  if (useEmployeeEntityQuery(user)) {
-    const entity = resolveEntity(lastUserMsg, lastContext);
-    if (entity === 'employees') {
-      const entityResult = await runEmployeeEntityQuery({
-        userMessage: lastUserMsg,
-        user,
-        uiContext,
-        lastContext,
-        requestId,
-      });
-      if (entityResult?.deterministic) {
-        logger.info(
-          `[ChatAssistant:stream] user=${user?.id} mode=entityQuery deterministic=true requestId=${requestId ?? 'none'}`
-        );
-        onToken(entityResult.reply);
-        onDone(
-          envelope({
-            reply: entityResult.reply,
-            blocks: entityResult.blocks,
-            meta: entityResult.meta ?? {
-              kind: 'employees',
-              entityType: 'employees',
-              queryId: entityResult.structuredQuery?.queryId ?? null,
-              total: typeof entityResult.total === 'number' ? entityResult.total : null,
-              deterministic: true,
-              tookMs: entityResult.tookMs ?? null,
-            },
-          })
-        );
-        return;
-      }
     }
   }
 
