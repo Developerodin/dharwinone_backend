@@ -93,9 +93,13 @@ const hasAny = (permissions, required) =>
   !!permissions &&
   required.some((r) => getGrantingPermissions(r).some((p) => permissions.has(p)));
 
-export async function checkToolAccess(name, user, deps = {}) {
-  const rule = TOOL_ACCESS[name];
-  if (!rule) return { ok: false, reason: `Unknown tool ${name}.` };
+/**
+ * Evaluate a single TOOL_ACCESS-shaped rule (`{ anyOf, adminByName }` or
+ * `{ note }`) against a user. Extracted from `checkToolAccess` so
+ * `agent/toolRegistry.js` can run the identical check against a tool's
+ * co-located `access` object without a name/TOOL_ACCESS lookup.
+ */
+export async function checkAccessRule(rule, user, deps = {}) {
   if (!rule.anyOf) return { ok: true };
   if (user?.platformSuperUser) return { ok: true };
   if (hasAny(user?.authContext?.permissions, rule.anyOf)) return { ok: true };
@@ -104,6 +108,12 @@ export async function checkToolAccess(name, user, deps = {}) {
     if (await isAdmin(user)) return { ok: true };
   }
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
+}
+
+export async function checkToolAccess(name, user, deps = {}) {
+  const rule = TOOL_ACCESS[name];
+  if (!rule) return { ok: false, reason: `Unknown tool ${name}.` };
+  return checkAccessRule(rule, user, deps);
 }
 
 /**
@@ -208,9 +218,18 @@ export async function redactSalary(result, user) {
   return stripKey(result, 'salaryRange');
 }
 
-export async function guardToolResult(name, result, user, deps = {}) {
+/**
+ * Same as `guardToolResult` but takes the rule object directly instead of a
+ * TOOL_ACCESS name lookup, so `agent/toolRegistry.js` can guard a tool's
+ * result using its co-located `access` object.
+ */
+export async function guardResultForRule(rule, result, user, deps = {}) {
   if (!result || result.forbidden) return result;
-  if (TOOL_ACCESS[name]?.rowScope !== 'person') return result;
+  if (rule?.rowScope !== 'person') return result;
   const scoped = applyRowScope(result, await resolveRowScope(user, deps));
   return redactSalary(scoped, user);
+}
+
+export async function guardToolResult(name, result, user, deps = {}) {
+  return guardResultForRule(TOOL_ACCESS[name], result, user, deps);
 }
