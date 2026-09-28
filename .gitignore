@@ -206,6 +206,10 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, round 2 — Candidate-only owner scope.
 !src/services/__tests__/employeeOwnerRoleScope.test.js
 
+# Sage agent loop, round 2 — employees domain.
+!src/services/chatAssistant/agent/tools/employees/__tests__/
+!src/services/chatAssistant/agent/tools/employees/__tests__/employeeTools.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js

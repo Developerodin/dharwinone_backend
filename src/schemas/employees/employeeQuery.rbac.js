@@ -2,7 +2,7 @@ import { getGrantingPermissions } from '../../config/permissions.js';
 import { ERROR_CODES } from '../entityQuery.contract.js';
 
 /** Mirror `employee.route.js` canReadEmployees + manage equivalents for chatbot entityQuery. */
-const EMPLOYEE_QUERY_READ_PERMISSIONS = Object.freeze([
+export const EMPLOYEE_QUERY_READ_PERMISSIONS = Object.freeze([
   'candidates.read',
   'employees.read',
   'candidates.manage',
