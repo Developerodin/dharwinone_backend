@@ -6,7 +6,7 @@ import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import Role from '../models/role.model.js';
 import Job from '../models/job.model.js';
-import ExternalJob, { EXTERNAL_JOB_SOURCES } from '../models/externalJob.model.js';
+import { EXTERNAL_JOB_SOURCES } from '../models/externalJob.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Attendance from '../models/attendance.model.js';
 import LeaveRequest from '../models/leaveRequest.model.js';
@@ -41,7 +41,6 @@ import {
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { llmParams } from './chatAssistant/llmParams.js';
-import { tagRoleNames } from './chatAssistant/roleResolver.js';
 import { resolveRole as registryResolveRole, listRoleSlugs, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
 import { resolveUserEntity } from './chatAssistant/entityResolver.js';
 import { fetchPeople } from './chatAssistant/peopleFetcher.js';
@@ -147,7 +146,7 @@ import {
   resolveSprintByNameOrId,
   buildProjectQueryContext,
 } from './chatAssistant/projectGraph.resolvers.js';
-import { resolveAssigneeByName, buildAccessibleTaskFilter, buildTaskServiceFilter, hasTaskReadAccess, extractTaskMemoryHints } from './chatAssistant/taskAccess.js';
+import { resolveAssigneeByName, hasTaskReadAccess, extractTaskMemoryHints } from './chatAssistant/taskAccess.js';
 import {
   executeAtomicTaskQuery,
   assertTaskResultIntegrity,
@@ -158,7 +157,6 @@ import {
   executeAtomicJobQuery,
   assertJobResultIntegrity,
   resolveJobPayload,
-  buildJobResultEnvelope,
 } from './chatAssistant/jobResult.js';
 import {
   andMongoFilters,
@@ -168,7 +166,6 @@ import {
   computeJobOriginCounts,
 } from './chatAssistant/queryPlanner/entities/jobRank.js';
 import { saveTaskQueryContext } from './chatAssistant/saveTaskQueryContext.js';
-import { queryTasks } from './task.service.js';
 import {
   getOrgCoverageSummary,
   listOrgUnits,
@@ -177,7 +174,6 @@ import {
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import {
   employeeOwnerQuery,
-  canUserBeVisible,
   overridesFromArgs,
 } from './chatAssistant/visibilityRules.js';
 import { extractFacts } from './chatAssistant/factExtractor.js';
@@ -187,7 +183,6 @@ import { blocksFromFacts } from './chatAssistant/renderers/index.js';
 import { envelope } from './chatAssistant/renderers/types.js';
 import { resolveViewerRole, resolveViewerRoleNames } from './chatAssistant/columnVisibility.js';
 import { buildFallback } from './chatAssistant/fallbackGenerator.js';
-import { useEmployeeEntityQuery } from './chatAssistant/entityQuery/index.js';
 import {
   runJobEntityQuery,
   runJobFilterQuery,
@@ -198,15 +193,10 @@ import {
 import { readJobQueryContext, saveJobQueryContext, buildJobQueryContextFromResult } from './chatAssistant/conversationState/jobQueryContext.js';
 import { guardLegacyReply } from './chatAssistant/entityQuery/recordValidator.js';
 import { tryAgentTurn, hasRecentAgentTurn, JOB_ENTITY_SWITCH_RE } from './chatAssistant/agent/gate.js';
-import { resolvePersonProfile } from './chatAssistant/personProfile/index.js';
 import { assertRelatedToolsExist } from './chatAssistant/personProfile/providers/index.js';
-import { matchSelection, detectDepth } from './chatAssistant/personProfile/preRouter.js';
-import { readPending, clearPending } from './chatAssistant/personProfile/pendingPerson.js';
-import { delimitUntrusted } from './chatAssistant/personProfile/outputGuard.js';
+import { detectDepth } from './chatAssistant/personProfile/preRouter.js';
 import { detectConversationalQuery } from './chatAssistant/conversationalEntity/queryPatterns.js';
 import {
-  readPendingEntity,
-  clearPendingEntity,
   readPendingTitle,
   clearPendingTitle,
   writePendingTitle,
@@ -216,8 +206,7 @@ import {
   detectTitleIntent,
   resolveTitleAmbiguity,
 } from './chatAssistant/conversationalEntity/resolveTitleAmbiguity.js';
-import { renderPersonDisambiguation, renderTitleAmbiguity } from './chatAssistant/conversationPolicy/renderFacts.js';
-import { presentPersonProfile } from './chatAssistant/personProfile/presentPersonProfile.js';
+import { renderTitleAmbiguity } from './chatAssistant/conversationPolicy/renderFacts.js';
 import {
   readPositionConversationState,
   writePositionConversationState,
@@ -3564,9 +3553,6 @@ function buildCountBanner(fetchedData) {
   const lines = [];
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
-    if (key === 'fetch_employees' && typeof data?.total === 'number') {
-      lines.push(`  fetch_employees.total = ${data.total}`);
-    }
     if (key === 'employee_analytics' && typeof data?.total === 'number') {
       lines.push(`  employee_analytics.total = ${data.total}`);
       if (data?.breakdown?.paid != null) {
@@ -3640,9 +3626,6 @@ function buildCountBanner(fetchedData) {
     }
     if (key === 'fetch_people' && typeof data?.page?.total === 'number') {
       lines.push(`  fetch_people.total = ${data.page.total}`);
-    }
-    if (key === 'fetch_candidates' && typeof data?.total === 'number') {
-      lines.push(`  fetch_candidates.total = ${data.total}`);
     }
     if (key === 'fetch_roles' && typeof data?.total === 'number') {
       lines.push(`  fetch_roles.total = ${data.total}`);
@@ -3726,91 +3709,6 @@ function summarizeData(fetchedData) {
       for (const r of records) {
         const aliases = Array.isArray(r.aliases) && r.aliases.length ? ` | ALIASES: ${r.aliases.join(', ')}` : '';
         lines.push(`ROLE: ${r.name} | SLUG: ${r.slug}${aliases}`);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_employees') {
-      if (data?.needsClarification) {
-        parts.push(
-          `--- employees ---\n` +
-          `NEEDS_CLARIFICATION: ${data.clarifyingQuestion || 'Please clarify manager meaning.'}\n` +
-          `USER_FACING_REPLY: Ask the user this question. Do not invent counts.`
-        );
-        continue;
-      }
-      if (data?.notFound) {
-        const fb = buildFallback({ module: 'employees', queryArg: data.searchedFor });
-        parts.push(
-          `--- employees ---\n` +
-          `NO_EMPLOYEE_FOUND: No employee exists in this company matching "${data.searchedFor}". Do not guess or fabricate details.\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent details):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const shown = records.length;
-      const eb = data?.employmentBreakdown;
-      const ebTag = eb
-        ? ` | EMPLOYMENT_TOTALS — active: ${eb.active}, resigned: ${eb.resigned}, total: ${eb.total}${
-            eb.hiddenDisabledTotal
-              ? ` | EXCLUDED_DISABLED_ACCOUNTS — ${eb.hiddenDisabledTotal} (resigned: ${eb.hiddenDisabledResigned}, active: ${eb.hiddenDisabledActive}) — these people are NOT in the totals above because their user account is disabled/archived; state this explicitly when listing or counting so the number matches the Employees page`
-              : ''
-          }${data?.employmentFilter ? ` | FILTER: ${data.employmentFilter}` : ''}`
-        : '';
-      // Always emit the AUTHORITATIVE_COUNT tag — even when shown == total —
-      // so the LLM never miscounts by enumerating NAME lines. Verbose
-      // phrasing is intentional; short tags get ignored.
-      const partialTag = data?.partialList
-        ? ` | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number when the user asks "how many" or "total". The records list below is a partial view (only ${shown} rendered).`
-        : ` | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number when the user asks "how many" or "total". Do not count NAME lines yourself.`;
-      const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
-      const header = total > shown
-        ? `--- employees (${shown} shown of ${total} total${ebTag}${partialTag}${scopeTag}) ---`
-        : `--- employees (${total} total${ebTag}${partialTag}${scopeTag}) ---`;
-      const lines = [header];
-      const fmtDate = formatDateIST;
-      for (const e of records) {
-        const domains = Array.isArray(e.domain) && e.domain.length ? e.domain.join(', ') : 'None';
-        const roleList = Array.isArray(e.roleNames) && e.roleNames.length
-          ? e.roleNames
-          : (Array.isArray(e.roleIds) && e.roleIds.length
-              ? e.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean)
-              : []);
-        const roles = roleList.length ? roleList.join(', ') : 'N/A';
-        const isEmployeeRole = roleList.some((r) => /employee/i.test(String(r)));
-        // Support alternate backend field names per spec.
-        const empIdVal  = e.employeeId || e.empId || e.employee_code || '';
-        const joinVal   = fmtDate(e.joiningDate || e.joinDate || e.dateOfJoining);
-        const resignVal = fmtDate(e.resignDate || e.resignationDate || e.exitDate);
-        let line = `NAME: ${e.name || 'N/A'}`;
-        // EMPLOYEE_ID only for users carrying the Employee role.
-        if (isEmployeeRole && empIdVal) line += ` | EMPLOYEE_ID: ${empIdVal}`;
-        line += ` | ROLE: ${roles} | EMAIL: ${e.email || 'N/A'} | PHONE: ${e.phoneNumber || 'N/A'}` +
-          ` | LOCATION: ${e.location || 'N/A'} | DOMAINS: ${domains} | STATUS: ${e.status || 'N/A'}`;
-        if (e.designation)   line += ` | DESIGNATION: ${e.designation}`;
-        if (e.department)    line += ` | DEPARTMENT: ${e.department}`;
-        if (e.shortBio)      line += ` | BIO: ${e.shortBio}`;
-        if (joinVal)         line += ` | JOIN_DATE: ${joinVal}`;
-        // Show resign date whenever it exists (past OR future). Per spec, do
-        // NOT hide resign date for resigned employees.
-        if (resignVal)       line += ` | RESIGN_DATE: ${resignVal}`;
-        if (e.employmentState) line += ` | EMPLOYMENT_STATE: ${e.employmentState}`;
-        if (Array.isArray(e.skills) && e.skills.length) {
-          const skillStr = e.skills.map((s) => s.name + (s.level ? ` (${s.level})` : '')).join(', ');
-          line += ` | SKILLS: ${skillStr}`;
-        }
-        if (Array.isArray(e.qualifications) && e.qualifications.length) {
-          const quals = e.qualifications.map((q) => q.degree || q.title || JSON.stringify(q)).join('; ');
-          line += ` | QUALIFICATIONS: ${quals}`;
-        }
-        if (Array.isArray(e.experiences) && e.experiences.length) {
-          const exps = e.experiences.map((x) => `${x.title || ''} at ${x.company || ''}`).join('; ');
-          line += ` | EXPERIENCE: ${exps}`;
-        }
-        lines.push(line);
       }
       parts.push(lines.join('\n'));
       continue;
@@ -3952,35 +3850,6 @@ function summarizeData(fetchedData) {
           const desc = String(j.jobDescription).replace(/\s+/g, ' ').slice(0, 240);
           line += ` | DESCRIPTION: ${desc}${j.jobDescription.length > 240 ? '…' : ''}`;
         }
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_job_applications') {
-      if (data?.notFound) {
-        parts.push(`--- job applications ---\nNO_APPLICATION_FOUND: No applications match "${data.searchedFor}". Do not guess.`);
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const baseTotal = data?.baseTotal ?? total;
-      const bd = data?.breakdown || { Applied: 0, Screening: 0, Shortlisted: 0, Interview: 0, Offered: 0, Hired: 0, Rejected: 0 };
-      const breakdownStr = `Applied: ${bd.Applied}, Screening: ${bd.Screening}, Shortlisted: ${bd.Shortlisted}, Interview: ${bd.Interview}, Offered: ${bd.Offered}, Hired: ${bd.Hired}, Rejected: ${bd.Rejected}`;
-      const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
-      const lines = [
-        `--- job applications (showing ${records.length} of ${total} matching | AUTHORITATIVE_TOTAL: ${baseTotal} all-applications — ${breakdownStr}${filterTag} | scoped jobs: ${data?.scopedJobIds || 0} — ENTITY_TYPE: candidate) ---`,
-      ];
-      for (const r of records) {
-        const candName = r.candidate?.owner?.name || r.candidate?.fullName || 'N/A';
-        const candEmail = r.candidate?.owner?.email || r.candidate?.email || 'N/A';
-        const empId = r.candidate?.employeeId || 'N/A';
-        const jobTitle = r.job?.title || 'N/A';
-        const applied = formatDateIST(r.createdAt) || 'N/A';
-        let line = `APPLICANT: ${candName} | EMPLOYEE_ID: ${empId} | EMAIL: ${candEmail} | JOB: ${jobTitle} | STATUS: ${r.status || 'N/A'} | APPLIED_ON: ${applied}`;
-        if (r.verificationCallStatus) line += ` | VERIFICATION_CALL: ${r.verificationCallStatus}`;
-        if (r.notes) line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
         lines.push(line);
       }
       parts.push(lines.join('\n'));
@@ -4687,45 +4556,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_candidates') {
-      if (data?.notFound) {
-        const fb = buildFallback({
-          module: 'candidates',
-          queryArg: null,
-          entityType: 'candidate role',
-        });
-        parts.push(
-          `--- candidates ---\n` +
-          `NO_CANDIDATE_ROLE: No "Candidate" role exists in the system. Tell the user no candidate role is configured. Do not invent users.\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent users):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const shown = records.length;
-      const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
-      const header = total > shown
-        ? `--- candidates (${shown} shown of ${total} total — these users hold the Candidate role${scopeTag}) ---`
-        : `--- candidates (${total} total — these users hold the Candidate role${scopeTag}) ---`;
-      const lines = [header];
-      for (const c of records) {
-        const domains = Array.isArray(c.domain) && c.domain.length ? c.domain.join(', ') : 'None';
-        const roles = Array.isArray(c.roleNames) && c.roleNames.length
-          ? c.roleNames.join(', ')
-          : (Array.isArray(c.roleIds) && c.roleIds.length
-              ? c.roleIds.map((r) => (typeof r === 'object' ? r.name : r)).filter(Boolean).join(', ')
-              : 'N/A');
-        lines.push(
-          `CANDIDATE: ${c.name || 'N/A'} | ROLE: ${roles} | EMAIL: ${c.email || 'N/A'}` +
-          ` | PHONE: ${c.phoneNumber || 'N/A'} | LOCATION: ${c.location || 'N/A'}` +
-          ` | DOMAINS: ${domains} | STATUS: ${c.status || 'N/A'}`
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     if (key === 'fetch_meetings') {
       // Internal/general meetings (InternalMeeting) — NEVER interviews (see fetch_interviews).
       const b = data?.breakdown || { scheduled: 0, ended: 0, cancelled: 0 };
@@ -4925,11 +4755,10 @@ function summarizeData(fetchedData) {
 
     const label = key.replace('fetch_', '').replace(/_/g, ' ');
     const count = Array.isArray(data) ? ` (${data.length} record${data.length !== 1 ? 's' : ''})` : '';
-    // fetch_people has no bespoke branch above — it lands here, so the same
-    // scope tag fetch_employees/fetch_candidates get is added here too.
+    // fetch_people has no bespoke branch above — it lands here, so its scope
+    // tag is added here.
     const scopeTag = data?.scopedToYou ? ' | SCOPE: only people you are allowed to see (your referrals / assigned people / yourself)' : '';
-    const safe = key === 'resolve_person_profile' ? fenceProfileFreeText(data) : data;
-    parts.push(`--- ${label}${count}${scopeTag} ---\n${JSON.stringify(safe, null, 2)}`);
+    parts.push(`--- ${label}${count}${scopeTag} ---\n${JSON.stringify(data, null, 2)}`);
   }
   let combined = parts.join('\n\n');
   if (combined.length > MAX_CONTEXT_CHARS) {
@@ -4981,18 +4810,6 @@ function validateEntityConsistency(fetched) {
           `but org summary reports 0 ${day.status} that day. Refetch or flag uncertainty.`
         );
       }
-    }
-  }
-  const overview = fetched?.fetch_employee_overview;
-  const empList = fetched?.fetch_employees;
-  if (overview?.employee?.employeeId && empList?.records?.length && !empList.notFound) {
-    const id = overview.employee.employeeId;
-    const inList = empList.records.some((r) => r.employeeId === id);
-    if (!inList) {
-      issues.push(
-        `INCONSISTENCY: overview includes ${id} but fetch_employees scope excluded them. ` +
-        `Reply should explain "found in profile lookup but not in current list scope" rather than picking one.`
-      );
     }
   }
   return issues;
@@ -5823,10 +5640,8 @@ async function prepareContext(client, history, user, uiContext = null, { request
   let effectiveUserMsg = lastUserMsg;
   try {
     const memForRef = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
-    const refResolution = resolveReferences(lastUserMsg, memForRef?.lastEntities, {
-      entityQueryEnabled: useEmployeeEntityQuery(user),
-    });
-    if (refResolution.wasResolved && !refResolution.useEntityQuery) {
+    const refResolution = resolveReferences(lastUserMsg, memForRef?.lastEntities);
+    if (refResolution.wasResolved) {
       effectiveUserMsg = refResolution.resolvedText;
       logger.info(
         `[ChatAssistant] reference resolved: "${lastUserMsg}" → "${effectiveUserMsg}" ` +
@@ -6392,15 +6207,6 @@ function extractEntities(turnText, fetched) {
   if (bestName) out.person = bestName;
 
   // Prefer canonical identity (incl. ObjectIds) from a successful fetch.
-  const empData = fetched?.fetch_employees;
-  if (empData?.records?.length === 1) {
-    const r = empData.records[0];
-    if (r?.name)        out.person = r.name;
-    if (r?.email)       out.email = r.email;
-    if (r?.employeeId)  out.employeeId = r.employeeId;
-    if (r?._id)         out.personUserId = r._id;
-    if (r?.empDocId)    out.personEmpDocId = r.empDocId;
-  }
   const overview = fetched?.fetch_employee_overview;
   if (overview?.employee?.name) {
     out.person = overview.employee.name;
@@ -6418,39 +6224,6 @@ function extractEntities(turnText, fetched) {
   Object.assign(out, extractOrgStructureMemoryHints(fetched));
 
   return out;
-}
-
-const PROFILE_FREE_TEXT_KEYS = new Set(['bio', 'profileSummary', 'recruiterFeedback', 'location']);
-
-function fenceProfileFreeText(payload) {
-  if (!payload?.profiles) return payload;
-  const profiles = {};
-  for (const [role, p] of Object.entries(payload.profiles)) {
-    const fields = { ...(p.fields || {}) };
-    for (const k of Object.keys(fields)) {
-      if (PROFILE_FREE_TEXT_KEYS.has(k) && typeof fields[k] === 'string') {
-        fields[k] = delimitUntrusted(fields[k]);
-      }
-    }
-    profiles[role] = { ...p, fields };
-  }
-  return { ...payload, profiles };
-}
-
-function renderDisambiguationPrompt(pending) {
-  return renderPersonDisambiguation({ query: pending.query, matches: pending.matches });
-}
-
-async function presentPersonProfileEnvelope(profile, ctx) {
-  const out = await presentPersonProfile({
-    profile,
-    userMessage: ctx.userMessage,
-    userId: ctx.userId,
-    adminId: ctx.adminId,
-    selectionKind: ctx.selectionKind,
-    depth: ctx.depth,
-  });
-  return envelope(out);
 }
 
 async function tryReferralLeadQueryRoute({ history, user, adminId, stream = false, onToken = null }) {
@@ -6652,13 +6425,6 @@ async function tryConversationalEntityRoute({ history, user, adminId, stream = f
     if (stream && onToken) onToken(payload.reply);
     return envelope(payload);
   };
-
-  // A stale user-vs-role pick (written before the person/role routes moved to the
-  // agent) is cleared, not answered: the agent takes the turn from here.
-  if (await readPendingEntity({ userId, adminId })) {
-    await clearPendingEntity({ userId, adminId });
-    return null;
-  }
 
   const titlePending = await readPendingTitle({ userId, adminId });
   if (titlePending) {
@@ -7007,49 +6773,6 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   const userId = user?.id;
   const adminId = user?.adminId ?? userId;
 
-  // Person disambiguation reply — resolved before tool routing so a bare "1"
-  // never reaches the model as a person name. Placed above the entityQuery gate:
-  // an open pending selection outranks every other pre-routing interpreter.
-  {
-    const pending = await readPending({ userId, adminId });
-    if (pending) {
-      const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-      const sel = matchSelection(lastUserMsg, pending.matches);
-
-      if (sel.kind === 'select') {
-        await clearPending({ userId, adminId });
-        const profile = await resolvePersonProfile({
-          userId: sel.userId, depth: detectDepth(lastUserMsg),
-          viewer: user, impersonating: !!user?.__impersonating, adminId,
-        });
-        return presentPersonProfileEnvelope(profile, {
-          userMessage: lastUserMsg,
-          userId,
-          adminId,
-          selectionKind: 'select',
-          depth: detectDepth(lastUserMsg),
-        });
-      }
-      if (sel.kind === 'reask') {
-        return envelope({
-          reply: renderDisambiguationPrompt(pending),
-          blocks: [],
-          meta: { kind: 'person_disambiguation', deterministic: true },
-        });
-      }
-      if (sel.kind === 'cancel') {
-        await clearPending({ userId, adminId });
-        return envelope({
-          reply: `No problem — dropping the question about ${pending.query}.`,
-          blocks: [],
-          meta: { kind: 'person_disambiguation', deterministic: true },
-        });
-      }
-      // unrelated: clear and fall through to normal routing
-      await clearPending({ userId, adminId });
-    }
-  }
-
   let agentAttempted = false;
   {
     const agentRoute = await tryAgentRoute({ client, history, user, adminId, requestId });
@@ -7258,58 +6981,6 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
 
   const userId = user?.id;
   const adminId = user?.adminId ?? userId;
-
-  // Person disambiguation reply — resolved before tool routing so a bare "1"
-  // never reaches the model as a person name. Placed above the entityQuery gate:
-  // an open pending selection outranks every other pre-routing interpreter.
-  {
-    const pending = await readPending({ userId, adminId });
-    if (pending) {
-      const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-      const sel = matchSelection(lastUserMsg, pending.matches);
-
-      if (sel.kind === 'select') {
-        await clearPending({ userId, adminId });
-        const profile = await resolvePersonProfile({
-          userId: sel.userId, depth: detectDepth(lastUserMsg),
-          viewer: user, impersonating: !!user?.__impersonating, adminId,
-        });
-        const payload = await presentPersonProfileEnvelope(profile, {
-          userMessage: lastUserMsg,
-          userId,
-          adminId,
-          selectionKind: 'select',
-          depth: detectDepth(lastUserMsg),
-        });
-        onToken(payload.reply);
-        onDone(payload);
-        return;
-      }
-      if (sel.kind === 'reask') {
-        const reply = renderDisambiguationPrompt(pending);
-        onToken(reply);
-        onDone(envelope({
-          reply,
-          blocks: [],
-          meta: { kind: 'person_disambiguation', deterministic: true },
-        }));
-        return;
-      }
-      if (sel.kind === 'cancel') {
-        await clearPending({ userId, adminId });
-        const reply = `No problem — dropping the question about ${pending.query}.`;
-        onToken(reply);
-        onDone(envelope({
-          reply,
-          blocks: [],
-          meta: { kind: 'person_disambiguation', deterministic: true },
-        }));
-        return;
-      }
-      // unrelated: clear and fall through to normal routing
-      await clearPending({ userId, adminId });
-    }
-  }
 
   let agentAttempted = false;
   {

@@ -10,7 +10,6 @@
 // remain untouched. blocks[] is appended to the response envelope alongside
 // the existing `reply` markdown string.
 
-import { renderEmployees }    from './employees.js';
 import { renderPeople }       from './people.js';
 import { renderAttendance }   from './attendance.js';
 import { renderGenericCount } from './genericCount.js';
@@ -65,7 +64,6 @@ const COUNT_ONLY_KINDS = new Set([
 // (jobs/candidates/leave/...) carry their authoritative total on the fact
 // itself, so an empty fetched payload is NOT an empty result.
 const REQUIRES_PAYLOAD = new Set([
-  'fetch_employees',
   'fetch_people',
   'fetch_tasks',
   'task_board_stage_count',
@@ -76,14 +74,12 @@ const REQUIRES_PAYLOAD = new Set([
 // fact.kind → key in `fetched` whose data the renderer consumes. Used to
 // dedupe (e.g. attendance_summary_day + _range share one source).
 const KIND_TO_FETCHED_KEY = {
-  fetch_employees:                     'fetch_employees',
   fetch_people:                        'fetch_people',
   attendance_summary_day:              'fetch_attendance_summary',
   attendance_summary_range:            'fetch_attendance_summary',
   fetch_leave_requests:                'fetch_leave_requests',
   fetch_backdated_attendance_requests: 'fetch_backdated_attendance_requests',
   fetch_jobs:                          'fetch_jobs',
-  fetch_candidates:                    'fetch_candidates',
   fetch_roles:                         'fetch_roles',
   fetch_placements:                    'fetch_placements',
   fetch_offers:                        'fetch_offers',
@@ -103,12 +99,6 @@ function taskSourceKey(fact) {
 }
 
 const KIND_RENDERERS = {
-  fetch_employees: (fact, fetched, ctx) =>
-    renderEmployees(fetched?.fetch_employees, {
-      role: fact.role,
-      entityType: fetched?.fetch_employees?.entityType ?? fact.entityType ?? null,
-      ...ctx,
-    }),
   fetch_people: (_fact, fetched, ctx) =>
     renderPeople(fetched?.fetch_people, {
       entityType: fetched?.fetch_people?.entityType ?? 'user',
@@ -124,46 +114,6 @@ const KIND_RENDERERS = {
     const payload = resolveJobPayload(fetched);
     if (payload?.type === 'job_result') return renderJobResult(payload, ctx);
     return renderJobs(fetched?.fetch_jobs, ctx, fact);
-  },
-  // fetch_candidates carries record rows (name/email/phone/status). Render as
-  // a TableBlock when records are present so "list them" shows actual people;
-  // fall back to count-only group block when no records were fetched.
-  fetch_candidates: (fact, fetched, ctx) => {
-    const data = fetched?.fetch_candidates;
-    const records = Array.isArray(data?.records) ? data.records : [];
-    if (records.length) {
-      const reshaped = {
-        records: records.map((r) => {
-          const roleNames = Array.isArray(r.roleNames) && r.roleNames.length
-            ? r.roleNames
-            : (Array.isArray(r.roleIds) && r.roleIds.length
-                ? r.roleIds.map((x) => (typeof x === 'object' ? x.name : x)).filter(Boolean)
-                : ['Candidate']);
-          // Keep employment vs account on SEPARATE axes. Candidates are not
-          // employees — User.status must never become employmentState, or the
-          // employees renderer remaps account "active" → badge "Working".
-          return {
-            name: r.name,
-            email: r.email,
-            phone: r.phoneNumber || r.phone,
-            roleNames,
-            role: roleNames,
-            department: r.department || r.designation || null,
-            employmentState: r.employmentState || null,
-            accountState: r.accountState || r.status || null,
-          };
-        }),
-        total: data.total ?? records.length,
-        requestedRole: 'Candidate',
-      };
-      const out = renderEmployees(reshaped, { role: 'Candidate', ...ctx });
-      if (out) return out;
-    }
-    // No records: on list intent suppress the count card so the streamed
-    // markdown list (or fallback explanation) shows through. Otherwise
-    // keep the count summary for "how many candidates" style questions.
-    if (ctx?.listIntent) return null;
-    return renderGenericCount(fact, ctx);
   },
   fetch_roles:                         (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_placements:                    (fact, _fetched, ctx) => renderGenericCount(fact, ctx),

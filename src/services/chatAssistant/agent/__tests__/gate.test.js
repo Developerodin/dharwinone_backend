@@ -66,27 +66,11 @@ describe('hasRecentAgentTurn', () => {
 
 describe('hasPendingPick', () => {
   const fresh = new Date();
-  it('is true while a job, title or entity pick is open', async () => {
+  it('is true while a job or title pick is open', async () => {
     const title = { lastEntities: { pendingTitleDisambiguation: { query: 'Data Analyst', jobMatches: [{ kind: 'job' }], employeeMatches: [], createdAt: fresh } } };
     const job = { lastEntities: { pendingJobDisambiguation: { query: 'dev', matches: [{ jobId: 'j1' }], createdAt: fresh } } };
-    const entity = { lastEntities: { pendingEntityDisambiguation: { query: 'x', matches: [{ kind: 'role' }], createdAt: fresh } } };
     assert.equal(await hasPendingPick('the job', title), true);
     assert.equal(await hasPendingPick('2', job), true);
-    assert.equal(await hasPendingPick('the first one', entity), true);
-  });
-
-  it('(d) is true while a person disambiguation pick is open', async () => {
-    const person = {
-      lastEntities: {
-        pendingPersonDisambiguation: {
-          query: 'john',
-          matches: [{ userId: 'u1', name: 'John Doe', roles: [] }],
-          createdAt: fresh,
-        },
-      },
-    };
-    assert.equal(await hasPendingPick('1', person), true);
-    assert.equal(await hasPendingPick('the first one', person), true);
   });
 
   it('ignores an expired pick', async () => {

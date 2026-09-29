@@ -152,7 +152,6 @@ export function looksLikeReferenceFollowUp(text) {
  *
  * @param {string} text - raw user message
  * @param {object|null} memory - lastEntities snapshot
- * @param {{ entityQueryEnabled?: boolean }} [opts]
  * @returns {{
  *   resolvedText: string,
  *   entityType: string|null,
@@ -161,10 +160,9 @@ export function looksLikeReferenceFollowUp(text) {
  *   wasResolved: boolean,
  *   toolName: string|null,
  *   toolArgs: object|null,
- *   useEntityQuery?: boolean,
  * }}
  */
-export function resolveReferences(text, memory = null, { entityQueryEnabled = false } = {}) {
+export function resolveReferences(text, memory = null) {
   const original = String(text || '').trim();
   const base = {
     resolvedText: original,
@@ -180,27 +178,6 @@ export function resolveReferences(text, memory = null, { entityQueryEnabled = fa
 
   const entityType = inferEntityTypeFromMemory(memory);
   if (!entityType) return base;
-
-  // Employee entityQuery follow-up — replay lastContext filters; do not fetch unfiltered list.
-  // Checked before the route lookup: employees have no ENTITY_ROUTE entry since the legacy
-  // fetch_employees tool was deleted.
-  if (
-    entityQueryEnabled &&
-    entityType === 'employees' &&
-    memory?.lastContext?.entity === 'employees' &&
-    RESOLVED_FOLLOWUP_RE.test(original)
-  ) {
-    return {
-      resolvedText: original,
-      entityType: 'employees',
-      intent: 'list',
-      confidence: 0.95,
-      wasResolved: true,
-      toolName: null,
-      toolArgs: null,
-      useEntityQuery: true,
-    };
-  }
 
   const route = ENTITY_ROUTE[entityType];
   if (!route) return base;
@@ -281,7 +258,6 @@ export function resolveReferences(text, memory = null, { entityQueryEnabled = fa
  */
 export function routeResolvedFollowUp(resolution) {
   if (!resolution?.wasResolved || !resolution.toolName) return null;
-  if (resolution.useEntityQuery) return null;
   if (resolution.confidence < 0.8) return null;
   return {
     toolName: resolution.toolName,

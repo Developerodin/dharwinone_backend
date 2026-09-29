@@ -1,14 +1,7 @@
-import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Joi from 'joi';
-
-/** Stable 0–99 bucket for percent rollout gates (CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT). */
-export function stableHashUserId(userId) {
-  const hash = crypto.createHash('sha256').update(String(userId)).digest();
-  return hash.readUInt32BE(0) % 100;
-}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load backend root .env (always relative to this file, not process.cwd())
@@ -368,18 +361,6 @@ const envVarsSchema = Joi.object()
       .description('Max input characters budgeted per Sage agent loop turn'),
     CHATBOT_MODEL: Joi.string().required().description('OpenAI model for Sage (router, replies, memory, role classifier). No default: every environment sets it in .env.'),
     CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
-    CHATBOT_ENTITY_QUERY_EMPLOYEES: Joi.boolean()
-      .default(false)
-      .description('Route chatbot employee queries through canonical entityQuery pipeline'),
-    CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT: Joi.number()
-      .integer()
-      .min(0)
-      .max(100)
-      .default(100)
-      .description('Percent of users (stable hash) enrolled in entityQuery when flag is on; 100 = all'),
-    CHATBOT_QUERY_AUDIT_DEBUG: Joi.boolean()
-      .default(false)
-      .description('Include raw mongo filter in employee query audit logs (incident response only)'),
 
     // === AI Meeting Summary (Phase 1 — see docs/superpowers/specs/2026-05-11-...) ===
     OPENAI_MODEL_SUMMARY: Joi.string().default('gpt-4o-mini'),
@@ -862,13 +843,10 @@ const config = {
     },
   },
   chatbot: {
-    /** When true, classifier+fetchPeople runs in prepareContext. entityQuery early gate still wins for employee queries when entityQueryEmployees is on. */
+    /** When true (twoStage), classifier+fetchPeople runs in prepareContext. */
     model: envVars.CHATBOT_MODEL,
     reasoningEffort: envVars.CHATBOT_REASONING_EFFORT,
     twoStage: envVars.CHATBOT_TWO_STAGE,
-    entityQueryEmployees: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES,
-    entityQueryEmployeesPercent: envVars.CHATBOT_ENTITY_QUERY_EMPLOYEES_PERCENT,
-    queryAuditDebug: envVars.CHATBOT_QUERY_AUDIT_DEBUG,
     /** Sage tool-calling agent loop knobs (see .superpowers/sdd/2026-09-28-sage-agent-loop). */
     agent: {
       enabled: envVars.CHATBOT_AGENT,

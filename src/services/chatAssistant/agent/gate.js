@@ -12,8 +12,7 @@ import config from '../../../config/config.js';
 import logger from '../../../config/logger.js';
 import ConversationMemory from '../../../models/conversationMemory.model.js';
 import { readPendingJob } from '../jobProfile/pendingJob.js';
-import { readPendingEntity, readPendingTitle } from '../conversationalEntity/pendingEntity.js';
-import { readPending as readPendingPerson } from '../personProfile/pendingPerson.js';
+import { readPendingTitle } from '../conversationalEntity/pendingEntity.js';
 import { matchedDomains, hasAgentToolAccess } from './toolRegistry.js';
 import { readAgentLedger, appendAgentLedger } from './context.js';
 import { runAgent } from './runAgent.js';
@@ -60,8 +59,7 @@ export function isAgentTurn(lastUserMsg, memDoc, now = new Date()) {
 }
 
 /**
- * An open disambiguation pick ("the job", "2", "the first job", "the first
- * person") belongs to its handler further down the pipeline, never to the
+ * An open disambiguation pick ("the job", "2", "the first job") belongs to its handler further down the pipeline, never to the
  * agent — the handler also clears the pick, and a pick left open would catch
  * a later "1". Reads the pending state off the already-loaded memDoc through
  * the readers' injectable model, so their TTL rules apply without extra queries.
@@ -71,13 +69,11 @@ export function isAgentTurn(lastUserMsg, memDoc, now = new Date()) {
  */
 export async function hasPendingPick(lastUserMsg, memDoc) {
   const fromMemDoc = { findOne: () => ({ lean: async () => memDoc }) };
-  const [job, title, entity, person] = await Promise.all([
+  const [job, title] = await Promise.all([
     readPendingJob({ ConversationMemory: fromMemDoc }),
     readPendingTitle({ ConversationMemory: fromMemDoc }),
-    readPendingEntity({ ConversationMemory: fromMemDoc }),
-    readPendingPerson({ ConversationMemory: fromMemDoc }),
   ]);
-  if (job || title || entity || person) return true;
+  if (job || title) return true;
   return JOB_ENTITY_SWITCH_RE.test(String(lastUserMsg || ''))
     && !!memDoc?.lastEntities?.positionConversationState?.designation;
 }

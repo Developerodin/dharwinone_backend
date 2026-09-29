@@ -17,43 +17,6 @@
 
 import { stageLabelForStatus } from './taskStageVocabulary.js';
 
-function readEmployees(fetched) {
-  const data = fetched?.fetch_employees;
-  if (!data || data.notFound) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-
-  // PRIMARY: trust the requestedRole the handler tagged on the result. This
-  // is what the caller actually asked for — never inferred from records.
-  // Multi-role users (Employee + Agent) used to defeat record-derived role
-  // detection, causing the renderer to label agent counts as "employees".
-  let role = data.requestedRole || null;
-
-  // FALLBACK: only when handler didn't tag a role (legacy paths) — try to
-  // infer from records' roleNames when every record carries the same single
-  // role. Skip "Employee" / "Candidate" since they are the catch-all label.
-  if (!role && Array.isArray(data.records) && data.records.length) {
-    const first = data.records[0];
-    if (Array.isArray(first.roleNames) && first.roleNames.length === 1) {
-      const candidate = first.roleNames[0];
-      if (candidate && !/^(employee|candidate)$/i.test(candidate)) role = candidate;
-    }
-  }
-
-  // Distinguish a generic "employees" headcount from a role-scoped count.
-  // When role is a real role (Agent / Recruiter / etc.) we treat the
-  // population as role-specific; otherwise fall through to generic label.
-  const isGenericEmployeeQuery = !role || /^(employee|candidate)$/i.test(role);
-  return {
-    kind: 'fetch_employees',
-    label: isGenericEmployeeQuery ? 'employees' : role.toLowerCase() + 's',
-    role: isGenericEmployeeQuery ? null : role,
-    total,
-    breakdown: data.employmentBreakdown || null,
-    requestedRole: data.requestedRole || null,
-    entityType: data.entityType || null,
-  };
-}
-
 function readPeople(fetched) {
   const data = fetched?.fetch_people;
   if (!data || data.notFound) return null;
@@ -137,13 +100,6 @@ function readJobs(fetched) {
     provenance: data.provenance || 'Job.countDocuments+find',
     authoritative: data.authoritative !== false,
   };
-}
-
-function readCandidates(fetched) {
-  const data = fetched?.fetch_candidates;
-  if (!data) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-  return { kind: 'fetch_candidates', label: 'candidates', total };
 }
 
 function readRoles(fetched) {
@@ -270,13 +226,11 @@ function readProjectAnalytics(fetched) {
 export function extractFacts(fetched, lastUserMsg = '') {
   const counts = [];
   const push = (f) => { if (f) counts.push(f); };
-  push(readEmployees(fetched));
   push(readPeople(fetched));
   push(readAttendanceSummary(fetched));
   push(readLeaveRequests(fetched));
   push(readBackdated(fetched));
   push(readJobs(fetched));
-  push(readCandidates(fetched));
   push(readRoles(fetched));
   push(readPlacements(fetched));
   push(readOffers(fetched));
