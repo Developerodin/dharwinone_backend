@@ -20,7 +20,7 @@ export default {
   ns: 'mentors',
   store: Mentor,
   key: 'user',
-  relatedTools: ['training_analytics'],
+  relatedTools: [],
   FIELDS: MENTOR_FIELDS,
   deriveFns: {},
   load: (target) => Mentor.findOne({ user: target.userId }).populate('user', 'name').lean(),

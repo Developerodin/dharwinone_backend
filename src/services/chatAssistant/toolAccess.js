@@ -21,7 +21,6 @@ const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js 
 
 export const TOOL_ACCESS = {
   // People — employee.route.js
-  designation_manager_analytics: { anyOf: PEOPLE_READ, rowScope: 'person' },
   // Permission keys only — no router tool by these names since round 2; kept for
   // resolveTitleAmbiguity, buildSystemContext and the two-stage people path.
   fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
@@ -35,8 +34,6 @@ export const TOOL_ACCESS = {
   // rule exactly rather than a permission this tool doesn't actually read behind.
 
   // Org / PM
-  org_structure_analytics: { note: 'hasOrgReadAccess in handler' },
-  org_manager_analytics: { anyOf: ['chart.read', 'structure.read', 'structure.manage'] },
   project_analytics: { note: 'projects.read/manage in handler' },
   team_analytics: { note: 'teams.read/manage in handler' },
   task_board_analytics: { note: 'tasks.read/manage in handler' },
@@ -49,17 +46,12 @@ export const TOOL_ACCESS = {
   fetch_attendance_summary: { note: 'admin check in handler' },
   fetch_employee_attendance_calendar: { note: 'admin-or-self in handler' },
   fetch_employee_attendance: { note: 'admin-or-self in handler' },
-  fetch_employee_overview: { note: 'admin-or-self in handler' },
   fetch_leave_requests: { note: 'buildLeaveRequestScopeFilter' },
   on_leave_today: { note: 'dashboard permission grading in handler' },
   rank_leaves_by_employee: { note: 'admin check in handler' },
   fetch_backdated_attendance_requests: { note: 'admin-or-self in handler' },
-  fetch_shifts: { anyOf: ['students.read'] }, // shift.route.js GET
-  training_analytics: { note: 'person arg gated in handler (Task 3)' },
 
   // Self-scoped / public
-  fetch_my_shift: {},
-  fetch_holidays: {},
 };
 
 const hasAny = (permissions, required) =>

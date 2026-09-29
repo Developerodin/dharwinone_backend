@@ -157,6 +157,37 @@ at `MAX_ANSWER_CHARS`; a KB miss, no configured KB or a KB error come back as `f
 
 Single-person lookups for any of these stay on `get_user`.
 
+### schedule
+
+`agent/tools/schedule/`: `get_work_schedule` (shift, week-off, upcoming ASSIGNED holidays and
+leaves allowed — the viewer's own Employee profile, else their Student profile; `person` resolves
+another employee through `executeEmployeeQuery`, so it needs an Employees-page read permission and
+gets that page's row scope), `list_shifts` (`shift.service` `queryShifts`, `students.read` like
+`GET /shifts`; `includeAssignees` adds `queryShiftAssignees` rosters and needs `attendance.assign`
+like `GET /shifts/:id/assignees`), `list_holidays` (`scope: 'mine'` = the holidays assigned to the
+viewer's profile, what the portal shows them; `scope: 'company'` = the Holidays page via
+`holiday.service` `queryHolidays`, `students.read`). Windows go through `employees/common.js`'s
+`dayRange`. `matchesTurn` skips attendance/leave, task/project and meeting turns.
+
+### org
+
+`agent/tools/org/`: `get_org_structure` — the Org Chart's own services (`orgStructure.service`
+`getOrgCoverageSummary` / `listOrgUnits` / `buildTree`) through `orgStructureAnalytics`'
+payload builder, plus `managerCounts.fetchOrgManagersAnalytics` for `metric: 'people_managers'`.
+Access is `chart.read` / `structure.read` / `structure.manage` (`canReadTree`). Chart departments
+are OrgUnits, not the `Employee.department` text field (`count_employees groupBy department`); the
+domain instructions say which is which. "Manager" has three meanings — chart positions
+(`get_org_structure` `positions`), designation (`count_employees` `filters.designation`) and people
+with direct reports (`people_managers`); a bare "how many managers" answers the first two. This
+replaces the legacy `businessConcepts.js` clarification flow.
+
+### training
+
+`agent/tools/training/`: `get_training_progress` — assigned modules with status and % done from
+`studentCourseQuery.service` `queryStudentCourses` (the My Courses page), for the viewer or a named
+person (another person needs `students.read` / `students.manage`, `canReadOtherTraining`). Progress
+exists only on Student profiles; no Student profile returns `noStudentProfile`, never "0 courses".
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -415,5 +446,5 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
   knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
-  `applications`, `hiring`, `meetings` and `knowledge` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
+  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org` and `training` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.

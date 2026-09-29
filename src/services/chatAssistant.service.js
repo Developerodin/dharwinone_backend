@@ -11,15 +11,10 @@ import LeaveRequest from '../models/leaveRequest.model.js';
 import User from '../models/user.model.js';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
-import Holiday from '../models/holiday.model.js';
 import Student from '../models/student.model.js';
-import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Employee from '../models/employee.model.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
-import Shift from '../models/shift.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
-import CandidateGroup from '../models/candidateGroup.model.js';
-import StudentGroup from '../models/studentGroup.model.js';
 import { buildLeaveRequestScopeFilter } from './leaveRequest.service.js';
 import { getEmployeesOnLeaveToday } from './onLeaveToday.service.js';
 import {
@@ -45,43 +40,10 @@ import {
   looksLikeOnLeaveTodayQuery,
 } from './chatAssistant/attendanceAnalytics.js';
 import {
-  resolveStudentIdForUser,
-  buildCourseProgressFilter,
-  summarizeCourseProgressBreakdown,
-} from './chatAssistant/trainingAnalytics.js';
-import {
-  hasOrgReadAccess,
-  looksLikeOrgStructureQuery,
-  extractOrgStructureArgs,
-  buildOrgStructureAnalyticsPayload,
-  looksLikeOrgStructureContinuation,
-  extractOrgStructureMemoryHints,
-} from './chatAssistant/orgStructureAnalytics.js';
-import {
   resolveReferences,
   routeResolvedFollowUp,
   looksLikeReferenceFollowUp,
 } from './chatAssistant/referenceResolver.js';
-import {
-  resolveConcept,
-  isAmbiguous,
-  pickManagerMeaning,
-  mentionsManagerConcept,
-  parseManagerConceptChoice,
-  buildManagerClarification,
-  buildManagerRoutingIntent,
-  parseManagerTopicFollowUp,
-  shouldProactivelyAnswerBoth,
-  formatProactiveManagerAnswer,
-  extractDesignationPhrase,
-  isBareManagerPositionQuery,
-  buildManagerPositionRoutingIntent,
-} from './chatAssistant/businessConcepts.js';
-import {
-  fetchManagerConceptCounts,
-  fetchOrgManagersAnalytics,
-  fetchDesignationManagersAnalytics,
-} from './chatAssistant/managerCounts.js';
 import {
   fetchProjectAnalytics,
   looksLikeProjectTeamQuery,
@@ -140,11 +102,6 @@ import {
   computeJobOriginCounts,
 } from './chatAssistant/queryPlanner/entities/jobRank.js';
 import { saveTaskQueryContext } from './chatAssistant/saveTaskQueryContext.js';
-import {
-  getOrgCoverageSummary,
-  listOrgUnits,
-  buildTree,
-} from './orgStructure.service.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import { extractFacts } from './chatAssistant/factExtractor.js';
 import { renderDeterministicAnswer } from './chatAssistant/factRenderer.js';
@@ -212,13 +169,10 @@ import {
   resolveRowScope,
   rowMatchesAllowed,
   redactSalary,
-  canReadOtherTraining,
 } from './chatAssistant/toolAccess.js';
 import { formatTaskLine } from './chatAssistant/pipelineLines.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
-
-const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ─── Timezone-safe date formatter (Asia/Kolkata / IST) ──────────────────────
 // Mongo stores dates as UTC; rendering them with raw `.toISOString().slice(0,10)`
@@ -329,12 +283,6 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
         Object.assign(out, toResolveDateWindowArgs(parsed) || {});
       }
     }
-  }
-  if (moduleName === 'org_structure_analytics') {
-    const inferred = extractOrgStructureArgs(userMsg);
-    if (!out.metric) out.metric = inferred.metric;
-    if (!out.unitName && inferred.unitName) out.unitName = inferred.unitName;
-    out.phrase = String(userMsg);
   }
   if (moduleName === 'project_analytics') {
     const inferred = extractProjectAnalyticsArgs(userMsg);
@@ -563,81 +511,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'training_analytics',
-      description:
-        'Authoritative training/course-progress analytics (aka fetch_student_courses) — sourced from StudentCourseProgress, ' +
-        'scoped to the STUDENT population only (Student.user references User; there is NO direct ATS Candidate/Employee foreign key on course progress). ' +
-        'A person must have a Student profile for this to return data — if they do not, the tool returns {noStudentProfile:true} rather than guessing zero courses. ' +
-        'Do NOT claim "courses for ATS candidate X" unless a Student profile is confirmed for that same person. ' +
-        'Omit person to get the LOGGED-IN USER\'s own courses. ' +
-        'Use for: "my courses", "<name>\'s training progress", "how many courses has <name> completed", "training status breakdown for <name>".',
-      parameters: {
-        type: 'object',
-        properties: {
-          person: { type: 'string', description: 'Name, email, or employeeId to look up. Omit for the logged-in user\'s own courses.' },
-          status: { type: 'string', description: 'Filter: enrolled | in-progress | completed | dropped.' },
-          limit:  { type: 'number', description: 'Max records to return (default 25, max 100).' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'org_structure_analytics',
-      description:
-        'Authoritative org-chart / organization STRUCTURE facts — sourced from orgStructure.service.js ' +
-        '(getOrgCoverageSummary + OrgUnit tree), the SAME data backing /organization/structure and the Org Chart page. ' +
-        'POSITIONS (ceo/manager/supervisor): each is an OrgUnit with an optional assigned HEAD (headEmployee) — ' +
-        '"how many managers" = count of manager POSITIONS (one Org Chart card each), NOT User role=Manager; ' +
-        'listing managers includes position name + head name. ' +
-        'DEPARTMENTS: last-level units with multiple employees (memberCount). ' +
-        'Named units (e.g. "Group A"): if department → list employees; if position → show head + reports/children. ' +
-        'Also covers: unassigned employees, coverage health. ' +
-        'Use for: "how many managers", "how many supervisors", "Group A in org chart", "unassigned employees", ' +
-        '"departments under supervisor X", "org chart / organization structure".',
-      parameters: {
-        type: 'object',
-        properties: {
-          metric: {
-            type: 'string',
-            enum: ['coverage', 'managers', 'supervisors', 'departments', 'unassigned', 'unit_lookup'],
-            description:
-              'managers/supervisors = position counts (OrgUnit.type) with head names in records; ' +
-              'departments = department units + employee membership; unassigned = coverage unassignedEmployees; ' +
-              'unit_lookup = named group/department/position walk (requires unitName).',
-          },
-          unitName: {
-            type: 'string',
-            description: 'Org unit name to look up on the chart (e.g. "Group A", "Sales", "Supervisor North").',
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'org_manager_analytics',
-      description:
-        'Authoritative count/list of ORGANIZATIONAL managers — active employees with one or more direct reports ' +
-        '(via Employee.reportingManager). Use when the user means people managers in the org hierarchy, NOT job title ' +
-        'and NOT User role=Manager. Prefer org_structure_analytics for manager POSITIONS on the org chart.',
-      parameters: {
-        type: 'object',
-        properties: {
-          metric: { type: 'string', enum: ['org_managers'], description: 'Always org_managers.' },
-          limit:  { type: 'number', description: 'Max records to return (default 50, max 200).' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'project_analytics',
       description:
         'Authoritative project ↔ workforce-team relationship analytics — sourced from Project.assignedTeams ' +
@@ -671,7 +544,7 @@ const ROUTING_TOOLS = [
       description:
         'Authoritative PM workforce team (TeamGroup) analytics — count, list, roster members, idle teams ' +
         '(teams with no active Inprogress/On hold projects). NEVER guess team counts — always call this when the user ' +
-        'asks "how many teams", "list teams", or "who is in team X". NOT org-chart departments — use org_structure_analytics for those. ' +
+        'asks "how many teams", "list teams", or "who is in team X". NOT org-chart departments. ' +
         'RBAC: mirrors teamGroup.service.js (teams.read / teams.manage). Returns AUTHORITATIVE_COUNT + provenance.',
       parameters: {
         type: 'object',
@@ -942,44 +815,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_holidays',
-      description: 'Retrieve upcoming public holidays',
-      parameters: {
-        type: 'object',
-        properties: {
-          days: { type: 'number', description: 'Look-ahead window in days (default 90)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_employee_overview',
-      description:
-        'Admin-only: time-scoped HR data for a specific employee — shift assignment, week-off days, assigned holidays, admin-assigned leaves, leave requests in the asked period, FUTURE leaves (today onward), backdated attendance correction requests, and CandidateGroup / StudentGroup memberships. ' +
-        'Does NOT return identity, department, designation, joining or resign dates, or whether they are active or resigned. ' +
-        'When the user asks for "shift", "week off", "holidays", "groups", or generic profile info only, no time period is needed. ' +
-        'When the user asks specifically for "attendance summary" or "past leaves" with no time period, ask them which date / month / range first. ' +
-        'For a single specific day pass {date: "YYYY-MM-DD"}; for a month pass {month: "YYYY-MM"}; for a range pass {fromDate, toDate}. ' +
-        'Use for: "<person>\'s shift", "<person>\'s week off", "<person>\'s holidays", "<person>\'s future leaves / upcoming leaves", "<person>\'s backdated attendance requests", "<person>\'s student/candidate group".',
-      parameters: {
-        type: 'object',
-        properties: {
-          employee: { type: 'string', description: 'Employee identifier — name, email, or employeeId (e.g. DBS10).' },
-          date:     { type: 'string', description: 'Single specific date in YYYY-MM-DD (scopes attendance + leave summary to that day).' },
-          month:    { type: 'string', description: 'Month in YYYY-MM. Used to scope attendance + leave summary.' },
-          fromDate: { type: 'string', description: 'Start date inclusive in YYYY-MM-DD.' },
-          toDate:   { type: 'string', description: 'End date inclusive in YYYY-MM-DD.' },
-        },
-        required: ['employee'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_employee_attendance_calendar',
       description:
         'Admin-only: PREFERRED tool for any employee attendance query — single day, month, or arbitrary range. ' +
@@ -1030,31 +865,6 @@ const ROUTING_TOOLS = [
         },
         required: ['employee'],
       },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_shifts',
-      description: 'Retrieve work shift definitions and employees assigned to them. Use for: "list shifts", "who works night shift", "shift schedule", "morning shift employees".',
-      parameters: {
-        type: 'object',
-        properties: {
-          shiftName:    { type: 'string', description: 'Filter by shift name (partial match, e.g. "Morning", "Night")' },
-          activeOnly:   { type: 'boolean', description: 'Only active shifts (default true)' },
-          includeStaff: { type: 'boolean', description: 'Include list of employees on each shift (default true)' },
-          limit:        { type: 'number', description: 'Max shifts to return (default 20, max 50)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_my_shift',
-      description: 'Retrieve the current logged-in employee\'s assigned shift. Use for: "my shift", "what shift am i on", "what time do i work".',
-      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
   {
@@ -1239,136 +1049,6 @@ async function fetchModule(name, args, user, uiContext = null) {
   }
 
   switch (name) {
-    case 'training_analytics': {
-      // STUDENT population only — see trainingAnalytics.js header for the FK spike
-      // result. Never assume an ATS Candidate/Employee has course data.
-      let studentId = null;
-      let personLabel = null;
-      if (args.person && String(args.person).trim()) {
-        const resolvedPerson = await resolveEmployeeMatch(String(args.person).trim());
-        if (resolvedPerson.kind === 'notFound') {
-          return { notFound: true, searchedFor: args.person, authoritative: true };
-        }
-        if (resolvedPerson.kind === 'ambiguous') {
-          return { ambiguous: true, matches: resolvedPerson.matches, searchedFor: args.person };
-        }
-        const isSelf = String(resolvedPerson.ownerUser?._id || resolvedPerson.employee?.owner || '') === String(user?.id);
-        if (!isSelf && !(await canReadOtherTraining(user))) {
-          return { forbidden: true, reason: "Viewing another person's training progress requires students.read." };
-        }
-        studentId = resolvedPerson.studentProfile?._id ? String(resolvedPerson.studentProfile._id) : null;
-        personLabel =
-          resolvedPerson.employee?.fullName ||
-          resolvedPerson.ownerUser?.name ||
-          resolvedPerson.synthesisedEmployee?.fullName ||
-          args.person;
-        if (!studentId) {
-          return {
-            noStudentProfile: true,
-            person: personLabel,
-            reason:
-              'No Student profile exists for this person. Training/course data is tracked on Student ' +
-              'profiles only (StudentCourseProgress.student -> Student._id -> Student.user -> User) — ' +
-              'there is no direct link from an ATS Candidate/Employee profile.',
-            authoritative: true,
-          };
-        }
-      } else {
-        studentId = await resolveStudentIdForUser(userId);
-        personLabel = user?.name || 'you';
-        if (!studentId) {
-          return {
-            noStudentProfile: true,
-            person: personLabel,
-            reason: 'No Student profile exists for the logged-in user — no training/course data is tracked.',
-            authoritative: true,
-          };
-        }
-      }
-
-      const listFilter = buildCourseProgressFilter(studentId, { status: args.status });
-      const totalFilter = buildCourseProgressFilter(studentId);
-      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
-      const [statusAgg, docs, total] = await Promise.all([
-        StudentCourseProgress.aggregate([
-          { $match: totalFilter },
-          { $group: { _id: '$status', count: { $sum: 1 } } },
-        ]),
-        StudentCourseProgress.find(listFilter)
-          .populate({ path: 'module', select: 'title' })
-          .sort({ updatedAt: -1 })
-          .limit(limit)
-          .lean(),
-        StudentCourseProgress.countDocuments(listFilter),
-      ]);
-      const breakdown = summarizeCourseProgressBreakdown(statusAgg);
-      const records = docs.map((d) => ({
-        moduleTitle: d.module?.title || 'Unknown module',
-        status: d.status,
-        percentage: d.progress?.percentage ?? 0,
-        enrolledAt: d.enrolledAt,
-        completedAt: d.completedAt,
-      }));
-      return {
-        total,
-        breakdown,
-        records,
-        person: personLabel,
-        population: 'student',
-        authoritative: true,
-        partialList: total > records.length,
-      };
-    }
-
-    case 'org_structure_analytics': {
-      // Wraps getOrgCoverageSummary + listOrgUnits + buildTree (Org Chart / Structure UI APIs).
-      // Managers/supervisors/ceo = POSITION counts (one card each) + head names — never User role=Manager.
-      // Departments = multi-employee last-level units (memberCount from tree).
-      if (!hasOrgReadAccess(user?.authContext?.permissions)) {
-        return {
-          forbidden: true,
-          reason: 'Missing chart.read / structure.read / structure.manage permission required to view org structure analytics.',
-        };
-      }
-      const inferred = extractOrgStructureArgs(args.phrase || '');
-      const metric = args.metric || inferred.metric || 'coverage';
-      const unitName = args.unitName || args.query || inferred.unitName || null;
-      // Tree needed for named lookup AND department membership counts on departments metric/coverage.
-      const needsTree =
-        Boolean(unitName) ||
-        metric === 'unit_lookup' ||
-        metric === 'departments' ||
-        metric === 'coverage';
-      const [summary, units, tree] = await Promise.all([
-        getOrgCoverageSummary(user || null),
-        listOrgUnits(),
-        needsTree ? buildTree(user || null) : Promise.resolve(null),
-      ]);
-      return buildOrgStructureAnalyticsPayload({
-        summary,
-        units,
-        tree,
-        args: { metric, unitName },
-      });
-    }
-
-    case 'org_manager_analytics': {
-      const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
-      return fetchOrgManagersAnalytics({ adminId, limit, user, args });
-    }
-
-    case 'designation_manager_analytics': {
-      const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
-      return fetchDesignationManagersAnalytics({
-        adminId,
-        limit,
-        user,
-        args,
-        text: args.phrase,
-        designationPhrase: args.designation,
-      });
-    }
-
     case 'fetch_jobs': {
       const limit = Math.min(args.limit || 100, 200);
       // Sage's job visibility must match the ATS Jobs page — non-privileged users only
@@ -1919,171 +1599,7 @@ async function fetchModule(name, args, user, uiContext = null) {
       });
     }
 
-    case 'fetch_holidays': {
-      const days = Math.min(args.days || 90, 365);
-      const now = new Date();
-      const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-      return Holiday.find({ date: { $gte: now, $lte: until }, isActive: true })
-        .select('title date endDate')
-        .sort({ date: 1 })
-        .limit(20)
-        .lean();
-    }
-
     // ─── Semantic / vector tools ─────────────────────────────────────────────
-
-    case 'fetch_employee_overview': {
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      if (!isAdmin) {
-        return { notFound: true, reason: 'Only administrators can look up another employee\'s details.', label: 'employee overview' };
-      }
-
-      const ident = String(args.employee || '').trim();
-      if (!ident) return { notFound: true, reason: 'No employee identifier provided.', label: 'employee overview' };
-
-      // Profile/shift never need a time window. Attendance + leave summary do.
-      const window = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 30,
-      });
-      const match = await resolveEmployeeMatch(ident);
-      if (match.kind === 'notFound') {
-        return { notFound: true, searchedFor: ident, label: 'employee overview' };
-      }
-      if (match.kind === 'ambiguous') {
-        return { ambiguous: true, searchedFor: ident, matches: match.matches, label: 'employee overview' };
-      }
-
-      const employee = match.employee;
-      const ownerUser = match.ownerUser;
-      const studentProfile = match.studentProfile;
-      if (!employee) {
-        return {
-          employee: {
-            name: ownerUser?.name, email: ownerUser?.email, phone: ownerUser?.phoneNumber,
-            employeeId: null, designation: null, department: null,
-            joiningDate: null, resignDate: null, isActive: null,
-            shift: null,
-          },
-          attendance: null,
-          leaves: [],
-          source: 'user-only',
-          label: 'employee overview',
-        };
-      }
-      const ownerId = employee.owner;
-
-      // Attendance summary — Student profile keyed routes, falls back to user.
-      const attQ = { date: { $gte: window.from, $lte: window.to } };
-      if (studentProfile?._id) attQ.student = studentProfile._id;
-      else attQ.user = ownerId;
-
-      const attRecs = await Attendance.find(attQ)
-        .select('date status duration leaveType')
-        .sort({ date: -1 })
-        .limit(180)
-        .lean();
-
-      const counts = attRecs.reduce((acc, r) => {
-        const k = r.status || 'Unknown';
-        acc[k] = (acc[k] || 0) + 1;
-        return acc;
-      }, {});
-      const totalMs = attRecs.reduce((s, r) => s + (Number(r.duration) || 0), 0);
-      const totalHrs = +(totalMs / 3600000).toFixed(1);
-
-      // Leave requests in the asked window
-      const leaves = ownerId
-        ? await LeaveRequest.find({ requestedBy: ownerId, dates: { $elemMatch: { $gte: window.from, $lte: window.to } } })
-            .select('leaveType dates status notes adminComment reviewedAt createdAt')
-            .sort({ createdAt: -1 })
-            .limit(20)
-            .lean()
-        : [];
-
-      // Future leaves — anything with at least one date today or later, regardless of window.
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
-      const futureLeaves = ownerId
-        ? await LeaveRequest.find({
-            requestedBy: ownerId,
-            dates: { $elemMatch: { $gte: today } },
-          })
-            .select('leaveType dates status notes adminComment')
-            .sort({ createdAt: -1 })
-            .limit(20)
-            .lean()
-        : [];
-
-      // Backdated attendance correction requests for this employee
-      const backdated = ownerId
-        ? await BackdatedAttendanceRequest.find(
-            studentProfile?._id
-              ? { $or: [{ student: studentProfile._id }, { user: ownerId }] }
-              : { user: ownerId }
-          )
-            .select('attendanceEntries notes status adminComment reviewedAt createdAt')
-            .sort({ createdAt: -1 })
-            .limit(20)
-            .lean()
-        : [];
-
-      // Group memberships — CandidateGroup keyed on Employee._id, StudentGroup on Student._id.
-      const [candidateGroups, studentGroups] = await Promise.all([
-        CandidateGroup.find({ candidates: employee._id })
-          .populate({ path: 'holidays', select: 'title date' })
-          .select('name description isActive holidays')
-          .lean(),
-        studentProfile?._id
-          ? StudentGroup.find({ students: studentProfile._id })
-              .populate({ path: 'holidays', select: 'title date' })
-              .select('name description isActive holidays')
-              .lean()
-          : [],
-      ]);
-
-      logger.info(`[ChatAssistant][fetch_employee_overview] employee=${employee.fullName || employee.employeeId} att=${attRecs.length} leaves=${leaves.length}`);
-
-      return {
-        employee: {
-          name: ownerUser?.name || employee.fullName,
-          email: ownerUser?.email,
-          phone: ownerUser?.phoneNumber,
-          location: ownerUser?.location,
-          employeeId: employee.employeeId,
-          designation: employee.designation,
-          department: employee.department,
-          joiningDate: employee.joiningDate,
-          resignDate: employee.resignDate,
-          isActive: employee.isActive,
-          shortBio: employee.shortBio,
-          leavesAllowed: employee.leavesAllowed,
-          shift: employee.shift || null,
-          weekOff: Array.isArray(employee.weekOff) ? employee.weekOff : [],
-          holidays: Array.isArray(employee.holidays) ? employee.holidays : [],
-          assignedLeaves: Array.isArray(employee.leaves) ? employee.leaves : [],
-        },
-        attendance: {
-          window: window.label,
-          windowDefaulted: window.missing,
-          recordCount: attRecs.length,
-          totalHours: totalHrs,
-          breakdown: counts,
-          source: studentProfile?._id ? 'student' : 'user',
-        },
-        leaves,
-        futureLeaves,
-        backdatedAttendance: backdated,
-        groups: {
-          candidate: candidateGroups,
-          student: studentGroups,
-        },
-        label: 'employee overview',
-      };
-    }
 
     case 'fetch_employee_attendance_calendar': {
       const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
@@ -2399,70 +1915,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       };
     }
 
-    case 'fetch_shifts': {
-      const limit = Math.min(args.limit || 20, 50);
-      const includeStaff = args.includeStaff !== false;
-      const q = {};
-      if (args.activeOnly !== false) q.isActive = true;
-      if (args.shiftName) q.name = { $regex: escapeRegex(args.shiftName), $options: 'i' };
-
-      const shifts = await Shift.find(q)
-        .select('name description timezone startTime endTime isActive')
-        .sort({ startTime: 1 })
-        .limit(limit)
-        .lean();
-      if (!shifts.length) return { total: 0, records: [], label: 'shift' };
-
-      // Roster per shift — only employees in current company (Employee.owner.adminId == adminId)
-      let staffByShift = {};
-      if (includeStaff) {
-        const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        const profiles = await Employee.find(
-          { shift: { $in: shifts.map((s) => s._id) }, owner: { $in: companyUserIds } },
-          { shift: 1, owner: 1, employeeId: 1, designation: 1, isActive: 1 }
-        ).populate({ path: 'owner', select: 'name email status' }).lean();
-        staffByShift = profiles.reduce((acc, p) => {
-          const k = String(p.shift);
-          (acc[k] = acc[k] || []).push({
-            name: p.owner?.name ?? 'N/A',
-            email: p.owner?.email ?? 'N/A',
-            employeeId: p.employeeId ?? 'N/A',
-            designation: p.designation ?? 'N/A',
-            isActive: !!p.isActive,
-          });
-          return acc;
-        }, {});
-      }
-
-      const records = shifts.map((s) => ({
-        ...s,
-        staff: staffByShift[String(s._id)] ?? [],
-        staffCount: (staffByShift[String(s._id)] ?? []).length,
-      }));
-
-      logger.info(`[ChatAssistant][fetch_shifts] shifts=${shifts.length} includeStaff=${includeStaff}`);
-      return { total: shifts.length, records, label: 'shift' };
-    }
-
-    case 'fetch_my_shift': {
-      const profile = await Employee.findOne({ owner: userId })
-        .populate({ path: 'shift', select: 'name description timezone startTime endTime isActive' })
-        .select('shift employeeId designation department')
-        .lean();
-      if (!profile) return { assigned: false, reason: 'No employee profile found for current user.' };
-      if (!profile.shift) {
-        return { assigned: false, reason: 'No shift assigned.', employeeId: profile.employeeId, designation: profile.designation };
-      }
-      return {
-        assigned: true,
-        employeeId: profile.employeeId,
-        designation: profile.designation,
-        department: profile.department,
-        shift: profile.shift,
-        label: 'my shift',
-      };
-    }
-
     case 'fetch_backdated_attendance_requests': {
       const limit = Math.min(args.limit || 50, 200);
       const explicitWindow = resolveDateWindow({
@@ -2621,20 +2073,6 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_leave_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_leave_requests.total = ${data.total}`);
     }
-    if (key === 'training_analytics' && typeof data?.total === 'number') {
-      lines.push(`  training_analytics.total = ${data.total}`);
-    }
-    if (key === 'org_structure_analytics' && !data?.forbidden) {
-      lines.push(`  org_structure_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.employees?.unassigned ?? 0}`);
-      lines.push(`  org_structure_analytics.managers = ${data?.managers?.count ?? 0} (manager POSITIONS)`);
-      lines.push(`  org_structure_analytics.supervisors = ${data?.supervisors?.count ?? 0} (supervisor POSITIONS)`);
-      lines.push(`  org_structure_analytics.departments = ${data?.departments?.count ?? 0}`);
-      lines.push(`  org_structure_analytics.employees.unassigned = ${data?.employees?.unassigned ?? 0}`);
-      lines.push(`  org_structure_analytics.employees.total = ${data?.employees?.total ?? 0}`);
-    }
-    if (key === 'org_manager_analytics' && typeof data?.total === 'number') {
-      lines.push(`  org_manager_analytics.total = ${data.total} (organizational managers with direct reports)`);
-    }
     if (key === 'project_analytics' && !data?.forbidden) {
       lines.push(`  project_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.stats?.total ?? 0}`);
       if (data?.stats) {
@@ -2690,7 +2128,6 @@ const BESPOKE_FORBIDDEN_KEYS = new Set([
   'team_analytics',
   'task_board_analytics',
   'workload_analytics',
-  'org_structure_analytics',
 ]);
 
 function summarizeData(fetchedData) {
@@ -2969,150 +2406,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_employee_overview') {
-      if (data?.notFound) {
-        const reason = data.reason || `No employee matched "${data.searchedFor || ''}". Do not invent details.`;
-        const fb = buildFallback({ module: 'employees', entityType: 'employee profile', queryArg: data.searchedFor });
-        parts.push(
-          `--- employee overview ---\n` +
-          `NO_EMPLOYEE_FOUND: ${reason}\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent details):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const e = data?.employee || {};
-      const a = data?.attendance;
-      const leaves = data?.leaves || [];
-      const lines = [`--- employee overview (ENTITY_TYPE: employee — sourced from Training Management → Attendance Tracking) ---`];
-
-      const empId = e.employeeId ? ` [${e.employeeId}]` : '';
-      lines.push(`IDENTITY: ${e.name || 'N/A'}${empId} | EMAIL: ${e.email || 'N/A'} | PHONE: ${e.phone || 'N/A'} | LOCATION: ${e.location || 'N/A'}`);
-      const employmentBits = [];
-      if (e.designation) employmentBits.push(`DESIGNATION: ${e.designation}`);
-      if (e.department) employmentBits.push(`DEPARTMENT: ${e.department}`);
-      const _joinSrc = e.joiningDate || e.joinDate || e.dateOfJoining;
-      if (_joinSrc) employmentBits.push(`JOIN_DATE: ${formatDateIST(_joinSrc)}`);
-      // Show resign date whenever set (past OR future) — never hide for
-      // resigned employees, per spec.
-      const _resignSrc = e.resignDate || e.resignationDate || e.exitDate;
-      if (_resignSrc) employmentBits.push(`RESIGN_DATE: ${formatDateIST(_resignSrc)}`);
-      if (e.isActive !== null && e.isActive !== undefined) employmentBits.push(`ACTIVE: ${e.isActive ? 'Yes' : 'No'}`);
-      if (e.leavesAllowed != null) employmentBits.push(`LEAVES_ALLOWED: ${e.leavesAllowed}`);
-      if (employmentBits.length) lines.push(`EMPLOYMENT: ${employmentBits.join(' | ')}`);
-
-      if (e.shift) {
-        const tz = e.shift.timezone || 'UTC';
-        lines.push(`SHIFT: ${e.shift.name} | TIME: ${e.shift.startTime}-${e.shift.endTime} ${tz} | ACTIVE: ${e.shift.isActive ? 'Yes' : 'No'}${e.shift.description ? ` | DESC: ${e.shift.description}` : ''}`);
-      } else {
-        lines.push(`SHIFT: Not assigned`);
-      }
-
-      if (a) {
-        const breakdown = Object.entries(a.breakdown || {}).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
-        const note = a.windowDefaulted
-          ? ' | NOTE: window defaulted (user did not specify) — if user wants a specific period, ask which month/dates'
-          : '';
-        lines.push(`ATTENDANCE_SUMMARY: period: ${a.window} | records: ${a.recordCount} | total worked: ${a.totalHours}h | breakdown: ${breakdown} | source: ${a.source === 'student' ? 'Training System' : 'User Punch'}${note}`);
-      } else {
-        lines.push(`ATTENDANCE_SUMMARY: No attendance records available`);
-      }
-
-      // Week off (rest days)
-      const weekOff = Array.isArray(e.weekOff) && e.weekOff.length
-        ? e.weekOff.join(', ')
-        : 'None';
-      lines.push(`WEEK_OFF: ${weekOff}`);
-
-      // Assigned holidays from settings/attendance/assign-holidays
-      const hols = Array.isArray(e.holidays) ? e.holidays : [];
-      if (hols.length === 0) {
-        lines.push(`HOLIDAYS_ASSIGNED: None`);
-      } else {
-        lines.push(`HOLIDAYS_ASSIGNED (${hols.length}):`);
-        for (const h of hols) {
-          const dt = formatDateIST(h.date) || 'N/A';
-          lines.push(`  HOLIDAY: ${h.title || 'N/A'} | DATE: ${dt}${h.endDate ? ` → ${formatDateIST(h.endDate)}` : ''}`);
-        }
-      }
-
-      // Admin-assigned leaves (Employee.leaves[]) — not user-requested
-      const aLeaves = Array.isArray(e.assignedLeaves) ? e.assignedLeaves : [];
-      if (aLeaves.length) {
-        lines.push(`ASSIGNED_LEAVES (admin-set, ${aLeaves.length}):`);
-        for (const l of aLeaves) {
-          const dt = formatDateIST(l.date) || 'N/A';
-          lines.push(`  ASSIGNED_LEAVE: ${dt} | type: ${l.leaveType || 'N/A'}${l.notes ? ` | notes: ${String(l.notes).slice(0, 80)}` : ''}`);
-        }
-      }
-
-      lines.push(`LEAVE_REQUESTS_IN_PERIOD (period: ${a?.window || 'unspecified'}, ${leaves.length} record${leaves.length === 1 ? '' : 's'}):`);
-      if (leaves.length === 0) {
-        lines.push(`  None`);
-      } else {
-        for (const l of leaves) {
-          const dates = Array.isArray(l.dates) && l.dates.length
-            ? l.dates.map((d) => formatDateIST(d)).join(', ')
-            : 'N/A';
-          let line = `  LEAVE: type=${l.leaveType || 'N/A'} | dates=${dates} | status=${l.status || 'N/A'}`;
-          if (l.adminComment) line += ` | admin_comment=${l.adminComment}`;
-          if (l.notes)        line += ` | notes=${String(l.notes).slice(0, 80)}`;
-          lines.push(line);
-        }
-      }
-
-      // Future leaves (today or later)
-      const fut = data?.futureLeaves || [];
-      lines.push(`FUTURE_LEAVES (today onward, ${fut.length}):`);
-      if (fut.length === 0) {
-        lines.push(`  None`);
-      } else {
-        for (const l of fut) {
-          const dates = Array.isArray(l.dates) && l.dates.length
-            ? l.dates.map((d) => formatDateIST(d)).join(', ')
-            : 'N/A';
-          lines.push(`  FUTURE_LEAVE: type=${l.leaveType || 'N/A'} | dates=${dates} | status=${l.status || 'N/A'}`);
-        }
-      }
-
-      // Backdated attendance requests
-      const bd = data?.backdatedAttendance || [];
-      lines.push(`BACKDATED_ATTENDANCE_REQUESTS (${bd.length}):`);
-      if (bd.length === 0) {
-        lines.push(`  None`);
-      } else {
-        for (const r of bd) {
-          const created = formatDateIST(r.createdAt) || 'N/A';
-          const entries = (r.attendanceEntries || []).map((x) => {
-            const d = formatDateIST(x.date) || '?';
-            return d;
-          }).join(', ');
-          let line = `  REQUEST: submitted=${created} | status=${r.status || 'N/A'} | entries=${entries || 'N/A'}`;
-          if (r.adminComment) line += ` | admin_comment=${r.adminComment}`;
-          lines.push(line);
-        }
-      }
-
-      // Group memberships
-      const cg = data?.groups?.candidate || [];
-      const sg = data?.groups?.student || [];
-      lines.push(`GROUP_MEMBERSHIPS:`);
-      if (cg.length === 0 && sg.length === 0) {
-        lines.push(`  None`);
-      } else {
-        for (const g of cg) {
-          const hCount = Array.isArray(g.holidays) ? g.holidays.length : 0;
-          lines.push(`  CANDIDATE_GROUP: ${g.name}${g.description ? ` — ${g.description}` : ''} | active: ${g.isActive ? 'Yes' : 'No'} | group_holidays: ${hCount}`);
-        }
-        for (const g of sg) {
-          const hCount = Array.isArray(g.holidays) ? g.holidays.length : 0;
-          lines.push(`  STUDENT_GROUP: ${g.name}${g.description ? ` — ${g.description}` : ''} | active: ${g.isActive ? 'Yes' : 'No'} | group_holidays: ${hCount}`);
-        }
-      }
-
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     if (key === 'fetch_employee_attendance_calendar') {
       if (data?.needsTimeWindow) {
         parts.push(
@@ -3271,36 +2564,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_shifts') {
-      const records = data?.records ?? [];
-      const lines = [`--- shifts (${records.length} total — ENTITY_TYPE: employee) ---`];
-      for (const s of records) {
-        const tz = s.timezone || 'UTC';
-        const status = s.isActive ? 'Active' : 'Inactive';
-        lines.push(`SHIFT: ${s.name} | TIME: ${s.startTime}-${s.endTime} ${tz} | STATUS: ${status} | EMPLOYEES_COUNT: ${s.staffCount}${s.description ? ` | DESC: ${s.description}` : ''}`);
-        for (const m of s.staff || []) {
-          lines.push(`  EMPLOYEE: ${m.name} (${m.employeeId}) | DESIGNATION: ${m.designation} | EMAIL: ${m.email} | ACTIVE: ${m.isActive ? 'Yes' : 'No'}`);
-        }
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_my_shift') {
-      if (!data?.assigned) {
-        parts.push(`--- my shift ---\nNOT_ASSIGNED: ${data?.reason || 'No shift assigned.'}`);
-      } else {
-        const s = data.shift;
-        parts.push(
-          `--- my shift (ENTITY_TYPE: employee) ---\n` +
-          `EMPLOYEE_ID: ${data.employeeId || 'N/A'} | DESIGNATION: ${data.designation || 'N/A'} | DEPARTMENT: ${data.department || 'N/A'}\n` +
-          `SHIFT: ${s.name} | TIME: ${s.startTime}-${s.endTime} ${s.timezone || 'UTC'} | ACTIVE: ${s.isActive ? 'Yes' : 'No'}` +
-          (s.description ? ` | DESC: ${s.description}` : '')
-        );
-      }
-      continue;
-    }
-
     if (key === 'fetch_leave_requests') {
       if (data?.notFound) {
         const reason = data.reason || `No employee matched "${data.searchedFor || ''}".`;
@@ -3449,160 +2712,6 @@ function summarizeData(fetchedData) {
         if (r.adminComment) line += ` | ADMIN_COMMENT: ${r.adminComment}`;
         if (r.notes)        line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
         lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'training_analytics') {
-      if (data?.noStudentProfile) {
-        parts.push(
-          `--- training / course progress ---\n` +
-          `NO_STUDENT_PROFILE: ${data.reason || 'This person has no Student profile.'}\n` +
-          `USER_FACING_REPLY: Tell the user this person is not tracked in the training system (Student profile required). Do not invent a course count of 0 as if they were enrolled.`
-        );
-        continue;
-      }
-      if (data?.notFound) {
-        parts.push(`--- training / course progress ---\nNO_PERSON_FOUND: No one matches "${data.searchedFor}". Do not guess.`);
-        continue;
-      }
-      const b = data?.breakdown || { total: 0, byStatus: {} };
-      const lines = [
-        `--- training / course progress (population=Student | person=${data?.person || 'N/A'} | ` +
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? b.total ?? 0} — ALWAYS use this number. ` +
-        `STATUS_BREAKDOWN: enrolled=${b.byStatus?.enrolled ?? 0}, in-progress=${b.byStatus?.['in-progress'] ?? 0}, completed=${b.byStatus?.completed ?? 0}, dropped=${b.byStatus?.dropped ?? 0}) ---`,
-      ];
-      for (const r of data?.records ?? []) {
-        lines.push(
-          `MODULE: ${r.moduleTitle || 'N/A'} | STATUS: ${r.status || 'N/A'} | PROGRESS: ${r.percentage ?? 0}% | ` +
-          `ENROLLED_AT: ${formatDateIST(r.enrolledAt)}` +
-          (r.completedAt ? ` | COMPLETED_AT: ${formatDateIST(r.completedAt)}` : '')
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'org_structure_analytics') {
-      if (data?.forbidden) {
-        parts.push(
-          `--- org structure analytics ---\n` +
-          `FORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
-          `USER_FACING_REPLY: Tell the user they do not have permission to view org-structure analytics.`
-        );
-        continue;
-      }
-      const emp = data?.employees || {};
-      const dep = data?.departments || {};
-      const lead = data?.leadership || {};
-      const mgr = data?.managers || {};
-      const sup = data?.supervisors || {};
-      const authCount = data?.authoritativeCount ?? emp.total ?? 0;
-      const authLabel = data?.authoritativeLabel || 'org structure';
-      const lines = [
-        `--- org structure analytics (AUTHORITATIVE — wraps orgStructure.service getOrgCoverageSummary + OrgUnit tree; matches Org Chart / Structure UI) ---`,
-        `MODEL: POSITIONS (ceo/manager/supervisor) = one Org Chart card each with optional HEAD (headEmployee). DEPARTMENTS = last-level multi-employee units.`,
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${authCount} — ${authLabel} — ALWAYS use this number. Do not invent. Do NOT use fetch_employees role=Manager.`,
-        `MANAGERS: count=${mgr.count ?? 0} manager POSITIONS (OrgUnit.type=manager — NOT a User role) | hasManagers=${mgr.hasManagers ?? lead.hasManagers ?? false}`,
-        `SUPERVISORS: count=${sup.count ?? 0} supervisor POSITIONS (OrgUnit.type=supervisor) | hasSupervisors=${sup.hasSupervisors ?? false}`,
-        `EMPLOYEES_TOTAL: ${emp.total ?? 0} | ASSIGNED: ${emp.assigned ?? 0} | UNASSIGNED: ${emp.unassigned ?? 0}`,
-        `UNASSIGNED_DEFINITION: ${emp.unassignedDefinition || 'active employee whose departmentId matches no active department-type org-unit'}`,
-        `DEPARTMENTS: count=${dep.count ?? 0} department units, hasDepartmentNodes=${dep.hasDepartmentNodes ?? false}, departmentsWithoutNode=${dep.departmentsWithoutNode ?? 0}, departmentNodesWithoutEmployees=${dep.departmentNodesWithoutEmployees ?? 0}, allDepartmentsLinked=${dep.allDepartmentsLinked ?? false}`,
-        `LEADERSHIP: hasCeo=${lead.hasCeo ?? false}, ceoCount=${lead.ceoCount ?? 0}, unitsMissingHead=${lead.unitsMissingHead ?? 0}, allLeadershipHeadsAssigned=${lead.allLeadershipHeadsAssigned ?? false}`,
-        `OVER_SPAN_UNITS: ${data?.overSpanUnits ?? 0} | OPEN_SLOTS: ${data?.openSlots ?? 0}`,
-        `METRIC: ${data?.metric || 'coverage'}`,
-      ];
-      for (const p of mgr.records || mgr.positions || []) {
-        lines.push(
-          `  MANAGER_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
-        );
-      }
-      for (const p of sup.records || sup.positions || []) {
-        lines.push(
-          `  SUPERVISOR_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
-        );
-      }
-      for (const p of lead.ceoPositions || []) {
-        lines.push(
-          `  CEO_POSITION: ${p.name || 'N/A'} | head=${p.headName || 'unassigned'} | hasHead=${p.hasHead === true}`
-        );
-      }
-      for (const d of dep.records || []) {
-        lines.push(
-          `  DEPARTMENT_UNIT: ${d.name || 'N/A'} | members=${d.memberCount ?? d.employeeCount ?? 'n/a'}`
-        );
-      }
-      if (data?.lookup) {
-        if (data.lookup.notFound) {
-          lines.push(`UNIT_LOOKUP: notFound query="${data.lookup.query || ''}" — say that unit was not found on the org chart.`);
-        } else {
-          lines.push(`UNIT_LOOKUP: matchCount=${data.lookup.matchCount} query="${data.lookup.query || ''}"`);
-          for (const m of data.lookup.matches || []) {
-            lines.push(
-              `  UNIT: ${m.name} | kind=${m.kind || m.type} | type=${m.type} | head=${m.headName || 'N/A'} | memberCount=${m.memberCount ?? 0} | employeeCount=${m.employeeCount ?? 0}`
-            );
-            if ((m.kind === 'department' || m.type === 'department') && Array.isArray(m.employees)) {
-              for (const e of m.employees.slice(0, 50)) {
-                lines.push(`    EMPLOYEE: ${e.fullName}${e.designation ? ` (${e.designation})` : ''}`);
-              }
-            }
-            if (m.kind === 'position' || ['ceo', 'manager', 'supervisor'].includes(m.type)) {
-              lines.push(`    POSITION_HEAD: ${m.headName || 'unassigned'}`);
-              for (const r of (m.reports || m.childUnits || []).slice(0, 50)) {
-                lines.push(
-                  `    REPORT: ${r.name} | kind=${r.kind || r.type} | type=${r.type} | head=${r.headName || 'N/A'} | members=${r.memberCount ?? 0}`
-                );
-              }
-            }
-            if (m.childDepartments?.length && m.type !== 'supervisor') {
-              for (const c of m.childDepartments) {
-                lines.push(`    CHILD_DEPARTMENT: ${c.name} | members=${c.memberCount ?? 0} | head=${c.headName || 'N/A'}`);
-              }
-            }
-            if (m.childSupervisors?.length && m.type !== 'manager') {
-              for (const c of m.childSupervisors) {
-                lines.push(`    CHILD_SUPERVISOR: ${c.name} | head=${c.headName || 'N/A'}`);
-              }
-            }
-          }
-        }
-      }
-      lines.push(`Do NOT recompute these from Employee role filters — this mirrors the Org Chart tree exactly.`);
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'org_manager_analytics') {
-      const lines = [
-        `--- org manager analytics (organizational managers = people with direct reports) ---`,
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? 0} — people with ≥1 direct report (reportingManager and/or org-chart span). NOT manager positions on org chart and NOT designation/title alone.`,
-        `DEFINITION: ${data?.definition || 'Employees with direct reports via org hierarchy.'}`,
-      ];
-      for (const r of data?.records ?? []) {
-        lines.push(
-          `MANAGER: ${r.name || 'N/A'} | directReports=${r.directReports ?? 0}` +
-          (r.designation ? ` | designation=${r.designation}` : '') +
-          (r.employeeId ? ` | employeeId=${r.employeeId}` : '')
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'designation_manager_analytics') {
-      const phrase = data?.designationPhrase || 'Manager';
-      const lines = [
-        `--- designation manager analytics (employees titled "${phrase}") ---`,
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? 0} — active employees whose designation matches "${phrase}". NOT organizational managers and NOT org-chart manager positions.`,
-        `DEFINITION: ${data?.definition || `Employees with designation "${phrase}".`}`,
-      ];
-      for (const r of data?.records ?? []) {
-        lines.push(
-          `EMPLOYEE: ${r.name || 'N/A'}` +
-          (r.designation ? ` | designation=${r.designation}` : '') +
-          (r.employeeId ? ` | employeeId=${r.employeeId}` : '')
-        );
       }
       parts.push(lines.join('\n'));
       continue;
@@ -3958,18 +3067,6 @@ const SPECIFIC_LOOKUP_RE = new RegExp(
 const INTENT_PATTERNS = [
   // Employee / candidate / role headcounts and lists are answered by the agent's
   // people, employees and candidates tools — no legacy fast path for them.
-  // Training / course progress (Epic F, Student population).
-  { re: /\b(my courses?|course progress|training progress|training status|courses? (completed|enrolled|in progress|dropped)|how many courses)\b/i,
-                                                                                    modules: ['training_analytics'] },
-  // Org structure / chart (Epic G) — manager/supervisor/group/chart asks.
-  // Bare "how many managers" → manager POSITIONS (org_structure_analytics).
-  { re: /\b(how many|count|number of|total)\b.{0,40}\bmanagers?\b/i,
-                                                                                       modules: ['org_structure_analytics'], args: { metric: 'managers' } },
-  { re: /\b(how many|count|number of|total)\b.{0,40}\bsupervisors?\b/i,
-                                                                                      modules: ['org_structure_analytics'], args: { metric: 'supervisors' } },
-  { re: /\b(unassigned employees?|employees?\s+unassigned|org(anisation|anization)?\s*chart|org(anisation|anization)?\s*structure|structure coverage|chart coverage|supervisor coverage|do we have a supervisor|department(s)? (without|missing) (a )?(node|chart)|group\s+[a-z0-9])/i,
-                                                                                      modules: ['org_structure_analytics'] },
-  { re: /\b(supervisors?)\b/i,                                                      modules: ['org_structure_analytics'] },
   // Jobs (internal company postings)
   { re: /\b(open jobs?|active jobs?|closed jobs?|draft jobs?|archived jobs?|live jobs?|hiring|vacanc|job opening|position available|internal jobs?|how many jobs?|total jobs?|list( all)? jobs?)\b/i, modules: ['fetch_jobs'] },
   // Tasks — overdue/blocked route to authoritative task_board_analytics
@@ -4023,9 +3120,6 @@ const INTENT_PATTERNS = [
   { re: /\b(company|team|org|all employees?)\s+attendance\b/i,             modules: ['fetch_attendance_summary'] },
   { re: /\b(my attendance|my punch|my check.?in|my working hours)\b/i,    modules: ['fetch_attendance'] },
   { re: /\b(attendance|punch|check.?in|working hours)\b/i,                 modules: ['fetch_attendance'] },
-  // Shifts — "my shift" goes to single-user lookup, others list shifts
-  { re: /\b(my shift|what shift am i|shift am i on|my work hours)\b/i,    modules: ['fetch_my_shift'] },
-  { re: /\b(shifts?|night shift|morning shift|shift schedule|shift roster|who is on shift)\b/i, modules: ['fetch_shifts'] },
   // Backdated attendance corrections — fast-path only when no specific person mentioned
   // (SPECIFIC_LOOKUP_RE catches "<name>'s backdated requests" first → LLM extracts employee arg)
   { re: /\b(backdated attendance|attendance correction|missed punch|late punch request|attendance request)\b/i, modules: ['fetch_backdated_attendance_requests'] },
@@ -4070,16 +3164,7 @@ export function detectIntent(text, uiContext = null) {
   // Epic B: week-off / groups for a named person must go through overview (LLM extracts employee).
   // Org-wide "how many week off" is not supported as an attendance sum — ask for the person.
   if (looksLikeWeekOffOrGroupsQuery(text)) {
-    return null; // fall through to LLM → fetch_employee_overview
-  }
-
-  // Epic G: org chart / supervisors / Group A → org_structure_analytics
-  // (never fetch_employees role=Manager). Bare manager counts → Business Knowledge Layer.
-  if (looksLikeOrgStructureQuery(text)) {
-    return {
-      modules: ['org_structure_analytics'],
-      args: extractOrgStructureArgs(text),
-    };
+    return null; // fall through to LLM (the agent's get_work_schedule answers these)
   }
 
   // PM workforce teams (TeamGroup) — before project_analytics team-mapping patterns.
@@ -4146,183 +3231,6 @@ function fastPathNeedsArgs(modules, args) {
   return !args.date && !args.month && !args.fromDate && !args.toDate;
 }
 
-// ─── Business Knowledge Layer — manager concept routing ───────────────────────
-
-async function persistManagerMemory(user, adminId, patch = {}) {
-  const $set = { 'lastEntities.updatedAt': new Date(), ...patch.$set };
-  const $unset = patch.$unset || {};
-  await ConversationMemory.findOneAndUpdate(
-    { userId: user?.id, adminId },
-    { $set, ...(Object.keys($unset).length ? { $unset } : {}) },
-    { upsert: true }
-  );
-}
-
-async function resolveManagerConceptRouting(lastUserMsg, user, memDoc) {
-  const adminId = user?.adminId ?? user?.id;
-  const pending = memDoc?.lastEntities?.pendingConceptClarification;
-  const topic = memDoc?.lastEntities?.conversationTopic;
-
-  // Clarification Manager — short replies like "2" must never fall through to employee search.
-  if (pending?.concept === 'manager') {
-    const choice = parseManagerConceptChoice(lastUserMsg);
-    if (choice) {
-      await persistManagerMemory(user, adminId, {
-        $unset: { 'lastEntities.pendingConceptClarification': 1 },
-        $set: {
-          'lastEntities.conversationTopic': {
-            concept: 'manager',
-            lastInterpretation: choice === 'OrgManager' ? 'org' : 'designation',
-            updatedAt: new Date(),
-          },
-        },
-      });
-      return buildManagerRoutingIntent(choice, pending.originalQuery || lastUserMsg);
-    }
-  }
-
-  const topicFollowUp = parseManagerTopicFollowUp(lastUserMsg, topic);
-  if (topicFollowUp) {
-    await persistManagerMemory(user, adminId, {
-      $set: {
-        'lastEntities.conversationTopic': {
-          concept: 'manager',
-          lastInterpretation: topicFollowUp === 'OrgManager' ? 'org' : 'designation',
-          updatedAt: new Date(),
-        },
-      },
-    });
-    return buildManagerRoutingIntent(topicFollowUp, lastUserMsg);
-  }
-
-  if (!mentionsManagerConcept(lastUserMsg)) return null;
-
-  if (isBareManagerPositionQuery(lastUserMsg)) {
-    return buildManagerPositionRoutingIntent(lastUserMsg);
-  }
-
-  const resolutions = resolveConcept('manager', { text: lastUserMsg });
-  if (!resolutions.length) return null;
-
-  const meaning = pickManagerMeaning(resolutions);
-  if (meaning) {
-    await persistManagerMemory(user, adminId, {
-      $set: {
-        'lastEntities.conversationTopic': {
-          concept: 'manager',
-          lastInterpretation: meaning === 'OrgManager' ? 'org' : 'designation',
-          updatedAt: new Date(),
-        },
-      },
-    });
-    return buildManagerRoutingIntent(meaning, lastUserMsg);
-  }
-
-  if (isAmbiguous(resolutions)) {
-    const designationPhrase = extractDesignationPhrase(lastUserMsg) || 'Manager';
-
-    if (shouldProactivelyAnswerBoth(lastUserMsg)) {
-      await persistManagerMemory(user, adminId, {
-        $unset: { 'lastEntities.pendingConceptClarification': 1 },
-        $set: {
-          'lastEntities.conversationTopic': {
-            concept: 'manager',
-            lastInterpretation: 'both',
-            updatedAt: new Date(),
-          },
-        },
-      });
-      return {
-        proactive: true,
-        modules: ['org_structure_analytics', 'org_manager_analytics', 'designation_manager_analytics'],
-        args: { designation: designationPhrase, phrase: lastUserMsg, limit: 50, metric: 'managers' },
-      };
-    }
-
-    const counts = await fetchManagerConceptCounts({
-      adminId,
-      user,
-      text: lastUserMsg,
-    });
-    const clarification = buildManagerClarification(counts);
-    await persistManagerMemory(user, adminId, {
-      $set: {
-        'lastEntities.pendingConceptClarification': {
-          concept: 'manager',
-          originalQuery: lastUserMsg,
-          options: clarification.options,
-          updatedAt: new Date(),
-        },
-      },
-    });
-    return {
-      clarify: clarification.clarifyingQuestion,
-      conceptClarify: clarification,
-    };
-  }
-
-  return null;
-}
-
-async function executeManagerConceptRoute(managerRoute, lastUserMsg, user) {
-  if (managerRoute?.clarify) {
-    return {
-      dataContext:
-        `--- clarification ---\nNEEDS_CLARIFICATION: ${managerRoute.clarify}\n` +
-        `USER_FACING_REPLY: Ask the user this question verbatim. Do not invent counts.\n` +
-        (managerRoute.conceptClarify?.options
-          ? `OPTIONS: ${JSON.stringify(managerRoute.conceptClarify.options)}`
-          : ''),
-      moduleCount: 0,
-      fetched: {
-        __clarify: {
-          question: managerRoute.clarify,
-          options: managerRoute.conceptClarify?.options || null,
-          concept: 'manager',
-        },
-      },
-    };
-  }
-
-  if (managerRoute?.proactive) {
-    const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
-    const toolCalls = managerRoute.modules.map((n) => {
-      const moduleArgs = extractFastPathArgs(lastUserMsg, n, managerRoute.args || {}, fastUserCtx);
-      return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
-    });
-    const fetched = await executeFetches(toolCalls, user);
-    const proactiveText = formatProactiveManagerAnswer({
-      positions: fetched.org_structure_analytics,
-      org: fetched.org_manager_analytics,
-      designation: fetched.designation_manager_analytics,
-      designationPhrase: managerRoute.args?.designation || 'Manager',
-    });
-    const dataContext =
-      `--- proactive manager answer ---\n` +
-      `USER_FACING_REPLY: Present BOTH interpretations using these exact labels (do not contradict them):\n` +
-      `${proactiveText}\n\n` +
-      summarizeData(fetched);
-    logger.info(`[ChatAssistant] intent=manager-proactive modules=[${managerRoute.modules}] user=${user?.id}`);
-    return { dataContext, moduleCount: managerRoute.modules.length, fetched };
-  }
-
-  if (managerRoute?.modules?.length) {
-    const fastUserCtx = { isAdmin: await userIsAdmin({ roleIds: user?.roleIds || [] }).catch(() => false) };
-    const toolCalls = managerRoute.modules.map((n) => {
-      const moduleArgs = extractFastPathArgs(lastUserMsg, n, managerRoute.args || {}, fastUserCtx);
-      return { function: { name: n, arguments: JSON.stringify(moduleArgs) } };
-    });
-    const fetched = await executeFetches(toolCalls, user);
-    const dataContext = summarizeData(fetched);
-    logger.info(
-      `[ChatAssistant] intent=manager-concept modules=[${managerRoute.modules}] user=${user?.id}`
-    );
-    return { dataContext, moduleCount: managerRoute.modules.length, fetched };
-  }
-
-  return null;
-}
-
 // ─── Shared context preparation (routing + fetch) ────────────────────────────
 
 // Legacy job tools that, with the agent on, go to the agent instead of the regex
@@ -4332,16 +3240,6 @@ const AGENT_JOB_TOOLS = new Set(['fetch_jobs']);
 async function prepareContext(client, history, user, uiContext = null, { requestId = null, agentAttempted = false } = {}) {
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
   const adminId = user?.adminId ?? user?.id;
-
-  // 0. Clarification Manager — intercept BEFORE classifier, continuation, or employee search.
-  try {
-    const memForConcept = await ConversationMemory.findOne({ userId: user?.id, adminId }).lean();
-    const managerRoute = await resolveManagerConceptRouting(lastUserMsg, user, memForConcept);
-    const managerCtx = await executeManagerConceptRoute(managerRoute, lastUserMsg, user);
-    if (managerCtx) return managerCtx;
-  } catch (err) {
-    logger.warn(`[ChatAssistant] manager concept routing failed: ${err.message}`);
-  }
 
   if (config.chatbot?.twoStage) {
     const lastTurn = [...history].reverse().find((m) => m.role === 'user')?.content || '';
@@ -4504,14 +3402,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         leaves:     'fetch_leave_requests',
         attendance: 'fetch_attendance_summary',
         backdated:  'fetch_backdated_attendance_requests',
-        department: 'org_structure_analytics',
-        departments: 'org_structure_analytics',
-        manager:    'org_structure_analytics',
-        managers:   'org_structure_analytics',
-        supervisor: 'org_structure_analytics',
-        supervisors: 'org_structure_analytics',
-        unassigned: 'org_structure_analytics',
-        org_structure: 'org_structure_analytics',
       };
       let toolName = null;
       const toolArgs = {};
@@ -4523,13 +3413,7 @@ async function prepareContext(client, history, user, uiContext = null, { request
         Object.assign(toolArgs, extractProjectAnalyticsArgs(continuationMsg));
         if (!toolArgs.metric) toolArgs.metric = 'list_with_teams';
         toolArgs.phrase = continuationMsg;
-      } else if (looksLikeOrgStructureContinuation(continuationMsg, le)) {
-        toolName = 'org_structure_analytics';
-        Object.assign(toolArgs, extractOrgStructureArgs(effectiveUserMsg));
-        if (!toolArgs.metric && le.lastMetric) toolArgs.metric = le.lastMetric;
-        if (!toolArgs.metric) toolArgs.metric = 'departments';
-        toolArgs.phrase = effectiveUserMsg;
-      } else         if (looksLikeTaskBoardContinuation(continuationMsg, le)) {
+      } else if (looksLikeTaskBoardContinuation(continuationMsg, le)) {
          toolName = 'task_board_analytics';
          Object.assign(toolArgs, extractTaskBoardArgs(continuationMsg, { uiContext }));
          if (le.currentTaskQueryContext?.filters) {
@@ -4556,11 +3440,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         toolArgs.phrase = continuationMsg;
       } else if (lastTopic && TOPIC_TOOL_MAP[lastTopic]) {
         toolName = TOPIC_TOOL_MAP[lastTopic];
-        if (toolName === 'org_structure_analytics') {
-          toolArgs.metric = le.lastMetric || lastTopic;
-          if (le.unitName) toolArgs.unitName = le.unitName;
-          toolArgs.phrase = effectiveUserMsg;
-        }
         // Carry forward identity hints so the same record set is fetched.
         if (le.person && (toolName === 'fetch_leave_requests' || toolName === 'fetch_backdated_attendance_requests')) {
           toolArgs.employee = le.person;
@@ -4968,22 +3847,10 @@ function extractEntities(turnText, fetched) {
   }
   if (bestName) out.person = bestName;
 
-  // Prefer canonical identity (incl. ObjectIds) from a successful fetch.
-  const overview = fetched?.fetch_employee_overview;
-  if (overview?.employee?.name) {
-    out.person = overview.employee.name;
-    if (overview.employee.email)      out.email = overview.employee.email;
-    if (overview.employee.employeeId) out.employeeId = overview.employee.employeeId;
-    if (overview.employee._id)        out.personEmpDocId = overview.employee._id;
-    if (overview.employee.owner)      out.personUserId = overview.employee.owner;
-    if (overview.user?._id)           out.personUserId = overview.user._id;
-  }
-
   Object.assign(out, extractProjectMemoryHints(fetched));
   Object.assign(out, extractTaskMemoryHints(fetched));
   Object.assign(out, extractTeamMemoryHints(fetched));
   Object.assign(out, extractTaskBoardMemoryHints(fetched));
-  Object.assign(out, extractOrgStructureMemoryHints(fetched));
 
   return out;
 }

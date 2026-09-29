@@ -25,7 +25,7 @@ describe('toolAccess', () => {
     const start = svcSrc.indexOf('const ROUTING_TOOLS = [');
     const end = svcSrc.indexOf('\n];', start);
     const names = [...svcSrc.slice(start, end).matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]);
-    assert.ok(names.length >= 22, `parsed ${names.length} tool names`);
+    assert.ok(names.length >= 15, `parsed ${names.length} tool names`);
     const missing = names.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -43,7 +43,7 @@ describe('toolAccess', () => {
     assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
     const body = svcSrc.slice(start, start + 1 + nextFn);
     const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
-    assert.ok(caseNames.length >= 23, `parsed ${caseNames.length} case labels`);
+    assert.ok(caseNames.length >= 15, `parsed ${caseNames.length} case labels`);
     const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -80,7 +80,7 @@ describe('toolAccess', () => {
   });
 
   it('self-scoped tools pass with no permissions', async () => {
-    assert.equal((await checkToolAccess('fetch_my_shift', userWith(), notAdmin)).ok, true);
+    assert.equal((await checkToolAccess('fetch_tasks', userWith(), notAdmin)).ok, true);
   });
 });
 

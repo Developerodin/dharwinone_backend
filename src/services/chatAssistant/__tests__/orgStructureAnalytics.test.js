@@ -13,12 +13,7 @@ import {
   summarizeOrgUnitNode,
   lookupOrgUnitFromTree,
   resolveOrgAuthoritativeCount,
-  looksLikeOrgStructureQuery,
-  guardFetchEmployeesOrgRoute,
-  extractOrgStructureArgs,
   buildOrgStructureAnalyticsPayload,
-  looksLikeOrgStructureContinuation,
-  extractOrgStructureMemoryHints,
 } from '../orgStructureAnalytics.js';
 import { computeSpanMetrics } from '../../orgTree.pure.js';
 import { isOrgChartLeaderUnit } from '../managerCounts.js';
@@ -309,43 +304,6 @@ describe('orgStructureAnalytics (Epic G)', () => {
     });
   });
 
-  describe('looksLikeOrgStructureQuery / routing guards', () => {
-    it('detects supervisor / group / org chart asks; routes bare manager counts to org structure', () => {
-      assert.equal(looksLikeOrgStructureQuery('how many managers'), true);
-      assert.equal(looksLikeOrgStructureQuery('how many managers in org chart'), true);
-      assert.equal(looksLikeOrgStructureQuery('how many supervisors'), true);
-      assert.equal(looksLikeOrgStructureQuery('group a in org chart'), true);
-      assert.equal(looksLikeOrgStructureQuery('org structure coverage'), true);
-      assert.equal(looksLikeOrgStructureQuery('unassigned employees'), true);
-      assert.equal(looksLikeOrgStructureQuery('how many employees resigned in July'), false);
-      assert.equal(looksLikeOrgStructureQuery('list sales agents'), false);
-    });
-
-    it('blocks fetch_employees for org manager/chart asks including bare manager counts', () => {
-      const g = guardFetchEmployeesOrgRoute('how many managers in org chart');
-      assert.equal(g.block, true);
-      assert.ok(g.preferModules.includes('org_structure_analytics'));
-      const gBare = guardFetchEmployeesOrgRoute('how many managers');
-      assert.equal(gBare?.block, true);
-      assert.ok(gBare?.preferModules.includes('org_structure_analytics'));
-      assert.equal(guardFetchEmployeesOrgRoute('list recruiters'), null);
-    });
-  });
-
-  describe('extractOrgStructureArgs', () => {
-    it('extracts managers / supervisors / unassigned metrics', () => {
-      assert.equal(extractOrgStructureArgs('how many managers').metric, 'managers');
-      assert.equal(extractOrgStructureArgs('how many supervisors').metric, 'supervisors');
-      assert.equal(extractOrgStructureArgs('unassigned employees').metric, 'unassigned');
-    });
-
-    it('extracts Group A as unitName for unit_lookup', () => {
-      const a = extractOrgStructureArgs('group a in org chart');
-      assert.equal(a.metric, 'unit_lookup');
-      assert.equal(a.unitName, 'Group A');
-    });
-  });
-
   describe('buildOrgStructureAnalyticsPayload', () => {
     it('assembles coverage + Group A lookup with AUTHORITATIVE count', () => {
       const payload = buildOrgStructureAnalyticsPayload({
@@ -406,48 +364,6 @@ describe('orgStructureAnalytics (Epic G)', () => {
       assert.deepEqual(
         leadershipUnits.map((u) => u.type),
         ['ceo', 'manager', 'supervisor', 'supervisor']
-      );
-    });
-  });
-
-  describe('extractOrgStructureMemoryHints', () => {
-    it('stores department entity memory after org_structure_analytics count', () => {
-      const hints = extractOrgStructureMemoryHints({
-        org_structure_analytics: {
-          metric: 'departments',
-          authoritativeCount: 6,
-          departments: {
-            count: 6,
-            records: [
-              { id: '1', name: 'Group A' },
-              { id: '2', name: 'Group B' },
-            ],
-          },
-        },
-      });
-      assert.equal(hints.lastTopic, 'departments');
-      assert.equal(hints.lastEntityType, 'departments');
-      assert.equal(hints.lastMetric, 'departments');
-      assert.equal(hints.lastOrgCount, 6);
-      assert.equal(hints.lastResultList.length, 2);
-    });
-  });
-
-  describe('looksLikeOrgStructureContinuation', () => {
-    it('detects list them after department topic', () => {
-      assert.equal(
-        looksLikeOrgStructureContinuation('list them', {
-          lastEntityType: 'departments',
-          lastMetric: 'departments',
-        }),
-        true,
-      );
-    });
-
-    it('ignores when prior topic was unrelated', () => {
-      assert.equal(
-        looksLikeOrgStructureContinuation('list them', { lastTopic: 'jobs' }),
-        false,
       );
     });
   });

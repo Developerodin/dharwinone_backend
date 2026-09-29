@@ -622,5 +622,40 @@
         "search_knowledge_base"
       ]
     }
+  },
+  {
+    "id": "r6-my-shift",
+    "question": "what time does my shift start?",
+    "expect": { "tools": ["get_work_schedule"] }
+  },
+  {
+    "id": "r6-list-shifts",
+    "question": "what shifts do we have?",
+    "expect": { "tools": ["list_shifts"] }
+  },
+  {
+    "id": "r6-my-holidays",
+    "question": "when is my next holiday?",
+    "expect": { "tools": ["list_holidays"] }
+  },
+  {
+    "id": "r6-org-supervisors",
+    "question": "how many supervisor positions are on the org chart?",
+    "expect": { "tools": ["get_org_structure"], "args": { "get_org_structure": { "metric": "positions", "positionType": "supervisor" } } }
+  },
+  {
+    "id": "r6-my-training",
+    "question": "how far am I in my training courses?",
+    "expect": { "tools": ["get_training_progress"] }
+  },
+  {
+    "id": "r6-manager-designation",
+    "question": "how many employees have the designation Manager?",
+    "expect": { "tools": ["count_employees"] }
+  },
+  {
+    "id": "r6-managers-ambiguous",
+    "question": "how many managers do we have?",
+    "expect": { "tools": ["get_org_structure", "count_employees"] }
   }
 ]

@@ -113,7 +113,7 @@ export function looksLikeOnLeaveTodayQuery(text) {
 
 /**
  * True when the ask is about a person's week-off or group memberships —
- * must route to fetch_employee_overview (not org-wide attendance sum).
+ * must not fast-path to the org-wide attendance sum (the agent's get_work_schedule answers it).
  * @param {string} text
  */
 export function looksLikeWeekOffOrGroupsQuery(text) {

@@ -146,7 +146,10 @@ const FAKE_USER = Object.freeze({
   id: 'eval-user-0000000000000001',
   name: 'Eval User',
   authContext: {
-    permissions: new Set(['jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read', 'interviews.read']),
+    permissions: new Set([
+      'jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read', 'interviews.read',
+      'students.read', 'chart.read', 'attendance.assign',
+    ]),
   },
 });
 
@@ -368,6 +371,29 @@ function cannedResult(name, args) {
       ] };
     case 'search_knowledge_base':
       return { found: true, answer: 'Full-time employees get 18 days of paid leave a year, accrued monthly.' };
+    case 'get_work_schedule':
+      return { self: !args?.person, name: args?.person || 'Eval Self', employeeId: 'DBS001',
+        shift: { name: 'Day', timezone: 'Asia/Kolkata', startTime: '09:30', endTime: '18:30' },
+        weekOff: ['Saturday', 'Sunday'], upcomingHolidays: [{ title: 'Diwali', date: '2026-11-08' }],
+        upcomingHolidayCount: 1, leavesAllowed: 12 };
+    case 'list_shifts':
+      return { total: 2, shifts: [
+        { id: 's1', name: 'Day', startTime: '09:30', endTime: '18:30', timezone: 'Asia/Kolkata', isActive: true },
+        { id: 's2', name: 'Night', startTime: '21:00', endTime: '06:00', timezone: 'Asia/Kolkata', isActive: true },
+      ] };
+    case 'list_holidays':
+      return { scope: args?.scope || 'mine', window: { from: '2026-09-29', to: null }, total: 2, holidays: [
+        { title: 'Diwali', date: '2026-11-08', endDate: null }, { title: 'Christmas', date: '2026-12-25', endDate: null },
+      ] };
+    case 'get_org_structure':
+      if (args?.metric === 'people_managers') return { metric: 'people_managers', total: 3, records: [{ name: 'Meera Iyer', directReports: 5 }] };
+      return { metric: args?.metric || 'coverage', positionType: args?.positionType || 'all', total: 4, records: [
+        { name: 'Ops Manager', type: 'manager', headName: 'Ravi Kumar' },
+      ] };
+    case 'get_training_progress':
+      return { person: args?.person || 'Eval Self', self: !args?.person, total: 2, courses: [
+        { module: 'React Basics', status: 'completed', percentage: 100 }, { module: 'Node APIs', status: 'in-progress', percentage: 40 },
+      ] };
     default:
       return { handoff: true };
   }

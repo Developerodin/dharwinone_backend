@@ -215,7 +215,6 @@
   "./src/services/chatAssistant/__tests__/pipelineLines.test.js",
   "./src/services/chatAssistant/__tests__/attendanceAggregator.punchTime.test.js",
   "./src/services/chatAssistant/__tests__/attendanceAnalytics.test.js",
-  "./src/services/chatAssistant/__tests__/businessConcepts.test.js",
   "./src/services/chatAssistant/__tests__/columnVisibility.test.js",
   "./src/services/chatAssistant/__tests__/employeeEmploymentFilter.test.js",
   "./src/services/chatAssistant/__tests__/entityResolver.test.js",
@@ -246,7 +245,6 @@
   "./src/services/chatAssistant/__tests__/taskBoardAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/taskStageVocabulary.test.js",
   "./src/services/chatAssistant/__tests__/teamAnalytics.test.js",
-  "./src/services/chatAssistant/__tests__/trainingAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/visibilityRules.employeeOwnerQuery.test.js",
   "./src/services/chatAssistant/__tests__/workloadAnalytics.test.js",
   "./src/services/chatAssistant/conversationPolicy/__tests__/renderFacts.delta.test.js",
@@ -389,5 +387,8 @@
   "./src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js",
   "./src/services/chatAssistant/agent/tools/hiring/__tests__/hiringTools.test.js",
   "./src/services/chatAssistant/agent/tools/meetings/__tests__/meetingTools.test.js",
-  "./src/services/chatAssistant/agent/tools/knowledge/__tests__/knowledgeTools.test.js"
+  "./src/services/chatAssistant/agent/tools/knowledge/__tests__/knowledgeTools.test.js",
+  "./src/services/chatAssistant/agent/tools/schedule/__tests__/scheduleTools.test.js",
+  "./src/services/chatAssistant/agent/tools/org/__tests__/orgTools.test.js",
+  "./src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js"
 ]

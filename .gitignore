@@ -217,6 +217,13 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, round 2 — applications domain.
 !src/services/chatAssistant/agent/tools/applications/__tests__/
 !src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js
+# Sage agent loop, round 6 — schedule, org and training domains.
+!src/services/chatAssistant/agent/tools/schedule/__tests__/
+!src/services/chatAssistant/agent/tools/schedule/__tests__/scheduleTools.test.js
+!src/services/chatAssistant/agent/tools/org/__tests__/
+!src/services/chatAssistant/agent/tools/org/__tests__/orgTools.test.js
+!src/services/chatAssistant/agent/tools/training/__tests__/
+!src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js
 
 # Sage agent loop, R4 — hiring domain (interviews, offers, placements, referral leads).
 !src/services/chatAssistant/agent/tools/hiring/__tests__/

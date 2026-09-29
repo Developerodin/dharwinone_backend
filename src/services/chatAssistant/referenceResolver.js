@@ -15,36 +15,6 @@ const POSSESSIVE_TASKS_RE = /^\s*(?:his|her|their)\s+tasks\.?\s*$/i;
 
 /** Maps memory entity type → list rewrite + tool routing. */
 const ENTITY_ROUTE = {
-  department: {
-    listPhrase: 'list all departments',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'departments' },
-  },
-  departments: {
-    listPhrase: 'list all departments',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'departments' },
-  },
-  manager: {
-    listPhrase: 'list all managers',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'managers' },
-  },
-  managers: {
-    listPhrase: 'list all managers',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'managers' },
-  },
-  supervisor: {
-    listPhrase: 'list all supervisors',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'supervisors' },
-  },
-  supervisors: {
-    listPhrase: 'list all supervisors',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'supervisors' },
-  },
   project: {
     listPhrase: 'list all projects',
     toolName: 'fetch_projects',
@@ -74,11 +44,6 @@ const ENTITY_ROUTE = {
     listPhrase: 'list all teams',
     toolName: 'team_analytics',
     toolArgs: { metric: 'list' },
-  },
-  unassigned: {
-    listPhrase: 'list unassigned employees',
-    toolName: 'org_structure_analytics',
-    toolArgs: { metric: 'unassigned' },
   },
 };
 

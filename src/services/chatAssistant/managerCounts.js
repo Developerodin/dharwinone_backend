@@ -1,5 +1,6 @@
 /**
- * Authoritative counts for manager concept meanings (Business Knowledge Layer).
+ * Org-chart manager helpers: people with direct reports (get_org_structure people_managers)
+ * and the designation regex employee.service.js uses for title filters.
  */
 
 import Role from '../../models/role.model.js';
@@ -9,7 +10,6 @@ import { listOrgUnits } from '../orgStructure.service.js';
 import { computeSpanMetrics } from '../orgTree.pure.js';
 import { employeeOwnerQuery, overridesFromArgs } from './visibilityRules.js';
 import { buildEmployeeEmploymentFilter } from './employeeEmploymentFilter.js';
-import { extractDesignationPhrase } from './businessConcepts.js';
 import { POSITION_TYPES } from './orgStructureAnalytics.js';
 
 const EMPLOYEE_ROLE_NAMES = ['Employee'];
@@ -36,7 +36,7 @@ async function resolveEmployeeOwnerIds(opts = {}) {
     { _id: 1 }
   ).lean();
   const profileRoleIds = profileRoleDocs.map((d) => d._id);
-  if (!profileRoleIds.length) return { ownerIds: [], baseFilter: null, designationPhrase: 'Manager' };
+  if (!profileRoleIds.length) return { ownerIds: [], baseFilter: null };
 
   const ownerIds = await User.find(
     employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
@@ -50,10 +50,7 @@ async function resolveEmployeeOwnerIds(opts = {}) {
     today,
   });
 
-  const text = opts.text || '';
-  const designationPhrase = opts.designationPhrase ?? extractDesignationPhrase(text) ?? 'Manager';
-
-  return { ownerIds, baseFilter, designationPhrase, today };
+  return { ownerIds, baseFilter, today };
 }
 
 /**
@@ -132,33 +129,6 @@ export async function collectOrgManagerLeaders(ctx) {
 }
 
 /**
- * Count active employees who have at least one direct report (distinct reportingManager targets).
- * @param {{ adminId: string, user?: object, designationPhrase?: string|null }} opts
- * @returns {Promise<{ orgManagers: number, designationManagers: number, designationPhrase: string }>}
- */
-export async function fetchManagerConceptCounts(opts = {}) {
-  const ctx = await resolveEmployeeOwnerIds(opts);
-  const { baseFilter, designationPhrase } = ctx;
-  if (!baseFilter || !ctx.ownerIds.length) {
-    return { orgManagers: 0, designationManagers: 0, designationPhrase };
-  }
-
-  const [leaderMap, designationManagers] = await Promise.all([
-    collectOrgManagerLeaders(ctx),
-    Employee.countDocuments({
-      ...baseFilter,
-      designation: designationRegexForPhrase(designationPhrase),
-    }),
-  ]);
-
-  return {
-    orgManagers: leaderMap.size,
-    designationManagers,
-    designationPhrase,
-  };
-}
-
-/**
  * @param {string} phrase
  * @returns {object}
  */
@@ -233,64 +203,5 @@ export async function fetchOrgManagersAnalytics(opts = {}) {
     population: 'Employee',
     definition:
       'Active employees with one or more direct reports (reportingManager links and/or org-chart position heads with span). Excludes department unit heads. NOT manager positions on the org chart and NOT designation/title alone.',
-  };
-}
-
-/**
- * List employees whose designation matches the requested title phrase.
- * @param {{ adminId: string, limit?: number, user?: object, designationPhrase?: string, text?: string }} opts
- */
-export async function fetchDesignationManagersAnalytics(opts = {}) {
-  const ctx = await resolveEmployeeOwnerIds(opts);
-  const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
-  const designationPhrase = ctx.designationPhrase || 'Manager';
-
-  if (!ctx.baseFilter || !ctx.ownerIds.length) {
-    return {
-      metric: 'designation_managers',
-      total: 0,
-      records: [],
-      designationPhrase,
-      authoritative: true,
-      definition: `Active employees whose designation matches "${designationPhrase}".`,
-    };
-  }
-
-  const desigFilter = designationRegexForPhrase(designationPhrase);
-  const total = await Employee.countDocuments({ ...ctx.baseFilter, designation: desigFilter });
-  const empRows = await Employee.find(
-    { ...ctx.baseFilter, designation: desigFilter },
-    { fullName: 1, employeeId: 1, designation: 1, department: 1, owner: 1 }
-  )
-    .sort({ fullName: 1 })
-    .limit(limit)
-    .lean();
-
-  const userRows = empRows.length
-    ? await User.find({ _id: { $in: empRows.map((e) => e.owner).filter(Boolean) } }, { name: 1, email: 1 }).lean()
-    : [];
-  const userById = new Map(userRows.map((u) => [String(u._id), u]));
-
-  const records = empRows.map((emp) => {
-    const usr = emp.owner ? userById.get(String(emp.owner)) : null;
-    return {
-      name: emp.fullName || usr?.name || 'Unknown',
-      employeeId: emp.employeeId || null,
-      designation: emp.designation || null,
-      department: emp.department || null,
-      // Keep key for TOOL_ACCESS rowScope:'person' (guardToolResult/rowMatchesAllowed) —
-      // without it every row here would be dropped for a scoped viewer instead of just
-      // the out-of-scope ones.
-      owner: emp.owner || null,
-    };
-  });
-
-  return {
-    metric: 'designation_managers',
-    total,
-    records,
-    designationPhrase,
-    authoritative: true,
-    definition: `Active employees whose designation matches "${designationPhrase}". This is job title/designation — not org-chart manager positions and not "people with direct reports".`,
   };
 }

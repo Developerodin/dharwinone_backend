@@ -159,7 +159,7 @@ export default {
   ns: 'employees',
   store: Employee,
   key: 'owner',
-  relatedTools: ['fetch_employee_overview', 'fetch_employee_attendance',
+  relatedTools: ['fetch_employee_attendance',
                  'fetch_leave_requests', 'fetch_tasks', 'fetch_projects'],
   FIELDS: EMPLOYEE_FIELDS,
   deriveFns: {
