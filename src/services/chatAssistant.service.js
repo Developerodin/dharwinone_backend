@@ -11,18 +11,15 @@ import LeaveRequest from '../models/leaveRequest.model.js';
 import User from '../models/user.model.js';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
-import InternalMeeting from '../models/internalMeeting.model.js';
 import Holiday from '../models/holiday.model.js';
 import Student from '../models/student.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Employee from '../models/employee.model.js';
-import VoiceAgent from '../models/voiceAgent.model.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
 import Shift from '../models/shift.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import CandidateGroup from '../models/candidateGroup.model.js';
 import StudentGroup from '../models/studentGroup.model.js';
-import { queryKb } from './kbQuery.service.js';
 import { buildLeaveRequestScopeFilter } from './leaveRequest.service.js';
 import { getEmployeesOnLeaveToday } from './onLeaveToday.service.js';
 import {
@@ -47,11 +44,6 @@ import {
   looksLikeWeekOffOrGroupsQuery,
   looksLikeOnLeaveTodayQuery,
 } from './chatAssistant/attendanceAnalytics.js';
-import {
-  buildInternalMeetingFilter,
-  countInternalMeetingsByStatus,
-  countInternalMeetings,
-} from './chatAssistant/meetingAnalytics.js';
 import {
   resolveStudentIdForUser,
   buildCourseProgressFilter,
@@ -950,24 +942,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_meetings',
-      description:
-        'Retrieve upcoming scheduled internal/general meetings (InternalMeeting collection — Communication module) that the ' +
-        'user is invited to or hosting. NEVER returns ATS interviews — those live in a separate collection. ' +
-        'Returns an authoritative total + a status breakdown (scheduled/ended/cancelled) alongside the record list — ' +
-        'always use the total field for "how many meetings", never count the listed records yourself.',
-      parameters: {
-        type: 'object',
-        properties: {
-          days: { type: 'number', description: 'Look-ahead window in days (default 30)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_holidays',
       description: 'Retrieve upcoming public holidays',
       parameters: {
@@ -1109,21 +1083,6 @@ const ROUTING_TOOLS = [
           limit:    { type: 'number', description: 'Max records (default 50, max 200)' },
         },
         required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_knowledge_base',
-      description: 'Search the company knowledge base (HR policies, FAQs, onboarding docs, procedures). ' +
-        'Use for policy questions, process questions, company-specific info: "what is the leave policy", "how do I apply for WFH".',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Question to search the knowledge base for' },
-        },
-        required: ['query'],
       },
     },
   },
@@ -1960,43 +1919,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       });
     }
 
-    case 'fetch_meetings': {
-      // Internal/general meetings ONLY (InternalMeeting) — interviews live in the
-      // separate Meeting collection (the agent's hiring tools answer those).
-      // This path must never query Meeting.
-      const days = Math.min(args.days || 30, 90);
-      const now = new Date();
-      const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-      // Scope to company: InternalMeeting has no adminId — scope via createdBy in company users.
-      const companyUserIds = await User.find(
-        { $or: [{ _id: adminId }, { adminId }] }
-      ).distinct('_id');
-      const baseFilter = buildInternalMeetingFilter({
-        from: now,
-        to: until,
-        participantEmail: user?.email || undefined,
-        createdBy: companyUserIds,
-      });
-      const scheduledFilter = { ...baseFilter, status: 'scheduled' };
-      const [breakdown, total, docs] = await Promise.all([
-        countInternalMeetingsByStatus(baseFilter),
-        countInternalMeetings(scheduledFilter),
-        InternalMeeting.find(scheduledFilter)
-          .select('title description scheduledAt durationMinutes meetingType status hosts emailInvites')
-          .sort({ scheduledAt: 1 })
-          .limit(10)
-          .lean(),
-      ]);
-      return {
-        total,
-        breakdown,
-        records: docs,
-        authoritative: true,
-        population: 'internal_meeting',
-        windowDays: days,
-      };
-    }
-
     case 'fetch_holidays': {
       const days = Math.min(args.days || 90, 365);
       const now = new Date();
@@ -2678,19 +2600,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       };
     }
 
-    case 'search_knowledge_base': {
-      const query = args.query || '';
-      try {
-        const agent = await VoiceAgent.findOne({ createdBy: adminId }).lean();
-        if (!agent) return { answer: 'No knowledge base configured for your company.' };
-        const result = await queryKb(String(agent._id), query);
-        return { answer: result.answer, fallback: result.fallback };
-      } catch (err) {
-        logger.warn(`[ChatAssistant] search_knowledge_base error: ${err.message}`);
-        return { answer: FALLBACK_ANSWER };
-      }
-    }
-
     default:
       return null;
   }
@@ -2711,9 +2620,6 @@ function buildCountBanner(fetchedData) {
     }
     if (key === 'fetch_leave_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_leave_requests.total = ${data.total}`);
-    }
-    if (key === 'fetch_meetings' && typeof data?.total === 'number') {
-      lines.push(`  fetch_meetings.total = ${data.total}`);
     }
     if (key === 'training_analytics' && typeof data?.total === 'number') {
       lines.push(`  training_analytics.total = ${data.total}`);
@@ -3543,25 +3449,6 @@ function summarizeData(fetchedData) {
         if (r.adminComment) line += ` | ADMIN_COMMENT: ${r.adminComment}`;
         if (r.notes)        line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
         lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_meetings') {
-      // Internal/general meetings (InternalMeeting) — NEVER interviews.
-      const b = data?.breakdown || { scheduled: 0, ended: 0, cancelled: 0 };
-      const total = data?.total ?? 0;
-      const lines = [
-        `--- meetings (InternalMeeting — internal/general, NOT ATS interviews | ` +
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY_UPCOMING: ${total} scheduled | ` +
-        `STATUS_BREAKDOWN_IN_WINDOW: scheduled=${b.scheduled ?? 0}, ended=${b.ended ?? 0}, cancelled=${b.cancelled ?? 0}) ---`,
-      ];
-      for (const m of data?.records ?? []) {
-        lines.push(
-          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT: ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
-          `TYPE: ${m.meetingType || 'N/A'} | STATUS: ${m.status || 'N/A'} | DURATION_MIN: ${m.durationMinutes ?? 'N/A'}`
-        );
       }
       parts.push(lines.join('\n'));
       continue;

@@ -230,7 +230,6 @@
   "./src/services/chatAssistant/__tests__/leaveIntentRouting.test.js",
   "./src/services/chatAssistant/__tests__/leaveRanking.test.js",
   "./src/services/chatAssistant/__tests__/listingRenderer.test.js",
-  "./src/services/chatAssistant/__tests__/meetingAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/orgStructureAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/orphanResolver.test.js",
   "./src/services/chatAssistant/__tests__/peopleFetcher.test.js",
@@ -388,5 +387,7 @@
   "./src/services/chatAssistant/agent/tools/employees/__tests__/employeeTools.test.js",
   "./src/services/chatAssistant/agent/tools/candidates/__tests__/candidateTools.test.js",
   "./src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js",
-  "./src/services/chatAssistant/agent/tools/hiring/__tests__/hiringTools.test.js"
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/hiringTools.test.js",
+  "./src/services/chatAssistant/agent/tools/meetings/__tests__/meetingTools.test.js",
+  "./src/services/chatAssistant/agent/tools/knowledge/__tests__/knowledgeTools.test.js"
 ]

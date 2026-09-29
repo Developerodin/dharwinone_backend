@@ -587,6 +587,40 @@
   {
     "id": "r4-meetings-not-interviews",
     "question": "how many team meetings do I have today?",
-    "expect": { "handoff": true }
+    "expect": { "tools": ["count_meetings"] }
+  },
+  {
+    "id": "r8-count-meetings-week",
+    "question": "how many meetings do I have this week?",
+    "expect": {
+      "tools": [
+        "count_meetings"
+      ]
+    }
+  },
+  {
+    "id": "r8-list-upcoming-meetings",
+    "question": "show my upcoming meetings",
+    "expect": {
+      "tools": [
+        "list_meetings"
+      ],
+      "args": {
+        "list_meetings": {
+          "filters": {
+            "when": "upcoming"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "r8-kb-leave-policy",
+    "question": "what is the leave policy?",
+    "expect": {
+      "tools": [
+        "search_knowledge_base"
+      ]
+    }
   }
 ]

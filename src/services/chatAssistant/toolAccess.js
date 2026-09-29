@@ -59,9 +59,7 @@ export const TOOL_ACCESS = {
 
   // Self-scoped / public
   fetch_my_shift: {},
-  fetch_meetings: { note: 'caller-invited meetings only' },
   fetch_holidays: {},
-  search_knowledge_base: {},
 };
 
 const hasAny = (permissions, required) =>

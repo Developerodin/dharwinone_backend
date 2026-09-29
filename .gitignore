@@ -221,6 +221,11 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, R4 — hiring domain (interviews, offers, placements, referral leads).
 !src/services/chatAssistant/agent/tools/hiring/__tests__/
 !src/services/chatAssistant/agent/tools/hiring/__tests__/hiringTools.test.js
+# Sage agent loop, round 8 — meetings + knowledge base domains.
+!src/services/chatAssistant/agent/tools/meetings/__tests__/
+!src/services/chatAssistant/agent/tools/meetings/__tests__/meetingTools.test.js
+!src/services/chatAssistant/agent/tools/knowledge/__tests__/
+!src/services/chatAssistant/agent/tools/knowledge/__tests__/knowledgeTools.test.js
 
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.

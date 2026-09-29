@@ -359,6 +359,15 @@ function cannedResult(name, args) {
       return { total: 1, page: 1, totalPages: 1, records: [
         { id: 'c1', candidate: 'Khushi Parmar', referredBy: 'Sami Shaikh', salesAgent: 'Neha Rao', job: 'QA Engineer', status: 'applied', linkType: 'Job link', claimedAt: '2026-09-01' },
       ], filtersApplied: args?.filters ?? {} };
+    case 'count_meetings':
+      return { total: 6, breakdown: { scheduled: 4, ended: 1, cancelled: 1 }, filtersApplied: args?.filters ?? {} };
+    case 'list_meetings':
+      return { total: 2, records: [
+        { id: 'm1', title: 'Sprint planning', scheduledAt: '2026-09-30T05:30:00.000Z', durationMinutes: 60, meetingType: 'Video', status: 'scheduled', hosts: ['Asha Rao'], invitedCount: 5 },
+        { id: 'm2', title: 'HR sync', scheduledAt: '2026-10-01T09:00:00.000Z', durationMinutes: 30, meetingType: 'Video', status: 'scheduled', hosts: ['Vikram Shah'], invitedCount: 2 },
+      ] };
+    case 'search_knowledge_base':
+      return { found: true, answer: 'Full-time employees get 18 days of paid leave a year, accrued monthly.' };
     default:
       return { handoff: true };
   }

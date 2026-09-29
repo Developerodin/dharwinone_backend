@@ -138,6 +138,23 @@ with the viewer, so row scope is the page's; each `access` mirrors that page's G
 Counts are one `limit: 1` service call per status/result bucket, so every number is the page's own
 count. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those stay on the legacy `fetch_meetings`).
 
+### meetings
+
+`agent/tools/meetings/`: `count_meetings`, `list_meetings` — internal / team meetings (Communication →
+Meetings, the `InternalMeeting` collection) through `internalMeeting.service`'s `queryInternalMeetings`, so
+row scope is the page's `internalMeetingScope` (all four `meetings.*` = every meeting; otherwise created /
+hosting / invited). Past and upcoming (`filters.when`), `status`, `scheduledBetween` (whole IST days via
+employees' `dayRange`), page search, and `mine` (the page's Mine toggle). Rows carry page-visible fields only —
+no description, no invite emails (`invitedCount` instead). Interviews are a separate domain and never answered
+here; `matchesTurn` stands down on interview / attendance / leave / task / project / org wording.
+
+### knowledge
+
+`agent/tools/knowledge/`: `search_knowledge_base` — a thin wrapper over `kbQuery.service`'s `queryKb` for
+policy / FAQ questions. The KB is the voice agent created by the viewer's `adminId` (or the viewer), as the legacy
+tool did — a creator pointer in a single-company deployment, not the one-level adminId walk. The answer is capped
+at `MAX_ANSWER_CHARS`; a KB miss, no configured KB or a KB error come back as `found: false`.
+
 Single-person lookups for any of these stay on `get_user`.
 
 ## How to add a tool
@@ -398,5 +415,5 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
   knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
-  `applications` and `hiring` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
+  `applications`, `hiring`, `meetings` and `knowledge` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.
