@@ -657,5 +657,40 @@
     "id": "r6-managers-ambiguous",
     "question": "how many managers do we have?",
     "expect": { "tools": ["get_org_structure", "count_employees"] }
+  },
+  {
+    "id": "r5-my-attendance",
+    "question": "show my attendance for this week",
+    "expect": { "tools": ["get_attendance"] }
+  },
+  {
+    "id": "r5-attendance-summary",
+    "question": "how many employees were present yesterday?",
+    "expect": { "tools": ["get_attendance_summary"] }
+  },
+  {
+    "id": "r5-pending-leave-count",
+    "question": "how many pending leave requests are there?",
+    "expect": { "tools": ["count_leave_requests"], "args": {"count_leave_requests": {"filters": {"status": "pending"}}} }
+  },
+  {
+    "id": "r5-most-leave",
+    "question": "who took the most leave this month?",
+    "expect": { "tools": ["count_leave_requests"], "args": {"count_leave_requests": {"groupBy": "employee"}} }
+  },
+  {
+    "id": "r5-list-leaves",
+    "question": "show Asha Rao's leave requests",
+    "expect": { "tools": ["list_leave_requests"] }
+  },
+  {
+    "id": "r5-on-leave-today",
+    "question": "who is on leave today?",
+    "expect": { "tools": ["who_is_on_leave_today"] }
+  },
+  {
+    "id": "r5-backdated",
+    "question": "list the pending attendance correction requests",
+    "expect": { "tools": ["list_backdated_requests"] }
   }
 ]

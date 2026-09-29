@@ -9,6 +9,7 @@ import knowledge from './knowledge/index.js';
 import schedule from './schedule/index.js';
 import org from './org/index.js';
 import training from './training/index.js';
+import attendance from './attendance/index.js';
 
 // Domain modules for Sage's tool registry (agent/toolRegistry.js); each entry is { domain, instructions, tools }.
-export default [jobs, people, employees, candidates, applications, hiring, meetings, knowledge, schedule, org, training];
+export default [jobs, people, employees, candidates, applications, hiring, meetings, knowledge, schedule, org, training, attendance];

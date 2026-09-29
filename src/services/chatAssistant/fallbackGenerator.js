@@ -162,10 +162,6 @@ export function isEmptyResult(payload) {
 export function moduleForKind(kind) {
   switch (kind) {
     case 'fetch_people':                             return 'employees';
-    case 'attendance_summary_day':
-    case 'attendance_summary_range':                 return 'attendance';
-    case 'fetch_leave_requests':                     return 'leave';
-    case 'fetch_backdated_attendance_requests':      return 'attendance';
     case 'fetch_jobs':                               return 'jobs';
     default:                                         return kind || 'unknown';
   }

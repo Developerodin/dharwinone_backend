@@ -11,7 +11,6 @@
 // the existing `reply` markdown string.
 
 import { renderPeople }       from './people.js';
-import { renderAttendance }   from './attendance.js';
 import { renderGenericCount } from './genericCount.js';
 import { renderJobs, renderJobResult } from './jobs.js';
 import { renderTasks }        from './tasks.js';
@@ -52,8 +51,6 @@ export function detectListIntent(msg) {
 // TableBlock when records exist (which paginates on the frontend) and decides
 // internally whether to fall back to count card / null based on list intent.
 const COUNT_ONLY_KINDS = new Set([
-  'fetch_leave_requests',
-  'fetch_backdated_attendance_requests',
 ]);
 
 // Kinds whose render output requires the matching `fetched` payload to be
@@ -64,18 +61,12 @@ const REQUIRES_PAYLOAD = new Set([
   'fetch_people',
   'fetch_tasks',
   'task_board_stage_count',
-  'attendance_summary_day',
-  'attendance_summary_range',
 ]);
 
 // fact.kind → key in `fetched` whose data the renderer consumes. Used to
-// dedupe (e.g. attendance_summary_day + _range share one source).
+// dedupe (e.g. the task kinds share one source).
 const KIND_TO_FETCHED_KEY = {
   fetch_people:                        'fetch_people',
-  attendance_summary_day:              'fetch_attendance_summary',
-  attendance_summary_range:            'fetch_attendance_summary',
-  fetch_leave_requests:                'fetch_leave_requests',
-  fetch_backdated_attendance_requests: 'fetch_backdated_attendance_requests',
   fetch_jobs:                          'fetch_jobs',
   fetch_tasks:                         'fetch_tasks',
   task_board_stage_count:              'task_board_analytics',
@@ -98,12 +89,6 @@ const KIND_RENDERERS = {
       entityType: fetched?.fetch_people?.entityType ?? 'user',
       ...ctx,
     }),
-  attendance_summary_day: (_fact, fetched, ctx) =>
-    renderAttendance(fetched?.fetch_attendance_summary, ctx),
-  attendance_summary_range: (_fact, fetched, ctx) =>
-    renderAttendance(fetched?.fetch_attendance_summary, ctx),
-  fetch_leave_requests:                (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
-  fetch_backdated_attendance_requests: (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_jobs:                          (fact, fetched, ctx)  => {
     const payload = resolveJobPayload(fetched);
     if (payload?.type === 'job_result') return renderJobResult(payload, ctx);

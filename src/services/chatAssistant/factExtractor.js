@@ -24,55 +24,6 @@ function readPeople(fetched) {
   return { kind: 'fetch_people', label: 'people', total };
 }
 
-function readAttendanceSummary(fetched) {
-  const data = fetched?.fetch_attendance_summary;
-  if (!data || data.notFound || data.needsTimeWindow) return null;
-  const days = data.perDay || [];
-  if (days.length === 1) {
-    const d = days[0];
-    return {
-      kind: 'attendance_summary_day',
-      label: 'attendance summary',
-      total: data.total,
-      date: d.date,
-      counts: d.counts,
-      avgDailyPresent: data.avgDailyPresent,
-    };
-  }
-  return {
-    kind: 'attendance_summary_range',
-    label: 'attendance summary',
-    total: data.total,
-    perDay: days,
-    avgDailyPresent: data.avgDailyPresent,
-    dayCount: data.dayCount,
-  };
-}
-
-function readLeaveRequests(fetched) {
-  const data = fetched?.fetch_leave_requests;
-  if (!data || data.notFound) return null;
-  return {
-    kind: 'fetch_leave_requests',
-    label: 'leave requests',
-    total: Number(data.total ?? 0),
-    breakdown: data.breakdown || null,
-    typeBreakdown: data.typeBreakdown || null,
-    statusFilter: data.statusFilter || null,
-  };
-}
-
-function readBackdated(fetched) {
-  const data = fetched?.fetch_backdated_attendance_requests;
-  if (!data || data.notFound) return null;
-  return {
-    kind: 'fetch_backdated_attendance_requests',
-    label: 'backdated attendance requests',
-    total: Number(data.total ?? 0),
-    breakdown: data.breakdown || null,
-  };
-}
-
 function readJobs(fetched) {
   const data = fetched?.job_result ?? fetched?.fetch_jobs;
   if (!data) return null;
@@ -206,9 +157,6 @@ export function extractFacts(fetched, lastUserMsg = '') {
   const counts = [];
   const push = (f) => { if (f) counts.push(f); };
   push(readPeople(fetched));
-  push(readAttendanceSummary(fetched));
-  push(readLeaveRequests(fetched));
-  push(readBackdated(fetched));
   push(readJobs(fetched));
   push(readProjects(fetched));
   push(readTasks(fetched));

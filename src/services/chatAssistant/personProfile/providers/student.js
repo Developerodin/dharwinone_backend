@@ -28,7 +28,7 @@ export default {
   ns: 'students',
   store: Student,
   key: 'user',
-  relatedTools: ['fetch_attendance'],
+  relatedTools: ['get_attendance'],
   FIELDS: STUDENT_FIELDS,
   deriveFns: {},
   load: (target) => Student.findOne({ user: target.userId }).populate('user', 'name').lean(),

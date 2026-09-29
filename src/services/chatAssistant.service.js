@@ -6,39 +6,20 @@ import httpStatus from 'http-status';
 import Role from '../models/role.model.js';
 import Job from '../models/job.model.js';
 import JobApplication from '../models/jobApplication.model.js';
-import Attendance from '../models/attendance.model.js';
-import LeaveRequest from '../models/leaveRequest.model.js';
 import User from '../models/user.model.js';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
 import Student from '../models/student.model.js';
 import Employee from '../models/employee.model.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
-import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
-import { buildLeaveRequestScopeFilter } from './leaveRequest.service.js';
-import { getEmployeesOnLeaveToday } from './onLeaveToday.service.js';
-import {
-  normalizeRankingArgs,
-  buildLeaveRankingPipeline,
-  decorateRankedRows,
-  looksLikeLeaveRankingQuery,
-} from './chatAssistant/leaveRanking.js';
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { llmParams } from './chatAssistant/llmParams.js';
 import { resolveRole as registryResolveRole, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
-import { resolveUserEntity } from './chatAssistant/entityResolver.js';
 import { fetchPeople } from './chatAssistant/peopleFetcher.js';
 import { renderListing } from './chatAssistant/listingRenderer.js';
 import { extractTemporalContext } from './chatAssistant/temporalContext.js';
-import { phraseToDateWindow, toResolveDateWindowArgs } from './chatAssistant/phraseToDateWindow.js';
-import {
-  enrichAttendanceSummary,
-  leaveDatesWindowClause,
-  backdatedEntriesWindowClause,
-  looksLikeWeekOffOrGroupsQuery,
-  looksLikeOnLeaveTodayQuery,
-} from './chatAssistant/attendanceAnalytics.js';
+import { looksLikeWeekOffOrGroupsQuery } from './chatAssistant/attendanceAnalytics.js';
 import {
   resolveReferences,
   routeResolvedFollowUp,
@@ -102,14 +83,12 @@ import {
   computeJobOriginCounts,
 } from './chatAssistant/queryPlanner/entities/jobRank.js';
 import { saveTaskQueryContext } from './chatAssistant/saveTaskQueryContext.js';
-import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
 import { extractFacts } from './chatAssistant/factExtractor.js';
 import { renderDeterministicAnswer } from './chatAssistant/factRenderer.js';
 import { enforceCounts, applyEntityTypeDrift } from './chatAssistant/responseValidator.js';
 import { blocksFromFacts } from './chatAssistant/renderers/index.js';
 import { envelope } from './chatAssistant/renderers/types.js';
 import { resolveViewerRole, resolveViewerRoleNames } from './chatAssistant/columnVisibility.js';
-import { buildFallback } from './chatAssistant/fallbackGenerator.js';
 import {
   runJobEntityQuery,
   runJobFilterQuery,
@@ -190,17 +169,6 @@ function formatDateIST(value) {
     return d.toISOString().slice(0, 10);
   }
 }
-function formatTimeIST(value) {
-  if (!value) return '';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  try {
-    return d.toLocaleTimeString('en-GB', { timeZone: DISPLAY_TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-  } catch {
-    return d.toISOString().slice(11, 16);
-  }
-}
-
 // ─── Future-date guard (issue 11) ───────────────────────────────────────────
 function isFutureDateISO(iso) {
   if (!iso || typeof iso !== 'string') return false;
@@ -220,7 +188,6 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
   const out = { ...(baseArgs || {}) };
   if (!userMsg || !moduleName) return out;
   const t = String(userMsg).toLowerCase();
-  const isAdminCue = /\b(company|company[\s-]?wide|all employees?|whole (team|company|org)|org[- ]?wide|everyone'?s|everyones|every employee|team[- ]?wide|across (the )?(company|team|org)|all (leave|leaves|requests?|backdated|missed))\b/i;
   if (moduleName === 'fetch_jobs') {
     if (!out.status) {
       if (/\b(active|open|live|currently[- ]?open)\b.*\bjobs?\b/.test(t) || /\bjobs?\b.*\b(active|open|live)\b/.test(t)) out.status = 'Active';
@@ -231,58 +198,6 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
     // Anchored to a job-noun so "internally" / "internal review" don't fire origin filters.
     if (/\binternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies))\b/.test(t)) out.jobOrigin = 'internal';
     else if (/\bexternal\s+(?:jobs?|openings?|positions?|postings?|vacanc(?:y|ies)|listings?)\b/.test(t)) out.jobOrigin = 'external';
-  }
-  if (moduleName === 'fetch_leave_requests' || moduleName === 'fetch_backdated_attendance_requests') {
-    if (!out.scope && !out.employee && userCtx?.isAdmin && isAdminCue.test(t)) {
-      out.scope = 'all';
-    }
-    if (!out.status) {
-      if (/\b(approved|accepted|granted)\b/.test(t)) out.status = 'approved';
-      else if (/\b(rejected|denied|declined)\b/.test(t)) out.status = 'rejected';
-      else if (/\b(pending|awaiting|unreviewed)\b/.test(t)) out.status = 'pending';
-      else if (/\b(cancelled|canceled|withdrawn)\b/.test(t)) out.status = 'cancelled';
-    }
-    if (moduleName === 'fetch_leave_requests' && !out.leaveType) {
-      if (/\bsick\s+leaves?\b/.test(t))    out.leaveType = 'sick';
-      else if (/\bcasual\s+leaves?\b/.test(t)) out.leaveType = 'casual';
-      else if (/\bunpaid\s+leaves?\b/.test(t)) out.leaveType = 'unpaid';
-    }
-    // Epic B: attach NL date window when the user named a month/range.
-    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
-      const parsed = phraseToDateWindow(userMsg);
-      if (parsed && !parsed.needsClarification) {
-        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
-      }
-    }
-  }
-  if (moduleName === 'rank_leaves_by_employee') {
-    if (!out.status) {
-      if (/\b(pending|awaiting|unreviewed)\b/.test(t)) out.status = 'pending';
-      else if (/\b(rejected|denied|declined)\b/.test(t)) out.status = 'rejected';
-      else if (/\b(cancelled|canceled|withdrawn)\b/.test(t)) out.status = 'cancelled';
-      // else: leave unset so the tool's default (approved = leave actually
-      // granted) applies — that is what "took the most leave" means.
-    }
-    if (!out.leaveType) {
-      if (/\bsick\s+leaves?\b/.test(t)) out.leaveType = 'sick';
-      else if (/\bcasual\s+leaves?\b/.test(t)) out.leaveType = 'casual';
-      else if (/\bunpaid\s+leaves?\b/.test(t)) out.leaveType = 'unpaid';
-    }
-    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
-      const parsed = phraseToDateWindow(userMsg);
-      if (parsed && !parsed.needsClarification) {
-        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
-      }
-    }
-  }
-  if (moduleName === 'fetch_attendance_summary') {
-    out.phrase = String(userMsg);
-    if (!out.date && !out.month && !(out.fromDate && out.toDate)) {
-      const parsed = phraseToDateWindow(userMsg);
-      if (parsed && !parsed.needsClarification) {
-        Object.assign(out, toResolveDateWindowArgs(parsed) || {});
-      }
-    }
   }
   if (moduleName === 'project_analytics') {
     const inferred = extractProjectAnalyticsArgs(userMsg);
@@ -361,81 +276,6 @@ export function normalizeRole(input) {
   // Legacy fallback so the function still works before the registry warms.
   const k = String(input).trim().toLowerCase().replace(/\s+/g, ' ');
   return ROLE_ALIAS_MAP[k] || ROLE_ALIAS_MAP[k.replace(/\s+/g, '_')] || ROLE_ALIAS_MAP[k.replace(/[\s_-]/g, '')] || null;
-}
-
-// Resolve a time window from tool-call args. Returns { from, to, label, missing }.
-// Accepts {month: "YYYY-MM"} or {fromDate, toDate} (ISO date strings).
-// Returns missing=true when caller passed nothing — handler decides whether to default
-// or prompt the LLM to clarify.
-/**
- * Resolve an employee identifier (name fragment / email / employeeId) to a single
- * Employee profile + matching User. Returns either a unique match or an ambiguity
- * payload listing all candidates so the LLM can ask the user to disambiguate.
- *
- * Search order mirrors site /v1/employees:
- *  1. Employee.fullName regex / employeeId (with whitespace-strip variant)
- *  2. User.name / email / phone (covers people with no Employee profile)
- *
- * @returns {Promise<
- *   | { kind: 'unique', employee: object|null, ownerUser: object|null, studentProfile: object|null }
- *   | { kind: 'ambiguous', matches: Array<{ name, employeeId, designation, department, email, _id }> }
- *   | { kind: 'notFound' }
- * >}
- */
-async function resolveEmployeeMatch(ident) {
-  const resolved = await resolveUserEntity(ident);
-  if (resolved.kind === 'notFound') return { kind: 'notFound' };
-
-  if (resolved.kind === 'ambiguous') {
-    return {
-      kind: 'ambiguous',
-      matches: resolved.matches.map((m) => ({
-        name: m.name,
-        employeeId: m.employeeId,
-        designation: m.designation,
-        department: m.department,
-        email: m.email,
-        _id: String(m.empDocId || m.userId || ''),
-      })),
-    };
-  }
-
-  // unique → load full Employee profile + ownerUser + studentProfile so
-  // downstream handlers (overview, attendance, shift) keep working.
-  const m = resolved.match;
-  const employee = m.empDocId
-    ? await Employee.findById(m.empDocId)
-        .populate({ path: 'shift', select: 'name timezone startTime endTime isActive' })
-        .populate({ path: 'holidays', select: 'title date endDate' })
-        .select('owner fullName employeeId designation department joiningDate resignDate isActive shift weekOff holidays leaves leavesAllowed shortBio')
-        .lean()
-    : null;
-
-  const ownerUser = m.userId
-    ? await User.findById(m.userId).select('name email phoneNumber location').lean()
-    : null;
-
-  const studentProfile = m.userId
-    ? await Student.findOne({ user: m.userId }).select('_id').lean()
-    : null;
-
-  if (employee) {
-    return { kind: 'unique', employee, ownerUser, studentProfile };
-  }
-  if (ownerUser) {
-    return {
-      kind: 'unique',
-      employee: null,
-      ownerUser,
-      studentProfile,
-      synthesisedEmployee: { fullName: ownerUser.name, employeeId: null, owner: ownerUser._id },
-    };
-  }
-  // Orphan employee — User missing or non-active. Return what we have so the
-  // caller can still surface a useful "this person used to work here" reply
-  // instead of "not found".
-  return { kind: 'unique', employee: null, ownerUser: null, studentProfile: null,
-           synthesisedEmployee: { fullName: m.name, employeeId: m.employeeId, owner: m.userId || null } };
 }
 
 export function resolveDateWindow({ date, month, fromDate, toDate, defaultDays }) {
@@ -656,116 +496,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_attendance',
-      description:
-        'Retrieve attendance records for the CURRENT LOGGED-IN USER ONLY — punch-in/out times, working hours, day-of-week, status (Present/Absent/Holiday/Leave) and leaveType (casual/sick/unpaid). ' +
-        'NEVER use this tool for company-wide questions like "how many employees were present" — for that, call fetch_attendance_summary.',
-      parameters: {
-        type: 'object',
-        properties: {
-          days:      { type: 'number', description: 'Number of past days to retrieve (default 30, max 90)' },
-          status:    { type: 'string', description: 'Filter by status: Present, Absent, Holiday, Leave' },
-          leaveType: { type: 'string', description: 'Filter by leave type when status=Leave: casual, sick, unpaid' },
-          limit:     { type: 'number', description: 'Max records to return (default 30, max 90)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_attendance_summary',
-      description:
-        'Admin-only: ORG-WIDE attendance aggregate for one day, month, or arbitrary range. ' +
-        'Use for: "how many employees were present yesterday", "how many absent today", ' +
-        '"company attendance on 25 Feb", "team present count this week", "attendance breakdown for April". ' +
-        'Returns total counted Present/Absent/Leave/Holiday/WeekOff per day plus per-employee status when the window is a single day. ' +
-        'NEVER use fetch_attendance for company-wide counts — that tool is the logged-in user\'s own attendance only. ' +
-        'Pass exactly one of {date}, {month}, or {fromDate, toDate}. If the user did not specify any, ask them first — never default a date. ' +
-        'When the window spans multiple days, the result includes avgDailyPresent (AUTHORITATIVE — never sum Present from per-day rows yourself).',
-      parameters: {
-        type: 'object',
-        properties: {
-          date:     { type: 'string', description: 'YYYY-MM-DD single day' },
-          month:    { type: 'string', description: 'YYYY-MM' },
-          fromDate: { type: 'string', description: 'YYYY-MM-DD inclusive (pair with toDate)' },
-          toDate:   { type: 'string', description: 'YYYY-MM-DD inclusive (pair with fromDate)' },
-          status:   { type: 'string', description: 'Optional: filter per-employee rows to Present | Absent | Leave | Holiday | WeekOff | Incomplete' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_leave_requests',
-      description:
-        'Retrieve leave requests. Three modes:\n' +
-        '  • {employee: "<name|email|employeeId>"} — admin-only, leave requests filed by that one specific person\n' +
-        '  • {scope: "all"} — admin-only, every company leave request\n' +
-        '  • {scope: "mine"} (default) — only the logged-in user\'s requests\n' +
-        'WHEN THE USER MENTIONS A SPECIFIC PERSON BY NAME, EMAIL, OR EMPLOYEE ID (e.g. "MOHAMMAD\'s leaves", "leaves of DBS10", "approved leaves for Saad", "his sick leaves") YOU MUST PASS the {employee} arg — never default to scope=mine. ' +
-        'Optional date window ({date}|{month}|{fromDate,toDate}) filters by leave days overlapping that window (AUTHORITATIVE_COUNT). ' +
-        'Use for: "pending leaves", "approved leaves", "MOHAMMAD\'s leaves", "<person>\'s sick leaves last month", "company leave queue".',
-      parameters: {
-        type: 'object',
-        properties: {
-          employee:  { type: 'string', description: 'When set, scope to a specific person — admin only. Resolved by name, email, or employeeId.' },
-          status:    { type: 'string', description: 'Filter by status (case-insensitive): pending | approved | rejected | cancelled. Pass "all" or omit for every status. Always include this when the user mentions "approved", "rejected", "pending", or "cancelled".' },
-          leaveType: { type: 'string', description: 'Filter by leave type (case-insensitive): casual | sick | unpaid.' },
-          scope:     { type: 'string', description: '"mine" (default) or "all" (admin-only). Ignored when employee is provided.' },
-          days:      { type: 'number', description: 'Past days to look back when no explicit date window (default 365, max 730)' },
-          date:      { type: 'string', description: 'YYYY-MM-DD — leave days overlapping this day' },
-          month:     { type: 'string', description: 'YYYY-MM — leave days overlapping this month' },
-          fromDate:  { type: 'string', description: 'YYYY-MM-DD inclusive start for leave-day window' },
-          toDate:    { type: 'string', description: 'YYYY-MM-DD inclusive end for leave-day window' },
-          limit:     { type: 'number', description: 'Max records (default 50, max 200)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'on_leave_today',
-      description:
-        'WHO IS ACTUALLY ON LEAVE TODAY. Reads the Attendance ledger (status=Leave for today) — the same source as the dashboard "On leave today" widget — NOT the leave-request queue. ' +
-        'Returns one row per person: name, employeeId, leaveType (casual|sick|unpaid), and the full start..end span of the leave they are in the middle of. ' +
-        'Visibility is graded server-side by the General → Dashboard permission (all employees / only referrals / only yourself); no scope argument exists and none is needed. ' +
-        'ALWAYS prefer this over fetch_leave_requests for "who is on leave today", "who is off today", "how many people are on leave today", "is anyone on leave right now" — a leave REQUEST is a filing with an approval status, which is a different question from who is absent on leave today.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'rank_leaves_by_employee',
-      description:
-        'RANK PEOPLE BY HOW MUCH LEAVE THEY TOOK. Aggregates approved LeaveRequest leave-DAYS per person inside a date window and returns them ordered, most first. ' +
-        'Use ONLY when the question asks who tops/leads a leave comparison: "who has taken the most leave this month", "which employee has the most leaves", "rank employees by leave taken", "who will be on leave most this month". ' +
-        'For a plain count or a list of requests use fetch_leave_requests instead — do not call this tool just because the word "leave" appears. ' +
-        'Admin-only (same company scope as the Settings → Leave Requests page). Defaults to status=approved; pass status explicitly to rank pending or rejected filings.',
-      parameters: {
-        type: 'object',
-        properties: {
-          status:    { type: 'string', description: 'pending | approved | rejected | cancelled | all. Default approved — leave actually granted.' },
-          leaveType: { type: 'string', description: 'Restrict the ranking to casual | sick | unpaid.' },
-          date:      { type: 'string', description: 'YYYY-MM-DD — rank leave days falling on this day' },
-          month:     { type: 'string', description: 'YYYY-MM — rank leave days inside this month' },
-          fromDate:  { type: 'string', description: 'YYYY-MM-DD inclusive start of the ranking window' },
-          toDate:    { type: 'string', description: 'YYYY-MM-DD inclusive end of the ranking window' },
-          limit:     { type: 'number', description: 'How many people to return (default 10, max 50)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_tasks',
       description:
         'Retrieve tasks with RBAC parity to task.service.queryTasks — supports project, team, assignee, sprint, overdue, and status filters. ' +
@@ -807,90 +537,6 @@ const ROUTING_TOOLS = [
           status: { type: 'string', description: 'Filter by status: Inprogress, On hold, completed' },
           limit: { type: 'number', description: 'Max records to return (default 10, max 50)' },
           includeTeams: { type: 'boolean', description: 'When true, populate assignedTeams with team name (default false).' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_employee_attendance_calendar',
-      description:
-        'Admin-only: PREFERRED tool for any employee attendance query — single day, month, or arbitrary range. ' +
-        'Mirrors Training Management → Attendance Tracking → List View. ' +
-        'Returns one row per day in the requested window with: date, weekday, computed status (Present, Absent, Leave, Holiday, WeekOff, Incomplete, Future, BeforeJoining, AfterResign), punchIn/punchOut times, duration hours, leaveType, holidayName, plus the employee\'s shift + weekOff. ' +
-        'Computed status uses the employee\'s shift, weekOff, holiday assignments, and joining/resign dates — so non-working days always read meaningfully even if no Attendance record exists. ' +
-        'Pass exactly one of: {date} (single day) | {month} | {fromDate, toDate}. ' +
-        'Optional filters: status (Present/Absent/Leave/Holiday/WeekOff/Incomplete) and leaveType (casual/sick/unpaid) — when set, only matching days are returned but day_totals still reflect the full window.',
-      parameters: {
-        type: 'object',
-        properties: {
-          employee:  { type: 'string', description: 'Employee identifier — name, email, or employeeId. Required.' },
-          date:      { type: 'string', description: 'Single specific date in YYYY-MM-DD (e.g. "2026-02-25").' },
-          month:     { type: 'string', description: 'Month in YYYY-MM (e.g. "2026-04").' },
-          fromDate:  { type: 'string', description: 'Start date inclusive YYYY-MM-DD.' },
-          toDate:    { type: 'string', description: 'End date inclusive YYYY-MM-DD.' },
-          status:    { type: 'string', description: 'Filter days by computed status: Present, Absent, Leave, Holiday, WeekOff, Incomplete, Future.' },
-          leaveType: { type: 'string', description: 'When status=Leave, filter further: casual, sick, unpaid.' },
-        },
-        required: ['employee'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_employee_attendance',
-      description:
-        'Admin-only: retrieve attendance records for a SPECIFIC employee (not the logged-in user). ' +
-        'Resolves the employee by name, email, or employeeId (e.g. DBS10, "DBS 10", "dbs-10" — all map to DBS10). ' +
-        'Sources the same data as the Training Management → Attendance Tracking page in the sidebar (Student-based first, falls back to User-based punches). ' +
-        'IMPORTANT: A time period is REQUIRED. Pass exactly one of:\n' +
-        '  • {date: "YYYY-MM-DD"} — for a single specific day ("on 25 Feb", "Feb 25 2026", "yesterday")\n' +
-        '  • {month: "YYYY-MM"} — for a whole month\n' +
-        '  • {fromDate, toDate} — for an arbitrary range\n' +
-        'If the user did not specify any of these, do NOT call this tool — ask the user first.',
-      parameters: {
-        type: 'object',
-        properties: {
-          employee:  { type: 'string', description: 'Employee identifier — name, email, or employeeId. Required.' },
-          date:      { type: 'string', description: 'Single specific date in YYYY-MM-DD (e.g. "2026-02-25"). Use when the user mentions one day.' },
-          month:     { type: 'string', description: 'Month in YYYY-MM (e.g. "2026-04"). Use when the user names a specific month.' },
-          fromDate:  { type: 'string', description: 'Start date inclusive in YYYY-MM-DD. Pair with toDate for ad-hoc ranges.' },
-          toDate:    { type: 'string', description: 'End date inclusive in YYYY-MM-DD. Pair with fromDate for ad-hoc ranges.' },
-          status:    { type: 'string', description: 'Filter by status: Present, Absent, Holiday, Leave' },
-          leaveType: { type: 'string', description: 'Filter by leave type: casual, sick, unpaid' },
-          limit:     { type: 'number', description: 'Max records (default 200, max 400)' },
-        },
-        required: ['employee'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_backdated_attendance_requests',
-      description:
-        'Retrieve backdated attendance correction requests. Three modes:\n' +
-        '  • {employee: "<name|email|employeeId>"} — admin-only, requests filed by that one specific person\n' +
-        '  • {scope: "all"} — admin-only, every company request (paginated)\n' +
-        '  • {scope: "mine"} (default) — only the logged-in user\'s requests\n' +
-        'WHEN THE USER MENTIONS A SPECIFIC PERSON BY NAME, EMAIL, OR EMPLOYEE ID (e.g. "MOHAMMAD\'s backdated requests", "missed punch of DBS10", "attendance corrections for Saad", "his backdated requests") YOU MUST PASS the {employee} arg — never default to scope=mine. ' +
-        'Optional date window ({date}|{month}|{fromDate,toDate}) filters by attendanceEntries.date overlapping that window (AUTHORITATIVE_COUNT). ' +
-        'Use for: "pending attendance requests", "attendance corrections", "MOHAMMAD\'s backdated requests", "<person>\'s missed punch requests".',
-      parameters: {
-        type: 'object',
-        properties: {
-          employee: { type: 'string', description: 'When set, scope to a specific person — admin only. Resolved by name, email, or employeeId.' },
-          status:   { type: 'string', description: 'Filter by status (case-insensitive): pending | approved | rejected | cancelled. Pass "all" or omit to see every status. Always include this when the user says words like "approved", "rejected", "pending", or "cancelled".' },
-          scope:    { type: 'string', description: '"mine" = only the current user\'s requests; "all" = all company requests (admins only). Ignored when employee is provided. Default "mine".' },
-          days:     { type: 'number', description: 'Look-back window in days when no explicit date window (default 365)' },
-          date:     { type: 'string', description: 'YYYY-MM-DD — entry dates overlapping this day' },
-          month:    { type: 'string', description: 'YYYY-MM — entry dates overlapping this month' },
-          fromDate: { type: 'string', description: 'YYYY-MM-DD inclusive start for entry-date window' },
-          toDate:   { type: 'string', description: 'YYYY-MM-DD inclusive end for entry-date window' },
-          limit:    { type: 'number', description: 'Max records (default 50, max 200)' },
         },
         required: [],
       },
@@ -1037,11 +683,6 @@ function validateTaskFetchedIntegrity(fetched, proseCount = null) {
 }
 
 async function fetchModule(name, args, user, uiContext = null) {
-  const userId = user?.id;
-  // adminId on the user record points to their company admin;
-  // if absent, the user IS the admin — use their own id for employee scoping.
-  const adminId = user?.adminId ?? userId;
-
   const access = await checkToolAccess(name, user);
   if (!access.ok) {
     logger.info(`[ChatAssistant][toolAccess] denied tool=${name} userId=${user?.id} reason=${access.reason}`);
@@ -1111,280 +752,6 @@ async function fetchModule(name, args, user, uiContext = null) {
         statusFilter,
         searchedFor: args.search || null,
         wantDetail: !!(args.search || args.jobId) && atomic.result.jobs.length === 1,
-      };
-    }
-
-    case 'fetch_attendance': {
-      const days = Math.min(args.days || 30, 90);
-      const limit = Math.min(args.limit || 30, 90);
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const q = { user: userId, date: { $gte: since } };
-      if (args.status)    q.status = args.status;
-      if (args.leaveType) q.leaveType = args.leaveType;
-      return Attendance.find(q)
-        .select('date day punchIn punchOut duration status notes leaveType timezone isActive')
-        .sort({ date: -1 })
-        .limit(limit)
-        .lean();
-    }
-
-    case 'fetch_attendance_summary': {
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      if (!isAdmin) {
-        return {
-          notFound: true,
-          reason: 'Only administrators can see company-wide attendance.',
-          label: 'attendance summary',
-        };
-      }
-      const win = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      if (win.missing) {
-        return { needsTimeWindow: true, label: 'attendance summary' };
-      }
-      if (win.future) {
-        logger.info(`[ChatAssistant][fetch_attendance_summary] future_date_short_circuit window=${win.label}`);
-        return {
-          futureDate: true,
-          notFound: true,
-          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
-          windowLabel: win.label,
-          label: 'attendance summary',
-        };
-      }
-      const { aggregateOrgAttendance } = await import('./chatAssistant/attendanceAggregator.js');
-      const result = await aggregateOrgAttendance({
-        adminId,
-        from: win.from,
-        to: win.to,
-        statusFilter: args.status,
-      });
-      const enriched = enrichAttendanceSummary(result);
-      logger.info(
-        `[ChatAssistant][fetch_attendance_summary] window=${win.label} total=${enriched.total} ` +
-        `avgDailyPresent=${enriched.avgDailyPresent} ` +
-        `perDay=${JSON.stringify(enriched.perDay[0]?.counts || {})}`
-      );
-      return { ...enriched, windowLabel: win.label, label: 'attendance summary' };
-    }
-
-    case 'fetch_leave_requests': {
-      const limit = Math.min(args.limit || 50, 200);
-      const explicitWindow = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      const hasExplicitWindow = !explicitWindow.missing;
-      const days = Math.min(args.days || 365, 730);
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      // Epic B: prefer leave-day overlap window; else createdAt recency (except per-employee lifetime).
-      const dateWindowClause = hasExplicitWindow
-        ? leaveDatesWindowClause({ from: explicitWindow.from, to: explicitWindow.to })
-        : null;
-      const q = args.employee
-        ? {}
-        : dateWindowClause
-          ? { ...dateWindowClause }
-          : { createdAt: { $gte: since } };
-      if (args.employee && dateWindowClause) Object.assign(q, dateWindowClause);
-
-      // Status normalization (schema is lowercase)
-      const VALID_STATUS = ['pending', 'approved', 'rejected', 'cancelled'];
-      const rawStatus = String(args.status || '').trim().toLowerCase();
-      const normalizedStatus = VALID_STATUS.includes(rawStatus) ? rawStatus : null;
-      if (rawStatus && rawStatus !== 'all' && normalizedStatus) q.status = normalizedStatus;
-
-      // Leave type normalization
-      const VALID_TYPES = ['casual', 'sick', 'unpaid'];
-      const rawType = String(args.leaveType || '').trim().toLowerCase();
-      const normalizedType = VALID_TYPES.includes(rawType) ? rawType : null;
-      if (normalizedType) q.leaveType = normalizedType;
-
-      const callerIsAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      // Default scope: admins asking a generic "leaves / leave requests" question
-      // expect company-wide data. The previous default ('mine') silently emptied
-      // the result for any admin who didn't think to say "all" — issue 9. Non-admin
-      // users still default to 'mine' so they only see their own records.
-      let scope;
-      if (args.scope === 'all') scope = 'all';
-      else if (args.scope === 'mine') scope = 'mine';
-      else if (args.employee) scope = 'employee';
-      else scope = callerIsAdmin ? 'all' : 'mine';
-      let resolvedEmployee = null;
-
-      if (args.employee) {
-        if (!callerIsAdmin) {
-          return { notFound: true, reason: 'Only administrators can look up another person\'s leave requests.', label: 'leave request' };
-        }
-        const match = await resolveEmployeeMatch(args.employee);
-        if (match.kind === 'notFound') {
-          return { notFound: true, searchedFor: args.employee, label: 'leave request' };
-        }
-        if (match.kind === 'ambiguous') {
-          return { ambiguous: true, searchedFor: args.employee, matches: match.matches, label: 'leave request' };
-        }
-        const ownerId = match.ownerUser?._id || match.employee?.owner;
-        if (!ownerId) return { notFound: true, searchedFor: args.employee, label: 'leave request' };
-        q.requestedBy = ownerId;
-        scope = 'employee';
-        resolvedEmployee = {
-          name: match.ownerUser?.name || match.employee?.fullName,
-          employeeId: match.employee?.employeeId,
-          email: match.ownerUser?.email,
-        };
-      } else if (scope === 'mine') {
-        // Same definition of "my leave" the Settings page uses: requests filed
-        // against my Student profile — not merely the ones I clicked Submit on,
-        // which for an admin would include other people's leave.
-        const { filter: selfFilter } = await buildLeaveRequestScopeFilter(user, { forceSelf: true });
-        if (selfFilter === null) {
-          return {
-            total: 0,
-            breakdown: { pending: 0, approved: 0, rejected: 0, cancelled: 0 },
-            typeBreakdown: { casual: 0, sick: 0, unpaid: 0 },
-            statusFilter: normalizedStatus,
-            leaveTypeFilter: normalizedType,
-            records: [],
-            scope: 'mine',
-            employee: null,
-            windowLabel: hasExplicitWindow ? explicitWindow.label : null,
-            authoritative: true,
-            label: 'leave request',
-          };
-        }
-        Object.assign(q, selfFilter);
-      } else {
-        if (!callerIsAdmin) {
-          return { notFound: true, reason: 'Only administrators can list company-wide leave requests.', label: 'leave request' };
-        }
-        // Company scope comes from leaveRequest.service — byte-for-byte the same
-        // scope Settings → Leave Requests uses. The previous
-        // `{ $or: [{ _id: adminId }, { adminId }] }` subtree walked only ONE level
-        // of User.adminId, so an admin saw just the people they personally
-        // onboarded and got 0 for every colleague onboarded by another admin.
-        const { filter: companyFilter } = await buildLeaveRequestScopeFilter(user);
-        Object.assign(q, companyFilter);
-      }
-
-      // Compute breakdown over status-agnostic version of the query.
-      const baseQ = { ...q };
-      delete baseQ.status;
-
-      const [total, records, statusAgg, typeAgg] = await Promise.all([
-        LeaveRequest.countDocuments(q),
-        LeaveRequest.find(q)
-          .populate({ path: 'requestedBy', select: 'name email' })
-          .populate({ path: 'reviewedBy', select: 'name' })
-          .select('leaveType dates status notes adminComment reviewedAt createdAt')
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean(),
-        LeaveRequest.aggregate([
-          { $match: baseQ },
-          { $group: { _id: '$status', count: { $sum: 1 } } },
-        ]),
-        LeaveRequest.aggregate([
-          { $match: baseQ },
-          { $group: { _id: '$leaveType', count: { $sum: 1 } } },
-        ]),
-      ]);
-
-      const breakdown = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-      for (const row of statusAgg) {
-        if (row?._id && row._id in breakdown) breakdown[row._id] = row.count;
-      }
-      const typeBreakdown = { casual: 0, sick: 0, unpaid: 0 };
-      for (const row of typeAgg) {
-        if (row?._id && row._id in typeBreakdown) typeBreakdown[row._id] = row.count;
-      }
-
-      logger.info(
-        `[ChatAssistant][fetch_leave_requests] scope=${scope} employee=${resolvedEmployee?.name || ''} ` +
-        `statusFilter=${normalizedStatus || 'none'} typeFilter=${normalizedType || 'none'} ` +
-        `total=${total} fetched=${records.length} breakdown=${JSON.stringify(breakdown)} types=${JSON.stringify(typeBreakdown)}`
-      );
-
-      return {
-        total: Math.max(total, records.length),
-        breakdown,
-        typeBreakdown,
-        statusFilter: normalizedStatus,
-        leaveTypeFilter: normalizedType,
-        records,
-        scope,
-        employee: resolvedEmployee,
-        windowLabel: hasExplicitWindow ? explicitWindow.label : null,
-        authoritative: true,
-        label: 'leave request',
-      };
-    }
-
-    // "Who is on leave today" is an ATTENDANCE question, not a leave-request
-    // question. Delegate wholesale to onLeaveToday.service — the same service
-    // behind GET /training/attendance/on-leave-today — so the chatbot, the
-    // dashboard widget and the attendance ledger can never disagree. No leave
-    // maths is reimplemented here, and the service applies its own
-    // dashboard.manage / dashboard.view / self permission grading.
-    case 'on_leave_today': {
-      const { scope, results } = await getEmployeesOnLeaveToday(user);
-      logger.info(`[ChatAssistant][on_leave_today] scope=${scope} count=${results.length}`);
-      return {
-        total: results.length,
-        scope,
-        records: results,
-        authoritative: true,
-        label: 'employees on leave today',
-      };
-    }
-
-    // "Who took the most leave" — per-person LeaveRequest aggregation. Kept in
-    // its own module (chatAssistant/leaveRanking.js) so ranking never leaks into
-    // the plain leave-request path, and reusing the SAME company scope as
-    // Settings → Leave Requests.
-    case 'rank_leaves_by_employee': {
-      if (!(await userIsAdmin({ roleIds: user?.roleIds || [] }))) {
-        return { notFound: true, reason: 'Only administrators can rank company-wide leave.', label: 'leave ranking' };
-      }
-
-      const window = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      if (window.missing) return { needsTimeWindow: true, label: 'leave ranking' };
-
-      const { status, leaveType, limit } = normalizeRankingArgs(args);
-      const { filter: companyFilter } = await buildLeaveRequestScopeFilter(user);
-      const records = decorateRankedRows(
-        await LeaveRequest.aggregate(
-          buildLeaveRankingPipeline({ companyFilter, window, status, leaveType, limit })
-        )
-      );
-
-      logger.info(
-        `[ChatAssistant][rank_leaves_by_employee] window=${window.label} status=${status || 'all'} ` +
-        `type=${leaveType || 'none'} people=${records.length} top=${records[0]?.leaveDays ?? 0}d`
-      );
-
-      return {
-        total: records.length,
-        records,
-        statusFilter: status,
-        leaveTypeFilter: leaveType,
-        windowLabel: window.label,
-        metric: 'leave_days',
-        authoritative: true,
-        label: 'leave ranking',
       };
     }
 
@@ -1601,457 +968,6 @@ async function fetchModule(name, args, user, uiContext = null) {
 
     // ─── Semantic / vector tools ─────────────────────────────────────────────
 
-    case 'fetch_employee_attendance_calendar': {
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      if (!isAdmin) {
-        return { notFound: true, reason: 'Only administrators can look up another employee\'s attendance.', label: 'attendance calendar' };
-      }
-      const ident = String(args.employee || '').trim();
-      if (!ident) return { notFound: true, reason: 'No employee identifier provided.', label: 'attendance calendar' };
-      const win = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      if (win.missing) {
-        return { needsTimeWindow: true, label: 'attendance calendar', searchedFor: ident };
-      }
-      if (win.future) {
-        logger.info(`[ChatAssistant][fetch_employee_attendance_calendar] future_date_short_circuit window=${win.label}`);
-        return {
-          futureDate: true,
-          notFound: true,
-          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
-          searchedFor: ident,
-          windowLabel: win.label,
-          label: 'attendance calendar',
-        };
-      }
-
-      const match = await resolveEmployeeMatch(ident);
-      if (match.kind === 'notFound') {
-        return { notFound: true, searchedFor: ident, label: 'attendance calendar' };
-      }
-      if (match.kind === 'ambiguous') {
-        return { ambiguous: true, searchedFor: ident, matches: match.matches, label: 'attendance calendar' };
-      }
-      // Accept orphan / synthesised employee. When resolver returns
-      // synthesisedEmployee (orphan or inactive owner) we still build a calendar
-      // using safe defaults: weekly Sat/Sun off, no holidays, no shift window.
-      const profile = match.employee || match.synthesisedEmployee || null;
-      const ownerUser = match.ownerUser;
-      const studentProfile = match.studentProfile;
-      const ownerId = ownerUser?._id || profile?.owner || null;
-      if (!ownerId) {
-        return {
-          notFound: true,
-          searchedFor: ident,
-          reason: 'Resolved a person but no owner ID — cannot build calendar.',
-          label: 'attendance calendar',
-        };
-      }
-      const employee = profile?._id
-        ? profile
-        : {
-            owner: ownerId,
-            fullName: match.synthesisedEmployee?.fullName || ownerUser?.name || ident,
-            employeeId: match.synthesisedEmployee?.employeeId || null,
-            weekOff: ['Saturday', 'Sunday'],
-            holidays: [],
-            shift: null,
-            joiningDate: null,
-            resignDate: null,
-          };
-
-      // Pull every Attendance record in the month
-      const attQ = { date: { $gte: win.from, $lte: win.to } };
-      if (studentProfile?._id) attQ.student = studentProfile._id;
-      else attQ.user = employee.owner;
-      const attRecs = await Attendance.find(attQ)
-        .select('date status punchIn punchOut duration leaveType notes')
-        .sort({ date: 1, punchIn: 1 })
-        .lean();
-
-      // Group records by ISO date — one date may have multiple sessions
-      const byDate = {};
-      for (const r of attRecs) {
-        if (!r.date) continue;
-        const k = formatDateIST(r.date);
-        (byDate[k] = byDate[k] || []).push(r);
-      }
-
-      // Holiday lookup map (date string → title)
-      const holidayMap = {};
-      for (const h of employee.holidays || []) {
-        if (!h?.date) continue;
-        const start = new Date(h.date);
-        const end = h.endDate ? new Date(h.endDate) : start;
-        for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-          holidayMap[d.toISOString().slice(0, 10)] = h.title || 'Holiday';
-        }
-      }
-
-      const weekOffSet = new Set((employee.weekOff && employee.weekOff.length) ? employee.weekOff : ['Saturday', 'Sunday']);
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const todayMs = Date.now();
-      const joinMs = employee.joiningDate ? new Date(employee.joiningDate).getTime() : 0;
-      const resignMs = employee.resignDate ? new Date(employee.resignDate).getTime() : Number.POSITIVE_INFINITY;
-
-      const fmtTime = (d) => (d ? (formatTimeIST(d) || null) : null);
-      const days = [];
-      for (let cursor = new Date(win.from); cursor <= win.to; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-        const iso = cursor.toISOString().slice(0, 10);
-        const dayName = dayNames[cursor.getUTCDay()];
-        const isWeekOff = weekOffSet.has(dayName);
-        const holidayName = holidayMap[iso];
-        const recs = byDate[iso] || [];
-        const dayMs = cursor.getTime();
-        const isFuture = dayMs > todayMs;
-        const beforeJoin = joinMs && dayMs < joinMs;
-        const afterResign = resignMs && dayMs > resignMs;
-
-        let status = 'Future';
-        let leaveType = null;
-        let punchIn = null;
-        let punchOut = null;
-        let durationMs = 0;
-
-        if (recs.length) {
-          // Use earliest punchIn / latest punchOut and sum durations
-          let earliest = null;
-          let latest = null;
-          let hadPresent = false;
-          let hadLeave = false;
-          let hadAbsent = false;
-          let hadHoliday = false;
-          let leaveT = null;
-          for (const r of recs) {
-            if (r.status === 'Present') hadPresent = true;
-            if (r.status === 'Absent') hadAbsent = true;
-            if (r.status === 'Leave') { hadLeave = true; leaveT = r.leaveType || leaveT; }
-            if (r.status === 'Holiday') hadHoliday = true;
-            if (r.punchIn && (!earliest || new Date(r.punchIn) < earliest)) earliest = new Date(r.punchIn);
-            if (r.punchOut && (!latest || new Date(r.punchOut) > latest)) latest = new Date(r.punchOut);
-            durationMs += Number(r.duration) || 0;
-          }
-          if (hadHoliday) status = 'Holiday';
-          else if (hadLeave) { status = 'Leave'; leaveType = leaveT; }
-          else if (hadAbsent && !hadPresent) status = 'Absent';
-          else if (hadPresent && !latest && earliest) status = 'Incomplete';
-          else if (hadPresent) status = 'Present';
-          punchIn = fmtTime(earliest);
-          punchOut = fmtTime(latest);
-        } else if (beforeJoin || afterResign) {
-          status = beforeJoin ? 'BeforeJoining' : 'AfterResign';
-        } else if (holidayName) {
-          status = 'Holiday';
-        } else if (isWeekOff) {
-          status = 'WeekOff';
-        } else if (isFuture) {
-          status = 'Future';
-        } else {
-          status = 'Absent';
-        }
-
-        days.push({
-          date: iso,
-          day: dayName,
-          status,
-          punchIn,
-          punchOut,
-          durationHours: durationMs ? +(durationMs / 3600000).toFixed(2) : 0,
-          leaveType: leaveType || undefined,
-          holidayName: holidayName || undefined,
-        });
-      }
-
-      // Roll-up — totals always span the full window so users see the big picture
-      // before any filter narrows the visible rows.
-      const totals = days.reduce((acc, d) => {
-        acc[d.status] = (acc[d.status] || 0) + 1;
-        return acc;
-      }, {});
-      const totalHours = +days.reduce((s, d) => s + (d.durationHours || 0), 0).toFixed(1);
-
-      // Optional client-side filters (status + leaveType) — applied after status compute.
-      let visibleDays = days;
-      if (args.status) {
-        const filt = String(args.status).trim().toLowerCase();
-        visibleDays = visibleDays.filter((d) => String(d.status).toLowerCase() === filt);
-      }
-      if (args.leaveType) {
-        const lt = String(args.leaveType).trim().toLowerCase();
-        visibleDays = visibleDays.filter((d) => d.leaveType && String(d.leaveType).toLowerCase() === lt);
-      }
-
-      return {
-        employee: {
-          name: ownerUser?.name || employee.fullName,
-          email: ownerUser?.email,
-          employeeId: employee.employeeId,
-          designation: employee.designation,
-          department: employee.department,
-        },
-        shift: employee.shift || null,
-        weekOff: Array.isArray(employee.weekOff) && employee.weekOff.length ? employee.weekOff : ['Saturday', 'Sunday'],
-        month: win.label,
-        totals,
-        totalHours,
-        windowDays: days.length,
-        filterApplied: !!(args.status || args.leaveType),
-        source: studentProfile?._id ? 'student' : 'user',
-        days: visibleDays,
-        label: 'attendance calendar',
-      };
-    }
-
-    case 'fetch_employee_attendance': {
-      // Admin-only: mirrors the Training Management → Attendance Tracking page in the
-      // sidebar, which is gated to Administrators on the site.
-      const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      if (!isAdmin) {
-        return {
-          notFound: true,
-          reason: 'Only administrators can look up another employee\'s attendance. You can ask "my attendance" for your own records.',
-          label: 'employee attendance',
-        };
-      }
-
-      const ident = String(args.employee || '').trim();
-      if (!ident) return { notFound: true, reason: 'No employee identifier provided.', label: 'employee attendance' };
-
-      // Time window is REQUIRED. Accept {date} | {month} | {fromDate,toDate}.
-      const window = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      if (window.missing) {
-        return {
-          needsTimeWindow: true,
-          label: 'employee attendance',
-          searchedFor: ident,
-        };
-      }
-      if (window.future) {
-        logger.info(`[ChatAssistant][fetch_employee_attendance] future_date_short_circuit window=${window.label}`);
-        return {
-          futureDate: true,
-          notFound: true,
-          reason: 'No attendance records exist for future dates. Attendance is recorded only for days that have already happened.',
-          searchedFor: ident,
-          windowLabel: window.label,
-          label: 'employee attendance',
-        };
-      }
-
-      const limit = Math.min(args.limit || 200, 400);
-
-      const match = await resolveEmployeeMatch(ident);
-      if (match.kind === 'notFound') {
-        return { notFound: true, searchedFor: ident, label: 'employee attendance' };
-      }
-      if (match.kind === 'ambiguous') {
-        return { ambiguous: true, searchedFor: ident, matches: match.matches, label: 'employee attendance' };
-      }
-      // Accept orphan / synthesised employees: the resolver returns
-      // `synthesisedEmployee` when User row is non-active or the Employee profile is
-      // orphaned. Owner ID is the only thing the Attendance query needs, so fall
-      // through to it instead of treating the same identity as "not found" here
-      // when fetch_employee_overview accepts it.
-      const employeeProfile = match.employee || match.synthesisedEmployee || null;
-      const ownerUser = match.ownerUser;
-      const studentProfile = match.studentProfile;
-      const ownerId = ownerUser?._id || employeeProfile?.owner || null;
-      if (!ownerId) {
-        return {
-          notFound: true,
-          searchedFor: ident,
-          reason: 'Resolved a person but their owner ID is missing — cannot query attendance.',
-          label: 'employee attendance',
-        };
-      }
-      const target = {
-        _id: ownerId,
-        name: ownerUser?.name || employeeProfile?.fullName || ident,
-        email: ownerUser?.email || '',
-      };
-      const attQ = { date: { $gte: window.from, $lte: window.to } };
-      if (studentProfile?._id) {
-        attQ.student = studentProfile._id;
-      } else {
-        attQ.user = target._id;
-      }
-      if (args.status)    attQ.status = args.status;
-      if (args.leaveType) attQ.leaveType = args.leaveType;
-
-      const records = await Attendance.find(attQ)
-        .select('date day punchIn punchOut duration status notes leaveType timezone')
-        .sort({ date: -1 })
-        .limit(limit)
-        .lean();
-
-      logger.info(
-        `[ChatAssistant][fetch_employee_attendance] employee=${target.name} ` +
-        `via=${employeeProfile ? 'Employee.fullName' : 'User.name'} ` +
-        `source=${studentProfile?._id ? 'Student' : 'User'} fetched=${records.length}`
-      );
-
-      return {
-        employee: {
-          name: target.name || employeeProfile?.fullName,
-          email: target.email,
-          employeeId: employeeProfile?.employeeId,
-          _id: String(target._id),
-        },
-        source: studentProfile?._id ? 'student' : 'user',
-        window: window.label,
-        records,
-        label: 'employee attendance',
-      };
-    }
-
-    case 'fetch_backdated_attendance_requests': {
-      const limit = Math.min(args.limit || 50, 200);
-      const explicitWindow = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-        defaultDays: 0,
-      });
-      const hasExplicitWindow = !explicitWindow.missing;
-      const days = Math.min(args.days || 365, 730);
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const entryWindowClause = hasExplicitWindow
-        ? backdatedEntriesWindowClause({ from: explicitWindow.from, to: explicitWindow.to })
-        : null;
-      // Per-employee mode searches lifetime unless an explicit entry-date window is set.
-      const q = args.employee
-        ? {}
-        : entryWindowClause
-          ? { ...entryWindowClause }
-          : { createdAt: { $gte: since } };
-      if (args.employee && entryWindowClause) Object.assign(q, entryWindowClause);
-
-      // Schema stores status as lowercase ('pending','approved','rejected','cancelled').
-      // LLM often passes "Approved" / "Pending" — case-fold so the filter still hits.
-      const VALID_STATUS = ['pending', 'approved', 'rejected', 'cancelled'];
-      const rawStatus = String(args.status || '').trim().toLowerCase();
-      const normalizedStatus = VALID_STATUS.includes(rawStatus) ? rawStatus : null;
-      if (rawStatus === 'all') {
-        // explicit "all" = no filter
-      } else if (normalizedStatus) {
-        q.status = normalizedStatus;
-      }
-
-      const callerIsAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
-      // Default scope: admins asking a generic backdated-attendance question
-      // expect company-wide data. Previous default 'mine' silently emptied the
-      // result for admins who didn't say "all" (issue 10). Non-admins keep 'mine'.
-      let scope;
-      if (args.scope === 'all') scope = 'all';
-      else if (args.scope === 'mine') scope = 'mine';
-      else if (args.employee) scope = 'employee';
-      else scope = callerIsAdmin ? 'all' : 'mine';
-      let resolvedEmployee = null;
-
-      // Per-employee mode (admin only) — overrides scope.
-      if (args.employee) {
-        if (!callerIsAdmin) {
-          return { notFound: true, reason: 'Only administrators can look up another person\'s backdated attendance requests.', label: 'backdated attendance request' };
-        }
-        const match = await resolveEmployeeMatch(args.employee);
-        if (match.kind === 'notFound') {
-          return { notFound: true, searchedFor: args.employee, label: 'backdated attendance request' };
-        }
-        if (match.kind === 'ambiguous') {
-          return { ambiguous: true, searchedFor: args.employee, matches: match.matches, label: 'backdated attendance request' };
-        }
-        const ownerId = match.ownerUser?._id || match.employee?.owner;
-        const studentId = match.studentProfile?._id;
-        const ownerEmail = match.ownerUser?.email;
-        if (!ownerId) {
-          return { notFound: true, searchedFor: args.employee, label: 'backdated attendance request' };
-        }
-        // Backdated requests can be keyed by `user` (User._id), `student` (Student._id),
-        // `requestedBy` (User._id of submitter — admin self-filing), or by stored email
-        // strings (`userEmail`, `studentEmail`). Match every possible link so legacy /
-        // training-system corrections are not missed.
-        const targetOr = [
-          { user: ownerId },
-          { requestedBy: ownerId },
-        ];
-        if (studentId) targetOr.push({ student: studentId });
-        if (ownerEmail) {
-          targetOr.push({ userEmail: ownerEmail });
-          targetOr.push({ studentEmail: ownerEmail });
-        }
-        q.$or = targetOr;
-        scope = 'employee';
-        resolvedEmployee = {
-          name: match.ownerUser?.name || match.employee?.fullName,
-          employeeId: match.employee?.employeeId,
-          email: match.ownerUser?.email,
-        };
-      } else if (scope === 'mine') {
-        q.requestedBy = userId;
-      } else {
-        // admin scope: requests from any company user
-        if (!callerIsAdmin) {
-          return { notFound: true, reason: 'Only administrators can list company-wide backdated attendance requests.', label: 'backdated attendance request' };
-        }
-        const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        q.requestedBy = { $in: companyUserIds };
-      }
-
-      // Build a status-agnostic version of the filter so we can compute the full
-      // status breakdown regardless of which status the user filtered by.
-      const baseQ = { ...q };
-      delete baseQ.status;
-
-      const [total, records, statusAgg] = await Promise.all([
-        BackdatedAttendanceRequest.countDocuments(q),
-        BackdatedAttendanceRequest.find(q)
-          .populate({ path: 'requestedBy', select: 'name email' })
-          .populate({ path: 'reviewedBy', select: 'name' })
-          .select('attendanceEntries notes status adminComment reviewedAt createdAt user student')
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean(),
-        BackdatedAttendanceRequest.aggregate([
-          { $match: baseQ },
-          { $group: { _id: '$status', count: { $sum: 1 } } },
-        ]),
-      ]);
-
-      const breakdown = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-      for (const row of statusAgg) {
-        if (row?._id && row._id in breakdown) breakdown[row._id] = row.count;
-      }
-
-      logger.info(
-        `[ChatAssistant][fetch_backdated_attendance_requests] scope=${scope} ` +
-        `employee=${resolvedEmployee?.name || ''} statusFilter=${normalizedStatus || 'none'} ` +
-        `total=${total} fetched=${records.length} breakdown=${JSON.stringify(breakdown)}`
-      );
-      return {
-        total: Math.max(total, records.length),
-        breakdown,
-        statusFilter: normalizedStatus,
-        records,
-        scope,
-        employee: resolvedEmployee,
-        windowLabel: hasExplicitWindow ? explicitWindow.label : null,
-        authoritative: true,
-        label: 'backdated attendance request',
-      };
-    }
-
     default:
       return null;
   }
@@ -2066,13 +982,6 @@ function buildCountBanner(fetchedData) {
   const lines = [];
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
-    if (key === 'fetch_attendance_summary' && typeof data?.avgDailyPresent === 'number') {
-      lines.push(`  fetch_attendance_summary.avgDailyPresent = ${data.avgDailyPresent}`);
-      lines.push(`  fetch_attendance_summary.totalEmployees = ${data.total}`);
-    }
-    if (key === 'fetch_leave_requests' && typeof data?.total === 'number') {
-      lines.push(`  fetch_leave_requests.total = ${data.total}`);
-    }
     if (key === 'project_analytics' && !data?.forbidden) {
       lines.push(`  project_analytics.AUTHORITATIVE_COUNT = ${data?.authoritativeCount ?? data?.stats?.total ?? 0}`);
       if (data?.stats) {
@@ -2102,9 +1011,6 @@ function buildCountBanner(fetchedData) {
       lines.push(`  fetch_tasks.AUTHORITATIVE_COUNT = ${data.authoritativeCount ?? data.total}`);
       lines.push(`  fetch_tasks.total = ${data.total}`);
       lines.push(`  fetch_tasks.provenance = ${data.provenance || 'task.service.queryTasks'}`);
-    }
-    if (key === 'fetch_backdated_attendance_requests' && typeof data?.total === 'number') {
-      lines.push(`  fetch_backdated_attendance_requests.total = ${data.total}`);
     }
     if (key === 'fetch_people' && typeof data?.page?.total === 'number') {
       lines.push(`  fetch_people.total = ${data.page.total}`);
@@ -2406,317 +1312,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_employee_attendance_calendar') {
-      if (data?.needsTimeWindow) {
-        parts.push(
-          `--- attendance calendar ---\n` +
-          `NEEDS_TIME_WINDOW: User asked for a calendar/list view for "${data.searchedFor || 'an employee'}" but did not specify a month. ` +
-          `Reply by asking which month they want — e.g. "Which month? (April 2026 / 2026-04)". Do NOT show records.`
-        );
-        continue;
-      }
-      if (data?.notFound) {
-        const reason = data.reason || `No employee matched "${data.searchedFor || ''}".`;
-        const fb = buildFallback({ module: 'attendance', queryArg: data.searchedFor });
-        parts.push(
-          `--- attendance calendar ---\n` +
-          `NO_EMPLOYEE_FOUND: ${reason} Do not invent data.\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent data):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const e = data?.employee || {};
-      const empId = e.employeeId ? ` [${e.employeeId}]` : '';
-      const totals = data?.totals || {};
-      const totalsStr = Object.entries(totals).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'none';
-      const shift = data?.shift
-        ? `${data.shift.name} (${data.shift.startTime}-${data.shift.endTime} ${data.shift.timezone || 'UTC'})`
-        : 'Not assigned';
-      const weekOff = (data?.weekOff || []).join(', ') || 'None';
-      const periodLabel = data?.month || 'N/A';
-      const visibleCount = (data?.days || []).length;
-      const windowCount = data?.windowDays ?? visibleCount;
-      const filterTag = data?.filterApplied ? ` | FILTERED: showing ${visibleCount} of ${windowCount} day(s)` : '';
-      const lines = [
-        `--- attendance calendar (list view) for ${e.name || 'N/A'}${empId} — period ${periodLabel} (ENTITY_TYPE: employee, source: ${data?.source === 'student' ? 'Training System' : 'User Punch'}) ---`,
-        `SHIFT: ${shift} | WEEK_OFF: ${weekOff} | WINDOW_DAYS: ${windowCount} | TOTAL_WORKED: ${data?.totalHours ?? 0}h | DAY_TOTALS: ${totalsStr}${filterTag}`,
-      ];
-      // Render every day so admin sees full month
-      for (const d of (data?.days || [])) {
-        let line = `DATE: ${d.date} | DAY: ${d.day} | STATUS: ${d.status}`;
-        if (d.punchIn)      line += ` | IN: ${d.punchIn}`;
-        if (d.punchOut)     line += ` | OUT: ${d.punchOut}`;
-        if (d.durationHours) line += ` | DURATION: ${d.durationHours}h`;
-        if (d.leaveType)    line += ` | LEAVE_TYPE: ${d.leaveType}`;
-        if (d.holidayName)  line += ` | HOLIDAY: ${d.holidayName}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_employee_attendance') {
-      if (data?.needsTimeWindow) {
-        parts.push(
-          `--- employee attendance ---\n` +
-          `NEEDS_TIME_WINDOW: User asked about attendance for "${data.searchedFor || 'an employee'}" but did not specify a month or date range. ` +
-          `Reply by asking which month or date range they want — for example: "Which month or date range would you like to see — e.g. 'April 2026' or 'from 2026-04-01 to 2026-04-15'?". ` +
-          `Do NOT make up dates. Do NOT show any records.`
-        );
-        continue;
-      }
-      if (data?.notFound) {
-        const reason = data.reason || `No employee matched "${data.searchedFor || ''}". Do not invent attendance.`;
-        const fb = buildFallback({ module: 'attendance', queryArg: data.searchedFor });
-        parts.push(
-          `--- employee attendance ---\n` +
-          `NO_EMPLOYEE_FOUND: ${reason}\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent attendance):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const recs = data?.records ?? [];
-      const counts = recs.reduce((acc, r) => {
-        const k = r.status || 'Unknown';
-        acc[k] = (acc[k] || 0) + 1;
-        return acc;
-      }, {});
-      const totalMs = recs.reduce((s, r) => s + (Number(r.duration) || 0), 0);
-      const totalHrs = (totalMs / 3600000).toFixed(1);
-      const breakdown = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
-      const empId = data?.employee?.employeeId ? ` [${data.employee.employeeId}]` : '';
-      const who = data?.employee ? `${data.employee.name}${empId} (${data.employee.email || 'no email'})` : 'employee';
-      const src = data?.source === 'student' ? 'Training System' : 'User Punch';
-      const win = data?.window || 'unspecified';
-      const lines = [`--- employee attendance for ${who} — period: ${win} (${recs.length} records — ${breakdown} | total worked: ${totalHrs}h | source: ${src} — ENTITY_TYPE: employee) ---`];
-      for (const r of recs) {
-        const date = formatDateIST(r.date) || 'N/A';
-        const fmt = (d) => (d ? (formatTimeIST(d) || '—') : '—');
-        const dur = r.duration ? `${(r.duration / 3600000).toFixed(2)}h` : '—';
-        let line = `DATE: ${date} | DAY: ${r.day || 'N/A'} | STATUS: ${r.status || 'N/A'} | IN: ${fmt(r.punchIn)} | OUT: ${fmt(r.punchOut)} | DURATION: ${dur}`;
-        if (r.leaveType) line += ` | LEAVE_TYPE: ${r.leaveType}`;
-        if (r.notes)     line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_attendance') {
-      const recs = Array.isArray(data) ? data : [];
-      const counts = recs.reduce((acc, r) => {
-        const k = r.status || 'Unknown';
-        acc[k] = (acc[k] || 0) + 1;
-        return acc;
-      }, {});
-      const totalMs = recs.reduce((s, r) => s + (Number(r.duration) || 0), 0);
-      const totalHrs = (totalMs / 3600000).toFixed(1);
-      const breakdown = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
-      const lines = [`--- attendance (${recs.length} records — ${breakdown} | total worked: ${totalHrs}h) ---`];
-      for (const r of recs) {
-        const date = formatDateIST(r.date) || 'N/A';
-        const fmt = (d) => (d ? (formatTimeIST(d) || '—') : '—');
-        const ms = effectiveSessionDurationMs(r);
-        const dur = ms == null ? '—' : ms < 60000 ? '<1m' : `${(ms / 3600000).toFixed(2)}h`;
-        let line = `DATE: ${date} | DAY: ${r.day || 'N/A'} | STATUS: ${r.status || 'N/A'} | IN: ${fmt(r.punchIn)} | OUT: ${fmt(r.punchOut)} | DURATION: ${dur}`;
-        if (r.leaveType) line += ` | LEAVE_TYPE: ${r.leaveType}`;
-        if (r.timezone)  line += ` | TZ: ${r.timezone}`;
-        if (r.notes)     line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_attendance_summary') {
-      if (data?.notFound) {
-        parts.push(`--- attendance summary ---\nERROR: ${data.reason}`);
-        continue;
-      }
-      if (data?.needsTimeWindow) {
-        parts.push(`--- attendance summary ---\nNEEDS_TIME_WINDOW: ask user for date / month / range`);
-        continue;
-      }
-      const avgTag =
-        typeof data.avgDailyPresent === 'number'
-          ? ` | AUTHORITATIVE_AVG_DAILY_PRESENT: ${data.avgDailyPresent} (over ${data.dayCount || 0} days — NEVER sum Present from DATE lines)`
-          : '';
-      const lines = [
-        `--- attendance summary (${data.windowLabel} | total employees: ${data.total} | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data.total}${avgTag}) ---`,
-      ];
-      for (const d of data.perDay || []) {
-        const cs = d.counts || {};
-        lines.push(
-          `DATE ${d.date} | Present:${cs.Present || 0} | Absent:${cs.Absent || 0} | Leave:${cs.Leave || 0} | ` +
-          `Holiday:${cs.Holiday || 0} | WeekOff:${cs.WeekOff || 0} | Incomplete:${cs.Incomplete || 0} | Future:${cs.Future || 0}`
-        );
-      }
-      if (data.employees?.length) {
-        lines.push(`\nPER-EMPLOYEE STATUS (single-day window):`);
-        for (const e of data.employees) {
-          lines.push(
-            `EMP: ${e.name} | ID: ${e.employeeId || 'N/A'} | STATUS: ${e.status} | ` +
-            `IN: ${e.punchIn || '—'} | OUT: ${e.punchOut || '—'} | HRS: ${e.durationHours}`
-          );
-        }
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_leave_requests') {
-      if (data?.notFound) {
-        const reason = data.reason || `No employee matched "${data.searchedFor || ''}".`;
-        const filters = {};
-        if (data?.statusFilter) filters.status = data.statusFilter;
-        if (data?.leaveTypeFilter) filters.type = data.leaveTypeFilter;
-        const fb = buildFallback({
-          module: 'leave',
-          queryArg: data.searchedFor,
-          filters: Object.keys(filters).length ? filters : null,
-        });
-        parts.push(
-          `--- leave requests ---\n` +
-          `NO_MATCH: ${reason}\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent records):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const empHeader = data?.employee
-        ? ` for ${data.employee.name || 'N/A'}${data.employee.employeeId ? ` [${data.employee.employeeId}]` : ''}`
-        : '';
-      const bd = data?.breakdown || { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-      const tb = data?.typeBreakdown || { casual: 0, sick: 0, unpaid: 0 };
-      const allCount = bd.pending + bd.approved + bd.rejected + bd.cancelled;
-      const filterTags = [];
-      if (data?.statusFilter)     filterTags.push(`status=${data.statusFilter}`);
-      if (data?.leaveTypeFilter)  filterTags.push(`leaveType=${data.leaveTypeFilter}`);
-      const filterTag = filterTags.length ? ` | FILTER: ${filterTags.join(', ')}` : '';
-      const winTag = data?.windowLabel ? ` | WINDOW: ${data.windowLabel}` : '';
-      const lines = [
-        `--- leave requests${empHeader} (showing ${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — full window total: ${allCount} — pending: ${bd.pending}, approved: ${bd.approved}, rejected: ${bd.rejected}, cancelled: ${bd.cancelled} | by_type — casual: ${tb.casual}, sick: ${tb.sick}, unpaid: ${tb.unpaid}${filterTag}${winTag} | scope=${data?.scope || 'mine'} — ENTITY_TYPE: employee) ---`,
-      ];
-      for (const r of records) {
-        const requester = typeof r.requestedBy === 'object' ? (r.requestedBy?.name || 'N/A') : 'N/A';
-        const dates = Array.isArray(r.dates) && r.dates.length
-          ? r.dates.map((d) => formatDateIST(d)).join(', ')
-          : 'N/A';
-        const created = formatDateIST(r.createdAt) || 'N/A';
-        let line = `LEAVE: requester=${requester} | type=${r.leaveType || 'N/A'} | dates=${dates} | status=${r.status || 'N/A'} | submitted=${created}`;
-        if (r.adminComment) line += ` | admin_comment=${String(r.adminComment).slice(0, 120)}`;
-        if (r.notes)        line += ` | notes=${String(r.notes).slice(0, 120)}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'on_leave_today') {
-      const records = data?.records ?? [];
-      const scopeNote = data?.scope === 'all'
-        ? 'every employee'
-        : data?.scope === 'referrals' ? 'only employees you referred' : 'only yourself';
-      if (!records.length) {
-        parts.push(
-          `--- employees on leave today (AUTHORITATIVE_COUNT_FOR_HOW_MANY: 0 | visibility=${data?.scope || 'self'} — ${scopeNote}) ---\n` +
-          `NOBODY_ON_LEAVE: No one within your visibility is on leave today. ` +
-          `This is the Attendance ledger, so it is a definitive answer — do NOT re-check the leave-request queue and do not present pending requests as people being on leave.`
-        );
-        continue;
-      }
-      const lines = [
-        `--- employees on leave today (${records.length} | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${records.length} | visibility=${data?.scope || 'self'} — ${scopeNote} | SOURCE: Attendance status=Leave, same as the dashboard widget — ENTITY_TYPE: employee) ---`,
-      ];
-      for (const r of records) {
-        const from = formatDateIST(r.startDate) || 'N/A';
-        const to = formatDateIST(r.endDate) || 'N/A';
-        const span = from === to ? `today only (${from})` : `${from} to ${to}`;
-        lines.push(
-          `ON_LEAVE: ${r.name || 'N/A'}${r.employeeId ? ` (${r.employeeId})` : ''} | type=${r.leaveType || 'N/A'} | leave_span=${span}`
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'rank_leaves_by_employee') {
-      if (data?.notFound) {
-        parts.push(`--- leave ranking ---\nNO_ACCESS: ${data.reason || 'Not permitted.'}`);
-        continue;
-      }
-      if (data?.needsTimeWindow) {
-        parts.push(
-          `--- leave ranking ---\nNEEDS_TIME_WINDOW: Ask which period to rank over (this month, last month, a date range) before answering.`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const filterTag = data?.statusFilter ? ` | STATUS: ${data.statusFilter}` : ' | STATUS: all';
-      const typeTag = data?.leaveTypeFilter ? ` | TYPE: ${data.leaveTypeFilter}` : '';
-      if (!records.length) {
-        parts.push(
-          `--- leave ranking (0 people | WINDOW: ${data?.windowLabel || 'n/a'}${filterTag}${typeTag}) ---\n` +
-          `NO_LEAVE_IN_WINDOW: Nobody took leave in that period, so there is nothing to rank.`
-        );
-        continue;
-      }
-      const lines = [
-        `--- leave ranking (${records.length} people | WINDOW: ${data?.windowLabel || 'n/a'}${filterTag}${typeTag} | METRIC: leave DAYS inside the window, most first | AUTHORITATIVE — ENTITY_TYPE: employee) ---`,
-      ];
-      for (const r of records) {
-        lines.push(
-          `RANK ${r.rank}: ${r.name || 'N/A'}${r.employeeId ? ` (${r.employeeId})` : ''} | leave_days=${r.leaveDays} | requests=${r.requestCount}` +
-          `${r.leaveTypes?.length ? ` | types=${r.leaveTypes.join(', ')}` : ''}`
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_backdated_attendance_requests') {
-      if (data?.notFound) {
-        const reason = data.reason || `No employee matched "${data.searchedFor || ''}".`;
-        const filters = data?.statusFilter ? { status: data.statusFilter } : null;
-        const fb = buildFallback({ module: 'attendance', entityType: 'backdated request', queryArg: data.searchedFor, filters });
-        parts.push(
-          `--- backdated attendance requests ---\n` +
-          `NO_MATCH: ${reason}\n` +
-          `USER_FACING_TEMPLATE (mirror this prose; do not invent records):\n${fb.markdown}`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const empHeader = data?.employee
-        ? ` for ${data.employee.name || 'N/A'}${data.employee.employeeId ? ` [${data.employee.employeeId}]` : ''}`
-        : '';
-      const bd = data?.breakdown || { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-      const breakdownStr = `pending: ${bd.pending}, approved: ${bd.approved}, rejected: ${bd.rejected}, cancelled: ${bd.cancelled}`;
-      const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
-      const allCount = bd.pending + bd.approved + bd.rejected + bd.cancelled;
-      const winTag = data?.windowLabel ? ` | WINDOW: ${data.windowLabel}` : '';
-      const lines = [`--- backdated attendance requests${empHeader} (showing ${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — full window total: ${allCount} — ${breakdownStr}${filterTag}${winTag} | scope=${data?.scope || 'mine'} — ENTITY_TYPE: employee) ---`];
-      for (const r of records) {
-        const requester = r.requestedBy?.name ?? 'N/A';
-        const reqEmail = r.requestedBy?.email ?? '';
-        const created = formatDateIST(r.createdAt) || 'N/A';
-        const entries = (r.attendanceEntries || []).map((e) => {
-          const d = formatDateIST(e.date) || '?';
-          const tin = formatTimeIST(e.punchIn) || '—';
-          const tout = formatTimeIST(e.punchOut) || '—';
-          return `${d}(${tin}-${tout})`;
-        }).join('; ');
-        let line = `REQUEST: ${requester} ${reqEmail ? `<${reqEmail}>` : ''} | STATUS: ${r.status || 'N/A'} | SUBMITTED: ${created} | ENTRIES: ${entries}`;
-        if (r.adminComment) line += ` | ADMIN_COMMENT: ${r.adminComment}`;
-        if (r.notes)        line += ` | NOTES: ${String(r.notes).slice(0, 120)}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     const label = key.replace('fetch_', '').replace(/_/g, ' ');
     const count = Array.isArray(data) ? ` (${data.length} record${data.length !== 1 ? 's' : ''})` : '';
     // fetch_people has no bespoke branch above — it lands here, so its scope
@@ -2733,9 +1328,6 @@ function summarizeData(fetchedData) {
 
 // ─── Cross-tool consistency check ──────────────────────────────────────────
 // Surfaces contradictions BEFORE the LLM picks a side. Examples:
-//  - fetch_attendance_summary says 0 Present on a day, but
-//    fetch_employee_attendance_calendar lists an employee with status Present
-//    that day → tool-call disagreement, refetch / clarify.
 //  - fetch_employee_overview returned a person but fetch_employees did not
 //    include them in the same scope → list-scope bug.
 // Returned strings get appended to dataContext as INCONSISTENCY_WARNINGS so
@@ -2755,19 +1347,6 @@ function validateEntityConsistency(fetched) {
   const issues = [];
   issues.push(...validateTaskFetchedIntegrity(fetched));
   issues.push(...validateJobFetchedIntegrity(fetched));
-  const summary = fetched?.fetch_attendance_summary;
-  const calendar = fetched?.fetch_employee_attendance_calendar;
-  if (summary?.perDay && Array.isArray(calendar?.days)) {
-    for (const day of calendar.days) {
-      const sumDay = summary.perDay.find((d) => d.date === day.date);
-      if (sumDay && day.status && sumDay.counts && sumDay.counts[day.status] === 0) {
-        issues.push(
-          `INCONSISTENCY: per-employee status ${day.status} on ${day.date} ` +
-          `but org summary reports 0 ${day.status} that day. Refetch or flag uncertainty.`
-        );
-      }
-    }
-  }
   return issues;
 }
 
@@ -2829,16 +1408,6 @@ function buildSystemPrompt(user, dataContext, memorySummary, lastEntities, viewe
     `8. Users with the "Candidate" role MUST be referred to as "candidate(s)" in your reply (never "employee" or "user"). Use the count from the candidates section header verbatim — if it says "5 total", say "5 candidates", not 0.\n` +
     `9a. When a section header says "N shown of M total", use M as the count when the user asks "how many" — never N. Then list the records that are actually shown.\n` +
     `9aa. If the header carries an "AUTHORITATIVE_COUNT_FOR_HOW_MANY: M" tag OR an "EMPLOYMENT_TOTALS" line, those numbers are absolute. NEVER answer a "how many" / "total" / "number of" question by counting the records below — always quote the authoritative number M. If a prior assistant turn in this conversation stated a different count, OVERRIDE it with M; the tool result is the source of truth. ONLY add a "Showing the first N of M — ask for more if you need the rest" footer when records shown N is strictly less than M; when N == M, do NOT add that footer.\n` +
-    `9y. fetch_employee_attendance_calendar is the PREFERRED tool for ANY attendance question about a specific employee — single day, month, or arbitrary range. ALWAYS use it instead of fetch_employee_attendance whenever you have a {date}, {month}, or {fromDate, toDate}. The calendar computes status per day (Present / Absent / Leave / Holiday / WeekOff / Future / Incomplete / BeforeJoining / AfterResign) using shift, week-off, holiday assignments, and joining/resign dates — so non-working days read meaningfully even with zero Attendance rows. fetch_employee_attendance returns raw rows only and will look empty for non-working days.\n` +
-    `9y1. When showing the calendar list, INCLUDE the STATUS column for every row in your reply (Markdown table or labeled rows). Never list attendance dates without their status.\n` +
-    `9u. THREE DIFFERENT LEAVE QUESTIONS, THREE DIFFERENT TOOLS — never answer one with another's data:\n` +
-    `    • "who is on leave today / off today / away right now", "how many people are on leave today" → on_leave_today. It reads the Attendance ledger (status=Leave for today), the same source as the dashboard "On leave today" widget. A zero from this tool is a real answer: say nobody is on leave, and do NOT go looking in the leave-request queue for pending filings to present instead.\n` +
-    `    • "who took the most leave", "rank employees by leave", "which employee has the most leaves" → rank_leaves_by_employee. It ranks by leave DAYS inside the asked period. If no period was given, ask which period first.\n` +
-    `    • everything else about leave — pending/approved/rejected filings, a person's leave history, the company leave queue → fetch_leave_requests.\n` +
-    `    A leave REQUEST is a filing with an approval status. Being on leave today is an attendance fact. Approved requests for future dates do NOT mean the person is on leave today, and a pending request never means someone is absent.\n` +
-    `9v. For backdated attendance request AND leave request queries, status is one of: pending | approved | rejected | cancelled (lowercase). Map natural-language asks: "accepted/approved/granted" → approved, "denied/rejected/declined" → rejected, "withdrawn/cancelled/canceled" → cancelled, "pending/awaiting/open" → pending. Leave requests also have leaveType: casual | sick | unpaid. The summary header always carries breakdowns ("pending: N, approved: N, …" and for leaves "casual: N, sick: N, unpaid: N") — quote those numbers verbatim when the user asks "how many approved/sick/etc".\n` +
-    `9u. WHENEVER the user names a specific person (name, email, or employeeId like DBS10) alongside "leaves", "leave requests", "backdated attendance", "attendance corrections", or "missed punch requests", you MUST call the relevant tool with the {employee} argument set to that name/id. Never fall back to {scope: "mine"} unless the user is clearly asking about themselves. Examples: "MOHAMMAD's leaves" → fetch_leave_requests({employee: "MOHAMMAD"}); "DBS10 missed punch" → fetch_backdated_attendance_requests({employee: "DBS10"}); "approved leaves for Saad" → fetch_leave_requests({employee: "Saad", status: "approved"}).\n` +
-    `9t. For backdated and leave queries, ALWAYS report the status breakdown header verbatim — even when the records list is empty. Example reply when 0 records: "Saad has 0 backdated attendance requests on file (pending: 0, approved: 0, rejected: 0, cancelled: 0)." Never just say "no records found" without showing the per-status counts.\n` +
     `9x. If a section starts with "AMBIGUOUS_MATCH", the user-given name/identifier maps to multiple employees. You MUST list the candidates back to the user and ask them to pick one — by employee ID is best. Do not pick one yourself, and do not show their attendance/leaves/profile until they confirm. Format the candidates as a clean numbered list with name, employee ID, designation, and email so the user can disambiguate.\n` +
     `9z. If a section says "NEEDS_TIME_WINDOW", you MUST ask the user which date / month / range they want before answering. Do not invent a default period. Suggest formats: a single day ("25 Feb 2026" → date 2026-02-25), a month ("April 2026"), or a range ("2026-04-01 to 2026-04-15"). Do not show any records this turn.\n` +
     `9w. When the user says a single specific day ("of 25 Feb", "yesterday", "Feb 25"), pass {date: "YYYY-MM-DD"} — DO NOT pretend a single date is invalid or ask for a range. Resolve the year from context (use the most recent occurrence of that month/day if not stated; today is in the conversation system).\n` +
@@ -2855,8 +1424,7 @@ function buildSystemPrompt(user, dataContext, memorySummary, lastEntities, viewe
     `11. SESSION CONTEXT: when the user says pronouns (him, her, they, this person) or asks a follow-up like "how many agents" right after naming a person/role, resolve against "Last referenced entities" below. Treat any explicit role assignment from prior turns ("Harsh is an agent") as authoritative for the rest of the conversation — count that person within that role even if the live data fetch missed them, and ask for clarification only if data conflicts.\n` +
     `12. ROLE LOCK ON FOLLOW-UP: when the prior turn fetched people for a specific role (Agent, Recruiter, Employee, Candidate, Student, Administrator) and the user follows up with "list them", "list their names", "show me", "who are they", "names please", or any reference-back phrasing, you MUST call the same fetch tool with the SAME {role} argument as the prior turn. Never drop the role. Never widen to a different role or population. The list count MUST equal the count you reported in the prior turn — if the records returned do not match, you called the wrong tool: re-call with the correct role. Do NOT mix populations (e.g. agents listed alongside candidates). If unsure of prior role, re-ask the user.\n` +
     `13. COUNT-LIST CONSISTENCY: the number you state in your reply (e.g. "We have 6 agents") MUST equal the section header "total" returned by the tool. Never state a count from memory or guess. After listing people, re-check the list length against the stated count — if they differ, your previous count was wrong: correct it in the same reply using the tool's authoritative total. Never present "We have N" followed by N+k or N-k names.\n` +
-    `14. TEMPORAL + TOPIC CARRY-OVER: when the user follows up with a question that lacks a date (or topic) but the prior turn carried one, REUSE the carried date/topic from "Last referenced entities" instead of asking again. Examples: prior turn "company attendance yesterday" → carried date set; follow-up "what about Akash" → call fetch_employee_attendance_calendar with {employee:"Akash", date:<carried-date>}. Prior turn "leaves of Saad in April" → follow-up "and Mohammad?" → fetch_leave_requests with {employee:"Mohammad", month:<carried-month>}. Never ask for a date the conversation already specified.\n` +
-    `15. ATTENDANCE TOOL CHOICE: org-wide questions ("how many present", "how many absent", "company attendance for X") MUST call fetch_attendance_summary. Per-employee questions MUST call fetch_employee_attendance_calendar (preferred) or fetch_employee_attendance. The personal fetch_attendance tool is ONLY for the logged-in user asking about themselves. Never use fetch_attendance to answer a "how many" org-level question.\n` +
+    `14. TEMPORAL + TOPIC CARRY-OVER: when the user follows up with a question that lacks a date (or topic) but the prior turn carried one, REUSE the carried date/topic from "Last referenced entities" instead of asking again. Never ask for a date the conversation already specified.\n` +
     `16. UNIFIED VISIBILITY: by default the chatbot only sees users with status active or pending. Disabled / archived / deleted users are HIDDEN from every query — counts, lists, AND direct lookups all agree. If the user explicitly asks for "disabled", "deactivated", "archived", "hidden", or "blocked" people, say those accounts are hidden from these results rather than reporting zero. Never claim someone "does not exist" if the same name later surfaces — instead, when you find a record whose STATUS field is not "active", say so out loud: "Found <Name>, but their account is <status> so they were excluded from the visible list." This rule keeps direct lookups, role lists, and headcounts mathematically consistent.\n` +
     `17. STRICT FACTUAL MODE FOR COUNTS: numeric facts (employee counts, agent counts, attendance totals, leave counts, candidate counts, applicant counts, project totals, role counts, offer/placement totals, attendance breakdown numbers) MUST be quoted EXACTLY from the section headers / AUTHORITATIVE_COUNT_FOR_HOW_MANY tags / EMPLOYMENT_TOTALS lines. NEVER use words like "approximately", "around", "about", "roughly", "estimated", or "summarised". NEVER recompute by counting NAME lines. NEVER round. If two numbers conflict in the data context, prefer the AUTHORITATIVE tag and surface the conflict in the reply (one short sentence). The post-LLM validator will overwrite any number you produce that disagrees with the retrieval layer — saving you from being wrong, but you should not rely on it.\n` +
     `18. ENTITY-TYPE LOCK: when the retrieval call carried a specific role (Agent, Recruiter, Administrator, SalesAgent, Student, Candidate) the noun in your reply MUST be that role — never a parent category. "How many agents?" with retrieval role=Agent must answer "7 agents", NEVER "7 employees" even if every agent is also an employee. The "Last referenced entities → role" line in this prompt and any non-empty <role> in the data section header are LOCKED for the entire turn AND for follow-up turns ("are you sure?", "list them", "show me", "yes") until the user names a different role. Mixing entity types ("agents" → "employees" → "people") between count and list within the SAME conversation is a hallucination — the retrieval layer always returns ONE entity type per call.\n` +
@@ -3102,57 +1670,9 @@ const INTENT_PATTERNS = [
     modules: ['project_analytics'], args: { metric: 'assignment_summary' } },
   { re: /\bhow many projects?\b/i, modules: ['fetch_projects'] },
   { re: /\b(projects? (of|by|for|status)|active projects?|list projects?)\b/i, modules: ['fetch_projects'] },
-  // Leave-request queue. The "on leave today" and leave-ranking intents are
-  // resolved by guards at the top of detectIntent, so anything reaching this
-  // rule is genuinely a question about filings. Fast-path only when no specific
-  // person is named (SPECIFIC_LOOKUP_RE catches "<name>'s leaves" upstream and
-  // routes to the LLM so the {employee} arg is set).
-  // `leaves?` — the singular-only \bleave\b never matched "approved leaves".
-  { re: /\b(leaves?|time off|absent)\b/i,                                  modules: ['fetch_leave_requests'] },
-  // Org-wide attendance aggregate — must come BEFORE the personal fast-path so
-  // "how many were present yesterday" routes to the summary tool, not the
-  // logged-in user's row dump.
-  { re: /\b(average|avg|mean)\b.*\b(daily\s+)?present\b/i,                 modules: ['fetch_attendance_summary'] },
-  { re: /\b(how many|total|count|number of)\b.*\b(present|absent|on leave|attended|attendance)\b/i,
-                                                                            modules: ['fetch_attendance_summary'] },
-  { re: /\b(present|absent)\s+(today|yesterday|this week|last week|this month|last month)\b/i,
-                                                                            modules: ['fetch_attendance_summary'] },
-  { re: /\b(company|team|org|all employees?)\s+attendance\b/i,             modules: ['fetch_attendance_summary'] },
-  { re: /\b(my attendance|my punch|my check.?in|my working hours)\b/i,    modules: ['fetch_attendance'] },
-  { re: /\b(attendance|punch|check.?in|working hours)\b/i,                 modules: ['fetch_attendance'] },
-  // Backdated attendance corrections — fast-path only when no specific person mentioned
-  // (SPECIFIC_LOOKUP_RE catches "<name>'s backdated requests" first → LLM extracts employee arg)
-  { re: /\b(backdated attendance|attendance correction|missed punch|late punch request|attendance request)\b/i, modules: ['fetch_backdated_attendance_requests'] },
 ];
 
-// Exported for chatAssistant/__tests__/leaveIntentRouting.test.js — the ORDER of
-// INTENT_PATTERNS is load-bearing (the catch-all leave rule must lose to the
-// on-leave-today and ranking rules), and that is only testable from outside.
-export function detectIntent(text, uiContext = null) {
-  // The three leave intents are resolved FIRST — ahead of SPECIFIC_LOOKUP_RE and
-  // ahead of INTENT_PATTERNS — because both would otherwise misroute them:
-  //   • "today's leaves"             -> trips the "<name>'s leaves" possessive rule
-  //   • "rank employees by leave"    -> matches an employees rule
-  //   • everything else with "leave" -> swallowed by the catch-all leave rule
-  // All three used to land on fetch_leave_requests, which answers a question
-  // about FILINGS, not about who is absent or who took the most time off.
-  // Both predicates are narrow (each needs a leave subject plus its own cue),
-  // so a plain "<name>'s leaves" still falls through to the LLM below.
-  if (looksLikeLeaveRankingQuery(text)) {
-    // Resolve status / leaveType / date window here rather than leaving args
-    // empty: fastPathNeedsArgs runs BEFORE extractFastPathArgs, so an empty
-    // args object would bounce "most leave this month" to the LLM even though
-    // the period is right there in the sentence. With no period named, args
-    // stay windowless and the fast path correctly defers.
-    return {
-      modules: ['rank_leaves_by_employee'],
-      args: extractFastPathArgs(text, 'rank_leaves_by_employee', {}, null, uiContext),
-    };
-  }
-  if (looksLikeOnLeaveTodayQuery(text)) {
-    return { modules: ['on_leave_today'], args: {} };
-  }
-
+function detectIntent(text, uiContext = null) {
   // Job salary ranking — must not fall through to fetch_jobs list (semantic top-K).
   if (looksLikeJobRankingQuery(text)) {
     return null;
@@ -3211,24 +1731,6 @@ export function detectIntent(text, uiContext = null) {
     }
   }
   return null; // null → fall through to LLM routing
-}
-
-// Tools that require a date/window in their args. If the fast-path matched one
-// of these but didn't supply args, the LLM router must extract the date — the
-// fast-path cannot. Returning true here triggers a fall-through to LLM routing.
-const TOOLS_REQUIRING_WINDOW = new Set([
-  'fetch_attendance_summary',
-  'fetch_employee_attendance',
-  'fetch_employee_attendance_calendar',
-  // "who took the most leave" is meaningless without a period — if the phrase
-  // carried no month/range, fall through to LLM routing rather than silently
-  // ranking over an arbitrary default window.
-  'rank_leaves_by_employee',
-]);
-
-function fastPathNeedsArgs(modules, args) {
-  if (!modules.some((m) => TOOLS_REQUIRING_WINDOW.has(m))) return false;
-  return !args.date && !args.month && !args.fromDate && !args.toDate;
 }
 
 // ─── Shared context preparation (routing + fetch) ────────────────────────────
@@ -3398,10 +1900,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         projects:   'fetch_projects',
         team:       'team_analytics',
         teams:      'team_analytics',
-        leave:      'fetch_leave_requests',
-        leaves:     'fetch_leave_requests',
-        attendance: 'fetch_attendance_summary',
-        backdated:  'fetch_backdated_attendance_requests',
       };
       let toolName = null;
       const toolArgs = {};
@@ -3440,11 +1938,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         toolArgs.phrase = continuationMsg;
       } else if (lastTopic && TOPIC_TOOL_MAP[lastTopic]) {
         toolName = TOPIC_TOOL_MAP[lastTopic];
-        // Carry forward identity hints so the same record set is fetched.
-        if (le.person && (toolName === 'fetch_leave_requests' || toolName === 'fetch_backdated_attendance_requests')) {
-          toolArgs.employee = le.person;
-        }
-        if (le.lastDate && (toolName === 'fetch_attendance_summary')) toolArgs.date = le.lastDate;
       }
       // Agent on and not yet tried this turn: a jobs continuation isn't forced onto
       // fetch_jobs — routing below decides (and may hand it to the agent). Once the
@@ -3486,7 +1979,7 @@ async function prepareContext(client, history, user, uiContext = null, { request
       fetched: { __clarify: { question: intent.clarify } },
     };
   }
-  if (intent && !fastPathNeedsArgs(intent.modules, intent.args)) {
+  if (intent) {
     // Per-module arg inference: scan the user message for modifiers the
     // pattern itself can't carry (resigned/active employment, status filter,
     // admin scope). Without this the fast-path silently strips qualifiers
@@ -3536,15 +2029,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         let parsed = {};
         try { parsed = JSON.parse(tc.function?.arguments || '{}'); } catch { /* keep empty */ }
         const name = tc.function?.name;
-        if (name === 'fetch_leave_requests' || name === 'fetch_backdated_attendance_requests') {
-          if (!parsed.employee && !parsed.scope && le.person) parsed.employee = le.person;
-        }
-        if (name === 'fetch_employee_attendance' || name === 'fetch_employee_attendance_calendar') {
-          if (!parsed.employee && le.person) parsed.employee = le.person;
-          if (!parsed.date && !parsed.month && !parsed.fromDate && !parsed.toDate && le.lastDate) {
-            parsed.date = le.lastDate;
-          }
-        }
         tc.function.arguments = JSON.stringify(parsed);
       }
     } catch (err) {

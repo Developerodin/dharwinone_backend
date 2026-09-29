@@ -4,9 +4,7 @@ import {
   computeAvgDailyPresent,
   enrichAttendanceSummary,
   leaveDatesWindowClause,
-  backdatedEntriesWindowClause,
   looksLikeWeekOffOrGroupsQuery,
-  looksLikeOnLeaveTodayQuery,
 } from '../attendanceAnalytics.js';
 
 describe('attendanceAnalytics (Epic B)', () => {
@@ -102,42 +100,6 @@ describe('attendanceAnalytics (Epic B)', () => {
     assert.equal(inWindow(new Date(Date.UTC(2026, 7, 31))), true);  // last day
     assert.equal(inWindow(new Date(Date.UTC(2026, 6, 31))), false); // day before
     assert.equal(inWindow(new Date(Date.UTC(2026, 8, 1))), false);  // day after
-  });
-
-  it('builds backdated window on attendanceEntries.date', () => {
-    const from = new Date(Date.UTC(2026, 6, 1));
-    const to = new Date(Date.UTC(2026, 6, 31, 23, 59, 59, 999));
-    const clause = backdatedEntriesWindowClause({ from, to });
-    assert.deepEqual(clause, { 'attendanceEntries.date': { $gte: from, $lte: to } });
-  });
-
-  it('detects on-leave-today asks (needs both a leave subject and a now-anchor)', () => {
-    for (const q of [
-      'who is on leave today',
-      'who is off today',
-      'is anyone absent right now',
-      "today's leaves",
-      'anyone out of office currently',
-    ]) {
-      assert.equal(looksLikeOnLeaveTodayQuery(q), true, q);
-    }
-  });
-
-  it('leaves non-today and non-leave asks to other routes', () => {
-    for (const q of [
-      'pending leaves',            // no now-anchor
-      'who joined today',          // now-anchor but not about leave
-      'how many leaves last month',
-      '',
-    ]) {
-      assert.equal(looksLikeOnLeaveTodayQuery(q), false, q);
-    }
-    assert.equal(looksLikeOnLeaveTodayQuery(null), false);
-  });
-
-  it('yields a today-scoped ranking ask to the ranking route', () => {
-    // "most" makes it a comparison; leaveRanking owns it even though it says today.
-    assert.equal(looksLikeOnLeaveTodayQuery('who has the most leaves today'), false);
   });
 
   it('routes week-off / groups asks to overview (not org attendance sum)', () => {

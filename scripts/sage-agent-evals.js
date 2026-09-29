@@ -148,7 +148,7 @@ const FAKE_USER = Object.freeze({
   authContext: {
     permissions: new Set([
       'jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read', 'interviews.read',
-      'students.read', 'chart.read', 'attendance.assign',
+      'students.read', 'chart.read', 'attendance.assign', 'students.manage',
     ]),
   },
 });
@@ -393,6 +393,30 @@ function cannedResult(name, args) {
     case 'get_training_progress':
       return { person: args?.person || 'Eval Self', self: !args?.person, total: 2, courses: [
         { module: 'React Basics', status: 'completed', percentage: 100 }, { module: 'Node APIs', status: 'in-progress', percentage: 40 },
+      ] };
+    case 'get_attendance':
+      return { person: { name: 'Eval Self', employeeId: 'DBS001', self: !args?.person }, window: args?.window ?? { from: '2026-09-01', to: '2026-09-29' },
+        total: 2, statusBreakdown: { Present: 1, Leave: 1 }, records: [
+          { date: '2026-09-29', status: 'Present', punchIn: '09:32', punchOut: '18:05', hours: 8.55 },
+          { date: '2026-09-26', status: 'Leave', leaveType: 'sick' },
+        ] };
+    case 'get_attendance_summary':
+      return { window: args?.window, total: 40, avgDailyPresent: 34, daysCounted: 1,
+        perDay: [{ date: args?.window?.from ?? '2026-09-28', counts: { Present: 34, Absent: 3, Leave: 3, Holiday: 0, WeekOff: 0, Incomplete: 0 } }] };
+    case 'count_leave_requests':
+      if (args?.groupBy === 'employee') {
+        return { groupBy: 'employee', statusCounted: 'approved', total: 2, groups: [
+          { rank: 1, name: 'Asha Rao', leaveDays: 4, requestCount: 2 }, { rank: 2, name: 'Vikram Shah', leaveDays: 2, requestCount: 1 },
+        ] };
+      }
+      return { total: 5, groupBy: 'status', breakdown: { pending: 3, approved: 2, rejected: 0, cancelled: 0 }, filtersApplied: args?.filters ?? {} };
+    case 'list_leave_requests':
+      return { total: 1, records: [{ id: 'l1', person: 'Asha Rao', leaveType: 'sick', status: 'pending', from: '2026-09-30', to: '2026-10-01', days: 2 }] };
+    case 'who_is_on_leave_today':
+      return { total: 1, scope: 'all', records: [{ name: 'Vikram Shah', employeeId: 'DBS007', leaveType: 'casual', from: '2026-09-29', to: '2026-09-29' }] };
+    case 'list_backdated_requests':
+      return { total: 1, breakdown: { pending: 1, approved: 0, rejected: 0, cancelled: 0 }, records: [
+        { id: 'b1', person: 'Asha Rao', status: 'pending', days: 1, from: '2026-09-25', to: '2026-09-25' },
       ] };
     default:
       return { handoff: true };

@@ -42,14 +42,6 @@ export const TOOL_ACCESS = {
   fetch_projects: { note: 'project.service visibility' },
 
   // HR — handlers check userIsAdmin or self
-  fetch_attendance: { note: 'admin check in handler' },
-  fetch_attendance_summary: { note: 'admin check in handler' },
-  fetch_employee_attendance_calendar: { note: 'admin-or-self in handler' },
-  fetch_employee_attendance: { note: 'admin-or-self in handler' },
-  fetch_leave_requests: { note: 'buildLeaveRequestScopeFilter' },
-  on_leave_today: { note: 'dashboard permission grading in handler' },
-  rank_leaves_by_employee: { note: 'admin check in handler' },
-  fetch_backdated_attendance_requests: { note: 'admin-or-self in handler' },
 
   // Self-scoped / public
 };

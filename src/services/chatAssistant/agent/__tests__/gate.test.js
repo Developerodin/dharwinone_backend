@@ -25,9 +25,9 @@ describe('isAgentTurn', () => {
   });
 
   it('skips a non-job message with no ledger', () => {
-    assert.equal(isAgentTurn('who is on leave today', null, NOW), false);
-    assert.equal(isAgentTurn('who is on leave today', { agentLedger: [] }, NOW), false);
-    assert.equal(isAgentTurn("show me today's attendance summary", {}, NOW), false);
+    assert.equal(isAgentTurn('tell me a joke about cats', null, NOW), false);
+    assert.equal(isAgentTurn('tell me a joke about cats', { agentLedger: [] }, NOW), false);
+    assert.equal(isAgentTurn('thanks, that helps', {}, NOW), false);
   });
 
   it('pins the RBAC-phrasing behavior change: "list user roles and permissions" now matches the people domain (review fix round 1, m-3)', () => {
@@ -139,7 +139,7 @@ describe('tryAgentTurn', () => {
   });
 
   it('gate rejects a non-job turn at the entry, but the router fallback may try it', async () => {
-    const leave = [{ role: 'user', content: 'who is on leave today' }];
+    const leave = [{ role: 'user', content: 'tell me a joke about cats' }];
     const entry = deps();
     assert.deepEqual(await tryAgentTurn({ user, adminId: 'a1', history: leave, deps: entry.d }), { result: null, attempted: false });
     assert.equal(entry.calls.run, 0);

@@ -226,7 +226,6 @@
   "./src/services/chatAssistant/__tests__/jobFieldMap.test.js",
   "./src/services/chatAssistant/__tests__/jobRank.filters.test.js",
   "./src/services/chatAssistant/__tests__/jobResult.test.js",
-  "./src/services/chatAssistant/__tests__/leaveIntentRouting.test.js",
   "./src/services/chatAssistant/__tests__/leaveRanking.test.js",
   "./src/services/chatAssistant/__tests__/listingRenderer.test.js",
   "./src/services/chatAssistant/__tests__/orgStructureAnalytics.test.js",
@@ -390,5 +389,6 @@
   "./src/services/chatAssistant/agent/tools/knowledge/__tests__/knowledgeTools.test.js",
   "./src/services/chatAssistant/agent/tools/schedule/__tests__/scheduleTools.test.js",
   "./src/services/chatAssistant/agent/tools/org/__tests__/orgTools.test.js",
-  "./src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js"
+  "./src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js",
+  "./src/services/chatAssistant/agent/tools/attendance/__tests__/attendanceTools.test.js"
 ]

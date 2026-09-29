@@ -188,6 +188,32 @@ replaces the legacy `businessConcepts.js` clarification flow.
 person (another person needs `students.read` / `students.manage`, `canReadOtherTraining`). Progress
 exists only on Student profiles; no Student profile returns `noStudentProfile`, never "0 courses".
 
+### attendance
+
+`agent/tools/attendance/`: attendance, leave requests, on-leave-today and backdated attendance
+requests. Every tool calls the service behind the matching portal page with the viewer, so row
+scope is the page's, and self-service ("my attendance", "my leaves") works with no admin
+permission. A named person resolves through the Employee collection (`resolvePerson`); naming
+someone else needs a people/attendance read permission, and the page's own scope still applies
+on top.
+
+| Tool | Backend | Access |
+|---|---|---|
+| `get_attendance` | `attendance.service` `listByStudent` / `listByUser` (same source choice as `/attendance/candidate/:id`) | self always; another person needs `students.*` / `candidates.*` (`requireAttendanceAccess`) |
+| `get_attendance_summary` | `attendanceAggregator.aggregateOrgAttendance` + `enrichAttendanceSummary`; window ≤ 92 days | `students.manage` (Attendance → Track) |
+| `count_leave_requests` | `buildLeaveRequestScopeFilter` + count / group; `groupBy:'employee'` ranks leave days via `leaveRanking.js` (approved unless `filters.status`) | `note` — service scope |
+| `list_leave_requests` | `leaveRequest.service.queryLeaveRequests` | `note` — service scope |
+| `who_is_on_leave_today` | `onLeaveToday.service.getEmployeesOnLeaveToday` (dashboard grading) | `note` — service scope |
+| `list_backdated_requests` | `backdatedAttendanceRequest.service.queryBackdatedAttendanceRequests`, plus per-status totals | `note` — service scope |
+
+Day windows are `{ from, to }` `YYYY-MM-DD`, validated by `employees/common.js`'s `dayRange` and
+turned into UTC-midnight day keys (`dayKeys`), because `Attendance.date`, `LeaveRequest.dates`
+and `attendanceEntries.date` are day keys, not instants. Filters reach the services inside `$and`,
+so a service that assigns its own scope (`Object.assign(filter, scope)` / `filter.$or = own`)
+intersects with the person filter instead of overwriting it. `matchesTurn` stands down for
+shift, week-off, holiday, org-chart, task, meeting and policy phrasing unless a strong attendance
+noun ("attendance", "backdated", "leave request", "punch in") is present.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -446,5 +472,5 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
   knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
-  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org` and `training` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
+  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org`, `training` and `attendance` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.
