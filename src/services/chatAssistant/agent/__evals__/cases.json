@@ -692,5 +692,35 @@
     "id": "r5-backdated",
     "question": "list the pending attendance correction requests",
     "expect": { "tools": ["list_backdated_requests"] }
+  },
+  {
+    "id": "r7-count-active-projects",
+    "question": "how many active projects do we have?",
+    "expect": { "tools": ["count_projects"], "args": { "count_projects": { "filters": { "status": "Inprogress" } } } }
+  },
+  {
+    "id": "r7-which-team-on-project",
+    "question": "which team is working on the Portal Revamp project?",
+    "expect": { "tools": ["list_projects"] }
+  },
+  {
+    "id": "r7-how-many-teams",
+    "question": "how many teams do we have?",
+    "expect": { "tools": ["list_teams"] }
+  },
+  {
+    "id": "r7-tasks-in-review",
+    "question": "how many tasks are in review?",
+    "expect": { "tools": ["count_tasks"] }
+  },
+  {
+    "id": "r7-my-tasks",
+    "question": "show my tasks",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "assignedToMe": true } } } }
+  },
+  {
+    "id": "r7-most-tasks",
+    "question": "who has the most tasks right now?",
+    "expect": { "tools": ["get_workload"] }
   }
 ]

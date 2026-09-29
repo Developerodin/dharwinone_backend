@@ -214,6 +214,17 @@ intersects with the person filter instead of overwriting it. `matchesTurn` stand
 shift, week-off, holiday, org-chart, task, meeting and policy phrasing unless a strong attendance
 noun ("attendance", "backdated", "leave request", "punch in") is present.
 
+### projects
+
+`agent/tools/projects/`: `count_projects`, `list_projects` (`project.service` `queryProjects`; viewers
+without `projects.read`/`manage` get My Projects, `mine: true`), `list_teams` (`teamGroup.service`
+`queryTeamGroups`, `teams.read`), `count_tasks` / `list_tasks` (`task.service` `queryTasks` with
+`buildTaskServiceFilter`; without `tasks.read` or Administrator the tools force `assignedToMe`, like
+`task.route.js`), and `get_workload` (`workloadAnalytics.fetchWorkloadAnalytics`, `projects.read`).
+`count_tasks` `groupBy: 'status'` is the stage breakdown plus overdue and blocked counts. An assignee
+name resolves to an `assignedTo` clause; unknown or ambiguous names return `notFound` / `matches`,
+never an unfiltered count.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -472,5 +483,5 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
   knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
-  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org`, `training` and `attendance` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
+  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org`, `training`, `attendance` and `projects` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.

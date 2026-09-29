@@ -220,7 +220,6 @@
   "./src/services/chatAssistant/__tests__/entityResolver.test.js",
   "./src/services/chatAssistant/__tests__/entityResolver.viewer.test.js",
   "./src/services/chatAssistant/__tests__/envelope.test.js",
-  "./src/services/chatAssistant/__tests__/factExtractor.projects.test.js",
   "./src/services/chatAssistant/__tests__/factRenderer.employmentBreakdown.test.js",
   "./src/services/chatAssistant/__tests__/fallbackGenerator.test.js",
   "./src/services/chatAssistant/__tests__/jobFieldMap.test.js",
@@ -232,7 +231,6 @@
   "./src/services/chatAssistant/__tests__/orphanResolver.test.js",
   "./src/services/chatAssistant/__tests__/peopleFetcher.test.js",
   "./src/services/chatAssistant/__tests__/phraseToDateWindow.test.js",
-  "./src/services/chatAssistant/__tests__/projectAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/projectGraph.resolvers.test.js",
   "./src/services/chatAssistant/__tests__/referenceResolver.test.js",
   "./src/services/chatAssistant/__tests__/referralLeadsAnalytics.test.js",
@@ -241,11 +239,7 @@
   "./src/services/chatAssistant/__tests__/roleClassifier.test.js",
   "./src/services/chatAssistant/__tests__/roleResolver.test.js",
   "./src/services/chatAssistant/__tests__/taskAccess.test.js",
-  "./src/services/chatAssistant/__tests__/taskBoardAnalytics.test.js",
-  "./src/services/chatAssistant/__tests__/taskStageVocabulary.test.js",
-  "./src/services/chatAssistant/__tests__/teamAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/visibilityRules.employeeOwnerQuery.test.js",
-  "./src/services/chatAssistant/__tests__/workloadAnalytics.test.js",
   "./src/services/chatAssistant/conversationPolicy/__tests__/renderFacts.delta.test.js",
   "./src/services/chatAssistant/conversationState/__tests__/entitySubject.jobSlot.test.js",
   "./src/services/chatAssistant/conversationalEntity/__tests__/mergeEntityPending.test.js",
@@ -390,5 +384,6 @@
   "./src/services/chatAssistant/agent/tools/schedule/__tests__/scheduleTools.test.js",
   "./src/services/chatAssistant/agent/tools/org/__tests__/orgTools.test.js",
   "./src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js",
-  "./src/services/chatAssistant/agent/tools/attendance/__tests__/attendanceTools.test.js"
+  "./src/services/chatAssistant/agent/tools/attendance/__tests__/attendanceTools.test.js",
+  "./src/services/chatAssistant/agent/tools/projects/__tests__/projectTools.test.js"
 ]

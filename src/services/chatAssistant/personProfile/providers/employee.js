@@ -159,8 +159,7 @@ export default {
   ns: 'employees',
   store: Employee,
   key: 'owner',
-  relatedTools: ['get_attendance',
-                 'list_leave_requests', 'fetch_tasks', 'fetch_projects'],
+  relatedTools: ['get_attendance', 'list_leave_requests', 'list_tasks'],
   FIELDS: EMPLOYEE_FIELDS,
   deriveFns: {
     eadNumber: eadDisplayValue,

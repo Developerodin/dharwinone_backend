@@ -11,40 +11,9 @@ export const RESOLVED_FOLLOWUP_RE =
 const ORDINAL_RE =
   /^\s*(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+(one|item|department|project|team|task|employee|manager|supervisor)\.?\s*$/i;
 
-const POSSESSIVE_TASKS_RE = /^\s*(?:his|her|their)\s+tasks\.?\s*$/i;
 
 /** Maps memory entity type → list rewrite + tool routing. */
 const ENTITY_ROUTE = {
-  project: {
-    listPhrase: 'list all projects',
-    toolName: 'fetch_projects',
-    toolArgs: {},
-  },
-  projects: {
-    listPhrase: 'list all projects with teams',
-    toolName: 'project_analytics',
-    toolArgs: { metric: 'list_with_teams' },
-  },
-  task: {
-    listPhrase: 'list tasks from last query',
-    toolName: 'task_board_analytics',
-    toolArgs: { metric: 'stage_count' },
-  },
-  tasks: {
-    listPhrase: 'list tasks from last query',
-    toolName: 'task_board_analytics',
-    toolArgs: { metric: 'stage_count' },
-  },
-  team: {
-    listPhrase: 'list all teams',
-    toolName: 'team_analytics',
-    toolArgs: { metric: 'list' },
-  },
-  teams: {
-    listPhrase: 'list all teams',
-    toolName: 'team_analytics',
-    toolArgs: { metric: 'list' },
-  },
 };
 
 const METRIC_TO_ENTITY = {
@@ -108,7 +77,6 @@ export function looksLikeReferenceFollowUp(text) {
   if (!t) return false;
   if (RESOLVED_FOLLOWUP_RE.test(t)) return true;
   if (ORDINAL_RE.test(t)) return true;
-  if (POSSESSIVE_TASKS_RE.test(t)) return true;
   return false;
 }
 
@@ -197,20 +165,6 @@ export function resolveReferences(text, memory = null) {
         toolArgs: { ...route.toolArgs, unitName: item.name, phrase: resolvedText },
       };
     }
-  }
-
-  // "his tasks" → last mentioned employee's tasks
-  if (POSSESSIVE_TASKS_RE.test(original) && memory?.person) {
-    const resolvedText = `list tasks for ${memory.person}`;
-    return {
-      resolvedText,
-      entityType: 'tasks',
-      intent: 'list',
-      confidence: 0.85,
-      wasResolved: true,
-      toolName: 'fetch_tasks',
-      toolArgs: { assignee: memory.person, phrase: resolvedText },
-    };
   }
 
   return base;

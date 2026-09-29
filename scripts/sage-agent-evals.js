@@ -147,8 +147,9 @@ const FAKE_USER = Object.freeze({
   name: 'Eval User',
   authContext: {
     permissions: new Set([
-      'jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read', 'interviews.read',
-      'students.read', 'chart.read', 'attendance.assign', 'students.manage',
+       'jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read',
+       'interviews.read', 'students.read', 'chart.read', 'attendance.assign', 'students.manage',
+       'projects.read', 'teams.read', 'tasks.read',
     ]),
   },
 });
@@ -298,6 +299,18 @@ function cannedResult(name, args) {
         { id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer', status: 'Applied' },
         { id: 'a2', applicant: 'Ranveer Singh', job: 'QA Engineer', status: 'Interview' },
       ] };
+    case 'count_projects':
+      return { total: 6, scope: 'all', filtersApplied: args?.filters ?? {} };
+    case 'list_projects':
+      return { total: 1, scope: 'all', records: [{ id: 'p1', name: 'Portal Revamp', status: 'Inprogress', priority: 'high', teams: ['Alpha'] }] };
+    case 'list_teams':
+      return { total: 2, records: [{ id: 't1', name: 'Alpha', memberCount: 4 }, { id: 't2', name: 'Beta', memberCount: 3 }] };
+    case 'count_tasks':
+      return { total: 12, scope: 'all', groupBy: args?.groupBy, groups: [{ value: 'in_review', count: 3 }], overdue: 2, blocked: 1, filtersApplied: args?.filters ?? {} };
+    case 'list_tasks':
+      return { total: 1, scope: 'mine', records: [{ id: 'k1', code: 'T-1', title: 'Fix login', status: 'todo', assignees: ['Eval Self'] }] };
+    case 'get_workload':
+      return { metric: args?.metric ?? 'most_tasks', rows: [{ name: 'Asha Rao', openCount: 9, totalCount: 14 }] };
     case 'get_my_profile':
       return {
         kind: 'unique',

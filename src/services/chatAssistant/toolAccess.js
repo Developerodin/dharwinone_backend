@@ -34,12 +34,6 @@ export const TOOL_ACCESS = {
   // rule exactly rather than a permission this tool doesn't actually read behind.
 
   // Org / PM
-  project_analytics: { note: 'projects.read/manage in handler' },
-  team_analytics: { note: 'teams.read/manage in handler' },
-  task_board_analytics: { note: 'tasks.read/manage in handler' },
-  workload_analytics: { note: 'projects/teams read in handler' },
-  fetch_tasks: { note: 'task.service.queryTasks visibility' },
-  fetch_projects: { note: 'project.service visibility' },
 
   // HR — handlers check userIsAdmin or self
 

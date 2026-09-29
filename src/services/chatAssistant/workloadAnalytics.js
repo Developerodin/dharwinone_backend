@@ -31,63 +31,6 @@ export const WORKLOAD_METRICS = [
   'cross_project_summary',
 ];
 
-const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-export function looksLikeWorkloadQuery(text) {
-  const t = String(text || '');
-  if (!t.trim()) return false;
-  if (/\b(who has (the )?most tasks?|most tasks?|highest workload|overload|overloaded|team workload|workload|utilization|capacity)\b/i.test(t)) return true;
-  if (/\b(tasks? per (employee|member|person)|employee tasks?|member workload)\b/i.test(t)) return true;
-  if (/\bwhich team\b.{0,40}\b(workload|tasks?|utilization)\b/i.test(t)) return true;
-  return false;
-}
-
-export function looksLikeWorkloadContinuation(text, memory = null) {
-  const t = String(text || '');
-  if (/\bwho has\b.{0,20}\bmost tasks?\b/i.test(t)) return true;
-  if (/\b(most tasks?|highest workload)\b/i.test(t) && (memory?.lastTeamName || memory?.projectName)) return true;
-  return false;
-}
-
-/**
- * @returns {{ metric: string, assigneeName?: string, teamName?: string, projectName?: string, phrase: string }}
- */
-export function extractWorkloadArgs(text) {
-  const phrase = String(text || '');
-  const out = { metric: 'most_tasks', phrase };
-
-  if (/\bteam utilization\b/i.test(phrase) || /\butilization\b/i.test(phrase)) {
-    out.metric = 'team_utilization';
-  } else if (/\bcross[\s-]?project\b/i.test(phrase)) {
-    out.metric = 'cross_project_summary';
-  } else if (/\boverload/i.test(phrase)) {
-    out.metric = 'overload';
-  } else if (/\boverdue\b/i.test(phrase) && /\b(employee|person|member|by)\b/i.test(phrase)) {
-    out.metric = 'overdue_by_employee';
-  } else if (/\bteam member\b/i.test(phrase) || /\bper member\b/i.test(phrase)) {
-    out.metric = 'team_member_workload';
-  } else if (/\bteam workload\b/i.test(phrase) || /\bwhich team\b/i.test(phrase)) {
-    out.metric = 'team_workload';
-  } else if (/\bprojects?\b/i.test(phrase) && /\b(on|for|assigned)\b/i.test(phrase)) {
-    out.metric = 'employee_projects';
-  } else if (/\bwho has\b/i.test(phrase) || /\bmost tasks?\b/i.test(phrase)) {
-    out.metric = 'most_tasks';
-  } else if (/\bemployee tasks?\b/i.test(phrase)) {
-    out.metric = 'employee_tasks';
-  }
-
-  const assigneeNamed = phrase.match(/\b(?:for|of)\s+["']?([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})["']?/i);
-  if (assigneeNamed) out.assigneeName = assigneeNamed[1].trim();
-
-  const teamNamed = phrase.match(/\bteam\s+["']?([^"'.?\n]+)["']?\b/i);
-  if (teamNamed) out.teamName = teamNamed[1].trim();
-
-  const projectNamed = phrase.match(/\bproject\s+["']?([^"'.?\n]+)["']?\b/i);
-  if (projectNamed) out.projectName = projectNamed[1].trim();
-
-  return out;
-}
-
 function buildFormattedWorkloadSummary(payload) {
   const { metric, rows = [], lookup = null, authoritativeCount = 0, breakdown = {} } = payload;
   const lines = [];
@@ -271,11 +214,10 @@ export async function fetchWorkloadAnalytics({ user, args = {} } = {}) {
     };
   }
 
-  const inferred = extractWorkloadArgs(args.phrase || '');
-  const metric = String(args.metric || inferred.metric || 'most_tasks').toLowerCase();
-  const assigneeName = args.assigneeName || args.assignee || inferred.assigneeName || null;
-  const teamName = args.teamName || args.team || inferred.teamName || null;
-  const projectName = args.projectName || inferred.projectName || null;
+  const metric = String(args.metric || 'most_tasks').toLowerCase();
+  const assigneeName = args.assigneeName || args.assignee || null;
+  const teamName = args.teamName || args.team || null;
+  const projectName = args.projectName || null;
 
   const { filter: baseFilter, scope } = await buildAccessibleTaskFilter(user, {});
 
@@ -380,7 +322,7 @@ export async function fetchWorkloadAnalytics({ user, args = {} } = {}) {
   if (assigneeName) {
     const assignee = await resolveAssigneeByName(assigneeName);
     if (assignee.kind === 'found') {
-      filter.assignedTo = assignee.userIds[0];
+      filter.assignedTo = new mongoose.Types.ObjectId(assignee.userIds[0]); // aggregate() does not cast strings
     } else if (assignee.kind === 'ambiguous') {
       return { ambiguous: true, searchedFor: assigneeName, matches: assignee.matches, authoritative: true };
     }

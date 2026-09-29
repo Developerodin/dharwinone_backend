@@ -13,8 +13,6 @@
 import { renderPeople }       from './people.js';
 import { renderGenericCount } from './genericCount.js';
 import { renderJobs, renderJobResult } from './jobs.js';
-import { renderTasks }        from './tasks.js';
-import { resolveTaskPayload } from '../taskResult.js';
 import { resolveJobPayload } from '../jobResult.js';
 import { buildFallback, isEmptyResult, moduleForKind } from '../fallbackGenerator.js';
 
@@ -59,8 +57,6 @@ const COUNT_ONLY_KINDS = new Set([
 // itself, so an empty fetched payload is NOT an empty result.
 const REQUIRES_PAYLOAD = new Set([
   'fetch_people',
-  'fetch_tasks',
-  'task_board_stage_count',
 ]);
 
 // fact.kind → key in `fetched` whose data the renderer consumes. Used to
@@ -68,17 +64,11 @@ const REQUIRES_PAYLOAD = new Set([
 const KIND_TO_FETCHED_KEY = {
   fetch_people:                        'fetch_people',
   fetch_jobs:                          'fetch_jobs',
-  fetch_tasks:                         'fetch_tasks',
-  task_board_stage_count:              'task_board_analytics',
-  task_board_stage_counts:             'task_board_analytics',
 };
 
-// Task kinds share one canonical payload (task_result) — render once.
-const TASK_FACT_KINDS = new Set(['fetch_tasks', 'task_board_stage_count', 'task_board_stage_counts']);
 const JOB_FACT_KINDS = new Set(['fetch_jobs', 'job_result']);
 
 function taskSourceKey(fact) {
-  if (fact?.kind && TASK_FACT_KINDS.has(fact.kind)) return 'task_result';
   if (fact?.kind && JOB_FACT_KINDS.has(fact.kind)) return 'job_result';
   return KIND_TO_FETCHED_KEY[fact.kind] || fact.kind;
 }
@@ -93,19 +83,6 @@ const KIND_RENDERERS = {
     const payload = resolveJobPayload(fetched);
     if (payload?.type === 'job_result') return renderJobResult(payload, ctx);
     return renderJobs(fetched?.fetch_jobs, ctx, fact);
-  },
-  fetch_tasks: (fact, fetched, ctx) => {
-    const payload = resolveTaskPayload(fetched);
-    return renderTasks(payload, ctx, fact);
-  },
-  task_board_stage_count: (fact, fetched, ctx) => {
-    const payload = resolveTaskPayload(fetched);
-    return renderTasks(payload, ctx, fact);
-  },
-  task_board_stage_counts: (fact, fetched, ctx) => {
-    const payload = resolveTaskPayload(fetched);
-    if (payload?.result?.tasks?.length) return renderTasks(payload, ctx, fact);
-    return renderGenericCount(fact, ctx);
   },
 };
 
@@ -169,11 +146,9 @@ export function blocksFromFacts(facts, fetched, ctx = {}) {
     }
 
     const sourcePayload = fetched
-      ? (sourceKey === 'task_result'
-        ? resolveTaskPayload(fetched)
-        : sourceKey === 'job_result'
-          ? resolveJobPayload(fetched)
-          : fetched[sourceKey])
+      ? (sourceKey === 'job_result'
+        ? resolveJobPayload(fetched)
+        : fetched[sourceKey])
       : null;
 
     // Empty / notFound — emit a contextual FallbackBlock instead of a
