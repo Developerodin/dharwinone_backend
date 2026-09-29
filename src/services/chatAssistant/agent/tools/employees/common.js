@@ -10,6 +10,8 @@ import {
 } from '../../../../../schemas/employees/employeeQuery.rbac.js';
 import { buildEmployeeListMongoFilter as realBuildEmployeeListMongoFilter } from '../../../../employee.service.js';
 import { userCanViewPreBoardingDocs } from '../../../../../controllers/employee.controller.js';
+import { zonedWallTimeToUtc, addDaysToDateStr } from '../../../../../utils/zonedTime.js';
+import { DEFAULT_TIMEZONE } from '../../context.js';
 
 // Same permissions the Employees page list route accepts (employee.route.js canReadEmployees).
 export const EMPLOYEES_ACCESS = Object.freeze({ anyOf: [...EMPLOYEE_QUERY_READ_PERMISSIONS] });
@@ -71,19 +73,40 @@ export function personRecordsDeps(ctx) {
   };
 }
 
-/** { from, to } days → buildAdvancedFilter's <prefix>From / <prefix>To instants (whole UTC days). */
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function dayRange(prefix, window) {
+/** A real calendar day: '2026-02-30' matches the shape but Date.UTC rolls it to March, so it must round-trip. */
+function assertIsoDay(day) {
+  const m = ISO_DAY_RE.exec(day);
+  const ok = m && new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toISOString().slice(0, 10) === day;
+  if (!ok) throw new Error(`Invalid date '${day}' — use YYYY-MM-DD.`);
+}
+
+/**
+ * { from, to } days → { from, to } ISO instants bounding whole days in the timezone the model resolves
+ * "today" in (context.js DEFAULT_TIMEZONE): from = that day's local midnight, to = the last ms of `to`.
+ * Date-only fields stored at UTC midnight (joiningDate 2026-07-03T00:00Z) still fall inside their own day.
+ * Throws on an impossible day or a reversed window instead of silently matching nothing.
+ */
+export function dayWindowBounds(window) {
   if (!window) return {};
-  for (const day of [window.from, window.to]) {
-    if (day !== undefined && (!ISO_DAY_RE.test(day) || Number.isNaN(Date.parse(day)))) {
-      throw new Error(`Invalid date '${day}' — use YYYY-MM-DD.`);
-    }
+  for (const day of [window.from, window.to]) if (day !== undefined) assertIsoDay(day);
+  if (window.from && window.to && window.from > window.to) {
+    throw new Error(`Invalid window: from is after to (${window.from} > ${window.to}).`);
   }
+  const midnight = (day) => zonedWallTimeToUtc(day, '00:00', DEFAULT_TIMEZONE);
   return {
-    ...(window.from ? { [`${prefix}From`]: `${window.from}T00:00:00.000Z` } : {}),
-    ...(window.to ? { [`${prefix}To`]: `${window.to}T23:59:59.999Z` } : {}),
+    ...(window.from ? { from: midnight(window.from).toISOString() } : {}),
+    ...(window.to ? { to: new Date(midnight(addDaysToDateStr(window.to, 1)).getTime() - 1).toISOString() } : {}),
+  };
+}
+
+/** { from, to } days → buildAdvancedFilter's <prefix>From / <prefix>To instants (whole business-timezone days). */
+export function dayRange(prefix, window) {
+  const { from, to } = dayWindowBounds(window);
+  return {
+    ...(from ? { [`${prefix}From`]: from } : {}),
+    ...(to ? { [`${prefix}To`]: to } : {}),
   };
 }
 

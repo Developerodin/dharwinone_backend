@@ -530,9 +530,9 @@
     "expect": { "tools": ["list_employees"] }
   },
   {
-    "id": "r3-placement-joined-handoff",
+    "id": "r4-placement-joined",
     "question": "how many placements were marked joined this month?",
-    "expect": { "handoff": true }
+    "expect": { "tools": ["count_placements"], "args": { "count_placements": { "filters": { "status": "Joined" } } } }
   },
   {
     "id": "r3-best-candidates",
@@ -543,5 +543,50 @@
     "id": "r3-linkedin-jobs",
     "question": "how many LinkedIn jobs do we have?",
     "expect": { "tools": ["count_jobs"] }
+  },
+  {
+    "id": "r4-interviews-today",
+    "question": "how many interviews are scheduled today?",
+    "expect": { "tools": ["count_interviews"] }
+  },
+  {
+    "id": "r4-interviews-by-interviewer",
+    "question": "list the interviews Asha Rao is conducting",
+    "expect": { "tools": ["list_interviews"], "args": { "list_interviews": { "filters": { "interviewer": "Asha Rao" } } } }
+  },
+  {
+    "id": "r4-count-offers",
+    "question": "how many offers have we sent out?",
+    "expect": { "tools": ["count_offers"] }
+  },
+  {
+    "id": "r4-list-accepted-offers",
+    "question": "show me the accepted offers",
+    "expect": { "tools": ["list_offers"], "args": { "list_offers": { "filters": { "status": "Accepted" } } } }
+  },
+  {
+    "id": "r4-preboarding-list",
+    "question": "who is in pre-boarding right now?",
+    "expect": { "tools": ["list_placements"], "args": { "list_placements": { "filters": { "stage": "preBoarding" } } } }
+  },
+  {
+    "id": "r4-hiring-funnel",
+    "question": "show me the hiring funnel",
+    "expect": { "tools": ["get_hiring_funnel"] }
+  },
+  {
+    "id": "r4-who-referred",
+    "question": "who referred Khushi Parmar?",
+    "expect": { "tools": ["list_referral_leads"], "args": { "list_referral_leads": { "filters": { "candidate": "Khushi Parmar" } } } }
+  },
+  {
+    "id": "r4-referrer-count",
+    "question": "how many candidates did Sami Shaikh refer?",
+    "expect": { "tools": ["list_referral_leads"], "args": { "list_referral_leads": { "filters": { "referrer": "Sami Shaikh" } } } }
+  },
+  {
+    "id": "r4-meetings-not-interviews",
+    "question": "how many team meetings do I have today?",
+    "expect": { "handoff": true }
   }
 ]

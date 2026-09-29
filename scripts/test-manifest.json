@@ -224,7 +224,6 @@
   "./src/services/chatAssistant/__tests__/factExtractor.projects.test.js",
   "./src/services/chatAssistant/__tests__/factRenderer.employmentBreakdown.test.js",
   "./src/services/chatAssistant/__tests__/fallbackGenerator.test.js",
-  "./src/services/chatAssistant/__tests__/interviewAnalytics.test.js",
   "./src/services/chatAssistant/__tests__/jobFieldMap.test.js",
   "./src/services/chatAssistant/__tests__/jobRank.filters.test.js",
   "./src/services/chatAssistant/__tests__/jobResult.test.js",
@@ -261,8 +260,6 @@
   "./src/services/chatAssistant/conversationalEntity/__tests__/resolveTitleAmbiguity.test.js",
   "./src/services/chatAssistant/entityQuery/__tests__/hallucination.adversarial.test.js",
   "./src/services/chatAssistant/entityQuery/__tests__/recordValidator.test.js",
-  "./src/services/chatAssistant/intent/__tests__/referralLeadIntents.pronounSubject.test.js",
-  "./src/services/chatAssistant/intent/__tests__/referralLeadQueryHandler.pendingName.test.js",
   "./src/services/chatAssistant/jobProfile/__tests__/presentJobProfile.test.js",
   "./src/services/chatAssistant/personProfile/__tests__/fieldProjector.test.js",
   "./src/services/chatAssistant/personProfile/__tests__/outputGuard.test.js",
@@ -336,7 +333,6 @@
   "src/services/__tests__/job.appendFilterClause.test.js",
   "src/services/__tests__/job.bookmarks.test.js",
   "src/services/__tests__/plivo.sdkAnswerIntent.test.js",
-  "src/services/chatAssistant/__tests__/referralLeadIntents.test.js",
   "src/services/chatAssistant/__tests__/roleRegistry.test.js",
   "src/services/__tests__/employee.updateMeSelfProfile.test.js",
   "src/validations/__tests__/externalJob.validation.test.js",
@@ -391,5 +387,6 @@
   "./src/services/__tests__/employeeOwnerRoleScope.test.js",
   "./src/services/chatAssistant/agent/tools/employees/__tests__/employeeTools.test.js",
   "./src/services/chatAssistant/agent/tools/candidates/__tests__/candidateTools.test.js",
-  "./src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js"
+  "./src/services/chatAssistant/agent/tools/applications/__tests__/applicationTools.test.js",
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/hiringTools.test.js"
 ]

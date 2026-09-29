@@ -167,8 +167,6 @@ export function moduleForKind(kind) {
     case 'fetch_leave_requests':                     return 'leave';
     case 'fetch_backdated_attendance_requests':      return 'attendance';
     case 'fetch_jobs':                               return 'jobs';
-    case 'fetch_placements':                         return 'onboarding';
-    case 'fetch_offers':                             return 'jobs';
     default:                                         return kind || 'unknown';
   }
 }

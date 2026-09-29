@@ -25,7 +25,7 @@ describe('toolAccess', () => {
     const start = svcSrc.indexOf('const ROUTING_TOOLS = [');
     const end = svcSrc.indexOf('\n];', start);
     const names = [...svcSrc.slice(start, end).matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]);
-    assert.ok(names.length >= 28, `parsed ${names.length} tool names`);
+    assert.ok(names.length >= 24, `parsed ${names.length} tool names`);
     const missing = names.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -43,7 +43,7 @@ describe('toolAccess', () => {
     assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
     const body = svcSrc.slice(start, start + 1 + nextFn);
     const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
-    assert.ok(caseNames.length >= 29, `parsed ${caseNames.length} case labels`);
+    assert.ok(caseNames.length >= 25, `parsed ${caseNames.length} case labels`);
     const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -64,16 +64,6 @@ describe('toolAccess', () => {
     assert.equal(r.ok, true);
   });
 
-  it('denies fetch_offers to a Candidate-role user', async () => {
-    const r = await checkToolAccess('fetch_offers', userWith('jobs.read'), notAdmin);
-    assert.equal(r.ok, false);
-  });
-
-  it('allows fetch_offers with pre-boarding.read (route parity)', async () => {
-    const r = await checkToolAccess('fetch_offers', userWith('pre-boarding.read'), notAdmin);
-    assert.equal(r.ok, true);
-  });
-
   it('platformSuperUser passes with no permissions', async () => {
     const su = { ...userWith(), platformSuperUser: true };
     assert.equal((await checkToolAccess('fetch_jobs', su, notAdmin)).ok, true);
@@ -84,8 +74,8 @@ describe('toolAccess', () => {
     assert.equal(r.ok, false);
   });
 
-  it('adminByName is not a general admin shortcut: fetch_offers still denies an admin-without-perm user', async () => {
-    const r = await checkToolAccess('fetch_offers', userWith(), admin);
+  it('adminByName is not a general admin shortcut: fetch_employees still denies an admin-without-perm user', async () => {
+    const r = await checkToolAccess('fetch_employees', userWith(), admin);
     assert.equal(r.ok, false);
   });
 

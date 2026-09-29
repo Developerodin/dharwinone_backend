@@ -18,17 +18,6 @@ import Employee from '../../models/employee.model.js';
 import { userIsAdmin } from '../../utils/roleHelpers.js';
 
 const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js canReadEmployees
-const OFFERS_READ = [ // offer.route.js canReadOffers
-  'candidates.read', 'employees.read',
-  'offers.read', 'offers.create', 'offers.edit', 'offers.delete', 'offers.manage',
-  'pre-boarding.read', 'pre-boarding.edit', 'pre-boarding.manage',
-];
-const PLACEMENTS_READ = [ // placement.route.js canReadPlacements
-  'candidates.read',
-  'pre-boarding.read', 'pre-boarding.create', 'pre-boarding.edit', 'pre-boarding.delete', 'pre-boarding.manage',
-  'onboarding.read', 'onboarding.create', 'onboarding.edit', 'onboarding.delete', 'onboarding.manage',
-  'offers.read', 'offers.create', 'offers.edit', 'offers.delete', 'offers.manage',
-];
 
 export const TOOL_ACCESS = {
   // People — employee.route.js
@@ -38,16 +27,12 @@ export const TOOL_ACCESS = {
   fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
   fetch_people: { anyOf: PEOPLE_READ, rowScope: 'person' },
 
-  // ATS pipeline
-  fetch_interviews: { anyOf: ['interviews.read'], note: 'rows scoped by meetingScope in handler' },
-  fetch_offers: { anyOf: OFFERS_READ },
-  fetch_placements: { anyOf: PLACEMENTS_READ },
+  // ATS pipeline (interviews, offers, placements, referral leads: agent/tools/hiring)
   fetch_jobs: { anyOf: ['jobs.read'] },
   // Reads Job mirrors (jobOrigin='external' / externalRef), the same collection and
   // origin fetch_jobs already exposes — not the raw ExternalJob collection that
   // requireExternalJobsAccess.js's external-jobs.* gate protects. Mirror fetch_jobs'
   // rule exactly rather than a permission this tool doesn't actually read behind.
-  referral_leads_analytics: { note: 'referralLeadsAnalytics.js candidates.read' },
 
   // Org / PM
   org_structure_analytics: { note: 'hasOrgReadAccess in handler' },

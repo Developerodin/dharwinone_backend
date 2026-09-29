@@ -124,7 +124,7 @@ export function validateReplyAgainstRecords(reply, toolResult) {
  * Adapt a legacy `fetched` blob (chatAssistant.service#executeFetches) into the
  * ToolResultContract shape `validateReplyAgainstRecords` expects. Records from
  * every bucket are unioned — an employee ID the LLM legitimately picked up from
- * `fetch_people` or `fetch_placements` must not be scrubbed as fabricated.
+ * `fetch_people` or `fetch_employees` must not be scrubbed as fabricated.
  *
  * @param {object|null} fetched
  * @returns {{ success: true, total: number, records: object[] }}

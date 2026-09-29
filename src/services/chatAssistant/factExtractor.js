@@ -102,20 +102,6 @@ function readJobs(fetched) {
   };
 }
 
-function readPlacements(fetched) {
-  const data = fetched?.fetch_placements;
-  if (!data) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-  return { kind: 'fetch_placements', label: 'placements', total };
-}
-
-function readOffers(fetched) {
-  const data = fetched?.fetch_offers;
-  if (!data) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-  return { kind: 'fetch_offers', label: 'offers', total };
-}
-
 function readProjects(fetched) {
   const data = fetched?.fetch_projects;
   if (!data || data.forbidden) return null;
@@ -224,8 +210,6 @@ export function extractFacts(fetched, lastUserMsg = '') {
   push(readLeaveRequests(fetched));
   push(readBackdated(fetched));
   push(readJobs(fetched));
-  push(readPlacements(fetched));
-  push(readOffers(fetched));
   push(readProjects(fetched));
   push(readTasks(fetched));
   push(readTaskBoardAnalytics(fetched));

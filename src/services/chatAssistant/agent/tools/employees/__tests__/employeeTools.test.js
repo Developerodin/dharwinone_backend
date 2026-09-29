@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import countEmployees from '../countEmployees.tool.js';
 import listEmployees from '../listEmployees.tool.js';
-import { EMPLOYEES_ACCESS } from '../common.js';
+import { EMPLOYEES_ACCESS, dayWindowBounds } from '../common.js';
 import { matchesTurn } from '../index.js';
 import { employeeDocumentConditions, buildAdvancedFilter } from '../../../../../employee.service.js';
 
@@ -213,13 +213,13 @@ describe('document metadata filters', () => {
 });
 
 describe('joined / resigned windows', () => {
-  it('maps a window to whole UTC days and defaults employmentStatus to all', async () => {
+  it('maps a window to whole IST days and defaults employmentStatus to all', async () => {
     const calls = [];
     const ctx = ctxFor({ executeEmployeeQuery: async (q) => { calls.push(q); return { success: true, total: 3, records: [] }; } });
     await countEmployees.execute({ filters: { joinedBetween: { from: '2026-07-01', to: '2026-07-31' } } }, ctx);
     const f = calls[0].filters;
-    assert.equal(f.joinedFrom, '2026-07-01T00:00:00.000Z');
-    assert.equal(f.joinedTo, '2026-07-31T23:59:59.999Z');
+    assert.equal(f.joinedFrom, '2026-06-30T18:30:00.000Z'); // IST midnight of 07-01
+    assert.equal(f.joinedTo, '2026-07-31T18:29:59.999Z'); // IST 23:59:59.999 of 07-31
     assert.equal(f.employmentStatus, 'all');
     assert.equal('joinedBetween' in f, false);
   });
@@ -228,7 +228,7 @@ describe('joined / resigned windows', () => {
     const calls = [];
     const ctx = ctxFor({ executeEmployeeQuery: async (q) => { calls.push(q); return { success: true, total: 1, records: [] }; } });
     await countEmployees.execute({ filters: { resignedBetween: { from: '2026-01-01' }, employmentStatus: 'resigned' } }, ctx);
-    assert.equal(calls[0].filters.resignedFrom, '2026-01-01T00:00:00.000Z');
+    assert.equal(calls[0].filters.resignedFrom, '2025-12-31T18:30:00.000Z');
     assert.equal('resignedTo' in calls[0].filters, false);
     assert.equal(calls[0].filters.employmentStatus, 'resigned');
   });
@@ -237,6 +237,41 @@ describe('joined / resigned windows', () => {
     await assert.rejects(
       countEmployees.execute({ filters: { joinedBetween: { from: 'July 2026' } } }, ctxFor()),
       /YYYY-MM-DD/,
+    );
+  });
+
+  it('bounds days in IST, so "today" is the day the model was told, not the UTC day', () => {
+    const { from, to } = dayWindowBounds({ from: '2026-09-29', to: '2026-09-29' });
+    assert.equal(from, '2026-09-28T18:30:00.000Z');
+    assert.equal(to, '2026-09-29T18:29:59.999Z');
+    // 09:00 IST on 09-29 is 03:30Z — inside; 02:00 IST on 09-30 (20:30Z on 09-29) — outside.
+    assert.ok(new Date('2026-09-29T03:30:00.000Z') >= new Date(from));
+    assert.ok(new Date('2026-09-29T20:30:00.000Z') > new Date(to));
+  });
+
+  it('still catches date-only fields stored at UTC midnight on their own day', () => {
+    const { from, to } = dayWindowBounds({ from: '2026-07-03', to: '2026-07-03' });
+    const joiningDate = new Date('2026-07-03T00:00:00.000Z');
+    assert.ok(joiningDate >= new Date(from) && joiningDate <= new Date(to));
+    const dayBefore = new Date('2026-07-02T00:00:00.000Z');
+    assert.ok(dayBefore < new Date(from));
+  });
+
+  it('rejects an impossible calendar day instead of rolling it over', async () => {
+    assert.throws(() => dayWindowBounds({ from: '2026-02-30' }), /Invalid date '2026-02-30' — use YYYY-MM-DD/);
+    assert.throws(() => dayWindowBounds({ to: '2026-13-01' }), /use YYYY-MM-DD/);
+    assert.deepEqual(Object.keys(dayWindowBounds({ from: '2028-02-29' })), ['from']); // leap day is real
+    await assert.rejects(
+      countEmployees.execute({ filters: { joinedBetween: { from: '2026-02-30' } } }, ctxFor()),
+      /YYYY-MM-DD/,
+    );
+  });
+
+  it('rejects a reversed window instead of silently counting 0', async () => {
+    assert.throws(() => dayWindowBounds({ from: '2026-07-31', to: '2026-07-01' }), /from is after to/);
+    await assert.rejects(
+      countEmployees.execute({ filters: { resignedBetween: { from: '2026-07-31', to: '2026-07-01' } } }, ctxFor()),
+      /from is after to/,
     );
   });
 

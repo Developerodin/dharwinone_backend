@@ -527,6 +527,13 @@ const queryPlacements = async (filter, options, currentUser) => {
     }
   }
   if (filter.preBoardingStatus) query.preBoardingStatus = filter.preBoardingStatus;
+  // Sage only (agent/tools/hiring): the list controller's pick() never passes these, so the page is unaffected.
+  if (filter.joiningFrom || filter.joiningTo) {
+    query.joiningDate = {
+      ...(filter.joiningFrom && { $gte: new Date(filter.joiningFrom) }),
+      ...(filter.joiningTo && { $lte: new Date(filter.joiningTo) }),
+    };
+  }
 
   const visibility = await buildPlacementVisibilityClause(currentUser, query.job);
   if (visibility.createdBy) query.createdBy = visibility.createdBy;
@@ -1166,4 +1173,7 @@ export {
   derivePreBoardingStatus,
   snapshotPlacementForPreboardingGate,
   isPreboardingGateSatisfied,
+  PRE_BOARDING_QUEUE_STATUSES,
+  ONBOARDING_ACTIVE_STATUSES,
+  STAGE_OFFRAMP_STATUSES,
 };

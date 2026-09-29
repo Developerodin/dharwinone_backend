@@ -4,8 +4,8 @@
  * Source of truth: `internalMeeting.model.js` (the `InternalMeeting` collection).
  * Quick internal / team meetings (Communication module) are a DISTINCT population
  * from ATS interviews. Interviews live in the `Meeting` collection
- * (see interviewAnalytics.js, meeting.model.js) — this module must NEVER query
- * `Meeting`, and interviewAnalytics.js must never query `InternalMeeting`. Keeping
+ * (see meeting.model.js, agent/tools/hiring) — this module must NEVER query
+ * `Meeting`, and the interview tools must never query `InternalMeeting`. Keeping
  * the two paths separate is what stops "meetings on Monday" from silently
  * returning only interviews (or vice versa) — see docs/superpowers/specs
  * 2026-08-07-analytics-agent-core-design.md §7.

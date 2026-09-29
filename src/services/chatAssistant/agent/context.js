@@ -13,7 +13,8 @@
 
 import ConversationMemory from '../../../models/conversationMemory.model.js';
 
-const DEFAULT_TIMEZONE = 'Asia/Kolkata';
+// The timezone the model is told "today" in; day-window tools bound their days in it too.
+export const DEFAULT_TIMEZONE = 'Asia/Kolkata';
 const HISTORY_TURNS = 6;
 const LEDGER_TURNS = 6;
 const ARGS_CHAR_CAP = 300;

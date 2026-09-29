@@ -145,7 +145,9 @@ function evaluateExpect(expect, ctx) {
 const FAKE_USER = Object.freeze({
   id: 'eval-user-0000000000000001',
   name: 'Eval User',
-  authContext: { permissions: new Set(['jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read']) },
+  authContext: {
+    permissions: new Set(['jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read', 'interviews.read']),
+  },
 });
 
 function jobRow(i, overrides = {}) {
@@ -305,6 +307,58 @@ function cannedResult(name, args) {
         { name: 'Ravi Kumar', skills: ['React', 'Node'], matchPct: 91, userId: 'c1' },
         { name: 'Meera Iyer', skills: ['React'], matchPct: 64, userId: 'c2' },
       ] };
+    // Hiring counts: a status/result filter narrows `total` to that bucket, like the real tools — an
+    // unfiltered-looking total next to a filtered call made the model re-count without the filter.
+    case 'count_interviews': {
+      const byStatus = { scheduled: 4, ended: 2, cancelled: 0 };
+      const byResult = { pending: 4, selected: 1, rejected: 1 };
+      const f = args?.filters ?? {};
+      const total = f.status ? byStatus[f.status] : (f.result ? byResult[f.result] : 6);
+      return { total, byStatus, byResult, filtersApplied: f };
+    }
+    case 'list_interviews':
+      return { total: 2, page: 1, totalPages: 1, records: [
+        { id: 'm1', candidate: 'Ravi Kumar', jobPosition: 'QA Engineer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-29T10:00:00.000Z', status: 'scheduled', result: 'pending' },
+        { id: 'm2', candidate: 'Meera Iyer', jobPosition: 'React Developer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-28T09:00:00.000Z', status: 'ended', result: 'selected' },
+      ], filtersApplied: args?.filters ?? {} };
+    case 'count_offers': {
+      const byStatus = { Draft: 2, Sent: 3, 'Under Negotiation': 1, Accepted: 2, Rejected: 1 };
+      const f = args?.filters ?? {};
+      return { total: f.status ? byStatus[f.status] : 9, byStatus, filtersApplied: f };
+    }
+    case 'list_offers':
+      return { total: 2, page: 1, totalPages: 1, compensationHidden: true, records: [
+        { id: 'o1', offerCode: 'OF-1', candidate: 'Ravi Kumar', job: 'QA Engineer', status: 'Accepted', placementStatus: 'Pending' },
+        { id: 'o2', offerCode: 'OF-2', candidate: 'Meera Iyer', job: 'React Developer', status: 'Accepted', placementStatus: 'Joined' },
+      ], filtersApplied: args?.filters ?? {} };
+    case 'count_placements': {
+      const byStatus = { Pending: 2, Onboarding: 1, Joined: 2, Deferred: 0, Cancelled: 1 };
+      const f = args?.filters ?? {};
+      return { total: f.status ? byStatus[f.status] : 5, byStatus, filtersApplied: f };
+    }
+    case 'list_placements':
+      return { total: 2, page: 1, totalPages: 1, records: [
+        { id: 'p1', candidate: 'Ravi Kumar', job: 'QA Engineer', status: 'Pending', preBoardingStatus: 'In Progress', joiningDate: '2026-10-05' },
+        { id: 'p2', candidate: 'Anil Das', job: 'Sales Lead', status: 'Pending', preBoardingStatus: 'Pending', joiningDate: '2026-10-12' },
+      ], filtersApplied: args?.filters ?? {} };
+    case 'get_hiring_funnel':
+      return {
+        total: 40, converted: 8, conversionRate: 20, pending: 12,
+        buckets: {
+          refer_leads: { label: 'Referral leads', count: 40 },
+          applications: { label: 'Job applications', count: 15 },
+          interviews: { label: 'Interviews', count: 7 },
+          offers: { label: 'Offers', count: 4 },
+          placements: { label: 'Placements (Onboarding / Joined / Deferred)', count: 3 },
+          pre_boarding: { label: 'Pre-boarding', count: 2, concurrent: true },
+          onboarded: { label: 'Onboarded (Employee role)', count: 5 },
+        },
+        filtersApplied: args?.filters ?? {},
+      };
+    case 'list_referral_leads':
+      return { total: 1, page: 1, totalPages: 1, records: [
+        { id: 'c1', candidate: 'Khushi Parmar', referredBy: 'Sami Shaikh', salesAgent: 'Neha Rao', job: 'QA Engineer', status: 'applied', linkType: 'Job link', claimedAt: '2026-09-01' },
+      ], filtersApplied: args?.filters ?? {} };
     default:
       return { handoff: true };
   }

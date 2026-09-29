@@ -12,15 +12,12 @@ import User from '../models/user.model.js';
 import Task from '../models/task.model.js';
 import Project from '../models/project.model.js';
 import InternalMeeting from '../models/internalMeeting.model.js';
-import Meeting from '../models/meeting.model.js';
 import Holiday from '../models/holiday.model.js';
 import Student from '../models/student.model.js';
 import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Employee from '../models/employee.model.js';
 import VoiceAgent from '../models/voiceAgent.model.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
-import Offer from '../models/offer.model.js';
-import Placement from '../models/placement.model.js';
 import Shift from '../models/shift.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import CandidateGroup from '../models/candidateGroup.model.js';
@@ -50,8 +47,6 @@ import {
   looksLikeWeekOffOrGroupsQuery,
   looksLikeOnLeaveTodayQuery,
 } from './chatAssistant/attendanceAnalytics.js';
-import { fetchHiringTunnelSnapshot } from './chatAssistant/referralLeadsAnalytics.js';
-import { buildInterviewFilter, summarizeInterviewBreakdown, formatInterviewers } from './chatAssistant/interviewAnalytics.js';
 import {
   buildInternalMeetingFilter,
   countInternalMeetingsByStatus,
@@ -206,7 +201,6 @@ import {
 } from './chatAssistant/jobProfile/pendingJob.js';
 import { detectWhatAboutEntitySwitch } from './chatAssistant/intent/activityIntents.js';
 import { readApplicationQueryContext } from './chatAssistant/conversationState/applicationQueryContext.js';
-import { handleReferralLeadQuery } from './chatAssistant/intent/referralLeadQueryHandler.js';
 import {
   detectPresentationIntent,
   filterBlocksForPresentation,
@@ -228,27 +222,11 @@ import {
   redactSalary,
   canReadOtherTraining,
 } from './chatAssistant/toolAccess.js';
-import { formatOfferLine, formatPlacementLine, formatTaskLine } from './chatAssistant/pipelineLines.js';
-import { meetingScope } from './visibilityScope.service.js';
-import { buildOfferVisibilityClause } from './offer.service.js';
-import { buildPlacementVisibilityClause } from './placement.service.js';
+import { formatTaskLine } from './chatAssistant/pipelineLines.js';
 
 const FALLBACK_ANSWER = SAGE_FALLBACK;
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Parses a model-supplied date arg defensively. Returns a valid Date, or null
-// (never an Invalid Date) so callers can skip just that bound instead of
-// letting a bad model arg reach Mongoose as an Invalid Date, which throws a
-// CastError and silently drops the whole date-range section.
-const parseDateArg = (x) => {
-  const d = new Date(x);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
-// Same, for an inclusive end-of-day bound — takes only the YYYY-MM-DD prefix
-// before appending the day-end suffix, so a full timestamp arg (or garbage)
-// can't be concatenated into an unparsable string.
-const parseDateArgEndOfDay = (x) => parseDateArg(`${String(x).slice(0, 10)}T23:59:59.999Z`);
 
 // ─── Timezone-safe date formatter (Asia/Kolkata / IST) ──────────────────────
 // Mongo stores dates as UTC; rendering them with raw `.toISOString().slice(0,10)`
@@ -590,58 +568,6 @@ export function clearContextCache(adminId) {
 // ─── Tool definitions for intent routing ────────────────────────────────────
 
 const ROUTING_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'referral_leads_analytics',
-      description:
-        'Authoritative candidate hiring-tunnel snapshot (referral leads / ATS candidates) — wraps the Refer Leads ' +
-        'page stats (getReferralLeadsStats), never a separately-invented funnel. ' +
-        'Buckets: refer_leads (total referred), applications, interviews, offers, ' +
-        'placements (Placement Onboarding/Joined/Deferred), pre_boarding (CONCURRENT with placements — Placement.preBoardingStatus, ' +
-        'NOT a linear application-status step), onboarded (User granted the Employee role — a SEPARATE hand-off event, not the same as Placement Joined). ' +
-        'NEVER use for Employee-role headcount/resign/join/paid-unpaid — that is a different population. ' +
-        'RBAC: requires the same candidates.read permission as the Refer Leads page; returns {forbidden:true} if the caller lacks it. ' +
-        'Use for: "hiring tunnel", "referral funnel", "candidate pipeline snapshot", "how many in pre-boarding", "how many placements this month".',
-      parameters: {
-        type: 'object',
-        properties: {
-          from: { type: 'string', description: 'YYYY-MM-DD inclusive start (referredAt window).' },
-          to:   { type: 'string', description: 'YYYY-MM-DD inclusive end (referredAt window).' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_interviews',
-      description:
-        'Authoritative interview analytics/list (aka interview_analytics) — sourced from the `Meeting` collection ' +
-        '(ATS Schedule Interview), NEVER the InternalMeeting collection (that is general/internal meetings — use fetch_meetings for those). ' +
-        '"interviewer" / employee name filters recruiter.name OR any assigned agents[].name — the STAFF running the interview. ' +
-        '"candidate" is a SEPARATE filter for the person being interviewed — never conflate the two. ' +
-        'status = Meeting lifecycle (scheduled | ended | cancelled); interviewResult = outcome (pending | selected | rejected). ' +
-        'Date window applies to scheduledAt (the actual interview slot), not createdAt. ' +
-        'Use for: "interviews on <date>", "interviews by <interviewer>", "<candidate>\'s interview status", "how many interviews were selected/rejected this month".',
-      parameters: {
-        type: 'object',
-        properties: {
-          from:            { type: 'string', description: 'YYYY-MM-DD inclusive start (scheduledAt window).' },
-          to:              { type: 'string', description: 'YYYY-MM-DD inclusive end (scheduledAt window).' },
-          date:            { type: 'string', description: 'YYYY-MM-DD single day (scheduledAt).' },
-          month:           { type: 'string', description: 'YYYY-MM calendar month (scheduledAt).' },
-          interviewerName: { type: 'string', description: 'Interviewer / employee name — matches recruiter.name or any agents[].name. NOT the candidate.' },
-          candidateName:   { type: 'string', description: 'Candidate (interviewee) name — separate from interviewerName.' },
-          status:          { type: 'string', description: 'Meeting lifecycle: scheduled | ended | cancelled.' },
-          interviewResult: { type: 'string', description: 'Outcome: pending | selected | rejected.' },
-          limit:           { type: 'number', description: 'Max records to return (default 25, max 100).' },
-        },
-        required: [],
-      },
-    },
-  },
   {
     type: 'function',
     function: {
@@ -1027,7 +953,7 @@ const ROUTING_TOOLS = [
       name: 'fetch_meetings',
       description:
         'Retrieve upcoming scheduled internal/general meetings (InternalMeeting collection — Communication module) that the ' +
-        'user is invited to or hosting. NEVER returns ATS interviews — those live in a separate collection, use fetch_interviews for those. ' +
+        'user is invited to or hosting. NEVER returns ATS interviews — those live in a separate collection. ' +
         'Returns an authoritative total + a status breakdown (scheduled/ended/cancelled) alongside the record list — ' +
         'always use the total field for "how many meetings", never count the listed records yourself.',
       parameters: {
@@ -1129,44 +1055,6 @@ const ROUTING_TOOLS = [
           limit:     { type: 'number', description: 'Max records (default 200, max 400)' },
         },
         required: ['employee'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_offers',
-      description: 'Retrieve offer letters issued to candidates — pending, sent, accepted, rejected. Use for: "list offers", "how many offers issued", "pending offers", "accepted offers this month".',
-      parameters: {
-        type: 'object',
-        properties: {
-          status:        { type: 'string', description: 'Filter by status: Draft, Active, Sent, Under Negotiation, Accepted, Rejected' },
-          candidateName: { type: 'string', description: 'Filter by candidate name (partial match)' },
-          jobTitle:      { type: 'string', description: 'Filter by job title (partial match)' },
-          from:          { type: 'string', description: 'ISO date; only offers created on/after (from) or on/before (to).' },
-          to:            { type: 'string', description: 'ISO date; only offers created on/after (from) or on/before (to).' },
-          limit:         { type: 'number', description: 'Max records (default 25, max 100)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_placements',
-      description: 'Retrieve placements — accepted offers becoming placements, joining/onboarding tracking. Use for: "list placements", "who joined this month", "pending joiners", "deferred placements".',
-      parameters: {
-        type: 'object',
-        properties: {
-          status:        { type: 'string', description: 'Filter by status: Pending, Onboarding, Joined, Deferred, Cancelled' },
-          candidateName: { type: 'string', description: 'Filter by candidate name (partial match)' },
-          days:          { type: 'number', description: 'Look-back window in days for joiningDate (default 90)' },
-          joiningFrom:   { type: 'string', description: 'ISO date. Use for who is joining today/tomorrow/this week (future dates allowed).' },
-          joiningTo:     { type: 'string', description: 'ISO date. Use for who is joining today/tomorrow/this week (future dates allowed).' },
-          limit:         { type: 'number', description: 'Max records (default 25, max 100)' },
-        },
-        required: [],
       },
     },
   },
@@ -1392,81 +1280,6 @@ async function fetchModule(name, args, user, uiContext = null) {
   }
 
   switch (name) {
-    case 'referral_leads_analytics': {
-      // Referral-lead / ATS-candidate population ONLY — see referralLeadsAnalytics.js
-      // header for the hand-off note (Employee-role tools only after User has Employee role).
-      const query = {};
-      if (args.from) query.from = args.from;
-      if (args.to) query.to = args.to;
-      return fetchHiringTunnelSnapshot({
-        user,
-        query,
-        permissions: user?.authContext?.permissions,
-      });
-    }
-
-    case 'fetch_interviews': {
-      // Meeting collection (ATS interviews) ONLY — see interviewAnalytics.js header.
-      // Never mix with fetch_meetings (InternalMeeting — general/non-interview).
-      const window = resolveDateWindow({
-        date: args.date,
-        month: args.month,
-        fromDate: args.from,
-        toDate: args.to,
-      });
-      const filter = buildInterviewFilter({
-        from: window.from,
-        to: window.to,
-        interviewerName: args.interviewerName,
-        candidateName: args.candidateName,
-        status: args.status,
-        interviewResult: args.interviewResult,
-      });
-      // Interviews page parity: manage = all, read = own (meeting.service.queryMeetings).
-      const { filter: visibility } = await meetingScope(user, 'read');
-      const scopedFilter = { $and: [filter, visibility] };
-      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
-      const [total, statusAgg, resultAgg, docs] = await Promise.all([
-        Meeting.countDocuments(scopedFilter),
-        Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-        Meeting.aggregate([{ $match: scopedFilter }, { $group: { _id: '$interviewResult', count: { $sum: 1 } } }]),
-        Meeting.find(scopedFilter)
-          .select(
-            'title scheduledAt status interviewResult interviewType candidate recruiter agents jobPosition ' +
-              'timezone createdBy createdAt remindAt reminderSentAt'
-          )
-          .populate({ path: 'createdBy', select: 'name' })
-          .sort({ scheduledAt: -1 })
-          .limit(limit)
-          .lean(),
-      ]);
-      const breakdown = summarizeInterviewBreakdown(statusAgg, resultAgg);
-      const records = docs.map((m) => ({
-        title: m.title,
-        scheduledAt: m.scheduledAt,
-        status: m.status,
-        interviewResult: m.interviewResult,
-        interviewType: m.interviewType,
-        jobPosition: m.jobPosition || null,
-        candidateName: m.candidate?.name || null,
-        interviewerName: formatInterviewers(m),
-        timezone: m.timezone || null,
-        scheduledBy: m.createdBy?.name || null,
-        scheduledOn: m.createdAt || null,
-        reminderSentAt: m.reminderSentAt || null,
-        remindAt: m.remindAt || null,
-      }));
-      return {
-        total,
-        breakdown,
-        records,
-        windowLabel: window.missing ? 'all time' : window.label,
-        authoritative: true,
-        population: 'interview',
-        partialList: total > records.length,
-      };
-    }
-
     case 'training_analytics': {
       // STUDENT population only — see trainingAnalytics.js header for the FK spike
       // result. Never assume an ATS Candidate/Employee has course data.
@@ -2149,7 +1962,7 @@ async function fetchModule(name, args, user, uiContext = null) {
 
     case 'fetch_meetings': {
       // Internal/general meetings ONLY (InternalMeeting) — interviews live in the
-      // separate Meeting collection (see fetch_interviews / interviewAnalytics.js).
+      // separate Meeting collection (the agent's hiring tools answer those).
       // This path must never query Meeting.
       const days = Math.min(args.days || 30, 90);
       const now = new Date();
@@ -2664,204 +2477,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       };
     }
 
-    case 'fetch_offers': {
-      const limit = Math.min(args.limit || 25, 100);
-      // Scope to company. Offer.createdBy may be the admin OR any company user
-      // (recruiter / sales agent). Widen the createdBy match AND also accept
-      // candidates whose Employee.adminId points to this company — issue 5:
-      // recruiter-issued offers were being missed by the createdBy-only scope.
-      const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-      const companyEmpIds = await Employee.find({
-        $or: [{ adminId }, { owner: { $in: companyUserIds } }],
-      }).distinct('_id');
-      const scopeOr = [
-        { createdBy: { $in: companyUserIds } },
-      ];
-      if (companyEmpIds.length) scopeOr.push({ candidate: { $in: companyEmpIds } });
-      const q = { $or: scopeOr };
-
-      const statusNorm = String(args.status || '').trim();
-      if (statusNorm) q.status = statusNorm;
-
-      // Resolve candidate filter (Offer.candidate refs Employee — translate name to Employee._ids)
-      if (args.candidateName) {
-        const safe = escapeRegex(args.candidateName);
-        const matchUsers = await User.find(
-          { name: { $regex: safe, $options: 'i' } },
-          { _id: 1 }
-        ).limit(50).lean();
-        const ownerIds = matchUsers.map((u) => u._id);
-        const ownerEmpIds = ownerIds.length
-          ? await Employee.find({ owner: { $in: ownerIds } }).distinct('_id')
-          : [];
-        const fullNameEmpIds = await Employee.find({ fullName: { $regex: safe, $options: 'i' } }).distinct('_id');
-        const allEmpIds = [...new Set([...ownerEmpIds.map(String), ...fullNameEmpIds.map(String)])];
-        if (allEmpIds.length) q.candidate = { $in: allEmpIds };
-        else return { total: 0, records: [], notFound: true, searchedFor: args.candidateName, label: 'offer' };
-      }
-
-      if (args.jobTitle) {
-        const safe = escapeRegex(args.jobTitle);
-        // Same visibility as the Jobs page — an unscoped title→id lookup is an existence
-        // side channel: a Draft/other-user job's title would otherwise resolve offers
-        // instead of the expected notFound.
-        const jobVisibilityFilter = await resolveJobVisibilityFilter(user);
-        const jobIds = await Job.find(
-          andMongoFilters({ title: { $regex: safe, $options: 'i' } }, jobVisibilityFilter),
-        ).distinct('_id');
-        if (jobIds.length) q.job = { $in: jobIds };
-        else return { total: 0, records: [], notFound: true, searchedFor: args.jobTitle, label: 'offer' };
-      }
-
-      if (args.from || args.to) {
-        const fromDate = args.from ? parseDateArg(args.from) : null;
-        const toDate = args.to ? parseDateArgEndOfDay(args.to) : null;
-        if (fromDate || toDate) {
-          q.createdAt = {
-            ...(fromDate && { $gte: fromDate }),
-            ...(toDate && { $lte: toDate }),
-          };
-        }
-      }
-
-      // Row-scope like the portal offers list (offer.service.js queryOffers):
-      // no pipeline perm and not admin => own jobs' offers or self-created only.
-      // jobIdFilter is always null here — Sage's args.jobTitle can resolve to
-      // several jobs (q.job is a $in, not the portal's single-id equality), so
-      // the restriction below is ANDed onto q.job instead of replacing it.
-      const offerVis = await buildOfferVisibilityClause(user, null);
-      const offerVisClause = offerVis.orClause || (offerVis.createdBy ? { createdBy: offerVis.createdBy } : null);
-      if (offerVisClause) q.$and = (q.$and || []).concat([offerVisClause]);
-
-      // Status breakdown (issue 5: chatbot must report exact totals per state).
-      const baseQ = { ...q };
-      delete baseQ.status;
-      const [total, statusAgg, records] = await Promise.all([
-        Offer.countDocuments(q),
-        Offer.aggregate([{ $match: baseQ }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-        Offer.find(q)
-          .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
-          .populate({ path: 'job', select: 'title location' })
-          .populate({ path: 'createdBy', select: 'name' })
-          .select('offerCode status joiningDate offerValidityDate ctcBreakdown jobType workLocation sentAt acceptedAt rejectedAt rejectionReason createdAt positionTitle offerLetterUrl offerLetterGeneratedAt createdBy')
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean(),
-      ]);
-      const breakdown = { Draft: 0, Sent: 0, 'Under Negotiation': 0, Accepted: 0, Rejected: 0, Withdrawn: 0, Expired: 0 };
-      for (const row of statusAgg) {
-        if (row?._id) breakdown[row._id] = (breakdown[row._id] || 0) + row.count;
-      }
-      const baseTotal = statusAgg.reduce((s, r) => s + (r.count || 0), 0);
-
-      logger.info(`[ChatAssistant][fetch_offers] total=${total} baseTotal=${baseTotal} fetched=${records.length} breakdown=${JSON.stringify(breakdown)} statusFilter=${statusNorm || 'none'}`);
-      return {
-        total: Math.max(total, records.length),
-        baseTotal,
-        breakdown,
-        statusFilter: statusNorm || null,
-        records,
-        label: 'offer',
-      };
-    }
-
-    case 'fetch_placements': {
-      const limit = Math.min(args.limit || 25, 100);
-      // Default: NO joining-date window — chatbot "how many placements" must
-      // report the lifetime total. Applying the 90-day default silently dropped
-      // older joiners and made the count read too low (issue 5). A window is
-      // applied only when the caller passes args.days explicitly.
-      const explicitDays = Number.isFinite(args.days) ? Math.min(args.days, 730) : null;
-      const since = explicitDays ? new Date(Date.now() - explicitDays * 24 * 60 * 60 * 1000) : null;
-
-      const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-      const companyEmpIds = await Employee.find({
-        $or: [{ adminId }, { owner: { $in: companyUserIds } }],
-      }).distinct('_id');
-      const scopeOr = [
-        { createdBy: { $in: companyUserIds } },
-      ];
-      if (companyEmpIds.length) scopeOr.push({ candidate: { $in: companyEmpIds } });
-      // Universal deleted-data guard: Placement uses cancelledAt/status='Cancelled'
-      // for soft-cancel + the schema has no deletedAt/isDeleted fields. Filter
-      // cancelled placements out unless caller explicitly asked for them.
-      const q = { $or: scopeOr };
-      if (args.status) {
-        q.status = args.status;
-      } else {
-        q.status = { $ne: 'Cancelled' };
-        q.cancelledAt = { $in: [null, undefined] };
-      }
-
-      if (args.candidateName) {
-        const safe = escapeRegex(args.candidateName);
-        const matchUsers = await User.find(
-          { name: { $regex: safe, $options: 'i' } },
-          { _id: 1 }
-        ).limit(50).lean();
-        const ownerIds = matchUsers.map((u) => u._id);
-        const ownerEmpIds = ownerIds.length
-          ? await Employee.find({ owner: { $in: ownerIds } }).distinct('_id')
-          : [];
-        const fullNameEmpIds = await Employee.find({ fullName: { $regex: safe, $options: 'i' } }).distinct('_id');
-        const allEmpIds = [...new Set([...ownerEmpIds.map(String), ...fullNameEmpIds.map(String)])];
-        if (allEmpIds.length) q.candidate = { $in: allEmpIds };
-        else return { total: 0, records: [], notFound: true, searchedFor: args.candidateName, label: 'placement' };
-      }
-
-      // Apply the date window only when the caller asked for one.
-      if (since && !args.candidateName) q.joiningDate = { $gte: since };
-
-      if (args.joiningFrom || args.joiningTo) {
-        const joiningFromDate = args.joiningFrom ? parseDateArg(args.joiningFrom) : null;
-        const joiningToDate = args.joiningTo ? parseDateArgEndOfDay(args.joiningTo) : null;
-        if (joiningFromDate || joiningToDate) {
-          q.joiningDate = {
-            ...(joiningFromDate && { $gte: joiningFromDate }),
-            ...(joiningToDate && { $lte: joiningToDate }),
-          };
-        }
-      }
-
-      // Row-scope like the portal placements list (placement.service.js
-      // queryPlacements): no pipeline perm and not admin => own jobs' placements
-      // or self-created only. Sage has no single-job filter for placements, so
-      // jobIdFilter is always null here.
-      const placementVis = await buildPlacementVisibilityClause(user, null);
-      const placementVisClause = placementVis.orClause || (placementVis.createdBy ? { createdBy: placementVis.createdBy } : null);
-      if (placementVisClause) q.$and = (q.$and || []).concat([placementVisClause]);
-
-      const baseQ = { ...q };
-      delete baseQ.status;
-      const [total, statusAgg, records] = await Promise.all([
-        Placement.countDocuments(q),
-        Placement.aggregate([{ $match: baseQ }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-        Placement.find(q)
-          .populate({ path: 'candidate', select: 'fullName employeeId owner', populate: { path: 'owner', select: 'name email' } })
-          .populate({ path: 'job', select: 'title location' })
-          .populate({ path: 'offer', select: 'offerCode' })
-          .select('status preBoardingStatus joiningDate joinedAt employeeId backgroundVerification onboardingCompletedAt deferredAt cancelledAt createdAt enteredOnboardingAt')
-          .sort({ joiningDate: -1, createdAt: -1 })
-          .limit(limit)
-          .lean(),
-      ]);
-      const breakdown = {};
-      for (const row of statusAgg) {
-        if (row?._id) breakdown[row._id] = row.count;
-      }
-      const baseTotal = statusAgg.reduce((s, r) => s + (r.count || 0), 0);
-
-      logger.info(`[ChatAssistant][fetch_placements] total=${total} baseTotal=${baseTotal} fetched=${records.length} breakdown=${JSON.stringify(breakdown)} window=${explicitDays ? explicitDays + 'd' : 'lifetime'}`);
-      return {
-        total: Math.max(total, records.length),
-        baseTotal,
-        breakdown,
-        windowDays: explicitDays,
-        records,
-        label: 'placement',
-      };
-    }
-
     case 'fetch_shifts': {
       const limit = Math.min(args.limit || 20, 50);
       const includeStaff = args.includeStaff !== false;
@@ -3097,13 +2712,6 @@ function buildCountBanner(fetchedData) {
     if (key === 'fetch_leave_requests' && typeof data?.total === 'number') {
       lines.push(`  fetch_leave_requests.total = ${data.total}`);
     }
-    if (key === 'referral_leads_analytics' && data?.buckets && !data.forbidden) {
-      lines.push(`  referral_leads_analytics.refer_leads = ${data.buckets.refer_leads?.count ?? 0}`);
-      lines.push(`  referral_leads_analytics.pre_boarding = ${data.buckets.pre_boarding?.count ?? 0}`);
-    }
-    if (key === 'fetch_interviews' && typeof data?.total === 'number') {
-      lines.push(`  fetch_interviews.total = ${data.total}`);
-    }
     if (key === 'fetch_meetings' && typeof data?.total === 'number') {
       lines.push(`  fetch_meetings.total = ${data.total}`);
     }
@@ -3170,7 +2778,6 @@ function buildCountBanner(fetchedData) {
 // with tool-specific wording. The generic FORBIDDEN block above the per-key
 // branches must skip these so their bespoke message is not shadowed.
 const BESPOKE_FORBIDDEN_KEYS = new Set([
-  'referral_leads_analytics',
   'fetch_tasks',
   'fetch_projects',
   'project_analytics',
@@ -3222,62 +2829,6 @@ function summarizeData(fetchedData) {
         const dept = m.department ? ` (${m.department})` : '';
         const email = m.email ? ` <${m.email}>` : '';
         lines.push(`  CANDIDATE: ${m.name || 'Unknown'} ${id}${desig}${dept}${email}`);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'referral_leads_analytics') {
-      if (data?.forbidden) {
-        parts.push(
-          `--- referral leads / hiring tunnel ---\n` +
-          `FORBIDDEN: ${data.reason || 'Missing permission.'}\n` +
-          `USER_FACING_REPLY: Tell the user they do not have permission to view referral-lead / candidate hiring-tunnel data.`
-        );
-        continue;
-      }
-      const b = data?.buckets || {};
-      const lines = [
-        `--- referral leads / hiring tunnel (population=referral_lead | AUTHORITATIVE — wraps getReferralLeadsStats, matches the Refer Leads page exactly) ---`,
-        `REFER_LEADS (total referred): ${b.refer_leads?.count ?? 0}`,
-        `APPLICATIONS: ${b.applications?.count ?? 0}`,
-        `INTERVIEWS: ${b.interviews?.count ?? 0}`,
-        `OFFERS: ${b.offers?.count ?? 0}`,
-        `PLACEMENTS (Onboarding/Joined/Deferred): ${b.placements?.count ?? 0}`,
-        `PRE_BOARDING (${b.pre_boarding?.count ?? 0}) — CONCURRENT with placements, NOT a linear application-status step (Placement.preBoardingStatus).`,
-        `ONBOARDED (${b.onboarded?.count ?? 0}) — User granted the Employee role; a SEPARATE hand-off event from Placement Joined.`,
-        `Do NOT mix these counts with Employee-role headcounts — different populations.`,
-      ];
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_interviews') {
-      const b = data?.breakdown || { total: 0, byStatus: {}, byResult: {} };
-      const win = data?.windowLabel || 'unspecified';
-      const lines = [
-        `--- interviews (Meeting collection — ATS interviews, NOT internal meetings | window=${win} | ` +
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${data?.total ?? b.total ?? 0} — ALWAYS use this number for "how many interviews". ` +
-        `STATUS_BREAKDOWN: scheduled=${b.byStatus?.scheduled ?? 0}, ended=${b.byStatus?.ended ?? 0}, cancelled=${b.byStatus?.cancelled ?? 0} | ` +
-        `RESULT_BREAKDOWN: pending=${b.byResult?.pending ?? 0}, selected=${b.byResult?.selected ?? 0}, rejected=${b.byResult?.rejected ?? 0}) ---`,
-      ];
-      for (const m of data?.records ?? []) {
-        // Minor 7: SCHEDULED_AT/reminder times are always rendered in IST by
-        // formatDateIST/formatTimeIST regardless of the meeting's recorded
-        // timezone, so the line must say so explicitly. TZ_RECORDED reports
-        // whatever is actually on the row (schema default is 'UTC', not
-        // 'Asia/Kolkata') — guessing a timezone here let the LLM pair an IST
-        // time with a fabricated label.
-        let line =
-          `TITLE: ${m.title || 'N/A'} | SCHEDULED_AT (IST): ${formatDateIST(m.scheduledAt)} ${formatTimeIST(m.scheduledAt)} | ` +
-          `STATUS: ${m.status || 'N/A'} | RESULT: ${m.interviewResult || 'N/A'} | ` +
-          `CANDIDATE: ${m.candidateName || 'N/A'}` +
-          (m.jobPosition ? ` | JOB: ${m.jobPosition}` : '');
-        const reminder = m.reminderSentAt
-          ? `sent ${formatDateIST(m.reminderSentAt)} ${formatTimeIST(m.reminderSentAt)}`
-          : m.remindAt ? `due ${formatDateIST(m.remindAt)} ${formatTimeIST(m.remindAt)}` : 'NOT_RECORDED';
-        line += ` | INTERVIEWERS: ${m.interviewerName} | TZ_RECORDED: ${m.timezone || 'NOT_RECORDED'} | SCHEDULED_BY: ${m.scheduledBy || 'NOT_RECORDED'} on ${formatDateIST(m.scheduledOn) || '?'} | REMINDER (IST): ${reminder}`;
-        lines.push(line);
       }
       parts.push(lines.join('\n'));
       continue;
@@ -3814,40 +3365,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_offers') {
-      if (data?.notFound) {
-        parts.push(`--- offers ---\nNO_OFFERS_FOUND: No offers match "${data.searchedFor}".`);
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const baseTotal = data?.baseTotal ?? total;
-      const bd = data?.breakdown || {};
-      const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
-      const filterTag = data?.statusFilter ? ` | FILTER: status=${data.statusFilter}` : '';
-      const lines = [`--- offers (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many offers" / "total offers". Do not count rows. | BREAKDOWN: ${bdStr}${filterTag} — ENTITY_TYPE: candidate) ---`];
-      for (const o of records) lines.push(formatOfferLine(o, { fmtDate: formatDateIST }));
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'fetch_placements') {
-      if (data?.notFound) {
-        parts.push(`--- placements ---\nNO_PLACEMENTS_FOUND: No placements match "${data.searchedFor}".`);
-        continue;
-      }
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const baseTotal = data?.baseTotal ?? total;
-      const bd = data?.breakdown || {};
-      const bdStr = Object.entries(bd).filter(([, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
-      const windowTag = data?.windowDays ? ` | WINDOW: last ${data.windowDays}d` : ' | WINDOW: lifetime (no joining-date filter)';
-      const lines = [`--- placements (${records.length} of ${total} matching | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${baseTotal} — ALWAYS use this number when the user asks "how many placements" / "total placements" / "total joiners". Do not count rows. | BREAKDOWN: ${bdStr}${windowTag} — ENTITY_TYPE: candidate) ---`];
-      for (const p of records) lines.push(formatPlacementLine(p, { fmtDate: formatDateIST }));
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     if (key === 'fetch_shifts') {
       const records = data?.records ?? [];
       const lines = [`--- shifts (${records.length} total — ENTITY_TYPE: employee) ---`];
@@ -4032,7 +3549,7 @@ function summarizeData(fetchedData) {
     }
 
     if (key === 'fetch_meetings') {
-      // Internal/general meetings (InternalMeeting) — NEVER interviews (see fetch_interviews).
+      // Internal/general meetings (InternalMeeting) — NEVER interviews.
       const b = data?.breakdown || { scheduled: 0, ended: 0, cancelled: 0 };
       const total = data?.total ?? 0;
       const lines = [
@@ -4566,10 +4083,6 @@ const INTENT_PATTERNS = [
   { re: /\b(unassigned employees?|employees?\s+unassigned|org(anisation|anization)?\s*chart|org(anisation|anization)?\s*structure|structure coverage|chart coverage|supervisor coverage|do we have a supervisor|department(s)? (without|missing) (a )?(node|chart)|group\s+[a-z0-9])/i,
                                                                                       modules: ['org_structure_analytics'] },
   { re: /\b(supervisors?)\b/i,                                                      modules: ['org_structure_analytics'] },
-  // Hiring tunnel snapshot (Epic C) — funnel/tunnel/pre-boarding asks route to the
-  // authoritative bucket snapshot.
-  { re: /\b(hiring tunnel|hiring funnel|referral funnel|referral tunnel|candidate (hiring )?(pipeline|funnel|tunnel) snapshot|pre-?boarding (count|status|candidates?))\b/i,
-                                                                            modules: ['referral_leads_analytics'] },
   // Jobs (internal company postings)
   { re: /\b(open jobs?|active jobs?|closed jobs?|draft jobs?|archived jobs?|live jobs?|hiring|vacanc|job opening|position available|internal jobs?|how many jobs?|total jobs?|list( all)? jobs?)\b/i, modules: ['fetch_jobs'] },
   // Tasks — overdue/blocked route to authoritative task_board_analytics
@@ -4605,8 +4118,6 @@ const INTENT_PATTERNS = [
     modules: ['project_analytics'], args: { metric: 'assignment_summary' } },
   { re: /\bhow many projects?\b/i, modules: ['fetch_projects'] },
   { re: /\b(projects? (of|by|for|status)|active projects?|list projects?)\b/i, modules: ['fetch_projects'] },
-  // Interviews (Meeting collection).
-  { re: /\b(interviews?|interviewed|interviewer|interview schedule|interview result|interview status)\b/i, modules: ['fetch_interviews'] },
   // Leave-request queue. The "on leave today" and leave-ranking intents are
   // resolved by guards at the top of detectIntent, so anything reaching this
   // rule is genuinely a question about filings. Fast-path only when no specific
@@ -4625,10 +4136,6 @@ const INTENT_PATTERNS = [
   { re: /\b(company|team|org|all employees?)\s+attendance\b/i,             modules: ['fetch_attendance_summary'] },
   { re: /\b(my attendance|my punch|my check.?in|my working hours)\b/i,    modules: ['fetch_attendance'] },
   { re: /\b(attendance|punch|check.?in|working hours)\b/i,                 modules: ['fetch_attendance'] },
-  // Offers (candidate-related)
-  { re: /\b(offer letters?|offers? (issued|sent|pending|accepted|rejected)|how many offers?|offer status)\b/i, modules: ['fetch_offers'] },
-  // Placements (candidate-related)
-  { re: /\b(placements?|joiners?|joining|onboarding (status|tracking)|background verification|bgv)\b/i, modules: ['fetch_placements'] },
   // Shifts — "my shift" goes to single-user lookup, others list shifts
   { re: /\b(my shift|what shift am i|shift am i on|my work hours)\b/i,    modules: ['fetch_my_shift'] },
   { re: /\b(shifts?|night shift|morning shift|shift schedule|shift roster|who is on shift)\b/i, modules: ['fetch_shifts'] },
@@ -5095,10 +4602,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
       // re-runs the placements query rather than dropping to the cached
       // headcount snapshot.
       const TOPIC_TOOL_MAP = {
-        placement:  'fetch_placements',
-        placements: 'fetch_placements',
-        offer:      'fetch_offers',
-        offers:     'fetch_offers',
         job:       'fetch_jobs',
         jobs:       'fetch_jobs',
         task:       'task_board_analytics',
@@ -5267,12 +4770,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
         let parsed = {};
         try { parsed = JSON.parse(tc.function?.arguments || '{}'); } catch { /* keep empty */ }
         const name = tc.function?.name;
-        if (name === 'fetch_offers' || name === 'fetch_placements') {
-          if (!parsed.candidateName && !parsed.jobTitle) {
-            if (le.person)        parsed.candidateName = le.person;
-            else if (le.jobTitle) parsed.jobTitle = le.jobTitle;
-          }
-        }
         if (name === 'fetch_leave_requests' || name === 'fetch_backdated_attendance_requests') {
           if (!parsed.employee && !parsed.scope && le.person) parsed.employee = le.person;
         }
@@ -5602,47 +5099,6 @@ function extractEntities(turnText, fetched) {
   Object.assign(out, extractOrgStructureMemoryHints(fetched));
 
   return out;
-}
-
-async function tryReferralLeadQueryRoute({ history, user, adminId, stream = false, onToken = null }) {
-  const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
-  const userId = user?.id;
-  const emit = (payload) => {
-    if (stream && onToken) onToken(payload.reply);
-    return envelope(payload);
-  };
-
-  const memDoc = userId && adminId
-    ? await ConversationMemory.findOne({ userId, adminId }).lean()
-    : null;
-
-  // The person resolved by an earlier turn, possibly in a different domain — asking
-  // "what do you know about X" then "who referred her?" must not lose X. Derived from
-  // the doc already loaded above rather than re-reading it: this route runs for every
-  // message and usually returns null without needing the subject at all.
-  // Jobs are excluded — a job title must never bind as a referral-lead candidate name.
-  const lastSubject = memDoc?.lastEntities?.currentEntitySubject;
-  const currentEntitySubject =
-    lastSubject?.name && lastSubject.entityType !== 'job'
-      ? {
-        name: lastSubject.name,
-        userId: lastSubject.userId
-          ? String(lastSubject.userId)
-          : (lastSubject.entityId ? String(lastSubject.entityId) : null),
-        entityType: lastSubject.entityType || 'employee',
-      }
-      : null;
-
-  const result = await handleReferralLeadQuery({
-    userMessage: lastUserMsg,
-    user,
-    adminId,
-    userId,
-    deps: { memoryDoc: memDoc, currentEntitySubject },
-  });
-
-  if (!result) return null;
-  return emit(result);
 }
 
 function agentEnabled() {
@@ -6164,11 +5620,6 @@ export async function sendMessage({ messages, user, uiContext = null, requestId 
   }
 
   {
-    const referralLeadRoute = await tryReferralLeadQueryRoute({ history, user, adminId });
-    if (referralLeadRoute) return referralLeadRoute;
-  }
-
-  {
     const convRoute = await tryConversationalEntityRoute({ history, user, adminId });
     if (convRoute) return convRoute;
   }
@@ -6378,16 +5829,6 @@ export async function streamMessage({ messages, user, onToken, onDone, uiContext
     });
     if (jobRoute) {
       onDone(jobRoute);
-      return;
-    }
-  }
-
-  {
-    const referralLeadRoute = await tryReferralLeadQueryRoute({
-      history, user, adminId, stream: true, onToken,
-    });
-    if (referralLeadRoute) {
-      onDone(referralLeadRoute);
       return;
     }
   }

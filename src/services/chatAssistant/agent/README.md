@@ -99,9 +99,9 @@ just a person's name is a `get_user` call, not a filter on the previous `count_u
 (`ownerUserRole: 'employee'`), current employees unless `filters.employmentStatus` says
 otherwise. `count_employees` can `groupBy` `department`, `designation`, `employmentType`,
 `compensationType` or `employmentStatus`. `filters.joinedBetween` / `resignedBetween` (`{ from, to }`,
-`YYYY-MM-DD`, inclusive whole UTC days) answer "who joined / resigned in <period>" and default
-`employmentStatus` to `all`; "joined" about placements or hires is a `handoff` (hiring pipeline is not
-migrated). Both run through `executeEmployeeQuery`, so row
+`YYYY-MM-DD`, inclusive whole days in `context.js` `DEFAULT_TIMEZONE` (IST) — the zone the model resolves "today" in; impossible or reversed days throw) answer "who joined / resigned in <period>" and default
+`employmentStatus` to `all`; "joined" about placements or hires goes to `count_placements` /
+`list_placements` (status Joined) in the hiring domain. Both run through `executeEmployeeQuery`, so row
 scope and salary masking match the Employees page. Access: the Employees page read/manage
 permissions (`EMPLOYEE_QUERY_READ_PERMISSIONS`).
 
@@ -121,6 +121,22 @@ similarity + skill overlap, then role and row scope through `buildEmployeeListMo
 applicant, job title/id or status, via `applicantQuery.service`'s `searchApplications`. Access
 is delegated to its `applicationScope` (admin / recruiter / sales agent / self), so the tools
 declare an access note rather than an `anyOf`.
+
+### hiring
+
+`agent/tools/hiring/`: the ATS pipeline after an application. Every tool calls the page's own service
+with the viewer, so row scope is the page's; each `access` mirrors that page's GET route.
+
+| Tool | Backed by | Access (route) |
+|---|---|---|
+| `count_interviews` / `list_interviews` | `meeting.service` `queryMeetings` (Interviews page; `meetingScope`: manage = all, read = own). Filter = the page's `buildMeetingsMongoFilter` + interviewer (recruiter or panel agent) + result. Count returns `byStatus` and `byResult`. | `interviews.read` |
+| `count_offers` / `list_offers` | `offer.service` `queryOffers`. Count returns `byStatus`. CTC only for `candidates.manage` / `employees.edit` / `offers.edit` / `offers.manage` (the Offer Letter Generator gate), otherwise `compensationHidden`; never `offerLetterUrl` or `rejectionReason`. | `offer.route.js` `canReadOffers` |
+| `count_placements` / `list_placements` | `placement.service` `queryPlacements`. Cancelled left out unless asked; `stage` = the Pre-boarding / Onboarding queue; `joiningBetween` for "joined this month". | `placement.route.js` `canReadPlacements` |
+| `get_hiring_funnel` | `referralLeadsAnalytics.fetchHiringTunnelSnapshot` → `getReferralLeadsStats` (Refer Leads page cards). | `candidates.read` |
+| `list_referral_leads` | `referralLeadsAnalytics.searchReferralLeads` → `listReferralLeads`. Referrer / sales-agent names resolve only among users who hold that role on some referral lead (never the whole user directory); several → `{ matches }` with names only. "me" (or the viewer's own name) needs no lookup; a viewer the page scopes to their own leads cannot name anyone else. Day windows go to the service as IST instants (`referredAtUpperBound` takes a full-instant `to` as-is). | `candidates.read` |
+
+Counts are one `limit: 1` service call per status/result bucket, so every number is the page's own
+count. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those stay on the legacy `fetch_meetings`).
 
 Single-person lookups for any of these stay on `get_user`.
 
@@ -381,6 +397,6 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 - **Legacy domains still route through the old pipeline** until migrated one at a time.
   Order: jobs → employees/people → candidates/applications/placements/offers →
   attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
-  knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates` and
-  `applications` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
+  knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
+  `applications` and `hiring` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
   (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.

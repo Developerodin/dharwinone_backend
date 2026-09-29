@@ -308,6 +308,17 @@ export const canUserSeeAllReferralLeads = async (req) => {
 };
 
 /**
+ * `to` upper bound for referredAt. A plain day (what the page sends) ends at 23:59:59.999 server-local, as
+ * it always has; a full ISO instant (Sage sends the IST end of day) is used exactly — setHours would push
+ * it to the server's end of day.
+ */
+export const referredAtUpperBound = (to) => {
+  const t = new Date(to);
+  if (!String(to).includes('T')) t.setHours(23, 59, 59, 999);
+  return t;
+};
+
+/**
  * Build Mongo match for referral leads (referred candidates; not restricted by Candidate-role owner roster).
  * @param {object} opts
  * @param {object} opts.user
@@ -349,9 +360,7 @@ export const buildReferralLeadsMatch = async (opts) => {
       mongo.referredAt.$gte = new Date(query.from);
     }
     if (query.to) {
-      const t = new Date(query.to);
-      t.setHours(23, 59, 59, 999);
-      mongo.referredAt.$lte = t;
+      mongo.referredAt.$lte = referredAtUpperBound(query.to);
     }
   }
 
@@ -402,9 +411,7 @@ const buildGlobalTopReferrerMatch = (query) => {
       mongo.referredAt.$gte = new Date(query.from);
     }
     if (query.to) {
-      const t = new Date(query.to);
-      t.setHours(23, 59, 59, 999);
-      mongo.referredAt.$lte = t;
+      mongo.referredAt.$lte = referredAtUpperBound(query.to);
     }
   }
 

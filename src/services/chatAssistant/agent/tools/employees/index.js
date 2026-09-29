@@ -23,8 +23,9 @@ const instructions = [
   '- "Joined / new joiners / resigned / left the company" in a period → filters.joinedBetween or ' +
     'filters.resignedBetween { from, to } as YYYY-MM-DD, resolved from today\'s date ("last month", "in July", ' +
     '"this year"). These include people who have since resigned, so say so. No period given → ask which one.',
-  '- "Joined" about hiring — a placement marked Joined, a candidate Hired, an accepted offer — is not an ' +
-    'employee joining date: call handoff.',
+  '- "Joined" about hiring — a placement marked Joined, joiners from the hiring pipeline, "who is joining next ' +
+    'week" — is not an employee joining date: use count_placements / list_placements with filters.status ' +
+    '"Joined" (and joiningBetween for a period). "Employees who joined" stays on joinedBetween here.',
   '- One named person\'s details → get_user, not list_employees.',
 ].join('\n');
 

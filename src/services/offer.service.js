@@ -1565,6 +1565,13 @@ const queryOffers = async (filter, options, currentUser) => {
   if (filter.candidateId) applyMultiValueObjectIdFilter(query, 'candidate', filter.candidateId);
   if (filter.createdBy) applyMultiValueObjectIdFilter(query, 'createdBy', filter.createdBy);
   if (filter.status) applyMultiStatusFilter(query, filter.status);
+  // Sage only (agent/tools/hiring): the list controller's pick() never passes these, so the page is unaffected.
+  if (filter.createdFrom || filter.createdTo) {
+    query.createdAt = {
+      ...(filter.createdFrom && { $gte: new Date(filter.createdFrom) }),
+      ...(filter.createdTo && { $lte: new Date(filter.createdTo) }),
+    };
+  }
 
   const stageRaw = filter.stage != null ? String(filter.stage).trim() : '';
   if (stageRaw) {
