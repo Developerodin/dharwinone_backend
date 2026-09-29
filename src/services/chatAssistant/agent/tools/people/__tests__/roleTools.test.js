@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import countUsers from '../countUsers.tool.js';
 import listUsers from '../listUsers.tool.js';
 import getUser from '../getUser.tool.js';
+import getMyProfile from '../getMyProfile.tool.js';
 import listRoles from '../listRoles.tool.js';
 import getRole from '../getRole.tool.js';
 import peopleDomain, { matchesTurn } from '../index.js';
@@ -153,7 +154,7 @@ describe('get_role', () => {
 });
 
 describe('people domain module', () => {
-  const tools = [countUsers, listUsers, getUser, listRoles, getRole];
+  const tools = [countUsers, listUsers, getUser, getMyProfile, listRoles, getRole];
 
   it('every tool was built by defineTool with a JSON schema', () => {
     for (const tool of tools) {
@@ -161,7 +162,7 @@ describe('people domain module', () => {
       assert.equal(tool.kind, 'read');
       assert.equal(tool.jsonSchema.type, 'object');
     }
-    assert.deepEqual(tools.map((t) => t.name), ['count_users', 'list_users', 'get_user', 'list_roles', 'get_role']);
+    assert.deepEqual(tools.map((t) => t.name), ['count_users', 'list_users', 'get_user', 'get_my_profile', 'list_roles', 'get_role']);
   });
 
   it('index.js default export matches the domain module shape, including the new matchesTurn gate interface', () => {

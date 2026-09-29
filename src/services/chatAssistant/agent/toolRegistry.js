@@ -19,7 +19,7 @@ export const HANDOFF_TOOL_NAME = 'handoff';
 
 // Built-in tool, always present and never access-filtered (its `note`-only access
 // has no `anyOf`, so `checkAccessRule` passes it for every user — same shape as
-// TOOL_ACCESS's self-scoped entries like `fetch_current_user`).
+// TOOL_ACCESS's self-scoped entries like `fetch_my_shift`).
 const handoffTool = defineTool({
   name: HANDOFF_TOOL_NAME,
   domain: 'core',

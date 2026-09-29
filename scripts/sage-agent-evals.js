@@ -190,12 +190,15 @@ function cannedResult(name, args) {
   switch (name) {
     case 'count_jobs': {
       if (args?.groupBy) {
+        // origin's real groups are always internal/external; placeholder names there made the model
+        // re-count each origin separately to find the numbers it asked for.
+        const [first, second] = args.groupBy === 'origin' ? ['internal', 'external'] : ['alpha', 'beta'];
         return {
           total: 7,
           groupBy: args.groupBy,
           groups: [
-            { value: 'alpha', count: 4 },
-            { value: 'beta', count: 3 },
+            { value: first, count: 4 },
+            { value: second, count: 3 },
           ],
           filtersApplied: args.filters ?? {},
         };
@@ -289,6 +292,18 @@ function cannedResult(name, args) {
       return { total: 2, records: [
         { id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer', status: 'Applied' },
         { id: 'a2', applicant: 'Ranveer Singh', job: 'QA Engineer', status: 'Interview' },
+      ] };
+    case 'get_my_profile':
+      return {
+        kind: 'unique',
+        identity: { userId: 'eval-self', name: 'Eval Self', email: 'eval.self@example.com', roles: ['Employee'] },
+        profiles: { employee: { fields: { employeeId: 'DBS001', designation: 'QA Engineer' }, visibleFields: ['employeeId', 'designation'] } },
+        availableSections: [],
+      };
+    case 'match_candidates_to_job':
+      return { job: args?.jobTitle || 'Eval Job', jobId: 'eval-job-1', pool: args?.pool || 'candidates', candidates: [
+        { name: 'Ravi Kumar', skills: ['React', 'Node'], matchPct: 91, userId: 'c1' },
+        { name: 'Meera Iyer', skills: ['React'], matchPct: 64, userId: 'c2' },
       ] };
     default:
       return { handoff: true };

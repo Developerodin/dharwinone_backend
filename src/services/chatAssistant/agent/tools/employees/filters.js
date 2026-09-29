@@ -9,6 +9,11 @@ const slipMonth = Joi.alternatives()
   .custom((value, helpers) => normalizeSlipMonth(value) ?? helpers.error('any.invalid'))
   .description('Month name or number, e.g. "September" or 9.');
 
+const isoDay = Joi.string().min(10).max(10).description('YYYY-MM-DD.'); // format checked in common.js dayRange
+// Inclusive, whole UTC days (same bounds as the legacy resolveDateWindow).
+const dayWindow = (what) => Joi.object({ from: isoDay, to: isoDay }).or('from', 'to')
+  .description(`${what} on or between these days (inclusive). Includes people who have since resigned.`);
+
 export const employeeFilters = Joi.object({
   search: Joi.string().min(1)
     .description('Name, email or employee id — like the Employees page search box.'),
@@ -19,6 +24,8 @@ export const employeeFilters = Joi.object({
   designation: Joi.string().min(1)
     .description('Job title / position, e.g. "React Developer". Partial match.'),
   agent: Joi.string().min(1).description('Name of the agent the employee is assigned to.'),
+  joinedBetween: dayWindow('Joining date'),
+  resignedBetween: dayWindow('Resign date'),
   missingSalarySlip: Joi.alternatives()
     .try(
       Joi.boolean().valid(true),

@@ -54,7 +54,6 @@ export function detectListIntent(msg) {
 const COUNT_ONLY_KINDS = new Set([
   'fetch_leave_requests',
   'fetch_backdated_attendance_requests',
-  'fetch_roles',
   'fetch_placements',
   'fetch_offers',
 ]);
@@ -80,7 +79,6 @@ const KIND_TO_FETCHED_KEY = {
   fetch_leave_requests:                'fetch_leave_requests',
   fetch_backdated_attendance_requests: 'fetch_backdated_attendance_requests',
   fetch_jobs:                          'fetch_jobs',
-  fetch_roles:                         'fetch_roles',
   fetch_placements:                    'fetch_placements',
   fetch_offers:                        'fetch_offers',
   fetch_tasks:                         'fetch_tasks',
@@ -115,7 +113,6 @@ const KIND_RENDERERS = {
     if (payload?.type === 'job_result') return renderJobResult(payload, ctx);
     return renderJobs(fetched?.fetch_jobs, ctx, fact);
   },
-  fetch_roles:                         (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_placements:                    (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_offers:                        (fact, _fetched, ctx) => renderGenericCount(fact, ctx),
   fetch_tasks: (fact, fetched, ctx) => {

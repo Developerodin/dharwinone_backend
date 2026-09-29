@@ -8,7 +8,7 @@
  * the candidate/referral population).
  *
  * Hand-off note: this module answers the ATS / referral-lead population ONLY. The
- * Employee-role population (uses `employee_analytics` / `fetch_employees`) is a
+ * Employee-role population (Sage agent `count_employees` / `list_employees`) is a
  * SEPARATE population reached only after the User is granted the Employee role — see
  * `pipelineStatusToLifecycleStage` in referralPipelineStatus.js for the exact
  * hand-off point ('employee'). Do not merge the two in a chatbot answer.

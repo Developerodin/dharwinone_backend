@@ -13,13 +13,14 @@ export default defineTool({
   description:
     'Count EMPLOYEES (people on the Employees page — never candidates). Use for "how many employees/' +
     'staff/interns/people", and breakdowns: groupBy department, designation, employmentType, ' +
-    'compensationType (paid/unpaid) or employmentStatus (current vs resigned). filters.missingSalarySlip / ' +
+    'compensationType (paid/unpaid) or employmentStatus (current vs resigned). filters.joinedBetween / ' +
+    'resignedBetween count who joined or resigned in a period. filters.missingSalarySlip / ' +
     'missingDocument count who has NOT uploaded a salary slip or document (upload records only — never file ' +
     'contents or links).',
   measure:
     'Employee PROFILES whose account holds the Employee role and is active or pending ' +
       '(disabled/deleted accounts excluded); current (not resigned) employees unless ' +
-      'filters.employmentStatus is set. Document filters test upload records, not file contents.',
+      'filters.employmentStatus is set (a joinedBetween/resignedBetween window defaults it to all). Document filters test upload records, not file contents.',
   input: Joi.object({
     filters: employeeFilters,
     groupBy: Joi.string()

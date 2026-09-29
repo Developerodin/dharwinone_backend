@@ -3,6 +3,7 @@ import listUsers from './listUsers.tool.js';
 import getUser from './getUser.tool.js';
 import listRoles from './listRoles.tool.js';
 import getRole from './getRole.tool.js';
+import getMyProfile from './getMyProfile.tool.js';
 
 const instructions = [
   'People: user accounts (logins) in the Users directory, and the roles those accounts hold.',
@@ -31,6 +32,7 @@ const instructions = [
     'count_users/list_users filter, even right after a users answer — the name would land in search by ' +
     'mistake.',
   '- "Tell me about <person>" → get_user.',
+  '- The user\'s OWN details ("my profile", "who am I", "my employee id") → get_my_profile, never get_user.',
 ].join('\n');
 
 // Noun test for this domain's turns — mirrors gate.js's job-noun test (README
@@ -73,6 +75,8 @@ const ROLE_HEADCOUNT_RE = /\bhow many\b.{0,40}\b(admins?|administrators?|recruit
 const ROLE_LIST_COUNT_RE = /\b(?:how many|count|list|show(?:\s+me)?|who are|all)(?:\s+(?:all|the|of|our|active))*\s+(?:admins?|administrators?|recruiters?|sales\s*agents?|agents?|students?)\b/i;
 // Course/training asks about students stay with training analytics, not a user headcount.
 const TRAINING_RE = /\b(courses?|training|modules?|enrolled|progress)\b/i;
+// "my profile" / "who am I" / "my employee id" — the viewer's own record (get_my_profile).
+const MY_PROFILE_RE = /\bmy\s+(?:profile|details|employee\s*(?:id|code|number)|designation|department|joining\s+date)\b|\bwho\s+am\s+i\b|\babout\s+me\b/i;
 
 /**
  * True for turns the people domain's tools can plausibly answer. Used by the
@@ -90,12 +94,13 @@ export function matchesTurn(text) {
     || WHO_IS_NAME_RE.test(t)
     || TELL_ME_ABOUT_NAME_RE.test(t)
     || ROLE_HEADCOUNT_RE.test(t)
-    || (ROLE_LIST_COUNT_RE.test(t) && !TRAINING_RE.test(t));
+    || (ROLE_LIST_COUNT_RE.test(t) && !TRAINING_RE.test(t))
+    || MY_PROFILE_RE.test(t);
 }
 
 export default {
   domain: 'people',
   instructions,
-  tools: [countUsers, listUsers, getUser, listRoles, getRole],
+  tools: [countUsers, listUsers, getUser, getMyProfile, listRoles, getRole],
   matchesTurn,
 };

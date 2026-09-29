@@ -25,7 +25,7 @@ describe('toolAccess', () => {
     const start = svcSrc.indexOf('const ROUTING_TOOLS = [');
     const end = svcSrc.indexOf('\n];', start);
     const names = [...svcSrc.slice(start, end).matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]);
-    assert.ok(names.length >= 33, `parsed ${names.length} tool names`);
+    assert.ok(names.length >= 28, `parsed ${names.length} tool names`);
     const missing = names.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -43,7 +43,7 @@ describe('toolAccess', () => {
     assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
     const body = svcSrc.slice(start, start + 1 + nextFn);
     const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
-    assert.ok(caseNames.length >= 34, `parsed ${caseNames.length} case labels`);
+    assert.ok(caseNames.length >= 29, `parsed ${caseNames.length} case labels`);
     const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
     assert.deepEqual(missing, []);
   });
@@ -76,30 +76,11 @@ describe('toolAccess', () => {
 
   it('platformSuperUser passes with no permissions', async () => {
     const su = { ...userWith(), platformSuperUser: true };
-    assert.equal((await checkToolAccess('fetch_roles', su, notAdmin)).ok, true);
+    assert.equal((await checkToolAccess('fetch_jobs', su, notAdmin)).ok, true);
   });
 
   it('denies a user with no matching permission even if a hypothetical isAdmin would say true (no admin shortcut)', async () => {
-    const r = await checkToolAccess('fetch_roles', userWith(), admin);
-    assert.equal(r.ok, false);
-  });
-
-  // fetch_external_jobs reads Job mirrors (jobOrigin='external'), the same collection
-  // fetch_jobs already exposes — not the raw ExternalJob collection guarded by
-  // requireExternalJobsAccess.js' external-jobs.* permission. Its rule mirrors
-  // fetch_jobs exactly: jobs.read, no adminByName shortcut.
-  it('allows fetch_external_jobs with jobs.read (mirrors fetch_jobs — it reads Job mirrors, not the raw ExternalJob collection)', async () => {
-    const r = await checkToolAccess('fetch_external_jobs', userWith('jobs.read'), notAdmin);
-    assert.equal(r.ok, true);
-  });
-
-  it('denies fetch_external_jobs to a user with no jobs.read', async () => {
-    const r = await checkToolAccess('fetch_external_jobs', userWith(), notAdmin);
-    assert.equal(r.ok, false);
-  });
-
-  it('denies fetch_external_jobs to an admin-without-perm user (no adminByName shortcut)', async () => {
-    const r = await checkToolAccess('fetch_external_jobs', userWith(), admin);
+    const r = await checkToolAccess('fetch_jobs', userWith(), admin);
     assert.equal(r.ok, false);
   });
 
@@ -109,7 +90,7 @@ describe('toolAccess', () => {
   });
 
   it('self-scoped tools pass with no permissions', async () => {
-    assert.equal((await checkToolAccess('fetch_current_user', userWith(), notAdmin)).ok, true);
+    assert.equal((await checkToolAccess('fetch_my_shift', userWith(), notAdmin)).ok, true);
   });
 });
 

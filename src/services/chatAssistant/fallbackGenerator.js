@@ -169,7 +169,6 @@ export function moduleForKind(kind) {
     case 'fetch_jobs':                               return 'jobs';
     case 'fetch_placements':                         return 'onboarding';
     case 'fetch_offers':                             return 'jobs';
-    case 'fetch_roles':                              return 'employees';
     default:                                         return kind || 'unknown';
   }
 }

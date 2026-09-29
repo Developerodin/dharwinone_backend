@@ -774,6 +774,18 @@ const buildAdvancedFilter = (filter) => {
     if (filter.createdTo) mongoFilter.createdAt.$lte = new Date(filter.createdTo);
   }
 
+  // Joining / resign date windows (Sage). $and, not the bare resignDate key — employmentStatus owns that.
+  for (const [field, from, to] of [
+    ['joiningDate', filter.joinedFrom, filter.joinedTo],
+    ['resignDate', filter.resignedFrom, filter.resignedTo],
+  ]) {
+    if (!from && !to) continue;
+    const range = { $ne: null };
+    if (from) range.$gte = new Date(from);
+    if (to) range.$lte = new Date(to);
+    mongoFilter.$and = [...(mongoFilter.$and || []), { [field]: range }];
+  }
+
   // Employment status: current (no resign or resign in future), resigned (resign date on or in past), all (no filter)
   if (filter.employmentStatus === 'resigned') {
     const cutoff = resignationCutoff();
@@ -4433,6 +4445,7 @@ export {
   queryCandidates,
   buildEmployeeListMongoFilter,
   employeeDocumentConditions,
+  buildAdvancedFilter,
   normalizeSlipMonth,
   normalizeOwnerUserRoleScope,
   countEmployeeCandidates,

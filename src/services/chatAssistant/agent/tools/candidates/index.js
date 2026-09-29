@@ -1,5 +1,6 @@
 import countCandidates from './countCandidates.tool.js';
 import listCandidates from './listCandidates.tool.js';
+import matchCandidatesToJob from './matchCandidatesToJob.tool.js';
 
 const instructions = [
   'Candidates: the Candidate role (job seekers in the ATS). Employees are a DIFFERENT role — never answer a ' +
@@ -10,17 +11,23 @@ const instructions = [
     '"Candidate" and filters.status "all". Never claim the candidate count ignores account status.',
   '- Candidates have no current/resigned split; do not say "current candidates".',
   '- One named candidate\'s details → get_user. Their job applications → count_applications/list_applications.',
+  '- "Who fits / best candidates for <job>" → match_candidates_to_job directly with jobTitle (or a jobId already ' +
+    'in the conversation). Do not look the job up with a job tool first. It ranks by fit; it is not a count of everyone qualified. "Which employees ' +
+    'could move into <job>" → pool "employees". People who APPLIED to a job are list_applications, not this.',
 ].join('\n');
 
 const CANDIDATE_NOUN_RE = /\bcandidates?\b/i;
+// "who fits this role" / "best fit for the React job" — match_candidates_to_job.
+const FIT_RE = /\bwho\s+(?:fits|would\s+fit|is\s+(?:a\s+)?(?:good\s+|best\s+)?fit|is\s+suitable)\b|\bbest\s+(?:fit|match)(?:es)?\s+for\b/i;
 
 export function matchesTurn(text) {
-  return CANDIDATE_NOUN_RE.test(String(text || ''));
+  const t = String(text || '');
+  return CANDIDATE_NOUN_RE.test(t) || FIT_RE.test(t);
 }
 
 export default {
   domain: 'candidates',
   instructions,
-  tools: [countCandidates, listCandidates],
+  tools: [countCandidates, listCandidates, matchCandidatesToJob],
   matchesTurn,
 };

@@ -16,8 +16,12 @@ const instructions = [
   '- Stack acronyms (MERN, MEAN, LAMP) are rarely written in postings. Query the stack\'s core parts with ' +
     'searchAll instead — MERN → ["react", "node"], MEAN → ["angular", "node"] — and say which terms you matched ' +
     '(e.g. "jobs mentioning both React and Node"). Never answer 0 from the acronym alone.',
-  '- Status defaults to Active. When you did not pass a status, say the numbers are for active jobs.',
+  '- Status defaults to Active. "Open" jobs are Active jobs, so pass no status for them. When you did not ' +
+    'pass a status, say the numbers are for active jobs.',
   '- A specific job by id or title → get_job. If it returns matches, ask which one the user meant.',
+  '- External / mirrored / LinkedIn jobs → filters.jobOrigin "external"; a named feed (LinkedIn) → also ' +
+    'filters.externalSource. The raw External Jobs search page is not visible to you — only mirrored listings.',
+  '- Who fits a job / best candidates for a job → match_candidates_to_job, not a job tool.',
   '- Highest/lowest paying → rank_jobs_by_salary. Listing jobs → list_jobs; its total is the full count ' +
     'even when fewer rows come back.',
   '- A short follow-up that\'s just a person\'s name ("what about John", "and Priya?") is not a job filter, ' +

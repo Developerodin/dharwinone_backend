@@ -156,8 +156,8 @@ const JOB_SUBJECT_RE =
   /\b(jobs?|openings?|vacanc(?:y|ies)|positions?|postings?)\b/i;
 
 /**
- * "roles" is a job noun ("how many AI roles"), but the same word is also the fetch_roles
- * tool's own vocabulary (RBAC roles) — "list roles and permissions", "user/system/admin
+ * "roles" is a job noun ("how many AI roles"), but the same word is also the people
+ * tools' own vocabulary (RBAC roles) — "list roles and permissions", "user/system/admin
  * roles" must not be stolen into a job query just because "roles" appears.
  */
 const JOB_ROLES_NOUN_RE = /\broles?\b/i;

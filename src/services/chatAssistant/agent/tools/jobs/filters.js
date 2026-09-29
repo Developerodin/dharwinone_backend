@@ -1,5 +1,6 @@
 import Joi from 'joi';
 import { getJobs } from '../../../../../validations/job.validation.js';
+import { EXTERNAL_JOB_SOURCES } from '../../../../../models/externalJob.model.js';
 
 // Keys the ATS Jobs page's own GET /jobs query also accepts reuse that route's Joi
 // piece, so the chat accepts exactly the values the page does. The rest are either
@@ -37,6 +38,12 @@ export const filters = Joi.object({
   jobOrigin: Joi.string()
     .valid('internal', 'external')
     .description('Filter by origin: "internal" (company-posted) or "external" (mirrored listing). Omit for both.'),
+  externalSource: Joi.alternatives()
+    .try(
+      Joi.string().valid(...EXTERNAL_JOB_SOURCES),
+      Joi.array().items(Joi.string().valid(...EXTERNAL_JOB_SOURCES)).max(EXTERNAL_JOB_SOURCES.length),
+    )
+    .description('Only mirrored external listings from this feed. "LinkedIn jobs" = both linkedin-* feeds as an array.'),
   company: Joi.string().min(1).description('Filter by organisation name (partial match).'),
   location: page('location').description('Filter by location (partial match).'),
   city: Joi.string().min(1).description('Filter by city (partial match on the location text).'),

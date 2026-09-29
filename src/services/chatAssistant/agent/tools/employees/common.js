@@ -71,11 +71,36 @@ export function personRecordsDeps(ctx) {
   };
 }
 
-/** Drop empty keys; ownerUserRole rides along as a filter (toApiFilter passes it through). */
+/** { from, to } days → buildAdvancedFilter's <prefix>From / <prefix>To instants (whole UTC days). */
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dayRange(prefix, window) {
+  if (!window) return {};
+  for (const day of [window.from, window.to]) {
+    if (day !== undefined && (!ISO_DAY_RE.test(day) || Number.isNaN(Date.parse(day)))) {
+      throw new Error(`Invalid date '${day}' — use YYYY-MM-DD.`);
+    }
+  }
+  return {
+    ...(window.from ? { [`${prefix}From`]: `${window.from}T00:00:00.000Z` } : {}),
+    ...(window.to ? { [`${prefix}To`]: `${window.to}T23:59:59.999Z` } : {}),
+  };
+}
+
+/**
+ * Drop empty keys; ownerUserRole rides along as a filter (toApiFilter passes it through).
+ * A joined/resigned window defaults employmentStatus to 'all': "who joined in July" includes
+ * people who have since left, and "who resigned in July" must not be cut to current employees.
+ */
 function cleanFilters(filters = {}, ownerUserRole) {
+  const { joinedBetween, resignedBetween, ...rest } = filters || {};
   const out = {};
-  for (const [k, v] of Object.entries(filters || {})) {
+  for (const [k, v] of Object.entries(rest)) {
     if (v !== undefined && v !== null && v !== '') out[k] = v;
+  }
+  if (joinedBetween || resignedBetween) {
+    Object.assign(out, dayRange('joined', joinedBetween), dayRange('resigned', resignedBetween));
+    if (out.employmentStatus === undefined) out.employmentStatus = 'all';
   }
   return { ...out, ownerUserRole };
 }
@@ -211,6 +236,7 @@ export function personBreakdownBlock(result, { label, id }) {
 
 export function personListBlock(result, { label, id }) {
   const hasMissing = result.records.some((r) => r.missing);
+  const f = result.filtersApplied || {};
   return {
     type: 'table',
     id,
@@ -222,6 +248,8 @@ export function personListBlock(result, { label, id }) {
       { key: 'designation', label: 'Designation', priority: 'primary' },
       { key: 'department', label: 'Department', priority: 'secondary' },
       { key: 'employmentType', label: 'Type', priority: 'secondary' },
+      ...(f.joinedBetween ? [{ key: 'joiningDate', label: 'Joined', priority: 'primary', format: 'date' }] : []),
+      ...(f.resignedBetween ? [{ key: 'resignDate', label: 'Resigned', priority: 'primary', format: 'date' }] : []),
       ...(hasMissing ? [{ key: 'missing', label: 'Missing', priority: 'primary' }] : []),
     ],
     rows: result.records.map((r) => ({
@@ -230,6 +258,8 @@ export function personListBlock(result, { label, id }) {
       designation: r.designation ?? '—',
       department: r.department ?? '—',
       employmentType: r.employmentType ?? '—',
+      ...(f.joinedBetween ? { joiningDate: r.joiningDate ?? '—' } : {}),
+      ...(f.resignedBetween ? { resignDate: r.resignDate ?? '—' } : {}),
       ...(hasMissing ? { missing: r.missing ?? '—' } : {}),
     })),
     layout: 'auto',

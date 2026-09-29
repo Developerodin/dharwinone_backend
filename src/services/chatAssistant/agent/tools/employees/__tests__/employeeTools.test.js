@@ -4,7 +4,7 @@ import countEmployees from '../countEmployees.tool.js';
 import listEmployees from '../listEmployees.tool.js';
 import { EMPLOYEES_ACCESS } from '../common.js';
 import { matchesTurn } from '../index.js';
-import { employeeDocumentConditions } from '../../../../../employee.service.js';
+import { employeeDocumentConditions, buildAdvancedFilter } from '../../../../../employee.service.js';
 
 const VIEWER = { id: 'viewer-1', _id: 'viewer-1', authContext: { permissions: new Set(['employees.read']) } };
 
@@ -209,5 +209,64 @@ describe('document metadata filters', () => {
     const plain = await listEmployees.execute({}, ctx);
     assert.equal('missing' in plain.records[0], false);
     assert.equal(listEmployees.render(plain).blocks[0].columns.some((c) => c.key === 'missing'), false);
+  });
+});
+
+describe('joined / resigned windows', () => {
+  it('maps a window to whole UTC days and defaults employmentStatus to all', async () => {
+    const calls = [];
+    const ctx = ctxFor({ executeEmployeeQuery: async (q) => { calls.push(q); return { success: true, total: 3, records: [] }; } });
+    await countEmployees.execute({ filters: { joinedBetween: { from: '2026-07-01', to: '2026-07-31' } } }, ctx);
+    const f = calls[0].filters;
+    assert.equal(f.joinedFrom, '2026-07-01T00:00:00.000Z');
+    assert.equal(f.joinedTo, '2026-07-31T23:59:59.999Z');
+    assert.equal(f.employmentStatus, 'all');
+    assert.equal('joinedBetween' in f, false);
+  });
+
+  it('keeps an explicit employmentStatus', async () => {
+    const calls = [];
+    const ctx = ctxFor({ executeEmployeeQuery: async (q) => { calls.push(q); return { success: true, total: 1, records: [] }; } });
+    await countEmployees.execute({ filters: { resignedBetween: { from: '2026-01-01' }, employmentStatus: 'resigned' } }, ctx);
+    assert.equal(calls[0].filters.resignedFrom, '2026-01-01T00:00:00.000Z');
+    assert.equal('resignedTo' in calls[0].filters, false);
+    assert.equal(calls[0].filters.employmentStatus, 'resigned');
+  });
+
+  it('rejects a date that is not YYYY-MM-DD', async () => {
+    await assert.rejects(
+      countEmployees.execute({ filters: { joinedBetween: { from: 'July 2026' } } }, ctxFor()),
+      /YYYY-MM-DD/,
+    );
+  });
+
+  it('buildAdvancedFilter ANDs both windows without touching the employmentStatus resignDate key', () => {
+    const m = buildAdvancedFilter({
+      employmentStatus: 'resigned',
+      joinedFrom: '2026-01-01T00:00:00.000Z',
+      resignedTo: '2026-07-31T23:59:59.999Z',
+    });
+    assert.ok(m.resignDate.$lte instanceof Date); // employmentStatus clause intact
+    assert.deepEqual(m.$and, [
+      { joiningDate: { $ne: null, $gte: new Date('2026-01-01T00:00:00.000Z') } },
+      { resignDate: { $ne: null, $lte: new Date('2026-07-31T23:59:59.999Z') } },
+    ]);
+  });
+
+  it('list shows the Joined column only for a joined window', async () => {
+    const ctx = ctxFor({
+      executeEmployeeQuery: async () => ({ success: true, total: 1, records: [{ _id: 'e1', fullName: 'A', joiningDate: '2026-07-03' }] }),
+    });
+    const out = await listEmployees.execute({ filters: { joinedBetween: { from: '2026-07-01' } } }, ctx);
+    const block = listEmployees.render(out).blocks[0];
+    assert.ok(block.columns.some((c) => c.key === 'joiningDate'));
+    assert.equal(block.rows[0].joiningDate, '2026-07-03');
+    assert.equal(block.columns.some((c) => c.key === 'resignDate'), false);
+  });
+
+  it('matchesTurn opens on joined / left phrasing', () => {
+    for (const q of ['who joined last month', 'how many new joiners this year', 'who left in July', 'people who left the company']) {
+      assert.equal(matchesTurn(q), true, q);
+    }
   });
 });

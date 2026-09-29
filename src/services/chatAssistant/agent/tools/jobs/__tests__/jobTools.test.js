@@ -368,3 +368,22 @@ describe('jobs domain module', () => {
     assert.ok(allDomains.includes(jobsDomain));
   });
 });
+
+describe('externalSource filter', () => {
+  it('accepts one feed or several, and rejects an unknown one', () => {
+    const schema = countJobs.input;
+    assert.equal(schema.validate({ filters: { externalSource: 'linkedin-jobs-api' } }).error, undefined);
+    assert.equal(schema.validate({ filters: { externalSource: ['linkedin-jobs-api', 'linkedin-job-search-api'] } }).error, undefined);
+    assert.ok(schema.validate({ filters: { externalSource: 'indeed' } }).error);
+  });
+
+  it('count_jobs matches Job.externalRef.source ($in for an array)', async () => {
+    let seen;
+    const ctx = {
+      user: { id: 'u1' },
+      deps: { resolveJobVisibilityFilter: async () => ({}), Job: { countDocuments: async (m) => { seen = m; return 2; } } },
+    };
+    await countJobs.execute({ filters: { externalSource: ['linkedin-jobs-api', 'linkedin-job-search-api'] } }, ctx);
+    assert.deepEqual(seen['externalRef.source'], { $in: ['linkedin-jobs-api', 'linkedin-job-search-api'] });
+  });
+});

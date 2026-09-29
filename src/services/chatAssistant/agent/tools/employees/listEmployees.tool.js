@@ -13,12 +13,13 @@ export default defineTool({
   description:
     'List EMPLOYEES (never candidates) with their designation, department and employment type. ' +
     'total is the full count even when fewer rows come back. For one person\'s full profile use get_user. ' +
+    'filters.joinedBetween / resignedBetween list who joined or resigned in a period, with the date. ' +
     'filters.missingSalarySlip / missingDocument find who has NOT uploaded a salary slip or document (upload ' +
     'records only — never file contents or links).',
   measure:
     'Employee PROFILES whose account holds the Employee role and is active or pending ' +
       '(disabled/deleted accounts excluded); current (not resigned) employees unless ' +
-      'filters.employmentStatus is set. Document filters test upload records, not file contents.',
+      'filters.employmentStatus is set (a joinedBetween/resignedBetween window defaults it to all). Document filters test upload records, not file contents.',
   input: Joi.object({
     filters: employeeFilters,
     page: Joi.number().integer().min(1).default(1),

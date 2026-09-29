@@ -1,12 +1,10 @@
 import OpenAI from 'openai';
-import mongoose from 'mongoose';
 import config from '../config/config.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
 import httpStatus from 'http-status';
 import Role from '../models/role.model.js';
 import Job from '../models/job.model.js';
-import { EXTERNAL_JOB_SOURCES } from '../models/externalJob.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import Attendance from '../models/attendance.model.js';
 import LeaveRequest from '../models/leaveRequest.model.js';
@@ -27,8 +25,6 @@ import Shift from '../models/shift.model.js';
 import BackdatedAttendanceRequest from '../models/backdatedAttendanceRequest.model.js';
 import CandidateGroup from '../models/candidateGroup.model.js';
 import StudentGroup from '../models/studentGroup.model.js';
-import { embedQuery } from '../utils/embedding.util.js';
-import { pineconeQuery } from '../utils/pinecone.util.js';
 import { queryKb } from './kbQuery.service.js';
 import { buildLeaveRequestScopeFilter } from './leaveRequest.service.js';
 import { getEmployeesOnLeaveToday } from './onLeaveToday.service.js';
@@ -41,21 +37,12 @@ import {
 import { userIsAdmin, userHasPersonProfileRole } from '../utils/roleHelpers.js';
 import { classifyRole } from './chatAssistant/roleClassifier.js';
 import { llmParams } from './chatAssistant/llmParams.js';
-import { resolveRole as registryResolveRole, listRoleSlugs, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
+import { resolveRole as registryResolveRole, resolveRoleSync, listRoleSlugsSync } from './chatAssistant/roleRegistry.js';
 import { resolveUserEntity } from './chatAssistant/entityResolver.js';
 import { fetchPeople } from './chatAssistant/peopleFetcher.js';
 import { renderListing } from './chatAssistant/listingRenderer.js';
 import { extractTemporalContext } from './chatAssistant/temporalContext.js';
 import { phraseToDateWindow, toResolveDateWindowArgs } from './chatAssistant/phraseToDateWindow.js';
-import {
-  resolveTemporalWindow,
-  probeEmployeeYearsByMonth,
-} from './chatAssistant/temporalResolver.js';
-import { buildEmployeeEmploymentFilter } from './chatAssistant/employeeEmploymentFilter.js';
-import {
-  clarifyAmbiguousJoined,
-  guardEmployeeAnalyticsRoute,
-} from './chatAssistant/analyticsRouterGuards.js';
 import {
   enrichAttendanceSummary,
   leaveDatesWindowClause,
@@ -172,10 +159,6 @@ import {
   buildTree,
 } from './orgStructure.service.js';
 import { effectiveSessionDurationMs } from '../utils/attendanceDuration.js';
-import {
-  employeeOwnerQuery,
-  overridesFromArgs,
-} from './chatAssistant/visibilityRules.js';
 import { extractFacts } from './chatAssistant/factExtractor.js';
 import { renderDeterministicAnswer } from './chatAssistant/factRenderer.js';
 import { enforceCounts, applyEntityTypeDrift } from './chatAssistant/responseValidator.js';
@@ -314,21 +297,6 @@ function extractFastPathArgs(userMsg, moduleName, baseArgs, userCtx, uiContext =
   if (!userMsg || !moduleName) return out;
   const t = String(userMsg).toLowerCase();
   const isAdminCue = /\b(company|company[\s-]?wide|all employees?|whole (team|company|org)|org[- ]?wide|everyone'?s|everyones|every employee|team[- ]?wide|across (the )?(company|team|org)|all (leave|leaves|requests?|backdated|missed))\b/i;
-  if (moduleName === 'employee_analytics') {
-    if (!out.metric) {
-      if (/\b(paid|unpaid)\b/.test(t)) out.metric = 'paid_unpaid';
-      else if (/\b(resign|resigned|resignations?|left the company|ex-?employees?)\b/.test(t)) out.metric = 'resign';
-      else if (/\b(joined|joining|joiners?)\b/.test(t)) out.metric = 'join';
-      else out.metric = 'headcount';
-    }
-    if (/\bunpaid\b/.test(t) && !/\bpaid\b/.test(t)) out.compensationType = 'unpaid';
-    else if (/\bpaid\b/.test(t) && !/\bunpaid\b/.test(t) && out.metric !== 'paid_unpaid') {
-      out.compensationType = 'paid';
-    }
-    // Attach NL phrase only — temporalResolver (memory + DB year probe) runs
-    // inside employee_analytics. Pre-assigning month here would skip multi-year clarify.
-    out.phrase = String(userMsg);
-  }
   if (moduleName === 'fetch_jobs') {
     if (!out.status) {
       if (/\b(active|open|live|currently[- ]?open)\b.*\bjobs?\b/.test(t) || /\bjobs?\b.*\b(active|open|live)\b/.test(t)) out.status = 'Active';
@@ -465,38 +433,6 @@ const ROLE_ALIAS_MAP = {
   administrator:   'Administrator',
   administrators:  'Administrator',
 };
-
-// Canonical role groups. Strict normalized-equality matching — never `.includes()` —
-// so "Administrator" never accidentally falls into Student or vice-versa.
-// Candidate and Employee are DISTINCT roles in Dharwin — never merged.
-// Resolution order at runtime: registry first (DB roles + previousNames),
-// then this map as cold-cache fallback.
-export const ROLE_GROUPS = {
-  employee:   ['Employee'],
-  candidate:  ['Candidate'],
-  student:    ['Student'],
-  salesAgent: ['SalesAgent', 'Sales Agent'],
-  agent:      ['Agent'],
-  recruiter:  ['Recruiter'],
-  admin:      ['Administrator'],
-};
-
-/**
- * Which owner population a profile-backed query should scope to.
- *
- * fetch_employees serves both populations, but they are DISTINCT roles (see
- * ROLE_GROUPS) and must never be merged. This used to be hardcoded to the
- * Employee role, so asking for candidates scoped owners by the Employee role
- * and silently answered with employees — resigned ones included — under a
- * "Candidates" heading.
- *
- * @param {string|null} canonicalRole output of normalizeRole(), or null for a
- *   plain headcount query with no role argument
- * @returns {string[]} exact Role.name values to match
- */
-export function profileRoleNamesFor(canonicalRole) {
-  return canonicalRole === 'Candidate' ? ROLE_GROUPS.candidate : ROLE_GROUPS.employee;
-}
 
 export function normalizeRole(input) {
   if (!input) return null;
@@ -657,37 +593,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'employee_analytics',
-      description:
-        'Authoritative EMPLOYEE-role analytics only (not ATS candidates / referral leads / placements). ' +
-        'Counts resignations, joins, headcount, or paid/unpaid employees inside a date window. ' +
-        'Use when the user asks "how many resigned/joined in July", "before July", "paid vs unpaid employees". ' +
-        'NEVER use for hiring funnel, referral leads, applicants, offers, or placement Joined — those are different populations. ' +
-        'If "joined" is ambiguous (employment vs placement vs Hired), ask the user instead of calling this tool.',
-      parameters: {
-        type: 'object',
-        properties: {
-          metric: {
-            type: 'string',
-            description: 'resign | join | headcount | paid_unpaid',
-          },
-          compensationType: {
-            type: 'string',
-            description: 'Optional paid | unpaid filter (Employee-role profiles only). For metric=paid_unpaid leave unset to get both buckets.',
-          },
-          month: { type: 'string', description: 'YYYY-MM calendar month (during that month).' },
-          date: { type: 'string', description: 'YYYY-MM-DD single day.' },
-          fromDate: { type: 'string', description: 'YYYY-MM-DD range start (inclusive).' },
-          toDate: { type: 'string', description: 'YYYY-MM-DD range end (inclusive).' },
-          limit: { type: 'number', description: 'Sample rows to return (default 25, max 100).' },
-        },
-        required: ['metric'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'referral_leads_analytics',
       description:
         'Authoritative candidate hiring-tunnel snapshot (referral leads / ATS candidates) — wraps the Refer Leads ' +
@@ -695,7 +600,7 @@ const ROUTING_TOOLS = [
         'Buckets: refer_leads (total referred), applications, interviews, offers, ' +
         'placements (Placement Onboarding/Joined/Deferred), pre_boarding (CONCURRENT with placements — Placement.preBoardingStatus, ' +
         'NOT a linear application-status step), onboarded (User granted the Employee role — a SEPARATE hand-off event, not the same as Placement Joined). ' +
-        'NEVER use for Employee-role headcount/resign/join/paid-unpaid — use employee_analytics for that population instead. ' +
+        'NEVER use for Employee-role headcount/resign/join/paid-unpaid — that is a different population. ' +
         'RBAC: requires the same candidates.read permission as the Refer Leads page; returns {forbidden:true} if the caller lacks it. ' +
         'Use for: "hiring tunnel", "referral funnel", "candidate pipeline snapshot", "how many in pre-boarding", "how many placements this month".',
       parameters: {
@@ -960,25 +865,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_external_jobs',
-      description: 'Retrieve external job listings that have been mirrored into the ATS Jobs page (Job collection with jobOrigin="external"). Does NOT touch the raw ExternalJob (External Jobs ATS page) collection. Use for: "external jobs", "mirrored jobs", "external listings".',
-      parameters: {
-        type: 'object',
-        properties: {
-          search:          { type: 'string', description: 'Filter by job title, company, or description (semantic match)' },
-          company:         { type: 'string', description: 'Filter by company name' },
-          location:        { type: 'string', description: 'Filter by location' },
-          status:          { type: 'string', enum: ['all', 'Draft', 'Active', 'Closed', 'Archived'], description: 'Defaults to Active. Pass "all" only when the user asks for every status.' },
-          source:          { type: 'string', enum: EXTERNAL_JOB_SOURCES, description: 'Filter by source: active-jobs-db, linkedin-job-search-api, linkedin-jobs-api' },
-          limit:           { type: 'number', description: 'Max records to return (default 100, max 200)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_attendance',
       description:
         'Retrieve attendance records for the CURRENT LOGGED-IN USER ONLY — punch-in/out times, working hours, day-of-week, status (Present/Absent/Holiday/Leave) and leaveType (casual/sick/unpaid). ' +
@@ -1089,18 +975,6 @@ const ROUTING_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'fetch_current_user',
-      description: 'Retrieve the logged-in user profile — name, email, role, location, account status',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'fetch_tasks',
       description:
         'Retrieve tasks with RBAC parity to task.service.queryTasks — supports project, team, assignee, sprint, overdue, and status filters. ' +
@@ -1174,23 +1048,6 @@ const ROUTING_TOOLS = [
         type: 'object',
         properties: {
           days: { type: 'number', description: 'Look-ahead window in days (default 90)' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'match_candidates_to_job',
-      description: 'Find the best-matching candidates for a specific job — returns ranked candidates by skill overlap score. ' +
-        'Use when asked "who fits this role", "best candidates for job X", "rank candidates for Senior React Developer".',
-      parameters: {
-        type: 'object',
-        properties: {
-          jobId:    { type: 'string', description: 'MongoDB _id of the job to match against (use if known)' },
-          jobTitle: { type: 'string', description: 'Job title to search for if jobId is unknown' },
-          limit:    { type: 'number', description: 'Max candidates to return (default 10, max 25)' },
         },
         required: [],
       },
@@ -1382,23 +1239,6 @@ const ROUTING_TOOLS = [
       },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_roles',
-      description:
-        'List the roles configured on this platform along with their slugs, ' +
-        'display names, and aliases. Use for: "how many user roles", "what ' +
-        'roles do we have", "list all roles", "show me the roles", ' +
-        '"available roles". Returns the authoritative role count — ' +
-        'never guess or count from prior turns.',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-  },
 ];
 
 // Fail fast if a provider advertises a tool that does not exist — an offer the
@@ -1552,184 +1392,6 @@ async function fetchModule(name, args, user, uiContext = null) {
   }
 
   switch (name) {
-    case 'employee_analytics': {
-      // Employee-role population ONLY — never Candidate / referral / placement.
-      const visOverride = overridesFromArgs(args);
-      const today = new Date();
-      const profileRoleNames = profileRoleNamesFor('Employee');
-      const profileRoleDocs = await Role.find(
-        { name: { $in: profileRoleNames }, status: 'active' },
-        { _id: 1 }
-      ).lean();
-      const profileRoleIds = profileRoleDocs.map((d) => d._id);
-      if (!profileRoleIds.length) {
-        return {
-          total: 0,
-          records: [],
-          metric: args.metric || null,
-          notFound: true,
-          searchedFor: 'Employee',
-          authoritative: true,
-        };
-      }
-      let ownerIds = await User.find(
-        employeeOwnerQuery({ roleIds: profileRoleIds, override: visOverride }),
-        { _id: 1 }
-      ).distinct('_id');
-      // Row-scope like the Employees page (I2): Agent/Sales Agent's Employees list
-      // is scoped, but every count/list below derives from ownerIds, so filtering
-      // it here scopes counts AND rows without a rowScope:'person' post-filter
-      // (which would zero out the count-only branches, e.g. paid_unpaid).
-      const employeeAnalyticsScope = await resolveRowScope(user);
-      if (employeeAnalyticsScope) {
-        ownerIds = ownerIds.filter((id) => employeeAnalyticsScope.has(String(id)));
-      }
-
-      const rawMetric = String(args.metric || '').trim().toLowerCase();
-      let metric = rawMetric;
-      if (rawMetric === 'resignation' || rawMetric === 'resignations' || rawMetric === 'left') metric = 'resign';
-      if (rawMetric === 'joined' || rawMetric === 'joining') metric = 'join';
-      if (rawMetric === 'paid' || rawMetric === 'unpaid') metric = 'paid_unpaid';
-
-      // Prefer explicit tool args; fall back to temporal resolver (NL + memory + DB years).
-      let windowArgs = {
-        date: args.date,
-        month: args.month,
-        fromDate: args.fromDate,
-        toDate: args.toDate,
-      };
-      const hasExplicitWindow = !!(windowArgs.date || windowArgs.month || (windowArgs.fromDate && windowArgs.toDate));
-      if (!hasExplicitWindow && args.phrase) {
-        let memory = args.memory || null;
-        if (!memory && user?.id) {
-          try {
-            const memDoc = await ConversationMemory.findOne({
-              userId: user.id,
-              adminId: user.adminId ?? user.id,
-            }).lean();
-            memory = memDoc?.lastEntities || null;
-          } catch (e) {
-            logger.warn(`[ChatAssistant] temporal memory load failed: ${e.message}`);
-          }
-        }
-        const dateField = metric === 'resign' ? 'resignDate' : metric === 'join' ? 'joiningDate' : null;
-        const eventLabel = metric === 'resign' ? 'resignation' : metric === 'join' ? 'joining' : 'records';
-        const resolved = await resolveTemporalWindow({
-          text: String(args.phrase),
-          now: today,
-          memory,
-          dateField,
-          eventLabel,
-          probeYears: dateField
-            ? (monthNum) => probeEmployeeYearsByMonth({
-              Employee,
-              ownerIds,
-              dateField,
-              monthNum,
-            })
-            : null,
-        });
-        if (resolved?.needsClarification) {
-          return {
-            needsClarification: true,
-            clarifyingQuestion: resolved.clarifyingQuestion,
-            options: resolved.options || null,
-            metric,
-            authoritative: true,
-          };
-        }
-        const mapped = toResolveDateWindowArgs(resolved);
-        if (mapped) windowArgs = mapped;
-      }
-
-      const window = resolveDateWindow(windowArgs);
-      if (
-        (metric === 'resign' || metric === 'join') &&
-        window.missing &&
-        !args.compensationType
-      ) {
-        return {
-          needsClarification: true,
-          clarifyingQuestion:
-            'Which period should I use — a calendar month (for example July 2026), or an exact from/to date range (YYYY-MM-DD)?',
-          metric,
-          authoritative: true,
-        };
-      }
-
-      const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100);
-      const compRaw = args.compensationType
-        ? String(args.compensationType).trim().toLowerCase()
-        : null;
-
-      if (metric === 'paid_unpaid') {
-        const paidFilter = buildEmployeeEmploymentFilter({
-          ownerIds,
-          employmentStatus: 'active',
-          compensationType: 'paid',
-          today,
-        });
-        const unpaidFilter = buildEmployeeEmploymentFilter({
-          ownerIds,
-          employmentStatus: 'active',
-          compensationType: 'unpaid',
-          today,
-        });
-        const [paid, unpaid] = await Promise.all([
-          Employee.countDocuments(paidFilter),
-          Employee.countDocuments(unpaidFilter),
-        ]);
-        return {
-          metric: 'paid_unpaid',
-          total: paid + unpaid,
-          breakdown: { paid, unpaid },
-          windowLabel: window.missing ? 'current active employees' : window.label,
-          records: [],
-          authoritative: true,
-          population: 'Employee',
-        };
-      }
-
-      const filterMetric = metric === 'headcount' ? 'headcount' : metric;
-      const filter = buildEmployeeEmploymentFilter({
-        ownerIds,
-        metric: filterMetric === 'resign' || filterMetric === 'join' || filterMetric === 'headcount'
-          ? filterMetric
-          : 'headcount',
-        window: { from: window.from, to: window.to },
-        compensationType: compRaw === 'paid' || compRaw === 'unpaid' ? compRaw : null,
-        today,
-      });
-      const total = await Employee.countDocuments(filter);
-      const docs = await Employee.find(filter)
-        .select('fullName employeeId joiningDate resignDate compensationType owner designation department')
-        .sort({ resignDate: -1, joiningDate: -1 })
-        .limit(limit)
-        .lean();
-      const records = docs.map((e) => ({
-        name: e.fullName,
-        employeeId: e.employeeId,
-        joiningDate: e.joiningDate,
-        resignDate: e.resignDate,
-        compensationType: e.compensationType || null,
-        designation: e.designation || null,
-        department: e.department || null,
-        owner: e.owner,
-      }));
-      return {
-        metric: filterMetric,
-        total,
-        records,
-        windowLabel: window.label,
-        from: window.from,
-        to: window.to,
-        compensationType: compRaw || null,
-        authoritative: true,
-        population: 'Employee',
-        partialList: total > records.length,
-      };
-    }
-
     case 'referral_leads_analytics': {
       // Referral-lead / ATS-candidate population ONLY — see referralLeadsAnalytics.js
       // header for the hand-off note (Employee-role tools only after User has Employee role).
@@ -1998,41 +1660,6 @@ async function fetchModule(name, args, user, uiContext = null) {
         searchedFor: args.search || null,
         wantDetail: !!(args.search || args.jobId) && atomic.result.jobs.length === 1,
       };
-    }
-
-    case 'fetch_external_jobs': {
-      // Redirected to mirrored Job rows (jobOrigin='external' OR legacy externalRef-only
-      // rows — MIRROR_EXTERNAL_OR, the same definition the ATS Jobs page uses, applied via
-      // buildJobRankingMongoFilter -> job.service.js buildJobListFilter). Raw ExternalJob
-      // collection (the ATS External Jobs page) is intentionally not exposed to the
-      // chatbot — only listings that have been mirrored into the ATS Jobs page are visible.
-      const limit = Math.min(args.limit || 100, 200);
-      const visibilityFilter = await resolveJobVisibilityFilter(user);
-      const ScopedJob = scopeJobModel(Job, visibilityFilter);
-      const statusFilter = args.status || 'Active';
-
-      const filters = {
-        jobOrigin: 'external',
-        status: statusFilter,
-        ...(args.company ? { company: args.company } : {}),
-        ...(args.location ? { location: args.location } : {}),
-        ...(args.search ? { search: args.search } : {}),
-      };
-      let baseFilter = buildJobRankingMongoFilter({ filters });
-      if (args.source) baseFilter = andMongoFilters(baseFilter, { 'externalRef.source': args.source });
-
-      const select = 'title organisation location jobType experienceLevel status salaryRange skillTags externalRef externalPlatformUrl jobDescription createdAt';
-
-      const [merged, total] = await Promise.all([
-        ScopedJob.find(baseFilter).select(select).sort({ createdAt: -1 }).limit(limit).lean(),
-        ScopedJob.countDocuments(baseFilter),
-      ]);
-
-      logger.info(
-        `[ChatAssistant][fetch_external_jobs] returned=${merged.length} total=${total} status=${statusFilter}`
-      );
-
-      return { records: merged, total, label: 'external job', statusFilter };
     }
 
     case 'fetch_attendance': {
@@ -2309,12 +1936,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       };
     }
 
-    case 'fetch_current_user': {
-      return User.findById(userId)
-        .select('name email location status lastLoginAt domain education profileSummary')
-        .lean();
-    }
-
     case 'fetch_tasks': {
       const limit = Math.min(args.limit || 50, 100);
       const hasRead = await hasTaskReadAccess(user);
@@ -2575,71 +2196,6 @@ async function fetchModule(name, args, user, uiContext = null) {
     }
 
     // ─── Semantic / vector tools ─────────────────────────────────────────────
-
-    case 'match_candidates_to_job': {
-      const limit = Math.min(args.limit || 10, 25);
-      let job = null;
-      // Same visibility as the Jobs page — the job title feeds straight into the
-      // response (`job: job.title`), so an unscoped lookup is an existence side
-      // channel for Drafts/other-user jobs.
-      const matchJobVisibilityFilter = await resolveJobVisibilityFilter(user);
-      if (args.jobId && mongoose.Types.ObjectId.isValid(args.jobId)) {
-        job = await Job.findOne(andMongoFilters({ _id: args.jobId }, matchJobVisibilityFilter))
-          .select('title skillTags skillRequirements').lean();
-      } else if (args.jobTitle) {
-        const companyUserIds = await User.find({ $or: [{ _id: adminId }, { adminId }] }).distinct('_id');
-        job = await Job.findOne(andMongoFilters({
-          createdBy: { $in: companyUserIds },
-          title: { $regex: escapeRegex(args.jobTitle), $options: 'i' },
-        }, matchJobVisibilityFilter)).select('title skillTags skillRequirements').lean();
-      }
-      if (!job) return { error: 'Job not found' };
-
-      const jobSkills = [
-        ...(job.skillTags ?? []),
-        ...(job.skillRequirements ?? []).map((r) => r.name),
-      ];
-
-      try {
-        const qEmb = await embedQuery(`${job.title} ${jobSkills.join(' ')}`);
-        // Anyone who can apply — candidates AND existing employees — lives in the
-        // Employee (candidates) collection, so the `employees` namespace is the whole
-        // applicable pool. This used to query `students`, which is not a student
-        // roster at all: it is a per-person attendance/HR profile whose skills array
-        // is empty for every row, so matching ranked people on name text alone and
-        // returned existing employees labelled as candidates.
-        const matches = await pineconeQuery('employees', qEmb, limit, null);
-        const ownerIds = matches.map((m) => m.metadata?.mongoId).filter(Boolean);
-        if (!ownerIds.length) return { job: job.title, candidates: [] };
-
-        const people = await Employee.find({ owner: { $in: ownerIds } })
-          .populate('owner', 'name email')
-          .select('fullName email skills owner')
-          .lean();
-
-        const ranked = people.map((p) => {
-          const ownerId = String(p.owner?._id ?? p.owner ?? '');
-          const pScore = matches.find((m) => m.metadata?.mongoId === ownerId)?.score ?? 0;
-          // Employee.skills are objects ({ name, level, ... }) while scoreMatch
-          // stringifies each entry — pass names or every skill becomes "[object Object]"
-          // and the overlap score is always zero.
-          const skillNames = (p.skills ?? []).map((s) => s?.name).filter(Boolean);
-          return {
-            name: p.fullName || p.owner?.name || 'Unknown',
-            email: p.email || p.owner?.email || '',
-            skills: skillNames,
-            matchPct: scoreMatch(skillNames, jobSkills, pScore),
-            // Owner User id — guardToolResult's applyRowScope filters candidates by this.
-            userId: ownerId,
-          };
-        });
-        ranked.sort((a, b) => b.matchPct - a.matchPct);
-        return { job: job.title, candidates: ranked };
-      } catch (err) {
-        logger.warn(`[ChatAssistant] match_candidates_to_job Pinecone error: ${err.message}`);
-        return { error: 'Vector search unavailable', job: job.title };
-      }
-    }
 
     case 'fetch_employee_overview': {
       const isAdmin = await userIsAdmin({ roleIds: user?.roleIds || [] });
@@ -3520,25 +3076,6 @@ async function fetchModule(name, args, user, uiContext = null) {
       }
     }
 
-    case 'fetch_roles': {
-      try {
-        const roles = await listRoleSlugs();
-        logger.info(`[ChatAssistant][fetch_roles] count=${roles.length}`);
-        return {
-          total: roles.length,
-          records: roles.map((r) => ({
-            id: r.id,
-            slug: r.slug,
-            name: r.name,
-            aliases: r.aliases || [],
-          })),
-        };
-      } catch (err) {
-        logger.warn(`[ChatAssistant] fetch_roles error: ${err.message}`);
-        return { total: 0, records: [], error: 'fetch_failed' };
-      }
-    }
-
     default:
       return null;
   }
@@ -3553,13 +3090,6 @@ function buildCountBanner(fetchedData) {
   const lines = [];
   for (const [key, data] of Object.entries(fetchedData)) {
     if (data == null) continue;
-    if (key === 'employee_analytics' && typeof data?.total === 'number') {
-      lines.push(`  employee_analytics.total = ${data.total}`);
-      if (data?.breakdown?.paid != null) {
-        lines.push(`  employee_analytics.paid = ${data.breakdown.paid}`);
-        lines.push(`  employee_analytics.unpaid = ${data.breakdown.unpaid}`);
-      }
-    }
     if (key === 'fetch_attendance_summary' && typeof data?.avgDailyPresent === 'number') {
       lines.push(`  fetch_attendance_summary.avgDailyPresent = ${data.avgDailyPresent}`);
       lines.push(`  fetch_attendance_summary.totalEmployees = ${data.total}`);
@@ -3626,9 +3156,6 @@ function buildCountBanner(fetchedData) {
     }
     if (key === 'fetch_people' && typeof data?.page?.total === 'number') {
       lines.push(`  fetch_people.total = ${data.page.total}`);
-    }
-    if (key === 'fetch_roles' && typeof data?.total === 'number') {
-      lines.push(`  fetch_roles.total = ${data.total}`);
     }
   }
   if (!lines.length) return '';
@@ -3700,58 +3227,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_roles') {
-      const records = data?.records ?? [];
-      const total = data?.total ?? records.length;
-      const lines = [
-        `--- user roles (${total} total | AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number when the user asks "how many roles" / "how many user roles" / "total roles". Do not count rows below.) ---`,
-      ];
-      for (const r of records) {
-        const aliases = Array.isArray(r.aliases) && r.aliases.length ? ` | ALIASES: ${r.aliases.join(', ')}` : '';
-        lines.push(`ROLE: ${r.name} | SLUG: ${r.slug}${aliases}`);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
-    if (key === 'employee_analytics') {
-      if (data?.needsClarification) {
-        parts.push(
-          `--- employee analytics ---\n` +
-          `NEEDS_TIME_WINDOW: ${data.clarifyingQuestion || 'Please clarify the date window.'}\n` +
-          `USER_FACING_REPLY: Ask the user this question. Do not invent counts.`
-        );
-        continue;
-      }
-      const total = data?.total ?? 0;
-      const win = data?.windowLabel || 'unspecified';
-      const metric = data?.metric || 'headcount';
-      if (metric === 'paid_unpaid' && data?.breakdown) {
-        parts.push(
-          `--- employee analytics (paid/unpaid | population=Employee | window=${win} | ` +
-          `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — paid: ${data.breakdown.paid}, unpaid: ${data.breakdown.unpaid}) ---\n` +
-          `Always use these authoritative paid/unpaid totals. Do not count candidate or referral populations.`
-        );
-        continue;
-      }
-      const records = data?.records ?? [];
-      const lines = [
-        `--- employee analytics (metric=${metric} | population=Employee | window=${win} | ` +
-        `AUTHORITATIVE_COUNT_FOR_HOW_MANY: ${total} — ALWAYS use this number. Do not invent.) ---`,
-      ];
-      for (const e of records) {
-        lines.push(
-          `NAME: ${e.name || 'N/A'}` +
-          (e.employeeId ? ` | EMPLOYEE_ID: ${e.employeeId}` : '') +
-          (e.joiningDate ? ` | JOINING_DATE: ${formatDateIST(e.joiningDate)}` : '') +
-          (e.resignDate ? ` | RESIGN_DATE: ${formatDateIST(e.resignDate)}` : '') +
-          (e.compensationType ? ` | COMPENSATION: ${e.compensationType}` : '')
-        );
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     if (key === 'referral_leads_analytics') {
       if (data?.forbidden) {
         parts.push(
@@ -3771,7 +3246,7 @@ function summarizeData(fetchedData) {
         `PLACEMENTS (Onboarding/Joined/Deferred): ${b.placements?.count ?? 0}`,
         `PRE_BOARDING (${b.pre_boarding?.count ?? 0}) — CONCURRENT with placements, NOT a linear application-status step (Placement.preBoardingStatus).`,
         `ONBOARDED (${b.onboarded?.count ?? 0}) — User granted the Employee role; a SEPARATE hand-off event from Placement Joined.`,
-        `Do NOT mix these counts with employee_analytics — different populations.`,
+        `Do NOT mix these counts with Employee-role headcounts — different populations.`,
       ];
       parts.push(lines.join('\n'));
       continue;
@@ -4729,30 +4204,6 @@ function summarizeData(fetchedData) {
       continue;
     }
 
-    if (key === 'fetch_external_jobs') {
-      // Now sourced from Job collection (jobOrigin='external'), not raw ExternalJob.
-      // Fields shifted: company → organisation.name, source → externalRef.source,
-      // salaryMin/Max → salaryRange.{min,max}, isRemote not on Job.
-      const jobs = Array.isArray(data) ? data : (data?.records ?? []);
-      const authoritativeTotal = Array.isArray(data) ? null : data?.total;
-      const statusTag = !Array.isArray(data) && data?.statusFilter ? `, status: ${data.statusFilter}` : '';
-      const header = authoritativeTotal != null
-        ? `--- external job listings mirrored into ATS (AUTHORITATIVE_TOTAL: ${authoritativeTotal}${statusTag} | showing ${jobs.length}) ---`
-        : `--- external job listings mirrored into ATS (${jobs.length} total) ---`;
-      const lines = [header];
-      for (const j of jobs) {
-        const company = j.organisation?.name || j.company || 'N/A';
-        const source = j.externalRef?.source || j.source || 'Unknown';
-        const sMin = j.salaryRange?.min ?? j.salaryMin;
-        const sMax = j.salaryRange?.max ?? j.salaryMax;
-        let line = `TITLE: ${j.title || 'N/A'} | ORIGIN: External (${source}) | COMPANY: ${company} | TYPE: ${j.jobType || 'N/A'} | LOCATION: ${j.location || 'N/A'} | STATUS: ${j.status || 'N/A'}`;
-        if (sMin || sMax) line += ` | SALARY: ${sMin || '?'}-${sMax || '?'}`;
-        lines.push(line);
-      }
-      parts.push(lines.join('\n'));
-      continue;
-    }
-
     const label = key.replace('fetch_', '').replace(/_/g, ' ');
     const count = Array.isArray(data) ? ` (${data.length} record${data.length !== 1 ? 's' : ''})` : '';
     // fetch_people has no bespoke branch above — it lands here, so its scope
@@ -4765,14 +4216,6 @@ function summarizeData(fetchedData) {
     combined = combined.slice(0, MAX_CONTEXT_CHARS) + '\n[...data truncated]';
   }
   return combined;
-}
-
-export function scoreMatch(candidateSkills, jobSkills, pineconeScore) {
-  if (!jobSkills?.length) return Math.round((pineconeScore ?? 0) * 100);
-  const cSkills = new Set((candidateSkills ?? []).map((s) => String(s).toLowerCase()));
-  const jSkills = (jobSkills ?? []).map((s) => String(s).toLowerCase());
-  const overlap = jSkills.filter((s) => cSkills.has(s)).length;
-  return Math.round((overlap / jSkills.length) * 70 + (pineconeScore ?? 0) * 30);
 }
 
 // ─── Cross-tool consistency check ──────────────────────────────────────────
@@ -5109,14 +4552,6 @@ const SPECIFIC_LOOKUP_RE = new RegExp(
 );
 
 const INTENT_PATTERNS = [
-  // Employee analytics (resign/join/paid) — before generic headcount so date-window
-  // asks hit employee_analytics instead of an unscoped fetch_employees list.
-  { re: /\b(how many|count|number of)\b.*\b(resign|resigned|resignations?|left the company|ex-?employees?|former employees?)\b/i,
-                                                                              modules: ['employee_analytics'], args: { metric: 'resign' } },
-  { re: /\b(resign|resigned|resignations?)\b.*\b(during|before|after|in|this month|last month|july|january|february|march|april|may|june|august|september|october|november|december|\d{4}-\d{2})\b/i,
-                                                                              modules: ['employee_analytics'], args: { metric: 'resign' } },
-  { re: /\b(paid|unpaid)\s+employees?\b/i,                                    modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
-  { re: /\b(how many|count)\b.*\b(paid|unpaid)\b.*\bemployees?\b/i,           modules: ['employee_analytics'], args: { metric: 'paid_unpaid' } },
   // Employee / candidate / role headcounts and lists are answered by the agent's
   // people, employees and candidates tools — no legacy fast path for them.
   // Training / course progress (Epic F, Student population).
@@ -5135,8 +4570,6 @@ const INTENT_PATTERNS = [
   // authoritative bucket snapshot.
   { re: /\b(hiring tunnel|hiring funnel|referral funnel|referral tunnel|candidate (hiring )?(pipeline|funnel|tunnel) snapshot|pre-?boarding (count|status|candidates?))\b/i,
                                                                             modules: ['referral_leads_analytics'] },
-  // External jobs (saved from job boards)
-  { re: /\b(external jobs?|saved jobs?|linkedin jobs?|scraped jobs?|job board|external listing|aggregated jobs?)\b/i, modules: ['fetch_external_jobs'] },
   // Jobs (internal company postings)
   { re: /\b(open jobs?|active jobs?|closed jobs?|draft jobs?|archived jobs?|live jobs?|hiring|vacanc|job opening|position available|internal jobs?|how many jobs?|total jobs?|list( all)? jobs?)\b/i, modules: ['fetch_jobs'] },
   // Tasks — overdue/blocked route to authoritative task_board_analytics
@@ -5287,18 +4720,6 @@ export function detectIntent(text, uiContext = null) {
     };
   }
 
-  // Epic A guards: funnel language must not ride employee_analytics; ambiguous
-  // "joined" must clarify before any employment-join count.
-  const funnelGuard = guardEmployeeAnalyticsRoute(text);
-  const joinedClarify = clarifyAmbiguousJoined(text);
-  if (joinedClarify?.needsClarification && !funnelGuard) {
-    return {
-      modules: [],
-      args: {},
-      clarify: joinedClarify.clarifyingQuestion,
-    };
-  }
-
   for (const pattern of INTENT_PATTERNS) {
     if (pattern.re.test(text)) {
       if (pattern.modules.includes('fetch_tasks') && isTaskStageCountQuery(text)) {
@@ -5306,13 +4727,6 @@ export function detectIntent(text, uiContext = null) {
           modules: ['task_board_analytics'],
           args: extractTaskBoardArgs(text, { uiContext }),
         };
-      }
-      // Never let employee_analytics answer referral/funnel questions.
-      if (
-        pattern.modules.includes('employee_analytics') &&
-        funnelGuard?.block
-      ) {
-        continue;
       }
       return { modules: pattern.modules, args: pattern.args || {} };
     }
@@ -5327,7 +4741,6 @@ const TOOLS_REQUIRING_WINDOW = new Set([
   'fetch_attendance_summary',
   'fetch_employee_attendance',
   'fetch_employee_attendance_calendar',
-  'employee_analytics',
   // "who took the most leave" is meaningless without a period — if the phrase
   // carried no month/range, fall through to LLM routing rather than silently
   // ranking over an arbitrary default window.
@@ -5336,15 +4749,6 @@ const TOOLS_REQUIRING_WINDOW = new Set([
 
 function fastPathNeedsArgs(modules, args) {
   if (!modules.some((m) => TOOLS_REQUIRING_WINDOW.has(m))) return false;
-  // paid/unpaid headcount does not require a calendar window.
-  if (
-    modules.includes('employee_analytics') &&
-    (args?.metric === 'paid_unpaid' || args?.compensationType)
-  ) {
-    return false;
-  }
-  // employee_analytics can resolve the window from the raw phrase inside the tool.
-  if (modules.includes('employee_analytics') && args?.phrase) return false;
   return !args.date && !args.month && !args.fromDate && !args.toDate;
 }
 
@@ -5529,7 +4933,7 @@ async function executeManagerConceptRoute(managerRoute, lastUserMsg, user) {
 
 // Legacy job tools that, with the agent on, go to the agent instead of the regex
 // fast path (INTENT_PATTERNS) / continuation map, or trigger the router fallback.
-const AGENT_JOB_TOOLS = new Set(['fetch_jobs', 'fetch_external_jobs']);
+const AGENT_JOB_TOOLS = new Set(['fetch_jobs']);
 
 async function prepareContext(client, history, user, uiContext = null, { requestId = null, agentAttempted = false } = {}) {
   const lastUserMsg = history.filter((m) => m.role === 'user').pop()?.content ?? '';
@@ -5825,32 +5229,6 @@ async function prepareContext(client, history, user, uiContext = null, { request
     });
     try {
       const fetched = await executeFetches(toolCalls, user, uiContext);
-      // Persist resolved analytics window into conversation memory (Epic A2).
-      const analytics = fetched?.employee_analytics;
-      if (analytics && !analytics.needsClarification && (analytics.from || analytics.to || analytics.windowLabel)) {
-        const fromIso = analytics.from instanceof Date
-          ? analytics.from.toISOString().slice(0, 10)
-          : null;
-        const toIso = analytics.to instanceof Date
-          ? analytics.to.toISOString().slice(0, 10)
-          : null;
-        const yearHint = fromIso && /^\d{4}/.test(fromIso) ? Number(fromIso.slice(0, 4)) : null;
-        ConversationMemory.findOneAndUpdate(
-          { userId: user?.id, adminId },
-          {
-            $set: {
-              'lastEntities.lastDateLabel': analytics.windowLabel || null,
-              'lastEntities.lastFromDate': fromIso,
-              'lastEntities.lastToDate': toIso,
-              ...(yearHint != null ? { 'lastEntities.lastYear': yearHint } : {}),
-              'lastEntities.lastTopic': 'employee_analytics',
-              'lastEntities.lastScope': analytics.metric || null,
-              'lastEntities.updatedAt': new Date(),
-            },
-          },
-          { upsert: true }
-        ).catch((e) => logger.warn(`[ChatAssistant] analytics window persist failed: ${e.message}`));
-      }
       const dataContext = summarizeData(fetched);
       logger.info(`[ChatAssistant] intent=fast modules=[${intent.modules}] argsByModule=${JSON.stringify(toolCalls.map((t) => t.function.arguments))} ctx=${dataContext.length}c user=${user?.id}`);
       return { dataContext, moduleCount: intent.modules.length, fetched };

@@ -102,13 +102,6 @@ function readJobs(fetched) {
   };
 }
 
-function readRoles(fetched) {
-  const data = fetched?.fetch_roles;
-  if (!data) return null;
-  const total = Number(data.total ?? data.records?.length ?? 0);
-  return { kind: 'fetch_roles', label: 'roles', total };
-}
-
 function readPlacements(fetched) {
   const data = fetched?.fetch_placements;
   if (!data) return null;
@@ -231,7 +224,6 @@ export function extractFacts(fetched, lastUserMsg = '') {
   push(readLeaveRequests(fetched));
   push(readBackdated(fetched));
   push(readJobs(fetched));
-  push(readRoles(fetched));
   push(readPlacements(fetched));
   push(readOffers(fetched));
   push(readProjects(fetched));

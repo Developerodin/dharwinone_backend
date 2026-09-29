@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import countUsers from '../countUsers.tool.js';
 import listUsers from '../listUsers.tool.js';
 import getUser from '../getUser.tool.js';
+import getMyProfile from '../getMyProfile.tool.js';
 import { buildUserMongoFilter, PEOPLE_ACCESS, PEOPLE_PROFILE_ACCESS } from '../common.js';
 import { tagRoleSlugs, bustRoleRegistry } from '../../../../roleRegistry.js';
 import { selectProviders } from '../../../../personProfile/selectProviders.js';
@@ -747,5 +748,39 @@ describe('CONTRACT.md R11 — Employee/Candidate provider selection is id-based,
     } finally {
       bustRoleRegistry();
     }
+  });
+});
+
+describe('get_my_profile', () => {
+  const VIEWER = { id: 'u-self', adminId: 'a-1' };
+
+  it('resolves the viewer themself, read-only, with impersonation passed through', async () => {
+    let seen;
+    const ctx = {
+      user: { ...VIEWER, __impersonating: true },
+      deps: {
+        resolvePersonProfile: async (args) => {
+          seen = args;
+          return { kind: 'unique', identity: { userId: 'u-self', name: 'Me', roles: ['Employee'] }, profiles: {}, availableSections: [] };
+        },
+      },
+    };
+    const out = await getMyProfile.execute({}, ctx);
+    assert.equal(seen.userId, 'u-self');
+    assert.equal(seen.viewer.id, 'u-self');
+    assert.equal(seen.persist, false);
+    assert.equal(seen.impersonating, true);
+    assert.equal(out.identity.name, 'Me');
+    assert.equal(getMyProfile.render(out).blocks.length, 1);
+  });
+
+  it('returns an error, never another person, when the profile is unavailable', async () => {
+    const ctx = { user: VIEWER, deps: { resolvePersonProfile: async () => ({ kind: 'unavailable' }) } };
+    assert.ok((await getMyProfile.execute({}, ctx)).error);
+  });
+
+  it('needs no permission (self-scoped note access)', () => {
+    assert.equal(getMyProfile.access.anyOf, undefined);
+    assert.ok(getMyProfile.access.note);
   });
 });

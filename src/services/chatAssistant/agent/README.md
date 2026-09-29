@@ -12,12 +12,7 @@ legacy pipeline only, with no other changes.
 
 ## Request flow
 
-1. `chatAssistant.service.js` checks for an open **person** disambiguation pick
-   (`readPending`, from `personProfile/pendingPerson.js`) before `tryAgentRoute` is even
-   called (`chatAssistant.service.js:8264` and the streaming path's `:8585`) — a bare "1" or
-   "the first one" in reply to a person pick always resolves that pick, never reaches the
-   agent.
-2. `tryAgentRoute` (`chatAssistant.service.js`) calls `tryAgentTurn` (`agent/gate.js`) — the
+1. `tryAgentRoute` (`chatAssistant.service.js`) calls `tryAgentTurn` (`agent/gate.js`) — the
    real gate. In order: the `CHATBOT_AGENT` flag, then a domain-generic turn test (skipped
    when the caller already routed here via `routerPicked`) — the turn matches when
    `agent/toolRegistry.js`'s `matchedDomains(lastUserMsg)` names at least one registered
@@ -26,27 +21,26 @@ legacy pipeline only, with no other changes.
    `hasAgentToolAccess(user, matchedDomains)`: the user must be able to call at least one tool
    in a matched domain, or — when no domain was named this turn (a noun-less recency-window
    follow-up) — at least one agent tool at all. Then `hasPendingPick(lastUserMsg, memDoc)` —
-   which checks the **job**, **title**, **entity** (user-vs-role), and **person** disambiguation
-   readers (`readPendingJob`, `readPendingTitle`, `readPendingEntity`, `personProfile/pendingPerson.js`'s
-   `readPending`) plus a "what about jobs" switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of
+   which checks the **job** and **title** disambiguation readers (`readPendingJob`,
+   `readPendingTitle`) plus a "what about jobs" switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of
    these being open skips the agent for this turn. The whole gate runs in one `try/catch`; a
    thrown error also skips the agent.
-3. Only past all of that does `tryAgentTurn` call `runAgent(...)` (`agent/runAgent.js`).
-4. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
+2. Only past all of that does `tryAgentTurn` call `runAgent(...)` (`agent/runAgent.js`).
+3. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
    permission-filtered so the model never sees a tool the user can't call.
-5. `runAgent` loops `llm.step(...)` (`agent/llm.js`, the OpenAI Responses API) up to
+4. `runAgent` loops `llm.step(...)` (`agent/llm.js`, the OpenAI Responses API) up to
    `CHATBOT_AGENT_MAX_STEPS` times: each step may return tool calls, which the registry's
    `execute(name, args)` runs — capped at `MAX_CALLS_PER_STEP = 8` per step; any call beyond
    the first 8 gets a canned `{"error":"too many calls in one step"}` output instead of
    actually running — or a final text answer.
-6. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
+5. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
    the facts are merged and passed to `enforceCounts`, which corrects counts against this
-   turn's tool totals. A reply with a digit but no successful tool call is rejected (step 8).
-7. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; `tryAgentTurn` persists
+   turn's tool totals. A reply with a digit but no successful tool call is rejected (step 7).
+6. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; `tryAgentTurn` persists
    `ledgerEntry` onto `ConversationMemory.agentLedger` via `appendAgentLedger` when it holds
    at least one tool call (a no-tool answer writes nothing) — `runAgent` itself never writes
    to the DB.
-8. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, the
+7. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, the
    same tool failing twice, an empty final reply that's still empty after one
    `tool_choice:'none'` retry, a digit in a reply with no successful tool call, or the turn
    deadline — makes `runAgent` return `null`, and the caller falls through to the legacy
@@ -55,8 +49,8 @@ legacy pipeline only, with no other changes.
    noun-less turn goes straight to legacy. Sage never goes dark because of the agent.
 
 ```
-service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
-                                       flag -> matchedDomains/isAgentTurn -> checkAccess -> hasPendingPick(job/title/entity/person)
+service.js --> tryAgentRoute --> tryAgentTurn (gate.js)
+                   flag -> matchedDomains/isAgentTurn -> checkAccess -> hasPendingPick(job/title)
                                                                                   |
                                                                                   v
                                                         runAgent --getAgentTools--> llm.step (loop, <=8 calls/step) --> registry.execute
@@ -71,7 +65,9 @@ service.js --readPending(person)--> tryAgentRoute --> tryAgentTurn (gate.js)
 ### jobs
 
 The reference domain (`agent/tools/jobs/`): `count_jobs`, `list_jobs`, `get_job`,
-`rank_jobs_by_salary`. Access is `jobs.read`.
+`rank_jobs_by_salary`. Access is `jobs.read`. `filters.jobOrigin: 'external'` plus
+`filters.externalSource` (one feed or an array) answer external / LinkedIn job questions — only
+listings mirrored into the Jobs page, never the raw External Jobs collection.
 
 ### people
 
@@ -86,6 +82,7 @@ defaults to `active` for user counts/lists unless the caller asks for another st
 | `count_users` | Count user accounts, optionally grouped by `role` or `status`. With `groupBy:'role'`, `total` is a distinct-user count (never the sum of the groups — a user with 2 roles counts in both groups, so the raw sum is kept separately as `assignmentCount`); with `groupBy:'status'` the sum is the correct total, since status is exclusive. | `filters` (search/status/role/location/domain/education), `groupBy` (`role`\|`status`) | `users.read` |
 | `list_users` | List user accounts (`id`, `name`, `email`, `roles`, `status`, `lastLoginAt`), newest first; `total` is always the full filtered count. | `filters`, `limit` (default 10, max 25) | `users.read` |
 | `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Name resolution excludes the platform-super account (unless the viewer is one) and deleted accounts, and prefers a single exact name/email match over asking to disambiguate. Ambiguous name → `{ matches }`; no match → `{ matches: [] }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
+| `get_my_profile` | The signed-in user's own profile ("my profile", "who am I", "my employee id"). Separate from `get_user` so it needs no `users.read`; self field rules come from `resolvePersonProfile` (impersonation is never self). | none | `{ note }` (self only) |
 | `list_roles` | List the roles defined in the system, with how many active users hold each. | `status` (`active`\|`inactive`) | `roles.read` |
 | `get_role` | One role's definition: name, aliases, status, full permission list. Exact match only (name, alias, or a former name) — no partial match. | `name` (required) | `roles.read` |
 
@@ -101,7 +98,10 @@ just a person's name is a `get_user` call, not a filter on the previous `count_u
 `agent/tools/employees/`: `count_employees`, `list_employees` — Employee-role profiles only
 (`ownerUserRole: 'employee'`), current employees unless `filters.employmentStatus` says
 otherwise. `count_employees` can `groupBy` `department`, `designation`, `employmentType`,
-`compensationType` or `employmentStatus`. Both run through `executeEmployeeQuery`, so row
+`compensationType` or `employmentStatus`. `filters.joinedBetween` / `resignedBetween` (`{ from, to }`,
+`YYYY-MM-DD`, inclusive whole UTC days) answer "who joined / resigned in <period>" and default
+`employmentStatus` to `all`; "joined" about placements or hires is a `handoff` (hiring pipeline is not
+migrated). Both run through `executeEmployeeQuery`, so row
 scope and salary masking match the Employees page. Access: the Employees page read/manage
 permissions (`EMPLOYEE_QUERY_READ_PERMISSIONS`).
 
@@ -110,7 +110,10 @@ permissions (`EMPLOYEE_QUERY_READ_PERMISSIONS`).
 `agent/tools/candidates/`: `count_candidates`, `list_candidates` — Candidate-role profiles
 only (`ownerUserRole: 'candidate'`). Candidate and Employee are distinct roles and are never
 aliased or merged; a missing Candidate role matches nothing. Same executor and access as
-`employees`.
+`employees`. `match_candidates_to_job` ranks Candidate profiles (or, with `pool: 'employees'`,
+current employees) against one job the viewer can see: Pinecone `employees` namespace for
+similarity + skill overlap, then role and row scope through `buildEmployeeListMongoFilter` /
+`applyEmployeeListScope`.
 
 ### applications
 
@@ -262,8 +265,7 @@ adding `matchesTurn` to a new domain's `index.js` is enough to widen `gate.js`'s
 agent tool at all) for free. No `gate.js` edit needed for either.
 
 One place still needs a manual addition per domain:
-- **`hasPendingPick`** reads a fixed list of pending-pick readers — job, title, entity, and
-  now person (`personProfile/pendingPerson.js`'s `readPending`). A new domain with its own
+- **`hasPendingPick`** reads a fixed list of pending-pick readers — job and title. A new domain with its own
   disambiguation flow (e.g. "which John did you mean?") needs its reader added here too, or
   the agent will take a bare "1" / "the first one" meant for that domain's disambiguation
   while the recency window is open.
@@ -303,18 +305,13 @@ One place still needs a manual addition per domain:
   dozens of parallel calls in one step when its tools don't fit the question, so only the
   first 8 actually run; the rest get a `{"error":"too many calls in one step"}` output so
   every call still has a matching result and the model sees the cap was hit.
-- **The agent never runs while a pick is pending, and the person check is now doubled up
-  on purpose.** `chatAssistant.service.js` resolves an open **person** disambiguation
-  (`readPending`) before `tryAgentRoute` is even called. `agent/gate.js`'s `tryAgentTurn`
-  separately checks `hasPendingPick` — **job**, **title**, **entity** (user-vs-role), and
-  **person** (`personProfile/pendingPerson.js`'s `readPending`, off the already-loaded
-  `memDoc`) picks, plus the `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the
-  *last* gate condition, right before calling `runAgent` (after the domain-match/recency
-  test and `checkAccess`, not before). The person check exists at both layers deliberately:
-  `chatAssistant.service.js`'s is the one that actually runs first in the request flow, and
-  `hasPendingPick`'s is defense in depth for `tryAgentTurn` itself (and for any future caller
-  that skips the service.js check). Either way, a bare "1" or "the first one" always resolves
-  the open pick instead of being handed to the loop as a fresh question.
+- **The agent never runs while a pick is pending.** `agent/gate.js`'s `tryAgentTurn` checks
+  `hasPendingPick` — **job** and **title** picks (off the already-loaded `memDoc`), plus the
+  `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the *last* gate condition, right
+  before calling `runAgent` (after the domain-match/recency test and `checkAccess`, not
+  before). A bare "1" or "the first one" always resolves the open pick instead of being
+  handed to the loop as a fresh question. (The person and user-vs-role picks are gone: the
+  agent's `get_user` returns `{ matches }` and asks in its own reply.)
 
 ## Context & memory
 

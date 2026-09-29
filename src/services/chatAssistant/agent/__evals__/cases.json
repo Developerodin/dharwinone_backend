@@ -152,9 +152,9 @@
     "expect": { "handoff": true }
   },
   {
-    "id": "handoff-john-position",
+    "id": "users-john-position",
     "question": "what position is John in",
-    "expect": { "handoff": true, "forbidSearchTerm": "John" }
+    "expect": { "tools": ["get_user"] }
   },
   {
     "id": "users-john-role",
@@ -508,5 +508,40 @@
     "id": "people-count-students",
     "question": "how many students do we have",
     "expect": { "tools": ["count_users"] }
+  },
+  {
+    "id": "r3-my-employee-id",
+    "question": "what is my employee id?",
+    "expect": { "tools": ["get_my_profile"] }
+  },
+  {
+    "id": "r3-who-am-i",
+    "question": "who am I?",
+    "expect": { "tools": ["get_my_profile"] }
+  },
+  {
+    "id": "r3-joined-last-month",
+    "question": "how many employees joined last month?",
+    "expect": { "tools": ["count_employees"] }
+  },
+  {
+    "id": "r3-resigned-in-july",
+    "question": "who resigned in July 2026?",
+    "expect": { "tools": ["list_employees"] }
+  },
+  {
+    "id": "r3-placement-joined-handoff",
+    "question": "how many placements were marked joined this month?",
+    "expect": { "handoff": true }
+  },
+  {
+    "id": "r3-best-candidates",
+    "question": "who are the best candidates for the React Developer job?",
+    "expect": { "tools": ["match_candidates_to_job"] }
+  },
+  {
+    "id": "r3-linkedin-jobs",
+    "question": "how many LinkedIn jobs do we have?",
+    "expect": { "tools": ["count_jobs"] }
   }
 ]

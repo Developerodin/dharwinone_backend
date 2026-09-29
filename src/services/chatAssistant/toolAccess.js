@@ -8,9 +8,8 @@
  * tool is self-scoped.
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  * `adminByName` — mirrors a route that also lets an Administrator-by-name user
- * through with no permission grant. No tool currently needs this (fetch_external_jobs
- * dropped it — it reads Job mirrors under jobs.read, not requireExternalJobsAccess.js'
- * external-jobs.* gate); kept as a documented escape hatch should a route legitimately
+ * through with no permission grant. No tool currently needs this; kept as a documented
+ * escape hatch should a route legitimately
  * need it. Every tool must otherwise pass via `anyOf` or platformSuperUser.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
@@ -33,9 +32,7 @@ const PLACEMENTS_READ = [ // placement.route.js canReadPlacements
 
 export const TOOL_ACCESS = {
   // People — employee.route.js
-  employee_analytics: { anyOf: PEOPLE_READ },
   designation_manager_analytics: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  match_candidates_to_job: { anyOf: PEOPLE_READ, rowScope: 'person' },
   // Permission keys only — no router tool by these names since round 2; kept for
   // resolveTitleAmbiguity, buildSystemContext and the two-stage people path.
   fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
@@ -50,7 +47,6 @@ export const TOOL_ACCESS = {
   // origin fetch_jobs already exposes — not the raw ExternalJob collection that
   // requireExternalJobsAccess.js's external-jobs.* gate protects. Mirror fetch_jobs'
   // rule exactly rather than a permission this tool doesn't actually read behind.
-  fetch_external_jobs: { anyOf: ['jobs.read'] },
   referral_leads_analytics: { note: 'referralLeadsAnalytics.js candidates.read' },
 
   // Org / PM
@@ -76,11 +72,7 @@ export const TOOL_ACCESS = {
   fetch_shifts: { anyOf: ['students.read'] }, // shift.route.js GET
   training_analytics: { note: 'person arg gated in handler (Task 3)' },
 
-  // Admin config
-  fetch_roles: { anyOf: ['roles.read'] }, // role.route.js GET — roles.read only, no .manage alias
-
   // Self-scoped / public
-  fetch_current_user: {},
   fetch_my_shift: {},
   fetch_meetings: { note: 'caller-invited meetings only' },
   fetch_holidays: {},

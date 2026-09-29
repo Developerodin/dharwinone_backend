@@ -387,6 +387,10 @@ export function buildJobRankingMongoFilter(plan) {
     // — a legacy externalRef-only row with no jobOrigin field set still counts as external.
     appendFilterClause(filter, MIRROR_EXTERNAL_OR);
   }
+  // Mirrored listings from one external feed (Job.externalRef.source, e.g. 'linkedin-jobs-api').
+  if (f.externalSource) {
+    filter['externalRef.source'] = Array.isArray(f.externalSource) ? { $in: f.externalSource } : f.externalSource;
+  }
   if (f.company) {
     filter['organisation.name'] = { $regex: escapeRegex(f.company), $options: 'i' };
   }
