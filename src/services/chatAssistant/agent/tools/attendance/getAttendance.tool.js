@@ -57,15 +57,20 @@ export default defineTool({
       total: status ? rows.length : (page?.totalResults ?? rows.length),
       statusBreakdown,
       ...(page?.totalResults > FETCH_CAP ? { breakdownCoversFirst: FETCH_CAP } : {}),
-      records: rows.slice(0, limit).map((r) => ({
-        date: isoDay(r.date),
-        status: r.status ?? null,
-        leaveType: r.leaveType ?? null,
-        punchIn: r.punchIn ? formatPunchIST(new Date(r.punchIn)) : null,
-        punchOut: r.punchOut ? formatPunchIST(new Date(r.punchOut)) : null,
-        hours: r.duration ? +(Number(r.duration) / 3600000).toFixed(2) : null,
-        notes: r.notes ?? null,
-      })),
+      records: rows.slice(0, limit).map((r) => {
+        // Leave and Holiday rows store the day's midnight in punchIn as a placeholder
+        // (attendance.service.js), which reads as a 05:30 punch in IST. Not a real punch.
+        const punched = r.status !== 'Leave' && r.status !== 'Holiday';
+        return {
+          date: isoDay(r.date),
+          status: r.status ?? null,
+          leaveType: r.leaveType ?? null,
+          punchIn: punched && r.punchIn ? formatPunchIST(new Date(r.punchIn)) : null,
+          punchOut: punched && r.punchOut ? formatPunchIST(new Date(r.punchOut)) : null,
+          hours: r.duration ? +(Number(r.duration) / 3600000).toFixed(2) : null,
+          notes: r.notes ?? null,
+        };
+      }),
     };
   },
   render(result) {

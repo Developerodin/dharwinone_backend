@@ -32,7 +32,7 @@ describe('get_attendance', () => {
         seen = { sid, q };
         return { totalResults: 2, results: [
           { date: '2026-09-02T00:00:00.000Z', status: 'Present', punchIn: '2026-09-02T04:00:00Z', duration: 3600000 },
-          { date: '2026-09-01T00:00:00.000Z', status: 'Leave', leaveType: 'sick' },
+          { date: '2026-09-01T00:00:00.000Z', status: 'Leave', leaveType: 'sick', punchIn: '2026-09-01T00:00:00.000Z' },
         ] };
       },
     }));
@@ -42,6 +42,8 @@ describe('get_attendance', () => {
     assert.deepEqual(out.statusBreakdown, { Present: 1, Leave: 1 });
     assert.equal(out.records[0].punchIn, '09:30');
     assert.equal(out.records[0].hours, 1);
+    // Leave rows carry a midnight placeholder punchIn — never shown as a 05:30 punch.
+    assert.equal(out.records[1].punchIn, null);
   });
 
   it('refuses another person for a viewer without students/candidates read (B3: permission, not role name)', async () => {
