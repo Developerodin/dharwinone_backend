@@ -23,23 +23,8 @@ const instructions = [
   '- Shifts, week-offs, holidays and the org chart are not these tools — call handoff.',
 ].join('\n');
 
-// Nouns this domain owns. "present" only as an attendance word, not "presentation".
-const ATTENDANCE_RE = /\b(attendance|punch(?:ed|es|ing)?|check(?:ed)?[\s-]?(?:in|out)|present(?!ation)|absent(?:ees?)?|absences?|working\s+hours|backdated|missed\s+punch(?:es)?|regulari[sz]\w*)\b/i;
-const LEAVE_RE = /\b(leaves?|leave\s+requests?|on\s+leave|time\s+off|sick\s+days?|off\s+today|out\s+of\s+office|ooo)\b/i;
-// Other rounds' nouns: shifts / week-offs / holidays / org chart (R6), tasks (R7), meetings (R8),
-// policy questions (knowledge base). A strong attendance noun still wins.
-const OTHER_DOMAIN_RE = /\b(shifts?|week[\s-]?offs?|holidays?|org(?:ani[sz]ation(?:al)?)?\s*chart|reporting\s+line|tasks?|meetings?|polic(?:y|ies))\b/i;
-const STRONG_RE = /\b(attendance|backdated|leave\s+requests?|punch(?:ed)?\s*(?:in|out))\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  if (!ATTENDANCE_RE.test(t) && !LEAVE_RE.test(t)) return false;
-  return !(OTHER_DOMAIN_RE.test(t) && !STRONG_RE.test(t));
-}
-
 export default {
   domain: 'attendance',
   instructions,
   tools: [getAttendance, getAttendanceSummary, countLeaveRequests, listLeaveRequests, whoIsOnLeaveToday, listBackdatedRequests],
-  matchesTurn,
 };

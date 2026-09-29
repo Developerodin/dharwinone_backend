@@ -7,23 +7,13 @@ const conversationMemorySchema = new mongoose.Schema(
     // and emits the "Duplicate schema index" warning on boot.
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    summary: { type: String, default: '' },
-    turnCount: { type: Number, default: 0 },
     /**
-     * Session entity tracking — last referenced person / role / job per
-     * (userId, adminId). Persisted between turns so follow-up questions
-     * resolve against the prior turn instead of an empty context.
-     *
-     * Identity is keyed on ObjectIds (`personUserId`, `personEmpDocId`,
-     * `roleId`, `jobId`). The plain-string fields are display-only
-     * snapshots — accurate at write time, but readers must re-resolve
-     * through the live collection before trusting them, because names rot
-     * on rename and rows can be deleted.
-     *
-     * Legacy plain-string fields (`person`, `role`, `employeeId`,
-     * `jobTitle`) are kept so memory documents that predate the ID
-     * migration still resolve correctly via name lookup. New writes
-     * populate both ID and snapshot.
+     * Identity pointers the legacy Sage pipeline (removed 2026-09) wrote per
+     * (userId, adminId). Nothing writes them any more; they stay declared only
+     * so entityCleanup.js and memorySweep.scheduler.js can still scrub deleted
+     * people/roles/jobs out of rows written before the removal, until the TTL
+     * index expires those rows. Every other legacy field was dropped from the
+     * schema; old documents just carry the extra keys until they expire.
      */
     lastEntities: {
       personUserId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User',     default: null },
@@ -36,135 +26,8 @@ const conversationMemorySchema = new mongoose.Schema(
       employeeId:      { type: String, default: null, trim: true },
       role:            { type: String, default: null, trim: true },
       jobTitle:        { type: String, default: null, trim: true },
-      lastDate:        { type: String, default: null, trim: true },
-      lastDateLabel:   { type: String, default: null, trim: true },
-      lastFromDate:    { type: String, default: null, trim: true },
-      lastToDate:      { type: String, default: null, trim: true },
-      /** Resolved calendar year from the last temporal window (for month-only follow-ups). */
-      lastYear:        { type: Number, default: null },
-      lastTopic:       { type: String, default: null, trim: true },
-      lastScope:       { type: String, default: null, trim: true },
-      /** Project graph memory — follow-ups after project count / team mapping. */
-      lastProjectCount: { type: Number, default: null },
-      lastProjectNames: { type: [String], default: undefined },
-      lastProjectId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
-      projectName:      { type: String, default: null, trim: true },
-      lastTeamName:     { type: String, default: null, trim: true },
-      teamId:           { type: mongoose.Schema.Types.ObjectId, ref: 'TeamGroup', default: null },
-      /** Task / sprint graph memory — follow-ups after task board or workload analytics. */
-      lastSprintId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Sprint', default: null },
-      lastSprintName:   { type: String, default: null, trim: true },
-      lastAssigneeName: { type: String, default: null, trim: true },
-      lastTaskFilter:   { type: String, default: null, trim: true },
-      /**
-       * Task-board / team follow-up state. These paths were written by
-       * saveTaskQueryContext.js and mergeEntities long before they were
-       * declared here — and because this schema is strict, every one of
-       * those writes was silently dropped by castUpdate. Declaring a path
-       * is what makes its write real; keep this block in step with the
-       * mergeEntities key list in chatAssistant.service.js.
-       */
-      lastTaskStage:      { type: String, default: null, trim: true },
-      lastTaskStageLabel: { type: String, default: null, trim: true },
-      lastTaskCount:      { type: Number, default: null },
-      lastTaskIds:        { type: [String], default: undefined },
-      lastTaskBoardFilter: { type: mongoose.Schema.Types.Mixed, default: null },
-      lastTeamCount:      { type: Number, default: null },
-      lastTeamNames:      { type: [String], default: undefined },
-      unitName:           { type: String, default: null, trim: true },
-      /** Agent↔employee follow-up subject — written by conversationState/agentSubject.js. */
-      currentAgentSubject: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Job entityQuery follow-up context — written by conversationState/jobQueryContext.js. */
-      jobQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Task entityQuery follow-up context — written by saveTaskQueryContext.js. */
-      currentTaskQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** User-vs-role and job-vs-designation disambiguation — conversationalEntity/pendingEntity.js. */
-      pendingEntityDisambiguation: { type: mongoose.Schema.Types.Mixed, default: null },
-      pendingTitleDisambiguation:  { type: mongoose.Schema.Types.Mixed, default: null },
-      /** "Which job did you mean?" state — jobProfile/pendingJob.js. */
-      pendingJobDisambiguation: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Reference resolver — entity type / intent from last authoritative fetch. */
-      lastEntityType:   { type: String, default: null, trim: true },
-      lastIntent:       { type: String, default: null, trim: true },
-      lastMetric:       { type: String, default: null, trim: true },
-      /**
-       * Canonical employee entityQuery context — filters/operations from the last
-       * deterministic employee query. Used for "list them" replay without LLM.
-       */
-      lastContext:      { type: mongoose.Schema.Types.Mixed, default: null },
-      /**
-       * Multi-group query context for compound filter composition (OR groups).
-       * Persists filterGroups, active group, page, and intent across turns.
-       */
-      currentQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Org structure count memory (departments, managers, supervisors). */
-      lastOrgCount:     { type: Number, default: null },
-      /** Last listing snapshot for ordinal resolution ("the second one"). */
-      lastResultList:   { type: [mongoose.Schema.Types.Mixed], default: undefined },
-      /** Hierarchical focus stack for multi-hop org drill-down (future). */
-      focusStack:       { type: [mongoose.Schema.Types.Mixed], default: undefined },
-      /** Pending business-concept clarification (e.g. manager ambiguity). */
-      pendingConceptClarification: {
-        concept:       { type: String, default: null, trim: true },
-        originalQuery: { type: String, default: null, trim: true },
-        options:       { type: [mongoose.Schema.Types.Mixed], default: undefined },
-        updatedAt:     { type: Date, default: null },
-      },
-      /**
-       * Pending person disambiguation. A sibling of pendingConceptClarification,
-       * NOT a key inside lastContext — saveEmployeeQueryContext.js:42 replaces
-       * lastContext wholesale on every deterministic employee turn.
-       */
-      pendingPersonDisambiguation: {
-        query:     { type: String, default: null, trim: true },
-        matches:   { type: [mongoose.Schema.Types.Mixed], default: undefined },
-        createdAt: { type: Date, default: null },
-      },
-      /** Person-profile conversation state — communicated field keys per subject. */
-      personConversationState: {
-        entityId:            { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-        entityType:          { type: String, default: 'user', trim: true },
-        name:                { type: String, default: null, trim: true },
-        communicatedFields:  { type: [String], default: undefined },
-        updatedAt:           { type: Date, default: null },
-      },
-      /** Title-ambiguity position context — job posting vs employee designation follow-ups. */
-      positionConversationState: {
-        entity:        { type: String, default: 'employee', trim: true },
-        designation:   { type: String, default: null, trim: true },
-        source:        { type: String, default: null, trim: true },
-        updatedAt:     { type: Date, default: null },
-      },
-      /** Conversation entity subject — who we are talking about (persists across intents). */
-      currentEntitySubject: {
-        entityType:  { type: String, default: 'employee', trim: true },
-        entityId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-        userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-        employeeId:  { type: String, default: null, trim: true },
-        empDocId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
-        name:        { type: String, default: null, trim: true },
-        updatedAt:   { type: Date, default: null },
-      },
-      /** Topic memory for manager follow-ups ("what about org chart"). */
-      conversationTopic: {
-        concept:            { type: String, default: null, trim: true },
-        lastInterpretation: { type: String, default: null, trim: true },
-        updatedAt:          { type: Date, default: null },
-      },
-      /** Person-scoped job application thread — applicant, operation, domain. */
-      applicationQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Referral-lead query thread — candidate, referrer, sales-agent context. */
-      referralLeadQueryContext: { type: mongoose.Schema.Types.Mixed, default: null },
-      /** Last deterministic query domain (e.g. applications) for what-about switches. */
-      lastQueryDomain: { type: String, default: null, trim: true },
-      updatedAt:       { type: Date, default: null },
     },
-    /**
-     * Pagination cursor for the most recent multi-record listing
-     * (employees, agents, etc.). Lets "show more" / "next" continue
-     * from the previous page without re-classifying. Cleared when
-     * the user starts a new topic.
-     */
+    /** Legacy listing cursor — scrubbed by memorySweep.scheduler.js only (see lastEntities). */
     lastListing: {
       role:             { type: String, default: null, trim: true },
       employmentScope:  { type: String, default: null, trim: true },

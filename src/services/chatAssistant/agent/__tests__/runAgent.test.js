@@ -154,6 +154,19 @@ describe('runAgent', () => {
     assert.equal(registry.executed.length, 0);
   });
 
+  it('onOutcome names why a turn was not answered (the caller picks the fixed reply from it)', async () => {
+    const outcomeOf = async (responses, results = {}) => {
+      const seen = [];
+      const step = scriptedStep(responses);
+      await runAgent({ client, user, history, memDoc: null, requestId: 'r', onOutcome: (o) => seen.push(o), deps: baseDeps(step, fakeRegistry(results)) });
+      return seen;
+    };
+    assert.deepEqual(await outcomeOf([stepResult({ toolCalls: [call('h', 'handoff', { reason: 'x' })] })]), ['handoff']);
+    assert.deepEqual(await outcomeOf([stepResult({ text: 'Our notice period is 30 days.' })]), ['untooled_number']);
+    assert.deepEqual(await outcomeOf([new Error('OpenAI 500')]), ['error']);
+    assert.deepEqual(await outcomeOf([stepResult({ text: 'Hi! How can I help?' })]), ['answer']);
+  });
+
   it('step cap → one final tool_choice none step answers', async () => {
     config.chatbot.agent.maxSteps = 3;
     const registry = fakeRegistry({ count_jobs: () => ({ ok: true, result: { total: 4 } }) });

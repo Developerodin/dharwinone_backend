@@ -1,12 +1,9 @@
 // src/services/chatAssistant/personProfile/index.js
 
-import { resolveUserEntity as realResolve } from '../entityResolver.js';
 import { getUserPermissionContext as realPermCtx } from '../../permission.service.js';
 import { tagRoleDisplayNames as realNames, tagRoleSlugs as realSlugs } from '../roleRegistry.js';
 import { selectProviders as realSelect } from './selectProviders.js';
 import { projectFields } from './fieldProjector.js';
-import { writePending as realWritePending,
-         writeCurrentPerson as realWriteCurrent } from './pendingPerson.js';
 import { hasApiPermissionFromContext } from '../../../utils/permissionCheck.js';
 import User from '../../../models/user.model.js';
 
@@ -18,60 +15,36 @@ function realLoadUserById(id) {
 }
 
 /**
+ * Read-only: callers (Sage's get_user / get_my_profile tools) resolve who they
+ * mean first and pass the User id.
+ *
  * @param {object} a
- * @param {string} [a.person]         free-form name / email / employeeId
- * @param {any}    [a.userId]         pre-resolved id from the pre-router
+ * @param {any}    a.userId           the target User id
  * @param {'brief'|'full'} [a.depth]
  * @param {object} a.viewer           req.user
  * @param {boolean} [a.impersonating] true when req.impersonation is present
- * @param {any} a.adminId
- * @param {boolean} [a.persist] false skips writePending/writeCurrentPerson entirely
- *   (a read-only caller, e.g. Sage's get_user tool — see toolAccess.js). Defaults
- *   to true, so every existing caller keeps writing exactly as before.
  * @param {object} [a.deps]           injection seam for tests
  */
 export async function resolvePersonProfile({
-  person, userId = null, depth = 'brief', viewer, impersonating = false, adminId, persist = true, deps = {},
+  userId, depth = 'brief', viewer, impersonating = false, deps = {},
 }) {
-  const resolveEntity = deps.resolveUserEntity ?? realResolve;
   const permCtxOf     = deps.getUserPermissionContext ?? realPermCtx;
   const nameTagger    = deps.tagRoleDisplayNames ?? realNames;
   const slugTagger    = deps.tagRoleSlugs ?? realSlugs;
   const pickProviders = deps.selectProviders ?? realSelect;
-  const savePending   = persist ? (deps.writePending ?? realWritePending) : async () => {};
-  const saveCurrent   = persist ? (deps.writeCurrentPerson ?? realWriteCurrent) : async () => {};
   const loadUser      = deps.loadUserById ?? realLoadUserById;
   const viewerId      = viewer?.id ?? viewer?._id;
 
-  let target;
-  if (userId) {
-    // Callers that already know who they mean (pending-disambiguation
-    // selection, conversational entity route, person conversation state) pass
-    // only an id. Load the row: without roleIds, tagRoleSlugs() below returns
-    // an empty Map and every one of those turns answered kind:'unavailable'
-    // ("I couldn't reach the directory just now") for every person.
-    const row = await loadUser(userId);
-    if (!row) return { kind: 'notFound' };
-    target = {
-      userId: row._id ?? userId,
-      name: row.name ?? null,
-      email: row.email ?? null,
-      roleIds: row.roleIds || [],
-    };
-  } else {
-    const res = await resolveEntity(person, { viewer });
-    if (res.kind === 'notFound') return { kind: 'notFound' };
-    if (res.kind === 'ambiguous') {
-      const matches = [];
-      for (const m of res.matches) {
-        const names = await nameTagger(m.roleIds || []);
-        matches.push({ userId: m.userId, name: m.name, roles: [...names.values()] });
-      }
-      await savePending({ userId: viewerId, adminId, query: person, matches });
-      return { kind: 'ambiguous', matches };
-    }
-    target = res.match;
-  }
+  // Load the row: without roleIds, tagRoleSlugs() below returns an empty Map and
+  // the turn would answer kind:'unavailable' for every person.
+  const row = userId ? await loadUser(userId) : null;
+  if (!row) return { kind: 'notFound' };
+  const target = {
+    userId: row._id ?? userId,
+    name: row.name ?? null,
+    email: row.email ?? null,
+    roleIds: row.roleIds || [],
+  };
 
   const { permissions } = await permCtxOf(viewer);
   const platformSuperUser = !!viewer?.platformSuperUser;
@@ -82,12 +55,9 @@ export async function resolvePersonProfile({
 
   const canReadAny = READ_NAMESPACES.some((ns) =>
     hasApiPermissionFromContext(permissions, platformSuperUser, `${ns}.read`));
-  // Deliberately no identity/name/email on this branch: the legacy
-  // resolve_person_profile tool (chatAssistant.service.js, no `anyOf` access
-  // gate — any Sage user can call it) forwards this object's fields straight
-  // into the model's context. Any caller that already knows who the target is
-  // (e.g. Sage's get_user tool) must build its own scalar identity from its
-  // own requester-scoped lookup, not from here (CONTRACT.md Ruling R10).
+  // Deliberately no identity/name/email on this branch: a caller that needs one
+  // (Sage's get_user tool) builds its own scalar identity from its own
+  // requester-scoped lookup, not from here (CONTRACT.md Ruling R10).
   if (!canReadAny && !isSelfTarget) return { kind: 'notAuthorized' };
 
   const slugMap = await slugTagger(target.roleIds || []);
@@ -118,8 +88,6 @@ export async function resolvePersonProfile({
       : { ...projected, noRecord: true, relatedTools: provider.relatedTools ?? [] };
     for (const s of projected.sections) allSections.add(s);
   }
-
-  await saveCurrent({ userId: viewerId, adminId, target });
 
   return {
     kind: 'unique',

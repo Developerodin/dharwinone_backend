@@ -5,7 +5,7 @@
 // This is a DIFFERENT question from both of its neighbours and deliberately
 // lives in its own module so the three can never be conflated:
 //   • who is on leave TODAY   -> onLeaveToday.service.js (Attendance ledger)
-//   • the leave-request queue -> fetch_leave_requests    (LeaveRequest rows)
+//   • the leave-request queue -> list_leave_requests     (LeaveRequest rows)
 //   • who took the MOST leave -> here                    (LeaveRequest days per person)
 //
 // Ranking metric is leave DAYS inside the asked window, not request count: one
@@ -15,54 +15,6 @@
 // Company scope is NOT decided here — the caller passes the filter produced by
 // leaveRequest.service#buildLeaveRequestScopeFilter, the same scope the
 // Settings → Leave Requests page uses.
-
-const VALID_STATUS = ['pending', 'approved', 'rejected', 'cancelled'];
-const VALID_TYPES = ['casual', 'sick', 'unpaid'];
-
-/** A leave/time-off mention — the subject has to actually be leave. */
-const LEAVE_SUBJECT_RE = /\b(leaves?|time\s*off)\b/i;
-/** Superlative or explicit ranking language. */
-const RANK_CUE_RE = /\b(most|highest|top|maximum|max|fewest|least|lowest|rank|ranked|ranking|leader\s*board|leaderboard)\b/i;
-
-/**
- * True when the question is asking who tops a leave comparison.
- *
- * Checked in detectIntent BEFORE the generic INTENT_PATTERNS list, because
- * "rank employees by leave taken" otherwise matches an employees rule and
- * "who has the most leaves" matches the catch-all leave rule — both of which
- * answer a different question than the one asked.
- *
- * @param {string} text
- * @returns {boolean}
- */
-export function looksLikeLeaveRankingQuery(text) {
-  if (!text || typeof text !== 'string') return false;
-  return LEAVE_SUBJECT_RE.test(text) && RANK_CUE_RE.test(text);
-}
-
-/** Ranking counts leave actually granted unless the caller says otherwise. */
-export const DEFAULT_RANKING_STATUS = 'approved';
-
-/**
- * Normalize free-form tool args into the status/type/limit the pipeline takes.
- * @param {{ status?: string, leaveType?: string, limit?: number }} [args]
- * @returns {{ status: string|null, leaveType: string|null, limit: number }}
- *   status === null means "every status" (the caller explicitly asked for `all`).
- */
-export function normalizeRankingArgs(args = {}) {
-  const rawStatus = String(args.status ?? '').trim().toLowerCase();
-  const status = rawStatus === 'all'
-    ? null
-    : (VALID_STATUS.includes(rawStatus) ? rawStatus : DEFAULT_RANKING_STATUS);
-
-  const rawType = String(args.leaveType ?? '').trim().toLowerCase();
-  const leaveType = VALID_TYPES.includes(rawType) ? rawType : null;
-
-  const rawLimit = Number(args.limit);
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 50) : 10;
-
-  return { status, leaveType, limit };
-}
 
 /**
  * Build the aggregation pipeline that ranks people by leave days in a window.

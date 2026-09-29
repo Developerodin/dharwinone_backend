@@ -1,11 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
-  TOOL_ACCESS,
-  checkToolAccess,
+  checkAccessRule,
   applyRowScope,
   resolveRowScope,
   redactSalary,
@@ -13,70 +9,39 @@ import {
   canReadOtherTraining,
 } from '../toolAccess.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const svcSrc = fs.readFileSync(path.join(here, '..', '..', 'chatAssistant.service.js'), 'utf8');
-
 const userWith = (...perms) => ({ id: 'u1', roleIds: [], authContext: { permissions: new Set(perms) } });
 const notAdmin = { isAdmin: async () => false };
 const admin = { isAdmin: async () => true };
+const PEOPLE_RULE = { anyOf: ['candidates.read', 'employees.read'], rowScope: 'person' };
 
-describe('toolAccess', () => {
-  it('every ROUTING_TOOLS name has a TOOL_ACCESS entry', () => {
-    const start = svcSrc.indexOf('const ROUTING_TOOLS = [');
-    const end = svcSrc.indexOf('\n];', start);
-    const names = [...svcSrc.slice(start, end).matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]);
-    assert.ok(names.length >= 1, `parsed ${names.length} tool names`);
-    const missing = names.filter((n) => !(n in TOOL_ACCESS));
-    assert.deepEqual(missing, []);
+describe('checkAccessRule', () => {
+  it('a rule with no anyOf (a { note } rule) passes every user', async () => {
+    assert.equal((await checkAccessRule({ note: 'self only' }, userWith(), notAdmin)).ok, true);
   });
 
-  // ROUTING_TOOLS only lists tools the LLM can call directly — it missed
-  // designation_manager_analytics, which fetchModule dispatches internally
-  // from the manager-concept router and which fell through to "unknown tool,
-  // always denied" until it got a TOOL_ACCESS entry. Diff every `case` label
-  // inside fetchModule's switch instead, so an internally-dispatched tool
-  // can't go ungated the same way again.
-  it('every case label inside fetchModule has a TOOL_ACCESS entry', () => {
-    const start = svcSrc.indexOf('async function fetchModule(');
-    assert.ok(start >= 0, 'fetchModule not found in chatAssistant.service.js');
-    const nextFn = svcSrc.slice(start + 1).search(/\n(?:async )?function [A-Za-z0-9_]+\(/);
-    assert.ok(nextFn >= 0, 'could not find the end of fetchModule');
-    const body = svcSrc.slice(start, start + 1 + nextFn);
-    const caseNames = [...body.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
-    assert.ok(caseNames.length >= 1, `parsed ${caseNames.length} case labels`);
-    const missing = caseNames.filter((n) => !(n in TOOL_ACCESS));
-    assert.deepEqual(missing, []);
-  });
-
-  it('denies unknown tools', async () => {
-    const r = await checkToolAccess('fetch_everything', userWith('candidates.read'), notAdmin);
-    assert.equal(r.ok, false);
-  });
-
-  it('denies fetch_employees to a user with no candidate/employee read', async () => {
-    const r = await checkToolAccess('fetch_employees', userWith('tasks.read'), notAdmin);
+  it('denies a user with none of the anyOf permissions, naming them', async () => {
+    const r = await checkAccessRule(PEOPLE_RULE, userWith('tasks.read'), notAdmin);
     assert.equal(r.ok, false);
     assert.match(r.reason, /candidates/i);
   });
 
-  it('allows fetch_employees with candidates.read', async () => {
-    const r = await checkToolAccess('fetch_employees', userWith('candidates.read'), notAdmin);
-    assert.equal(r.ok, true);
+  it('allows a user with one of the anyOf permissions', async () => {
+    assert.equal((await checkAccessRule(PEOPLE_RULE, userWith('candidates.read'), notAdmin)).ok, true);
   });
 
   it('platformSuperUser passes with no permissions', async () => {
     const su = { ...userWith(), platformSuperUser: true };
-    assert.equal((await checkToolAccess('fetch_jobs', su, notAdmin)).ok, true);
+    assert.equal((await checkAccessRule({ anyOf: ['jobs.read'] }, su, notAdmin)).ok, true);
   });
 
-  it('denies a user with no matching permission even if a hypothetical isAdmin would say true (no admin shortcut)', async () => {
-    const r = await checkToolAccess('fetch_jobs', userWith(), admin);
-    assert.equal(r.ok, false);
+  it('no admin shortcut: an admin without the permission is denied', async () => {
+    assert.equal((await checkAccessRule({ anyOf: ['jobs.read'] }, userWith(), admin)).ok, false);
   });
 
-  it('adminByName is not a general admin shortcut: fetch_employees still denies an admin-without-perm user', async () => {
-    const r = await checkToolAccess('fetch_employees', userWith(), admin);
-    assert.equal(r.ok, false);
+  it('adminByName lets an Administrator-by-name user through, and only then', async () => {
+    const rule = { anyOf: ['jobs.read'], adminByName: true };
+    assert.equal((await checkAccessRule(rule, userWith(), admin)).ok, true);
+    assert.equal((await checkAccessRule(rule, userWith(), notAdmin)).ok, false);
   });
 });
 
@@ -158,7 +123,7 @@ describe('row scope', () => {
     assert.equal(out.page.hasMore, false);
   });
 
-  it('rowMatchesAllowed matches on _id/id/userId/owner (exported for reuse outside applyRowScope, e.g. buildSystemContext)', () => {
+  it('rowMatchesAllowed matches on _id/id/userId/owner', () => {
     const allowed = new Set(['a']);
     assert.equal(rowMatchesAllowed({ _id: 'a' }, allowed), true);
     assert.equal(rowMatchesAllowed({ id: 'a' }, allowed), true);

@@ -17,9 +17,7 @@ export const PROVIDERS = {
 };
 
 /**
- * Local precedence, owned by personProfile/. Deliberately NOT
- * columnVisibility.ROLE_PRECEDENCE — that is module-private and answers a
- * different question (which RBAC tier is the VIEWER).
+ * Local precedence, owned by personProfile/.
  */
 export const PROVIDER_PRECEDENCE = [
   'employee', 'candidate', 'student', 'mentor',

@@ -38,24 +38,6 @@ const instructions = [
     'matches means the name fits several people: list them and ask which one.',
 ].join('\n');
 
-// Hiring nouns. "meeting(s)" is deliberately absent: internal meetings are a different, un-migrated domain.
-const INTERVIEW_RE = /\b(interviews?|interviewed|interviewers?|interviewing)\b/i;
-const OFFER_RE = /\b(offers|offer\s+letters?|job\s+offers?|offer\s+(?:status|code|accepted|sent|pending|rejected|declined)|(?:pending|accepted|rejected|declined|sent|draft)\s+offers?)\b/i;
-// "joining" alone is also meetings ("who is joining today's standup") and attendance ("is Rahul joining
-// tomorrow"), so it only counts with a period ("joining next week") or as a whole "who is joining today?".
-const PLACEMENT_RE = /\b(placements?|pre-?boarding|onboarding\s+(?:queue|stage|status)|background\s+verification|bgv|joiners?|joining\s+date|joining\s+(?:this|next)\s+(?:week|month|quarter))\b/i;
-const JOINING_TODAY_RE = /\b(?:who|how\s+many|how\s+many\s+\w+)\s+(?:is|are)\s+joining\s+(?:today|tomorrow)\W*$/i;
-// "referred" is misspelled often (reffered, refered) — the legacy router's REFERRED_WORD handled the same slips.
-const REFERRAL_RE = /\b(ref{1,2}er{1,2}(?:ed|al|als|rer|rers)|refer\s+leads?|sales\s+agents?|hiring\s+(?:funnel|tunnel|pipeline)|(?:candidate|recruitment)\s+(?:funnel|pipeline)|conversion\s+rate|hires)\b/i;
-// "which candidates did Sami refer" — the bare verb only after did/has/have, so "refer to the policy" stays out.
-const REFER_VERB_RE = /\b(?:did|has|have)\s+[\w .'-]{1,40}?\s+refer\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  return INTERVIEW_RE.test(t) || OFFER_RE.test(t) || PLACEMENT_RE.test(t) || JOINING_TODAY_RE.test(t)
-    || REFERRAL_RE.test(t) || REFER_VERB_RE.test(t);
-}
-
 export default {
   domain: 'hiring',
   instructions,
@@ -63,5 +45,4 @@ export default {
     countInterviews, listInterviews, countOffers, listOffers,
     countPlacements, listPlacements, getHiringFunnel, listReferralLeads,
   ],
-  matchesTurn,
 };

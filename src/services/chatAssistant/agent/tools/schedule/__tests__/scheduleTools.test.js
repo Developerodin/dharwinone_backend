@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import getWorkSchedule from '../getWorkSchedule.tool.js';
 import listShifts from '../listShifts.tool.js';
 import listHolidays from '../listHolidays.tool.js';
-import { matchesTurn } from '../index.js';
-import { matchesTurn as orgMatchesTurn } from '../../org/index.js';
 
 const USER_ID = '64b7f0c2a1b2c3d4e5f60001';
 const perms = (...p) => ({ id: USER_ID, name: 'Asha', authContext: { permissions: new Set(p) } });
@@ -177,30 +175,5 @@ describe('list_holidays', () => {
     assert.equal(filter.isActive, true);
     assert.ok(filter.date.$gte instanceof Date);
     assert.equal(res.total, 1);
-  });
-});
-
-describe('schedule / org matchesTurn', () => {
-  it('matches schedule questions', () => {
-    for (const q of ['what is my shift', 'when is my next holiday', 'what is my week off', 'who works the night shift']) {
-      assert.equal(matchesTurn(q), true, q);
-    }
-  });
-
-  it('does not steal attendance/leave, task/project or meeting turns', () => {
-    for (const q of [
-      'show my attendance for the night shift', 'who is on leave on the holiday', 'tasks due before the holiday',
-      'meetings during my shift', 'how many projects does the Sales department have',
-      'list tasks for managers', 'which meetings did the manager attend', 'my leave balance',
-    ]) {
-      assert.equal(matchesTurn(q) || orgMatchesTurn(q), false, q);
-    }
-  });
-
-  it('org matches manager / department / org chart turns, incl. project managers', () => {
-    for (const q of ['how many managers do we have', 'list departments', 'who is in Group A', 'how many project managers']) {
-      assert.equal(orgMatchesTurn(q), true, q);
-    }
-    assert.equal(orgMatchesTurn('count employees group by designation'), false);
   });
 });

@@ -228,36 +228,6 @@ export async function executeAtomicJobQuery(options = {}) {
   return envelope;
 }
 
-/**
- * @param {object|null} fetched
- */
-export function resolveJobPayload(fetched) {
-  if (!fetched) return null;
-  if (fetched.job_result) return fetched.job_result;
-  if (fetched.fetch_jobs?.type === 'job_result') return fetched.fetch_jobs;
-  if (fetched.fetch_jobs) {
-    const data = fetched.fetch_jobs;
-    const filters = data.query?.filters ?? data.filters ?? {};
-    const total = Number(
-      data.result?.total
-      ?? data.authoritativeCount
-      ?? data.counts?.total
-      ?? data.total
-      ?? data.records?.length
-      ?? 0,
-    );
-    const records = data.result?.jobs ?? data.records ?? [];
-    return buildJobResultEnvelope({
-      filters,
-      total,
-      records,
-      intent: data.intent ?? (records.length ? 'list' : 'count'),
-      queryId: data.query?.queryId ?? data.queryId ?? null,
-    });
-  }
-  return null;
-}
-
 /** @param {object} filters @param {number} total */
 export function buildJobCountPhrase(filters = {}, total = 0) {
   const parts = [];

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import countCandidates from '../countCandidates.tool.js';
 import listCandidates from '../listCandidates.tool.js';
 import matchCandidatesToJob from '../matchCandidatesToJob.tool.js';
-import { matchesTurn } from '../index.js';
 
 const SALES_AGENT = { id: 'sa-1', _id: 'sa-1', authContext: { permissions: new Set(['candidates.read']) } };
 
@@ -55,13 +54,6 @@ describe('list_candidates', () => {
     assert.equal(seen.filters.ownerUserRole, 'candidate');
     assert.deepEqual(seen.filters.skills, ['react']);
     assert.equal(out.records[0].name, 'Ravi');
-  });
-});
-
-describe('candidates matchesTurn', () => {
-  it('matches candidate nouns only', () => {
-    assert.equal(matchesTurn('how many candidates in Pune'), true);
-    assert.equal(matchesTurn('how many employees'), false);
   });
 });
 
@@ -126,10 +118,5 @@ describe('match_candidates_to_job', () => {
     ctx.deps.pineconeQuery = async () => { throw new Error('down'); };
     const out = await matchCandidatesToJob.execute({ jobTitle: 'react' }, ctx);
     assert.match(out.error, /unavailable/);
-  });
-
-  it('matchesTurn opens on fit phrasing', () => {
-    assert.equal(matchesTurn('who fits the React developer role'), true);
-    assert.equal(matchesTurn('best matches for the QA job'), true);
   });
 });

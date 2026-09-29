@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import getTrainingProgress from '../getTrainingProgress.tool.js';
-import { matchesTurn } from '../index.js';
 
 const SELF = '64b7f0c2a1b2c3d4e5f60001';
 const OTHER = '64b7f0c2a1b2c3d4e5f60002';
@@ -73,11 +72,5 @@ describe('get_training_progress', () => {
     });
     assert.equal(res.self, false);
     assert.equal(res.person, 'Ravi');
-  });
-
-  it('matchesTurn', () => {
-    assert.equal(matchesTurn('how far am I in my training'), true);
-    assert.equal(matchesTurn('which courses has Priya completed'), true);
-    assert.equal(matchesTurn('how many tasks are open'), false);
   });
 });

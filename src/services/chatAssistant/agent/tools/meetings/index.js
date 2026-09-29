@@ -13,18 +13,8 @@ const instructions = [
   '- Meeting descriptions and invitee email lists are not available here; say so if asked.',
 ].join('\n');
 
-const MEETING_RE = /\bmeetings?\b/i;
-// Other domains own these even when "meeting" appears: hiring (interviews), attendance/leave, tasks, org.
-const NOT_MEETINGS_RE = /\b(interview\w*|attendance|leaves?|tasks?|projects?|org(?:anization|anisation)?\s*(?:chart|structure)|reports?\s+to)\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  return MEETING_RE.test(t) && !NOT_MEETINGS_RE.test(t);
-}
-
 export default {
   domain: 'meetings',
   instructions,
   tools: [countMeetings, listMeetings],
-  matchesTurn,
 };

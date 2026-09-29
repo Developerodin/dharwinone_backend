@@ -7,7 +7,7 @@
 
 import { eadDisplayValue } from '../../../../utils/eadDisplayValue.js';
 import Employee from '../../../../models/employee.model.js';
-import { resignationCutoff } from '../../employeeEmploymentFilter.js';
+import { resignationCutoff } from '../../../../utils/resignBucket.js';
 
 /**
  * Mirrors employmentStatusClause(): a resignDate AFTER the UTC end-of-day cutoff

@@ -129,19 +129,6 @@ export async function collectOrgManagerLeaders(ctx) {
 }
 
 /**
- * @param {string} phrase
- * @returns {object}
- */
-export function designationRegexForPhrase(phrase) {
-  const p = String(phrase || 'Manager').trim();
-  if (/^manager$/i.test(p)) {
-    return { $regex: '^Manager$', $options: 'i' };
-  }
-  const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return { $regex: escaped, $options: 'i' };
-}
-
-/**
  * List/count org managers (people with direct reports via reportingManager and/or org-chart head span).
  * @param {{ adminId: string, limit?: number, user?: object }} opts
  */

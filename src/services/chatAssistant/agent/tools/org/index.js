@@ -16,19 +16,8 @@ const instructions = [
   '- "Unassigned employees" (not placed in any chart department) → get_org_structure metric unassigned.',
 ].join('\n');
 
-const ORG_RE = /\b(org(?:ani[sz]ation(?:al)?)?\s*(?:chart|structure|units?)|supervisors?|managers?|direct\s+reports?|reports?\s+to|reporting\s+(?:line|manager)|unassigned|ceo|departments?|group\s+[a-z0-9])\b/i;
-// Turns about attendance/leave (R5), tasks/projects (R7) or meetings (R8) stay with their own domain,
-// even when they mention a department or a manager. "Project manager(s)" is a designation, so it stays here.
-const OTHER_DOMAIN_RE = /\b(attendance|leaves?|punch(?:es|ed)?|backdated|tasks?|sprints?|meetings?|projects?(?!\s+managers?))\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  return ORG_RE.test(t) && !OTHER_DOMAIN_RE.test(t);
-}
-
 export default {
   domain: 'org',
   instructions,
   tools: [getOrgStructure],
-  matchesTurn,
 };

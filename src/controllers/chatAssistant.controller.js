@@ -1,7 +1,6 @@
 import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import * as chatAssistantService from '../services/chatAssistant.service.js';
-import { clearContextCache } from '../services/chatAssistant.service.js';
 import * as chatbotConfigService from '../services/chatbotConfig.service.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
@@ -125,12 +124,10 @@ export const streamMessage = async (req, res) => {
 };
 
 /**
- * Clear chatbot context cache
+ * Kept for API compatibility: Sage no longer caches a company snapshot (every
+ * answer comes from live tool calls), so there is nothing to clear.
  */
 export const refreshCache = catchAsync(async (req, res) => {
-  const adminId = req.user?.adminId ?? req.user?.id;
-  clearContextCache(adminId);
-
   res.status(httpStatus.OK).json({
     success: true,
     message: 'Context cache cleared',
@@ -138,10 +135,9 @@ export const refreshCache = catchAsync(async (req, res) => {
 });
 
 /**
- * Clear chatbot conversation: drop the persisted ConversationMemory row for
- * this user+admin AND bust the per-admin context cache. Frontend invokes
- * this from the "Clear conversation" button so the next turn starts fresh
- * (no summary, no lastEntities, no stale snapshot).
+ * Clear chatbot conversation: drop the persisted ConversationMemory row (the
+ * agent's tool ledger) for this user+admin. Frontend invokes this from the
+ * "Clear conversation" button so the next turn starts fresh.
  */
 export const clearConversation = catchAsync(async (req, res) => {
   const userId = req.user?.id;
@@ -150,7 +146,6 @@ export const clearConversation = catchAsync(async (req, res) => {
     return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: 'Unauthorized' });
   }
   const { deletedCount } = await ConversationMemory.deleteOne({ userId, adminId });
-  clearContextCache(adminId);
   res.status(httpStatus.OK).json({
     success: true,
     message: 'Conversation cleared',

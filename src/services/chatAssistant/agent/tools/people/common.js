@@ -8,7 +8,6 @@ import {
 } from '../../../../user.service.js';
 import { queryRoles as realQueryRoles } from '../../../../role.service.js';
 import { resolvePersonProfile as realResolvePersonProfile } from '../../../personProfile/index.js';
-import { writeEntitySubject as realWriteEntitySubject } from '../../../conversationState/entitySubject.js';
 import { resolveRowScope as realResolveRowScope } from '../../../toolAccess.js';
 import {
   viewerSeesHiddenUsers as realViewerSeesHiddenUsers,
@@ -33,9 +32,6 @@ export const ROLES_ACCESS = Object.freeze({ anyOf: ['roles.read'] }); // list_ro
 /** Unconditional — mirrors role.service.js's getAssigneeCountsByRoleId. CONTRACT.md Ruling R1. */
 export const EXCLUDE_PLATFORM_SUPER = { platformSuperUser: { $ne: true } };
 
-/** adminId convention used throughout chatAssistant.service.js. */
-export const adminIdOf = (user) => user.adminId ?? user.id ?? user._id;
-
 /**
  * Injectable model/service seam for one tool call — ctx.deps overrides for tests,
  * the same idiom as jobs' jobScope(ctx) returning { Job, visibilityFilter }. Every
@@ -55,7 +51,6 @@ export function peopleDeps(ctx) {
     viewerSeesHiddenUsers: deps.viewerSeesHiddenUsers ?? realViewerSeesHiddenUsers,
     getDirectoryHiddenUserIds: deps.getDirectoryHiddenUserIds ?? realGetDirectoryHiddenUserIds,
     queryRoles: deps.queryRoles ?? realQueryRoles,
-    writeEntitySubject: deps.writeEntitySubject ?? realWriteEntitySubject,
   };
 }
 

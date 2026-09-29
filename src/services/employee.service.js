@@ -19,14 +19,12 @@ import { generatePresignedDownloadUrl } from '../config/s3.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
-import { resignationCutoff } from './chatAssistant/employeeEmploymentFilter.js';
-import { designationRegexForPhrase } from './chatAssistant/managerCounts.js';
 import { resolveCompanyEmailSettingsUserId, normalizeMongoRefId } from './emailConnectionPolicy.service.js';
 import { syncReferralPipelineStatusForCandidate } from './referralLeads.service.js';
 import { setEmployeeDepartment } from './employeeDepartment.helper.js';
 import { resolvePositionIdFromDesignationTitle } from './positionResolve.helper.js';
 import { autoEnrollStudentForPosition } from './positionEnrollment.service.js';
-import { resignBucket } from '../utils/resignBucket.js';
+import { resignBucket, resignationCutoff } from '../utils/resignBucket.js';
 import { notify } from './notification.service.js';
 import { clearBankProofIndex } from './payrollDetail.service.js';
 import {
@@ -627,6 +625,18 @@ const mapExperienceLevel = (years) => {
 
 /** Escape user input for safe use inside MongoDB `$regex` literals (ReDoS / metachar injection). */
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Designation filter for the Employees list: a bare "Manager" matches only the
+ * exact title (not "Project Manager"); anything else is a case-insensitive substring.
+ * @param {string} phrase
+ * @returns {object}
+ */
+const designationRegexForPhrase = (phrase) => {
+  const p = String(phrase || 'Manager').trim();
+  if (/^manager$/i.test(p)) return { $regex: '^Manager$', $options: 'i' };
+  return { $regex: escapeRegex(p), $options: 'i' };
+};
 
 /**
  * Whitespace-tolerant regex source — collapses runs of whitespace in the input

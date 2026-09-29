@@ -2,62 +2,65 @@
 
 ## What this is
 
-Sage (the chat assistant) answers migrated domains through a tool-calling loop on
+Sage (the chat assistant) answers every chat turn through a tool-calling loop on
 OpenAI's Responses API: the model picks one or more tools, the tools query the
-real service layer, and the model writes the final reply from the results. Domains
-that haven't migrated yet — and any turn the loop can't handle — fall back to the
-legacy deterministic pipeline in `chatAssistant.service.js`. The loop is **off by default**:
-a host must explicitly set `CHATBOT_AGENT=true` to enable it; unset or `false` runs today's
-legacy pipeline only, with no other changes.
+real service layer, and the model writes the final reply from the results.
+Greetings, thanks and general-knowledge definitions are answered with no tool
+call. There is no other pipeline: a turn the loop cannot answer gets a fixed
+reply (request flow, step 5), so the chat never goes dark and never throws to the user.
+The legacy deterministic router and its `CHATBOT_AGENT` / `CHATBOT_TWO_STAGE` flags were
+removed in R9 (2026-09-29).
 
 ## Request flow
 
-1. `tryAgentRoute` (`chatAssistant.service.js`) calls `tryAgentTurn` (`agent/gate.js`) — the
-   real gate. In order: the `CHATBOT_AGENT` flag, then a domain-generic turn test (skipped
-   when the caller already routed here via `routerPicked`) — the turn matches when
-   `agent/toolRegistry.js`'s `matchedDomains(lastUserMsg)` names at least one registered
-   domain (each domain's own `matchesTurn(text)`, e.g. `jobs`') or the agent answered
-   the last tool-backed turn recently (`hasRecentAgentTurn`) — then `checkAccess`, which is
-   `hasAgentToolAccess(user, matchedDomains)`: the user must be able to call at least one tool
-   in a matched domain, or — when no domain was named this turn (a noun-less recency-window
-   follow-up) — at least one agent tool at all. Then `hasPendingPick(lastUserMsg, memDoc)` —
-   which checks the **job** and **title** disambiguation readers (`readPendingJob`,
-   `readPendingTitle`) plus a "what about jobs" switch-back regex (`JOB_ENTITY_SWITCH_RE`). Any of
-   these being open skips the agent for this turn. The whole gate runs in one `try/catch`; a
-   thrown error also skips the agent.
-2. Only past all of that does `tryAgentTurn` call `runAgent(...)` (`agent/runAgent.js`).
+1. `chatAssistant.controller.js` calls `sendMessage` or `streamMessage`
+   (`chatAssistant.service.js`). Both trim the request's messages to the last 6
+   non-empty ones and call `tryAgentTurn` (`agent/gate.js`).
+2. `tryAgentTurn` loads the user's `ConversationMemory` row (for the tool ledger) and
+   calls `runAgent(...)` (`agent/runAgent.js`) — on every turn, with no routing test.
 3. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
-   permission-filtered so the model never sees a tool the user can't call.
-4. `runAgent` loops `llm.step(...)` (`agent/llm.js`, the OpenAI Responses API) up to
-   `CHATBOT_AGENT_MAX_STEPS` times: each step may return tool calls, which the registry's
-   `execute(name, args)` runs — capped at `MAX_CALLS_PER_STEP = 8` per step; any call beyond
-   the first 8 gets a canned `{"error":"too many calls in one step"}` output instead of
-   actually running — or a final text answer.
-5. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
+   permission-filtered so the model never sees a tool the user can't call, and loops
+   `llm.step(...)` (`agent/llm.js`) up to `CHATBOT_AGENT_MAX_STEPS` times: each step may
+   return tool calls, which the registry's `execute(name, args)` runs — capped at
+   `MAX_CALLS_PER_STEP = 8` per step; any call beyond the first 8 gets a canned
+   `{"error":"too many calls in one step"}` output instead of actually running — or a
+   final text answer.
+4. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
    the facts are merged and passed to `enforceCounts`, which corrects counts against this
-   turn's tool totals. A reply with a digit but no successful tool call is rejected (step 7).
-6. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`; `tryAgentTurn` persists
-   `ledgerEntry` onto `ConversationMemory.agentLedger` via `appendAgentLedger` when it holds
-   at least one tool call (a no-tool answer writes nothing) — `runAgent` itself never writes
-   to the DB.
-7. Anything that isn't a clean answer — the model calling `handoff`, a thrown error, the
-   same tool failing twice, an empty final reply that's still empty after one
-   `tool_choice:'none'` retry, a digit in a reply with no successful tool call, or the turn
-   deadline — makes `runAgent` return `null`, and the caller falls through to the legacy
-   pipeline, which then runs exactly as with the flag off. If the recency window was open,
-   `tryAgentTurn` appends a `{ at, handoff: true }` marker that closes it, so the next
-   noun-less turn goes straight to legacy. Sage never goes dark because of the agent.
+   turn's tool totals. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`;
+   `tryAgentTurn` persists `ledgerEntry` onto `ConversationMemory.agentLedger` via
+   `appendAgentLedger` when it holds at least one tool call (a no-tool answer writes
+   nothing) — `runAgent` itself never writes to the DB.
+5. Anything that isn't a clean answer makes `runAgent` return `null` and report an
+   outcome through its `onOutcome` callback; `tryAgentTurn` turns that into a fixed,
+   digit-free reply (`SAGE_REPLIES` / `fallbackReply` in `gate.js`) with no blocks, and
+   logs `[agentGate] fixed reply … outcome=<outcome>`:
+   - `handoff` (the model called `handoff`: no tool fits) → "I don't have that in the system
+     right now. I can help with …" (the old `SAGE_FALLBACK` wording);
+   - `untooled_number` (a digit in a reply with no successful tool call) → "I couldn't check
+     that against the system, so I won't guess a number …";
+   - `error`, `deadline`, `repeated_tool_failure`, `empty` (a thrown error or timeout, the
+     turn deadline, the same tool failing twice, an empty reply still empty after one
+     `tool_choice:'none'` retry), or a throw inside `tryAgentTurn` itself (e.g. the memory
+     read) → "Sorry, I couldn't answer that right now. Please try again in a moment."
+6. The service wraps the result in the `{ reply, blocks, meta }` envelope
+   (`renderers/types.js`). `sendMessage` returns it; `streamMessage` has no token stream to
+   relay (the agent has none), so it sends the whole reply as one `onToken` (the `{ token }`
+   SSE event) and then `onDone(envelope)` (the `{ done, blocks, meta }` event) — the same
+   events the frontend already consumes. An answered turn's `meta` is
+   `{ kind: 'jobs', deterministic: false, tookMs }` (the value the agent path always sent);
+   a fixed reply's is `{ kind: null, deterministic: false }`.
 
 ```
-service.js --> tryAgentRoute --> tryAgentTurn (gate.js)
-                   flag -> matchedDomains/isAgentTurn -> checkAccess -> hasPendingPick(job/title)
-                                                                                  |
-                                                                                  v
-                                                        runAgent --getAgentTools--> llm.step (loop, <=8 calls/step) --> registry.execute
-    ^                                                                                                                          |
-    |<----------------------------------- null (gate skip / handoff / error / empty) ----------------------------------------|
-    |
-    +--> legacy pipeline (fallback)
+controller --> sendMessage / streamMessage (chatAssistant.service.js)
+                  |
+                  v
+              tryAgentTurn (gate.js) --loadMemDoc--> runAgent --getAgentTools--> llm.step (loop, <=8 calls/step) --> registry.execute
+                  |                                     |
+                  |<------ answer {reply, blocks} ------+   (ledger entry appended when a tool ran)
+                  |<------ null + onOutcome(handoff | untooled_number | error | deadline | ...)
+                  v
+              the answer, or a fixed reply (SAGE_REPLIES) --> { reply, blocks, meta } envelope
 ```
 
 ## Registered domains
@@ -136,7 +139,7 @@ with the viewer, so row scope is the page's; each `access` mirrors that page's G
 | `list_referral_leads` | `referralLeadsAnalytics.searchReferralLeads` → `listReferralLeads`. Referrer / sales-agent names resolve only among users who hold that role on some referral lead (never the whole user directory); several → `{ matches }` with names only. "me" (or the viewer's own name) needs no lookup; a viewer the page scopes to their own leads cannot name anyone else. Day windows go to the service as IST instants (`referredAtUpperBound` takes a full-instant `to` as-is). | `candidates.read` |
 
 Counts are one `limit: 1` service call per status/result bucket, so every number is the page's own
-count. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those stay on the legacy `fetch_meetings`).
+count. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those are the `meetings` domain).
 
 ### meetings
 
@@ -146,7 +149,7 @@ row scope is the page's `internalMeetingScope` (all four `meetings.*` = every me
 hosting / invited). Past and upcoming (`filters.when`), `status`, `scheduledBetween` (whole IST days via
 employees' `dayRange`), page search, and `mine` (the page's Mine toggle). Rows carry page-visible fields only —
 no description, no invite emails (`invitedCount` instead). Interviews are a separate domain and never answered
-here; `matchesTurn` stands down on interview / attendance / leave / task / project / org wording.
+here.
 
 ### knowledge
 
@@ -167,7 +170,7 @@ gets that page's row scope), `list_shifts` (`shift.service` `queryShifts`, `stud
 like `GET /shifts/:id/assignees`), `list_holidays` (`scope: 'mine'` = the holidays assigned to the
 viewer's profile, what the portal shows them; `scope: 'company'` = the Holidays page via
 `holiday.service` `queryHolidays`, `students.read`). Windows go through `employees/common.js`'s
-`dayRange`. `matchesTurn` skips attendance/leave, task/project and meeting turns.
+`dayRange`.
 
 ### org
 
@@ -210,9 +213,7 @@ Day windows are `{ from, to }` `YYYY-MM-DD`, validated by `employees/common.js`'
 turned into UTC-midnight day keys (`dayKeys`), because `Attendance.date`, `LeaveRequest.dates`
 and `attendanceEntries.date` are day keys, not instants. Filters reach the services inside `$and`,
 so a service that assigns its own scope (`Object.assign(filter, scope)` / `filter.$or = own`)
-intersects with the person filter instead of overwriting it. `matchesTurn` stands down for
-shift, week-off, holiday, org-chart, task, meeting and policy phrasing unless a strong attendance
-noun ("attendance", "backdated", "leave request", "punch in") is present.
+intersects with the person filter instead of overwriting it.
 
 ### projects
 
@@ -248,7 +249,7 @@ export default defineTool({
     filters: Joi.object({ search: Joi.string().min(1) }),
   }),
   // { anyOf: [...] } (>=1 permission string) or { note: '...' } when a handler
-  // already enforces its own check — same shape as toolAccess.js TOOL_ACCESS entries.
+  // already enforces its own check (evaluated by toolAccess.js checkAccessRule).
   // Co-locate it as a constant in common.js (like jobs' JOBS_ACCESS) so every tool in
   // the domain shares one definition.
   access: MY_DOMAIN_ACCESS,
@@ -282,10 +283,9 @@ Notes on each field, from what `defineTool.js` actually enforces (a bad tool thr
   (e.g. jobs mirrors the ATS Jobs page), pull individual keys from that route's Joi object
   in `src/validations/*.validation.js` (see `agent/tools/jobs/filters.js`'s `page(key)`
   helper) so the chat accepts exactly what the page accepts. One source, no drift.
-- **`access`** is `{ anyOf: [...] }` or `{ note: '...' }` (+ optional `rowScope: 'person'`) —
-  identical semantics to a `toolAccess.js` `TOOL_ACCESS` entry; it replaces that entry for
-  agent tools, evaluated by `checkAccessRule`/`guardResultForRule` (extracted from
-  `checkToolAccess`/`guardToolResult`, same behavior).
+- **`access`** is `{ anyOf: [...] }` or `{ note: '...' }` (+ optional `rowScope: 'person'`),
+  evaluated by `toolAccess.js`'s `checkAccessRule` (before the call) and `guardResultForRule`
+  (row scope + salary redaction on the result).
 - **`execute` must call the SERVICE layer**, not raw Mongo, when a service function exists —
   same business rules the REST controller uses.
 - **`execute` must AND the page's visibility filter into every query**, and **must fail
@@ -351,26 +351,6 @@ tooling only does for files explicitly allow-listed:
 
 See memory `project_backend_tests_not_versioned` for why this is 3 steps, not 1.
 
-### 5. Widen the gate for a new domain
-
-`agent/gate.js` is domain-generic: it doesn't hard-code any domain's nouns. A domain index
-(`agent/tools/<domain>/index.js`) may export an optional `matchesTurn(text) => boolean` —
-jobs' is the noun/ranking-query test (`hasJobSubjectNoun(text) || looksLikeJobRankingQuery(text)`),
-moved out of `gate.js` and into `agent/tools/jobs/index.js`. `agent/toolRegistry.js`'s
-`matchedDomains(text)` runs every registered domain's `matchesTurn` and returns the names of
-the ones that matched; a domain with no `matchesTurn` export never matches this way. So:
-adding `matchesTurn` to a new domain's `index.js` is enough to widen `gate.js`'s
-`isAgentTurn` (any domain matches, or the user's last turn was a recent agent turn — see
-`hasRecentAgentTurn`) and the access check (`hasAgentToolAccess(user, matchedDomains)`:
-≥1 permitted tool in a matched domain, or — with no domain named this turn — ≥1 permitted
-agent tool at all) for free. No `gate.js` edit needed for either.
-
-One place still needs a manual addition per domain:
-- **`hasPendingPick`** reads a fixed list of pending-pick readers — job and title. A new domain with its own
-  disambiguation flow (e.g. "which John did you mean?") needs its reader added here too, or
-  the agent will take a bare "1" / "the first one" meant for that domain's disambiguation
-  while the recency window is open.
-
 ## Rules that keep it safe
 
 - **RBAC is checked twice.** `getAgentTools` hides tools the user can't call (the model
@@ -380,14 +360,15 @@ One place still needs a manual addition per domain:
   runs `enforceCounts` on the final text, which rewrites a count that disagrees with a
   tool's total. That only covers counts a tool reported: it cannot check a number when no
   tool ran. So a reply containing any digit with **no successful tool call** this turn is
-  not shipped — `runAgent` returns `null` (outcome `untooled_number`) and the legacy
-  pipeline answers. Digit-free no-tool replies (e.g. defining "MERN") still ship; keeping
+  not shipped — `runAgent` returns `null` (outcome `untooled_number`) and the user gets the
+  fixed "won't guess a number" reply. Digit-free no-tool replies (e.g. defining "MERN") still ship; keeping
   those from being company facts rests on `BASE_INSTRUCTIONS` (company policies, people and
   data → tool or `handoff`).
 - **Turns are time-boxed.** Each model step has a per-request timeout
   (`CHATBOT_AGENT_STEP_TIMEOUT_MS`, SDK retries off) and the turn has a deadline
   (`CHATBOT_AGENT_TURN_TIMEOUT_MS`); each step gets at most the time left. Past the deadline
-  `runAgent` returns `null` (outcome `deadline`) and the legacy pipeline answers.
+  `runAgent` returns `null` (outcome `deadline`) and the user gets the fixed "couldn't answer
+  right now" reply.
 - **Results are size-capped, but only at the top level.** The registry's `shrinkToFit`
   (`MAX_RESULT_CHARS = 20000`) only shrinks the largest top-level **array** property,
   tagging `truncated: true`. A single large scalar field (e.g. `get_job`'s job description)
@@ -400,19 +381,16 @@ One place still needs a manual addition per domain:
 - **Agent failure never means a dead chat.** Handoff, a thrown error, or the same tool
   failing twice in one turn all make `runAgent` return `null` immediately. An empty final
   reply gets one retry first — `runAgent.js` re-asks with `tool_choice:'none'` on the same
-  input — and only returns `null` if that retry is *also* empty. Either way, the caller
-  always falls back to the legacy pipeline.
+  input — and only returns `null` if that retry is *also* empty. Either way `tryAgentTurn`
+  sends a fixed reply (request flow, step 5) and never throws.
 - **Per-step tool-call cap.** `runAgent.js`'s `MAX_CALLS_PER_STEP = 8`: the model can emit
   dozens of parallel calls in one step when its tools don't fit the question, so only the
   first 8 actually run; the rest get a `{"error":"too many calls in one step"}` output so
   every call still has a matching result and the model sees the cap was hit.
-- **The agent never runs while a pick is pending.** `agent/gate.js`'s `tryAgentTurn` checks
-  `hasPendingPick` — **job** and **title** picks (off the already-loaded `memDoc`), plus the
-  `JOB_ENTITY_SWITCH_RE` "what about jobs" switch-back — as the *last* gate condition, right
-  before calling `runAgent` (after the domain-match/recency test and `checkAccess`, not
-  before). A bare "1" or "the first one" always resolves the open pick instead of being
-  handed to the loop as a fresh question. (The person and user-vs-role picks are gone: the
-  agent's `get_user` returns `{ matches }` and asks in its own reply.)
+- **Boot fails on a dangling follow-up tool.** Person-profile providers list `relatedTools`
+  (`personProfile/providers/*.js`) that `get_user` results point the model to;
+  `toolRegistry.js` runs `assertRelatedToolsExist` at load, so naming a tool the agent
+  does not have fails at boot, not mid-chat.
 
 ## Context & memory
 
@@ -429,9 +407,9 @@ Per-step model input is `[stable prefix] + [turn context] + [history] + [this tu
   (`context.js`'s `trimToLastTurns`).
 - **Tool ledger** — every agent turn's successful tool calls are summarized
   (`summarizeCalls`) and appended to `ConversationMemory.agentLedger`, capped to the last 6
-  entries (`appendAgentLedger`). Turns with no tool calls append nothing; a handoff inside
-  the recency window appends a `{ at, handoff: true }` marker (no `calls`, skipped on replay)
-  that closes the window. This is how a bare follow-up ("what about ai?") gets
+  entries (`appendAgentLedger`). Turns with no tool calls append nothing (older rows may
+  still hold `{ at, handoff: true }` markers from the removed recency window; they carry no
+  `calls` and are skipped on replay). This is how a bare follow-up ("what about ai?") gets
   resolved: the model sees `count_jobs({"search":"ml"}) → total 12` in turn context and
   re-calls with changed args — it never reuses a stale number from the ledger itself
   (`BASE_INSTRUCTIONS` says so explicitly).
@@ -446,26 +424,31 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
 
 | Env var | Config path | Default | Meaning |
 |---|---|---|---|
-| `CHATBOT_MODEL` | `chatbot.model` | *(required, no default)* | OpenAI model for Sage — router, replies, memory, role classifier, and the agent loop. Every environment must set it. |
-| `CHATBOT_REASONING_EFFORT` | `chatbot.reasoningEffort` | `none` | Reasoning effort for Sage's reply-writing calls (reasoning models only). |
-| `CHATBOT_AGENT` | `chatbot.agent.enabled` | `false` | Enables the tool-calling agent loop. Off by default — each host opts in explicitly. Unset/`false` runs the legacy deterministic pipeline entirely; `gate.js` is never consulted. |
+| `CHATBOT_MODEL` | `chatbot.model` | *(required, no default)* | OpenAI model for Sage's agent loop. Every environment must set it. |
+| `CHATBOT_REASONING_EFFORT` | `chatbot.reasoningEffort` | `none` | Reasoning effort for the agent loop's model calls (reasoning models only). |
 | `CHATBOT_AGENT_MAX_STEPS` | `chatbot.agent.maxSteps` | `5` | Max tool-call steps per agent turn before it's forced to answer with `tool_choice: 'none'`. |
 | `CHATBOT_AGENT_TOOL_TIMEOUT_MS` | `chatbot.agent.toolTimeoutMs` | `8000` | Per-tool-call timeout in the registry; `0` disables the timeout. |
-| `CHATBOT_AGENT_STEP_TIMEOUT_MS` | `chatbot.agent.stepTimeoutMs` | `20000` | Per-request timeout for one model step (`responses.create`), with SDK retries disabled. A timeout is a thrown error → legacy fallback. |
-| `CHATBOT_AGENT_TURN_TIMEOUT_MS` | `chatbot.agent.turnTimeoutMs` | `30000` | Deadline for the whole agent turn. Checked before each step, and each step's timeout is capped to the time left; past it the turn falls back to legacy. |
+| `CHATBOT_AGENT_STEP_TIMEOUT_MS` | `chatbot.agent.stepTimeoutMs` | `20000` | Per-request timeout for one model step (`responses.create`), with SDK retries disabled. A timeout is a thrown error → the fixed "couldn't answer right now" reply. |
+| `CHATBOT_AGENT_TURN_TIMEOUT_MS` | `chatbot.agent.turnTimeoutMs` | `30000` | Deadline for the whole agent turn. Checked before each step, and each step's timeout is capped to the time left; past it the user gets the fixed "couldn't answer right now" reply. |
 | `CHATBOT_AGENT_INPUT_BUDGET` | `chatbot.agent.inputBudget` | `60000` | Max characters of this-turn tool items before `compactTurnItems` starts summarizing the oldest ones; `0` disables the budget. |
+
+`CHATBOT_AGENT` and `CHATBOT_TWO_STAGE` are gone (R9). The config schema allows unknown keys, so a
+host `.env` that still sets them boots fine; they are simply ignored and can be deleted.
 
 ## Deploy notes
 
-- These vars must be set in **each EC2 host's own `.env`** — staging (`dharwin/dev`) and
+- These vars are read from **each EC2 host's own `.env`** — staging (`dharwin/dev`) and
   production (`dharwin/main`) are separate hosts reading their own gitignored `.env`, and a
-  branch merge runs nothing on either. `CHATBOT_MODEL` is required. `CHATBOT_AGENT` defaults
-  to `false`, so a host stays on the legacy pipeline until someone sets `CHATBOT_AGENT=true`
-  on it — enabling the loop on one host (e.g. staging) does not enable it anywhere else. The
-  remaining agent vars have defaults and only need setting to change behavior.
-- `ConversationMemory.agentLedger` is a new, optional Mongoose field (array, default empty).
-  No migration is needed — existing documents simply have no `agentLedger` until their next
-  agent turn, and `readAgentLedger` returns `[]` for a document that doesn't have one yet.
+  branch merge runs nothing on either. `CHATBOT_MODEL` is required; the rest have defaults.
+- Since R9 the agent is the only path on every host, whatever `CHATBOT_AGENT` says: a host
+  that had it unset or `false` switches from the legacy pipeline to the agent on its next
+  pull + restart.
+- `ConversationMemory` keeps `agentLedger` (the tool ledger), `expiresAt` (30-day TTL, set
+  when the row is created) and, only so `entityCleanup.js` / `memorySweep.scheduler.js` can
+  scrub deleted people/roles/jobs out of rows written before R9, the `lastEntities` identity
+  pointers and `lastListing`. Every other legacy field (`summary`, `turnCount`, pending picks,
+  query contexts, `conversationTopic`, …) was dropped from the schema with no migration; old
+  documents carry the extra keys until the TTL removes them.
 
 ## Known limits / upgrade paths
 
@@ -476,12 +459,16 @@ All read from `src/config/config.js` (`config.chatbot` / `config.chatbot.agent`)
   — narrowing the *active* tool set per step while keeping the full list in the (cached)
   prefix, which avoids invalidating the prompt cache the way changing the tool list would.
   Neither is built yet; revisit when eval pick-accuracy drops or tool count crosses ~40.
-- **No token streaming of the agent's final answer** — `llm.step` returns the complete
-  `output_text` once the Responses API call resolves. The legacy pipeline's streaming path
-  is untouched.
-- **Legacy domains still route through the old pipeline** until migrated one at a time.
-  Order: jobs → employees/people → candidates/applications/placements/offers →
-  attendance/leave/holidays/shifts → interviews/meetings/tasks/projects → analytics tools →
-  knowledge base/roles. `jobs`, `people` (users + roles), `employees`, `candidates`,
-  `applications`, `hiring`, `meetings`, `knowledge`, `schedule`, `org`, `training`, `attendance` and `projects` (see "Registered domains" above) are migrated so far. `gate.js` itself is domain-generic
-  (§5), so a new domain reaches it by exporting `matchesTurn`, not by editing `gate.js`.
+- **No token streaming.** `llm.step` returns the complete `output_text` once the Responses API
+  call resolves, so the stream route sends the reply as a single `{ token }` event before
+  `{ done }`. Streaming the final step would need `responses.create({ stream: true })` in
+  `llm.step` and forwarding its text deltas through `onToken`.
+- **A handoff is a dead end for the user.** With no legacy pipeline behind it, a question no
+  tool covers (e.g. call records, activity logs, documents — the gap list in the R9 plan)
+  gets the fixed "I don't have that in the system" reply. Coverage grows by adding tools.
+- **`meta.kind` is always `'jobs'` on an answered turn** — the value the agent path sent since
+  the jobs-only first round. The frontend stores it but does not branch on it; derive it from
+  the turn's tool domains if something ever needs it to be right.
+- **Ledger TTL.** `appendAgentLedger` does not slide `expiresAt`, so a row (and its ledger)
+  expires 30 days after it was created even for an active user; the next turn starts a fresh
+  row. At most one follow-up per month loses its "Previous tool calls" context.

@@ -2,9 +2,8 @@ import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import { buildProfileTableBlock } from '../../../personProfile/profileTableBlock.js';
 import {
-  OBJECT_ID_RE, PEOPLE_PROFILE_ACCESS, peopleScope, peopleDeps, adminIdOf, peopleCountFacts,
+  OBJECT_ID_RE, PEOPLE_PROFILE_ACCESS, peopleScope, peopleDeps, peopleCountFacts,
 } from './common.js';
-import { subjectFromProfile } from '../../../conversationState/entitySubject.js';
 
 const MAX_NAME_MATCHES = 10;
 
@@ -48,7 +47,6 @@ export default defineTool({
   async execute({ id, name } = {}, ctx) {
     const user = peopleScope(ctx);
     const deps = peopleDeps(ctx);
-    const adminId = adminIdOf(user);
 
     // Resolve to exactly one target user ourselves first, via requester-scoped
     // reads only (getUserByIdForRequester / queryUsers) — never resolvePersonProfile's
@@ -108,8 +106,6 @@ export default defineTool({
       depth: 'full',
       viewer: user,
       impersonating: !!user.__impersonating,
-      adminId,
-      persist: false, // I-2: no pending pick, no lastEntities.person write (R14: subject written below)
       deps: ctx.deps,
     });
 
@@ -125,9 +121,7 @@ export default defineTool({
       // legitimate question) and never bypass the check either. Fall back to
       // the SAFE scalar identity we already resolved ourselves above (C-1 —
       // resolvePersonProfile's notAuthorized result carries no identity, on
-      // purpose: the legacy resolve_person_profile tool has no access gate of
-      // its own and would otherwise leak name/email through it) + full role
-      // definitions.
+      // purpose) + full role definitions.
       const roles = await loadRoleDefs(identity.userId, deps);
       return {
         kind: 'unique',
@@ -166,15 +160,6 @@ export default defineTool({
       }
     }
 
-    // Only write this tool makes: the person just looked up becomes the
-    // conversation subject, so a follow-up the agent hands to the legacy
-    // pipeline ("which jobs has this user applied to") knows who "this user" is.
-    // No pending pick is ever written (I-2 still holds for ambiguity).
-    const subject = subjectFromProfile(profile);
-    if (subject && user.id) {
-      await deps.writeEntitySubject({ userId: user.id, adminId, subject });
-    }
-
     return {
       kind: 'unique',
       identity: profile.identity,
@@ -186,8 +171,7 @@ export default defineTool({
   },
   render(result) {
     if (result?.kind !== 'unique') return null;
-    // Reuses the same table builder the legacy profile path renders with — it
-    // already accepts exactly this { kind, identity, profiles } shape.
+    // buildProfileTableBlock accepts exactly this { kind, identity, profiles } shape.
     const block = buildProfileTableBlock({ kind: 'unique', identity: result.identity, profiles: result.profiles || {} });
     return { blocks: block ? [block] : [], facts: peopleCountFacts('get_user', 1) };
   },

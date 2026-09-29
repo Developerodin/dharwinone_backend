@@ -10,15 +10,8 @@ const instructions = [
     'other tools, not the knowledge base.',
 ].join('\n');
 
-const KB_RE = /\b(polic(?:y|ies)|handbook|faqs?|knowledge\s*base|code\s+of\s+conduct|sops?|guidelines?|reimburse\w*|notice\s+period|dress\s+code)\b/i;
-
-export function matchesTurn(text) {
-  return KB_RE.test(String(text || ''));
-}
-
 export default {
   domain: 'knowledge',
   instructions,
   tools: [searchKnowledgeBase],
-  matchesTurn,
 };

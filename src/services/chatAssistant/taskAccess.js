@@ -5,19 +5,12 @@ import Employee from '../../models/employee.model.js';
 import User from '../../models/user.model.js';
 import { userIsAdmin } from '../../utils/roleHelpers.js';
 import { isKanbanViewOnlyScope } from '../../utils/kanbanScope.js';
-import { hasApiPermissionFromContext } from '../../utils/permissionCheck.js';
 import { buildProjectQueryContext } from './projectGraph.resolvers.js';
 
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const OPEN_TASK_STATUSES = ['new', 'todo', 'on_going', 'in_review'];
 export const OVERLOAD_TASK_THRESHOLD = 10;
-
-/** Start of today UTC — overdue = dueDate strictly before this. */
-export function isBlockedTask(task) {
-  const tags = task?.tags || [];
-  return tags.some((t) => /^blocked$/i.test(String(t || '').trim()));
-}
 
 export function blockedTaskClause() {
   return { tags: { $regex: /^blocked$/i } };
@@ -56,30 +49,6 @@ export function buildTaskServiceFilter(user, options = {}) {
   if (options.overdue) filter.overdue = options.overdue;
   if (options.blocked) filter.blocked = options.blocked;
   return filter;
-}
-
-export async function hasTaskReadAccess(user) {
-  if (!user) return false;
-  if (user.platformSuperUser) return true;
-  if (await userIsAdmin(user)) return true;
-  const perms = user?.authContext?.permissions;
-  return (
-    hasApiPermissionFromContext(perms, false, 'tasks.read')
-    || hasApiPermissionFromContext(perms, false, 'tasks.manage')
-  );
-}
-
-/** Entity hints for conversation memory after a fetch_tasks turn. */
-export function extractTaskMemoryHints(fetched = {}) {
-  const out = {};
-  const data = fetched.fetch_tasks;
-  if (data?.forbidden) return out;
-  if (data && typeof data.total === 'number') {
-    out.lastTaskCount = data.total;
-    out.lastTopic = 'tasks';
-    out.lastScope = data.scope || null;
-  }
-  return out;
 }
 
 export async function buildAccessibleTaskFilter(user, extra = {}) {

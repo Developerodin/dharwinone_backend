@@ -1,8 +1,9 @@
 // Sage's tool-calling agent loop (architecture.md §3, §7a, §7b).
 //
-// Contract: returns an answer envelope, or null. Null ALWAYS means "let the old
-// pipeline answer" — handoff, repeated bad args, empty output, any thrown error.
-// Sage must never go dark because of the agent.
+// Contract: returns an answer envelope, or null. Null means the turn was not
+// answered — handoff, repeated bad args, empty output, an unchecked number, the
+// deadline, any thrown error — and `onOutcome` names which; the caller
+// (agent/gate.js) replies with a fixed message. Sage must never go dark.
 //
 // No DB writes here: the caller (entry gate) persists `ledgerEntry`.
 
@@ -11,8 +12,28 @@ import logger from '../../../config/logger.js';
 import { step as llmStep } from './llm.js';
 import { getAgentTools as defaultGetAgentTools } from './toolRegistry.js';
 import { buildAgentInput, compactTurnItems, summarizeCalls, readAgentLedger } from './context.js';
-import { resolveViewerRoleNames as defaultResolveViewerRoleNames } from '../columnVisibility.js';
+import Role from '../../../models/role.model.js';
 import { enforceCounts } from '../responseValidator.js';
+
+/**
+ * The viewer's active role NAMES (all of them, not a collapsed tier) for the turn
+ * context — the model introduces the speaker by their real roles.
+ * @param {{ roleIds?:string[], platformSuperUser?:boolean }|null|undefined} user
+ * @returns {Promise<string[]>}
+ */
+async function defaultResolveViewerRoleNames(user) {
+  if (!user) return [];
+  const roleIds = user.roleIds || [];
+  if (!roleIds.length) return user.platformSuperUser ? ['Administrator'] : [];
+  try {
+    const docs = await Role.find({ _id: { $in: roleIds }, status: 'active' })
+      .select('name')
+      .lean();
+    return docs.map((r) => r.name).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
 // The model can emit dozens of parallel calls when its tools don't fit the
 // question (task-2-report, check 3). Only the first MAX_CALLS_PER_STEP run; the
@@ -37,7 +58,7 @@ export const BASE_INSTRUCTIONS = [
   'You may call several tools at once when the question needs them.',
   'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
   'If no available tool fits the question, call `handoff` with a short reason instead of answering.',
-  'Greetings, thanks and small talk ("hi", "thanks") are not questions for you: call `handoff`.',
+  'Greetings, thanks and small talk ("hi", "thanks"): reply briefly and warmly with no tool call, and offer help. Never put a number in such a reply.',
   'Reply in plain, concise markdown.',
 ].join('\n');
 
@@ -85,10 +106,12 @@ function mergeCountFacts(factsList) {
  * @param {Array<{role:string, content:string}>} args.history this request's messages (current question last)
  * @param {{agentLedger?:Array}|null} args.memDoc ConversationMemory doc (read-only here)
  * @param {string} [args.requestId]
+ * @param {(outcome:string) => void} [args.onOutcome] called once with the turn's outcome
+ *   ('answer', 'handoff', 'untooled_number', 'empty', 'deadline', 'repeated_tool_failure', 'error')
  * @param {{step?:Function, getAgentTools?:Function, resolveViewerRoleNames?:Function, now?:Function}} [args.deps]
  * @returns {Promise<null | {reply:string, blocks:Array, meta:{steps:number, toolCalls:string[], ms:number}, ledgerEntry:object}>}
  */
-export async function runAgent({ client, user, history, memDoc, requestId, deps = {} }) {
+export async function runAgent({ client, user, history, memDoc, requestId, onOutcome = () => {}, deps = {} }) {
   const {
     step = llmStep,
     getAgentTools = defaultGetAgentTools,
@@ -117,7 +140,7 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
     let { input } = built;
     const { maxSteps, inputBudget, stepTimeoutMs, turnTimeoutMs } = config.chatbot.agent;
 
-    // Turn deadline: a slow provider must not delay the legacy fallback. Each step
+    // Turn deadline: a slow provider must not delay the fallback reply. Each step
     // gets at most the time left, so the whole turn stays near turnTimeoutMs
     // (plus at most one tool batch, bounded by toolTimeoutMs).
     const runStep = async (toolChoice) => {
@@ -206,8 +229,8 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
     }
     // enforceCounts can only correct numbers against facts from this turn's tools.
     // With no successful tool call there are no facts, so a number in the reply
-    // is unchecked (e.g. a from-memory "our notice period is 30 days") — let the
-    // legacy pipeline answer instead. Digit-free replies (definitions) still ship.
+    // is unchecked (e.g. a from-memory "our notice period is 30 days") — the caller
+    // sends a fixed reply instead. Digit-free replies (definitions) still ship.
     if (!executed.some((c) => c.ok) && /\d/.test(text)) {
       outcome = 'untooled_number';
       return null;
@@ -236,9 +259,10 @@ export async function runAgent({ client, user, history, memDoc, requestId, deps 
       ledgerEntry: summarizeCalls(successful.map((c) => ({ name: c.name, args: c.args, output: c.result }))),
     };
   } catch (err) {
-    logger.warn(`[runAgent] falling back to legacy pipeline: ${JSON.stringify({ requestId, error: err?.message || String(err) })}`);
+    logger.warn(`[runAgent] turn failed: ${JSON.stringify({ requestId, error: err?.message || String(err) })}`);
     return null;
   } finally {
+    onOutcome(outcome);
     logger.info(
       `[runAgent] ${JSON.stringify({
         requestId,

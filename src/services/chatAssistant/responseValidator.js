@@ -36,55 +36,6 @@ function buildPattern(fact) {
 }
 
 /**
- * Detect entity-type mismatch — retrieval said "agents", LLM rendered
- * "employees" or vice versa. Used for telemetry / hard-fail logging.
- *
- * @param {string} reply
- * @param {{ counts: object[], primary: object|null }} facts
- * @returns {{ mismatched: boolean, expected: string|null, found: string|null }}
- */
-export function detectEntityTypeDrift(reply, facts) {
-  const p = facts?.primary;
-  if (!p?.role) return { mismatched: false, expected: null, found: null };
-  const lc = String(reply || '').toLowerCase();
-  const role = p.role.toLowerCase();
-  const numericPhrase = new RegExp(`\\b\\d+\\s+(employees?|agents?|recruiters?|administrators?|admins?|candidates?|students?|sales\\s*agents?|${escapeForRegex(role)}s?)\\b`, 'gi');
-  let m;
-  let expectedHit = false;
-  let driftedNoun = null;
-  // eslint-disable-next-line no-cond-assign
-  while ((m = numericPhrase.exec(lc)) !== null) {
-    const noun = m[1].replace(/s$/, '');
-    if (noun === role || noun + 's' === role) { expectedHit = true; continue; }
-    if (!driftedNoun) driftedNoun = m[1];
-  }
-  if (driftedNoun && !expectedHit) {
-    return { mismatched: true, expected: role, found: driftedNoun };
-  }
-  return { mismatched: false, expected: role, found: null };
-}
-
-/**
- * Detect entity-type drift AND apply the correction the detector was built
- * for. Streaming cannot recall tokens already sent and non-streaming should
- * not rewrite fluent prose wholesale, so the correction is an appended
- * sentence naming the authoritative entity type — the reply's number is
- * already right (enforceCounts runs first), only the noun drifted.
- *
- * @param {string} reply
- * @param {{ counts: object[], primary: object|null }} facts
- * @returns {{ reply: string, mismatched: boolean, expected: string|null, found: string|null }}
- */
-export function applyEntityTypeDrift(reply, facts) {
-  const drift = detectEntityTypeDrift(reply, facts);
-  if (!drift.mismatched) return { reply: reply || '', ...drift };
-  const plural = drift.expected.endsWith('s') ? drift.expected : `${drift.expected}s`;
-  const correction =
-    `\n\n*To be precise: these records are ${plural}, not ${drift.found} — the lookup was scoped to the ${drift.expected} role.*`;
-  return { reply: `${reply || ''}${correction}`, ...drift };
-}
-
-/**
  * Walk every count fact and patch wrong numbers in the reply.
  *
  * @param {string} reply

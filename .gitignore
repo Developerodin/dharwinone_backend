@@ -169,8 +169,6 @@ attendance-status-backfill.*.journal.json
 # Sage tool gate (2026-09-25) — guards the BRD "never exceed user access" rule.
 !src/services/chatAssistant/__tests__/
 !src/services/chatAssistant/__tests__/toolAccess.test.js
-!src/services/chatAssistant/__tests__/llmParams.test.js
-!src/services/chatAssistant/__tests__/pipelineLines.test.js
 !src/services/chatAssistant/__tests__/attendanceAggregator.punchTime.test.js
 !src/services/chatAssistant/__tests__/jobRank.filters.test.js
 
@@ -195,6 +193,9 @@ attendance-status-backfill.*.journal.json
 
 # Sage agent loop, Task 8 — entry gate.
 !src/services/chatAssistant/agent/__tests__/gate.test.js
+
+# Sage agent loop, R9 — chat service entry: every turn via the agent, fixed replies on a non-answer.
+!src/services/chatAssistant/agent/__tests__/chatService.test.js
 
 # Sage agent loop, Task 3 — people domain: user tools.
 !src/services/chatAssistant/agent/tools/people/__tests__/
@@ -249,5 +250,3 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/renderers/__tests__/
 !src/services/chatAssistant/renderers/__tests__/jobs.test.js
 !src/services/chatAssistant/renderers/__tests__/jobRanking.test.js
-!src/services/chatAssistant/jobProfile/__tests__/
-!src/services/chatAssistant/jobProfile/__tests__/presentJobProfile.test.js

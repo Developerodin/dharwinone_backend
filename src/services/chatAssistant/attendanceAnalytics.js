@@ -65,14 +65,3 @@ export function leaveDatesWindowClause(window) {
   if (window.to) range.$lte = window.to;
   return { dates: { $elemMatch: range } };
 }
-
-/**
- * True when the ask is about a person's week-off or group memberships —
- * must not fast-path to the org-wide attendance sum (the agent's get_work_schedule answers it).
- * @param {string} text
- */
-export function looksLikeWeekOffOrGroupsQuery(text) {
-  if (!text) return false;
-  return /\b(week[\s-]?offs?|off[\s-]?days?|weekend\s+off|which\s+days?\s+off)\b/i.test(text)
-    || /\b(candidate\s+groups?|student\s+groups?|group\s+memberships?|what\s+groups?)\b/i.test(text);
-}

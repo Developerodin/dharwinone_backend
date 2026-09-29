@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import { buildProfileTableBlock } from '../../../personProfile/profileTableBlock.js';
-import { peopleScope, peopleDeps, adminIdOf } from './common.js';
+import { peopleScope, peopleDeps } from './common.js';
 
 /**
  * The signed-in user's own profile. A separate tool from get_user on purpose: get_user needs
@@ -27,8 +27,6 @@ export default defineTool({
       depth: 'full',
       viewer: user,
       impersonating: !!user.__impersonating,
-      adminId: adminIdOf(user),
-      persist: false,
       deps: ctx.deps,
     });
     if (profile.kind !== 'unique') return { error: 'Your profile is not available right now.' };

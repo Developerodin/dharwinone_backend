@@ -6,7 +6,6 @@ import countLeaveRequests from '../countLeaveRequests.tool.js';
 import listLeaveRequests from '../listLeaveRequests.tool.js';
 import whoIsOnLeaveToday from '../whoIsOnLeaveToday.tool.js';
 import listBackdatedRequests from '../listBackdatedRequests.tool.js';
-import { matchesTurn } from '../index.js';
 
 const PLAIN = { id: 'u1', _id: 'u1', name: 'Me', authContext: { permissions: new Set() } };
 const HR = { id: 'hr', _id: 'hr', name: 'HR', authContext: { permissions: new Set(['students.manage']) } };
@@ -202,23 +201,5 @@ describe('list_backdated_requests', () => {
     assert.equal(out.total, 8);
     assert.deepEqual(out.breakdown, { pending: 2, approved: 2, rejected: 2, cancelled: 2 });
     assert.equal(out.records[0].from, '2026-09-05');
-  });
-});
-
-describe('attendance matchesTurn', () => {
-  it('matches attendance and leave phrasing', () => {
-    for (const q of ['my attendance this week', 'who is on leave today', 'how many were absent yesterday',
-      'pending leave requests', 'who took the most leave in August', 'DBS10 missed punch requests',
-      'when did I punch in today']) {
-      assert.equal(matchesTurn(q), true, q);
-    }
-  });
-
-  it('does not steal shift / holiday / org chart / task / meeting / policy turns', () => {
-    for (const q of ['what is my shift', 'upcoming holidays', 'show the org chart', 'my tasks this week',
-      'meetings today', 'what is the leave policy', 'who is on the night shift', 'my week off',
-      'give a presentation', 'how many employees resigned']) {
-      assert.equal(matchesTurn(q), false, q);
-    }
   });
 });

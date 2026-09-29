@@ -6,7 +6,7 @@ import getUser from '../getUser.tool.js';
 import getMyProfile from '../getMyProfile.tool.js';
 import listRoles from '../listRoles.tool.js';
 import getRole from '../getRole.tool.js';
-import peopleDomain, { matchesTurn } from '../index.js';
+import peopleDomain from '../index.js';
 import allDomains from '../../index.js';
 import { ROLES_ACCESS } from '../common.js';
 
@@ -165,73 +165,14 @@ describe('people domain module', () => {
     assert.deepEqual(tools.map((t) => t.name), ['count_users', 'list_users', 'get_user', 'get_my_profile', 'list_roles', 'get_role']);
   });
 
-  it('index.js default export matches the domain module shape, including the new matchesTurn gate interface', () => {
+  it('index.js default export matches the domain module shape', () => {
     assert.equal(peopleDomain.domain, 'people');
     assert.equal(typeof peopleDomain.instructions, 'string');
     assert.ok(peopleDomain.instructions.length > 0);
     assert.deepEqual(peopleDomain.tools, tools);
-    assert.equal(typeof peopleDomain.matchesTurn, 'function');
   });
 
   it('is registered in agent/tools/index.js', () => {
     assert.ok(allDomains.includes(peopleDomain));
-  });
-
-  it('matchesTurn is true for user/role/who-is/headcount/capability turns and false for unrelated or other-domain ones (review fix round 1, I-4)', () => {
-    for (const text of [
-      'how many users do we have',
-      'list all user accounts',
-      'who has the recruiter role',
-      'how many admins are there',
-      'who is Priya Sharma',
-      'Who is Priya Sharma?', // sentence-start capital "Who" must also match
-      'what roles exist',
-      'what permissions does Sales Agent have',
-      'what can a sales agent do', // the brief's own get_role routing example
-      'what can an administrator do',
-      'what are the permissions for the recruiter role', // "permissions of/for <X>"
-    ]) {
-      assert.ok(matchesTurn(text), `expected matchesTurn to be true for: ${text}`);
-    }
-    for (const text of [
-      'how many jobs are open',
-      'list active job postings',
-      'who is on leave today',
-      'Who is on leave today?',
-      "show me today's attendance summary",
-      'how many users logged in today', // login-activity report, not a headcount
-      'show login history for Rahul', // ditto
-      'how many candidates are assigned to agent Rahul', // Employees/Candidates agent-assignment flow
-      'permission to take leave', // everyday phrasing, not RBAC
-      'my account settings', // everyday phrasing, not a user-directory lookup
-      '',
-    ]) {
-      assert.equal(matchesTurn(text), false, `expected matchesTurn to be false for: ${text}`);
-    }
-  });
-
-  it('matchesTurn opens on a role noun that is the object of a list/count verb (round 2: no legacy role fast path)', () => {
-    for (const text of [
-      'list all recruiters',
-      'list recruiters',
-      'show me agents',
-      'show me all the sales agents',
-      'who are the admins',
-      'list all administrators',
-      'how many students do we have',
-      'count the students',
-      'how many agents',
-    ]) {
-      assert.ok(matchesTurn(text), `expected matchesTurn to be true for: ${text}`);
-    }
-    for (const text of [
-      'how many candidates are assigned to agent Rahul', // agent-assignment flow, "agent" is not the verb's object
-      'show candidates assigned to agent Rahul',
-      'how many students completed the course', // training analytics
-      'list students enrolled in React basics',
-      'agent performance this week', // no list/count verb
-    ]) {
-      assert.equal(matchesTurn(text), false, `expected matchesTurn to be false for: ${text}`);
-    }
   });
 });

@@ -4,7 +4,6 @@ import {
   computeAvgDailyPresent,
   enrichAttendanceSummary,
   leaveDatesWindowClause,
-  looksLikeWeekOffOrGroupsQuery,
 } from '../attendanceAnalytics.js';
 
 describe('attendanceAnalytics (Epic B)', () => {
@@ -100,11 +99,5 @@ describe('attendanceAnalytics (Epic B)', () => {
     assert.equal(inWindow(new Date(Date.UTC(2026, 7, 31))), true);  // last day
     assert.equal(inWindow(new Date(Date.UTC(2026, 6, 31))), false); // day before
     assert.equal(inWindow(new Date(Date.UTC(2026, 8, 1))), false);  // day after
-  });
-
-  it('routes week-off / groups asks to overview (not org attendance sum)', () => {
-    assert.equal(looksLikeWeekOffOrGroupsQuery("what is Saad's week off?"), true);
-    assert.equal(looksLikeWeekOffOrGroupsQuery('which candidate groups is DBS10 in?'), true);
-    assert.equal(looksLikeWeekOffOrGroupsQuery('how many were present yesterday'), false);
   });
 });

@@ -147,9 +147,9 @@
     "expect": { "handoff": true }
   },
   {
-    "id": "handoff-greeting",
+    "id": "greeting-answered",
     "question": "hi",
-    "expect": { "handoff": true }
+    "expect": { "tools": [], "answer": true }
   },
   {
     "id": "users-john-position",
@@ -340,9 +340,9 @@
     }
   },
   {
-    "id": "handoff-greeting-people-domain",
+    "id": "greeting-answered-people-domain",
     "question": "good morning!",
-    "expect": { "handoff": true }
+    "expect": { "tools": [], "answer": true }
   },
   {
     "id": "get-role-sales-agent-permissions",

@@ -327,13 +327,8 @@ const envVarsSchema = Joi.object()
     QDRANT_COLLECTION_PREFIX: Joi.string().optional().allow('')
       .description('Qdrant collection prefix; defaults to PINECONE_INDEX so both backends share one naming scheme'),
 
-    // Chatbot — two-stage pipeline (classifier + scoped fetcher)
-    CHATBOT_REASONING_EFFORT: Joi.string().valid('none', 'low', 'medium', 'high').default('none').description("Reasoning effort for Sage's reply-writing calls (reasoning models only). The tool router always runs at none: chat completions rejects function tools with any other effort."),
-    CHATBOT_AGENT: Joi.boolean()
-      .truthy('true', '1')
-      .falsy('false', '0')
-      .default(false)
-      .description('Enable Sage tool-calling agent loop (vs deterministic routing). Off unless a host opts in.'),
+    // Chatbot (Sage) — the tool-calling agent loop is its only path.
+    CHATBOT_REASONING_EFFORT: Joi.string().valid('none', 'low', 'medium', 'high').default('none').description("Reasoning effort for Sage's agent loop model calls (reasoning models only)."),
     CHATBOT_AGENT_MAX_STEPS: Joi.number()
       .integer()
       .min(1)
@@ -353,14 +348,13 @@ const envVarsSchema = Joi.object()
       .integer()
       .min(1)
       .default(30000)
-      .description('Deadline (ms) for one Sage agent loop turn; past it the turn falls back to the legacy pipeline'),
+      .description('Deadline (ms) for one Sage agent loop turn; past it the user gets a fixed fallback reply'),
     CHATBOT_AGENT_INPUT_BUDGET: Joi.number()
       .integer()
       .min(0)
       .default(60000)
       .description('Max input characters budgeted per Sage agent loop turn'),
-    CHATBOT_MODEL: Joi.string().required().description('OpenAI model for Sage (router, replies, memory, role classifier). No default: every environment sets it in .env.'),
-    CHATBOT_TWO_STAGE: Joi.boolean().default(false).description('Enable two-stage chatbot pipeline (classifier + scoped fetcher)'),
+    CHATBOT_MODEL: Joi.string().required().description("OpenAI model for Sage's agent loop. No default: every environment sets it in .env."),
 
     // === AI Meeting Summary (Phase 1 — see docs/superpowers/specs/2026-05-11-...) ===
     OPENAI_MODEL_SUMMARY: Joi.string().default('gpt-4o-mini'),
@@ -843,13 +837,10 @@ const config = {
     },
   },
   chatbot: {
-    /** When true (twoStage), classifier+fetchPeople runs in prepareContext. */
     model: envVars.CHATBOT_MODEL,
     reasoningEffort: envVars.CHATBOT_REASONING_EFFORT,
-    twoStage: envVars.CHATBOT_TWO_STAGE,
-    /** Sage tool-calling agent loop knobs (see .superpowers/sdd/2026-09-28-sage-agent-loop). */
+    /** Sage tool-calling agent loop knobs (see services/chatAssistant/agent/README.md). */
     agent: {
-      enabled: envVars.CHATBOT_AGENT,
       maxSteps: envVars.CHATBOT_AGENT_MAX_STEPS,
       toolTimeoutMs: envVars.CHATBOT_AGENT_TOOL_TIMEOUT_MS,
       stepTimeoutMs: envVars.CHATBOT_AGENT_STEP_TIMEOUT_MS,

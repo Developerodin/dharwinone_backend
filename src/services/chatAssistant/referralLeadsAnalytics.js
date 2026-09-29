@@ -22,7 +22,6 @@
 import { getUserPermissionContext } from '../permission.service.js';
 import { getGrantingPermissions } from '../../config/permissions.js';
 import { getReferralLeadsStats, listReferralLeads } from '../referralLeads.service.js';
-import Placement from '../../models/placement.model.js';
 
 /** Same permission the referral-leads HTTP routes require (canReadCandidatesOnly). */
 export const REFERRAL_LEADS_READ_PERMISSION = 'candidates.read';
@@ -83,23 +82,6 @@ export const PRE_BOARDING_PROVENANCE = Object.freeze({
     'NOT on APPLICATION_STATUSES. It runs concurrently with Placement.status=Pending — ' +
     'do not present it as a sequential stage after "offers".',
 });
-
-/**
- * Count candidates currently mid pre-boarding (Placement.preBoardingStatus is
- * Pending or In Progress — i.e. not yet Completed). Optionally scoped to a set of
- * candidate (Employee) ids, e.g. the referral leads currently in view.
- *
- * @param {{ companyEmpIds?: Array<string> }} [opts] - companyEmpIds: Employee/candidate
- *   _ids to scope the Placement.candidate lookup to (omit for company-wide).
- * @returns {Promise<{ count: number } & typeof PRE_BOARDING_PROVENANCE>}
- */
-export async function countPreBoardingConcurrent({ companyEmpIds } = {}) {
-  const ids = Array.isArray(companyEmpIds) ? companyEmpIds.filter(Boolean) : [];
-  const match = { preBoardingStatus: { $in: ['Pending', 'In Progress'] } };
-  if (ids.length) match.candidate = { $in: ids };
-  const count = await Placement.countDocuments(match);
-  return { count, ...PRE_BOARDING_PROVENANCE };
-}
 
 /**
  * Map a `getReferralLeadsStats` result into labeled hiring-tunnel buckets for the

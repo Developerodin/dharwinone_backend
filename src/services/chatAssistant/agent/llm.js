@@ -32,7 +32,7 @@ export async function step({
   timeoutMs = config.chatbot.agent.stepTimeoutMs,
 }) {
   // SDK defaults are a 10-minute timeout with 2 retries; the agent must fail fast
-  // so the legacy pipeline can still answer. No retries: the loop falls back instead.
+  // so the user still gets the fixed fallback reply in time. No retries.
   const res = await client.responses.create({
     model: config.chatbot.model,
     instructions,

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import countEmployees from '../countEmployees.tool.js';
 import listEmployees from '../listEmployees.tool.js';
 import { EMPLOYEES_ACCESS, dayWindowBounds } from '../common.js';
-import { matchesTurn } from '../index.js';
 import { employeeDocumentConditions, buildAdvancedFilter } from '../../../../../employee.service.js';
 
 const VIEWER = { id: 'viewer-1', _id: 'viewer-1', authContext: { permissions: new Set(['employees.read']) } };
@@ -111,19 +110,6 @@ describe('list_employees', () => {
     assert.equal(seen.pagination.limit, 50);
     assert.equal(out.records[0].name, 'Asha');
     assert.equal('salaryRange' in out.records[0], false);
-  });
-});
-
-describe('employees matchesTurn', () => {
-  it('matches employee questions', () => {
-    for (const t of ['how many employees do we have', 'unpaid interns by department', 'how many people work here', 'list resigned staff']) {
-      assert.equal(matchesTurn(t), true, t);
-    }
-  });
-  it('does not match candidate or job-only questions', () => {
-    for (const t of ['how many candidates applied', 'show me react jobs']) {
-      assert.equal(matchesTurn(t), false, t);
-    }
   });
 });
 
@@ -297,11 +283,5 @@ describe('joined / resigned windows', () => {
     assert.ok(block.columns.some((c) => c.key === 'joiningDate'));
     assert.equal(block.rows[0].joiningDate, '2026-07-03');
     assert.equal(block.columns.some((c) => c.key === 'resignDate'), false);
-  });
-
-  it('matchesTurn opens on joined / left phrasing', () => {
-    for (const q of ['who joined last month', 'how many new joiners this year', 'who left in July', 'people who left the company']) {
-      assert.equal(matchesTurn(q), true, q);
-    }
   });
 });

@@ -37,7 +37,7 @@ function formatDateInTimezone(date, timezone) {
  * never hits the DB itself — `req.user.roleIds` are raw unpopulated
  * ObjectIds in production, so there is nothing usable to "read defensively"
  * off `user` here. The caller resolves names once (e.g. via
- * `resolveViewerRoleNames(user)` in columnVisibility.js, which the loop
+ * `resolveViewerRoleNames(user)` in runAgent.js, which the loop
  * already awaits alongside the rest of the request setup) and passes the
  * resulting string array in.
  */
@@ -138,7 +138,7 @@ function trimToLastTurns(history, maxTurns) {
  *   cache hits across users/turns. Nothing per-user/time-varying belongs here.
  * @param {{name?:string}} [args.user]
  * @param {string[]} [args.roleNames] the user's resolved role names, e.g.
- *   `await resolveViewerRoleNames(user)` (columnVisibility.js) — this module
+ *   `await resolveViewerRoleNames(user)` (runAgent.js) — this module
  *   stays sync/pure and does not resolve them itself. Empty/omitted renders
  *   as 'User'; never guessed from `user.roleIds`/`user.role` (those are raw
  *   unpopulated ObjectIds on a real req.user, not names).
@@ -269,9 +269,9 @@ export function readAgentLedger(memDoc) {
 
 /**
  * Append one ledger entry, capped to the last 6 agent turns, atomically.
- * Mirrors chatAssistant.service.js's ConversationMemory.findOneAndUpdate
- * filter/options (userId+adminId, upsert) so this never creates a duplicate
- * doc alongside the legacy pipeline's memory writes.
+ * Upserts on (userId, adminId), the collection's unique key. `expiresAt` is
+ * set once when the row is created (the schema default, 30 days), and the TTL
+ * index then drops the whole row, so the ledger restarts at most once a month.
  *
  * @param {object} args
  * @param {*} args.userId

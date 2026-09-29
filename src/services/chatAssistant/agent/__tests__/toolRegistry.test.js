@@ -2,7 +2,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Joi from 'joi';
 import { defineTool } from '../defineTool.js';
-import { getAgentTools, HANDOFF_TOOL_NAME, matchedDomains, hasAgentToolAccess } from '../toolRegistry.js';
+import { getAgentTools, HANDOFF_TOOL_NAME } from '../toolRegistry.js';
 import config from '../../../../config/config.js';
 import registeredDomains from '../tools/index.js';
 
@@ -343,50 +343,6 @@ describe('getAgentTools — duplicate tool names', () => {
     await assert.rejects(() => getAgentTools(userWith(), { domains: dupDomains }), /dup_tool/);
   });
 });
-
-// ─── matchedDomains / hasAgentToolAccess (agent/gate.js's domain-generic gate) ──
-
-describe('matchedDomains', () => {
-  const withMatch = { domain: 'has_matcher', instructions: '', matchesTurn: (text) => /widget/i.test(text), tools: [] };
-  const withoutMatch = { domain: 'no_matcher', instructions: '', tools: [] };
-  const domains = [withMatch, withoutMatch];
-
-  it('returns the names of domains whose matchesTurn(text) is true', () => {
-    assert.deepEqual(matchedDomains('how many widgets do we have', { domains }), ['has_matcher']);
-  });
-
-  it('skips a domain with no matchesTurn export, and returns [] when nothing matches', () => {
-    assert.deepEqual(matchedDomains('anything at all', { domains }), []);
-  });
-});
-
-describe('hasAgentToolAccess', () => {
-  const domainA = { domain: 'domain_a', instructions: '', tools: [{ name: 't_a', access: { anyOf: ['a.read'] } }] };
-  const domainB = { domain: 'domain_b', instructions: '', tools: [{ name: 't_b', access: { anyOf: ['b.read'] } }] };
-  const domains = [domainA, domainB];
-
-  it('is ok when the user holds a permission for a tool in one of the named domains', async () => {
-    const result = await hasAgentToolAccess(userWith('a.read'), ['domain_a'], { domains });
-    assert.equal(result.ok, true);
-  });
-
-  it('is not ok when the user has no tool permission in the named domains, even if permitted elsewhere', async () => {
-    const result = await hasAgentToolAccess(userWith('b.read'), ['domain_a'], { domains });
-    assert.equal(result.ok, false);
-  });
-
-  it('with domainNames:null, checks every registered domain (the recent-agent-turn case)', async () => {
-    const result = await hasAgentToolAccess(userWith('b.read'), null, { domains });
-    assert.equal(result.ok, true);
-  });
-
-  it('platformSuperUser passes with no permissions granted', async () => {
-    const result = await hasAgentToolAccess({ ...userWith(), platformSuperUser: true }, ['domain_a'], { domains });
-    assert.equal(result.ok, true);
-  });
-});
-
-// ─── Measure ────────────────────────────────────────────────────────────────
 
 describe('getAgentTools — measure', () => {
   const measuredTool = defineTool({

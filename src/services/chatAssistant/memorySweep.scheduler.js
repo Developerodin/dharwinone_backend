@@ -1,18 +1,18 @@
 // uat.dharwin.backend/src/services/chatAssistant/memorySweep.scheduler.js
 //
 // Daily sweep that drops dangling ConversationMemory.lastEntities references.
-// rehydrateLastEntities (chatAssistant.service.js) already filters dead refs
-// at READ time so the chatbot never surfaces a ghost; this sweep is the
-// belt-and-suspenders write-side cleanup so the DB stays tidy and disk
-// usage doesn't accumulate forever.
+// Only rows written by the removed legacy Sage pipeline carry these pointers
+// (nothing writes them now), so this only scrubs deleted people/roles/jobs out
+// of those rows until their TTL expires them. Once no pre-removal row is left
+// (30 days after the deploy), this scheduler and the lastEntities/lastListing
+// schema fields can be deleted.
 //
 // What it does, per ConversationMemory row:
 //   - personUserId    -> unset if no active User row
 //   - personEmpDocId  -> unset if no Employee row
 //   - roleId          -> unset if no active Role row
 //   - jobId           -> unset if no Job row
-// Conversation summary, turnCount, and lastListing pagination are left alone
-// — only entity pointers are scrubbed.
+// Only entity pointers are scrubbed.
 
 import logger from '../../config/logger.js';
 import ConversationMemory from '../../models/conversationMemory.model.js';

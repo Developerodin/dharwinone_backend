@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import searchKnowledgeBase, { MAX_ANSWER_CHARS } from '../searchKnowledgeBase.tool.js';
-import { matchesTurn } from '../index.js';
 
 function ctxWith({ findVoiceAgent, queryKb }, user = { id: 'u1', adminId: 'admin1' }) {
   return { user, requestId: 'r', deps: { findVoiceAgent, queryKb } };
@@ -52,14 +51,5 @@ describe('search_knowledge_base', () => {
     }));
     assert.equal(out.found, false);
     assert.equal(out.unavailable, true);
-  });
-});
-
-describe('knowledge matchesTurn', () => {
-  it('matches policy / FAQ phrasing and not plain data questions', () => {
-    assert.equal(matchesTurn('what is the leave policy?'), true);
-    assert.equal(matchesTurn('where is the employee handbook'), true);
-    assert.equal(matchesTurn('how many leave requests are pending'), false);
-    assert.equal(matchesTurn('show my meetings'), false);
   });
 });

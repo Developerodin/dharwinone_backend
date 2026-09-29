@@ -25,10 +25,8 @@ async function deletePineconeForUser(userId) {
 }
 
 /**
- * Drop chatbot memory references to a user that no longer exists. The
- * conversation summary / turnCount / lastListing are preserved — only the
- * person pointer is unset, so rehydrate on the next turn doesn't surface a
- * ghost.
+ * Drop chatbot memory references to a user that no longer exists — only the
+ * person pointer on pre-removal legacy rows (see ConversationMemory.lastEntities).
  */
 async function clearMemoryReferencesForUser(userId) {
   if (!userId) return;
@@ -75,45 +73,24 @@ async function clearMemoryReferencesForRole(roleId) {
 }
 
 /**
- * Lazy-load `clearContextCache` from chatAssistant.service.js to avoid the
- * circular import (service imports this module; this module imports the
- * service back only when a cleanup actually fires).
- */
-async function bustContextCache(adminId) {
-  if (!adminId) return;
-  try {
-    const mod = await import('../chatAssistant.service.js');
-    if (typeof mod.clearContextCache === 'function') mod.clearContextCache(adminId);
-  } catch (err) {
-    logger.warn(`[entityCleanup] context cache bust failed: ${err.message}`);
-  }
-}
-
-/**
  * Fire all user-cleanup steps. Safe from a hard-delete path (call before
  * User.deleteOne) or a soft-delete path (call after status='deleted').
  *
- * @param {{ userId: any, adminId?: any }} params
+ * @param {{ userId: any }} params
  */
-export async function cascadeUserRemoval({ userId, adminId }) {
+export async function cascadeUserRemoval({ userId }) {
   await Promise.all([
     deletePineconeForUser(userId),
     clearMemoryReferencesForUser(userId),
-    bustContextCache(adminId),
   ]);
 }
 
 /**
- * Fire all role-cleanup steps. Bust registry, drop memory references,
- * and bust the per-admin context cache so a stale snapshot doesn't
- * survive on the next turn.
+ * Fire all role-cleanup steps: bust the role registry and drop memory references.
  *
- * @param {{ roleId: any, adminIds?: any[] }} params
+ * @param {{ roleId: any }} params
  */
-export async function cascadeRoleMutation({ roleId, adminIds = [] }) {
+export async function cascadeRoleMutation({ roleId }) {
   bustRoleRegistry();
   await clearMemoryReferencesForRole(roleId);
-  if (adminIds.length) {
-    for (const a of adminIds) await bustContextCache(a);
-  }
 }

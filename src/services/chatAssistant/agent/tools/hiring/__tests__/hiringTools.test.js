@@ -8,7 +8,6 @@ import countPlacements from '../countPlacements.tool.js';
 import listPlacements from '../listPlacements.tool.js';
 import getHiringFunnel from '../getHiringFunnel.tool.js';
 import listReferralLeads from '../listReferralLeads.tool.js';
-import { matchesTurn } from '../index.js';
 import { interviewMongoFilter, referralWindow } from '../common.js';
 import { applyNewFilters } from '../../../../../referralLeadsQueryBuilder.js';
 import { referredAtUpperBound } from '../../../../../referralLeads.service.js';
@@ -428,25 +427,5 @@ describe('referralLeads.service referredAtUpperBound', () => {
 
   it('takes a full ISO instant as-is', () => {
     assert.equal(referredAtUpperBound('2026-09-30T18:29:59.999Z').toISOString(), '2026-09-30T18:29:59.999Z');
-  });
-});
-
-describe('hiring matchesTurn', () => {
-  it('opens on hiring nouns', () => {
-    for (const q of [
-      'how many interviews are scheduled today', 'list pending offers', 'how many placements joined this month',
-      'how many in pre-boarding', 'show me the hiring funnel', 'who reffered Khushi Parmar?',
-      'which candidates did Sami refer', 'who is the top referrer',
-      'who is joining next week', 'placements joining this month', 'who is joining today?',
-      'how many candidates are joining tomorrow', 'what is her joining date',
-    ]) assert.equal(matchesTurn(q), true, q);
-  });
-
-  it('stays closed for un-migrated domains and unrelated verbs', () => {
-    for (const q of [
-      'how many meetings do I have today', 'show my tasks', 'who is on leave today', 'my attendance this week',
-      'do we offer health insurance', 'how many employees do we have', 'please refer to the leave policy',
-      "who is joining today's standup", 'is Rahul joining tomorrow',
-    ]) assert.equal(matchesTurn(q), false, q);
   });
 });

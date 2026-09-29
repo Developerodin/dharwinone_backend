@@ -3,12 +3,10 @@ import assert from 'node:assert/strict';
 import {
   ORG_READ_PERMISSIONS,
   POSITION_TYPES,
-  hasOrgReadAccess,
   formatOrgCoverageFacts,
   countOrgUnitsByType,
   listPositionRecords,
   listDepartmentRecords,
-  findOrgUnitsByName,
   findTreeNodesByName,
   summarizeOrgUnitNode,
   lookupOrgUnitFromTree,
@@ -147,24 +145,6 @@ describe('orgStructureAnalytics (Epic G)', () => {
     assert.deepEqual(ORG_READ_PERMISSIONS, ['chart.read', 'structure.read', 'structure.manage']);
   });
 
-  describe('hasOrgReadAccess', () => {
-    it('denies when permissions is missing or not a Set', () => {
-      assert.equal(hasOrgReadAccess(undefined), false);
-      assert.equal(hasOrgReadAccess(null), false);
-      assert.equal(hasOrgReadAccess([]), false);
-    });
-
-    it('denies a Set with unrelated permissions', () => {
-      assert.equal(hasOrgReadAccess(new Set(['candidates.read'])), false);
-    });
-
-    it('grants access when any ORG_READ_PERMISSIONS entry is present', () => {
-      assert.equal(hasOrgReadAccess(new Set(['chart.read'])), true);
-      assert.equal(hasOrgReadAccess(new Set(['structure.read'])), true);
-      assert.equal(hasOrgReadAccess(new Set(['structure.manage'])), true);
-    });
-  });
-
   describe('countOrgUnitsByType / position records', () => {
     it('counts active manager/supervisor/department/ceo positions (not User roles)', () => {
       assert.deepEqual(POSITION_TYPES, ['ceo', 'manager', 'supervisor']);
@@ -195,13 +175,7 @@ describe('orgStructureAnalytics (Epic G)', () => {
     });
   });
 
-  describe('findOrgUnitsByName / tree lookup', () => {
-    it('finds Group A by exact name', () => {
-      const hits = findOrgUnitsByName(SAMPLE_UNITS, 'Group A');
-      assert.equal(hits.length, 1);
-      assert.equal(hits[0].type, 'department');
-    });
-
+  describe('tree lookup', () => {
     it('walks the tree for Group A and summarizes employees', () => {
       const nodes = findTreeNodesByName(SAMPLE_TREE, 'group a');
       assert.equal(nodes.length, 1);

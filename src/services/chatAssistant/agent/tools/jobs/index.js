@@ -2,8 +2,6 @@ import countJobs from './countJobs.tool.js';
 import listJobs from './listJobs.tool.js';
 import getJob from './getJob.tool.js';
 import rankJobsBySalary from './rankJobsBySalary.tool.js';
-import { hasJobSubjectNoun } from '../../../queryPlanner/entities/jobFilter.js';
-import { looksLikeJobRankingQuery } from '../../../queryPlanner/entities/jobRank.js';
 
 const instructions = [
   'Jobs: job postings on the ATS Jobs page, internal openings and mirrored external listings.',
@@ -32,8 +30,5 @@ const instructions = [
 export default {
   domain: 'jobs',
   instructions,
-  // Gate test for agent/gate.js's matchedDomains: the noun/ranking-query test the
-  // gate used to hard-code.
-  matchesTurn: (text) => hasJobSubjectNoun(text) || looksLikeJobRankingQuery(text),
   tools: [countJobs, listJobs, getJob, rankJobsBySalary],
 };

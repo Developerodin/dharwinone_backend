@@ -16,18 +16,8 @@ const instructions = [
     'could move into <job>" → pool "employees". People who APPLIED to a job are list_applications, not this.',
 ].join('\n');
 
-const CANDIDATE_NOUN_RE = /\bcandidates?\b/i;
-// "who fits this role" / "best fit for the React job" — match_candidates_to_job.
-const FIT_RE = /\bwho\s+(?:fits|would\s+fit|is\s+(?:a\s+)?(?:good\s+|best\s+)?fit|is\s+suitable)\b|\bbest\s+(?:fit|match)(?:es)?\s+for\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  return CANDIDATE_NOUN_RE.test(t) || FIT_RE.test(t);
-}
-
 export default {
   domain: 'candidates',
   instructions,
   tools: [countCandidates, listCandidates, matchCandidatesToJob],
-  matchesTurn,
 };

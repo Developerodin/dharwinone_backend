@@ -12,15 +12,8 @@ const instructions = [
   '- If a result has notFound "applicant", say you could not find that person\'s applications — not "0 jobs".',
 ].join('\n');
 
-const APPLICATION_RE = /\b(appl(?:y|ied|ies|ying)|applications?|applicants?)\b/i;
-
-export function matchesTurn(text) {
-  return APPLICATION_RE.test(String(text || ''));
-}
-
 export default {
   domain: 'applications',
   instructions,
   tools: [countApplications, listApplications],
-  matchesTurn,
 };

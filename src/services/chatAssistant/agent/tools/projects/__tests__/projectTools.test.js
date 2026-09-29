@@ -6,7 +6,6 @@ import listTeams from '../listTeams.tool.js';
 import countTasks from '../countTasks.tool.js';
 import listTasks from '../listTasks.tool.js';
 import getWorkload from '../getWorkload.tool.js';
-import { matchesTurn } from '../index.js';
 
 const SELF = '64b000000000000000000001';
 const OTHER = '64b000000000000000000002';
@@ -186,22 +185,5 @@ describe('get_workload', () => {
   it('team metrics need a team name', async () => {
     const out = await getWorkload.execute({ metric: 'team_utilization' }, ctxFor(['projects.read']));
     assert.match(out.error, /teamName/);
-  });
-});
-
-describe('matchesTurn', () => {
-  it('takes project / task / team-list turns', () => {
-    for (const q of ['how many projects are active', 'show my tasks', 'how many tasks are in review',
-      'who has the most tasks', 'how many teams do we have', 'who is in team Alpha']) {
-      assert.equal(matchesTurn(q), true, q);
-    }
-  });
-
-  it('leaves attendance, leave, schedule, org-chart and meeting turns alone', () => {
-    for (const q of ['attendance tasks for today', 'who is on leave today', 'my shift this week',
-      'upcoming holidays', 'show the org chart', 'my meetings today', 'how many interviews today',
-      'how many team members are there']) {
-      assert.equal(matchesTurn(q), false, q);
-    }
   });
 });

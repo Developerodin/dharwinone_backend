@@ -19,21 +19,8 @@ const instructions = [
   '- Meetings, interviews, attendance, leave, shifts and holidays are not tasks: handoff.',
 ].join('\n');
 
-const PROJECT_TASK_RE = /\b(projects?|tasks?|task\s*board|kanban|sprints?|workload|overloaded|utili[sz]ation|backlog)\b/i;
-// A bare "team" is the employees domain's word ("team members") — only whole-team phrasings match here.
-const TEAM_RE = /\b(how many teams|list (?:the |all )?teams|(?:which|what) teams?|teams? (?:list|lead|roster)|idle teams?|in team\s+\w+|workforce teams?)\b/i;
-// Turns other domains own even when they mention a task or project.
-const NOT_OURS_RE = /\b(attendance|leaves?|holidays?|shifts?|org[\s-]?chart|meetings?|interviews?)\b/i;
-
-export function matchesTurn(text) {
-  const t = String(text || '');
-  if (NOT_OURS_RE.test(t)) return false;
-  return PROJECT_TASK_RE.test(t) || TEAM_RE.test(t);
-}
-
 export default {
   domain: 'projects',
   instructions,
   tools: [countProjects, listProjects, listTeams, countTasks, listTasks, getWorkload],
-  matchesTurn,
 };

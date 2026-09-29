@@ -1,7 +1,8 @@
 /**
- * Sage tool gate. Mirrors the route permission of the portal page each tool
- * reads from, so a chat answer can never exceed what the user could open in the UI.
- * Every ROUTING_TOOLS name must appear here; unknown names are denied.
+ * Sage tool gate. Each agent tool's co-located `access` rule (agent/defineTool.js)
+ * mirrors the route permission of the portal page it reads from, so a chat answer
+ * can never exceed what the user could open in the UI. agent/toolRegistry.js runs
+ * these checks.
  *
  * `anyOf` — user needs at least one (aliases resolved like requireAnyOfPermissions).
  * No `anyOf` — the handler already enforces its own check (see `note`) or the
@@ -17,38 +18,12 @@ import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.sc
 import Employee from '../../models/employee.model.js';
 import { userIsAdmin } from '../../utils/roleHelpers.js';
 
-const PEOPLE_READ = ['candidates.read', 'employees.read']; // employee.route.js canReadEmployees
-
-export const TOOL_ACCESS = {
-  // People — employee.route.js
-  // Permission keys only — no router tool by these names since round 2; kept for
-  // resolveTitleAmbiguity, buildSystemContext and the two-stage people path.
-  fetch_employees: { anyOf: PEOPLE_READ, rowScope: 'person' },
-  fetch_people: { anyOf: PEOPLE_READ, rowScope: 'person' },
-
-  // ATS pipeline (interviews, offers, placements, referral leads: agent/tools/hiring)
-  fetch_jobs: { anyOf: ['jobs.read'] },
-  // Reads Job mirrors (jobOrigin='external' / externalRef), the same collection and
-  // origin fetch_jobs already exposes — not the raw ExternalJob collection that
-  // requireExternalJobsAccess.js's external-jobs.* gate protects. Mirror fetch_jobs'
-  // rule exactly rather than a permission this tool doesn't actually read behind.
-
-  // Org / PM
-
-  // HR — handlers check userIsAdmin or self
-
-  // Self-scoped / public
-};
-
 const hasAny = (permissions, required) =>
   !!permissions &&
   required.some((r) => getGrantingPermissions(r).some((p) => permissions.has(p)));
 
 /**
- * Evaluate a single TOOL_ACCESS-shaped rule (`{ anyOf, adminByName }` or
- * `{ note }`) against a user. Extracted from `checkToolAccess` so
- * `agent/toolRegistry.js` can run the identical check against a tool's
- * co-located `access` object without a name/TOOL_ACCESS lookup.
+ * Evaluate one access rule (`{ anyOf, adminByName }` or `{ note }`) against a user.
  */
 export async function checkAccessRule(rule, user, deps = {}) {
   if (!rule.anyOf) return { ok: true };
@@ -61,15 +36,9 @@ export async function checkAccessRule(rule, user, deps = {}) {
   return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
 }
 
-export async function checkToolAccess(name, user, deps = {}) {
-  const rule = TOOL_ACCESS[name];
-  if (!rule) return { ok: false, reason: `Unknown tool ${name}.` };
-  return checkAccessRule(rule, user, deps);
-}
-
 /**
  * student.route.js reads other students' progress behind students.read.
- * Same rule as checkToolAccess — platformSuperUser or a permission grant, no
+ * Same rule as checkAccessRule — platformSuperUser or a permission grant, no
  * Administrator-by-name shortcut.
  */
 export async function canReadOtherTraining(user) {
@@ -99,17 +68,12 @@ export async function resolveRowScope(user, deps = {}) {
   return null;
 }
 
-// Exported so callers outside the guardToolResult pipeline (e.g. buildSystemContext's
-// general-query fallback, which queries User directly) can apply the identical
-// owner-id predicate instead of re-implementing it.
 export const rowMatchesAllowed = (r, allowed) =>
   [r._id, r.id, r.userId, r.owner].map(idOf).some((id) => id && allowed.has(id));
 
-// Precomputed on the whole (unscoped) population before the row filter runs —
-// fetch_employees/fetch_people compute these from a company-wide Mongo count,
-// and fetch_people pre-renders a full markdown roster before guardToolResult
-// ever sees the result. Once rows are cut down, these siblings talk about a
-// population the caller can no longer see and must not survive the filter.
+// Aggregates or pre-rendered text a result may carry, computed on the whole
+// (unscoped) population before the row filter runs. Once rows are cut down, these
+// siblings talk about a population the caller can no longer see and must not survive.
 const AGGREGATE_SIBLING_KEYS = ['breakdown', 'employmentBreakdown', 'rendered'];
 
 /** Drop stale company-wide aggregates/pre-rendered text and, if present, cut `page` down to the filtered count. */
@@ -120,12 +84,11 @@ function stripAggregateSiblings(obj, filteredLength) {
   return out;
 }
 
-// ponytail: post-filter, not query rewrite — fetch_employees has 5 query paths.
-// Ceiling: a scoped user only sees rows inside the handler's limit (max 1000);
-// move the owner filter into each query path if a scoped population ever exceeds that.
+// ponytail: post-filter, not query rewrite. Ceiling: a scoped user only sees rows
+// inside the tool's own limit; move the owner filter into the tool's query if a
+// scoped population ever exceeds that.
 //
-// Three result shapes reach this function: a bare array (semantic_employee_search),
-// { records: [...] } (fetch_employees/fetch_candidates/fetch_people), and
+// Three result shapes are handled: a bare array, { records: [...] } and
 // { job, candidates: [...] } (match_candidates_to_job). Each is filtered by the
 // same owner-id keys; only the object shapes carry aggregate/pre-rendered
 // siblings (employmentBreakdown, rendered, page.total, ...) that must be
@@ -160,7 +123,7 @@ const stripKey = (v, key) => {
 
 /**
  * personProfile gates compensation on employees.manage; apply the same to every
- * person tool. Same rule as checkToolAccess — platformSuperUser or a permission
+ * person tool. Same rule as checkAccessRule — platformSuperUser or a permission
  * grant, no userIsAdmin shortcut.
  */
 export async function redactSalary(result, user) {
@@ -170,9 +133,8 @@ export async function redactSalary(result, user) {
 }
 
 /**
- * Same as `guardToolResult` but takes the rule object directly instead of a
- * TOOL_ACCESS name lookup, so `agent/toolRegistry.js` can guard a tool's
- * result using its co-located `access` object.
+ * Guard a tool result by its `access` rule: `rowScope: 'person'` rows are cut to
+ * the Employees-page scope and salary is redacted.
  */
 export async function guardResultForRule(rule, result, user, deps = {}) {
   if (!result || result.forbidden) return result;
@@ -181,6 +143,3 @@ export async function guardResultForRule(rule, result, user, deps = {}) {
   return redactSalary(scoped, user);
 }
 
-export async function guardToolResult(name, result, user, deps = {}) {
-  return guardResultForRule(TOOL_ACCESS[name], result, user, deps);
-}

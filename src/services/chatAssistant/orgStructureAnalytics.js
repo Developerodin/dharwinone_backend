@@ -32,18 +32,6 @@ export const ORG_READ_PERMISSIONS = Object.freeze(['chart.read', 'structure.read
 /** OrgUnit.type values that are positions (single head), not multi-employee departments. */
 export const POSITION_TYPES = Object.freeze(['ceo', 'manager', 'supervisor']);
 
-/**
- * True when the permission Set grants access to at least one of ORG_READ_PERMISSIONS
- * (mirrors requireAnyOfPermissions('chart.read', 'structure.read', 'structure.manage')
- * used by orgStructure.route.js `canReadTree`).
- * @param {Set<string>|null|undefined} permissions
- * @returns {boolean}
- */
-export function hasOrgReadAccess(permissions) {
-  if (!permissions || typeof permissions.has !== 'function') return false;
-  return ORG_READ_PERMISSIONS.some((p) => permissions.has(p));
-}
-
 const idStr = (v) => (v == null ? null : String(v));
 
 const headNameOf = (u) =>
@@ -138,21 +126,6 @@ export function listDepartmentRecords(units = [], tree = null) {
         })),
       };
     });
-}
-
-/**
- * Case-insensitive unit name lookup. Exact matches win over partial includes.
- * @param {Array<{ name?: string, isActive?: boolean }>} units
- * @param {string} nameQuery
- * @returns {Array}
- */
-export function findOrgUnitsByName(units = [], nameQuery = '') {
-  const q = String(nameQuery || '').trim().toLowerCase();
-  if (!q) return [];
-  const active = (units || []).filter((u) => u?.isActive !== false);
-  const exact = active.filter((u) => String(u.name || '').toLowerCase() === q);
-  if (exact.length) return exact;
-  return active.filter((u) => String(u.name || '').toLowerCase().includes(q));
 }
 
 /**

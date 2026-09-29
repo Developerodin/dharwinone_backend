@@ -221,7 +221,7 @@ This is the decision the brief names explicitly. `getUsers.query.role` (the REST
 — a fixed picker enum for three specific UI use cases (interview/kanban assignee
 pickers). That enum cannot answer "how many admins" or "who has role X" for an
 arbitrary role, which is exactly `count_users`'/`list_users`' stated purpose
-(task-3-brief's `matchesTurn` examples). So: `filters.role` accepts free-form
+(task-3-brief's routing examples). So: `filters.role` accepts free-form
 name(s), resolved via `resolveRoleNames()` (§1) against the live Role collection
 — name, slug, alias, or previousName, case-insensitive exact match, any status.
 An input name matching zero roles is a **tool error** (throw, so the model sees
@@ -365,7 +365,7 @@ exactly one target through `get_user`'s own requester-scoped lookups first —
 `getUserByIdForRequester` (mirrors what `GET /users/:userId` does) and
 `queryUsers` (mirrors `GET /users`, with the `platformSuperUser`/`deleted`
 exclusion Ruling R12 adds) — and only then call `resolvePersonProfile` with
-that single resolved `userId`, `persist: false` (Ruling R10). Current shape
+that single resolved `userId` (Ruling R10). Current shape
 (`getUser.tool.js`, elided for length — read the file for the exact code):
 ```js
 async execute({ id, name } = {}, ctx) {
@@ -403,8 +403,6 @@ async execute({ id, name } = {}, ctx) {
     depth: 'full',
     viewer: user,
     impersonating: !!user.__impersonating,
-    adminId,
-    persist: false, // Ruling R10/R14 — no pending pick, no lastEntities.person write
     deps: ctx.deps,
   });
 
@@ -581,7 +579,7 @@ input: Joi.object({
 
 ---
 
-## 8. `people/index.js` instructions (guidance for `matchesTurn`/model routing)
+## 8. `people/index.js` instructions (guidance for model routing)
 
 Per task-3/4 briefs' examples, the instructions string must say, in substance:
 - Users: user accounts, logins, "who has role X", "how many admins" →
@@ -609,11 +607,11 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 | R7 | `get_user`'s `rowScope: 'person'` access flag only buys the automatic `redactSalary` pass (shape-agnostic); the Employees/Candidates row-scope check itself must be hand-implemented in `execute()`, because `applyRowScope` doesn't recognize `get_user`'s result shape. |
 | R8 | Row-scope stripping in `get_user` applies only to `profiles.employee`/`profiles.candidate` — Student/Mentor/etc. have no ownership-scoping concept anywhere in this codebase to mirror. |
 | R9 | `list_roles.userCount` is computed by a fresh aggregate matching `count_users`' own default scoping (active, hidden-excluded, platform-super-excluded) — not a reuse of `role.service.js`'s existing `assigneeCountTotal`/`assigneeCountActivePending`, which lack hidden-user exclusion and don't default to "active". |
-| R10 | `resolvePersonProfile`'s `notAuthorized` result carries no identity, ever — `get_user` builds its own fallback scalar identity from its own requester-scoped lookup (R6/R12), and calls `resolvePersonProfile` with `persist: false` so it never writes a pending-person pick or rebinds the legacy "current person". |
+| R10 | `resolvePersonProfile`'s `notAuthorized` result carries no identity, ever — `get_user` builds its own fallback scalar identity from its own requester-scoped lookup (R6/R12), and calls `resolvePersonProfile` with that resolved `userId` only. (R9: `resolvePersonProfile` is now read-only — the `person` free-text path, `persist` and its pending-person / current-person writers were removed with the legacy pipeline.) |
 | R11 | Employee-vs-Candidate provider selection is verified id-based (`roleRegistry.tagRoleSlugs`), not name-based — a `previousNames` collision cannot mis-route a profile. |
 | R12 | `get_user`'s name path excludes `platformSuperUser` (unless the viewer is one) and deleted accounts from `queryUsers`, mirroring `getUserByIdForRequester`'s own exclusions on the id path. |
 | R13 | `get_user`'s name path prefers a single exact name/email match over the full `matches` disambiguation list, since `queryUsers`' search is partial-match. |
-| R14 | A unique `get_user` result is written as the conversation subject (`lastEntities.currentEntitySubject`, via `writeEntitySubject`) — the one write it makes. A follow-up the agent hands to the legacy pipeline ("which jobs has this user applied to") needs to know who "this user" is. Ambiguous or empty results write nothing. |
+| R14 | *Retired in R9.* `get_user` used to write a unique result as the conversation subject (`lastEntities.currentEntitySubject`) for follow-ups handed to the legacy pipeline. With the legacy pipeline gone nothing read it, so `get_user` now makes no writes; the agent's tool ledger carries follow-up context. |
 | R15 | **Applies to every domain, not just people.** Every `count_*`/`list_*` tool declares `measure` in `defineTool`: one sentence naming what it counts (ACCOUNTS vs PROFILES vs RECORDS) and its default status scope. The registry appends it to the model-facing description and to every result, so a reply can say which number it is. `toolRegistry.test.js` fails on a count/list tool without one. Added after Sage reported 20 candidate profiles (active/pending accounts) as if it were the Users page's 23 candidate accounts. |
 
 ## Open risks (not resolved by this contract — flagging for awareness)
@@ -676,12 +674,8 @@ target a viewer can't otherwise look up. **`get_user` must never rely on
   `queryUsers` (Ruling R6, R12), *before* it ever calls `resolvePersonProfile`
   — so it already holds a safe `{ userId, name, email }` scalar regardless of
   what `resolvePersonProfile` returns.
-- It calls `resolvePersonProfile({ userId, ..., persist: false })` —
-  `persist` is an additive parameter on `resolvePersonProfile` (default
-  `true`, so every other caller's behavior is unchanged); `false` no-ops both
-  `writePending` and `writeCurrentPerson`, because a read-only tool must not
-  write a pending-person disambiguation pick or rebind the legacy pipeline's
-  "current person" (review fix round 1, finding I-2).
+- It calls `resolvePersonProfile({ userId, ... })`, which is read-only (review
+  fix round 1, finding I-2; since R9 it has no writers at all).
 - On `notAuthorized`, `get_user` builds `roles[]` the normal way (fresh
   `User.roleIds` → `Role.find`, Ruling R6) off its own resolved `userId`, and
   returns

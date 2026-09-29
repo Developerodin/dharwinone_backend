@@ -12,6 +12,7 @@ import logger from '../../../config/logger.js';
 import { defineTool, assertUniqueToolNames } from './defineTool.js';
 import { checkAccessRule, guardResultForRule } from '../toolAccess.js';
 import toolDomains from './tools/index.js';
+import { assertRelatedToolsExist } from '../personProfile/providers/index.js';
 
 const MAX_RESULT_CHARS = 20000;
 
@@ -24,7 +25,7 @@ const handoffTool = defineTool({
   name: HANDOFF_TOOL_NAME,
   domain: 'core',
   kind: 'read',
-  description: 'Hand off this conversation to the legacy Sage pipeline when no available tool can answer the question.',
+  description: 'Call when no available tool can answer the question; Sage then tells the user it cannot answer that yet.',
   input: Joi.object({ reason: Joi.string().max(300) }),
   access: { note: 'built-in, always available' },
   execute: async () => ({ handoff: true }),
@@ -34,44 +35,9 @@ const defaultDomains = toolDomains;
 
 // Fail at boot, not mid-chat, if two domains ever define the same tool name.
 assertUniqueToolNames([...defaultDomains.flatMap((d) => d.tools), handoffTool]);
-
-/**
- * Domain names whose registered index exports a `matchesTurn(text)` that returns
- * true for this turn — e.g. jobs' `matchesTurn` is the noun/ranking-query test
- * agent/gate.js used to hard-code. A domain with no `matchesTurn` never matches
- * here (see agent/README.md's "widen the gate" section for wiring one up).
- * @param {string} text
- * @param {object} [options]
- * @param {Array<{domain:string, matchesTurn?:Function}>} [options.domains] defaults to every registered domain module
- * @returns {string[]}
- */
-export function matchedDomains(text, { domains = defaultDomains } = {}) {
-  return domains.filter((d) => typeof d.matchesTurn === 'function' && d.matchesTurn(text)).map((d) => d.domain);
-}
-
-/**
- * True when `user` is permitted to call at least one tool belonging to
- * `domainNames` — or, when `domainNames` is `null`, at least one tool in ANY
- * registered domain (agent/gate.js's "recent agent turn, no domain named this
- * turn" case).
- * @param {object} user
- * @param {string[]|null} domainNames
- * @param {object} [options]
- * @param {Array<{domain:string, tools:Array}>} [options.domains] defaults to every registered domain module
- * @param {object} [options.deps] forwarded to checkAccessRule (toolAccess.js)
- * @returns {Promise<{ok:boolean, reason?:string}>}
- */
-export async function hasAgentToolAccess(user, domainNames, { domains = defaultDomains, deps } = {}) {
-  const tools = domains
-    .filter((d) => domainNames === null || domainNames.includes(d.domain))
-    .flatMap((d) => d.tools);
-  for (const tool of tools) {
-    // eslint-disable-next-line no-await-in-loop
-    const access = await checkAccessRule(tool.access, user, deps);
-    if (access.ok) return { ok: true };
-  }
-  return { ok: false, reason: 'No permitted tool in the matched domain(s).' };
-}
+// get_user's profile sections name follow-up tools (personProfile providers' relatedTools);
+// fail at boot if one names a tool the agent does not have.
+assertRelatedToolsExist(defaultDomains.flatMap((d) => d.tools.map((t) => t.name)));
 
 /** The model-facing description: the tool's own text plus its measure, when it declares one. */
 function modelDescription(tool) {

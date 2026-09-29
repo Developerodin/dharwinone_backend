@@ -2,8 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import countApplications from '../countApplications.tool.js';
 import listApplications from '../listApplications.tool.js';
-import { matchesTurn } from '../index.js';
-import { matchesTurn as peopleMatchesTurn } from '../../people/index.js';
 
 const VIEWER = { id: 'v1', _id: 'v1' };
 
@@ -53,20 +51,5 @@ describe('list_applications', () => {
       })),
     );
     assert.deepEqual(out.records[0], { id: 'a1', applicant: 'Ranveer Singh', job: 'React Dev', status: 'Applied', appliedAt: null });
-  });
-});
-
-describe('applications matchesTurn', () => {
-  it('matches application phrasing', () => {
-    assert.equal(matchesTurn('how many jobs has he applied too'), true);
-    assert.equal(matchesTurn('which jobs has this user applied to'), true);
-    assert.equal(matchesTurn('how many employees'), false);
-  });
-});
-
-describe('people matchesTurn — tell me about', () => {
-  it('opens the people domain for a named person only', () => {
-    assert.equal(peopleMatchesTurn('tell me about Ranveer Singh'), true);
-    assert.equal(peopleMatchesTurn('tell me about leave policy'), false);
   });
 });

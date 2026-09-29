@@ -6,15 +6,8 @@ const instructions = [
   '- noStudentProfile means the person is not enrolled as a student — say that, never "0 courses".',
 ].join('\n');
 
-const TRAINING_RE = /\b(training|courses?|lms|learning\s+progress)\b/i;
-
-export function matchesTurn(text) {
-  return TRAINING_RE.test(String(text || ''));
-}
-
 export default {
   domain: 'training',
   instructions,
   tools: [getTrainingProgress],
-  matchesTurn,
 };

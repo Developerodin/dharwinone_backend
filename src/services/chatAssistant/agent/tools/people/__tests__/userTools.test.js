@@ -85,7 +85,6 @@ function ctxFor(overrides = {}) {
       resolveRowScope: async () => null,
       viewerSeesHiddenUsers: () => false,
       getDirectoryHiddenUserIds: async () => [],
-      writeEntitySubject: async () => {},
       ...overrides,
     },
   };
@@ -310,7 +309,7 @@ describe('get_user', () => {
     assert.deepEqual(await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx), { matches: [] });
   });
 
-  it('id path: resolvePersonProfile is called with the requester-scoped userId and persist:false (I-2)', async () => {
+  it('id path: resolvePersonProfile is called with the requester-scoped userId', async () => {
     const calls = [];
     const ctx = ctxFor({
       getUserByIdForRequester: async (id) => {
@@ -325,7 +324,6 @@ describe('get_user', () => {
     await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(calls[0][0], 'getUserByIdForRequester');
     assert.equal(calls[1][1].userId, '64b7f0c2a1b2c3d4e5f60718');
-    assert.equal(calls[1][1].persist, false);
     assert.equal('person' in calls[1][1], false);
   });
 
@@ -434,7 +432,6 @@ describe('get_user', () => {
     });
     await getUser.execute({ name: 'Priya' }, ctx);
     assert.equal(calls[0].userId, 'u1');
-    assert.equal(calls[0].persist, false);
   });
 
   it('forwards notFound / unavailable as-is', async () => {
@@ -597,8 +594,7 @@ describe('get_user', () => {
     assert.ok('employee' in unrestricted.profiles);
   });
 
-  it('I-2 — no pending pick or current-person write: the real resolvePersonProfile, called with persist:false, never invokes its writers', async () => {
-    const throwIfCalled = (label) => async () => { throw new Error(`must not call ${label} — get_user performs no DB writes`); };
+  it('end to end through the real resolvePersonProfile (read-only: it has no writers)', async () => {
     const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Employee', slug: 'employee', aliases: [], status: 'active', permissions: [] }]);
     const { User } = fakeUser();
     User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
@@ -619,43 +615,11 @@ describe('get_user', () => {
         tagRoleDisplayNames: async () => new Map([[ROLE_ID_1, 'Employee']]),
         selectProviders: () => [],
         loadUserById: async (id) => ({ _id: id, name: 'Priya', email: 'priya@x.com', roleIds: [ROLE_ID_1] }),
-        resolveUserEntity: throwIfCalled('resolveUserEntity (get_user never resolves by free text itself)'),
-        writePending: throwIfCalled('writePending'),
-        writeCurrentPerson: throwIfCalled('writeCurrentPerson'),
-        writeEntitySubject: async () => {},
       },
     };
 
     const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
     assert.equal(out.kind, 'unique');
-  });
-
-  it('a unique find becomes the conversation subject, so a handed-off "this user" follow-up knows who it is', async () => {
-    const writes = [];
-    const ctx = ctxFor({
-      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Ranveer Singh', email: 'r@x.com' }),
-      resolvePersonProfile: async () => ({
-        kind: 'unique',
-        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Ranveer Singh' },
-        profiles: {},
-        availableSections: [],
-      }),
-      writeEntitySubject: async (args) => { writes.push(args); },
-    });
-    await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
-    assert.equal(writes.length, 1);
-    assert.equal(writes[0].userId, 'viewer-1');
-    assert.equal(writes[0].subject.userId, '64b7f0c2a1b2c3d4e5f60718');
-    assert.equal(writes[0].subject.name, 'Ranveer Singh');
-  });
-
-  it('several name matches write no conversation subject', async () => {
-    const ctx = ctxFor({
-      queryUsers: async () => ({ results: [{ _id: 'a', name: 'Ranveer Singh' }, { _id: 'b', name: 'Ranveer Sinha' }] }),
-      writeEntitySubject: async () => { throw new Error('must not write on ambiguity'); },
-    });
-    const out = await getUser.execute({ name: 'Ranveer' }, ctx);
-    assert.equal(out.matches.length, 2);
   });
 
   it('has users.read + person row-scope access', () => {
@@ -675,47 +639,19 @@ describe('get_user', () => {
   });
 });
 
-describe('personProfile.resolvePersonProfile — direct coverage of the C-1/I-2 fix', () => {
+describe('personProfile.resolvePersonProfile — direct coverage of the C-1 fix', () => {
   const NOT_AUTH_VIEWER = { id: 'viewer-1', roleIds: [] };
 
   it('C-1 regression — the default notAuthorized result carries no identity', async () => {
     const profile = await resolvePersonProfile({
-      person: 'Someone',
+      userId: 'p9',
       viewer: NOT_AUTH_VIEWER,
-      adminId: 'a1',
       deps: {
-        resolveUserEntity: async () => ({
-          kind: 'unique',
-          match: { userId: 'p9', name: 'Someone', email: 'someone@x.com', roleIds: [] },
-        }),
+        loadUserById: async () => ({ _id: 'p9', name: 'Someone', email: 'someone@x.com', roleIds: [] }),
         getUserPermissionContext: async () => ({ isAdmin: false, permissions: new Set() }),
       },
     });
     assert.deepEqual(profile, { kind: 'notAuthorized' });
-  });
-
-  it('I-2 — persist:false skips writePending/writeCurrentPerson; the default (unset) still writes', async () => {
-    const writeCalls = [];
-    const deps = {
-      resolveUserEntity: async () => ({
-        kind: 'unique',
-        match: { userId: 'p1', name: 'Abhishek', roleIds: ['r-emp'] },
-      }),
-      getUserPermissionContext: async () => ({ isAdmin: false, permissions: new Set(['employees.read']) }),
-      tagRoleDisplayNames: async () => new Map([['r-emp', 'Employee']]),
-      tagRoleSlugs: async () => new Map([['r-emp', 'employee']]),
-      selectProviders: () => [],
-      writePending: async () => { writeCalls.push('writePending'); },
-      writeCurrentPerson: async () => { writeCalls.push('writeCurrentPerson'); },
-    };
-
-    const noWrite = await resolvePersonProfile({ person: 'Abhishek', viewer: NOT_AUTH_VIEWER, adminId: 'a1', persist: false, deps });
-    assert.equal(noWrite.kind, 'unique');
-    assert.deepEqual(writeCalls, []);
-
-    const defaultWrite = await resolvePersonProfile({ person: 'Abhishek', viewer: NOT_AUTH_VIEWER, adminId: 'a1', deps });
-    assert.equal(defaultWrite.kind, 'unique');
-    assert.deepEqual(writeCalls, ['writeCurrentPerson']);
   });
 });
 
@@ -768,7 +704,6 @@ describe('get_my_profile', () => {
     const out = await getMyProfile.execute({}, ctx);
     assert.equal(seen.userId, 'u-self');
     assert.equal(seen.viewer.id, 'u-self');
-    assert.equal(seen.persist, false);
     assert.equal(seen.impersonating, true);
     assert.equal(out.identity.name, 'Me');
     assert.equal(getMyProfile.render(out).blocks.length, 1);

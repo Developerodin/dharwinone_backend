@@ -488,7 +488,7 @@ const deleteUserById = async (userId) => {
   //     — failures here must not block the delete.
   try {
     const { cascadeUserRemoval } = await import('./chatAssistant/entityCleanup.js');
-    await cascadeUserRemoval({ userId, adminId: user.adminId ?? user._id });
+    await cascadeUserRemoval({ userId });
   } catch (err) {
     logger.warn(`[deleteUserById] cascadeUserRemoval failed for ${userId}: ${err.message}`);
   }

@@ -115,6 +115,8 @@ function containsSearchTerm(calls, term) {
 function evaluateExpect(expect, ctx) {
   if (expect.anyOf) return expect.anyOf.some((alt) => evaluateExpect(alt, ctx));
   if (expect.rule) return RULES[expect.rule](ctx.calls);
+  // `handoff: true` = the model must call `handoff` (in production Sage then sends its
+  // fixed "can't answer that yet" reply) rather than guess with a tool or from memory.
   if (expect.handoff) {
     if (!ctx.handoffCalled) return false;
     if (expect.forbidSearchTerm && containsSearchTerm(ctx.calls, expect.forbidSearchTerm)) return false;
@@ -471,8 +473,8 @@ function wrapRegistryForEval(real) {
  * Builds runAgent `deps` for one case run: `getAgentTools` is the real
  * registry wrapped per above; `step` is the real `llm.step` (hits the live
  * model) instrumented to record every tool call the model attempts —
- * including `handoff`, which runAgent short-circuits to null before it ever
- * reaches `registry.execute` — plus per-step token usage.
+ * including `handoff`, which runAgent short-circuits to null (the caller's fixed
+ * reply) before it ever reaches `registry.execute` — plus per-step token usage.
  */
 function buildInstrumentedDeps() {
   const calls = [];

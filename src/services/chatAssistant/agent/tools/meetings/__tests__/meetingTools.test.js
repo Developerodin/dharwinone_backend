@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import countMeetings from '../countMeetings.tool.js';
 import listMeetings from '../listMeetings.tool.js';
-import { matchesTurn } from '../index.js';
 
 const VIEWER = { id: 'v1', _id: 'v1' };
 const NOW = new Date('2026-09-29T10:00:00.000Z');
@@ -90,23 +89,5 @@ describe('list_meetings', () => {
       listMeetings.execute({ filters: { scheduledBetween: { from: '2026/09/01' } } }, ctxWith(async () => ({}))),
       /YYYY-MM-DD/,
     );
-  });
-});
-
-describe('meetings matchesTurn', () => {
-  it('matches meeting phrasing', () => {
-    assert.equal(matchesTurn('how many meetings do I have this week?'), true);
-    assert.equal(matchesTurn('show my upcoming meetings'), true);
-  });
-  it('leaves interviews, attendance/leave, tasks and org turns to their own domains', () => {
-    for (const t of [
-      'how many interview meetings are scheduled today',
-      'meetings with interviewers tomorrow',
-      'attendance for the meeting day',
-      'who is on leave during the meeting',
-      'tasks from the meeting',
-      'meetings for project Apollo',
-      'org chart meeting',
-    ]) assert.equal(matchesTurn(t), false, t);
   });
 });
