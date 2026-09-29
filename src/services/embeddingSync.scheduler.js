@@ -1,8 +1,6 @@
-import Student from '../models/student.model.js';
 import User from '../models/user.model.js';
 import Role from '../models/role.model.js';
 import Employee from '../models/employee.model.js';
-import Attendance from '../models/attendance.model.js';
 import { embedTexts } from '../utils/embedding.util.js';
 import { pineconeUpsert, ensureIndex } from '../utils/pinecone.util.js';
 import logger from '../config/logger.js';
@@ -53,12 +51,6 @@ async function processCursor(query, handler, batchSize, label) {
 
 // ── Text builders ──────────────────────────────────────────────────────────────
 
-function studentText(student, userName) {
-  const skills = (student.skills ?? []).join(' ');
-  const titles = (student.experience ?? []).map((e) => e.title).join(' ');
-  return `${userName} ${skills} ${titles}`.trim();
-}
-
 function employeeUserText(u, profile) {
   const domains = (u.domain ?? []).join(' ');
   const skills = ((profile?.skills) ?? [])
@@ -95,58 +87,7 @@ function employeeUserText(u, profile) {
     .trim();
 }
 
-function attendanceText(rec, ownerName) {
-  const date = rec.date ? new Date(rec.date).toISOString().slice(0, 10) : '';
-  return [
-    ownerName ?? '',
-    'attendance',
-    rec.day ?? '',
-    date,
-    rec.status ?? '',
-    rec.leaveType ?? '',
-    rec.notes ?? '',
-    rec.timezone ?? '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .trim();
-}
-
 // ── Upsert helpers ─────────────────────────────────────────────────────────────
-
-async function upsertStudents(students) {
-  if (!students.length) return;
-
-  const userIds = [...new Set(students.map((s) => String(s.user)))];
-  const users = await User.find({ _id: { $in: userIds } }, { _id: 1, adminId: 1, name: 1 }).lean();
-  const userMap = Object.fromEntries(users.map((u) => [String(u._id), u]));
-
-  // Pre-filter to rows whose user still exists — keeps text/embedding arrays aligned.
-  // This used to require adminId, which dropped 4 of the 6 Student-role users for a
-  // field nothing queries here.
-  const eligible = students.filter((s) => userMap[String(s.user)]);
-  const skipped = students.length - eligible.length;
-  if (skipped) logger.info(`[EmbeddingSync] students: ${eligible.length} eligible, ${skipped} skipped (no user)`);
-  if (!eligible.length) return;
-
-  const texts = eligible.map((s) => studentText(s, userMap[String(s.user)]?.name ?? '') || 'candidate');
-  const embeddings = await embedTexts(texts);
-
-  const vectors = eligible.map((s, i) => {
-    const u = userMap[String(s.user)];
-    return {
-      id: `student_${s._id}`,
-      values: embeddings[i],
-      metadata: {
-        ...(u?.adminId ? { adminId: String(u.adminId) } : {}),
-        mongoId: String(s._id),
-        isActive: true,
-      },
-    };
-  });
-
-  await pineconeUpsert('students', vectors);
-}
 
 async function upsertEmployeeUsers(users) {
   if (!users.length) return;
@@ -188,53 +129,12 @@ async function upsertEmployeeUsers(users) {
   await pineconeUpsert('employees', vectors);
 }
 
-async function upsertAttendance(records) {
-  if (!records.length) return;
-
-  const userIds = [...new Set(records.map((r) => String(r.user ?? '')).filter(Boolean))];
-  const users = await User.find({ _id: { $in: userIds } }, { _id: 1, name: 1, adminId: 1 }).lean();
-  const userMap = Object.fromEntries(users.map((u) => [String(u._id), u]));
-
-  // Requires only that the user still exists. Requiring adminId here dropped
-  // attendance for everyone whose User row never received one — the same 65 people
-  // the employees step used to lose — for a field nothing queries in this namespace.
-  const eligible = records.filter((r) => r.user && userMap[String(r.user)]);
-  const skipped = records.length - eligible.length;
-  if (skipped) logger.info(`[EmbeddingSync] attendance: ${eligible.length} eligible, ${skipped} skipped (no user)`);
-  if (!eligible.length) return;
-
-  const texts = eligible.map((r) => attendanceText(r, userMap[String(r.user)]?.name) || 'attendance');
-  const embeddings = await embedTexts(texts);
-  const vectors = eligible.map((r, i) => {
-    const u = userMap[String(r.user)];
-    const dateStr = r.date ? new Date(r.date).toISOString().slice(0, 10) : '';
-    return {
-      id: `attendance_${r._id}`,
-      values: embeddings[i],
-      metadata: {
-        ...(u.adminId ? { adminId: String(u.adminId) } : {}),
-        mongoId: String(r._id),
-        userId: String(r.user),
-        userName: String(u.name ?? ''),
-        date: dateStr,
-        dateMs: r.date ? new Date(r.date).getTime() : 0,
-        day: String(r.day ?? ''),
-        status: String(r.status ?? ''),
-        leaveType: String(r.leaveType ?? ''),
-        isActive: !!r.isActive,
-        durationMs: Number(r.duration ?? 0),
-      },
-    };
-  });
-  await pineconeUpsert('attendance', vectors);
-}
-
 // ── Backfill ───────────────────────────────────────────────────────────────────
 
 export async function runEmbeddingBackfill() {
   // Hard gate: full re-embedding of every collection is heavy. Default off in production
   // so a Render restart doesn't trigger another full backfill (each restart was re-embedding
-  // ~all employees + 180d attendance, spiking RAM and OpenAI cost). Set
+  // ~all employees + 180d attendance at the time, spiking RAM and OpenAI cost). Set
   // EMBEDDING_BACKFILL_ON_BOOT=1 for a one-time intentional backfill, then unset it.
   const enabled = ['1', 'true', 'yes'].includes(
     String(process.env.EMBEDDING_BACKFILL_ON_BOOT ?? '').trim().toLowerCase()
@@ -249,24 +149,9 @@ export async function runEmbeddingBackfill() {
 
   let step = 'init';
   try {
-    step = 'students';
-    // Student is a user role held by 6 users and has nothing to do with jobs. The
-    // students COLLECTION is a different thing: a per-person attendance/HR profile
-    // created for everyone (205 rows, ~15k attendance records keyed to it), so
-    // embedding all of it put 188 employees into a namespace called `students`.
-    // Scope to the actual role; the collection itself stays untouched.
-    const studentRole = await Role.findOne({ name: 'Student' }, { _id: 1 }).lean();
-    const studentUserIds = studentRole ? await User.distinct('_id', { roleIds: studentRole._id }) : [];
-    await processCursor(
-      Student.find({ user: { $in: studentUserIds } }, { user: 1, skills: 1, experience: 1 }),
-      upsertStudents,
-      BATCH_SIZE,
-      'students'
-    );
-
-    // No jobs step: Sage lists, counts and searches jobs straight from Mongo with the
-    // Jobs page filter (job.service.js#buildJobListFilter). A vector top-K can't give
-    // exact counts, and nothing reads a jobs namespace any more.
+    // Only the employees namespace is embedded: match_candidates_to_job is the one reader.
+    // Jobs, students and attendance are read straight from Mongo by Sage's tools, and a
+    // vector top-K can't give exact counts. Their old namespaces are no longer written.
 
     step = 'employees';
     // Was gated on `adminId: { $exists: true, $ne: null }`, which silently skipped 65
@@ -296,20 +181,6 @@ export async function runEmbeddingBackfill() {
       'employees'
     );
 
-    step = 'attendance';
-    // Cap to last 180 days to avoid embedding decade-old records.
-    const attendanceCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
-    const attFilter = { user: { $exists: true, $ne: null }, date: { $gte: attendanceCutoff } };
-    await processCursor(
-      Attendance.find(attFilter, {
-        user: 1, date: 1, day: 1, status: 1, leaveType: 1, notes: 1,
-        duration: 1, timezone: 1, isActive: 1,
-      }).sort({ date: -1 }),
-      upsertAttendance,
-      BATCH_SIZE,
-      'attendance'
-    );
-
     logger.info('[EmbeddingSync] backfill complete');
   } catch (err) {
     logger.error(`[EmbeddingSync] backfill failed at step=${step}: ${err?.stack || err?.message || String(err)}`);
@@ -334,33 +205,6 @@ async function hasWorkforceRole(user) {
 // ── Post-save hooks ────────────────────────────────────────────────────────────
 
 export function registerEmbeddingHooks() {
-  Student.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
-    try {
-      if (!doc) return;
-      const u = await User.findById(doc.user, { adminId: 1, name: 1, roleIds: 1 }).lean();
-      if (!u) return;
-      // Only actual Student-role users belong in this namespace — the students
-      // collection itself holds an attendance profile for everyone.
-      const studentRole = await Role.findOne({ name: 'Student' }, { _id: 1 }).lean();
-      if (!studentRole || !(u.roleIds || []).some((r) => String(r) === String(studentRole._id))) return;
-      const text = studentText(doc, u.name ?? '');
-      const [emb] = await embedTexts([text]);
-      await pineconeUpsert('students', [
-        {
-          id: `student_${doc._id}`,
-          values: emb,
-          metadata: {
-            ...(u.adminId ? { adminId: String(u.adminId) } : {}),
-            mongoId: String(doc._id),
-            isActive: true,
-          },
-        },
-      ]);
-    } catch (err) {
-      logger.error(`[EmbeddingSync] student hook error: ${err?.stack || err?.message || String(err)}`);
-    }
-  });
-
   User.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
     try {
       if (!doc?._id) return;
@@ -430,38 +274,6 @@ export function registerEmbeddingHooks() {
       ]);
     } catch (err) {
       logger.error(`[EmbeddingSync] employee profile hook error: ${err?.stack || err?.message || String(err)}`);
-    }
-  });
-
-  Attendance.schema.post(['save', 'findOneAndUpdate'], async function (doc) {
-    try {
-      if (!doc?.user) return;
-      const owner = await User.findById(doc.user, { _id: 1, name: 1, adminId: 1 }).lean();
-      if (!owner) return;
-      const text = attendanceText(doc, owner.name);
-      const [emb] = await embedTexts([text || 'attendance']);
-      const dateStr = doc.date ? new Date(doc.date).toISOString().slice(0, 10) : '';
-      await pineconeUpsert('attendance', [
-        {
-          id: `attendance_${doc._id}`,
-          values: emb,
-          metadata: {
-            ...(owner.adminId ? { adminId: String(owner.adminId) } : {}),
-            mongoId: String(doc._id),
-            userId: String(doc.user),
-            userName: String(owner.name ?? ''),
-            date: dateStr,
-            dateMs: doc.date ? new Date(doc.date).getTime() : 0,
-            day: String(doc.day ?? ''),
-            status: String(doc.status ?? ''),
-            leaveType: String(doc.leaveType ?? ''),
-            isActive: !!doc.isActive,
-            durationMs: Number(doc.duration ?? 0),
-          },
-        },
-      ]);
-    } catch (err) {
-      logger.error(`[EmbeddingSync] attendance hook error: ${err?.stack || err?.message || String(err)}`);
     }
   });
 
