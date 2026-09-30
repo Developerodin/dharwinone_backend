@@ -11,6 +11,13 @@ let runTools;
 const tool = (def) =>
   defineTool({ domain: 'fake', kind: 'read', description: 'Fake.', input: Joi.object({}), access: { anyOf: ['a.read'] }, ...def });
 
+const writePrepare = mock.fn(async () => ({
+  ok: true,
+  summary: { title: 'Wrote', lines: [], targetCount: 0, targets: [] },
+  payload: {},
+}));
+const writeCommit = mock.fn(async () => ({ ok: true, message: 'wrote' }));
+
 const fakeDomains = [
   {
     domain: 'fake',
@@ -35,7 +42,7 @@ const fakeDomains = [
         access: { anyOf: ['a.read'], rowScope: 'person' },
         execute: async () => ({ name: 'Asha', salaryRange: '10-20 LPA' }),
       }),
-      tool({ name: 'fake_write', kind: 'write', execute: async () => ({ wrote: true }) }),
+      tool({ name: 'fake_write', kind: 'write', prepare: writePrepare, commit: writeCommit }),
       tool({
         name: 'fake_composite',
         access: { note: 'sections gate themselves' },
@@ -88,11 +95,13 @@ describe('compose runTool', () => {
     assert.deepEqual(await runTool('does_not_exist', {}, ctxFor(userWith('a.read'))), { status: 'unknown' });
   });
 
-  it('refuses write tools, as the registry does', async () => {
+  it('refuses write tools: composite tools never draft, prepare and commit never run', async () => {
     assert.deepEqual(await runTool('fake_write', {}, ctxFor(userWith('a.read'))), {
       status: 'error',
       error: 'write tools require confirmation',
     });
+    assert.equal(writePrepare.mock.callCount(), 0);
+    assert.equal(writeCommit.mock.callCount(), 0);
   });
 
   it('applies guardResultForRule: salary redacted without employees.manage, kept with it', async () => {

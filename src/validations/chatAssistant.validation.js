@@ -19,6 +19,13 @@ const chatMessage = Joi.alternatives().try(
   })
 );
 
+/** POST /actions/:key/confirm and /actions/:key/cancel — key is the SageAction uuid. */
+export const actionKey = {
+  params: Joi.object().keys({
+    key: Joi.string().uuid().required(),
+  }),
+};
+
 export const sendMessage = {
   body: Joi.object().keys({
     messages: Joi.array().items(chatMessage).min(1).max(MESSAGES_MAX).required(),

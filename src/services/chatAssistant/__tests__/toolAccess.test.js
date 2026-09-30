@@ -43,6 +43,35 @@ describe('checkAccessRule', () => {
     assert.equal((await checkAccessRule(rule, userWith(), admin)).ok, true);
     assert.equal((await checkAccessRule(rule, userWith(), notAdmin)).ok, false);
   });
+
+  it('allOf is AND: one permission of two is denied, naming the list; both pass', async () => {
+    const rule = { allOf: ['candidates.manage', 'jobs.manage'] };
+    const one = await checkAccessRule(rule, userWith('candidates.manage'), notAdmin);
+    assert.equal(one.ok, false);
+    assert.equal(one.reason, 'Requires all of: candidates.manage, jobs.manage.');
+    assert.equal((await checkAccessRule(rule, userWith('candidates.manage', 'jobs.manage'), notAdmin)).ok, true);
+  });
+
+  it('allOf resolves aliases per permission, like anyOf', async () => {
+    // activity.read grants activityLogs.read (config/permissions.js permissionAliases).
+    const rule = { allOf: ['activityLogs.read', 'jobs.read'] };
+    assert.equal((await checkAccessRule(rule, userWith('activity.read', 'jobs.read'), notAdmin)).ok, true);
+    assert.equal((await checkAccessRule(rule, userWith('activity.read'), notAdmin)).ok, false);
+  });
+
+  it('anyOf and allOf together: both must hold', async () => {
+    const rule = { anyOf: ['jobs.read', 'jobs.manage'], allOf: ['candidates.manage'] };
+    assert.equal((await checkAccessRule(rule, userWith('jobs.read', 'candidates.manage'), notAdmin)).ok, true);
+    assert.equal((await checkAccessRule(rule, userWith('jobs.read'), notAdmin)).ok, false);
+    const neither = await checkAccessRule(rule, userWith('candidates.manage'), notAdmin);
+    assert.equal(neither.ok, false);
+    assert.equal(neither.reason, 'Requires one of: jobs.read, jobs.manage.');
+  });
+
+  it('platformSuperUser passes an allOf rule with no permissions', async () => {
+    const su = { ...userWith(), platformSuperUser: true };
+    assert.equal((await checkAccessRule({ allOf: ['a.manage', 'b.manage'] }, su, notAdmin)).ok, true);
+  });
 });
 
 describe('training person gate', () => {

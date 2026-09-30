@@ -59,6 +59,7 @@ export const BASE_INSTRUCTIONS = [
   'You may call several tools at once when the question needs them.',
   'If a tool returns an error, fix the arguments and try again. If a result says truncated, tell the user and suggest narrowing the filters.',
   'If no available tool fits the question, call `handoff` with a short reason instead of answering.',
+  'A write tool only drafts. Tell the user what the draft will do and that they must press Confirm. Never say it is done.',
   'Greetings, thanks and small talk ("hi", "thanks"): reply briefly and warmly with no tool call, and offer help. Never put a number in such a reply.',
   'Reply in plain, concise markdown.',
 ].join('\n');
@@ -292,15 +293,20 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     }
 
     let blocks = [];
+    const confirmBlocks = [];
     const factsList = [];
     for (const call of successful) {
       const rendered = registry.render(call.name, call.result);
       if (!rendered) continue;
+      // A draft's confirm block is the only way to run it, so it is kept, never replaced.
+      const confirms = (rendered.blocks ?? []).filter((b) => b?.type === 'confirm');
+      if (confirms.length) confirmBlocks.push(...confirms);
       // Only a render WITH blocks replaces them: a plain count renders `blocks: []`
       // and must not wipe a list shown by an earlier call ("how many ML jobs, show them").
-      if (rendered.blocks?.length) blocks = rendered.blocks;
+      else if (rendered.blocks?.length) blocks = rendered.blocks;
       if (rendered.facts) factsList.push(rendered.facts);
     }
+    blocks = [...blocks, ...confirmBlocks];
     const facts = mergeCountFacts(factsList);
     const reply = facts.counts.length ? enforceCounts(text, facts).reply : text;
 

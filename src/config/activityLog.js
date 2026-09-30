@@ -197,6 +197,9 @@ export const ActivityActions = {
   // Communication contact discovery
   /** Exact-email contact lookup. Recorded on hit AND miss so the log is not an oracle. Spec §6. */
   CONTACT_LOOKUP: 'contact.lookup',
+  // Sage chat assistant — confirm-first writes. entityId = SageAction key; metadata.source = 'sage'.
+  SAGE_ACTION_CONFIRMED: 'sage.action.confirmed',
+  SAGE_ACTION_FAILED: 'sage.action.failed',
 };
 
 export const EntityTypes = {
@@ -233,4 +236,5 @@ export const EntityTypes = {
   OFFER: 'Offer',
   PLACEMENT: 'Placement',
   EXTERNAL_JOB: 'ExternalJob',
+  SAGE_ACTION: 'SageAction',
 };

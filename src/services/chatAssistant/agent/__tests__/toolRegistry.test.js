@@ -89,14 +89,19 @@ const domainA = {
   tools: [readTool, throwTool, strictTool, slowTool, bigTool, renderTool],
 };
 
+// prepare refuses, so execute never reaches the SageAction store (no DB in this file);
+// the stored-draft path is covered by sageActions.test.js with a mocked model.
 const writeTool = defineTool({
   name: 'fake_write',
   domain: 'domain_b',
   kind: 'write',
-  description: 'A write-kind tool, for write-refusal tests.',
+  description: 'A write-kind tool, for write-draft tests.',
   input: Joi.object({}),
   access: { anyOf: ['domain_b.write'] },
-  execute: async () => ({ wrote: true }),
+  prepare: async () => ({ ok: false, error: 'nothing to draft' }),
+  commit: async () => {
+    throw new Error('commit must never run inside the loop');
+  },
 });
 
 const domainB = {
@@ -231,11 +236,18 @@ describe('getAgentTools — execute: tool failures', () => {
     assert.match(result.error, /boom/);
   });
 
-  it('write-kind tool is refused inside the loop', async () => {
+  it('write-kind tool only drafts inside the loop: prepare runs, its refusal comes back, commit never runs', async () => {
     const user = userWith('domain_b.write');
     const { execute } = await getAgentTools(user, { domains: FAKE_DOMAINS });
     const result = await execute('fake_write', {});
-    assert.deepEqual(result, { ok: false, error: 'write tools require confirmation' });
+    assert.deepEqual(result, { ok: false, error: 'nothing to draft' });
+  });
+
+  it('write-kind tool is refused while impersonating, before prepare', async () => {
+    const user = { ...userWith('domain_b.write'), __impersonating: true };
+    const { execute } = await getAgentTools(user, { domains: FAKE_DOMAINS });
+    const result = await execute('fake_write', {});
+    assert.deepEqual(result, { ok: false, error: 'Actions are disabled while impersonating' });
   });
 });
 

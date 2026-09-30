@@ -442,7 +442,7 @@ import { MY_DOMAIN_ACCESS, myDomainScope } from './common.js';
 export default defineTool({
   name: 'count_widgets',           // must match /^[a-z][a-z0-9_]{2,63}$/, unique across ALL domains
   domain: 'widgets',               // groups instructions + schemas; the unit find_tools loads (see "Lazy tool loading")
-  kind: 'read',                    // 'read' runs in the loop; 'write' is refused by the loop (see below)
+  kind: 'read',                    // 'read' runs in the loop; 'write' only drafts (see "How to add a write tool")
   description: 'Count widgets the user can see. Use for "how many widgets…".', // the MODEL reads this — be specific about when to call it
   input: Joi.object({
     filters: Joi.object({ search: Joi.string().min(1) }),
@@ -482,9 +482,12 @@ Notes on each field, from what `defineTool.js` actually enforces (a bad tool thr
   (e.g. jobs mirrors the ATS Jobs page), pull individual keys from that route's Joi object
   in `src/validations/*.validation.js` (see `agent/tools/jobs/filters.js`'s `page(key)`
   helper) so the chat accepts exactly what the page accepts. One source, no drift.
-- **`access`** is `{ anyOf: [...] }` or `{ note: '...' }` (+ optional `rowScope: 'person'`),
-  evaluated by `toolAccess.js`'s `checkAccessRule` (before the call) and `guardResultForRule`
-  (row scope + salary redaction on the result).
+- **`access`** is `{ anyOf: [...] }`, `{ allOf: [...] }`, both, or `{ note: '...' }` (+ optional
+  `rowScope: 'person'`), evaluated by `toolAccess.js`'s `checkAccessRule` (before the call) and
+  `guardResultForRule` (row scope + salary redaction on the result). `anyOf` is OR
+  (`requireAnyOfPermissions`); `allOf` is AND (`requirePermissions(a, b)`), each permission
+  alias-resolved; with both, both must hold. Mirror an AND route with `allOf` — mapping it onto
+  `anyOf` widens access.
 - **`execute` must call the SERVICE layer**, not raw Mongo, when a service function exists —
   same business rules the REST controller uses.
 - **`execute` must AND the page's visibility filter into every query**, and **must fail
@@ -515,6 +518,87 @@ as the registry would for `ctx.user`: access check, write refusal, Joi validatio
 independent sections in parallel. `ctx.composeDepth` allows a composite to call another composite
 once (depth 2); a third level returns `error`, so tools cannot loop. Give the composite its own
 `access: { note }` (sections gate themselves) and a `timeoutMs` that covers its slowest section.
+
+### How to add a write tool
+
+A write tool never writes from the chat loop. The model drafts; the user presses Confirm;
+the confirm endpoint performs the write (`agent/sageActions.js`, model `SageAction`).
+
+```js
+export default defineTool({
+  name: 'close_jobs',
+  domain: 'jobs',
+  kind: 'write',
+  description: 'Draft closing jobs. Only drafts: the user must press Confirm.',
+  input: Joi.object({ jobIds: Joi.array().items(Joi.string()).min(1).max(50).required() }),
+  access: { allOf: ['jobs.read', 'jobs.manage'] }, // mirror the write route's own gate
+  // maxTargets: 20,                // optional, default and ceiling 50
+  async prepare({ jobIds }, ctx) {
+    // READ-ONLY. Resolve targets under the caller's row scope and validate.
+    return {
+      ok: true,
+      summary: {
+        title: 'Close 2 jobs',
+        lines: ['Close "React Developer"', 'Close "QA Lead"'],
+        targetCount: 2,
+        targets: [{ id: 'j1', name: 'React Developer' }, { id: 'j2', name: 'QA Lead' }], // every target
+        confirmLabel: 'Close jobs', // optional, default 'Confirm'
+      },
+      payload: { jobIds: ['j1', 'j2'] }, // what commit needs: ids, not names
+    }; // or { ok: false, error: 'No open jobs match.' }
+  },
+  async commit(draft, ctx) {
+    // Performs the write from draft.payload through the service layer.
+    return { ok: true, message: 'Closed 2 jobs.', details: { closed: 2 } };
+  },
+  // Optional. When present, confirm calls this INSTEAD of re-running prepare.
+  // async recheck(draft, ctx) { return { ok: true }; } // or { ok: false, error }
+});
+```
+
+- **`prepare(value, ctx)`** is read-only and runs under the tool timeout, both when the model
+  drafts and (by default) again on confirm. `summary.targets` must list every target
+  (`targets.length === targetCount`, at most `maxTargets`, ceiling 50), or the draft is refused.
+- **`commit(draft, ctx)`** gets `{ key, tool, args, summary, payload }` and returns
+  `{ ok, message, details? }`. It runs with no timeout: a timeout would not stop the write
+  underneath, so the row would say failed while the write still lands.
+- **`recheck(draft, ctx)`** (optional) replaces the default confirm check, which re-runs
+  `prepare` and refuses unless the fresh target ids equal the draft's. Use it when prepare's
+  output must not be regenerated on confirm (e.g. a generated task-plan preview); check that
+  the stored payload is still valid and return `{ ok: true }` or `{ ok: false, error }`.
+- **Defined with `execute` instead of `prepare`/`commit`, it throws at load.** Write tools get
+  no `rowScope` result guard and no `render`: prepare scopes itself, and the registry renders
+  the confirm block.
+- **Confirm block** (`renderers/types.js` `ConfirmBlock`):
+  `{ type: 'confirm', key, title, lines, targetCount, confirmLabel, expiresAt }`. `runAgent`
+  appends every confirm block after the turn's other blocks, so a later list render never
+  replaces it. Clients that don't know the type drop it.
+
+**`POST /v1/chat-assistant/actions/:key/confirm`** (auth, `chatAssistantLimiter`, key = uuid):
+1. Impersonating → 403 "Actions are disabled while impersonating".
+2. Atomic claim `{ key, userId, status: 'pending', expiresAt > now }` → `executing`. No row:
+   another user's key or missing → 404; expired → 410 (row marked `expired`); already
+   done / failed / executing / cancelled → 409 with the stored result. Nothing runs twice.
+3. Re-check: access rule (permissions may have changed → 403), Joi-validate the stored args,
+   then `recheck` if defined, else re-run `prepare`; different target ids → 409 "The data
+   changed since the draft — ask Sage again." (row failed).
+4. `commit` → result stored, status `done` / `failed`, `expiresAt` bumped to +24 h. A commit
+   that returns `ok: false` answers 200 with `status: 'failed'`; a thrown error answers 500
+   `{ status: 'failed', message }` and the row is never left `executing`.
+5. One activity log row per claimed confirm: `sage.action.confirmed` or `sage.action.failed`,
+   entity `SageAction` / key, metadata `{ source: 'sage', tool, targetCount, targetIds (≤ 50),
+   outcome }`.
+6. Responds `{ status, message, details? }`.
+
+**`POST /v1/chat-assistant/actions/:key/cancel`** — pending → `cancelled` (same ownership
+rules, 404 for someone else's key); cancelling again returns 200; a finished action is 409.
+
+**Lifetimes and failure modes.** A draft is valid for 15 minutes; terminal rows stay 24 hours,
+then the `{ expiresAt: 1 }` TTL index removes them (so an expired draft answers 404 once the
+TTL monitor has deleted it). A process crash mid-commit leaves the row `executing`; it expires
+with the draft's TTL and a later confirm reports not found, so the outcome is unknown —
+acceptable today; the upgrade is a sweeper. Indexes `{ key: 1 }` unique and `{ expiresAt: 1 }`
+TTL are not built in production (`autoIndex: false`): create them on deploy.
 
 ### 2. Register it
 
@@ -598,10 +682,14 @@ See memory `project_backend_tests_not_versioned` for why this is 3 steps, not 1.
   tagging `truncated: true`. A single large scalar field (e.g. `get_job`'s job description)
   is not touched by that cap — bound it yourself in the tool, the way `get_job.tool.js`'s
   `boundDescription` truncates at `MAX_DESCRIPTION_CHARS`.
-- **Write tools are refused by the loop.** `kind: 'write'` tools are a contract for later:
-  `registry.execute` returns an error ("write tools require confirmation") if the loop ever
-  tries to run one. The confirm-first flow (`POST /v1/chat-assistant/actions/:key/confirm`)
-  is not built yet — this repo has the contract, not the implementation.
+- **Write tools only draft; the user's confirm performs the write.** For a `kind: 'write'`
+  tool, `registry.execute` runs the access check, Joi validation and the tool's read-only
+  `prepare` under the timeout, stores a pending `SageAction` and returns
+  `{ draft: true, key, summary, expiresAt }` to the model plus a `confirm` block. The model
+  has no confirm tool; `BASE_INSTRUCTIONS` tells it a write tool only drafts and never to say
+  it is done. The write happens only in `POST /v1/chat-assistant/actions/:key/confirm`
+  (see "How to add a write tool"). Composite tools never draft: `compose.runTool` refuses
+  every write tool. Drafting is refused while impersonating.
 - **Agent failure never means a dead chat.** Handoff, a thrown error, or the same tool
   failing twice in one turn all make `runAgent` return `null` immediately. An empty final
   reply gets one retry first — `runAgent.js` re-asks with `tool_choice:'none'` on the same

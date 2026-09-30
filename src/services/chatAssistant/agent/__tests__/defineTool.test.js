@@ -131,6 +131,61 @@ describe('defineTool rejects bad definitions', () => {
   });
 });
 
+describe('defineTool access rules', () => {
+  it('accepts allOf, alone or together with anyOf', () => {
+    assert.deepEqual(defineTool(validDef({ access: { allOf: ['jobs.read', 'jobs.manage'] } })).access, {
+      allOf: ['jobs.read', 'jobs.manage'],
+    });
+    assert.doesNotThrow(() => defineTool(validDef({ access: { anyOf: ['jobs.read'], allOf: ['jobs.manage'] } })));
+  });
+
+  it('rejects an empty or non-string allOf', () => {
+    assert.throws(() => defineTool(validDef({ access: { allOf: [] } })), /count_jobs.*access/);
+    assert.throws(() => defineTool(validDef({ access: { allOf: [''] } })), /count_jobs.*access/);
+    assert.throws(() => defineTool(validDef({ access: { anyOf: ['jobs.read'], allOf: [] } })), /count_jobs.*access/);
+  });
+});
+
+describe('defineTool write tools', () => {
+  const writeDef = (overrides = {}) => ({
+    ...validDef({ name: 'close_jobs', kind: 'write', execute: undefined }),
+    prepare: async () => ({ ok: false, error: 'nothing' }),
+    commit: async () => ({ ok: true, message: 'done' }),
+    ...overrides,
+  });
+
+  it('accepts prepare + commit, defaults maxTargets to 50, keeps recheck', () => {
+    const recheck = async () => ({ ok: true });
+    const tool = defineTool(writeDef({ recheck }));
+    assert.equal(tool.kind, 'write');
+    assert.equal(typeof tool.prepare, 'function');
+    assert.equal(typeof tool.commit, 'function');
+    assert.equal(tool.recheck, recheck);
+    assert.equal(tool.maxTargets, 50);
+    assert.equal(tool.execute, undefined);
+    assert.equal(defineTool(writeDef()).recheck, undefined);
+    assert.equal(defineTool(writeDef({ maxTargets: 10 })).maxTargets, 10);
+  });
+
+  it('rejects a write tool defined with execute instead of prepare/commit', () => {
+    const executeOnly = writeDef({ prepare: undefined, commit: undefined, execute: async () => ({}) });
+    assert.throws(() => defineTool(executeOnly), /close_jobs.*not execute/);
+    assert.throws(() => defineTool(writeDef({ execute: async () => ({}) })), /close_jobs.*not execute/);
+  });
+
+  it('rejects a write tool missing prepare or commit', () => {
+    assert.throws(() => defineTool(writeDef({ prepare: undefined })), /close_jobs.*prepare/);
+    assert.throws(() => defineTool(writeDef({ commit: undefined })), /close_jobs.*commit/);
+  });
+
+  it('rejects a non-function recheck and a maxTargets outside 1..50', () => {
+    assert.throws(() => defineTool(writeDef({ recheck: 'nope' })), /close_jobs.*recheck/);
+    for (const maxTargets of [0, 51, 1.5, '10']) {
+      assert.throws(() => defineTool(writeDef({ maxTargets })), /close_jobs.*maxTargets/);
+    }
+  });
+});
+
 describe('assertUniqueToolNames', () => {
   it('does not throw when all names are unique', () => {
     const tools = [validDef(), validDef({ name: 'fetch_jobs' })].map(defineTool);

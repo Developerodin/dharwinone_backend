@@ -33,6 +33,25 @@ router
     chatAssistantController.streamMessage
   );
 
+// Sage write drafts: the model only drafts; the user's confirm performs the write.
+router
+  .route('/actions/:key/confirm')
+  .post(
+    auth(),
+    chatAssistantLimiter,
+    validate(chatAssistantValidation.actionKey),
+    chatAssistantController.confirmAction
+  );
+
+router
+  .route('/actions/:key/cancel')
+  .post(
+    auth(),
+    chatAssistantLimiter,
+    validate(chatAssistantValidation.actionKey),
+    chatAssistantController.cancelAction
+  );
+
 router
   .route('/settings')
   .get(auth(), chatAssistantController.getSettings)

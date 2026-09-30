@@ -192,6 +192,9 @@ attendance-status-backfill.*.journal.json
 # Sage Wave 2, Step 0 — tools calling tools under the caller's access.
 !src/services/chatAssistant/agent/__tests__/compose.test.js
 
+# Sage Wave 3, Step 0 — write tools draft, the user's confirm performs the write.
+!src/services/chatAssistant/agent/__tests__/sageActions.test.js
+
 # Sage agent loop, Task 5 — model adapter + agent loop.
 !src/services/chatAssistant/agent/__tests__/llm.test.js
 !src/services/chatAssistant/agent/__tests__/runAgent.test.js

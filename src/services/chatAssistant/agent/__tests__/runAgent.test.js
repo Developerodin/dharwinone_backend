@@ -355,6 +355,24 @@ describe('runAgent', () => {
     assert.deepEqual(out.blocks, [{ type: 'list', id: 'job-list' }]);
   });
 
+  it('a write draft\'s confirm block survives a later list render and is appended after it', async () => {
+    const registry = fakeRegistry({
+      close_jobs: () => ({ ok: true, result: { draft: true, key: 'k1' } }),
+      list_jobs: () => ({ ok: true, result: { total: 2, jobs: [{}, {}] } }),
+    });
+    registry.render = (name) => {
+      if (name === 'close_jobs') return { blocks: [{ type: 'confirm', key: 'k1' }] };
+      if (name === 'list_jobs') return { blocks: [{ type: 'list', id: 'job-list' }] };
+      return null;
+    };
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'close_jobs', {}), call('b', 'list_jobs', {})] }),
+      stepResult({ text: 'I drafted closing those jobs. Press Confirm to close them.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.deepEqual(out.blocks, [{ type: 'list', id: 'job-list' }, { type: 'confirm', key: 'k1' }]);
+  });
+
   it('empty-text retry does not replay that response\'s output items', async () => {
     const registry = fakeRegistry();
     const emptyWithReasoning = { ...stepResult({ text: '' }), outputItems: [{ type: 'reasoning', id: 'rs_lone' }] };

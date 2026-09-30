@@ -64,9 +64,21 @@
  *   type:'actions',
  *   buttons:{ label:string, intent:'query'|'navigate', payload:string }[]
  * }} ActionsBlock
+ * A Sage write draft (agent/sageActions.js confirmBlock). The buttons call
+ * POST /v1/chat-assistant/actions/:key/confirm and /cancel. Clients that don't
+ * know the type drop it.
+ * @typedef {{
+ *   type:'confirm',
+ *   key:string,
+ *   title:string,
+ *   lines:string[],
+ *   targetCount:number,
+ *   confirmLabel:string,
+ *   expiresAt:string
+ * }} ConfirmBlock
  *
  * @typedef {TextBlock|HeadingBlock|CalloutBlock|KVBlock|BadgeRowBlock|
- *           TableBlock|CardsBlock|GroupBlock|FallbackBlock|ActionsBlock} Block
+ *           TableBlock|CardsBlock|GroupBlock|FallbackBlock|ActionsBlock|ConfirmBlock} Block
  *
  * @typedef {object} Meta
  * @property {string|null} [kind]

@@ -4,6 +4,10 @@ const NAME_RE = /^[a-z][a-z0-9_]{2,63}$/;
 const KINDS = ['read', 'write'];
 // Must stay under CHATBOT_AGENT_STEP_TIMEOUT_MS (20000) so a slow tool fails before the model step does.
 const MAX_TIMEOUT_MS = 15000;
+// A draft's summary lists every target, and confirm compares those ids against a fresh
+// prepare. Ceiling: raising this past 50 needs a full target-id list stored apart from
+// the displayed summary.targets.
+export const MAX_TARGETS = 50;
 
 function fail(name, message) {
   const label = name || '(unnamed tool)';
@@ -14,16 +18,31 @@ function isJoiObjectSchema(schema) {
   return !!schema && typeof schema.describe === 'function' && schema.describe().type === 'object';
 }
 
-// Mirrors src/services/chatAssistant/toolAccess.js TOOL_ACCESS entry semantics:
-// `anyOf` (non-empty permission list) or `note` (handler already enforces access).
+const isPermissionList = (list) =>
+  Array.isArray(list) && list.length > 0 && list.every((p) => typeof p === 'string' && p.length > 0);
+
+// Mirrors src/services/chatAssistant/toolAccess.js checkAccessRule semantics:
+// `anyOf` and/or `allOf` (non-empty permission lists) or `note` (handler already enforces access).
 function isValidAccess(access) {
   if (!access || typeof access !== 'object') return false;
-  const hasAnyOf =
-    Array.isArray(access.anyOf) &&
-    access.anyOf.length > 0 &&
-    access.anyOf.every((p) => typeof p === 'string' && p.length > 0);
+  if (access.anyOf !== undefined && !isPermissionList(access.anyOf)) return false;
+  if (access.allOf !== undefined && !isPermissionList(access.allOf)) return false;
   const hasNote = typeof access.note === 'string' && access.note.trim().length > 0;
-  return hasAnyOf || hasNote;
+  return access.anyOf !== undefined || access.allOf !== undefined || hasNote;
+}
+
+function checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets }) {
+  if (execute !== undefined) {
+    fail(name, 'write tools define prepare(value, ctx) and commit(draft, ctx), not execute');
+  }
+  if (typeof prepare !== 'function') fail(name, 'write tools require prepare(value, ctx)');
+  if (typeof commit !== 'function') fail(name, 'write tools require commit(draft, ctx)');
+  if (recheck !== undefined && typeof recheck !== 'function') {
+    fail(name, 'recheck must be a function when present');
+  }
+  if (maxTargets !== undefined && !(Number.isInteger(maxTargets) && maxTargets > 0 && maxTargets <= MAX_TARGETS)) {
+    fail(name, `maxTargets must be an integer from 1 to ${MAX_TARGETS} when present`);
+  }
 }
 
 /**
@@ -39,9 +58,18 @@ function isValidAccess(access) {
  *
  * `timeoutMs` (optional) overrides config.chatbot.agent.toolTimeoutMs for this
  * tool, e.g. a composite tool that runs several others.
+ *
+ * `kind: 'write'` tools have no `execute`. They define `prepare(value, ctx)`
+ * (read-only: resolves targets under the caller's scope and returns
+ * `{ ok, summary, payload }` or `{ ok: false, error }`) and `commit(draft, ctx)`
+ * (performs the write from `draft.payload`, returns `{ ok, message, details? }`),
+ * plus optional `recheck(draft, ctx)` (replaces the default re-prepare on confirm)
+ * and `maxTargets` (default and ceiling MAX_TARGETS). See agent/sageActions.js.
  */
 export function defineTool(def) {
-  const { name, domain, kind, description, measure, input, access, execute, render, timeoutMs } = def || {};
+  const {
+    name, domain, kind, description, measure, input, access, execute, prepare, commit, recheck, maxTargets, render, timeoutMs,
+  } = def || {};
 
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
     fail(name, `name must match ${NAME_RE} (got ${JSON.stringify(name)})`);
@@ -62,9 +90,11 @@ export function defineTool(def) {
     fail(name, 'input must be a Joi object schema');
   }
   if (!isValidAccess(access)) {
-    fail(name, "access must be { anyOf: [...] } (non-empty) or { note: '...' } (see toolAccess.js)");
+    fail(name, "access must be { anyOf: [...] } and/or { allOf: [...] } (non-empty) or { note: '...' } (see toolAccess.js)");
   }
-  if (typeof execute !== 'function') {
+  if (kind === 'write') {
+    checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets });
+  } else if (typeof execute !== 'function') {
     fail(name, 'execute must be a function');
   }
   if (render !== undefined && typeof render !== 'function') {
@@ -81,6 +111,12 @@ export function defineTool(def) {
     fail(name, `input schema conversion failed: ${err.message}`);
   }
 
+  if (kind === 'write') {
+    return Object.freeze({
+      name, domain, kind, description, measure, input, access, prepare, commit, recheck,
+      maxTargets: maxTargets ?? MAX_TARGETS, render, timeoutMs, jsonSchema,
+    });
+  }
   return Object.freeze({ name, domain, kind, description, measure, input, access, execute, render, timeoutMs, jsonSchema });
 }
 

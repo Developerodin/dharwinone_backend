@@ -5,7 +5,10 @@
  * these checks.
  *
  * `anyOf` — user needs at least one (aliases resolved like requireAnyOfPermissions).
- * No `anyOf` — the handler already enforces its own check (see `note`) or the
+ * `allOf` — user needs every one, each alias-resolved (mirrors requirePermissions(a, b),
+ * which is AND; mapping such a route onto `anyOf` would widen access). With both,
+ * both must hold.
+ * Neither — the handler already enforces its own check (see `note`) or the
  * tool is self-scoped.
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  * `adminByName` — mirrors a route that also lets an Administrator-by-name user
@@ -18,22 +21,30 @@ import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.sc
 import Employee from '../../models/employee.model.js';
 import { userIsAdmin } from '../../utils/roleHelpers.js';
 
-const hasAny = (permissions, required) =>
-  !!permissions &&
-  required.some((r) => getGrantingPermissions(r).some((p) => permissions.has(p)));
+const grants = (permissions, required) => getGrantingPermissions(required).some((p) => permissions.has(p));
+
+const hasAny = (permissions, required) => !!permissions && required.some((r) => grants(permissions, r));
+
+const hasAll = (permissions, required) => !!permissions && required.every((r) => grants(permissions, r));
 
 /**
- * Evaluate one access rule (`{ anyOf, adminByName }` or `{ note }`) against a user.
+ * Evaluate one access rule (`{ anyOf?, allOf?, adminByName }` or `{ note }`) against a user.
  */
 export async function checkAccessRule(rule, user, deps = {}) {
-  if (!rule.anyOf) return { ok: true };
+  if (!rule.anyOf && !rule.allOf) return { ok: true };
   if (user?.platformSuperUser) return { ok: true };
-  if (hasAny(user?.authContext?.permissions, rule.anyOf)) return { ok: true };
+  const permissions = user?.authContext?.permissions;
+  const allOk = !rule.allOf || hasAll(permissions, rule.allOf);
+  const anyOk = !rule.anyOf || hasAny(permissions, rule.anyOf);
+  if (allOk && anyOk) return { ok: true };
   if (rule.adminByName) {
     const isAdmin = deps.isAdmin ?? userIsAdmin;
     if (await isAdmin(user)) return { ok: true };
   }
-  return { ok: false, reason: `Requires one of: ${rule.anyOf.join(', ')}.` };
+  const reasons = [];
+  if (!allOk) reasons.push(`Requires all of: ${rule.allOf.join(', ')}.`);
+  if (!anyOk) reasons.push(`Requires one of: ${rule.anyOf.join(', ')}.`);
+  return { ok: false, reason: reasons.join(' ') };
 }
 
 /**

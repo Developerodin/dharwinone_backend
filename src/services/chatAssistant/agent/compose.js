@@ -1,6 +1,7 @@
 // Composition: a tool calls another registered tool under the caller's access, with the
-// same access check, write refusal, Joi validation, timeout and row-scope guard as
-// toolRegistry.execute. Never throws; returns a status the composite reports per section.
+// same access check, Joi validation, timeout and row-scope guard as toolRegistry.execute.
+// Write tools are always refused here: composite tools never draft. Never throws; returns
+// a status the composite reports per section.
 // The model-facing extras (size cap, measure) stay in the registry, applied once to the
 // composite's own result.
 
@@ -10,8 +11,9 @@ import { runWithTimeout, TOOL_TIMEOUT } from './runWithTimeout.js';
 // A composite may call another composite once; a third level is refused so tools never loop.
 export const MAX_COMPOSE_DEPTH = 2;
 
-async function findTool(name) {
+export async function findTool(name) {
   // Dynamic: tools/index.js imports every domain, and composite tools import this file.
+  // eslint-disable-next-line import/no-cycle -- lazy import; composite tools import compose.js
   const { default: domains } = await import('./tools/index.js');
   for (const domain of domains) {
     const tool = domain.tools.find((t) => t.name === name);

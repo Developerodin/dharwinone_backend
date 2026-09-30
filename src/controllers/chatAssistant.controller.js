@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import catchAsync from '../utils/catchAsync.js';
 import * as chatAssistantService from '../services/chatAssistant.service.js';
 import * as chatbotConfigService from '../services/chatbotConfig.service.js';
+import * as sageActions from '../services/chatAssistant/agent/sageActions.js';
 import ConversationMemory from '../models/conversationMemory.model.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
@@ -122,6 +123,26 @@ export const streamMessage = async (req, res) => {
     res.end();
   }
 };
+
+/**
+ * Run a Sage write draft the user confirmed. Refused while impersonating (req.impersonation,
+ * the same flag that picks buildImpersonationUser above), so nobody acts as someone else.
+ */
+export const confirmAction = catchAsync(async (req, res) => {
+  const { code, body } = await sageActions.confirmAction({
+    key: req.params.key,
+    user: req.user,
+    impersonating: !!req.impersonation,
+    req,
+  });
+  res.status(code).json(body);
+});
+
+/** Cancel a pending Sage write draft; cancelling twice is a no-op. */
+export const cancelAction = catchAsync(async (req, res) => {
+  const { code, body } = await sageActions.cancelAction({ key: req.params.key, user: req.user });
+  res.status(code).json(body);
+});
 
 /**
  * Kept for API compatibility: Sage no longer caches a company snapshot (every

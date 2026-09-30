@@ -3,9 +3,11 @@
 //   - filters tools to what `user` is permitted to call (model never sees the rest);
 //   - above EAGER_TOOL_LIMIT permitted tools, offers only handoff + find_tools and lets
 //     the loop load domains on demand (`loadDomains`);
-//   - `execute` re-checks access (defence in depth), refuses `write`-kind tools,
-//     validates args with the tool's own Joi schema, runs with a timeout, applies
-//     the same row-scope/redaction guard as the legacy pipeline, and caps result size.
+//   - `execute` re-checks access (defence in depth), validates args with the tool's own
+//     Joi schema, runs with a timeout, applies the same row-scope/redaction guard as the
+//     legacy pipeline, and caps result size. A `write`-kind tool only drafts: its prepare
+//     runs and a pending SageAction is stored (agent/sageActions.js); the user's confirm
+//     endpoint performs the write, never the loop.
 // Chat-agnostic: nothing here imports ConversationMemory or chat renderers.
 
 import Joi from 'joi';
@@ -16,6 +18,7 @@ import { runWithTimeout } from './runWithTimeout.js';
 import { checkAccessRule, guardResultForRule } from '../toolAccess.js';
 import toolDomains from './tools/index.js';
 import { assertRelatedToolsExist } from '../personProfile/providers/index.js';
+import { createDraft, confirmBlock, IMPERSONATION_MESSAGE } from './sageActions.js';
 
 const MAX_RESULT_CHARS = 20000;
 
@@ -269,7 +272,8 @@ export async function getAgentTools(user, { domains = defaultDomains, deps, eage
       const access = await checkAccessRule(tool.access, user, deps);
       if (!access.ok) return { ok: false, error: access.reason || 'Not permitted.' };
 
-      if (tool.kind === 'write') return { ok: false, error: 'write tools require confirmation' };
+      // A draft made while impersonating could never be confirmed (the endpoint refuses).
+      if (tool.kind === 'write' && user?.__impersonating) return { ok: false, error: IMPERSONATION_MESSAGE };
 
       let args;
       try {
@@ -281,6 +285,12 @@ export async function getAgentTools(user, { domains = defaultDomains, deps, eage
       const { value, error: joiError } = tool.input.validate(args, { abortEarly: false });
       if (joiError) {
         return { ok: false, error: joiError.details.map((d) => d.message).join('; ') };
+      }
+
+      if (tool.kind === 'write') {
+        const drafted = await createDraft(tool, value, { user, requestId, deps });
+        ok = drafted.ok;
+        return drafted;
       }
 
       const timeoutMs = tool.timeoutMs ?? config.chatbot.agent.toolTimeoutMs;
@@ -311,6 +321,7 @@ export async function getAgentTools(user, { domains = defaultDomains, deps, eage
 
   function render(name, result) {
     const tool = toolsByName.get(name);
+    if (tool?.kind === 'write') return result?.draft ? { blocks: [confirmBlock(result)] } : null;
     return (tool && tool.render && tool.render(result)) ?? null;
   }
 
