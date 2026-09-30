@@ -1,0 +1,146 @@
+[
+  {
+    "id": "W-advice-explain-unavailable",
+    "question": "why is Priya Shah unavailable?",
+    "expect": {
+      "tools": ["explain_status"],
+      "args": { "explain_status": { "person": "Priya Shah", "question": "why_unavailable" } }
+    }
+  },
+  {
+    "id": "W-advice-explain-cannot-join-project",
+    "question": "why can't Rahul Verma join the Apollo project?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["explain_status"], "args": { "explain_status": { "question": "cannot_join_project", "project": "Apollo" } } },
+        { "tools": ["get_allocation"], "args": { "get_allocation": { "mode": "can_assign", "project": "Apollo" } } }
+      ]
+    }
+  },
+  {
+    "id": "W-advice-explain-onboarding-blocked",
+    "question": "why can't I move Ananya Iyer to onboarding?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["explain_status"], "args": { "explain_status": { "question": "cannot_move_to_onboarding" } } },
+        { "tools": ["get_placement"] }
+      ]
+    }
+  },
+  {
+    "id": "W-advice-explain-not-in-employee-list",
+    "question": "Karan Mehta joined last week, why isn't he showing in the employee list?",
+    "expect": {
+      "tools": ["explain_status"],
+      "args": { "explain_status": { "person": "Karan Mehta", "question": "not_in_employee_list" } }
+    }
+  },
+  {
+    "id": "W-advice-explain-not-in-org-tree",
+    "question": "why is Sneha Rao missing from the org chart?",
+    "expect": {
+      "tools": ["explain_status"],
+      "args": { "explain_status": { "question": "not_in_org_tree" } }
+    }
+  },
+  {
+    "id": "W-advice-explain-cannot-see-record",
+    "question": "why can't I see Vikram Singh's record?",
+    "expect": {
+      "tools": ["explain_status"],
+      "args": { "explain_status": { "question": "cannot_see_record" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-follow-ups",
+    "question": "what should I follow up on today?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["recommend"], "args": { "recommend": { "kind": "follow_ups_today" } } },
+        { "tools": ["get_attention_digest"], "args": { "get_attention_digest": { "scope": "mine" } } }
+      ]
+    }
+  },
+  {
+    "id": "W-advice-recommend-next-candidate",
+    "question": "which candidate should I call next?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "next_candidate_to_contact" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-interview-order",
+    "question": "who should I interview first?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "interview_order" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-allocate",
+    "question": "who should I put on the Apollo project?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "allocate_to_project", "project": "Apollo" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-training-first",
+    "question": "who needs training before we assign them to a project?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "training_before_assignment" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-bench-for-job",
+    "question": "anyone on the bench who fits the Java Developer job?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["recommend"], "args": { "recommend": { "kind": "bench_for_job" } } },
+        { "tools": ["match_candidates_to_job", "get_allocation"], "args": { "match_candidates_to_job": { "pool": "employees" } } }
+      ]
+    }
+  },
+  {
+    "id": "W-advice-recommend-team-tasks",
+    "question": "what should the Alpha team work on first?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "team_task_priorities", "team": "Alpha" } }
+    }
+  },
+  {
+    "id": "W-advice-recommend-recruiter-capacity",
+    "question": "where do we need another recruiter?",
+    "expect": {
+      "tools": ["recommend"],
+      "args": { "recommend": { "kind": "recruiter_capacity" } }
+    }
+  },
+  {
+    "id": "W-advice-match-jobs-suit",
+    "question": "which open jobs would suit Priya Shah?",
+    "expect": {
+      "tools": ["match_jobs_to_employee"],
+      "args": { "match_jobs_to_employee": { "person": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "W-advice-match-jobs-internal-move",
+    "question": "what internal openings could Rahul Verma move to?",
+    "expect": {
+      "tools": ["match_jobs_to_employee"],
+      "args": { "match_jobs_to_employee": { "person": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "W-advice-match-jobs-skill-gap",
+    "question": "show me the skill gap between Ananya Iyer and our open roles",
+    "expect": {
+      "tools": ["match_jobs_to_employee"],
+      "args": { "match_jobs_to_employee": { "person": "Ananya Iyer" } }
+    }
+  }
+]
