@@ -1,0 +1,83 @@
+[
+  {
+    "id": "V-person-360-everything",
+    "question": "tell me everything about Priya Sharma",
+    "expect": {
+      "tools": ["get_person_360"],
+      "args": { "get_person_360": { "person": "priya sharma" } }
+    }
+  },
+  {
+    "id": "V-person-360-full-picture-candidate",
+    "question": "give me the full 360 view of candidate Karan Mehta",
+    "expect": {
+      "tools": ["get_person_360"],
+      "args": { "get_person_360": { "person": "karan mehta" } }
+    }
+  },
+  {
+    "id": "V-person-360-today",
+    "question": "what is Rahul Verma doing today?",
+    "expect": {
+      "tools": ["get_person_360"],
+      "args": { "get_person_360": { "person": "rahul verma", "focus": "today" } }
+    }
+  },
+  {
+    "id": "V-person-360-pending",
+    "question": "does Anita Desai have any pending actions?",
+    "expect": {
+      "tools": ["get_person_360"],
+      "args": { "get_person_360": { "person": "anita desai", "focus": "pending" } }
+    }
+  },
+  {
+    "id": "V-person-360-pending-self",
+    "question": "what is pending for me?",
+    "expect": {
+      "tools": ["get_person_360"],
+      "args": { "get_person_360": { "focus": "pending" } }
+    }
+  },
+  {
+    "id": "V-person-one-fact-manager-not-360",
+    "question": "who is Rahul Verma's manager?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_reporting_chain"], "args": { "get_reporting_chain": { "mode": "chain", "person": "rahul verma" } } },
+        { "tools": ["get_user"], "args": { "get_user": { "name": "rahul verma" } } }
+      ]
+    }
+  },
+  {
+    "id": "V-person-one-fact-joined-not-360",
+    "question": "when did Priya Sharma join?",
+    "expect": {
+      "tools": ["get_user"],
+      "args": { "get_user": { "name": "priya sharma" } }
+    }
+  },
+  {
+    "id": "V-duplicates-candidate-emails",
+    "question": "are there any duplicate candidates with the same email?",
+    "expect": {
+      "tools": ["find_duplicate_people"],
+      "args": { "find_duplicate_people": { "by": "email", "population": "candidates" } }
+    }
+  },
+  {
+    "id": "V-duplicates-employee-phones",
+    "question": "find employees who share a phone number",
+    "expect": {
+      "tools": ["find_duplicate_people"],
+      "args": { "find_duplicate_people": { "by": "phone", "population": "employees" } }
+    }
+  },
+  {
+    "id": "V-duplicates-any",
+    "question": "show me duplicate profiles in the system",
+    "expect": {
+      "tools": ["find_duplicate_people"]
+    }
+  }
+]
