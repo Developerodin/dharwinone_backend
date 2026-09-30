@@ -1,0 +1,127 @@
+[
+  {
+    "id": "calls-count-plain",
+    "question": "how many calls have we made?",
+    "expect": {
+      "tools": ["count_call_records"]
+    }
+  },
+  {
+    "id": "calls-count-missed-by-day",
+    "question": "how many missed calls per day this week?",
+    "expect": {
+      "tools": ["count_call_records"],
+      "args": { "count_call_records": { "filters": { "status": "missed" }, "groupBy": "day" } }
+    }
+  },
+  {
+    "id": "calls-count-by-caller",
+    "question": "who made the most calls?",
+    "expect": {
+      "tools": ["count_call_records"],
+      "args": { "count_call_records": { "groupBy": "caller" } }
+    }
+  },
+  {
+    "id": "calls-list-person",
+    "question": "show me the calls to Priya Shah",
+    "expect": {
+      "tools": ["list_call_records"],
+      "args": { "list_call_records": { "filters": { "person": "Priya Shah" } } }
+    }
+  },
+  {
+    "id": "calls-list-mine-failed",
+    "question": "list my failed calls",
+    "expect": {
+      "tools": ["list_call_records"],
+      "args": { "list_call_records": { "filters": { "mine": true, "status": "failed" } } }
+    }
+  },
+  {
+    "id": "calls-get-latest-person",
+    "question": "what did Rahul Verma say on his last call?",
+    "expect": {
+      "tools": ["get_call_record"],
+      "args": { "get_call_record": { "person": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "calls-get-recording",
+    "question": "is there a recording of the latest call with Priya Shah?",
+    "expect": {
+      "tools": ["get_call_record"],
+      "args": { "get_call_record": { "person": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "calls-metrics-answer-rate",
+    "question": "what was our call answer rate last month?",
+    "expect": {
+      "tools": ["get_call_metrics"]
+    }
+  },
+  {
+    "id": "calls-metrics-avg-duration-ai",
+    "question": "average duration of AI agent calls this week?",
+    "expect": {
+      "tools": ["get_call_metrics"],
+      "args": { "get_call_metrics": { "filters": { "callType": "ai_agent" } } }
+    }
+  },
+  {
+    "id": "calls-count-hangup-side",
+    "question": "on how many calls did the candidate hang up?",
+    "expect": {
+      "tools": ["count_call_records"],
+      "args": { "count_call_records": { "groupBy": "hangupBy" } }
+    }
+  },
+  {
+    "id": "calls-count-inbound-twilio",
+    "question": "how many inbound Twilio calls did we get?",
+    "expect": {
+      "tools": ["count_call_records"],
+      "args": { "count_call_records": { "filters": { "direction": "inbound", "provider": "twilio" } } }
+    }
+  },
+  {
+    "id": "calls-get-who-hung-up",
+    "question": "who hung up on the last call with Priya Shah?",
+    "expect": {
+      "tools": ["get_call_record"],
+      "args": { "get_call_record": { "person": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "calls-followups-callback-requested",
+    "question": "which candidates asked us to call them back?",
+    "expect": {
+      "tools": ["list_call_followups"],
+      "args": { "list_call_followups": { "kind": "callbackRequested" } }
+    }
+  },
+  {
+    "id": "calls-followups-callback-overdue",
+    "question": "are any callbacks overdue?",
+    "expect": {
+      "tools": ["list_call_followups"],
+      "args": { "list_call_followups": { "kind": "callbackOverdue" } }
+    }
+  },
+  {
+    "id": "calls-followups-not-yet-called",
+    "question": "which applicants haven't been called yet?",
+    "expect": {
+      "tools": ["list_call_followups"],
+      "args": { "list_call_followups": { "kind": "notYetCalled" } }
+    }
+  },
+  {
+    "id": "calls-metrics-not-yet-called-count",
+    "question": "how many applicants from this month have not been called and how many callbacks are due?",
+    "expect": {
+      "tools": ["get_call_metrics"]
+    }
+  }
+]

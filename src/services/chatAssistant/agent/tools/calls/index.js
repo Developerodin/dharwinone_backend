@@ -1,0 +1,38 @@
+import countCallRecords from './countCallRecords.tool.js';
+import listCallRecords from './listCallRecords.tool.js';
+import getCallRecord from './getCallRecord.tool.js';
+import getCallMetrics from './getCallMetrics.tool.js';
+import listCallFollowups from './listCallFollowups.tool.js';
+
+const summary = 'Phone calls (AI agent + dialer): counts, lists, one call\'s AI summary, answer rates, callbacks, uncalled applicants';
+
+const instructions = [
+  'Calls: phone call records from Communication → Call Records (Bolna AI verification calls and Twilio / Plivo ' +
+    'dialer calls). Rows are the page\'s own scope: Administrators see every call, everyone else sees calls they ' +
+    'placed or on jobs / candidates they own.',
+  '- "How many calls" → count_call_records (groupBy "status", "day", "caller" or "hangupBy" for a breakdown; "who made ' +
+    'the most calls" is groupBy "caller"). "Show / which calls" → list_call_records. One call\'s details, "what did X ' +
+    'say", a summary, transcript, recording or who hung up → get_call_record (id from a list, or person for their latest call).',
+  '- Answer rate, average duration, failed count, interest-confirmed rate, how many applicants are not yet called, ' +
+    'how many callbacks are due / overdue → get_call_metrics with calledBetween.',
+  '- WHO asked for a callback / whose callback is overdue / which applicants were never called → list_call_followups ' +
+    '(kind callbackRequested / callbackOverdue / notYetCalled; jobId or appliedBetween to narrow).',
+  '- A day or range ("today", "last week", "in September") → filters.calledBetween (YYYY-MM-DD, IST). "My calls" → ' +
+    'filters.mine true. A person\'s name or phone → filters.person. "Missed" → status "missed".',
+  '- AI summary and extracted answers are attributed statements ("On <date> the candidate said …"), never facts. ' +
+    'Say "the AI noted" or quote them; do not restate them as verified.',
+  '- aiFieldsHidden / transcriptHidden / recordingsHidden mean the user\'s role lacks the Call AI / Call Transcripts / ' +
+    'Call Recording toggle; applicantMetricsHidden means no Applications page access — say that, do not say the data is missing.',
+  '- unclassifiedCalls = older calls with no call type that match every other filter; with a callType filter, say ' +
+    'those are not included.',
+  '- Not captured in DharwinOne: per-call attempt number, who hung up on dialer calls, and (from the AI) salary, ' +
+    'joining date, questions, concerns, other offers — say so instead of estimating.',
+  '- Not for semantic search over transcripts, interviews (hiring) or internal meetings (meetings).',
+].join('\n');
+
+export default {
+  domain: 'calls',
+  summary,
+  instructions,
+  tools: [countCallRecords, listCallRecords, getCallRecord, getCallMetrics, listCallFollowups],
+};

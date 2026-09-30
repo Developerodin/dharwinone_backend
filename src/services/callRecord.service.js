@@ -436,13 +436,53 @@ async function fetchDialerChannelCallRows({ dialerScopeFilter, userId, sort, fet
   return [...byId.values()];
 }
 
-async function listCallRecords(options = {}) {
-  const limit = Math.min(Number(options.limit) || 25, 500);
-  const requestedPage = Number(options.page) || 1;
-  const sortBy = options.sortBy === 'date' || options.sortBy === 'createdAt' ? 'createdAt' : 'createdAt';
-  const order = options.order === 'asc' ? 1 : -1;
-  const sort = { [sortBy]: order };
+const DIRECTION_ALIASES = { inbound: ['inbound', 'incoming'], outbound: ['outbound', 'outgoing'] };
 
+/**
+ * Optional narrowing filters (Sage call tools). Every key is opt-in: an options object without
+ * them adds nothing, so existing listCallRecords callers get exactly the query they always did.
+ * They only ever narrow — ownership still comes from nonAdminCallScope.
+ */
+function narrowingConditions(options) {
+  const out = [];
+  const validDate = (v) => {
+    if (!v) return null;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const from = validDate(options.createdFrom);
+  const to = validDate(options.createdTo);
+  if (from || to) out.push({ createdAt: { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) } });
+  const aliases = DIRECTION_ALIASES[options.direction];
+  if (aliases) {
+    // Dialer rows write telephonyData.direction; Bolna rows keep its telephony_data.call_type.
+    out.push({
+      $or: [{ 'telephonyData.direction': { $in: aliases } }, { 'telephonyData.call_type': { $in: aliases } }],
+    });
+  }
+  if (options.provider && String(options.provider).trim()) {
+    out.push({ 'telephonyData.provider': String(options.provider).trim().toLowerCase() });
+  }
+  if (options.createdBy && String(options.createdBy).trim()) {
+    // $expr, not { createdBy }: legacy dialer rows hold createdBy as a BSON string (pipeline
+    // updates skipped casting), and a plain match casts the id to ObjectId and misses them.
+    // ponytail: not index-backed; fine at thousands of rows, normalise createdBy past that.
+    out.push({ $expr: { $eq: [{ $toString: '$createdBy' }, String(options.createdBy).trim()] } });
+  }
+  if (options.candidateId) {
+    const oid = toObjectIdOrNull(options.candidateId);
+    out.push({ candidate: oid || { $in: [] } });
+  }
+  if (options.callSourceMissing === true) out.push({ callSource: null });
+  return out;
+}
+
+/**
+ * The Call Records page's own conditions (search, status, language, call type, ownership) plus the
+ * opt-in narrowing filters. Shared by listCallRecords and the count/group/summary exports below so
+ * a chat count and the page can never disagree about scope.
+ */
+async function callRecordConditions(options = {}) {
   const andConditions = [];
   const searchTerm = String(options.search ?? '').trim();
   if (searchTerm.length >= 2) {
@@ -481,6 +521,7 @@ async function listCallRecords(options = {}) {
   if (options.callSource && UI_CALL_SOURCES.includes(String(options.callSource))) {
     andConditions.push({ callSource: String(options.callSource) });
   }
+  andConditions.push(...narrowingConditions(options));
 
   const isDialerChannel = options.channel === 'dialer' && options.userId;
   if (isDialerChannel) {
@@ -492,7 +533,17 @@ async function listCallRecords(options = {}) {
     // matches createdBy so the agent who placed the call sees it in their records.
     andConditions.push(await nonAdminCallScope(options.userId));
   }
+  return { andConditions, isDialerChannel };
+}
 
+async function listCallRecords(options = {}) {
+  const limit = Math.min(Number(options.limit) || 25, 500);
+  const requestedPage = Number(options.page) || 1;
+  const sortBy = options.sortBy === 'date' || options.sortBy === 'createdAt' ? 'createdAt' : 'createdAt';
+  const order = options.order === 'asc' ? 1 : -1;
+  const sort = { [sortBy]: order };
+
+  const { andConditions, isDialerChannel } = await callRecordConditions(options);
   const filter = andConditions.length === 0 ? {} : andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
 
   let dedupedResults;
@@ -1261,6 +1312,77 @@ async function getCallRecordScopeFields(executionId) {
 }
 
 /**
+ * listCallRecords' filter (never the dialer channel), cast against the schema: aggregate $match
+ * does not cast, and nonAdminCallScope matches createdBy by a string id.
+ */
+async function castCallRecordMatch(options = {}) {
+  const { andConditions } = await callRecordConditions({ ...options, channel: undefined });
+  const query = CallRecord.find(composeMongoFilter(andConditions));
+  query.cast(CallRecord);
+  return query.getFilter();
+}
+
+/**
+ * Exact count with listCallRecords' options (same scope, same `total` the page shows — raw
+ * records, before the per-page Twilio parent/child merge).
+ */
+async function countCallRecords(options = {}) {
+  return CallRecord.countDocuments(await castCallRecordMatch(options));
+}
+
+const GROUP_KEYS = {
+  status: () => ({ $ifNull: ['$status', 'unknown'] }),
+  day: (timezone) => ({ $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone } }),
+  // $toString merges legacy string createdBy rows with their ObjectId twins.
+  caller: () => ({ $toString: '$createdBy' }),
+  hangupBy: () => ({ $ifNull: ['$telephonyData.hangup_by', null] }),
+};
+
+/**
+ * Counts per status / day (in `timezone`) / caller / hang-up side over listCallRecords' options.
+ * @returns {Promise<{ total: number, groups: Array<{ value: string|null, count: number }> }>}
+ */
+async function groupCallRecords(options = {}, { groupBy, timezone = 'Asia/Kolkata' } = {}) {
+  const key = GROUP_KEYS[groupBy];
+  if (!key) throw new Error(`groupBy must be one of ${Object.keys(GROUP_KEYS).join(', ')}`);
+  const rows = await CallRecord.aggregate([
+    { $match: await castCallRecordMatch(options) },
+    { $group: { _id: key(timezone), count: { $sum: 1 } } },
+  ]);
+  const groups = rows.map((r) => ({ value: r._id ?? null, count: r.count }));
+  return { total: groups.reduce((s, g) => s + g.count, 0), groups };
+}
+
+/**
+ * Per-status counts, mean duration of completed calls and (only when asked — it reads AI fields)
+ * the stillInterested answers, over listCallRecords' options.
+ */
+async function summarizeCallRecords(options = {}, { includeInterest = false } = {}) {
+  const facet = {
+    byStatus: [{ $group: { _id: { $ifNull: ['$status', 'unknown'] }, count: { $sum: 1 } } }],
+    completedDuration: [
+      { $match: { status: 'completed', duration: { $gt: 0 } } },
+      { $group: { _id: null, avg: { $avg: '$duration' }, count: { $sum: 1 } } },
+    ],
+  };
+  if (includeInterest) {
+    facet.interest = [
+      { $match: { 'verification.stillInterested': { $ne: null } } },
+      { $group: { _id: '$verification.stillInterested', count: { $sum: 1 } } },
+    ];
+  }
+  const [out] = await CallRecord.aggregate([{ $match: await castCallRecordMatch(options) }, { $facet: facet }]);
+  const toMap = (rows = []) => Object.fromEntries(rows.map((r) => [r._id, r.count]));
+  const dur = out?.completedDuration?.[0];
+  return {
+    byStatus: toMap(out?.byStatus),
+    avgCompletedDurationSeconds: dur ? dur.avg : null,
+    completedWithDuration: dur ? dur.count : 0,
+    ...(includeInterest ? { interest: toMap(out?.interest) } : {}),
+  };
+}
+
+/**
  * Re-derive verification + callQuality for stored records that have extractedData
  * or a transcript but no verification yet. Idempotent.
  */
@@ -1269,6 +1391,9 @@ export {
   getCallRecordScopeFields,
   getCallRecordingFields,
   assertDialerRecordMutationAllowed,
+  countCallRecords,
+  groupCallRecords,
+  summarizeCallRecords,
 };
 
 export async function backfillVerification(limit = 200) {
@@ -1322,6 +1447,9 @@ export default {
   userCanAccessCallRecord,
   getCallRecordScopeFields,
   getCallRecordingFields,
+  countCallRecords,
+  groupCallRecords,
+  summarizeCallRecords,
 };
 
 
