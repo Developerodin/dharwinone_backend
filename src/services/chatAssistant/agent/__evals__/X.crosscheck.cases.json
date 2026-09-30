@@ -1,0 +1,102 @@
+[
+  {
+    "id": "X-cross-joining-next-week-preboarding",
+    "question": "who is joining next week but hasn't finished pre-boarding?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "joining_next_week_preboarding_incomplete" } }
+    }
+  },
+  {
+    "id": "X-cross-trained-no-project",
+    "question": "which employees have completed their training but aren't on any project yet?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["run_cross_check"], "args": { "run_cross_check": { "query": "trained_no_project" } } },
+        { "tools": ["run_cross_check"], "args": { "run_cross_check": { "query": "no_project_all_training_complete" } } }
+      ]
+    }
+  },
+  {
+    "id": "X-cross-leave-tomorrow-meeting",
+    "question": "is anyone on leave tomorrow who has an interview or a meeting scheduled?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "on_leave_tomorrow_with_interview_or_meeting" } }
+    }
+  },
+  {
+    "id": "X-cross-passed-interview-no-offer",
+    "question": "which candidates passed the interview but still don't have an offer?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "passed_interview_no_offer" } }
+    }
+  },
+  {
+    "id": "X-cross-applications-unchanged",
+    "question": "which applications haven't moved in 7 business days?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "applications_unchanged", "args": { "businessDays": 7 } } }
+    }
+  },
+  {
+    "id": "X-cross-bench-recent-jobs",
+    "question": "who on the bench is a good fit for our latest 3 react jobs?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "bench_matches_recent_jobs", "args": { "jobKeyword": "react", "jobCount": 3 } } }
+    }
+  },
+  {
+    "id": "X-cross-available-training-score",
+    "question": "which free employees scored 80 or more in a React course?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "available_with_training_score", "args": { "skill": "react", "minScore": 80 } } }
+    }
+  },
+  {
+    "id": "X-cross-referred-never-interviewed",
+    "question": "show referral leads of sales agent Priya that were screened but never interviewed",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "referred_screened_never_interviewed", "args": { "salesAgent": "priya" } } }
+    }
+  },
+  {
+    "id": "X-cross-bgv-done-not-onboarding",
+    "question": "whose background verification is done but they haven't been moved to onboarding?",
+    "expect": {
+      "tools": ["run_cross_check"],
+      "args": { "run_cross_check": { "query": "bgv_done_not_onboarding" } }
+    }
+  },
+  {
+    "id": "X-funnel-this-month",
+    "question": "what does our recruitment funnel look like this month — conversion at each stage?",
+    "expect": { "tools": ["get_recruitment_funnel"] }
+  },
+  {
+    "id": "X-funnel-compare-previous",
+    "question": "compare this month's hiring funnel with last month",
+    "expect": {
+      "tools": ["get_recruitment_funnel"],
+      "args": { "get_recruitment_funnel": { "compareTo": "previous" } }
+    }
+  },
+  {
+    "id": "X-funnel-slowest-stage-recruiter",
+    "question": "which hiring stage is the slowest for recruiter Rahul?",
+    "expect": {
+      "tools": ["get_recruitment_funnel"],
+      "args": { "get_recruitment_funnel": { "recruiter": "rahul" } }
+    }
+  },
+  {
+    "id": "X-funnel-recruiter-workload",
+    "question": "how many open applications, interviews and offers does each recruiter have pending?",
+    "expect": { "tools": ["get_recruitment_funnel"] }
+  }
+]
