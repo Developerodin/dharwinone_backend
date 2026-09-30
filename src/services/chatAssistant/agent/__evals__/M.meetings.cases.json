@@ -1,0 +1,159 @@
+[
+  {
+    "id": "m-get-meeting-decisions-by-title",
+    "question": "what was decided in the design review meeting?",
+    "expect": {
+      "tools": [
+        "get_meeting"
+      ],
+      "args": {
+        "get_meeting": {
+          "title": "design review"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-get-meeting-action-items",
+    "question": "list the action items from the sprint planning meeting",
+    "expect": {
+      "tools": [
+        "get_meeting"
+      ],
+      "args": {
+        "get_meeting": {
+          "title": "sprint planning"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-get-meeting-recorded",
+    "question": "was the HR sync meeting recorded? send me the recording link",
+    "expect": {
+      "tools": [
+        "get_meeting"
+      ],
+      "args": {
+        "get_meeting": {
+          "title": "HR sync"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-get-meeting-attendees-followup",
+    "history": [
+      {
+        "role": "user",
+        "content": "show my meetings today"
+      },
+      {
+        "role": "assistant",
+        "content": "You have Sprint planning at 11:00 and HR sync at 14:30."
+      }
+    ],
+    "ledger": [
+      {
+        "calls": [
+          {
+            "tool": "list_meetings",
+            "args": {
+              "filters": {
+                "scheduledBetween": {
+                  "from": "2026-09-30",
+                  "to": "2026-09-30"
+                }
+              }
+            },
+            "total": 2
+          }
+        ]
+      }
+    ],
+    "question": "who attended sprint planning?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": [
+            "get_meeting"
+          ],
+          "args": {
+            "get_meeting": {
+              "title": "sprint planning"
+            }
+          }
+        },
+        {
+          "tools": [
+            "get_meeting"
+          ],
+          "args": {
+            "get_meeting": {
+              "id": "m1"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "m-list-meetings-earlier-today",
+    "question": "which meetings did I have earlier today?",
+    "expect": {
+      "tools": [
+        "list_meetings"
+      ],
+      "args": {
+        "list_meetings": {
+          "filters": {
+            "when": "earlier_today"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "m-list-meetings-ended",
+    "question": "show the meetings that have ended this week",
+    "expect": {
+      "tools": [
+        "list_meetings"
+      ],
+      "args": {
+        "list_meetings": {
+          "filters": {
+            "status": "ended"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "m-interview-summary-not-meeting",
+    "question": "what was decided in Priya's interview yesterday?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": [
+            "get_interview"
+          ]
+        },
+        {
+          "tools": [
+            "list_interviews"
+          ]
+        },
+        {
+          "handoff": true
+        },
+        {
+          "tools": [
+            "get_interview",
+            "list_interviews"
+          ]
+        }
+      ]
+    }
+  }
+]

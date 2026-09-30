@@ -1,0 +1,160 @@
+[
+  {
+    "id": "m-mailbox-from-person-topic",
+    "question": "any emails from Priya about the offer letter in my inbox?",
+    "expect": {
+      "tools": [
+        "search_my_mailbox"
+      ],
+      "args": {
+        "search_my_mailbox": {
+          "person": "Priya"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-mailbox-find-thread",
+    "question": "find the email thread about the invoice in my mailbox",
+    "expect": {
+      "tools": [
+        "search_my_mailbox"
+      ],
+      "args": {
+        "search_my_mailbox": {
+          "query": "invoice"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-mailbox-summarise-thread-followup",
+    "history": [
+      {
+        "role": "user",
+        "content": "find the invoice email"
+      },
+      {
+        "role": "assistant",
+        "content": "I found one thread: \"Invoice for September\" from Acme Billing."
+      }
+    ],
+    "ledger": [
+      {
+        "calls": [
+          {
+            "tool": "search_my_mailbox",
+            "args": {
+              "query": "invoice"
+            },
+            "total": 1
+          }
+        ]
+      }
+    ],
+    "question": "summarise that thread for me",
+    "expect": {
+      "tools": [
+        "search_my_mailbox"
+      ],
+      "args": {
+        "search_my_mailbox": {
+          "threadId": "t1",
+          "accountId": "a1"
+        }
+      },
+      "maxCalls": 2
+    }
+  },
+  {
+    "id": "m-chat-mention-search",
+    "question": "did anyone mention the release date in chat?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": [
+            "search_chat"
+          ],
+          "args": {
+            "search_chat": {
+              "query": "release"
+            }
+          }
+        },
+        {
+          "tools": [
+            "search_chat"
+          ],
+          "args": {
+            "search_chat": {
+              "query": "release date"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "m-chat-person-said",
+    "question": "what did Ravi say about the deadline in our chat?",
+    "expect": {
+      "tools": [
+        "search_chat"
+      ],
+      "args": {
+        "search_chat": {
+          "query": "deadline",
+          "conversation": "Ravi"
+        }
+      }
+    }
+  },
+  {
+    "id": "m-email-activity-reset-delivered",
+    "question": "was the password reset email delivered to asha@acme.com?",
+    "expect": {
+      "tools": [
+        "list_email_activity"
+      ],
+      "args": {
+        "list_email_activity": {
+          "filters": {
+            "person": "asha@acme.com"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "m-email-activity-offer-by-name",
+    "question": "did Priya's offer email go out?",
+    "expect": {
+      "tools": [
+        "list_email_activity"
+      ],
+      "args": {
+        "list_email_activity": {
+          "filters": {
+            "person": "Priya"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "m-email-activity-failed-today",
+    "question": "which platform emails failed today?",
+    "expect": {
+      "tools": [
+        "list_email_activity"
+      ],
+      "args": {
+        "list_email_activity": {
+          "filters": {
+            "status": "failed"
+          }
+        }
+      }
+    }
+  }
+]

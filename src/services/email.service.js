@@ -580,6 +580,26 @@ const sendEmail = async (to, subject, text, html, templateName = null, metadata 
   throw lastErr;
 };
 
+/**
+ * Read one page of the EmailLog audit trail (newest first) plus the full match count. Explicit
+ * projection: no metadata (it can carry tokens / links) and no bodies (EmailLog stores none).
+ * Used by Sage list_email_activity; the caller builds and gates the filter.
+ * @param {Object} filter - Mongo filter on EmailLog
+ * @param {{ limit?: number }} [options]
+ * @returns {Promise<{ total: number, results: Object[] }>}
+ */
+const queryEmailLogs = async (filter = {}, { limit = 20 } = {}) => {
+  const [total, results] = await Promise.all([
+    EmailLog.countDocuments(filter),
+    EmailLog.find(filter)
+      .select('to subject templateName status error sentAt createdAt')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean(),
+  ]);
+  return { total, results };
+};
+
 /** In-memory queue for bulk emails; drained with concurrency limit to avoid overwhelming SMTP. */
 const emailQueue = [];
 const QUEUE_CONCURRENCY = 5;
@@ -1950,6 +1970,7 @@ const sendDevTicketUpdatedEmail = async (to, ticket, options = {}) => {
 export {
   getTransport,
   sendEmail,
+  queryEmailLogs,
   queueEmail,
   /** Shared branded wrapper — same layout as reset password / verification emails */
   buildEmailHTML,
