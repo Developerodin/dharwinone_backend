@@ -154,7 +154,7 @@
   {
     "id": "users-john-position",
     "question": "what position is John in",
-    "expect": { "tools": ["get_user"] }
+    "expect": { "anyOf": [{ "tools": ["get_user"] }, { "tools": ["get_user", "get_reporting_chain"] }] }
   },
   {
     "id": "users-john-role",

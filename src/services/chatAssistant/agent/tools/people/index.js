@@ -45,7 +45,7 @@ const instructions = [
 
 export default {
   domain: 'people',
-  summary: "One person's full profile (role, designation, position), user accounts and logins, roles, and what I can do.",
+  summary: "One person's profile, user accounts/logins, list of roles (active or inactive) and their permissions, what I can do.",
   instructions,
   tools: [countUsers, listUsers, getUser, getMyProfile, whatCanIDo, listRoles, getRole],
 };

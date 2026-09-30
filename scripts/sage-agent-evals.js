@@ -606,8 +606,10 @@ function cannedResult(name, args) {
     case 'get_job_stats':
       return args?.rankBy
         ? { rankBy: args.rankBy, total: 2, jobs: [
-          { jobId: 'eval-job-1', title: 'Eval Job 1', status: 'Active', daysOpen: 40, applications: 0, vacanciesLeft: 1 },
-          { jobId: 'eval-job-2', title: 'Eval Job 2', status: 'Active', daysOpen: 25, applications: 0, vacanciesLeft: 2 },
+          { jobId: 'eval-job-1', title: 'Eval Job 1', status: 'Active', daysOpen: 40, applications: args.rankBy === 'zero_applications' ? 0 : 6,
+            interviewed: args.rankBy === 'no_interviews' ? 0 : 2, vacanciesLeft: 1 },
+          { jobId: 'eval-job-2', title: 'Eval Job 2', status: 'Active', daysOpen: 25, applications: args.rankBy === 'zero_applications' ? 0 : 3,
+            interviewed: args.rankBy === 'no_interviews' ? 0 : 1, vacanciesLeft: 2 },
         ], jobsConsidered: 9, filtersApplied: args.filters ?? {} }
         : { job: { jobId: 'eval-job-1', title: args?.title || 'Eval Job', status: 'Active', daysOpen: 30 },
           applications: { total: 5, byStage: { Applied: 3, Interview: 2 }, lastApplicationAt: '2026-09-28' },
@@ -665,7 +667,8 @@ function cannedResult(name, args) {
       }
       if (mode === 'group_moves') {
         return { mode, total: 1, records: [
-          { employee: 'Priya Sharma', fromDepartment: 'QA', toDepartment: 'Platform', effectiveDate: '2026-08-01' },
+          { employee: args?.person || 'Priya Sharma', fromDepartment: 'QA', toDepartment: 'Platform', type: 'department',
+            effectiveDate: args?.movedBetween?.from ?? '2026-08-01', approvedBy: 'Anita Desai' },
         ] };
       }
       return { mode, total: 1, totalActiveEmployees: 40, records: [{ name: 'Priya Sharma', designation: 'QA Engineer' }] };
@@ -677,7 +680,8 @@ function cannedResult(name, args) {
       }
       if (args?.mode === 'list') {
         return { mode: 'list', bucket: args.bucket, total: 1, records: [
-          { name: 'Asha Rao', designation: 'React Developer', activeProjects: Number(String(args.bucket).match(/projects_(\d)/)?.[1] ?? 0), openTasks: 0 },
+          { name: 'Asha Rao', designation: 'React Developer', activeProjects: Number(String(args.bucket).match(/projects_(\d)/)?.[1] ?? 1),
+            openTasks: args.bucket === 'overloaded' ? (args.overloadAbove ?? 9) + 3 : 0 },
         ], maxActiveProjects: 2 };
       }
       return { mode: 'summary', total: 20, byActiveProjects: { 0: 5, 1: 12, 2: 3, '3+': 0 }, atOrOverLimit: 3,
@@ -686,6 +690,7 @@ function cannedResult(name, args) {
       return { found: true, meeting: { id: 'm1', title: args?.title || 'Sprint planning', status: 'ended', scheduledAt: '2026-09-29T05:30:00.000Z',
         durationMinutes: 60, hosts: ['Asha Rao'], invitedCount: 3,
         attendees: [{ name: 'Vikram Shah', role: 'participant' }, { name: 'Ravi Kumar', role: 'participant' }], recorded: true, recordingCount: 1,
+        recordingLink: 'https://example.com/recording/m1 (signed, expires)',
         summary: { executiveSummary: 'Release planning.', decisions: ['Ship the release on 2026-10-10'],
           actionItems: [{ text: 'Update the release notes', owner: 'Vikram Shah' }] } } };
     case 'search_my_mailbox':
