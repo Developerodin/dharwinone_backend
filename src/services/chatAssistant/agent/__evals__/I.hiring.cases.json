@@ -1,0 +1,158 @@
+[
+  {
+    "id": "I-get-interview-how-did-it-go",
+    "question": "how did Ravi Kumar's interview go?",
+    "expect": {
+      "tools": [
+        "get_interview"
+      ],
+      "args": {
+        "get_interview": {
+          "candidate": "Ravi Kumar"
+        }
+      }
+    }
+  },
+  {
+    "id": "I-get-interview-panel-and-recording",
+    "question": "who was on the panel for Meera's QA interview and was it recorded?",
+    "expect": {
+      "tools": [
+        "get_interview"
+      ],
+      "args": {
+        "get_interview": {
+          "candidate": "Meera",
+          "jobPosition": "QA"
+        }
+      }
+    }
+  },
+  {
+    "id": "I-get-interview-who-set-result",
+    "question": "who marked Tiger Shroff as selected, and when?",
+    "expect": {
+      "tools": [
+        "get_interview"
+      ],
+      "args": {
+        "get_interview": {
+          "candidate": "Tiger Shroff"
+        }
+      }
+    }
+  },
+  {
+    "id": "I-transcript-what-did-candidate-say",
+    "question": "what did Ravi Kumar say about test automation in his interview?",
+    "expect": {
+      "tools": [
+        "get_interview_transcript"
+      ],
+      "args": {
+        "get_interview_transcript": {
+          "candidate": "Ravi Kumar"
+        }
+      }
+    }
+  },
+  {
+    "id": "I-transcript-full-text",
+    "question": "show me the full transcript of Meera's interview",
+    "expect": {
+      "tools": [
+        "get_interview_transcript"
+      ],
+      "args": {
+        "get_interview_transcript": {
+          "candidate": "Meera",
+          "includeFullText": true
+        }
+      }
+    }
+  },
+  {
+    "id": "I-list-interviews-result-missing",
+    "question": "which interviews ended but still have no result?",
+    "expect": {
+      "tools": [
+        "list_interviews"
+      ],
+      "args": {
+        "list_interviews": {
+          "filters": {
+            "resultMissing": true
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "I-list-interviews-panel-clashes",
+    "question": "are any interviewers double-booked on 2026-10-05?",
+    "expect": {
+      "tools": [
+        "list_interviews"
+      ],
+      "args": {
+        "list_interviews": {
+          "filters": {
+            "overlapping": true,
+            "scheduledBetween": {
+              "from": "2026-10-05",
+              "to": "2026-10-05"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "I-count-interviews-result-missing",
+    "question": "how many interviews are waiting for a result?",
+    "expect": {
+      "tools": [
+        "count_interviews"
+      ],
+      "args": {
+        "count_interviews": {
+          "filters": {
+            "resultMissing": true
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "I-count-interviews-cancelled",
+    "question": "how many interviews were cancelled?",
+    "expect": {
+      "tools": [
+        "count_interviews"
+      ],
+      "args": {
+        "count_interviews": {
+          "filters": {
+            "status": "cancelled"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "I-count-interviews-passed",
+    "question": "how many candidates passed their interview?",
+    "expect": {
+      "tools": [
+        "count_interviews"
+      ],
+      "args": {
+        "count_interviews": {
+          "filters": {
+            "result": "selected"
+          }
+        }
+      }
+    }
+  }
+]
