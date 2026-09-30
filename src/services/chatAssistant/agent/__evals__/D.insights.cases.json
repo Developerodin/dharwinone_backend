@@ -1,0 +1,110 @@
+[
+  {
+    "id": "D-insights-digest-my-attention",
+    "question": "what needs my attention today?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_attention_digest"], "args": { "get_attention_digest": { "scope": "mine" } } },
+        { "tools": ["get_attention_digest"] }
+      ]
+    }
+  },
+  {
+    "id": "D-insights-digest-exceptions",
+    "question": "show me today's exceptions across recruitment and HR",
+    "expect": { "tools": ["get_attention_digest"] }
+  },
+  {
+    "id": "D-insights-digest-critical-alerts",
+    "question": "any critical alerts right now?",
+    "expect": { "tools": ["get_attention_digest"] }
+  },
+  {
+    "id": "D-insights-digest-since-yesterday",
+    "question": "what changed since yesterday?",
+    "expect": {
+      "tools": ["get_attention_digest"],
+      "args": { "get_attention_digest": { "compareTo": "previous" } }
+    }
+  },
+  {
+    "id": "D-insights-digest-monday-briefing-recruitment",
+    "question": "give me my Monday briefing for recruitment",
+    "expect": {
+      "tools": ["get_attention_digest"],
+      "args": { "get_attention_digest": { "module": "recruitment" } }
+    }
+  },
+  {
+    "id": "D-insights-summary-recruitment",
+    "question": "recruitment summary for this month",
+    "expect": {
+      "tools": ["get_operations_summary"],
+      "args": { "get_operations_summary": { "module": "recruitment" } }
+    }
+  },
+  {
+    "id": "D-insights-summary-hr",
+    "question": "give me today's HR report",
+    "expect": {
+      "tools": ["get_operations_summary"],
+      "args": { "get_operations_summary": { "module": "hr" } }
+    }
+  },
+  {
+    "id": "D-insights-summary-pm",
+    "question": "how are projects and tasks doing overall? PM summary please",
+    "expect": {
+      "tools": ["get_operations_summary"],
+      "args": { "get_operations_summary": { "module": "pm" } }
+    }
+  },
+  {
+    "id": "D-insights-summary-bench",
+    "question": "bench summary",
+    "expect": {
+      "tools": ["get_operations_summary"],
+      "args": { "get_operations_summary": { "module": "bench" } }
+    }
+  },
+  {
+    "id": "D-insights-quality-all",
+    "question": "run the data quality checks",
+    "expect": { "tools": ["run_data_quality_checks"] }
+  },
+  {
+    "id": "D-insights-quality-missing-data",
+    "question": "which records have missing data we need to clean up?",
+    "expect": { "tools": ["run_data_quality_checks"] }
+  },
+  {
+    "id": "D-insights-quality-candidate-gaps",
+    "question": "how many candidates have no skills, no education or no work experience?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["run_data_quality_checks"],
+          "args": {
+            "run_data_quality_checks": {
+              "checks": ["candidates_no_skills", "candidates_no_education", "candidates_no_experience"]
+            }
+          }
+        },
+        { "tools": ["run_data_quality_checks"] }
+      ]
+    }
+  },
+  {
+    "id": "D-insights-quality-offers-missing-terms",
+    "question": "are there offers missing a salary or joining date?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["run_data_quality_checks"],
+          "args": { "run_data_quality_checks": { "checks": ["offers_missing_terms"] } }
+        },
+        { "tools": ["run_data_quality_checks"] }
+      ]
+    }
+  }
+]
