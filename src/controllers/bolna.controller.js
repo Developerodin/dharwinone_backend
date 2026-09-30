@@ -149,6 +149,11 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
 
   const candidateAgentId = config.bolna.candidateAgentId;
 
+  // The application drives interview scheduling and callbacks in the prompt: without it the
+  // agent renders interview_scheduling_enabled "no" and never offers slots.
+  const JobApplication = (await import('../models/jobApplication.model.js')).default;
+  const application = await JobApplication.findOne({ candidate: candidateId, job: jobId });
+
   logger.info('Initiating candidate verification call: ' + JSON.stringify({
     candidateId,
     candidateName: candidate.fullName,
@@ -162,7 +167,7 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     formattedPhone,
     candidate,
     job,
-    application: null,
+    application,
     jobTitleOverride: jobTitle,
   });
 
@@ -190,7 +195,6 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
   });
 
   // Update JobApplication with call details
-  const JobApplication = (await import('../models/jobApplication.model.js')).default;
   await JobApplication.updateOne(
     { candidate: candidateId, job: jobId },
     {
