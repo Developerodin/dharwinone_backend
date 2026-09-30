@@ -790,10 +790,13 @@ const queryMyInterviews = async (currentUser, options = {}) => {
 };
 
 const queryMeetings = async (filter, options, currentUser = null, scopeOptions = {}) => {
-  let scopedFilter = filter;
+  // Every interview round has a slot. Legacy stub docs (only hostId + roomName) have none, and the
+  // status filter reads their missing status as "scheduled", so they surfaced as blank interviews.
+  const withSlot = { $and: [filter || {}, { scheduledAt: { $ne: null } }] };
+  let scopedFilter = withSlot;
   if (currentUser) {
     const { filter: scope } = await meetingScope(currentUser, 'read', scopeOptions);
-    scopedFilter = { $and: [filter || {}, scope] };
+    scopedFilter = { $and: [withSlot, scope] };
   }
   const result = await Meeting.paginate(scopedFilter, {
     ...options,

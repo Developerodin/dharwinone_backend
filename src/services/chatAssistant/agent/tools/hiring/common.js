@@ -113,9 +113,7 @@ export function interviewMongoFilter(filters = {}) {
     status: filters.status,
     ...dayRange('date', filters.scheduledBetween),
   }));
-  // A round always has a slot. Legacy stub docs (only hostId + roomName) have none and would otherwise
-  // count as "scheduled", since the shared page filter treats a missing status as scheduled.
-  const and = [...(base.$and || []), { scheduledAt: { $ne: null } }];
+  const and = [...(base.$and || [])];
   if (filters.interviewer) {
     const re = { $regex: escapeRegex(filters.interviewer), $options: 'i' };
     and.push({ $or: [{ 'recruiter.name': re }, { 'agents.name': re }] });
