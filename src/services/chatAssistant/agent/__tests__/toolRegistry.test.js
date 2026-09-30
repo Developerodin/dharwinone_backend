@@ -264,6 +264,40 @@ describe('getAgentTools — execute: timeout', () => {
     const result = await execute('fake_slow', {});
     assert.deepEqual(result, { ok: true, result: { slow: true } });
   });
+
+  const slowWithTimeout = (name, timeoutMs) =>
+    defineTool({
+      name,
+      domain: 'domain_t',
+      kind: 'read',
+      description: 'Resolves slowly, with its own timeoutMs.',
+      input: Joi.object({}),
+      access: { anyOf: ['domain_t.read'] },
+      timeoutMs,
+      execute: () => new Promise((resolve) => setTimeout(() => resolve({ slow: true }), 100)),
+    });
+  const timeoutDomains = [
+    {
+      domain: 'domain_t',
+      summary: 'Domain T things.',
+      instructions: 'Domain T instructions.',
+      tools: [slowWithTimeout('fake_short_timeout', 20), slowWithTimeout('fake_long_timeout', 1000)],
+    },
+  ];
+
+  it("a tool's own timeoutMs overrides the config: shorter times out", async () => {
+    config.chatbot.agent.toolTimeoutMs = 0;
+    const { execute } = await getAgentTools(userWith('domain_t.read'), { domains: timeoutDomains });
+    const result = await execute('fake_short_timeout', {});
+    assert.equal(result.ok, false);
+    assert.match(result.error, /timed out after 20ms/);
+  });
+
+  it("a tool's own timeoutMs overrides the config: longer outlives it", async () => {
+    config.chatbot.agent.toolTimeoutMs = 20;
+    const { execute } = await getAgentTools(userWith('domain_t.read'), { domains: timeoutDomains });
+    assert.deepEqual(await execute('fake_long_timeout', {}), { ok: true, result: { slow: true } });
+  });
 });
 
 // ─── execute: size cap ──────────────────────────────────────────────────────

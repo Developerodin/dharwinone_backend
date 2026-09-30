@@ -189,6 +189,9 @@ attendance-status-backfill.*.journal.json
 # Sage agent loop, Task 4 — tool registry (access filter, timeout, size cap).
 !src/services/chatAssistant/agent/__tests__/toolRegistry.test.js
 
+# Sage Wave 2, Step 0 — tools calling tools under the caller's access.
+!src/services/chatAssistant/agent/__tests__/compose.test.js
+
 # Sage agent loop, Task 5 — model adapter + agent loop.
 !src/services/chatAssistant/agent/__tests__/llm.test.js
 !src/services/chatAssistant/agent/__tests__/runAgent.test.js

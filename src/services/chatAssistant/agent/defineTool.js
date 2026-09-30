@@ -2,6 +2,8 @@ import { toJsonSchema } from './toJsonSchema.js';
 
 const NAME_RE = /^[a-z][a-z0-9_]{2,63}$/;
 const KINDS = ['read', 'write'];
+// Must stay under CHATBOT_AGENT_STEP_TIMEOUT_MS (20000) so a slow tool fails before the model step does.
+const MAX_TIMEOUT_MS = 15000;
 
 function fail(name, message) {
   const label = name || '(unnamed tool)';
@@ -34,9 +36,12 @@ function isValidAccess(access) {
  * profiles vs records) and the default status scope. The registry appends it to
  * the description the model sees and to every result the tool returns, so a
  * reply can say which measure a number is.
+ *
+ * `timeoutMs` (optional) overrides config.chatbot.agent.toolTimeoutMs for this
+ * tool, e.g. a composite tool that runs several others.
  */
 export function defineTool(def) {
-  const { name, domain, kind, description, measure, input, access, execute, render } = def || {};
+  const { name, domain, kind, description, measure, input, access, execute, render, timeoutMs } = def || {};
 
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
     fail(name, `name must match ${NAME_RE} (got ${JSON.stringify(name)})`);
@@ -65,6 +70,9 @@ export function defineTool(def) {
   if (render !== undefined && typeof render !== 'function') {
     fail(name, 'render must be a function when present');
   }
+  if (timeoutMs !== undefined && !(Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS)) {
+    fail(name, `timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} when present`);
+  }
 
   let jsonSchema;
   try {
@@ -73,7 +81,7 @@ export function defineTool(def) {
     fail(name, `input schema conversion failed: ${err.message}`);
   }
 
-  return Object.freeze({ name, domain, kind, description, measure, input, access, execute, render, jsonSchema });
+  return Object.freeze({ name, domain, kind, description, measure, input, access, execute, render, timeoutMs, jsonSchema });
 }
 
 /**

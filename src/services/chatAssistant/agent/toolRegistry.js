@@ -12,6 +12,7 @@ import Joi from 'joi';
 import config from '../../../config/config.js';
 import logger from '../../../config/logger.js';
 import { defineTool, assertUniqueToolNames } from './defineTool.js';
+import { runWithTimeout } from './runWithTimeout.js';
 import { checkAccessRule, guardResultForRule } from '../toolAccess.js';
 import toolDomains from './tools/index.js';
 import { assertRelatedToolsExist } from '../personProfile/providers/index.js';
@@ -132,21 +133,6 @@ function parseRawArgs(rawArgs) {
   }
   if (typeof rawArgs === 'object') return rawArgs;
   throw new Error(`arguments must be an object or a JSON string (got ${typeof rawArgs})`);
-}
-
-async function runWithTimeout(fn, timeoutMs) {
-  if (!(timeoutMs > 0)) return fn();
-  let timer;
-  try {
-    return await Promise.race([
-      fn(),
-      new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`tool timed out after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /**
@@ -297,7 +283,7 @@ export async function getAgentTools(user, { domains = defaultDomains, deps, eage
         return { ok: false, error: joiError.details.map((d) => d.message).join('; ') };
       }
 
-      const timeoutMs = config.chatbot.agent.toolTimeoutMs;
+      const timeoutMs = tool.timeoutMs ?? config.chatbot.agent.toolTimeoutMs;
       let result;
       try {
         result = await runWithTimeout(() => tool.execute(value, { user, requestId, deps }), timeoutMs);

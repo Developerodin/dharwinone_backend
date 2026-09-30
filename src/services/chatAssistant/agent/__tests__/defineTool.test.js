@@ -45,6 +45,11 @@ describe('defineTool happy path', () => {
     const tool = defineTool(validDef());
     assert.equal(tool.render, undefined);
   });
+
+  it('carries an optional timeoutMs up to 15000, undefined when omitted', () => {
+    assert.equal(defineTool(validDef({ timeoutMs: 15000 })).timeoutMs, 15000);
+    assert.equal(defineTool(validDef()).timeoutMs, undefined);
+  });
 });
 
 describe('defineTool rejects bad definitions', () => {
@@ -110,6 +115,12 @@ describe('defineTool rejects bad definitions', () => {
 
   it('rejects a render that is present but not a function', () => {
     assert.throws(() => defineTool(validDef({ render: 'nope' })), /count_jobs.*render/);
+  });
+
+  it('rejects a timeoutMs that is not an integer from 1 to 15000', () => {
+    for (const timeoutMs of [0, -1, 15001, 1.5, '5000', null]) {
+      assert.throws(() => defineTool(validDef({ timeoutMs })), /count_jobs.*timeoutMs/);
+    }
   });
 
   it('surfaces unsupported Joi features in the input at load time', () => {
