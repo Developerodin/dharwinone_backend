@@ -1,10 +1,9 @@
 import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
-import { offerFilters } from './filters.js';
 import {
-  OFFERS_ACCESS, MAX_LIST_LIMIT, hiringScope, hiringDeps, offerQueryFilter, offerRow, canSeeOfferCompensation,
-  hiringCountFacts,
+  OFFERS_ACCESS, MAX_LIST_LIMIT, hiringScope, offerRow, canSeeOfferCompensation, hiringCountFacts,
 } from './common.js';
+import { offerListFilters, detailDeps, offerPlan, countOffersWith, offerDaysPending } from './placementDetail.js';
 
 export default defineTool({
   name: 'list_offers',
@@ -12,32 +11,45 @@ export default defineTool({
   kind: 'read',
   description:
     'List job offers, newest first: offer code, candidate, job, status, joining date, and placement status for ' +
-    'accepted offers. Use for "show pending offers", "<candidate>\'s offer", "offers for <job>". CTC appears only ' +
-    'for viewers allowed to edit offers; when compensationHidden is true, say you cannot show compensation. ' +
-    'total is the full count even when fewer rows come back.',
+    'accepted offers. Use for "show pending offers", "<candidate>\'s offer", "offers for <job>", "offers ' +
+    'pending more than N days" (filters.pendingOverDays; sentDateMissing = still-pending offers with no sent date on record, never counted), "accepted but pre-boarding not started" ' +
+    '(filters.acceptedNoPreboarding). CTC appears only for viewers allowed to edit offers; when ' +
+    'compensationHidden is true, say you cannot show compensation. total is the full count even when fewer ' +
+    'rows come back. One offer in full → get_offer.',
   measure:
     'Offer RECORDS (one per offer letter) you are allowed to see on the Offers page (offer/pre-boarding ' +
       'permission = all, otherwise offers on your own jobs or created by you); every status unless ' +
       'filters.status is set.',
   input: Joi.object({
-    filters: offerFilters,
+    filters: offerListFilters,
     page: Joi.number().integer().min(1).default(1),
     limit: Joi.number().integer().min(1).max(MAX_LIST_LIMIT).default(20),
   }),
   access: OFFERS_ACCESS,
   async execute({ filters = {}, page, limit } = {}, ctx) {
     const user = hiringScope(ctx);
-    const deps = hiringDeps(ctx);
-    const [res, showCtc] = await Promise.all([
-      deps.queryOffers(offerQueryFilter(filters), { page, limit, sortBy: 'createdAt:desc' }, user),
-      canSeeOfferCompensation(user),
+    const deps = detailDeps(ctx);
+    const now = deps.now();
+    const plan = offerPlan(filters, now);
+    const showCtc = await canSeeOfferCompensation(user);
+    const hide = showCtc ? {} : { compensationHidden: true };
+    if (plan.empty) return { total: 0, page, totalPages: 0, records: [], ...hide, filtersApplied: filters };
+
+    const toRow = (o) => {
+      const row = offerRow(o, { showCtc });
+      return filters.pendingOverDays ? { ...row, daysPending: offerDaysPending(o, now) } : row;
+    };
+    const [res, sentDateMissing] = await Promise.all([
+      deps.queryOffers(plan.query, { page, limit, sortBy: 'createdAt:desc' }, user),
+      plan.sentAtMissingQuery ? countOffersWith(plan.sentAtMissingQuery, user, deps) : 0,
     ]);
     return {
       total: res?.totalResults ?? 0,
       page: res?.page ?? page,
       totalPages: res?.totalPages ?? 0,
-      records: (res?.results || []).map((o) => offerRow(o, { showCtc })),
-      ...(showCtc ? {} : { compensationHidden: true }),
+      records: (res?.results || []).map(toRow),
+      ...hide,
+      ...(sentDateMissing ? { sentDateMissing } : {}),
       filtersApplied: filters,
     };
   },

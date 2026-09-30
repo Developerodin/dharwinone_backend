@@ -412,8 +412,12 @@ const recomputeOnboardingStatus = (placement) => {
  * @returns {Promise<{ ok: boolean }>} ok false → caller should return an empty paginated result
  */
 const narrowPlacementQueryToValidCandidates = async (query, filter) => {
+  // Sage only: filter.candidateMatch is an extra Employee filter the candidate must also satisfy.
+  const withMatch = (idClause) => (filter.candidateMatch ? { $and: [idClause, filter.candidateMatch] } : idClause);
   if (filter.candidateId) {
-    const emp = await Employee.findById(filter.candidateId).select('fullName email').lean();
+    const emp = filter.candidateMatch
+      ? await Employee.findOne(withMatch({ _id: filter.candidateId })).select('fullName email').lean()
+      : await Employee.findById(filter.candidateId).select('fullName email').lean();
     if (!placementCandidateHasDisplayIdentity(emp)) {
       return { ok: false };
     }
@@ -426,7 +430,7 @@ const narrowPlacementQueryToValidCandidates = async (query, filter) => {
     return { ok: false };
   }
 
-  const employees = await Employee.find({ _id: { $in: candidateRefs } })
+  const employees = await Employee.find(withMatch({ _id: { $in: candidateRefs } }))
     .select('_id fullName email')
     .lean();
 
@@ -534,6 +538,13 @@ const queryPlacements = async (filter, options, currentUser) => {
       ...(filter.joiningTo && { $lte: new Date(filter.joiningTo) }),
     };
   }
+  // Sage only, like joiningFrom/To. bgvStatus is a comma list; 'Pending' also matches an unset status
+  // (the schema default). bgvNotRequested: no BGV requestedAt on record.
+  if (filter.bgvStatus) {
+    const bgv = String(filter.bgvStatus).split(',').map((s) => s.trim()).filter(Boolean);
+    query['backgroundVerification.status'] = { $in: bgv.includes('Pending') ? [...bgv, null] : bgv };
+  }
+  if (filter.bgvNotRequested) query['backgroundVerification.requestedAt'] = null;
 
   const visibility = await buildPlacementVisibilityClause(currentUser, query.job);
   if (visibility.createdBy) query.createdBy = visibility.createdBy;

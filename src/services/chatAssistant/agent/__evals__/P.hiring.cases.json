@@ -1,0 +1,153 @@
+[
+  {
+    "id": "P-get-offer-by-candidate",
+    "question": "show me Ravi Kumar's offer details",
+    "expect": {
+      "tools": ["get_offer"],
+      "args": { "get_offer": { "candidate": "Ravi Kumar" } }
+    }
+  },
+  {
+    "id": "P-get-offer-by-code",
+    "question": "who prepared offer OFF-2026-0012 and when was it sent?",
+    "expect": {
+      "tools": ["get_offer"],
+      "args": { "get_offer": { "offerCode": "OFF-2026-0012" } }
+    }
+  },
+  {
+    "id": "P-get-offer-salary",
+    "question": "what salary did we offer Meera Nair?",
+    "expect": {
+      "tools": ["get_offer"],
+      "args": { "get_offer": { "candidate": "Meera Nair" } }
+    }
+  },
+  {
+    "id": "P-get-offer-sent-by",
+    "question": "who sent Ravi Kumar's offer?",
+    "expect": {
+      "tools": ["get_offer"],
+      "args": { "get_offer": { "candidate": "Ravi Kumar" } }
+    }
+  },
+  {
+    "id": "P-list-offers-pending-over-days",
+    "question": "which offers have been pending for more than 7 days?",
+    "expect": {
+      "tools": ["list_offers"],
+      "args": { "list_offers": { "filters": { "pendingOverDays": 7 } } }
+    }
+  },
+  {
+    "id": "P-list-offers-accepted-no-preboarding",
+    "question": "show accepted offers where pre-boarding hasn't started yet",
+    "expect": {
+      "tools": ["list_offers"],
+      "args": { "list_offers": { "filters": { "acceptedNoPreboarding": true } } }
+    }
+  },
+  {
+    "id": "P-count-offers-pending-over-days",
+    "question": "how many offers are still waiting on the candidate after 14 days?",
+    "expect": {
+      "tools": ["count_offers"],
+      "args": { "count_offers": { "filters": { "pendingOverDays": 14 } } }
+    }
+  },
+  {
+    "id": "P-count-offers-accepted-no-preboarding",
+    "question": "how many accepted offers have no pre-boarding started?",
+    "expect": {
+      "tools": ["count_offers"],
+      "args": { "count_offers": { "filters": { "acceptedNoPreboarding": true } } }
+    }
+  },
+  {
+    "id": "P-get-placement-where-in-onboarding",
+    "question": "where is Meera Nair in onboarding and what's holding her up?",
+    "expect": {
+      "tools": ["get_placement"],
+      "args": { "get_placement": { "candidate": "Meera Nair" } }
+    }
+  },
+  {
+    "id": "P-get-placement-employee-yet",
+    "question": "has Ravi Kumar's BGV been done, and is he an employee yet?",
+    "expect": {
+      "tools": ["get_placement"],
+      "args": { "get_placement": { "candidate": "Ravi Kumar" } }
+    }
+  },
+  {
+    "id": "P-get-placement-audit",
+    "question": "who moved Meera Nair's placement to Onboarding?",
+    "expect": {
+      "tools": ["get_placement"],
+      "args": { "get_placement": { "candidate": "Meera Nair" } }
+    }
+  },
+  {
+    "id": "P-list-placements-bgv-pending",
+    "question": "list placements with BGV still pending",
+    "expect": {
+      "tools": ["list_placements"],
+      "args": { "list_placements": { "filters": { "bgvPending": true } } }
+    }
+  },
+  {
+    "id": "P-list-placements-join-date-passed",
+    "question": "who has passed their joining date but still isn't onboarded?",
+    "expect": {
+      "tools": ["list_placements"],
+      "args": { "list_placements": { "filters": { "joinDatePassedNotOnboarded": true } } }
+    }
+  },
+  {
+    "id": "P-count-placements-ready-for-bgv",
+    "question": "how many hires are ready for background verification?",
+    "expect": {
+      "tools": ["count_placements"],
+      "args": { "count_placements": { "filters": { "readyForBgv": true } } }
+    }
+  },
+  {
+    "id": "P-count-placements-bgv-pending",
+    "question": "how many placements have BGV pending?",
+    "expect": {
+      "tools": ["count_placements"],
+      "args": { "count_placements": { "filters": { "bgvPending": true } } }
+    }
+  },
+  {
+    "id": "P-list-documents-person",
+    "question": "which of Meera Nair's documents were rejected and why?",
+    "expect": {
+      "tools": ["list_documents"],
+      "args": { "list_documents": { "person": "Meera Nair" } }
+    }
+  },
+  {
+    "id": "P-list-documents-cohort-missing",
+    "question": "who in pre-boarding is still missing documents?",
+    "expect": {
+      "tools": ["list_documents"],
+      "args": { "list_documents": { "cohort": { "stage": "preBoarding" }, "onlyWith": "missing" } }
+    }
+  },
+  {
+    "id": "P-list-documents-expiring",
+    "question": "whose EAD or visa expires in the next 60 days among people in onboarding?",
+    "expect": {
+      "tools": ["list_documents"],
+      "args": {
+        "list_documents": { "cohort": { "stage": "onboarding" }, "onlyWith": "expiring", "expiringWithinDays": 60 }
+      }
+    }
+  },
+  {
+    "id": "P-list-documents-mine",
+    "question": "are any of my documents still pending review?",
+    "expect": { "tools": ["list_documents"] }
+  }
+]

@@ -1586,6 +1586,21 @@ const queryOffers = async (filter, options, currentUser) => {
     }
   }
 
+  // Sage only (agent/tools/hiring) — pick() in the list controller never passes these keys.
+  // sentBefore: marked Sent before this instant; sentAtMissing: no sentAt on record (legacy rows).
+  if (filter.sentBefore) query.sentAt = { $lt: new Date(filter.sentBefore) };
+  else if (filter.sentAtMissing) query.sentAt = null;
+  // Offers whose placement has this status / pre-boarding status.
+  // ponytail: one distinct over matching placements; fine while a status holds thousands, not millions.
+  if (filter.placementStatus || filter.placementPreBoardingStatus) {
+    const placementOfferIds = await Placement.distinct('offer', {
+      ...(filter.placementStatus && { status: filter.placementStatus }),
+      ...(filter.placementPreBoardingStatus && { preBoardingStatus: filter.placementPreBoardingStatus }),
+    });
+    if (!placementOfferIds.length) return emptyPaginateResult(options);
+    pushAnd(query, { _id: { $in: placementOfferIds } });
+  }
+
   const visibility = await buildOfferVisibilityClause(currentUser, query.job);
   if (visibility.blocked) {
     const limit = options.limit || 10;

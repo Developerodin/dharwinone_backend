@@ -1,9 +1,11 @@
 import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
-import { placementFilters } from './filters.js';
 import {
-  PLACEMENTS_ACCESS, MAX_LIST_LIMIT, hiringScope, hiringDeps, placementQueryFilter, placementRow, hiringCountFacts,
+  PLACEMENTS_ACCESS, MAX_LIST_LIMIT, hiringScope, placementRow, hiringCountFacts,
 } from './common.js';
+import { placementListFilters, detailDeps, placementPlan } from './placementDetail.js';
+
+const SORT = 'joiningDate:desc';
 
 export default defineTool({
   name: 'list_placements',
@@ -12,22 +14,25 @@ export default defineTool({
   description:
     'List placements, latest joining date first: candidate, job, status, pre-boarding status, joining date, ' +
     'BGV status. Use for "who joined this month" (status Joined + joiningBetween), "who is joining next week", ' +
-    '"<candidate>\'s placement". total is the full count even when fewer rows come back.',
+    '"<candidate>\'s placement", "BGV pending" (filters.bgvPending), "ready for BGV" (filters.readyForBgv), ' +
+    '"joining date passed but not onboarded" (filters.joinDatePassedNotOnboarded). total is the full count ' +
+    'even when fewer rows come back. One person\'s steps and what is blocking them → get_placement.',
   measure:
     'Placement RECORDS (one per accepted offer) you are allowed to see on the Pre-boarding/Onboarding pages; ' +
-      'every status EXCEPT Cancelled unless filters.status or filters.stage is set.',
+      'every status EXCEPT Cancelled unless filters.status or filters.stage is set (bgvPending / readyForBgv / ' +
+      'joinDatePassedNotOnboarded default to Pending + Onboarding).',
   input: Joi.object({
-    filters: placementFilters,
+    filters: placementListFilters,
     page: Joi.number().integer().min(1).default(1),
     limit: Joi.number().integer().min(1).max(MAX_LIST_LIMIT).default(20),
   }),
   access: PLACEMENTS_ACCESS,
   async execute({ filters = {}, page, limit } = {}, ctx) {
     const user = hiringScope(ctx);
-    const deps = hiringDeps(ctx);
-    const res = await deps.queryPlacements(
-      placementQueryFilter(filters), { page, limit, sortBy: 'joiningDate:desc' }, user,
-    );
+    const deps = detailDeps(ctx);
+    const plan = placementPlan(filters, deps.now());
+    if (plan.empty) return { total: 0, page, totalPages: 0, records: [], filtersApplied: filters };
+    const res = await deps.queryPlacements(plan.query, { page, limit, sortBy: SORT }, user);
     return {
       total: res?.totalResults ?? 0,
       page: res?.page ?? page,
