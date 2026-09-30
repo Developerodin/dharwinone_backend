@@ -1,0 +1,51 @@
+[
+  {
+    "id": "P-actions-task-plan-break-down",
+    "question": "break project Apollo into tasks",
+    "expect": {
+      "anyOf": [
+        { "tools": ["create_task_plan"], "args": { "create_task_plan": { "project": "Apollo" } } },
+        { "tools": ["list_projects", "create_task_plan"], "args": { "create_task_plan": { "project": "Apollo" } } }
+      ]
+    }
+  },
+  {
+    "id": "P-actions-task-plan-with-brief",
+    "question": "plan the tasks for the Website Redesign project, focus on SEO and accessibility",
+    "expect": {
+      "anyOf": [
+        { "tools": ["create_task_plan"], "args": { "create_task_plan": { "project": "Website Redesign" } } },
+        { "tools": ["list_projects", "create_task_plan"], "args": { "create_task_plan": { "project": "Website Redesign" } } }
+      ]
+    }
+  },
+  {
+    "id": "P-actions-task-plan-generate-list",
+    "question": "can you generate a task list for project Orion?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["create_task_plan"], "args": { "create_task_plan": { "project": "Orion" } } },
+        { "tools": ["list_projects", "create_task_plan"], "args": { "create_task_plan": { "project": "Orion" } } }
+      ]
+    }
+  },
+  {
+    "id": "P-actions-task-plan-not-for-listing",
+    "question": "list the tasks on project Apollo",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_tasks"] }
+      ]
+    }
+  },
+  {
+    "id": "P-actions-task-plan-not-for-assignment",
+    "question": "assign people to the tasks on project Apollo",
+    "expect": {
+      "anyOf": [
+        { "handoff": true },
+        { "tools": ["get_allocation"] }
+      ]
+    }
+  }
+]
