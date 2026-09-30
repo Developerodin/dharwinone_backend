@@ -398,7 +398,11 @@ export const CHECKS = {
       }
       const a = filterSet(apps, (v, id) => leadIds.has(id), 'Referral leads at Screening / Shortlisted');
       const b = await guardSet('Interviews', () => interviewSet(e, {
-        clause: { 'candidate.id': { $in: [...a.ids] }, status: { $ne: 'cancelled' } }, key: 'employee', label: 'Interviews (any)',
+        clause: {
+          $or: [{ candidateId: { $in: validIds(a.ids) } }, { 'candidate.id': { $in: [...a.ids] } }],
+          status: { $ne: 'cancelled' },
+        },
+        key: 'employee', label: 'Interviews (any)',
       }));
       return {
         definition, op: 'minus', a, b,
@@ -517,6 +521,10 @@ export async function runCheck(query, args, e, limit) {
     if (s.truncated) notes.push(`${s.label}: more than ${s.total} records — only the first ${s.total} were compared.`);
   }
   if (op === 'minus' && b?.truncated) notes.push('Some people listed may belong to the excluded group (it hit the size cap).');
+  // The excluded set sees less than the listed set (e.g. offers only on your jobs): a row missing from it
+  // may just be invisible to you, so the rows mean "none visible to you", not "none".
+  const narrowerB = op === 'minus' && !!b?.partialScope && b.partialScope !== a.partialScope;
+  if (narrowerB) notes.push(`Rows mean none visible to you in ${b.label}; records outside your access are not checked.`);
   const seen = new Map();
   for (const r of rows) if (r.name) seen.set(lc(r.name), (seen.get(lc(r.name)) ?? 0) + 1);
   if ([...seen.values()].some((n) => n > 1)) notes.push('Some people share a name; employeeId tells them apart.');
@@ -524,7 +532,7 @@ export async function runCheck(query, args, e, limit) {
 
   return {
     query, status: 'ok', definition: plan.definition,
-    total: ids.length, atLeast, ...(op === 'minus' && b?.truncated ? { approximate: true } : {}),
+    total: ids.length, atLeast, ...(op === 'minus' && (b?.truncated || narrowerB) ? { approximate: true } : {}),
     sets: sets.map(setSummary),
     rows,
     notes,

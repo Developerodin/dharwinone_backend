@@ -199,11 +199,13 @@ export async function interviewSet(e, { clause = {}, key = 'application', label 
   if (!(await allowed(INTERVIEWS_ACCESS, user, deps))) return restrictedSet(label, 'Requires interviews.read.');
   const { filter } = await deps.meetingScope(user, 'read');
   const { rows, truncated } = await cappedRows(deps.Meeting.find({ $and: [filter, clause] })
-    .select('applicationId candidate.id jobPosition scheduledAt interviewResult status').sort({ scheduledAt: -1 }));
+    .select('applicationId candidateId candidate.id jobPosition scheduledAt interviewResult status').sort({ scheduledAt: -1 }));
   const info = new Map();
   let unmapped = 0;
   for (const m of rows) {
-    const id = key === 'application' ? idOf(m.applicationId) : (m.candidate?.id ? String(m.candidate.id) : null);
+    // candidateId is the verified Employee link; candidate.id is free text (may be a mock/external id).
+    const candidate = idOf(m.candidateId) ?? (m.candidate?.id ? String(m.candidate.id) : null);
+    const id = key === 'application' ? idOf(m.applicationId) : candidate;
     if (!id) { unmapped += 1; continue; }
     if (!info.has(id)) {
       info.set(id, { interviewOn: istDayOf(m.scheduledAt), jobPosition: m.jobPosition ?? null, result: m.interviewResult ?? null });

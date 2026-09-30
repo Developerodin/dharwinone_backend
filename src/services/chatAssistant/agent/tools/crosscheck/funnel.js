@@ -153,7 +153,8 @@ async function loadCohort({ user, deps }, window, jobIds) {
     const acc = os.find((o) => o.status === 'Accepted') || null;
     a._firstInterviewAt = firstMeeting.get(id) ?? null;
     a._firstOfferAt = os.length ? os.reduce((m, o) => (o.createdAt < m ? o.createdAt : m), os[0].createdAt) : null;
-    a._offer = acc || os[0] || null;
+    // Newest offer decides "open": a rejected offer followed by a live one is still open.
+    a._offer = acc || os.reduce((n, o) => (!n || o.createdAt > n.createdAt ? o : n), null);
     a._placement = acc ? placementByOffer.get(idOf(acc)) ?? null : null;
   }
   return { apps, truncated };

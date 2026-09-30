@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import runCrossCheck from '../runCrossCheck.tool.js';
 import crosscheckDomain from '../index.js';
 import { guardSet, businessDaysBack, nextWeek, SET_CAP } from '../common.js';
-import { employeesToUsers } from '../identity.js';
+import { employeesToUsers, emailsToUsers, namesForUsers } from '../identity.js';
 
 const NOW = new Date('2026-09-30T06:00:00.000Z'); // Wednesday, 11:30 IST
 const id = (n) => `64b7f0c2a1b2c3d4e5f6${String(n).padStart(4, '0')}`;
@@ -133,6 +133,23 @@ describe('identity mapping', () => {
     assert.ok(!map.has(E(2)));
     assert.deepEqual(unmapped.sort(), [E(2), E(4), 'not-an-id'].sort());
   });
+
+  it('email fallback and row names skip candidate profiles a recruiter merely owns', async () => {
+    const log = [];
+    const profiles = [
+      { _id: E(2), owner: U(9), email: 'kiran@x.com', fullName: 'Kiran', employeeId: 'DBS2' },
+      { _id: E(3), owner: U(9), email: 'rec@x.com', fullName: 'Recruiter', employeeId: 'DBS3' },
+    ];
+    const deps = {
+      Employee: model('Employee', () => profiles, log),
+      User: model('User', (f) => (f.email ? [] : [{ _id: U(9), name: 'Rec Login', email: 'rec@x.com' }]), log),
+    };
+    const { map, unmapped } = await emailsToUsers(['kiran@x.com', 'rec@x.com'], deps);
+    assert.equal(map.get('rec@x.com'), U(9));
+    assert.deepEqual(unmapped, ['kiran@x.com']);
+    const names = await namesForUsers([U(9)], deps);
+    assert.deepEqual(names.get(U(9)), { name: 'Recruiter', employeeId: 'DBS3', employeeProfile: true });
+  });
 });
 
 describe('run_cross_check — happy path', () => {
@@ -231,8 +248,11 @@ describe('run_cross_check — happy path', () => {
           return inIds(f).map((x) => ({ _id: x, fullName: `Lead ${x.slice(-1)}` }));
         },
         Meeting: (f) => {
-          assert.deepEqual(inIds(clauseOf(f), 'candidate.id').sort(), [E(1), E(2)].sort());
-          return [{ candidate: { id: E(2) } }];
+          const [byId, byText] = clauseOf(f).$or;
+          assert.deepEqual(inIds(byId, 'candidateId').sort(), [E(1), E(2)].sort());
+          assert.deepEqual(inIds(byText, 'candidate.id').sort(), [E(1), E(2)].sort());
+          // Linked by candidateId only (candidate.id is a mock id): still counts as interviewed.
+          return [{ candidateId: E(2), candidate: { id: '1' } }];
         },
         Job: () => [{ _id: id(9001), title: 'SDR' }],
       },

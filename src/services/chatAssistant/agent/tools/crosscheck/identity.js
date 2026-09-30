@@ -22,12 +22,11 @@ import { OBJECT_ID_RE, idOf, okSet } from './common.js';
 const lc = (s) => String(s ?? '').trim().toLowerCase();
 const uniq = (xs) => [...new Set(xs.filter(Boolean).map(String))];
 
-export async function employeesToUsers(ids, deps) {
-  const wanted = uniq(ids);
-  const valid = wanted.filter((id) => OBJECT_ID_RE.test(id));
-  const emps = valid.length
-    ? await deps.Employee.find({ _id: { $in: valid } }).select('owner email').lean()
-    : [];
+/**
+ * `(employee) => bool`: does this profile speak for its owner? Yes when it is the owner's only profile, or its
+ * email equals the owner's login email. A job creator owning many public-apply candidate profiles is neither.
+ */
+async function ownsProfile(emps, deps) {
   const owners = uniq(emps.map((e) => idOf(e.owner)));
   const profiles = owners.length
     ? await deps.Employee.find({ owner: { $in: owners } }).select('owner').lean()
@@ -40,13 +39,22 @@ export async function employeesToUsers(ids, deps) {
     const users = await deps.User.find({ _id: { $in: shared } }).select('email').lean();
     for (const u of users) ownerEmail.set(idOf(u), lc(u.email));
   }
-  const map = new Map();
-  for (const e of emps) {
+  return (e) => {
     const owner = idOf(e.owner);
-    if (!owner) continue;
-    if (shared.includes(owner) && (!e.email || lc(e.email) !== ownerEmail.get(owner))) continue;
-    map.set(idOf(e), owner);
-  }
+    if (!owner) return false;
+    return !shared.includes(owner) || (!!e.email && lc(e.email) === ownerEmail.get(owner));
+  };
+}
+
+export async function employeesToUsers(ids, deps) {
+  const wanted = uniq(ids);
+  const valid = wanted.filter((id) => OBJECT_ID_RE.test(id));
+  const emps = valid.length
+    ? await deps.Employee.find({ _id: { $in: valid } }).select('owner email').lean()
+    : [];
+  const owns = await ownsProfile(emps, deps);
+  const map = new Map();
+  for (const e of emps) if (owns(e)) map.set(idOf(e), idOf(e.owner));
   return { map, unmapped: wanted.filter((id) => !map.has(id)) };
 }
 
@@ -69,8 +77,9 @@ export async function emailsToUsers(emails, deps) {
   if (rest.length) {
     const emps = await deps.Employee.find({ $or: [{ companyAssignedEmail: { $in: rest } }, { email: { $in: rest } }] })
       .select('owner email companyAssignedEmail').lean();
+    const owns = await ownsProfile(emps, deps);
     for (const e of emps) {
-      if (!e.owner) continue;
+      if (!owns(e)) continue;
       for (const addr of [lc(e.companyAssignedEmail), lc(e.email)]) {
         if (rest.includes(addr) && !map.has(addr)) map.set(addr, idOf(e.owner));
       }
@@ -115,13 +124,14 @@ export async function namesForUsers(ids, deps) {
   const wanted = uniq(ids).filter((id) => OBJECT_ID_RE.test(id));
   if (!wanted.length) return new Map();
   const [emps, users] = await Promise.all([
-    deps.Employee.find({ owner: { $in: wanted } }).select('owner fullName employeeId').lean(),
+    deps.Employee.find({ owner: { $in: wanted } }).select('owner fullName employeeId email').lean(),
     deps.User.find({ _id: { $in: wanted } }).select('name').lean(),
   ]);
   const out = new Map(users.map((u) => [idOf(u), { name: u.name ?? null, employeeId: null, employeeProfile: false }]));
+  const owns = await ownsProfile(emps, deps);
   for (const e of emps) {
     const owner = idOf(e.owner);
-    if (out.get(owner)?.employeeProfile) continue;
+    if (!owns(e) || out.get(owner)?.employeeProfile) continue;
     out.set(owner, { name: e.fullName ?? out.get(owner)?.name ?? null, employeeId: e.employeeId ?? null, employeeProfile: true });
   }
   return out;
