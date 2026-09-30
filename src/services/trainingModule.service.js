@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import ApiError from '../utils/ApiError.js';
 import TrainingModule from '../models/trainingModule.model.js';
 import Student from '../models/student.model.js';
+import StudentCourseProgress from '../models/studentCourseProgress.model.js';
 import Mentor from '../models/mentor.model.js';
 import Category from '../models/category.model.js';
 import User from '../models/user.model.js';
@@ -934,6 +935,135 @@ const queryEmployeesForModule = async (moduleId, filter, options) => {
   );
 };
 
+const COURSE_LINK = '/training/curriculum/modules';
+
+/** The "Course assigned" notice updateTrainingModuleById sends to an added student. */
+const courseAssignedNotice = (moduleName) => ({
+  title: 'Course assigned',
+  message: `You have been assigned to "${moduleName}".`,
+  subject: `Course assigned: ${moduleName}`,
+  link: COURSE_LINK,
+});
+
+/** Training modules have no due date, so a reminder never says "overdue". */
+const courseReminderNotice = (moduleName) => ({
+  title: 'Course reminder',
+  message: `This is a reminder to continue your course "${moduleName}".`,
+  subject: `Reminder: ${moduleName}`,
+  link: COURSE_LINK,
+});
+
+const sendCourseNotice = (notify, plainTextEmailBody, userId, notice) =>
+  notify(userId, {
+    type: 'course',
+    title: notice.title,
+    message: notice.message,
+    link: notice.link,
+    email: { subject: notice.subject, text: plainTextEmailBody(notice.message, notice.link) },
+  }).catch(() => {});
+
+/**
+ * Add students to one module without touching anyone already on it (never the PATCH
+ * full-array replace, which unassigns and notifies everyone left out). One $addToSet per
+ * student, so modifiedCount says exactly who this call added — a single $each could not —
+ * and only those get the "Course assigned" notice. A replay adds and notifies no one.
+ * Ids that are not Student profiles are ignored, never created.
+ * ponytail: one updateOne per id; fine at Sage's 50-target cap, batch for bigger callers.
+ * @param {string} moduleId
+ * @param {string[]} studentIds
+ * @param {object} [_currentUser]
+ * @returns {Promise<{ added: string[], alreadyEnrolled: string[], notFound: string[] }>}
+ */
+const enrollStudentsInModule = async (moduleId, studentIds, _currentUser) => {
+  const module = await TrainingModule.findById(moduleId).select('moduleName').lean();
+  if (!module) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
+  }
+  const wanted = [...new Set((studentIds || []).map(String))];
+  const students = wanted.length ? await Student.find({ _id: { $in: wanted } }).select('_id user').lean() : [];
+  const notice = courseAssignedNotice(module.moduleName || 'Training module');
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
+
+  const added = [];
+  const alreadyEnrolled = [];
+  for (const student of students) {
+    const res = await TrainingModule.updateOne({ _id: moduleId }, { $addToSet: { students: student._id } });
+    if (!res.modifiedCount) {
+      alreadyEnrolled.push(String(student._id));
+      continue;
+    }
+    added.push(String(student._id));
+    if (student.user) sendCourseNotice(notify, plainTextEmailBody, student.user, notice);
+  }
+  const found = new Set(students.map((s) => String(s._id)));
+  return { added, alreadyEnrolled, notFound: wanted.filter((id) => !found.has(id)) };
+};
+
+/**
+ * Where each student stands on one module, from the rows My Courses joins
+ * (studentCourseQuery.service queryStudentCourses): on TrainingModule.students = enrolled;
+ * StudentCourseProgress.status, 'enrolled' when no progress row exists yet.
+ * @param {string} moduleId
+ * @param {string[]} studentIds
+ */
+const courseReminderEligibility = async (moduleId, studentIds) => {
+  const module = await TrainingModule.findById(moduleId).select('moduleName status students').lean();
+  if (!module) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Training module not found');
+  }
+  const onModule = new Set((module.students || []).map(String));
+  const wanted = [...new Set((studentIds || []).map(String))];
+  const enrolled = wanted.filter((id) => onModule.has(id));
+  const rows = enrolled.length
+    ? await StudentCourseProgress.find({ module: moduleId, student: { $in: enrolled } }).select('student status').lean()
+    : [];
+  const statusOf = new Map(rows.map((r) => [String(r.student), r.status || 'enrolled']));
+  const out = {
+    module: { id: String(module._id), moduleName: module.moduleName, status: module.status },
+    remind: [],
+    completed: [],
+    dropped: [],
+    notEnrolled: wanted.filter((id) => !onModule.has(id)),
+  };
+  for (const id of enrolled) {
+    const status = statusOf.get(id) ?? 'enrolled';
+    if (status === 'completed') out.completed.push(id);
+    else if (status === 'dropped') out.dropped.push(id);
+    else out.remind.push(id);
+  }
+  return out;
+};
+
+/**
+ * Send the course reminder (in-app + email, type 'course') to the given students who are
+ * enrolled on the module and have not completed or dropped it; the rest are returned, not sent.
+ * @param {string} moduleId
+ * @param {string[]} studentIds
+ * @param {object} [_currentUser]
+ * @returns {Promise<{ reminded: string[], completed: string[], dropped: string[], notEnrolled: string[] }>}
+ */
+const sendCourseReminder = async (moduleId, studentIds, _currentUser) => {
+  const standing = await courseReminderEligibility(moduleId, studentIds);
+  const students = standing.remind.length
+    ? await Student.find({ _id: { $in: standing.remind } }).select('_id user').lean()
+    : [];
+  const notice = courseReminderNotice(standing.module.moduleName || 'Training module');
+  const { notify, plainTextEmailBody } = await import('./notification.service.js');
+
+  const reminded = [];
+  for (const student of students) {
+    if (!student.user) continue;
+    sendCourseNotice(notify, plainTextEmailBody, student.user, notice);
+    reminded.push(String(student._id));
+  }
+  return {
+    reminded,
+    completed: standing.completed,
+    dropped: standing.dropped,
+    notEnrolled: standing.notEnrolled,
+  };
+};
+
 export {
   createTrainingModule,
   queryTrainingModules,
@@ -941,4 +1071,9 @@ export {
   queryEmployeesForModule,
   updateTrainingModuleById,
   deleteTrainingModuleById,
+  courseAssignedNotice,
+  courseReminderNotice,
+  enrollStudentsInModule,
+  courseReminderEligibility,
+  sendCourseReminder,
 };

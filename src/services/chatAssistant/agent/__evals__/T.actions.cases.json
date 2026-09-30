@@ -1,0 +1,102 @@
+[
+  {
+    "id": "T-actions-assign-two-people",
+    "question": "assign the Java Basics course to Priya Shah and Ravi Kumar",
+    "expect": {
+      "anyOf": [
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "java basics", "people": ["priya shah", "ravi kumar"] } } },
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "java basics course", "people": ["priya shah", "ravi kumar"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-assign-by-email",
+    "question": "enrol meera@acme.test in React Basics",
+    "expect": {
+      "anyOf": [
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "react basics", "people": ["meera@acme.test"] } } },
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "react basics course", "people": ["meera@acme.test"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-assign-one-person",
+    "question": "add Nita Rao to the SQL Fundamentals training",
+    "expect": {
+      "anyOf": [
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "sql fundamentals", "people": ["nita rao"] } } },
+        { "tools": ["assign_training"], "args": { "assign_training": { "module": "sql fundamentals training", "people": ["nita rao"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-assign-not-drafted-for-enrolment-question",
+    "question": "has Priya Shah been assigned the Java Basics course?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "person": "priya shah" } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "cohort", "course": "java basics" } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-assign-not-drafted-for-a-whole-position",
+    "question": "assign Java Basics to all the Java Developers",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"] },
+        { "tools": [] }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-remind-one-person",
+    "question": "remind Priya Shah to finish the React Basics course",
+    "expect": {
+      "anyOf": [
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "react basics", "people": ["priya shah"] } } },
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "react basics course", "people": ["priya shah"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-remind-two-people",
+    "question": "send a reminder about Java Basics to Ravi Kumar and Meera Iyer",
+    "expect": {
+      "anyOf": [
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "java basics", "people": ["ravi kumar", "meera iyer"] } } },
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "java basics course", "people": ["ravi kumar", "meera iyer"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-remind-by-email",
+    "question": "nudge nita@acme.test to continue SQL Fundamentals",
+    "expect": {
+      "anyOf": [
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "sql fundamentals", "people": ["nita@acme.test"] } } },
+        { "tools": ["send_course_reminder"], "args": { "send_course_reminder": { "module": "sql fundamentals course", "people": ["nita@acme.test"] } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-remind-not-drafted-for-overdue-question",
+    "question": "whose training is overdue in the Onboarding course?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "cohort", "course": "onboarding", "overdue": true } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "cohort", "course": "onboarding" } } }
+      ]
+    }
+  },
+  {
+    "id": "T-actions-remind-not-drafted-for-everyone-not-started",
+    "question": "remind everyone who hasn't started Java Basics",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "cohort", "course": "java basics" } } },
+        { "tools": [] }
+      ]
+    }
+  }
+]
