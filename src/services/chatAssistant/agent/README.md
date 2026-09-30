@@ -368,6 +368,63 @@ says whether a person can join a project and why. The rule lives in `services/pr
 (`MAX_ACTIVE_PROJECTS_PER_ASSIGNEE = 2`, active = In progress / On hold, `isAtProjectCapacity`), the same
 helper `pmAssistant.service.js` now uses, so the chat and the PM assistant cannot disagree.
 
+### person
+
+`agent/tools/person/`: `get_person_360` composes other tools and does not query Mongo itself. It resolves
+the person once (`get_user`'s name rules; `get_my_profile` when `person` is omitted; an ambiguous name returns
+`{ matches }` and stops), then runs the sections in parallel through `compose.js` `runTools` under the
+viewer's access: profile, referral, applications, calls, interviews, offer, placement, documents, org,
+attendance (last 30 IST days), leave, training, projects / tasks, activity. Each section is
+`{ status, summary, rows ≤ 5 }`; restricted or failed sections are never filled from another source. The
+profile's roles decide which sections apply: referral, offer, placement and documents are skipped
+(`notRecorded`) for an Employee without the Candidate role; org, attendance, leave and projects / tasks for a
+Candidate without the Employee role. `focus: 'today'` = attendance, tasks due and approved leave today, plus
+the viewer's own meetings only when the person is the viewer (others' meetings are `restricted`);
+`focus: 'pending'` = open tasks, pending leave, missing documents, callbacks due, interviews awaiting a
+result, an offer waiting on the candidate. External-job (bench marketing) activity is `notCaptured`.
+One-fact questions (manager, department, joining date) stay on `get_reporting_chain` / `get_user`.
+`find_duplicate_people` groups Employees-page-scoped profiles (`applyEmployeeListScope` +
+`buildEmployeeListMongoFilter`, one `$group` aggregate) on normalised email (lower-case, trimmed) or phone
+(digits only, last 10); access is `EMPLOYEES_ACCESS`.
+
+### insights
+
+`agent/tools/insights/`: `get_attention_digest`, `get_operations_summary`, `run_data_quality_checks` —
+composites whose sections run Wave 1 tools via `compose.runTool`, so the tools' own access is a `note`.
+Digest items are a fixed table in `digestItems.js` (tool, filter, severity, whether it has a "mine" filter
+and a window); severity is fixed, never scored, and thresholds come from the `smartNudge` situations.
+`scope: 'mine'` keeps only items with a "mine" filter and lists the rest in `notScopedToYou`;
+`compareTo: 'previous'` re-runs the windowed items for the previous window of equal length
+(`{ now, before, delta }`) and lists the rest in `noWindow`. Overdue training is `notCaptured` (no due
+date). `get_operations_summary` is one module's key counts (recruitment / hr / pm / bench), each from a
+Wave 1 count tool, plus that module's digest items. `run_data_quality_checks` runs the 17 BRD data-quality
+checks, each `{ id, label, status, count, sample, source }`; duplicate phones / emails call
+`find_duplicate_people`, and missing-field checks with no Wave 1 filter use the page's own scoped filter
+plus one `$and` clause.
+
+### crosscheck
+
+`agent/tools/crosscheck/`: `run_cross_check` (18 named checks) and `get_recruitment_funnel`. Each check is
+set A minus / intersect set B (`sets.js`), every set built from that page's own filter and scope and capped
+at 5000 ids; `identity.js` maps between User / Employee / Student / candidate ids and counts unmappable ids
+as `unmapped`. No access to one set makes the whole check `restricted`; a truncated set makes the answer
+"at least". `applications_unchanged` uses `unchangedSinceFilter` and `lastStatusChangeAt`
+(`applicationStatusHistory.js`) and reports whether each date came from `statusChangedAt` or `updatedAt`.
+The funnel covers applications created in the window (Applications-page scope); stage dates come from
+`stageEntryDates` and the answer reports `basis` (`tallyBasis`: history / derived / none, plus
+approximate). Screening is `notCaptured` on the derived basis; onboarding and hired dates always come from
+the placement record. Recruiter workload is pending items per recruiter, never a quality measure.
+
+### advice
+
+`agent/tools/advice/`: `explain_status` (why unavailable, can't join a project, can't move to onboarding,
+not on the Employees page, not on the org chart, can't see a record) returns `rules: [{ rule, source, met,
+evidence }]` taken from the real rule code, plus a one-line conclusion; `recommend` (8 kinds) returns the
+ranking rules and items `{ subject, score, reasons, evidence }`; `match_jobs_to_employee` ranks active jobs
+the viewer can see by skill-tag overlap with the employee's profile skills (keyword based — the vector
+index holds people, not jobs). Sections go through `compose.runTool`; `follow_ups_today` calls
+`get_attention_digest` with scope mine.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -443,6 +500,21 @@ Notes on each field, from what `defineTool.js` actually enforces (a bad tool thr
   contract jobs" — neither gets enforced, because rewriting both "N `<label>`" phrases to a
   single total would corrupt one of them. Only give a fact the same label/role as another
   call in the turn when they really should share one number.
+- **`timeoutMs` is optional.** An integer from 1 to 15000 (kept under
+  `CHATBOT_AGENT_STEP_TIMEOUT_MS`, 20000); `registry.execute` uses `tool.timeoutMs ??
+  config.chatbot.agent.toolTimeoutMs`. Only composite tools that run several others need it.
+
+### Composite tools (`compose.js`)
+
+A tool that answers from other tools calls them through `agent/compose.js`, never by writing a
+new unscoped query. `runTool(name, args, ctx, { timeoutMs = 6000 })` runs a registered tool exactly
+as the registry would for `ctx.user`: access check, write refusal, Joi validation, timeout and
+`guardResultForRule`. It never throws; it returns `{ status: 'ok', result }` or `restricted` /
+`invalid` / `timeout` / `error` / `unknown`, and the composite reports that status per section
+(never filling a restricted or failed section from elsewhere). `runTools(calls, ctx)` runs
+independent sections in parallel. `ctx.composeDepth` allows a composite to call another composite
+once (depth 2); a third level returns `error`, so tools cannot loop. Give the composite its own
+`access: { note }` (sections gate themselves) and a `timeoutMs` that covers its slowest section.
 
 ### 2. Register it
 

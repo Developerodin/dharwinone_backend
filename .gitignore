@@ -267,6 +267,19 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/agent/tools/jobs/__tests__/aggregateApplicationsByJob.test.js
 !src/services/chatAssistant/agent/tools/referrals/__tests__/referralGroupedStats.test.js
 
+# Sage Wave 2 - person, insights, crosscheck and advice domains.
+!src/services/chatAssistant/agent/tools/person/__tests__/
+!src/services/chatAssistant/agent/tools/person/__tests__/V.getPerson360.test.js
+!src/services/chatAssistant/agent/tools/person/__tests__/V.findDuplicatePeople.test.js
+!src/services/chatAssistant/agent/tools/insights/__tests__/
+!src/services/chatAssistant/agent/tools/insights/__tests__/attentionDigest.test.js
+!src/services/chatAssistant/agent/tools/insights/__tests__/dataQuality.test.js
+!src/services/chatAssistant/agent/tools/crosscheck/__tests__/
+!src/services/chatAssistant/agent/tools/crosscheck/__tests__/X.crosscheck.test.js
+!src/services/chatAssistant/agent/tools/crosscheck/__tests__/X.funnel.test.js
+!src/services/chatAssistant/agent/tools/advice/__tests__/
+!src/services/chatAssistant/agent/tools/advice/__tests__/W.adviceTools.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js

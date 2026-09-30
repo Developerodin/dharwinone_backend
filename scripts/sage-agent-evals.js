@@ -710,6 +710,216 @@ function cannedResult(name, args) {
         { conversationId: 'cv1', conversation: 'Release squad', conversationType: 'group', author: 'Ravi Kumar', at: '2026-09-29T12:00:00.000Z',
           snippet: 'The release date is 2026-10-10; deadline for fixes is 2026-10-08.' },
       ], conversationsSearched: 4, conversationsTotal: 4, partial: false };
+    case 'get_person_360': {
+      const self = !args?.person;
+      const person = { userId: 'eval-user-7', name: args?.person || 'Eval Self', roles: ['Employee'], self, candidate: false, employee: true };
+      const ok = (summary, rows = []) => ({ status: 'ok', summary, rows });
+      const notRecorded = (note) => ({ status: 'notRecorded', note });
+      let sections;
+      if (args?.focus === 'today') {
+        sections = {
+          attendanceToday: ok({ total: 1 }, [{ date: '2026-09-30', status: 'Present', punchIn: '09:32' }]),
+          tasksDueToday: ok({ total: 1 }, [{ code: 'T-12', title: 'Fix login bug', status: 'in_progress', dueDate: '2026-09-30' }]),
+          leaveToday: notRecorded('Not on approved leave today.'),
+          meetingsToday: self ? notRecorded('No meetings today.') : { status: 'restricted', note: "Other people's meetings are not readable." },
+        };
+      } else if (args?.focus === 'pending') {
+        sections = {
+          openTasks: ok({ open: 2, overdue: 1, blocked: 0 }, [{ code: 'T-12', title: 'Fix login bug', status: 'in_progress', dueDate: '2026-09-29' }]),
+          pendingLeave: ok({ total: 1 }, [{ leaveType: 'casual', status: 'pending', from: '2026-10-05', to: '2026-10-05', days: 1 }]),
+          missingDocuments: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+          callbacksDue: notRecorded('No callbacks due.'),
+          interviewsAwaitingResult: notRecorded('No ended interview waiting for a result.'),
+          offerPending: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+        };
+      } else {
+        const all = {
+          profile: ok({ name: person.name, roles: person.roles, employee: { designation: 'QA Engineer', department: 'QA', joiningDate: '2025-04-01' } }),
+          referral: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+          applications: notRecorded('No job applications on record.'),
+          calls: notRecorded('No call records match this name.'),
+          interviews: notRecorded('No interviews on record.'),
+          offer: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+          placement: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+          documents: notRecorded('Candidate-only section — they hold the Employee role, not the Candidate role.'),
+          org: ok({ designation: 'QA Engineer', chain: [{ level: 'teamLead', unit: 'QA', head: 'Rahul Verma' }], reportingManager: 'Rahul Verma' }),
+          attendance: ok({ window: { from: '2026-09-01', to: '2026-09-30' }, total: 21, statusBreakdown: { Present: 20, Absent: 1 } }),
+          leave: ok({ total: 1 }, [{ leaveType: 'casual', status: 'approved', from: '2026-09-12', to: '2026-09-12', days: 1 }]),
+          training: ok({ total: 3, completed: 2 }, [{ module: 'Playwright basics', status: 'completed', percentage: 100 }]),
+          work: ok({ tasks: { total: 5, open: 2, overdue: 1, blocked: 0 }, projectsFromTasks: ['Apollo'] }),
+          activity: ok({ total: 1 }, [{ at: '2026-09-25T10:00:00.000Z', actor: 'Asha Rao', action: 'candidate.update', target: person.name }]),
+          externalJobs: { status: 'notCaptured', note: 'External-job (bench marketing) activity is not captured in DharwinOne per person.' },
+        };
+        const wanted = args?.sections?.length ? new Set(args.sections) : null;
+        sections = wanted ? Object.fromEntries(Object.entries(all).filter(([k]) => wanted.has(k))) : all;
+      }
+      return { person, focus: args?.focus ?? 'all', today: '2026-09-30', sections };
+    }
+    case 'find_duplicate_people': {
+      const by = args?.by ?? 'both';
+      const fields = by === 'both' ? ['email', 'phone'] : [by];
+      const groups = fields.map((f) => ({
+        matchedOn: f, value: f === 'email' ? 'priya.sharma@example.com' : '9876543210', size: 2,
+        people: [{ id: 'e1', name: 'Priya Sharma', userId: 'u1' }, { id: 'e2', name: 'Priya S', userId: 'u2' }],
+      }));
+      return { by, population: args?.population ?? 'all', totalGroups: groups.length,
+        byField: Object.fromEntries(fields.map((f) => [f, 1])), groups };
+    }
+    case 'get_attention_digest': {
+      const window = { from: args?.window?.from ?? '2026-09-30', to: args?.window?.to ?? args?.window?.from ?? '2026-09-30' };
+      const mine = args?.scope === 'mine';
+      const compare = args?.compareTo === 'previous';
+      const all = [
+        { id: 'callbacks_overdue', label: 'Callbacks overdue', module: 'recruitment', severity: 'high', source: 'list_call_followups', status: 'ok', count: 3,
+          rows: [{ applicant: 'Ravi Kumar', job: 'QA Engineer', callbackAt: '2026-09-29T11:00:00.000Z' }], windowed: false },
+        { id: 'failed_calls', label: 'Failed calls', module: 'recruitment', severity: 'medium', source: 'list_call_records', status: 'ok', count: 2,
+          rows: [{ candidate: 'Meera Nair', status: 'failed' }], windowed: true, ...(compare ? { compare: { now: 2, before: 5, delta: -3 } } : {}) },
+        { id: 'pending_leave', label: 'Pending leave requests', module: 'hr', severity: 'medium', source: 'list_leave_requests', status: 'ok', count: 4,
+          rows: [{ person: 'Asha Rao', leaveType: 'casual', from: '2026-10-02' }], windowed: false },
+        { id: 'overdue_tasks', label: 'Overdue tasks', module: 'pm', severity: 'medium', source: 'list_tasks', status: 'ok', count: 1,
+          rows: [{ code: 'T-12', title: 'Fix login bug', dueDate: '2026-09-28' }], windowed: false },
+        { id: 'employees_no_project', label: 'Employees on no active project', module: 'bench', severity: 'low', source: 'get_allocation', status: 'ok', count: 5,
+          rows: [{ name: 'Vikram Shah', designation: 'React Developer' }], windowed: false },
+      ];
+      const inModule = all.filter((i) => !args?.module || args.module === 'all' || i.module === args.module);
+      const mineIds = new Set(['failed_calls', 'pending_leave', 'overdue_tasks']);
+      const items = mine ? inModule.filter((i) => mineIds.has(i.id)) : inModule;
+      return {
+        scope: args?.scope ?? 'all', module: args?.module ?? 'all', window, items, restricted: [], failed: [],
+        ...(mine ? { notScopedToYou: inModule.filter((i) => !mineIds.has(i.id)).map((i) => i.label) } : {}),
+        ...(compare ? { compareTo: 'previous', previousWindow: { from: '2026-09-29', to: '2026-09-29' },
+          noWindow: items.filter((i) => !i.windowed).map((i) => i.label) } : {}),
+      };
+    }
+    case 'get_operations_summary': {
+      const module = args?.module ?? 'recruitment';
+      const window = { from: args?.window?.from ?? '2026-09-30', to: args?.window?.to ?? args?.window?.from ?? '2026-09-30' };
+      const metricsByModule = {
+        recruitment: [['open_jobs', 'Open jobs (Active)', 'count_jobs', 12], ['applications', 'Applications', 'count_applications', 140],
+          ['interviews', 'Interviews scheduled in the window', 'count_interviews', 9], ['offers', 'Offers created in the window', 'count_offers', 3],
+          ['joiners', 'Joined in the window', 'count_placements', 1]],
+        hr: [['employees', 'Current employees', 'count_employees', 40], ['present_today', 'Present today', 'get_attendance_summary', 35],
+          ['on_leave_today', 'On leave today', 'who_is_on_leave_today', 2], ['onboarding', 'Placements in onboarding', 'count_placements', 3]],
+        pm: [['projects', 'Projects', 'count_projects', 6], ['open_tasks', 'Open tasks', 'count_tasks', 48],
+          ['utilisation', 'Employees by active projects', 'get_allocation', 20]],
+        bench: [['unallocated', 'Employees on no active project', 'get_allocation', 5], ['external_jobs', 'External jobs (Active)', 'count_jobs', 30]],
+      };
+      return {
+        module, window,
+        metrics: (metricsByModule[module] ?? []).map(([id, label, source, value]) => ({ id, label, source, status: 'ok', value })),
+        restricted: [], failed: [],
+        attention: [{ id: 'pending_leave', label: 'Pending leave requests', module: 'hr', severity: 'medium', source: 'list_leave_requests', status: 'ok', count: 4, rows: [], windowed: false }]
+          .filter((i) => i.module === module),
+      };
+    }
+    case 'run_data_quality_checks': {
+      const all = [
+        { id: 'incomplete_employee_profiles', label: 'Employee profiles not 100% complete', count: 7, sample: [{ name: 'Asha Rao', profileCompletion: 60 }] },
+        { id: 'candidates_no_skills', label: 'Candidates with no skills', count: 12, sample: [{ name: 'Ravi Kumar' }] },
+        { id: 'candidates_no_education', label: 'Candidates with no education', count: 9, sample: [{ name: 'Meera Nair' }] },
+        { id: 'candidates_no_experience', label: 'Candidates with no work experience', count: 15, sample: [{ name: 'Karan Mehta' }] },
+        { id: 'duplicate_phones', label: 'Duplicate phone numbers', count: 2, sample: [{ matchedOn: 'phone' }] },
+        { id: 'offers_missing_terms', label: 'Offers missing salary or joining date', count: 1, sample: [{ candidate: 'Ravi Kumar', offerCode: 'OF-1', missing: 'joining date' }] },
+        { id: 'tasks_no_due_date', label: 'Tasks with no due date', count: 4, sample: [{ code: 'T-40', title: 'Write docs' }] },
+      ].map((c) => ({ ...c, status: 'ok', source: `eval source for ${c.id}` }));
+      const checks = args?.checks?.length ? all.filter((c) => args.checks.includes(c.id)) : all;
+      const sampleSize = args?.sampleSize ?? 5;
+      const shown = checks.map((c) => ({ ...c, sample: c.sample.slice(0, sampleSize) }));
+      return { checks: shown, flagged: shown.filter((c) => c.count > 0).length, restricted: [], failed: [], notCaptured: [] };
+    }
+    case 'run_cross_check': {
+      const query = args?.query ?? 'passed_interview_no_offer';
+      const a = args?.args ?? {};
+      const extra = query === 'applications_unchanged'
+        ? { businessDays: a.businessDays ?? 5, noChangeSince: '2026-09-23', basis: { statusChangedAt: 1, updatedAt: 1 }, holidaysSkipped: 0 }
+        : query === 'bench_matches_recent_jobs'
+          ? { jobs: Array.from({ length: a.jobCount ?? 5 }, (_, i) => ({ jobId: `eval-job-${i + 1}`, title: `${a.jobKeyword ?? 'Eval'} Developer ${i + 1}` })) }
+          : {};
+      const row = query === 'applications_unchanged'
+        ? { name: 'Ravi Kumar', job: 'QA Engineer', status: 'Applied', lastChange: '2026-09-18', lastChangeBasis: 'statusChangedAt' }
+        : { name: 'Ravi Kumar', employeeId: 'DBS021', job: 'QA Engineer' };
+      return {
+        query, status: 'ok',
+        definition: `Eval definition for ${query}${Object.keys(a).length ? ` with ${JSON.stringify(a)}` : ''}.`,
+        total: 2, atLeast: false,
+        sets: [{ section: 'Set A', status: 'ok', total: 10 }, ...(query === 'applications_unchanged' ? [] : [{ section: 'Set B', status: 'ok', total: 8 }])],
+        rows: [row, { ...row, name: 'Meera Nair', ...(row.employeeId ? { employeeId: 'DBS022' } : {}) }],
+        notes: [], ...extra,
+      };
+    }
+    case 'get_recruitment_funnel': {
+      const window = args?.window ?? { from: '2026-09-01', to: '2026-09-30' };
+      const conversions = [
+        { from: 'application', to: 'interview', numerator: 40, denominator: 100, rate: 40 },
+        { from: 'application', to: 'screening', numerator: 10, denominator: 20, rate: 50, population: 'history' },
+        { from: 'screening', to: 'interview', numerator: 6, denominator: 10, rate: 60, population: 'history' },
+        { from: 'interview', to: 'offer', numerator: 12, denominator: 40, rate: 30 },
+        { from: 'offer', to: 'accepted', numerator: 8, denominator: 12, rate: 66.7 },
+        { from: 'accepted', to: 'onboarding', numerator: 6, denominator: 8, rate: 75 },
+        { from: 'onboarding', to: 'hired', numerator: 5, denominator: 6, rate: 83.3 },
+      ];
+      const funnel = {
+        status: 'ok', cohort: { applications: 100, truncated: false }, applications: 100,
+        basis: { history: 20, derived: 70, none: 10, approximate: 0 },
+        stages: [{ stage: 'application', reached: 100 }, { stage: 'screening', reached: 10, population: 'history', notCaptured: 80 },
+          { stage: 'interview', reached: 40 }, { stage: 'offer', reached: 12 }, { stage: 'accepted', reached: 8 },
+          { stage: 'onboarding', reached: 6 }, { stage: 'hired', reached: 5 }],
+        conversions,
+        stageAging: [{ stage: 'interview', open: 10, avgDays: 9.5, maxDays: 21, withoutDate: 0 }],
+        slowestStage: { from: 'interview', to: 'offer', n: 12, avgDays: 11.2, medianDays: 9 },
+        cycleTime: { applicationToOnboarding: { n: 6, avgDays: 34, medianDays: 31 } },
+      };
+      return {
+        window, ...(args?.jobId ? { jobId: args.jobId } : {}), ...(args?.recruiter ? { recruiter: args.recruiter === 'me' ? 'Eval User' : args.recruiter } : {}),
+        funnel,
+        recruiterWorkload: { status: 'ok', total: 2, medianTotal: 15, rows: [
+          { recruiter: 'Asha Rao', openApplications: 14, openInterviews: 4, openOffers: 2, total: 20 },
+          { recruiter: 'Vikram Shah', openApplications: 8, openInterviews: 1, openOffers: 1, total: 10 },
+        ], sections: { interviews: 'ok', offers: 'ok' },
+        note: 'Pending workload (open items per recruiter) — a workload comparison, not a measure of recruiter quality.' },
+        notes: ['Reached = entered the stage or any later one. Screening is only dated in status history, so its counts use history-basis applications only (notCaptured = the rest).',
+          'Onboarding and hired dates always come from the placement record (entered onboarding, joined).'],
+        ...(args?.compareTo === 'previous' ? {
+          previous: { window: { from: '2026-08-01', to: '2026-08-31' }, status: 'ok', cohort: { applications: 90, truncated: false },
+            basis: { history: 0, derived: 80, none: 10, approximate: 0 }, stages: funnel.stages, conversions, slowestStage: funnel.slowestStage },
+          change: conversions.map((c) => ({ from: c.from, to: c.to, rate: c.rate, previousRate: c.rate, delta: 0 })),
+        } : {}),
+      };
+    }
+    case 'explain_status': {
+      const question = args?.question ?? 'why_unavailable';
+      const rules = [
+        { rule: 'Not resigned', source: 'employee.model.js employmentStatus', met: true, evidence: null },
+        { rule: 'Under the 2-active-project limit', source: 'services/projectCapacity.js isAtProjectCapacity', met: false, evidence: 'On 2 active projects.' },
+      ];
+      return {
+        question, person: args?.person || 'Priya Sharma', ...(args?.project ? { project: args.project } : {}),
+        rules, conclusion: 'Blocked: Under the 2-active-project limit.', sections: { profile: 'ok', canAssign: 'ok' },
+      };
+    }
+    case 'recommend': {
+      const kind = args?.kind ?? 'follow_ups_today';
+      const subjectArg = args?.project ?? args?.job ?? args?.team;
+      return {
+        kind, rules: [`Eval ranking rule for ${kind}.`],
+        ...(args?.project ? { project: args.project } : {}), ...(args?.job ? { job: args.job } : {}), ...(args?.team ? { team: args.team } : {}),
+        sections: { source: 'ok' }, total: 2,
+        items: [
+          { subject: 'Ravi Kumar', score: 90, reasons: [subjectArg ? `fits ${subjectArg}` : 'highest rule match'], evidence: { count: 2 } },
+          { subject: 'Meera Nair', score: 70, reasons: ['second rule match'], evidence: { count: 1 } },
+        ],
+      };
+    }
+    case 'match_jobs_to_employee':
+      return {
+        person: args?.person || 'Priya Sharma', designation: 'QA Engineer', skills: ['Selenium', 'Playwright', 'Java'], skillsTotal: 3,
+        total: 2, jobsSearched: 6,
+        jobs: [
+          { jobId: 'eval-job-1', title: 'QA Engineer', organisation: 'Acme Corp', score: 73, matchedSkills: ['selenium', 'java'], missingSkills: ['cypress'], titleMatchesDesignation: true },
+          { jobId: 'eval-job-2', title: 'SDET', organisation: 'Acme Corp', score: 40, matchedSkills: ['playwright'], missingSkills: ['python'] },
+        ],
+        sections: { profile: 'ok', jobs: 'ok' },
+      };
     default:
       return NO_CANNED_RESULT;
   }

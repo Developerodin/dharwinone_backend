@@ -368,5 +368,12 @@
   "./src/services/chatAssistant/agent/tools/calls/__tests__/callRecordServiceFilters.test.js",
   "./src/services/chatAssistant/agent/tools/hiring/__tests__/P.serviceFilters.test.js",
   "./src/services/chatAssistant/agent/tools/jobs/__tests__/aggregateApplicationsByJob.test.js",
-  "./src/services/chatAssistant/agent/tools/referrals/__tests__/referralGroupedStats.test.js"
+  "./src/services/chatAssistant/agent/tools/referrals/__tests__/referralGroupedStats.test.js",
+  "./src/services/chatAssistant/agent/tools/person/__tests__/V.getPerson360.test.js",
+  "./src/services/chatAssistant/agent/tools/person/__tests__/V.findDuplicatePeople.test.js",
+  "./src/services/chatAssistant/agent/tools/insights/__tests__/attentionDigest.test.js",
+  "./src/services/chatAssistant/agent/tools/insights/__tests__/dataQuality.test.js",
+  "./src/services/chatAssistant/agent/tools/crosscheck/__tests__/X.crosscheck.test.js",
+  "./src/services/chatAssistant/agent/tools/crosscheck/__tests__/X.funnel.test.js",
+  "./src/services/chatAssistant/agent/tools/advice/__tests__/W.adviceTools.test.js"
 ]
