@@ -33,6 +33,8 @@ scripts/*
 !scripts/backfill-student-positions.js
 # Sage agent loop, Task 7 — tool-pick eval runner (report-only, no DB writes).
 !scripts/sage-agent-evals.js
+# JobApplication status history backfill (dry run by default).
+!scripts/backfill-application-status-history.js
 tests/
 graphify-out/
 
@@ -269,3 +271,7 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/renderers/__tests__/
 !src/services/chatAssistant/renderers/__tests__/jobs.test.js
 !src/services/chatAssistant/renderers/__tests__/jobRanking.test.js
+# JobApplication status history — helper, rewired write sites, write guard.
+!src/services/__tests__/H.applicationStatusHistory.test.js
+!src/services/__tests__/H.rewiredSites.test.js
+!src/services/__tests__/H.statusWriteGuard.test.js

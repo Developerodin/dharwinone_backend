@@ -38,6 +38,7 @@ import {
 } from './offerInterviewBypass.service.js';
 import { refreshProfilePictureInPlace } from '../utils/profilePicture.util.js';
 import { collationForSortBy } from '../utils/mongoCollation.js';
+import { initialStatusFields, recordStatusChange, recordStatusChangeMany } from './applicationStatusHistory.js';
 
 const STATUS_VALUES = OFFER_STATUSES;
 
@@ -643,7 +644,7 @@ const createStandaloneApplicationForOfferLetter = async (payload, userId) => {
     // offer. Leaving applicantUser NULL is mandatory so the applicant resolver never
     // leaks the admin's email into UI rows.
     applicantUser: null,
-    status: 'Applied',
+    ...initialStatusFields('Applied', { by: userId }),
   });
 
   return application._id.toString();
@@ -737,7 +738,7 @@ const createOfferCore = async (applicationId, payload, userId) => {
 
   const applicationStatusBefore = application.status;
 
-  await application.updateOne({ status: 'Offered' });
+  await recordStatusChange({ applicationId: application._id }, 'Offered', { by: userId, source: 'offer_created' });
   await syncReferralPipelineStatusForCandidate(candRefId);
 
   writeAtsAudit(
@@ -1122,7 +1123,11 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
           const opts = session ? { session } : {};
           await offer.save(opts);
           if (offer.jobApplication) {
-            await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Hired' }, opts);
+            await recordStatusChange({ applicationId: offer.jobApplication }, 'Hired', {
+              by: currentUser?._id ?? currentUser?.id,
+              source: 'offer_accepted',
+              session,
+            });
           }
           if (needsFreshPlacement) {
             try {
@@ -1157,7 +1162,10 @@ const updateOfferById = async (id, updateBody, currentUser, options = {}) => {
     } else if (newStatus === 'Rejected') {
       offer.rejectedAt = new Date();
       offer.rejectionReason = updateBody.rejectionReason || '';
-      await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Rejected' });
+      await recordStatusChange({ applicationId: offer.jobApplication }, 'Rejected', {
+        by: currentUser?._id ?? currentUser?.id,
+        source: 'offer_rejected',
+      });
       // Forward cascade: a rejected offer cancels its still-active placement (one-directional).
       await cascadeOfferRejectionToPlacement(offer._id, currentUser?._id ?? currentUser?.id);
       await syncReferralPipelineStatusForCandidate(offer.candidate);
@@ -1717,7 +1725,10 @@ const deleteOfferById = async (id, currentUser) => {
   if (offer.jobApplication) {
     const app = await JobApplication.findById(offer.jobApplication).select('status candidate').lean();
     if (app?.status === 'Offered') {
-      await JobApplication.findByIdAndUpdate(offer.jobApplication, { status: 'Interview' });
+      await recordStatusChange({ applicationId: offer.jobApplication }, 'Interview', {
+        by: currentUser?._id ?? currentUser?.id,
+        source: 'offer_reverted',
+      });
       await syncReferralPipelineStatusForCandidate(app.candidate);
     }
     // BUG-6 FIX: If this was a standalone offer (synthetic candidate), clean up orphan records.
@@ -1858,7 +1869,10 @@ const generateOfferLetter = async (id, currentUser, letterPayload = null) => {
     await Employee.findByIdAndUpdate(candidateId, employeeSnapshot);
 
     if (fresh.jobApplication) {
-      await JobApplication.findByIdAndUpdate(fresh.jobApplication, { status: 'Hired' });
+      await recordStatusChange({ applicationId: fresh.jobApplication }, 'Hired', {
+        by: currentUser?._id ?? currentUser?.id,
+        source: 'offer_accepted',
+      });
       await syncReferralPipelineStatusForCandidate(candidateId);
     }
     queueJobOwnerVacancyFilledNotify(jobId);
@@ -2052,7 +2066,7 @@ export const autoExpireOffers = async () => {
 
   const appIds = expired.map((o) => o.jobApplication).filter(Boolean);
   if (appIds.length) {
-    await JobApplication.updateMany({ _id: { $in: appIds } }, { $set: { status: 'Rejected' } });
+    await recordStatusChangeMany({ _id: { $in: appIds } }, 'Rejected', { source: 'bulk_reject' });
     const candidateIds = await JobApplication.distinct('candidate', { _id: { $in: appIds } });
     await Promise.all(
       candidateIds.map((cid) => syncReferralPipelineStatusForCandidate(cid).catch(() => undefined))

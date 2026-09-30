@@ -40,6 +40,7 @@ import Employee from '../models/employee.model.js';
 import Meeting from '../models/meeting.model.js';
 import JobApplication from '../models/jobApplication.model.js';
 import RubricTemplate from '../models/rubricTemplate.model.js';
+import { initialStatusFields } from '../services/applicationStatusHistory.js';
 
 /**
  * Every record this script creates carries this tag in its name, title or email, and
@@ -244,13 +245,13 @@ const runSeed = async (apply) => {
   const planApplication = await JobApplication.create({
     job: planJob._id,
     candidate: candidate._id,
-    status: 'Applied',
+    ...initialStatusFields('Applied', { by: staff._id }),
     appliedBy: staff._id,
   });
   const legacyApplication = await JobApplication.create({
     job: legacyJob._id,
     candidate: candidate._id,
-    status: 'Applied',
+    ...initialStatusFields('Applied', { by: staff._id }),
     appliedBy: staff._id,
   });
 

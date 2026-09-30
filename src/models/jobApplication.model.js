@@ -24,6 +24,33 @@ const jobApplicationSchema = new mongoose.Schema(
       enum: APPLICATION_STATUSES,
       default: 'Applied',
     },
+    /**
+     * Status writes go through services/applicationStatusHistory.js only (guarded by
+     * H.statusWriteGuard.test.js), which keeps these two fields in step with `status`.
+     * `statusChangedAt` = time of the last real status change (updatedAt moves on any edit).
+     */
+    statusChangedAt: { type: Date },
+    /**
+     * Every status transition, oldest first. `source` is `created`, `manual`, `interview_*`,
+     * `offer_*`, `bulk_reject`, `internal_transfer`, or `backfill:<created|activity_log|meeting|offer|updated_at>`.
+     * `approximate: true` = the time is a stand-in (backfill fell back to updatedAt).
+     * Default is undefined, not []: an unrelated save() must not persist an empty array, which the
+     * backfill would read as "history already exists".
+     */
+    statusHistory: {
+      type: [
+        {
+          _id: false,
+          from: { type: String, default: null },
+          to: { type: String, required: true },
+          at: { type: Date, required: true },
+          by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          source: { type: String, required: true },
+          approximate: { type: Boolean, default: false },
+        },
+      ],
+      default: undefined,
+    },
     coverLetter: { type: String, trim: true },
     /** Immutable resume file captured at apply time (versioned slot snapshot). */
     submittedResume: {
@@ -125,6 +152,9 @@ jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 // P3: tenant-safe compound indexes for scoped list/count/search queries.
 jobApplicationSchema.index({ tenantId: 1, candidate: 1 });
 jobApplicationSchema.index({ tenantId: 1, appliedBy: 1 });
+// Stage aging / "unchanged for N days". autoIndex is OFF in production (config.js): needs
+// MONGOOSE_AUTO_INDEX=1 once on deploy. Correctness does not depend on it, only latency.
+jobApplicationSchema.index({ statusChangedAt: 1 });
 
 // toJSON.plugin strips the raw `createdAt` from serialized output, so the UI never sees the
 // application date. Expose it via a virtual (read from createdAt) that survives the strip.

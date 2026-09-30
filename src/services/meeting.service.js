@@ -47,6 +47,7 @@ import { enqueueInterviewBiasCheck } from './interviewBias.enqueue.js';
 import { serializeBiasSummary } from './interviewBias.inputs.js';
 import { hasAllApiPermissions } from '../utils/permissionCheck.js';
 import * as jobApplicationService from './jobApplication.service.js';
+import { applyStatusChange, recordStatusChange } from './applicationStatusHistory.js';
 import { INTERVIEW_ROUND_TYPES } from '../constants/interviewLinkage.js';
 import { offPlanRubricError } from '../constants/interviewRoundPlan.js';
 import { resolveRubricForRound } from './rubricTemplate.service.js';
@@ -177,7 +178,7 @@ async function rollbackInterviewSelectionPipeline(meeting) {
 
     const st = application.status;
     if (st === 'Offered' || st === 'Hired') {
-      await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+      await recordStatusChange({ applicationId: application._id }, 'Interview', { source: 'interview_result_reverted' });
       syncCandidateId = candidateObjId;
     }
     logger.info('[rollbackInterviewSelectionPipeline] No offer doc — normalized application status only');
@@ -214,7 +215,7 @@ async function applyInterviewRejectionToApplication(meeting) {
       );
       return;
     }
-    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Rejected' } });
+    await recordStatusChange({ applicationId: application._id }, 'Rejected', { source: 'interview_rejected' });
     syncCandidateId = candidateObjId;
     logger.info(
       '[applyInterviewRejectionToApplication] Set application %s to Rejected (meeting=%s)',
@@ -245,7 +246,7 @@ async function reopenApplicationAfterInterviewRejection(meeting) {
     if (application.status !== 'Rejected') {
       return;
     }
-    await JobApplication.updateOne({ _id: application._id }, { $set: { status: 'Interview' } });
+    await recordStatusChange({ applicationId: application._id }, 'Interview', { source: 'interview_reopened' });
     syncCandidateId = candidateObjId;
     logger.info(
       '[reopenApplicationAfterInterviewRejection] Restored application %s to Interview (meeting=%s)',
@@ -440,7 +441,7 @@ const transitionApplicationToInterview = async (application, userId, meeting, jo
     return;
   }
   const statusBefore = application.status;
-  application.status = 'Interview';
+  applyStatusChange(application, 'Interview', { by: userId, source: 'interview_scheduled' });
   await application.save();
   await syncReferralPipelineStatusForCandidate(candId).catch((err) =>
     logger.warn('referral pipeline sync after interview schedule:', err?.message || err)
@@ -1536,7 +1537,7 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
   // System action: mark the application Hired directly (the manual transition guard only applies to the
   // recruiter dropdown; pipeline-driving system actions set status directly, like interview scheduling).
   if (application.status !== 'Hired') {
-    application.status = 'Hired';
+    applyStatusChange(application, 'Hired', { by: userId, source: 'internal_transfer' });
     await application.save();
     queueJobOwnerVacancyFilledNotify(jobId);
   }

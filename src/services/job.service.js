@@ -21,6 +21,7 @@ import { applyLocationMetaToPayload, buildLocationFilterClause } from '../utils/
 import { collationForSortBy } from '../utils/mongoCollation.js';
 import { captureResumeSnapshot, captureSlotSnapshot } from './jobApplicationResumeSnapshot.service.js';
 import { DOCUMENT_VERSION_SLOTS } from '../utils/documentVersionSlot.js';
+import { initialStatusFields } from './applicationStatusHistory.js';
 import { getVacancyCapacityBlockReason, isVacancyCapacityFull } from '../constants/atsPipeline.js';
 
 /** Escape regex metacharacters so user input is matched literally (prevents ReDoS / injection). */
@@ -1310,7 +1311,7 @@ const applyCandidateToJob = async (jobId, candidateId, appliedById, currentUser,
     // Internal applicant: a logged-in user applying as themselves. Recruiter-applies-on-behalf
     // leaves this null (external). Public apply also leaves it null. Drives the internal/external badge.
     applicantUser: isSelfApply ? userId : null,
-    status: 'Applied',
+    ...initialStatusFields('Applied', { by: appliedById }),
     ...(submittedResume ? { submittedResume } : {}),
     ...(submittedCoverLetter ? { submittedCoverLetter } : {}),
   });
@@ -1738,7 +1739,7 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
     job: jobId,
     candidate: candidate._id,
     appliedBy: user._id,
-    status: 'Applied',
+    ...initialStatusFields('Applied', { by: user._id }),
     coverLetter: typeof coverLetter === 'string' ? coverLetter : '',
     ...(submittedResume ? { submittedResume } : {}),
   });

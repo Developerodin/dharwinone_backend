@@ -6,6 +6,7 @@ import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineSta
 import ApiError from '../utils/ApiError.js';
 import { APPLICATION_STATUSES, getManualApplicationTransitionBlockReason, isManualApplicationTransition } from '../constants/atsPipeline.js';
 import { queryApplicants as queryApplicantsScoped } from './applicantQuery.service.js';
+import { applyStatusChange, initialStatusFields } from './applicationStatusHistory.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
 
@@ -96,7 +97,7 @@ const createJobApplication = async (body, currentUser) => {
     job: body.job,
     candidate: body.candidate,
     applicantUser: applicantUserId,
-    status: body.status || 'Applied',
+    ...initialStatusFields(body.status || 'Applied', { by: currentUser.id }),
     coverLetter: body.coverLetter,
     notes: body.notes,
     appliedBy: currentUser.id,
@@ -176,7 +177,7 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
         );
       }
     }
-    application.status = status;
+    applyStatusChange(application, status, { by: currentUser?.id ?? currentUser?._id, source: 'manual' });
   }
   if (notes !== undefined) {
     application.notes = notes;
