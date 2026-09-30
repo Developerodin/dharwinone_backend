@@ -1,0 +1,76 @@
+[
+  {
+    "id": "D-actions-request-passport-pan",
+    "question": "ask Priya Sharma to upload her passport and PAN card",
+    "expect": {
+      "anyOf": [
+        { "tools": ["request_documents"], "args": { "request_documents": { "person": "Priya Sharma" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-request-signed-offer",
+    "question": "request the signed offer letter from Ravi Kumar, note that it needs to be signed on every page",
+    "expect": {
+      "anyOf": [
+        { "tools": ["request_documents"], "args": { "request_documents": { "person": "Ravi Kumar" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-request-by-employee-id",
+    "question": "can you get EMP-1042 to send us their degree certificate and experience letter?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["request_documents"], "args": { "request_documents": { "person": "EMP-1042" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-remind-pending",
+    "question": "remind Priya Sharma about her pending documents",
+    "expect": {
+      "anyOf": [
+        { "tools": ["remind_pending_documents"], "args": { "remind_pending_documents": { "person": "Priya Sharma" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-remind-nudge",
+    "question": "nudge Ravi Kumar to upload the documents we asked him for",
+    "expect": {
+      "anyOf": [
+        { "tools": ["remind_pending_documents"], "args": { "remind_pending_documents": { "person": "Ravi Kumar" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-remind-follow-up",
+    "question": "Meera Nair still hasn't sent her paperwork, send her a reminder",
+    "expect": {
+      "anyOf": [
+        { "tools": ["remind_pending_documents"], "args": { "remind_pending_documents": { "person": "Meera Nair" } } }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-no-draft-missing-question",
+    "question": "which documents is Priya Sharma still missing?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_documents"], "args": { "list_documents": { "person": "Priya Sharma" } } },
+        { "tools": ["get_person_360"] }
+      ]
+    }
+  },
+  {
+    "id": "D-actions-no-draft-pending-question",
+    "question": "has Ravi Kumar uploaded the documents we requested?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_documents"], "args": { "list_documents": { "person": "Ravi Kumar" } } },
+        { "tools": ["get_person_360"] }
+      ]
+    }
+  }
+]
