@@ -4,6 +4,7 @@ import listTeams from './listTeams.tool.js';
 import countTasks from './countTasks.tool.js';
 import listTasks from './listTasks.tool.js';
 import getWorkload from './getWorkload.tool.js';
+import getAllocation from './getAllocation.tool.js';
 
 const instructions = [
   'Projects & tasks: projects (Projects page), workforce teams (Teams page) and tasks (Task Board).',
@@ -14,13 +15,18 @@ const instructions = [
     'summary") → count_tasks, with groupBy "status" for a breakdown. "Which tasks…" → list_tasks.',
   '- "My tasks" → filters.assignedToMe. "His / her / their tasks" → filters.assigneeName with that person\'s ' +
     'real name from the conversation, never the pronoun; if no person was discussed, ask who.',
-  '- "Who has the most tasks", "who is overloaded", team workload / utilization → get_workload.',
+  '- "Who has the most tasks", team workload / utilization → get_workload. "Who has more than N open tasks" ' +
+    '(an explicit threshold) → get_allocation mode list, bucket "overloaded", overloadAbove N.',
+  '- "Who is on no / one / two projects", "who is free / on the bench / unallocated", "who has no active ' +
+    'tasks", "how many people are at the project limit" → get_allocation (summary for counts, list + bucket ' +
+    'for names). "Can X be put on project Y" → get_allocation mode can_assign; answer with eligible and reason.',
   '- A result with notFound / ambiguous: say what was not found or list the matches and ask which one — never "0".',
   '- Meetings, interviews, attendance, leave, shifts and holidays are not tasks: handoff.',
 ].join('\n');
 
 export default {
   domain: 'projects',
+  summary: 'Projects, workforce teams, Task Board tasks, workload, allocation and the max-2-active-projects rule.',
   instructions,
-  tools: [countProjects, listProjects, listTeams, countTasks, listTasks, getWorkload],
+  tools: [countProjects, listProjects, listTeams, countTasks, listTasks, getWorkload, getAllocation],
 };

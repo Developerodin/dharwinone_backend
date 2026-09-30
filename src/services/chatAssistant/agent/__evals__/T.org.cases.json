@@ -1,0 +1,60 @@
+[
+  {
+    "id": "T-org-chain-who-reports-to",
+    "question": "who is Priya Sharma's team lead, supervisor and manager?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "mode": "chain", "person": "priya sharma" } }
+    }
+  },
+  {
+    "id": "T-org-chain-reporting-manager",
+    "question": "who does Rahul Verma report to?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "person": "rahul verma" } }
+    }
+  },
+  {
+    "id": "T-org-direct-reports",
+    "question": "who reports directly to Anita Desai?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "mode": "direct_reports", "person": "anita desai" } }
+    }
+  },
+  {
+    "id": "T-org-no-reporting-manager",
+    "question": "which employees don't have a reporting manager set?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "mode": "no_reporting_manager" } }
+    }
+  },
+  {
+    "id": "T-org-no-group",
+    "question": "list employees who aren't in any group on the org chart",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "mode": "no_group" } }
+    }
+  },
+  {
+    "id": "T-org-group-moves-window",
+    "question": "who changed department between 2026-01-01 and 2026-03-31, and who approved it?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": {
+        "get_reporting_chain": { "mode": "group_moves", "movedBetween": { "from": "2026-01-01", "to": "2026-03-31" } }
+      }
+    }
+  },
+  {
+    "id": "T-org-group-moves-person",
+    "question": "has Karan Mehta been moved between teams? when and by whom?",
+    "expect": {
+      "tools": ["get_reporting_chain"],
+      "args": { "get_reporting_chain": { "mode": "group_moves", "person": "karan mehta" } }
+    }
+  }
+]

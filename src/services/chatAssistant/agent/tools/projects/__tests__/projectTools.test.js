@@ -6,6 +6,7 @@ import listTeams from '../listTeams.tool.js';
 import countTasks from '../countTasks.tool.js';
 import listTasks from '../listTasks.tool.js';
 import getWorkload from '../getWorkload.tool.js';
+import getAllocation from '../getAllocation.tool.js';
 
 const SELF = '64b000000000000000000001';
 const OTHER = '64b000000000000000000002';
@@ -185,5 +186,105 @@ describe('get_workload', () => {
   it('team metrics need a team name', async () => {
     const out = await getWorkload.execute({ metric: 'team_utilization' }, ctxFor(['projects.read']));
     assert.match(out.error, /teamName/);
+  });
+});
+
+describe('get_allocation', () => {
+  const U = (n) => `64b0000000000000000000${String(n).padStart(2, '0')}`;
+  const STAFF = [
+    { _id: 'e1', fullName: 'Asha', employeeId: 'E1', designation: 'Dev', owner: U(11) },
+    { _id: 'e2', fullName: 'Ravi', employeeId: 'E2', designation: 'Dev', owner: U(12) },
+    { _id: 'e3', fullName: 'Meera', employeeId: 'E3', designation: 'Dev', owner: U(13) },
+    { _id: 'e4', fullName: 'Kiran', employeeId: 'E4', designation: 'Dev', owner: U(14) },
+    { _id: 'e5', fullName: 'NoLogin', employeeId: 'E5', designation: 'Dev', owner: null },
+  ];
+  const PROJECTS = { [U(11)]: 0, [U(12)]: 1, [U(13)]: 2, [U(14)]: 3 };
+  const TASKS = { [U(12)]: 12, [U(13)]: 3 };
+
+  function allocCtx(perms, extra = {}) {
+    const seen = {};
+    const ctx = ctxFor(perms, {
+      authorizeEmployeeQuery: (query) => { seen.authQuery = query; return { allowed: true }; },
+      applyEmployeeListScope: async (f, u) => { seen.scopeUser = u; return { ...f, owner: 'scoped' }; },
+      buildEmployeeListMongoFilter: async (f) => ({ mongoFilter: { scopedBy: f.owner, designation: f.designation } }),
+      Employee: { find: (mf) => { seen.mongoFilter = mf; return { select: () => ({ lean: async () => STAFF }) }; } },
+      countActiveProjects: async (ids, opts) => {
+        seen.projectCountArgs = { ids, opts };
+        return new Map(ids.map((id) => [id, PROJECTS[id] ?? 0]));
+      },
+      Task: { aggregate: async () => Object.entries(TASKS).map(([_id, n]) => ({ _id, n })) },
+      ...extra,
+    });
+    return { ctx, seen };
+  }
+
+  it('shares get_workload\'s access rule', () => {
+    assert.deepEqual(getAllocation.access.anyOf, ['projects.read', 'projects.manage']);
+  });
+
+  it('summary: 0 / 1 / 2 / 3+ active projects, no tasks, unallocated, overloaded — Employees-page scoped', async () => {
+    const { ctx, seen } = allocCtx(['projects.read', 'tasks.read']);
+    const out = await getAllocation.execute({ designation: 'Dev' }, ctx);
+    assert.equal(seen.scopeUser.id, SELF);
+    assert.deepEqual(seen.mongoFilter, { scopedBy: 'scoped', designation: 'Dev' });
+    assert.equal(seen.authQuery.filters.ownerUserRole, 'employee');
+    assert.deepEqual(out.byActiveProjects, { 0: 1, 1: 1, 2: 1, '3+': 1 });
+    assert.equal(out.total, 4);
+    assert.equal(out.atOrOverLimit, 2);
+    assert.equal(out.noActiveTasks, 2);
+    assert.equal(out.unallocated, 1);
+    assert.equal(out.overloaded, 1);
+    assert.equal(out.withoutLoginAccount, 1);
+    assert.equal(out.maxActiveProjects, 2);
+  });
+
+  it('list bucket returns names with counts; overloadAbove is "more than N open tasks"', async () => {
+    const { ctx } = allocCtx(['projects.read', 'tasks.read']);
+    const free = await getAllocation.execute({ mode: 'list', bucket: 'unallocated' }, ctx);
+    assert.deepEqual(free.records.map((r) => r.name), ['Asha']);
+    const busy = await getAllocation.execute({ mode: 'list', bucket: 'overloaded', overloadAbove: 2 }, ctx);
+    assert.deepEqual(busy.records.map((r) => [r.name, r.openTasks]), [['Ravi', 12], ['Meera', 3]]);
+    assert.equal(getAllocation.render(busy).facts.counts[0].total, 2);
+  });
+
+  it('without tasks.read, task counts are null (not zero) and say why', async () => {
+    const { ctx } = allocCtx(['projects.read']);
+    const out = await getAllocation.execute({}, ctx);
+    assert.equal(out.noActiveTasks, null);
+    assert.equal(out.unallocated, null);
+    assert.match(out.note, /tasks\.read/);
+    const list = await getAllocation.execute({ mode: 'list', bucket: 'no_active_tasks' }, ctx);
+    assert.equal(list.total, null);
+  });
+
+  it('a viewer the Employees page refuses gets an error, not an unscoped list', async () => {
+    const { ctx } = allocCtx(['projects.read'], { authorizeEmployeeQuery: () => ({ allowed: false, error: 'nope' }) });
+    const out = await getAllocation.execute({}, ctx);
+    assert.equal(out.error, 'nope');
+  });
+
+  it('can_assign applies the max-2 rule, excluding the target project', async () => {
+    const P = '64b0000000000000000000ff';
+    const { ctx, seen } = allocCtx(['projects.read'], {
+      resolveAssignee: async () => ({ kind: 'found', userIds: [U(13)], match: { name: 'Meera' } }),
+      resolveProject: async () => ({ kind: 'found', project: { _id: P, name: 'Portal', status: 'Inprogress', assignedTo: [] } }),
+    });
+    const out = await getAllocation.execute({ mode: 'can_assign', person: 'Meera', project: 'Portal' }, ctx);
+    assert.deepEqual(seen.projectCountArgs, { ids: [U(13)], opts: { excludeProjectId: P } });
+    assert.equal(out.eligible, false);
+    assert.match(out.reason, /limit is 2/);
+  });
+
+  it('can_assign: someone already on the project stays eligible; unknown project is notFound', async () => {
+    const { ctx } = allocCtx(['projects.read'], {
+      resolveAssignee: async () => ({ kind: 'found', userIds: [U(14)], match: { name: 'Kiran' } }),
+      resolveProject: async () => ({ kind: 'found', project: { _id: 'p1', name: 'CRM', assignedTo: [{ _id: U(14) }] } }),
+    });
+    const on = await getAllocation.execute({ mode: 'can_assign', person: 'Kiran', project: 'CRM' }, ctx);
+    assert.equal(on.eligible, true);
+    assert.equal(on.alreadyOnProject, true);
+    ctx.deps.resolveProject = async () => ({ kind: 'notFound' });
+    const missing = await getAllocation.execute({ mode: 'can_assign', person: 'Kiran', project: 'Nope' }, ctx);
+    assert.equal(missing.notFound, 'project');
   });
 });

@@ -19,6 +19,7 @@ import {
 import { buildTaskServiceFilter, resolveAssigneeByName as realResolveAssignee } from '../../../taskAccess.js';
 import { fetchWorkloadAnalytics as realFetchWorkload } from '../../../workloadAnalytics.js';
 import { dayRange } from '../employees/common.js';
+import { ACTIVE_PROJECT_STATUSES as CAPACITY_ACTIVE_STATUSES } from '../../../../projectCapacity.js';
 
 // project.route.js GET / — projects.read, or my-projects.read for ?mine=1 (forced below).
 export const PROJECTS_ACCESS = Object.freeze({ anyOf: ['projects.read', 'projects.manage', 'my-projects.read'] });
@@ -31,7 +32,7 @@ export const TASKS_ACCESS = Object.freeze({ note: 'task.route requireTaskListAcc
 export const WORKLOAD_ACCESS = Object.freeze({ anyOf: ['projects.read', 'projects.manage'] });
 
 export const MAX_LIST_LIMIT = 50;
-export const ACTIVE_PROJECT_STATUSES = ['Inprogress', 'On hold'];
+export const ACTIVE_PROJECT_STATUSES = [...CAPACITY_ACTIVE_STATUSES];
 
 export function workScope(ctx) {
   if (!ctx?.user?.id && !ctx?.user?._id) {

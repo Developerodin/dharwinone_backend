@@ -31,6 +31,12 @@ import {
   extractCoveredThemes,
   buildGapReason,
 } from './pmGroup.js';
+import {
+  activeProjectsFilter,
+  countActiveProjectsByAssignee,
+  isAtProjectCapacity,
+  MAX_ACTIVE_PROJECTS_PER_ASSIGNEE,
+} from './projectCapacity.js';
 
 const ASSIGNMENT_ROW_NOTES_MAX = 500;
 
@@ -63,25 +69,8 @@ export function ensureOpenAIConfigured() {
  * @returns {Promise<Set<string>>}
  */
 async function ownersAtAssigneeCapacityElsewhere(ownerUserIds, excludeProjectId) {
-  const unique = [...new Set((ownerUserIds || []).map((id) => String(id)).filter(Boolean))];
-  const oids = unique
-    .filter((id) => mongoose.Types.ObjectId.isValid(id))
-    .map((id) => new mongoose.Types.ObjectId(id));
-  if (oids.length === 0) return new Set();
-
-  const excludeOid = mongoose.Types.ObjectId.isValid(String(excludeProjectId))
-    ? new mongoose.Types.ObjectId(String(excludeProjectId))
-    : excludeProjectId;
-
-  const rows = await Project.aggregate([
-    { $match: { _id: { $ne: excludeOid }, status: { $in: ['Inprogress', 'On hold'] } } },
-    { $unwind: '$assignedTo' },
-    { $match: { assignedTo: { $in: oids } } },
-    { $group: { _id: '$assignedTo', cnt: { $sum: 1 } } },
-    { $match: { cnt: { $gte: 2 } } },
-  ]).exec();
-
-  return new Set(rows.map((r) => String(r._id)));
+  const counts = await countActiveProjectsByAssignee(ownerUserIds, { excludeProjectId });
+  return new Set([...counts].filter(([, n]) => isAtProjectCapacity(n)).map(([id]) => id));
 }
 
 async function assertProjectOwnerOrAdmin(project, user) {
@@ -1539,14 +1528,13 @@ export async function applyAssignmentRun(runId, user) {
           : ownerId;
         // eslint-disable-next-line no-await-in-loop
         const activeOnOtherProjects = await Project.countDocuments({
-          _id: { $ne: project._id },
-          status: { $in: ['Inprogress', 'On hold'] },
+          ...activeProjectsFilter(project._id),
           assignedTo: ownerOid,
         }).session(session).exec();
-        if (activeOnOtherProjects >= 2 && !projectAssignees.has(ownerId)) {
+        if (isAtProjectCapacity(activeOnOtherProjects, { alreadyOnProject: projectAssignees.has(ownerId) })) {
           throw new ApiError(
             httpStatus.CONFLICT,
-            'Candidate capacity limit reached (max 2 active projects as project assignee, excluding this project if already a member).'
+            `Candidate capacity limit reached (max ${MAX_ACTIVE_PROJECTS_PER_ASSIGNEE} active projects as project assignee, excluding this project if already a member).`
           );
         }
         ownersToAdd.add(ownerId);

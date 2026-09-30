@@ -1,0 +1,86 @@
+[
+  {
+    "id": "T-training-cohort-course-completion",
+    "question": "what's the completion rate for the Java Fundamentals course?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "course": "java fundamentals" } }
+    }
+  },
+  {
+    "id": "T-training-cohort-position-not-started",
+    "question": "which Java Developers haven't started their training yet?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "position": "java developer", "progress": "not_started" } }
+    }
+  },
+  {
+    "id": "T-training-cohort-score-gte90",
+    "question": "who scored 90 or above on the React Basics quizzes?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "course": "react basics", "scoreBand": "gte90" } }
+    }
+  },
+  {
+    "id": "T-training-cohort-score-lt70",
+    "question": "list students scoring below 70 in the SQL course",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "course": "sql", "scoreBand": "lt70" } }
+    }
+  },
+  {
+    "id": "T-training-cohort-score-custom",
+    "question": "who has a quiz score between 70 and 85 in Python Basics?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": {
+        "get_training_progress": { "mode": "cohort", "course": "python basics", "scoreBand": "custom", "minScore": 70, "maxScore": 85 }
+      }
+    }
+  },
+  {
+    "id": "T-training-cohort-inactive",
+    "question": "which QA Engineers haven't opened their courses in 14 days?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "position": "qa engineer", "inactiveDays": 14 } }
+    }
+  },
+  {
+    "id": "T-training-cohort-overdue",
+    "question": "whose training is overdue in the Onboarding course?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "course": "onboarding", "overdue": true } }
+    }
+  },
+  {
+    "id": "T-training-position-map-one",
+    "question": "which courses are assigned to the Data Analyst position?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "position_map", "position": "data analyst" } }
+    }
+  },
+  {
+    "id": "T-training-position-map-all",
+    "question": "show me the position to course mapping",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "position_map" } }
+    }
+  },
+  {
+    "id": "T-training-person-still-default",
+    "question": "how far along am I in my courses?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "person" } } },
+        { "tools": ["get_training_progress"] }
+      ]
+    }
+  }
+]

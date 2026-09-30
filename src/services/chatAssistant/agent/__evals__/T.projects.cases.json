@@ -1,0 +1,141 @@
+[
+  {
+    "id": "T-projects-allocation-summary",
+    "question": "how many people are on 0, 1 and 2 active projects?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "summary"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-allocation-zero-projects",
+    "question": "who isn't on any active project?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "list",
+          "bucket": "projects_0"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-allocation-two-projects",
+    "question": "list everyone already on two active projects",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "list",
+          "bucket": "projects_2"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-allocation-no-tasks",
+    "question": "who has zero active tasks right now?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "list",
+          "bucket": "no_active_tasks"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-allocation-unallocated-designation",
+    "question": "which React Developers are completely unallocated?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "list",
+          "bucket": "unallocated",
+          "designation": "react developer"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-allocation-overloaded-threshold",
+    "question": "who has more than 15 open tasks?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "list",
+          "bucket": "overloaded",
+          "overloadAbove": 15
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-can-assign",
+    "question": "can I assign Neha Gupta to the Phoenix project?",
+    "expect": {
+      "tools": [
+        "get_allocation"
+      ],
+      "args": {
+        "get_allocation": {
+          "mode": "can_assign",
+          "person": "neha gupta",
+          "project": "phoenix"
+        }
+      }
+    }
+  },
+  {
+    "id": "T-projects-can-assign-max-two",
+    "question": "is Arjun Rao free to join Project Atlas or is he at the two project limit?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": [
+            "get_allocation"
+          ],
+          "args": {
+            "get_allocation": {
+              "mode": "can_assign",
+              "person": "arjun rao",
+              "project": "atlas"
+            }
+          }
+        },
+        {
+          "tools": [
+            "get_allocation"
+          ],
+          "args": {
+            "get_allocation": {
+              "mode": "can_assign",
+              "person": "arjun rao",
+              "project": "project atlas"
+            }
+          }
+        }
+      ]
+    }
+  }
+]
