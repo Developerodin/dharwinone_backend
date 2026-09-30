@@ -2,17 +2,19 @@
  * Joi -> JSON Schema converter for Sage tool input schemas (agent/defineTool.js).
  *
  * Supports only the subset agent tool inputs use: object (nested, required),
- * string/number/integer/boolean, array (single item schema), `.valid(...)` as
+ * string/number/integer/boolean, array (single item schema; `.min`/`.max`/plain
+ * `.unique()` as minItems/maxItems/uniqueItems), `.valid(...)` as
  * enum, `alternatives().try(...)` as anyOf (the "string OR array of strings"
- * search-filter shape), `.description()`, `.default()`, and a narrow
+ * search-filter shape), string `.pattern()` without flags, `.description()`, `.default()`, and a narrow
  * `.allow(null)` case for plain-or-enum scalars. Anything outside this subset
  * throws `Unsupported Joi feature '<x>' at <path>` so a bad tool fails when
  * `defineTool` loads it, not mid-chat when the model calls it.
  */
 
-const STRING_RULES = ['min', 'max'];
+// `trim` only normalises the value before validation; there is nothing for the model to see.
+const STRING_RULES = ['min', 'max', 'pattern', 'trim'];
 const NUMBER_RULES = ['integer', 'min', 'max'];
-const ARRAY_RULES = ['max'];
+const ARRAY_RULES = ['min', 'max', 'unique'];
 const NULLABLE_TYPES = ['string', 'number', 'integer', 'boolean'];
 
 function pathLabel(path) {
@@ -58,8 +60,17 @@ function convertString(desc, path) {
     if (!STRING_RULES.includes(rule.name)) throw unsupported(rule.name, path);
     if (rule.name === 'min') schema.minLength = rule.args.limit;
     if (rule.name === 'max') schema.maxLength = rule.args.limit;
+    if (rule.name === 'pattern') schema.pattern = convertPattern(rule.args, path);
   }
   return schema;
+}
+
+// describe() gives the regex as '/source/flags'. JSON Schema `pattern` has no flags and no
+// invert, so only a plain regex converts.
+function convertPattern({ regex, options }, path) {
+  const match = /^\/(.*)\/([a-z]*)$/s.exec(regex);
+  if (!match || match[2] || options?.invert) throw unsupported('pattern with flags or invert', path);
+  return match[1];
 }
 
 function convertNumber(desc, path) {
@@ -85,7 +96,14 @@ function convertArray(desc, path) {
   }
   for (const rule of desc.rules || []) {
     if (!ARRAY_RULES.includes(rule.name)) throw unsupported(rule.name, path);
+    if (rule.name === 'min') schema.minItems = rule.args.limit;
     if (rule.name === 'max') schema.maxItems = rule.args.limit;
+    if (rule.name === 'unique') {
+      // Only plain `.unique()` (whole-item equality) is `uniqueItems`; a key or function comparator
+      // (describe() shows it as `args`) is a rule JSON Schema cannot state.
+      if (rule.args) throw unsupported('unique with a comparator or options', path);
+      schema.uniqueItems = true;
+    }
   }
   return schema;
 }

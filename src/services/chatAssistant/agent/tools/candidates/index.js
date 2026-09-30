@@ -18,6 +18,7 @@ const instructions = [
 
 export default {
   domain: 'candidates',
+  summary: 'Candidate-role profiles: counts and lists, and ranking candidates or employees against a job.',
   instructions,
   tools: [countCandidates, listCandidates, matchCandidatesToJob],
 };

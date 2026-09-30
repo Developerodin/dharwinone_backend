@@ -2,7 +2,14 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Joi from 'joi';
 import { defineTool } from '../defineTool.js';
-import { getAgentTools, HANDOFF_TOOL_NAME } from '../toolRegistry.js';
+import {
+  getAgentTools,
+  HANDOFF_TOOL_NAME,
+  FIND_TOOLS_NAME,
+  EAGER_TOOL_LIMIT,
+  LAZY_INSTRUCTIONS,
+  assertDomainSummaries,
+} from '../toolRegistry.js';
 import config from '../../../../config/config.js';
 import registeredDomains from '../tools/index.js';
 
@@ -77,6 +84,7 @@ const renderTool = defineTool({
 
 const domainA = {
   domain: 'domain_a',
+  summary: 'Domain A things.',
   instructions: 'Domain A instructions.',
   tools: [readTool, throwTool, strictTool, slowTool, bigTool, renderTool],
 };
@@ -93,6 +101,7 @@ const writeTool = defineTool({
 
 const domainB = {
   domain: 'domain_b',
+  summary: 'Domain B things.',
   instructions: 'Domain B instructions.',
   tools: [writeTool],
 };
@@ -337,8 +346,8 @@ describe('getAgentTools — duplicate tool names', () => {
       execute: async () => ({}),
     });
     const dupDomains = [
-      { domain: 'dup_a', instructions: 'Dup A.', tools: [dupToolX] },
-      { domain: 'dup_b', instructions: 'Dup B.', tools: [dupToolY] },
+      { domain: 'dup_a', summary: 'Dup A.', instructions: 'Dup A.', tools: [dupToolX] },
+      { domain: 'dup_b', summary: 'Dup B.', instructions: 'Dup B.', tools: [dupToolY] },
     ];
     await assert.rejects(() => getAgentTools(userWith(), { domains: dupDomains }), /dup_tool/);
   });
@@ -355,7 +364,7 @@ describe('getAgentTools — measure', () => {
     access: { anyOf: ['m.read'] },
     execute: async () => ({ total: 3 }),
   });
-  const domains = [{ domain: 'domain_m', instructions: 'M.', tools: [measuredTool] }];
+  const domains = [{ domain: 'domain_m', summary: 'M.', instructions: 'M.', tools: [measuredTool] }];
 
   it('appends the measure to the model-facing description and to the result', async () => {
     const { schemas, execute } = await getAgentTools(userWith('m.read'), { domains });
@@ -376,5 +385,130 @@ describe('getAgentTools — measure', () => {
       .filter((t) => typeof t.measure !== 'string' || !t.measure.trim())
       .map((t) => t.name);
     assert.deepEqual(missing, []);
+  });
+});
+
+// ─── domain summaries ───────────────────────────────────────────────────────
+
+describe('getAgentTools — domain summaries', () => {
+  it('rejects a domain with no summary', async () => {
+    const noSummary = { ...domainA, summary: undefined };
+    await assert.rejects(() => getAgentTools(userWith(), { domains: [noSummary] }), /domain_a.*summary/);
+  });
+
+  it('rejects a summary over 120 characters or spanning lines', () => {
+    assert.throws(() => assertDomainSummaries([{ ...domainA, summary: 'x'.repeat(121) }]), /120/);
+    assert.throws(() => assertDomainSummaries([{ ...domainA, summary: 'one\ntwo' }]), /one line/);
+    assert.doesNotThrow(() => assertDomainSummaries([{ ...domainA, summary: 'x'.repeat(120) }]));
+  });
+});
+
+// ─── lazy loading ───────────────────────────────────────────────────────────
+
+const cTool = defineTool({
+  name: 'fake_c',
+  domain: 'domain_c',
+  kind: 'read',
+  description: 'Gated on domain_c.read.',
+  input: Joi.object({}),
+  access: { anyOf: ['domain_c.read'] },
+  execute: async () => ({ c: true }),
+});
+const domainC = { domain: 'domain_c', summary: 'Domain C things.', instructions: 'Domain C instructions.', tools: [cTool] };
+const LAZY_DOMAINS = [domainA, domainB, domainC];
+
+describe('getAgentTools — eager vs lazy', () => {
+  it('defaults to EAGER_TOOL_LIMIT = 30', () => {
+    assert.equal(EAGER_TOOL_LIMIT, 30);
+  });
+
+  it('at or under the limit: eager, schemas and instructions identical to an unlimited registry', async () => {
+    const user = userWith('domain_a.read', 'domain_b.write');
+    const atLimit = await getAgentTools(user, { domains: FAKE_DOMAINS, eagerLimit: 7 });
+    const unlimited = await getAgentTools(user, { domains: FAKE_DOMAINS, eagerLimit: Infinity });
+    assert.equal(atLimit.lazy, false);
+    assert.deepEqual(atLimit.schemas, unlimited.schemas);
+    assert.equal(atLimit.instructions, unlimited.instructions);
+    assert.equal(atLimit.instructions, 'Domain A instructions.\n\nDomain B instructions.');
+    assert.ok(!atLimit.schemas.some((s) => s.name === FIND_TOOLS_NAME));
+  });
+
+  it('above the limit: lazy, offers only find_tools + handoff and the lazy instructions', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    assert.equal(reg.lazy, true);
+    assert.deepEqual(reg.schemas.map((s) => s.name), [FIND_TOOLS_NAME, HANDOFF_TOOL_NAME]);
+    assert.equal(reg.instructions, LAZY_INSTRUCTIONS);
+    assert.doesNotMatch(reg.instructions, /Domain A instructions/);
+  });
+
+  it('find_tools catalog and enum list only the permitted domains, sorted', async () => {
+    const reg = await getAgentTools(userWith('domain_c.read', 'domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    const find = reg.schemas.find((s) => s.name === FIND_TOOLS_NAME);
+    assert.match(find.description, /- domain_a — Domain A things\.\n- domain_c — Domain C things\./);
+    assert.doesNotMatch(find.description, /domain_b/);
+    assert.deepEqual(find.parameters.properties.domains.items.enum, ['domain_a', 'domain_c']);
+    assert.equal(find.parameters.properties.domains.maxItems, 5);
+    assert.equal(find.parameters.properties.domains.minItems, 1);
+    assert.equal(find.parameters.properties.domains.uniqueItems, true);
+    assert.deepEqual(find.parameters.required, ['domains']);
+  });
+
+  it('eager registry: find_tools is not a loop tool, so a hallucinated call is an unknown tool', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: Infinity });
+    assert.equal(reg.lazy, false);
+    assert.equal(reg.isFindTools(FIND_TOOLS_NAME), false);
+    assert.deepEqual(await reg.execute(FIND_TOOLS_NAME, { domains: ['domain_a'] }), {
+      ok: false,
+      error: `Unknown tool '${FIND_TOOLS_NAME}'.`,
+    });
+  });
+
+  it('a permitted tool the model calls without loading its domain still runs, with access re-checked', async () => {
+    const reg = await getAgentTools(userWith('domain_c.read'), { domains: LAZY_DOMAINS, eagerLimit: 0 });
+    assert.equal(reg.lazy, true);
+    assert.deepEqual(await reg.execute('fake_c', {}), { ok: true, result: { c: true } });
+    const denied = await reg.execute('fake_read', {});
+    assert.equal(denied.ok, false);
+    assert.match(denied.error, /Requires one of/);
+  });
+
+  it('loadDomains returns only permitted tools; unknown and unpermitted domains load nothing', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    const out = reg.loadDomains(['domain_c', 'domain_b', 'nope', 'domain_a']);
+    assert.deepEqual(out.loaded, ['domain_a']);
+    assert.deepEqual(out.schemas.map((s) => s.name), domainA.tools.map((t) => t.name).sort());
+    assert.equal(out.instructions, 'Domain A instructions.');
+    assert.deepEqual(reg.loadDomains(['domain_c']), { schemas: [], instructions: '', loaded: [] });
+  });
+
+  it('parseFindToolsArgs: requires 1–5 unique permitted domain names', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read', 'domain_c.read'), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    assert.deepEqual(reg.parseFindToolsArgs('{"domains":["domain_a","domain_c"]}'), { domains: ['domain_a', 'domain_c'] });
+    assert.ok(reg.parseFindToolsArgs({ domains: [] }).error);
+    assert.ok(reg.parseFindToolsArgs({ domains: ['domain_a', 'domain_a'] }).error);
+    assert.ok(reg.parseFindToolsArgs({ domains: ['domain_b'] }).error);
+    assert.ok(reg.parseFindToolsArgs({}).error);
+    assert.match(reg.parseFindToolsArgs('{bad').error, /Invalid arguments/);
+  });
+
+  it('execute refuses find_tools: the loop handles it', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    assert.deepEqual(await reg.execute(FIND_TOOLS_NAME, { domains: ['domain_a'] }), {
+      ok: false,
+      error: 'find_tools is handled by the loop',
+    });
+    assert.equal(reg.isFindTools(FIND_TOOLS_NAME), true);
+    assert.equal(reg.isFindTools('fake_read'), false);
+  });
+
+  it('domainOfTool maps a tool to its domain module, unknown → null', async () => {
+    const reg = await getAgentTools(userWith(), { domains: LAZY_DOMAINS, eagerLimit: 2 });
+    assert.equal(reg.domainOfTool('fake_c'), 'domain_c');
+    assert.equal(reg.domainOfTool('nope'), null);
+  });
+
+  it('handoff does not count toward the limit', async () => {
+    const reg = await getAgentTools(userWith('domain_a.read'), { domains: LAZY_DOMAINS, eagerLimit: domainA.tools.length });
+    assert.equal(reg.lazy, false);
   });
 });

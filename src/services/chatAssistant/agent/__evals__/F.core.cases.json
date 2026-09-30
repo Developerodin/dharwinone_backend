@@ -1,0 +1,66 @@
+[
+  {
+    "id": "core-cold-single-domain-pending-leave",
+    "question": "show me the pending leave requests",
+    "expect": {
+      "tools": ["list_leave_requests"],
+      "args": { "list_leave_requests": { "filters": { "status": "pending" } } }
+    }
+  },
+  {
+    "id": "core-cold-two-domain-leave-and-tasks",
+    "question": "who is on leave today and has tasks due today",
+    "expect": {
+      "tools": ["who_is_on_leave_today", "list_tasks"],
+      "maxCalls": 3
+    }
+  },
+  {
+    "id": "core-followup-ledger-preload-blocked-tasks",
+    "history": [
+      { "role": "user", "content": "how many tasks are overdue?" },
+      { "role": "assistant", "content": "There are 2 overdue tasks." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_tasks", "args": { "filters": { "overdue": true } }, "total": 2 }] }
+    ],
+    "question": "and how many are blocked?",
+    "expect": {
+      "tools": ["count_tasks"],
+      "args": { "count_tasks": { "filters": { "blocked": true } } }
+    }
+  },
+  {
+    "id": "core-cold-three-domain-counts",
+    "question": "how many active jobs do we have, how many interviews are scheduled, and what is our employee headcount?",
+    "expect": {
+      "tools": ["count_jobs", "count_interviews", "count_employees"],
+      "maxCalls": 4
+    }
+  },
+  {
+    "id": "core-followup-older-ledger-domain-not-preloaded",
+    "history": [
+      { "role": "user", "content": "how many ml jobs are there?" },
+      { "role": "assistant", "content": "There are 7 jobs matching ml." },
+      { "role": "user", "content": "who is on leave today?" },
+      { "role": "assistant", "content": "Vikram Shah is on leave today." }
+    ],
+    "ledger": [
+      { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "ml" } }, "total": 7 }] },
+      { "calls": [{ "tool": "who_is_on_leave_today", "args": {}, "total": 1 }] }
+    ],
+    "question": "going back to the ml jobs, list them",
+    "expect": { "tools": ["list_jobs"] }
+  },
+  {
+    "id": "core-no-domain-fits-handoff",
+    "question": "what is the payroll cut-off date this month?",
+    "expect": { "anyOf": [{ "handoff": true }, { "tools": ["search_knowledge_base"] }] }
+  },
+  {
+    "id": "core-general-knowledge-no-tool",
+    "question": "what does ATS stand for in recruiting?",
+    "expect": { "tools": [], "answer": true }
+  }
+]

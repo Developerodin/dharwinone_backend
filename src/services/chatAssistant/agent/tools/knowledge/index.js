@@ -12,6 +12,7 @@ const instructions = [
 
 export default {
   domain: 'knowledge',
+  summary: 'Company policies and FAQs from the knowledge base (leave policy, notice period, benefits, procedures).',
   instructions,
   tools: [searchKnowledgeBase],
 };

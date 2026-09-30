@@ -146,14 +146,20 @@ function trimToLastTurns(history, maxTurns) {
  * @param {Array<{at:Date, calls:Array}>} [args.ledger] prior agent turns' tool ledger
  * @param {Date} [args.now]
  * @param {string} [args.timezone] default 'Asia/Kolkata'
+ * @param {{loaded:string[], instructions:string}} [args.preloaded] lazy registry only: domains
+ *   loaded before step 1 (from the last ledger entry). Their instructions ride in the input,
+ *   not in `instructions`, so the stable prefix stays identical across users and turns.
  * @returns {{instructions:string, input:Array}}
  */
-export function buildAgentInput({ instructions, user, roleNames, history, ledger, now, timezone } = {}) {
+export function buildAgentInput({ instructions, user, roleNames, history, ledger, now, timezone, preloaded } = {}) {
   const turnContext = buildTurnContextMessage({ user, roleNames, ledger, now, timezone });
   const trimmedHistory = trimToLastTurns(history, HISTORY_TURNS);
+  const preloadMessage = preloaded?.loaded?.length
+    ? { role: 'developer', content: `Tools already loaded for: ${preloaded.loaded.join(', ')}.\n\n${preloaded.instructions}` }
+    : null;
   return {
     instructions,
-    input: [turnContext, ...trimmedHistory],
+    input: preloadMessage ? [turnContext, preloadMessage, ...trimmedHistory] : [turnContext, ...trimmedHistory],
   };
 }
 
@@ -186,10 +192,13 @@ function extractTotalFromOutput(output) {
  *
  * @param {Array} items
  * @param {number} budgetChars <= 0 means "no budget" — items returned unchanged.
+ * @param {{keepTools?:string[]}} [options] outputs of these tools are never compacted
+ *   (the loop keeps find_tools' loaded-domain instructions). The budget is soft: kept
+ *   outputs can leave the items above it.
  * @returns {Array} same reference when no compaction is needed; otherwise a
  *   new array (only the compacted entries are new objects).
  */
-export function compactTurnItems(items, budgetChars) {
+export function compactTurnItems(items, budgetChars, { keepTools = [] } = {}) {
   if (!Array.isArray(items) || !items.length) return items;
   if (!(budgetChars > 0)) return items;
   if (JSON.stringify(items).length <= budgetChars) return items;
@@ -204,7 +213,12 @@ export function compactTurnItems(items, budgetChars) {
   const result = items.slice();
   const compactableIndexes = [];
   result.forEach((it, i) => {
-    if (it && it.type === 'function_call_output' && !isCompactedOutput(it.output)) {
+    if (
+      it &&
+      it.type === 'function_call_output' &&
+      !keepTools.includes(toolNameByCallId.get(it.call_id)) &&
+      !isCompactedOutput(it.output)
+    ) {
       compactableIndexes.push(i);
     }
   });

@@ -8,10 +8,16 @@
 // and latency. Report-only by default (--min 0 means "never fail the run");
 // pass --min <pct> to exit 1 when accuracy drops below it.
 //
+// Cases come from __evals__/cases.json plus every __evals__/*.cases.json.
+// `find_tools` (lazy tool loading) is not scored, like `handoff`.
+//
 // Usage:
 //   node scripts/sage-agent-evals.js
 //   node scripts/sage-agent-evals.js --case count-plain-react
+//   node scripts/sage-agent-evals.js --file F.core.cases.json   (or --file F.core)
+//   node scripts/sage-agent-evals.js --eager                    (every permitted tool up front, no find_tools)
 //   node scripts/sage-agent-evals.js --min 80
+//   node scripts/sage-agent-evals.js --check                    (offline: validate case files + canned results, no OpenAI)
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,19 +28,34 @@ import config from '../src/config/config.js';
 import { runAgent } from '../src/services/chatAssistant/agent/runAgent.js';
 import { getAgentTools as realGetAgentTools } from '../src/services/chatAssistant/agent/toolRegistry.js';
 import { step as realLlmStep } from '../src/services/chatAssistant/agent/llm.js';
+import toolDomains from '../src/services/chatAssistant/agent/tools/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CASES_PATH = path.resolve(__dirname, '../src/services/chatAssistant/agent/__evals__/cases.json');
+const EVALS_DIR = path.resolve(__dirname, '../src/services/chatAssistant/agent/__evals__');
+const FIND_TOOLS = 'find_tools';
+const UNSCORED_TOOLS = new Set(['handoff', FIND_TOOLS]);
 
 // ─── CLI args ───────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const out = { caseId: null, min: 0 };
+  const out = { caseId: null, file: null, eager: false, min: 0, check: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--case') out.caseId = argv[++i];
+    else if (argv[i] === '--file') out.file = argv[++i];
+    else if (argv[i] === '--eager') out.eager = true;
     else if (argv[i] === '--min') out.min = Number(argv[++i]);
+    else if (argv[i] === '--check') out.check = true;
   }
   return out;
+}
+
+/** cases.json first, then every *.cases.json by name; `file` keeps just that one. */
+function loadCaseFiles(file) {
+  const names = ['cases.json', ...fs.readdirSync(EVALS_DIR).filter((n) => n.endsWith('.cases.json')).sort()];
+  const picked = file ? names.filter((n) => n === file || n === `${file}.cases.json`) : names;
+  return picked.flatMap((name) =>
+    JSON.parse(fs.readFileSync(path.join(EVALS_DIR, name), 'utf8')).map((c) => ({ ...c, file: name }))
+  );
 }
 
 // ─── Arg matching: partial, case-insensitive on strings ────────────────────
@@ -126,7 +147,7 @@ function evaluateExpect(expect, ctx) {
   // `answer: true` = Sage must reply itself (e.g. a definition), not hand off.
   if (expect.answer && ctx.handoffCalled) return false;
 
-  const toolCalls = ctx.calls.filter((c) => c.name !== 'handoff');
+  const toolCalls = ctx.calls.filter((c) => !UNSCORED_TOOLS.has(c.name));
   if (expect.tools && !toolCallsMatch(toolCalls, expect.tools, expect.maxCalls)) return false;
 
   if (expect.args) {
@@ -142,7 +163,10 @@ function evaluateExpect(expect, ctx) {
   return true;
 }
 
-// ─── Fake user (jobs.read only, no DB) ──────────────────────────────────────
+// ─── Fake user (read permissions for every domain, no DB) ────────────────────
+// Only `access.anyOf` gates read these (execute is faked), but the in-execute permissions
+// (call AI/transcripts, interview transcript/summary, activity logs, offers) are granted too so
+// the set matches a real HR admin. `--check` fails if an expected tool is hidden from this user.
 
 const FAKE_USER = Object.freeze({
   id: 'eval-user-0000000000000001',
@@ -152,6 +176,12 @@ const FAKE_USER = Object.freeze({
        'jobs.read', 'users.read', 'roles.read', 'employees.read', 'candidates.read',
        'interviews.read', 'students.read', 'chart.read', 'attendance.assign', 'students.manage',
        'projects.read', 'teams.read', 'tasks.read',
+       'meetings.read', 'emails.read', 'chats.read', 'evaluation.read', 'positions.read', 'structure.read',
+       'calls.view', 'call-recording.view', 'call-transcripts.read', 'call-ai.read', 'users.impersonate',
+       'interviews.transcript.read', 'interviews.summary.read', 'activityLogs.read',
+       'offers.read', 'pre-boarding.read', 'onboarding.read', 'dashboard.view',
+       // list_email_activity's gate (EMAIL_ACTIVITY_ACCESS): the Activity Logs delete tier.
+       'activity.delete',
     ]),
   },
 });
@@ -189,6 +219,9 @@ function evalRoleRow(name, overrides = {}) {
   return { id: `eval-role-${name}`, name, aliases: [], status: 'active', userCount: 3, ...overrides };
 }
 
+// A tool with no canned result below; `--check` fails on any registered tool that returns it.
+const NO_CANNED_RESULT = Object.freeze({ handoff: true });
+
 /**
  * A plausible fake result per tool name. Shape matches what the real tool
  * returns closely enough for runAgent's ledger (`total`) to work; content is
@@ -225,7 +258,11 @@ function cannedResult(name, args) {
         ],
       };
     case 'get_job':
-      return { job: jobRow(1, { title: args?.title || 'Eval Job', jobDescription: 'Eval-only canned description.' }) };
+      return { job: jobRow(1, {
+        title: args?.title || 'Eval Job', jobDescription: 'Eval-only canned description.',
+        createdBy: 'Asha Rao', recruiter: 'Vikram Shah', applicationDeadline: '2026-10-31',
+        salaryRange: { min: 1200000, max: 1500000 }, project: null, workAuthorization: null,
+      }) };
     case 'count_users': {
       // Real role names, so a "how many of them are employees/candidates" case can be answered from the
       // groups without the model going back for per-role counts.
@@ -254,12 +291,17 @@ function cannedResult(name, args) {
       }
       return { total: 24, filtersApplied: args?.filters ?? {} };
     }
-    case 'list_users':
+    case 'list_users': {
+      // A row's lastLoginAt must agree with the inactivity filter, or the model re-queries to reconcile them.
+      const f = args?.filters ?? {};
+      const lastLoginAt = f.neverLoggedIn ? null : (f.inactiveDays ? '2026-08-01T09:00:00.000Z' : undefined);
+      const row = (i) => evalUserRow(i, lastLoginAt === undefined ? {} : { lastLoginAt });
       return {
-        total: 4,
-        users: [evalUserRow(1), evalUserRow(2), evalUserRow(3)],
+        total: 3,
+        users: [row(1), row(2), row(3)],
         filtersApplied: args?.filters ?? {},
       };
+    }
     case 'get_user':
       return {
         kind: 'unique',
@@ -269,6 +311,7 @@ function cannedResult(name, args) {
         availableSections: [],
       };
     case 'list_roles':
+      if (args?.status === 'inactive') return { roles: [evalRoleRow('Legacy Intern', { status: 'inactive', userCount: 0 })] };
       return { roles: [evalRoleRow('Administrator'), evalRoleRow('Recruiter'), evalRoleRow('Sales Agent')] };
     case 'get_role':
       return {
@@ -335,6 +378,12 @@ function cannedResult(name, args) {
       return { total, byStatus, byResult, filtersApplied: f };
     }
     case 'list_interviews':
+      if (args?.filters?.resultMissing || args?.filters?.overlapping) {
+        return { total: 2, page: 1, totalPages: 1, records: [
+          { id: 'm1', candidate: 'Ravi Kumar', jobPosition: 'QA Engineer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-29T10:00:00.000Z', status: 'ended', result: 'pending' },
+          { id: 'm2', candidate: 'Meera Iyer', jobPosition: 'React Developer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-29T10:30:00.000Z', status: 'ended', result: 'pending' },
+        ], filtersApplied: args.filters };
+      }
       return { total: 2, page: 1, totalPages: 1, records: [
         { id: 'm1', candidate: 'Ravi Kumar', jobPosition: 'QA Engineer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-29T10:00:00.000Z', status: 'scheduled', result: 'pending' },
         { id: 'm2', candidate: 'Meera Iyer', jobPosition: 'React Developer', interviewers: 'Asha Rao (recruiter)', scheduledAt: '2026-09-28T09:00:00.000Z', status: 'ended', result: 'selected' },
@@ -345,6 +394,12 @@ function cannedResult(name, args) {
       return { total: f.status ? byStatus[f.status] : 9, byStatus, filtersApplied: f };
     }
     case 'list_offers':
+      if (args?.filters?.pendingOverDays) {
+        return { total: 2, page: 1, totalPages: 1, compensationHidden: true, sentDateMissing: 0, records: [
+          { id: 'o3', offerCode: 'OF-3', candidate: 'Ravi Kumar', job: 'QA Engineer', status: 'Sent', sentAt: '2026-09-10', daysPending: 20 },
+          { id: 'o4', offerCode: 'OF-4', candidate: 'Meera Iyer', job: 'React Developer', status: 'Under Negotiation', sentAt: '2026-09-15', daysPending: 15 },
+        ], filtersApplied: args.filters };
+      }
       return { total: 2, page: 1, totalPages: 1, compensationHidden: true, records: [
         { id: 'o1', offerCode: 'OF-1', candidate: 'Ravi Kumar', job: 'QA Engineer', status: 'Accepted', placementStatus: 'Pending' },
         { id: 'o2', offerCode: 'OF-2', candidate: 'Meera Iyer', job: 'React Developer', status: 'Accepted', placementStatus: 'Joined' },
@@ -380,6 +435,12 @@ function cannedResult(name, args) {
     case 'count_meetings':
       return { total: 6, breakdown: { scheduled: 4, ended: 1, cancelled: 1 }, filtersApplied: args?.filters ?? {} };
     case 'list_meetings':
+      if (args?.filters?.status === 'ended' || ['past', 'earlier_today'].includes(args?.filters?.when)) {
+        return { total: 2, records: [
+          { id: 'm1', title: 'Sprint planning', scheduledAt: '2026-09-30T03:30:00.000Z', durationMinutes: 60, meetingType: 'Video', status: 'ended', hosts: ['Asha Rao'], invitedCount: 5, hasRecording: true },
+          { id: 'm2', title: 'HR sync', scheduledAt: '2026-09-30T04:45:00.000Z', durationMinutes: 30, meetingType: 'Video', status: 'ended', hosts: ['Vikram Shah'], invitedCount: 2, hasRecording: false },
+        ], filtersApplied: args.filters };
+      }
       return { total: 2, records: [
         { id: 'm1', title: 'Sprint planning', scheduledAt: '2026-09-30T05:30:00.000Z', durationMinutes: 60, meetingType: 'Video', status: 'scheduled', hosts: ['Asha Rao'], invitedCount: 5 },
         { id: 'm2', title: 'HR sync', scheduledAt: '2026-10-01T09:00:00.000Z', durationMinutes: 30, meetingType: 'Video', status: 'scheduled', hosts: ['Vikram Shah'], invitedCount: 2 },
@@ -406,6 +467,32 @@ function cannedResult(name, args) {
         { name: 'Ops Manager', type: 'manager', headName: 'Ravi Kumar' },
       ] };
     case 'get_training_progress':
+      if (args?.mode === 'cohort' && args.scoreBand) {
+        const quizScore = args.scoreBand === 'gte90' ? 94 : args.scoreBand === 'lt70' ? 58 : (args.minScore ?? 75);
+        return { mode: 'cohort', course: args.course ?? null, position: args.position ?? null, total: 1, students: 1, records: [
+          { student: 'Vikram Shah', course: args.course || 'React Basics', position: 'React Developer', status: 'In Progress', completion: 60, quizScore, atRisk: quizScore < 70 },
+        ], filtersApplied: { scoreBand: args.scoreBand } };
+      }
+      if (args?.mode === 'cohort' && args.progress) {
+        const status = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' }[args.progress] ?? 'In Progress';
+        return { mode: 'cohort', course: args.course ?? null, position: args.position ?? null, total: 1, students: 1, records: [
+          { student: 'Asha Rao', course: args.course || 'React Basics', position: args.position || 'React Developer', status,
+            completion: status === 'Completed' ? 100 : status === 'Not Started' ? 0 : 45, quizScore: null, atRisk: false },
+        ], filtersApplied: { progress: args.progress } };
+      }
+      if (args?.mode === 'cohort') {
+        return { mode: 'cohort', course: args.course ?? null, position: args.position ?? null, total: 2, students: 2,
+          cohort: { assignments: 10, students: 8, completed: 4, inProgress: 3, notStarted: 3, completionRate: 40, avgCompletion: 55, avgQuizScore: 78, withQuizScore: 6, atRisk: 1 },
+          records: [
+            { student: 'Asha Rao', course: args.course || 'React Basics', position: args.position || 'React Developer', status: 'In Progress', completion: 45, quizScore: 72, atRisk: false },
+            { student: 'Vikram Shah', course: args.course || 'React Basics', position: args.position || 'React Developer', status: 'Completed', completion: 100, quizScore: 91, atRisk: false },
+          ] };
+      }
+      if (args?.mode === 'position_map') {
+        return { mode: 'position_map', total: 1, records: [
+          { position: args.position || 'Java Developer', department: 'Engineering', courses: ['Java 101', 'Spring'], courseCount: 2, folders: ['Backend'], employeeCount: 6, studentCount: 5 },
+        ] };
+      }
       return { person: args?.person || 'Eval Self', self: !args?.person, total: 2, courses: [
         { module: 'React Basics', status: 'completed', percentage: 100 }, { module: 'Node APIs', status: 'in-progress', percentage: 40 },
       ] };
@@ -433,8 +520,193 @@ function cannedResult(name, args) {
       return { total: 1, breakdown: { pending: 1, approved: 0, rejected: 0, cancelled: 0 }, records: [
         { id: 'b1', person: 'Asha Rao', status: 'pending', days: 1, from: '2026-09-25', to: '2026-09-25' },
       ] };
+    // ─── Wave 1 tools: minimal skeletons of each real execute's happy-path shape ───
+    // Wave 1 canned results echo the call's filters / groupBy: a row that contradicts the filter the model
+    // just sent (a finished session for "active", status groups for groupBy caller) made it re-query, which
+    // the scorer counts as an extra call — noise, not a routing error.
+    case 'count_call_records': {
+      const f = args?.filters ?? {};
+      const groupsBy = {
+        status: [{ value: 'completed', count: 8 }, { value: 'missed', count: 4 }],
+        day: [{ value: f.calledBetween?.from ?? '2026-09-28', count: 7 }, { value: f.calledBetween?.to ?? '2026-09-29', count: 5 }],
+        caller: [{ value: 'Asha Rao', count: 8 }, { value: 'Vikram Shah', count: 4 }],
+        hangupBy: [{ value: 'Callee', count: 5 }, { value: 'Caller', count: 4 }, { value: null, count: 3 }],
+      };
+      return args?.groupBy
+        ? { total: 12, groupBy: args.groupBy, groups: groupsBy[args.groupBy] ?? [], filtersApplied: f }
+        : { total: 12, filtersApplied: f };
+    }
+    case 'list_call_records': {
+      const f = args?.filters ?? {};
+      return { total: 1, records: [
+        { id: 'cr1', when: '2026-09-29T10:00:00.000Z', person: 'Priya Shah', category: 'candidate', callType: f.callType ?? 'job_application',
+          direction: f.direction ?? 'outbound', provider: f.provider ?? 'plivo', durationSeconds: 184, status: f.status ?? 'completed',
+          placedBy: f.mine ? 'Eval Self' : 'Asha Rao', outcome: 'interested', recordingAvailable: true },
+      ], filtersApplied: f };
+    }
+    case 'get_call_record':
+      return {
+        call: { id: 'cr1', when: '2026-09-29T10:00:00.000Z', person: args?.person || 'Priya Shah', category: 'candidate',
+          callType: 'job_application', direction: 'outbound', durationSeconds: 184, status: 'completed', outcome: 'interested', recordingAvailable: true },
+        aiInsights: { source: 'AI extraction of the call', summary: 'The candidate said they are interested in the QA role.', interest: 'interested' },
+        transcript: null,
+        recordings: { bolna: { available: true, channel: 'agent_only' }, plivo: { available: false }, twilio: { available: false } },
+      };
+    case 'list_call_followups':
+      return { kind: args?.kind ?? 'callbackRequested', total: 1, records: [
+        { applicationId: 'a1', applicant: 'Ranveer Singh', job: 'QA Engineer', applicationStatus: 'Applied', appliedAt: '2026-09-25T09:00:00.000Z',
+          callbackAt: '2026-09-30T11:00:00.000Z', callbacksBooked: 1, verificationCallStatus: 'callback_scheduled' },
+      ], ...(args?.kind === 'notYetCalled' ? { byVerificationStatus: { 'never attempted': 1 } } : {}), filtersApplied: {} };
+    case 'list_email_activity':
+      return { total: 1, records: [
+        { to: args?.filters?.person?.includes('@') ? args.filters.person : 'ravi.kumar@example.com', person: 'Ravi Kumar',
+          type: args?.filters?.type ?? 'offer-letter', subject: 'Your DharwinOne email', status: args?.filters?.status ?? 'sent',
+          error: null, sentAt: '2026-09-29T10:00:00.000Z', attemptedAt: '2026-09-29T10:00:00.000Z' },
+      ], filtersApplied: args?.filters ?? {} };
+    case 'get_call_metrics':
+      return { totalCalls: 40, byStatus: { completed: 28, 'no-answer': 9, failed: 3 }, finishedCalls: 40, answeredCalls: 28,
+        answerRate: 0.7, avgDurationSeconds: 142, failedCalls: 3, interestConfirmedRate: 0.4,
+        notYetCalledApplicants: 6, callbacksDue: 2, callbacksOverdue: 1, filtersApplied: args?.filters ?? {} };
+    case 'get_interview':
+      return {
+        interview: { id: 'm1', candidate: args?.candidate || 'Ravi Kumar', jobPosition: args?.jobPosition || 'QA Engineer', status: 'ended',
+          result: 'selected', scheduledAt: '2026-09-28T09:00:00.000Z', scheduledBy: 'Asha Rao', interviewers: 'Asha Rao, Vikram Shah',
+          panel: [{ name: 'Asha Rao', role: 'recruiter' }, { name: 'Vikram Shah', role: 'interviewer' }] },
+        recording: { recorded: true, recordingCount: 1 },
+        aiSummary: { executiveSummary: 'Strong test automation answers.', decisions: ['Move to offer'], nextSteps: ['Share offer'] },
+        evaluations: [{ evaluator: 'Vikram Shah', weightedScore: 4.2, isComplete: true }],
+        resultMissing: false,
+        feedbackMissing: false,
+        history: [{ action: 'interview.result.update', by: 'Asha Rao', at: '2026-09-29T12:00:00.000Z', from: 'pending', to: 'selected' }],
+      };
+    case 'get_interview_transcript':
+      return {
+        interview: { id: 'm1', candidate: args?.candidate || 'Ravi Kumar', jobPosition: 'QA Engineer', scheduledAt: '2026-09-28T09:00:00.000Z', status: 'ended' },
+        transcriptAvailable: true,
+        utteranceCount: 40,
+        speakers: [{ name: 'Ravi Kumar', role: 'candidate', utterances: 20 }, { name: 'Asha Rao', role: 'interviewer', utterances: 20 }],
+        windows: [{ from: '0:00', to: '5:10', excerpt: 'Asha Rao: Tell me about test automation. Ravi Kumar: I have built Selenium and Playwright suites.' }],
+        ...(args?.includeFullText ? { fullText: '[0:00] Asha Rao: Tell me about test automation.\n[0:05] Ravi Kumar: I have built Selenium and Playwright suites.' } : {}),
+      };
+    case 'get_offer':
+      return { id: 'o1', offerCode: args?.offerCode || 'OF-1', candidate: args?.candidate || 'Ravi Kumar', job: 'QA Engineer', status: 'Sent',
+        preparedBy: 'Asha Rao', sentAt: '2026-09-20', markedSentBy: 'Asha Rao', markedSentAt: '2026-09-20T10:00:00.000Z', daysPending: 10, joiningDate: '2026-10-15', letter: { pdfUrl: null }, compensationHidden: true };
+    case 'get_placement':
+      return { id: 'p1', candidate: args?.candidate || 'Ravi Kumar', job: 'QA Engineer', offerCode: 'OF-1', status: 'Pending', joiningDate: '2026-10-05',
+        holdsEmployeeRole: false, firstBlockingStep: { step: 'Background verification', detail: 'Background verification is Pending.' },
+        steps: [{ step: 'Pre-boarding', status: 'In progress' }, { step: 'Background verification', status: 'Pending' }],
+        auditTrail: [{ action: 'status.change', from: 'Pending', to: 'Onboarding', by: 'Asha Rao', at: '2026-09-25T10:00:00.000Z' }] };
+    case 'list_documents':
+      if (args?.cohort) {
+        return { total: 1, records: [{ name: 'Meera Nair', counts: { uploaded: 3, pendingReview: 0, approved: 2, rejected: 1, missing: 1 },
+          rejected: ['Passport'], missing: ['Offer letter (signed)'] }], placementsScanned: 4, filtersApplied: { cohort: args.cohort } };
+      }
+      return { name: args?.person || 'Meera Nair', counts: { uploaded: 3, pendingReview: 0, approved: 2, rejected: 1, missing: 1 },
+        documents: [{ label: 'Passport', status: 'rejected', reason: 'Blurry scan' }], missing: [{ label: 'Offer letter (signed)' }], expiries: [] };
+    case 'get_job_stats':
+      return args?.rankBy
+        ? { rankBy: args.rankBy, total: 2, jobs: [
+          { jobId: 'eval-job-1', title: 'Eval Job 1', status: 'Active', daysOpen: 40, applications: 0, vacanciesLeft: 1 },
+          { jobId: 'eval-job-2', title: 'Eval Job 2', status: 'Active', daysOpen: 25, applications: 0, vacanciesLeft: 2 },
+        ], jobsConsidered: 9, filtersApplied: args.filters ?? {} }
+        : { job: { jobId: 'eval-job-1', title: args?.title || 'Eval Job', status: 'Active', daysOpen: 30 },
+          applications: { total: 5, byStage: { Applied: 3, Interview: 2 }, lastApplicationAt: '2026-09-28' },
+          zeroApplications: false, hireRatePercent: 0, vacancies: 2, hired: 0, vacanciesLeft: 2 };
+    case 'get_referral':
+      return { total: 1, records: [{ candidate: args?.person || 'Priya Sharma', referred: true, referredBy: 'Sami Shaikh', salesAgent: 'Neha Rao',
+        channel: 'Share link', job: 'QA Engineer', referredAt: '2026-09-01', status: 'applied' }], notCaptured: ['who the link was shared with'] };
+    case 'get_referral_stats':
+      if (args?.salesAgent) {
+        return { salesAgent: args.salesAgent === 'me' ? 'Eval Self' : args.salesAgent, self: args.salesAgent === 'me', referred: 20, applied: 12, offers: 4, joined: 3, joinRatePercent: 15,
+          avgReferralToJoiningDays: 34, stuck: { total: 3, byStage: [{ stage: 'interview', count: 2, avgDaysInStage: 12, oldestDaysInStage: 20, leadsWithStageDate: 2 }, { stage: 'offer', count: 1, avgDaysInStage: 9, oldestDaysInStage: 9, leadsWithStageDate: 1 }] }, monthOverMonth: { thisMonth: { referred: 5, joined: 1 }, lastMonth: { referred: 4, joined: 1 } } };
+      }
+      return { rankBy: args?.rankBy ?? 'referred', total: 2, agents: [
+        { salesAgent: 'Neha Rao', referred: 20, applied: 12, offers: 4, joined: 3, joinRatePercent: 15 },
+        { salesAgent: 'Sami Shaikh', referred: 10, applied: 5, offers: 1, joined: 1, joinRatePercent: 10 },
+      ], salesAgentsWithLeads: 2 };
+    case 'list_activity': {
+      const f = args?.filters ?? {};
+      const at = f.between?.from ? `${f.between.from}T11:00:00.000Z` : '2026-09-29T11:00:00.000Z';
+      if (f.target) {
+        return { total: 1, scope: 'everyone', records: [
+          { id: 'al3', at, actor: f.actor ?? 'Asha Rao', action: 'candidate.update', group: 'Employees', targetType: f.targetType ?? 'Employee',
+            target: f.target, changes: [{ field: 'designation', from: 'QA Engineer', to: 'Senior QA Engineer' }] },
+        ], filtersApplied: f };
+      }
+      return { total: 2, scope: 'everyone', records: [
+        { id: 'al1', at, actor: f.actor ?? 'Priya Rao', action: 'user.login', group: 'Accounts', targetType: null, target: null, changes: null },
+        { id: 'al2', at, actor: f.actor ?? 'Asha Rao', action: 'role.update', group: 'Roles', targetType: 'Role', target: 'Recruiter',
+          changes: [{ field: 'permissions', from: 'jobs.read', to: 'jobs.read, jobs.manage' }] },
+      ], filtersApplied: f };
+    }
+    case 'list_impersonations': {
+      const f = args?.filters ?? {};
+      const startedAt = f.between?.from ? `${f.between.from}T08:00:00.000Z` : '2026-09-29T08:00:00.000Z';
+      return { total: 1, records: [
+        { id: 'im1', admin: 'Asha Rao', target: 'Priya Rao', startedAt,
+          endedAt: f.noEndRecorded ? null : startedAt.replace('T08:00', 'T08:12'), durationMinutes: f.noEndRecorded ? null : 12 },
+      ], reason: 'not captured in DharwinOne', pagesViewed: 'not captured in DharwinOne', filtersApplied: f };
+    }
+    case 'what_can_i_do':
+      return { roles: ['Recruiter'], fullAccess: false, modules: [
+        { module: 'ATS', areas: [{ area: 'Jobs', can: ['view', 'add'] }, { area: 'Candidates', can: ['view'] }] },
+      ], modulesWithoutAccess: ['Settings', 'Payroll'], note: 'Capabilities come from your roles.' };
+    case 'get_reporting_chain': {
+      const mode = args?.mode || 'chain';
+      if (mode === 'chain') {
+        return { mode, person: args?.person || 'Priya Sharma', designation: 'QA Engineer', onChart: true, chain: [
+          { level: 'teamLead', unit: 'QA', head: 'Rahul Verma' }, { level: 'manager', unit: 'Engineering', head: 'Anita Desai' },
+        ], reportingManager: 'Rahul Verma' };
+      }
+      if (mode === 'direct_reports') {
+        return { mode, person: args?.person || 'Anita Desai', total: 2, records: [
+          { name: 'Rahul Verma', employeeId: 'DBS010', designation: 'QA Lead' }, { name: 'Priya Sharma', employeeId: 'DBS011', designation: 'QA Engineer' },
+        ] };
+      }
+      if (mode === 'group_moves') {
+        return { mode, total: 1, records: [
+          { employee: 'Priya Sharma', fromDepartment: 'QA', toDepartment: 'Platform', effectiveDate: '2026-08-01' },
+        ] };
+      }
+      return { mode, total: 1, totalActiveEmployees: 40, records: [{ name: 'Priya Sharma', designation: 'QA Engineer' }] };
+    }
+    case 'get_allocation':
+      if (args?.mode === 'can_assign') {
+        return { mode: 'can_assign', person: args.person, project: args.project, eligible: true,
+          reason: 'On 1 other active project(s) — under the limit of 2.', activeProjectsElsewhere: 1, alreadyOnProject: false, maxActiveProjects: 2 };
+      }
+      if (args?.mode === 'list') {
+        return { mode: 'list', bucket: args.bucket, total: 1, records: [
+          { name: 'Asha Rao', designation: 'React Developer', activeProjects: Number(String(args.bucket).match(/projects_(\d)/)?.[1] ?? 0), openTasks: 0 },
+        ], maxActiveProjects: 2 };
+      }
+      return { mode: 'summary', total: 20, byActiveProjects: { 0: 5, 1: 12, 2: 3, '3+': 0 }, atOrOverLimit: 3,
+        noActiveTasks: 4, unallocated: 2, overloaded: 1, overloadAbove: 10, maxActiveProjects: 2 };
+    case 'get_meeting':
+      return { found: true, meeting: { id: 'm1', title: args?.title || 'Sprint planning', status: 'ended', scheduledAt: '2026-09-29T05:30:00.000Z',
+        durationMinutes: 60, hosts: ['Asha Rao'], invitedCount: 3,
+        attendees: [{ name: 'Vikram Shah', role: 'participant' }, { name: 'Ravi Kumar', role: 'participant' }], recorded: true, recordingCount: 1,
+        summary: { executiveSummary: 'Release planning.', decisions: ['Ship the release on 2026-10-10'],
+          actionItems: [{ text: 'Update the release notes', owner: 'Vikram Shah' }] } } };
+    case 'search_my_mailbox':
+      if (args?.threadId) {
+        return { found: true, thread: { threadId: args.threadId, accountId: args.accountId ?? 'a1', mailbox: 'eval.self@example.com',
+          subject: 'Invoice for September', messageCount: 1, messages: [
+            { from: 'Acme Billing', to: 'eval.self@example.com', date: '2026-09-28T09:00:00.000Z', subject: 'Invoice for September',
+              text: 'Please find the September invoice attached; due 2026-10-15.' },
+          ] } };
+      }
+      return { connected: true, mailboxes: ['eval.self@example.com'], total: 1, moreAvailable: false, threads: [
+        { threadId: 't1', accountId: 'a1', mailbox: 'eval.self@example.com', subject: 'Invoice for September', from: 'Acme Billing',
+          date: '2026-09-28T09:00:00.000Z', snippet: 'Please find the September invoice attached.', messageCount: 1 },
+      ] };
+    case 'search_chat':
+      return { total: 1, messages: [
+        { conversationId: 'cv1', conversation: 'Release squad', conversationType: 'group', author: 'Ravi Kumar', at: '2026-09-29T12:00:00.000Z',
+          snippet: 'The release date is 2026-10-10; deadline for fixes is 2026-10-08.' },
+      ], conversationsSearched: 4, conversationsTotal: 4, partial: false };
     default:
-      return { handoff: true };
+      return NO_CANNED_RESULT;
   }
 }
 
@@ -451,16 +723,21 @@ function parseArgsJson(raw) {
 }
 
 /**
- * Wrap the REAL registry: keeps its real schemas/instructions/isHandoff (so
- * the live model sees the exact tool contracts it sees in prod), but replaces
- * `execute` with a fake that never touches Mongo, and `render` with a no-op
- * (rendering fidelity isn't what this eval measures).
+ * Wrap the REAL registry: keeps its real schemas/instructions/isHandoff and lazy
+ * loading (so the live model sees the exact tool contracts it sees in prod), but
+ * replaces `execute` with a fake that never touches Mongo, and `render` with a
+ * no-op (rendering fidelity isn't what this eval measures).
  */
 function wrapRegistryForEval(real) {
   return {
     schemas: real.schemas,
     instructions: real.instructions,
+    lazy: real.lazy,
     isHandoff: real.isHandoff,
+    isFindTools: real.isFindTools,
+    domainOfTool: real.domainOfTool,
+    loadDomains: real.loadDomains,
+    parseFindToolsArgs: real.parseFindToolsArgs,
     render: () => null,
     async execute(name, rawArgs) {
       const args = parseArgsJson(rawArgs);
@@ -476,16 +753,17 @@ function wrapRegistryForEval(real) {
  * including `handoff`, which runAgent short-circuits to null (the caller's fixed
  * reply) before it ever reaches `registry.execute` — plus per-step token usage.
  */
-function buildInstrumentedDeps() {
+function buildInstrumentedDeps({ eager }) {
   const calls = [];
-  const usage = { inputTokens: 0, outputTokens: 0 };
+  const usage = { inputTokens: 0, outputTokens: 0, steps: 0 };
 
   async function getAgentTools(user, opts) {
-    const real = await realGetAgentTools(user, opts);
+    const real = await realGetAgentTools(user, eager ? { ...opts, eagerLimit: Infinity } : opts);
     return wrapRegistryForEval(real);
   }
 
   async function step(req) {
+    usage.steps += 1;
     const res = await realLlmStep(req);
     for (const c of res.toolCalls) calls.push({ name: c.name, args: parseArgsJson(c.arguments) });
     if (res.usage) {
@@ -505,10 +783,10 @@ function buildMemDoc(ledger) {
   return { agentLedger: ledger.map((entry) => ({ at: new Date(), calls: entry.calls })) };
 }
 
-async function runCase(client, testCase) {
+async function runCase(client, testCase, { eager }) {
   const history = [...(testCase.history ?? []), { role: 'user', content: testCase.question }];
   const memDoc = buildMemDoc(testCase.ledger);
-  const { deps, calls, usage } = buildInstrumentedDeps();
+  const { deps, calls, usage } = buildInstrumentedDeps({ eager });
 
   const startedAt = Date.now();
   let errored = null;
@@ -520,9 +798,10 @@ async function runCase(client, testCase) {
   const ms = Date.now() - startedAt;
 
   const handoffCalled = calls.some((c) => c.name === 'handoff');
+  const findToolsCalled = calls.some((c) => c.name === FIND_TOOLS);
   const pass = !errored && evaluateExpect(testCase.expect, { calls, handoffCalled });
 
-  return { id: testCase.id, pass, ms, calls, handoffCalled, errored, usage };
+  return { id: testCase.id, pass, ms, calls, handoffCalled, findToolsCalled, errored, usage };
 }
 
 // ─── Reporting ──────────────────────────────────────────────────────────────
@@ -537,12 +816,74 @@ function formatCall(c) {
   return `${c.name}(${JSON.stringify(c.args)})`;
 }
 
+/** Every tool name an `expect` (and its `anyOf` alternatives) names. */
+function expectedToolNames(expect) {
+  if (!expect || typeof expect !== 'object') return [];
+  return [
+    ...(expect.tools ?? []),
+    ...Object.keys(expect.args ?? {}),
+    ...(expect.anyOf ?? []).flatMap(expectedToolNames),
+  ];
+}
+
+/**
+ * --check: no model calls. Every case file parses; ids are unique; every tool a case expects
+ * or replays in its ledger is registered AND visible to FAKE_USER (else the case can never
+ * pass); every rule exists; every registered tool has a canned result.
+ */
+async function checkCases(file) {
+  const problems = [];
+  const names = ['cases.json', ...fs.readdirSync(EVALS_DIR).filter((n) => n.endsWith('.cases.json')).sort()]
+    .filter((n) => !file || n === file || n === `${file}.cases.json`);
+  const cases = [];
+  for (const name of names) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(EVALS_DIR, name), 'utf8'));
+      if (!Array.isArray(parsed)) throw new Error('top level is not an array');
+      cases.push(...parsed.map((c) => ({ ...c, file: name })));
+    } catch (err) {
+      problems.push(`${name}: ${err.message}`);
+    }
+  }
+
+  const registered = new Set([...toolDomains.flatMap((d) => d.tools.map((t) => t.name)), 'handoff']);
+  const visible = new Set((await realGetAgentTools(FAKE_USER, { eagerLimit: Infinity })).schemas.map((s) => s.name));
+  const seenIds = new Set();
+  for (const c of cases) {
+    const where = `${c.file}:${c.id ?? '(no id)'}`;
+    if (typeof c.id !== 'string' || !c.id) problems.push(`${where}: missing id`);
+    else if (seenIds.has(c.id)) problems.push(`${where}: duplicate id`);
+    seenIds.add(c.id);
+    if (typeof c.question !== 'string' || !c.question.trim()) problems.push(`${where}: missing question`);
+    if (!c.expect || typeof c.expect !== 'object') problems.push(`${where}: missing expect`);
+    const rules = [c.expect?.rule, ...(c.expect?.anyOf ?? []).map((a) => a.rule)].filter(Boolean);
+    for (const r of rules) if (!RULES[r]) problems.push(`${where}: unknown rule '${r}'`);
+    const ledgerTools = (c.ledger ?? []).flatMap((e) => (e.calls ?? []).map((call) => call.tool));
+    for (const tool of new Set([...expectedToolNames(c.expect), ...ledgerTools])) {
+      if (!registered.has(tool)) problems.push(`${where}: unknown tool '${tool}'`);
+      else if (!visible.has(tool)) problems.push(`${where}: '${tool}' is hidden from FAKE_USER (add its permission)`);
+    }
+  }
+  for (const tool of registered) {
+    if (tool !== 'handoff' && cannedResult(tool, {}) === NO_CANNED_RESULT) problems.push(`no canned result for '${tool}'`);
+  }
+
+  console.log(`checked ${cases.length} cases in ${names.length} files against ${registered.size} tools`);
+  for (const p of problems) console.log(`  - ${p}`);
+  if (problems.length) process.exitCode = 1;
+  else console.log('ok');
+}
+
 async function main() {
-  const { caseId, min } = parseArgs(process.argv.slice(2));
-  const allCases = JSON.parse(fs.readFileSync(CASES_PATH, 'utf8'));
+  const { caseId, file, eager, min, check } = parseArgs(process.argv.slice(2));
+  if (check) {
+    await checkCases(file);
+    return;
+  }
+  const allCases = loadCaseFiles(file);
   const cases = caseId ? allCases.filter((c) => c.id === caseId) : allCases;
   if (!cases.length) {
-    console.error(caseId ? `No case with id '${caseId}'` : 'No cases found.');
+    console.error(caseId ? `No case with id '${caseId}'` : `No cases found${file ? ` in '${file}'` : ''}.`);
     process.exitCode = 1;
     return;
   }
@@ -551,11 +892,11 @@ async function main() {
   const rows = [];
   for (const testCase of cases) {
     // eslint-disable-next-line no-await-in-loop
-    const outcome = await runCase(client, testCase);
+    const outcome = await runCase(client, testCase, { eager });
     rows.push(outcome);
     const status = outcome.pass ? 'PASS' : 'FAIL';
     const callsText = outcome.calls.map(formatCall).join(', ') || '(no tool calls)';
-    console.log(`[${status}] ${outcome.id} (${outcome.ms}ms) — ${callsText}`);
+    console.log(`[${status}] ${testCase.file}:${outcome.id} (${outcome.ms}ms) — ${callsText}`);
     if (outcome.errored) console.log(`  error: ${outcome.errored}`);
   }
 
@@ -563,10 +904,15 @@ async function main() {
   const accuracy = (100 * passCount) / rows.length;
   const msSorted = rows.map((r) => r.ms).sort((a, b) => a - b);
   const totalTokens = rows.reduce((sum, r) => sum + r.usage.inputTokens + r.usage.outputTokens, 0);
+  const avg = (key) => rows.reduce((sum, r) => sum + key(r), 0) / rows.length;
+  const findToolsCases = rows.filter((r) => r.findToolsCalled).length;
 
   console.log('');
+  console.log(`mode:     ${eager ? 'eager (--eager)' : 'default (lazy above the eager tool limit)'}`);
   console.log(`accuracy: ${passCount}/${rows.length} (${accuracy.toFixed(1)}%)`);
-  console.log(`latency:  p50=${percentile(msSorted, 50)}ms p95=${percentile(msSorted, 95)}ms`);
+  console.log(`steps:    avg ${avg((r) => r.usage.steps).toFixed(2)} model steps per case`);
+  console.log(`latency:  avg=${Math.round(avg((r) => r.ms))}ms p50=${percentile(msSorted, 50)}ms p95=${percentile(msSorted, 95)}ms`);
+  console.log(`find_tools: called in ${findToolsCases}/${rows.length} cases`);
   console.log(`tokens:   ${totalTokens} (input+output, summed across every model step)`);
 
   const failed = rows.filter((r) => !r.pass);

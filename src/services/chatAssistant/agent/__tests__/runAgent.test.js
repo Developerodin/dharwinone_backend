@@ -1,7 +1,10 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import Joi from 'joi';
 import config from '../../../../config/config.js';
 import { runAgent } from '../runAgent.js';
+import { defineTool } from '../defineTool.js';
+import { getAgentTools } from '../toolRegistry.js';
 
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -471,5 +474,283 @@ describe('runAgent', () => {
     const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
     assert.equal(out, null);
     assert.equal(step.requests.length, 1);
+  });
+});
+
+// ─── Lazy tool loading (real registry over fake domains) ────────────────────
+
+const lazyJobs = {
+  domain: 'jobs',
+  summary: 'Job postings.',
+  instructions: 'JOBS INSTRUCTIONS',
+  tools: [
+    defineTool({
+      name: 'count_jobs',
+      domain: 'jobs',
+      kind: 'read',
+      description: 'Count jobs.',
+      input: Joi.object({ search: Joi.string() }),
+      access: { anyOf: ['jobs.read'] },
+      execute: async () => ({ total: 12 }),
+      render: (result) => ({ blocks: [{ type: 'text', id: `b-${result.total}` }], facts: jobFacts(result.total) }),
+    }),
+  ],
+};
+const lazyLeave = {
+  domain: 'leave',
+  summary: 'Who is on leave.',
+  instructions: 'LEAVE INSTRUCTIONS',
+  tools: [
+    defineTool({
+      name: 'who_is_on_leave_today',
+      domain: 'leave',
+      kind: 'read',
+      description: 'Who is on leave today.',
+      input: Joi.object({}),
+      access: { anyOf: ['leave.read'] },
+      execute: async () => ({ total: 1, records: [{ name: 'Asha' }] }),
+    }),
+  ],
+};
+const lazyTasks = {
+  domain: 'tasks',
+  summary: 'Tasks.',
+  instructions: 'TASKS INSTRUCTIONS',
+  tools: [
+    defineTool({
+      name: 'list_tasks',
+      domain: 'tasks',
+      kind: 'read',
+      description: 'List tasks.',
+      input: Joi.object({}),
+      access: { anyOf: ['tasks.read'] },
+      execute: async () => ({ total: 2, records: [] }),
+    }),
+  ],
+};
+const LAZY_DOMAINS = [lazyJobs, lazyLeave, lazyTasks];
+const superUser = { id: 'u1', name: 'Prakhar', platformSuperUser: true };
+
+function lazyDeps(step, { domains = LAZY_DOMAINS } = {}) {
+  return {
+    ...baseDeps(step, null),
+    getAgentTools: (u) => getAgentTools(u, { domains, eagerLimit: 0 }),
+  };
+}
+
+const names = (req) => req.tools.map((t) => t.name);
+
+describe('runAgent — lazy tool loading', () => {
+  let original;
+  beforeEach(() => {
+    original = { ...config.chatbot.agent };
+    config.chatbot.agent.maxSteps = 5;
+    config.chatbot.agent.inputBudget = 60000;
+    config.chatbot.agent.stepTimeoutMs = 20000;
+    config.chatbot.agent.turnTimeoutMs = 30000;
+  });
+  afterEach(() => {
+    Object.assign(config.chatbot.agent, original);
+  });
+
+  it('find_tools step → the next step is offered the loaded schemas; the call is answered with loaded + instructions', async () => {
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['leave', 'tasks'] })] }),
+      stepResult({ toolCalls: [call('a', 'who_is_on_leave_today'), call('b', 'list_tasks')] }),
+      stepResult({ text: 'Asha is on leave and has tasks due.' }),
+    ]);
+    const out = await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+
+    assert.deepEqual(names(step.requests[0]), ['find_tools', 'handoff']);
+    assert.match(step.requests[0].instructions, /call `find_tools`/);
+    assert.doesNotMatch(step.requests[0].instructions, /LEAVE INSTRUCTIONS/);
+    assert.deepEqual(names(step.requests[1]), ['find_tools', 'handoff', 'list_tasks', 'who_is_on_leave_today']);
+    assert.equal(step.requests[1].instructions, step.requests[0].instructions);
+    const findOutput = outputsIn(step.requests[1].input).find((o) => o.call_id === 'f1');
+    assert.deepEqual(JSON.parse(findOutput.output), {
+      loaded: ['leave', 'tasks'],
+      instructions: 'LEAVE INSTRUCTIONS\n\nTASKS INSTRUCTIONS',
+    });
+    assert.equal(out.reply, 'Asha is on leave and has tasks due.');
+  });
+
+  it('find_tools is kept in meta.toolCalls but left out of the ledger, render and facts', async () => {
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] })] }),
+      stepResult({ toolCalls: [call('a', 'count_jobs', { search: 'ml' })] }),
+      stepResult({ text: 'There are 7 jobs matching ml.' }),
+    ]);
+    const out = await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+    assert.deepEqual(out.meta.toolCalls, ['find_tools', 'count_jobs']);
+    assert.deepEqual(out.ledgerEntry.calls, [{ tool: 'count_jobs', args: { search: 'ml' }, total: 12 }]);
+    assert.deepEqual(out.blocks, [{ type: 'text', id: 'b-12' }]);
+    assert.equal(out.reply, 'There are 12 jobs matching ml.');
+  });
+
+  it('a find_tools-only step is free once per turn', async () => {
+    config.chatbot.agent.maxSteps = 1;
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] })] }),
+      stepResult({ toolCalls: [call('a', 'count_jobs')] }),
+      stepResult({ text: 'There are 12 jobs.' }),
+    ]);
+    const out = await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+    assert.equal(step.requests[1].toolChoice ?? 'auto', 'auto');
+    assert.equal(step.requests[2].toolChoice, 'none');
+    assert.equal(out.reply, 'There are 12 jobs.');
+  });
+
+  it('a second find_tools-only step is not free', async () => {
+    config.chatbot.agent.maxSteps = 1;
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] })] }),
+      stepResult({ toolCalls: [call('f2', 'find_tools', { domains: ['leave'] })] }),
+      stepResult({ text: 'I could not find that.' }),
+    ]);
+    await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+    assert.equal(step.requests.length, 3);
+    assert.equal(step.requests[2].toolChoice, 'none');
+  });
+
+  it('a step mixing find_tools with another call is not free', async () => {
+    config.chatbot.agent.maxSteps = 1;
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] }), call('x', 'count_jobs')] }),
+      stepResult({ text: 'There are 12 jobs.' }),
+    ]);
+    await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+    assert.equal(step.requests[1].toolChoice, 'none');
+  });
+
+  it('a number after only find_tools → untooled_number', async () => {
+    const seen = [];
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] })] }),
+      stepResult({ text: 'There are 40 jobs.' }),
+    ]);
+    const out = await runAgent({
+      client, user: superUser, history, memDoc: null, requestId: 'r', onOutcome: (o) => seen.push(o), deps: lazyDeps(step),
+    });
+    assert.equal(out, null);
+    assert.deepEqual(seen, ['untooled_number']);
+  });
+
+  it('bad find_tools args → { error } output; failing twice ends the turn', async () => {
+    const seen = [];
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['payroll'] })] }),
+      stepResult({ toolCalls: [call('f2', 'find_tools', { domains: [] })] }),
+      stepResult({ text: 'should not get here' }),
+    ]);
+    const out = await runAgent({
+      client, user: superUser, history, memDoc: null, requestId: 'r', onOutcome: (o) => seen.push(o), deps: lazyDeps(step),
+    });
+    const first = JSON.parse(outputsIn(step.requests[1].input).find((o) => o.call_id === 'f1').output);
+    assert.match(first.error, /must be one of/);
+    assert.deepEqual(names(step.requests[1]), ['find_tools', 'handoff']);
+    assert.equal(out, null);
+    assert.deepEqual(seen, ['repeated_tool_failure']);
+  });
+
+  it('never loads a domain the user has no tool in', async () => {
+    const leaveOnly = { id: 'u2', name: 'Asha', authContext: { permissions: new Set(['leave.read']) } };
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs'] })] }),
+      stepResult({ text: 'I cannot see jobs.' }),
+    ]);
+    await runAgent({ client, user: leaveOnly, history, memDoc: null, requestId: 'r', deps: lazyDeps(step) });
+    assert.deepEqual(names(step.requests[1]), ['find_tools', 'handoff']);
+    const find = step.requests[0].tools.find((t) => t.name === 'find_tools');
+    assert.deepEqual(find.parameters.properties.domains.items.enum, ['leave']);
+  });
+
+  it('ledger preload: the last entry\'s domains are loaded before step 1, instructions as one input item', async () => {
+    const memDoc = {
+      agentLedger: [
+        { at: new Date(), calls: [{ tool: 'list_tasks', args: {}, total: 2 }] },
+        { at: new Date(), calls: [{ tool: 'count_jobs', args: { search: 'ml' }, total: 12 }] },
+      ],
+    };
+    const followUp = [
+      { role: 'user', content: 'how many ml jobs?' },
+      { role: 'assistant', content: 'There are 12 ml jobs.' },
+      { role: 'user', content: 'what about ai' },
+    ];
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'count_jobs', { search: 'ai' })] }),
+      stepResult({ text: 'There are 5 jobs for ai.' }),
+    ]);
+    const out = await runAgent({ client, user: superUser, history: followUp, memDoc, requestId: 'r', deps: lazyDeps(step) });
+
+    const first = step.requests[0];
+    assert.deepEqual(names(first), ['count_jobs', 'find_tools', 'handoff']);
+    assert.doesNotMatch(first.instructions, /JOBS INSTRUCTIONS/);
+    assert.equal(first.input[0].role, 'developer');
+    assert.deepEqual(first.input[1], { role: 'developer', content: 'Tools already loaded for: jobs.\n\nJOBS INSTRUCTIONS' });
+    assert.deepEqual(first.input.slice(2), followUp);
+    assert.equal(out.reply, 'There are 12 jobs for ai.');
+  });
+
+  it('ledger preload ignores malformed entries, removed tools and domains the user lost', async () => {
+    const leaveOnly = { id: 'u2', name: 'Asha', authContext: { permissions: new Set(['leave.read']) } };
+    const ledgers = [
+      { agentLedger: { not: 'an array' } },
+      { agentLedger: [null] },
+      { agentLedger: [{ at: new Date(), calls: 'garbage' }] },
+      { agentLedger: [{ at: new Date(), calls: [null, { tool: 'removed_tool' }, { tool: 42 }] }] },
+      // jobs is a real domain, but this user has no jobs tool any more.
+      { agentLedger: [{ at: new Date(), calls: [{ tool: 'count_jobs', args: {}, total: 12 }] }] },
+    ];
+    for (const memDoc of ledgers) {
+      const step = scriptedStep([stepResult({ text: 'Hello.' })]);
+      // eslint-disable-next-line no-await-in-loop
+      const out = await runAgent({ client, user: leaveOnly, history, memDoc, requestId: 'r', deps: lazyDeps(step) });
+      assert.equal(out?.reply, 'Hello.', JSON.stringify(memDoc));
+      assert.deepEqual(names(step.requests[0]), ['find_tools', 'handoff']);
+      assert.equal(step.requests[0].input.filter((i) => i.role === 'developer').length, 1);
+    }
+  });
+
+  it('find_tools output (loaded instructions) survives compaction; other outputs are compacted', async () => {
+    config.chatbot.agent.inputBudget = 500;
+    const bigDomains = [
+      { ...lazyJobs, instructions: 'JOBS INSTRUCTIONS '.repeat(20) },
+      lazyLeave,
+      {
+        ...lazyTasks,
+        tools: [
+          defineTool({
+            name: 'list_tasks',
+            domain: 'tasks',
+            kind: 'read',
+            description: 'List tasks.',
+            input: Joi.object({}),
+            access: { anyOf: ['tasks.read'] },
+            execute: async () => ({ total: 2, records: Array.from({ length: 50 }, (_, i) => ({ title: `Task ${i}` })) }),
+          }),
+        ],
+      },
+    ];
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('f1', 'find_tools', { domains: ['jobs', 'tasks'] })] }),
+      stepResult({ toolCalls: [call('a', 'list_tasks')] }),
+      stepResult({ toolCalls: [call('b', 'list_tasks')] }),
+      stepResult({ text: 'Done.' }),
+    ]);
+    await runAgent({ client, user: superUser, history, memDoc: null, requestId: 'r', deps: lazyDeps(step, { domains: bigDomains }) });
+    const outputs = outputsIn(step.requests[3].input);
+    assert.match(outputs.find((o) => o.call_id === 'f1').output, /JOBS INSTRUCTIONS/);
+    assert.equal(JSON.parse(outputs.find((o) => o.call_id === 'a').output).compacted, true);
+  });
+
+  it('eager registry: no preload item even with a ledger', async () => {
+    const memDoc = { agentLedger: [{ at: new Date(), calls: [{ tool: 'count_jobs', args: {}, total: 12 }] }] };
+    const step = scriptedStep([stepResult({ text: 'Hello.' })]);
+    const deps = { ...lazyDeps(step), getAgentTools: (u) => getAgentTools(u, { domains: LAZY_DOMAINS }) };
+    await runAgent({ client, user: superUser, history, memDoc, requestId: 'r', deps });
+    const first = step.requests[0];
+    assert.deepEqual(names(first), ['count_jobs', 'handoff', 'list_tasks', 'who_is_on_leave_today']);
+    assert.match(first.instructions, /JOBS INSTRUCTIONS\n\nLEAVE INSTRUCTIONS\n\nTASKS INSTRUCTIONS$/);
+    assert.equal(first.input.filter((i) => i.role === 'developer').length, 1);
   });
 });

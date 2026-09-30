@@ -223,6 +223,29 @@ describe('buildAgentInput — history trimming', () => {
   });
 });
 
+describe('buildAgentInput — preloaded domains', () => {
+  const args = {
+    instructions: BASE_INSTRUCTIONS,
+    user: { name: 'Prakhar' },
+    history: [{ role: 'user', content: 'what about ai' }],
+    ledger: [],
+    now: new Date('2026-09-28T10:00:00Z'),
+  };
+
+  it('adds one developer item after the turn context; instructions unchanged', () => {
+    const out = buildAgentInput({ ...args, preloaded: { loaded: ['jobs', 'tasks'], instructions: 'J\n\nT' } });
+    assert.equal(out.instructions, BASE_INSTRUCTIONS);
+    assert.equal(out.input.length, 3);
+    assert.deepEqual(out.input[1], { role: 'developer', content: 'Tools already loaded for: jobs, tasks.\n\nJ\n\nT' });
+    assert.deepEqual(out.input[2], { role: 'user', content: 'what about ai' });
+  });
+
+  it('adds nothing when no domain was loaded', () => {
+    const out = buildAgentInput({ ...args, preloaded: { loaded: [], instructions: '' } });
+    assert.equal(out.input.length, 2);
+  });
+});
+
 describe('compactTurnItems', () => {
   const bigTotal = (n) => ({ total: n, jobs: Array.from({ length: 200 }, (_, i) => ({ id: i, title: `Job ${i}`.padEnd(40, 'x') })) });
 
@@ -290,6 +313,24 @@ describe('compactTurnItems', () => {
     assert.deepEqual(result.map((it) => it.call_id), ['call_1', 'call_1', 'call_2', 'call_2']);
     assert.deepEqual(JSON.parse(result[1].output), { compacted: true, summary: 'do_thing → (result omitted)' });
     assert.deepEqual(JSON.parse(result[3].output), { compacted: true, summary: 'do_other → (result omitted)' });
+  });
+
+  it('keepTools: those outputs are never compacted, even when the budget stays exceeded', () => {
+    const findOutput = JSON.stringify({ loaded: ['jobs'], instructions: 'JOBS INSTRUCTIONS '.repeat(50) });
+    const items = [
+      { type: 'function_call', call_id: 'f1', name: 'find_tools', arguments: '{"domains":["jobs"]}' },
+      { type: 'function_call_output', call_id: 'f1', output: findOutput },
+      { type: 'function_call', call_id: 'call_1', name: 'list_jobs', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: JSON.stringify(bigTotal(3)) },
+    ];
+    const result = compactTurnItems(items, 10, { keepTools: ['find_tools'] });
+    assert.equal(result[1], items[1]);
+    assert.deepEqual(JSON.parse(result[3].output), { compacted: true, summary: 'list_jobs → total 3' });
+    // Without keepTools the oldest (find_tools) output is compacted first, as before.
+    assert.deepEqual(JSON.parse(compactTurnItems(items, 10)[1].output), {
+      compacted: true,
+      summary: 'find_tools → (result omitted)',
+    });
   });
 });
 

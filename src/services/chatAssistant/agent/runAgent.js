@@ -10,7 +10,7 @@
 import config from '../../../config/config.js';
 import logger from '../../../config/logger.js';
 import { step as llmStep } from './llm.js';
-import { getAgentTools as defaultGetAgentTools } from './toolRegistry.js';
+import { getAgentTools as defaultGetAgentTools, FIND_TOOLS_NAME } from './toolRegistry.js';
 import { buildAgentInput, compactTurnItems, summarizeCalls, readAgentLedger } from './context.js';
 import Role from '../../../models/role.model.js';
 import { enforceCounts } from '../responseValidator.js';
@@ -41,6 +41,7 @@ async function defaultResolveViewerRoleNames(user) {
 // function_call_output or the API rejects the next request.
 const MAX_CALLS_PER_STEP = 8;
 const TOO_MANY_CALLS_OUTPUT = JSON.stringify({ error: 'too many calls in one step' });
+const FIND_TOOLS_KEEP = [FIND_TOOLS_NAME];
 
 // Same tool failing this many times in one turn = the model isn't converging.
 const MAX_FAILURES_PER_TOOL = 2;
@@ -69,6 +70,20 @@ function parseArgsForLedger(raw) {
   } catch {
     return raw;
   }
+}
+
+/** `current` plus any `added` schema whose name it lacks; the same reference when nothing is new. */
+function mergeSchemas(current, added) {
+  const have = new Set(current.map((s) => s.name));
+  const fresh = added.filter((s) => !have.has(s.name));
+  return fresh.length ? [...current, ...fresh].sort((a, b) => a.name.localeCompare(b.name)) : current;
+}
+
+/** Domains of the tools called in the last ledger entry (legacy handoff markers carry no calls). */
+function ledgerDomains(ledger, registry) {
+  const calls = Array.isArray(ledger) ? ledger.at(-1)?.calls : null;
+  if (!Array.isArray(calls)) return [];
+  return [...new Set(calls.map((c) => registry.domainOfTool(c?.tool)).filter(Boolean))];
 }
 
 function addUsage(totals, usage) {
@@ -124,20 +139,47 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
   const executed = []; // { name, args, ok, result }
   let steps = 0;
   let outcome = 'error';
+  let lazy = false;
+  let activeSchemas = [];
 
   try {
     const registry = await getAgentTools(user);
+    const isFindTools = (name) => !!registry.isFindTools?.(name);
+    lazy = !!registry.lazy;
+    activeSchemas = registry.schemas;
     const roleNames = await resolveViewerRoleNames(user);
+    const ledger = readAgentLedger(memDoc);
+
+    // Lazy registry: a follow-up usually stays in the last turn's domains, so load them up front.
+    let preloaded = null;
+    if (lazy) {
+      const domains = ledgerDomains(ledger, registry);
+      if (domains.length) {
+        preloaded = registry.loadDomains(domains);
+        activeSchemas = mergeSchemas(activeSchemas, preloaded.schemas);
+      }
+    }
+
     const built = buildAgentInput({
       instructions: `${BASE_INSTRUCTIONS}\n\n${registry.instructions}`,
       user,
       roleNames,
       history,
-      ledger: readAgentLedger(memDoc),
+      ledger,
       now: now(),
+      preloaded,
     });
     const { instructions } = built;
     let { input } = built;
+
+    /** One find_tools call → its output; loaded schemas join the active set for the next step. */
+    const runFindTools = async (rawArgs) => {
+      const parsed = registry.parseFindToolsArgs(rawArgs);
+      if (parsed.error) return { ok: false, error: parsed.error };
+      const { schemas, instructions: domainInstructions, loaded } = registry.loadDomains(parsed.domains);
+      activeSchemas = mergeSchemas(activeSchemas, schemas);
+      return { ok: true, result: { loaded, instructions: domainInstructions } };
+    };
     const { maxSteps, inputBudget, stepTimeoutMs, turnTimeoutMs } = config.chatbot.agent;
 
     // Turn deadline: a slow provider must not delay the fallback reply. Each step
@@ -154,7 +196,7 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
         client,
         instructions,
         input,
-        tools: registry.schemas,
+        tools: activeSchemas,
         toolChoice,
         timeoutMs: Math.min(stepTimeoutMs, remaining),
       });
@@ -164,6 +206,7 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
 
     const failuresByTool = new Map();
     let text = null;
+    let freeStepUsed = false;
 
     for (let i = 0; i < maxSteps && text === null; i += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -186,10 +229,18 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
         return null;
       }
 
+      // Loading tools is not progress on the answer: one find_tools-only step per turn is free.
+      if (!freeStepUsed && res.toolCalls.every((c) => isFindTools(c.name))) {
+        freeStepUsed = true;
+        i -= 1;
+      }
+
       const allowed = res.toolCalls.slice(0, MAX_CALLS_PER_STEP);
       // eslint-disable-next-line no-await-in-loop
       const settled = await Promise.allSettled(
-        allowed.map((c) => registry.execute(c.name, c.arguments, { requestId }))
+        allowed.map((c) =>
+          isFindTools(c.name) ? runFindTools(c.arguments) : registry.execute(c.name, c.arguments, { requestId })
+        )
       );
 
       // A tool counts at most one failure per step: parallel failures of one tool
@@ -216,7 +267,9 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
       // Ceiling: compaction shrinks the OLDEST outputs first, so under a very long
       // history it can also shrink this step's fresh outputs; upgrade = exempt the
       // latest step's outputs in compactTurnItems.
-      input = compactTurnItems([...input, ...res.outputItems, ...outputs], inputBudget);
+      // find_tools outputs carry the loaded domains' instructions; the schemas stay loaded, so the
+      // guidance for using them must not be compacted away.
+      input = compactTurnItems([...input, ...res.outputItems, ...outputs], inputBudget, { keepTools: FIND_TOOLS_KEEP });
     }
 
     if (text === null) {
@@ -231,15 +284,16 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     // With no successful tool call there are no facts, so a number in the reply
     // is unchecked (e.g. a from-memory "our notice period is 30 days") — the caller
     // sends a fixed reply instead. Digit-free replies (definitions) still ship.
-    if (!executed.some((c) => c.ok) && /\d/.test(text)) {
+    // find_tools only loads tools; it returns no company data, so it never counts as the answer.
+    const successful = executed.filter((c) => c.ok && !isFindTools(c.name));
+    if (!successful.length && /\d/.test(text)) {
       outcome = 'untooled_number';
       return null;
     }
 
     let blocks = [];
     const factsList = [];
-    for (const call of executed) {
-      if (!call.ok) continue;
+    for (const call of successful) {
       const rendered = registry.render(call.name, call.result);
       if (!rendered) continue;
       // Only a render WITH blocks replaces them: a plain count renders `blocks: []`
@@ -251,7 +305,6 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     const reply = facts.counts.length ? enforceCounts(text, facts).reply : text;
 
     outcome = 'answer';
-    const successful = executed.filter((c) => c.ok);
     return {
       reply,
       blocks,
@@ -268,6 +321,8 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
         requestId,
         outcome,
         steps,
+        lazy,
+        toolsOffered: activeSchemas.length,
         tools: executed.map((c) => c.name),
         ms: Date.now() - startedAt,
         usage,

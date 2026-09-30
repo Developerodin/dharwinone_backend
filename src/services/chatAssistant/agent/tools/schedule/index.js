@@ -15,6 +15,7 @@ const instructions = [
 
 export default {
   domain: 'schedule',
+  summary: "Work schedules: a person's shift and week-off, company shifts and rosters, assigned or company holidays.",
   instructions,
   tools: [getWorkSchedule, listShifts, listHolidays],
 };

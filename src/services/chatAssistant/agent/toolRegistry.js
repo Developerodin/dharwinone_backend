@@ -1,6 +1,8 @@
 // Sage agent tool registry (architecture.md §2). Boots by importing every domain
 // module once (explicit, greppable — no fs globbing), then per request:
 //   - filters tools to what `user` is permitted to call (model never sees the rest);
+//   - above EAGER_TOOL_LIMIT permitted tools, offers only handoff + find_tools and lets
+//     the loop load domains on demand (`loadDomains`);
 //   - `execute` re-checks access (defence in depth), refuses `write`-kind tools,
 //     validates args with the tool's own Joi schema, runs with a timeout, applies
 //     the same row-scope/redaction guard as the legacy pipeline, and caps result size.
@@ -16,7 +18,22 @@ import { assertRelatedToolsExist } from '../personProfile/providers/index.js';
 
 const MAX_RESULT_CHARS = 20000;
 
+// ponytail: above this many permitted tools the prompt carries only handoff + find_tools and
+// the model loads domains on demand. Ceiling: the find_tools catalog (one line per domain)
+// itself grows with every domain; upgrade = nested domains or embedding-based tool search.
+export const EAGER_TOOL_LIMIT = 30;
+
 export const HANDOFF_TOOL_NAME = 'handoff';
+export const FIND_TOOLS_NAME = 'find_tools';
+const MAX_DOMAINS_PER_FIND = 5;
+const MAX_SUMMARY_CHARS = 120;
+
+export const LAZY_INSTRUCTIONS = [
+  'Tools are grouped by domain and most are not loaded yet.',
+  'Before answering any question about company data, call `find_tools` with every domain the question touches ' +
+    '(several at once when it spans modules). You may call it again later in the turn.',
+  "Only call `handoff` if no domain in find_tools' list can answer.",
+].join('\n');
 
 // Built-in tool, always present and never access-filtered (its `note`-only access
 // has no `anyOf`, so `checkAccessRule` passes it for every user — same shape as
@@ -33,8 +50,26 @@ const handoffTool = defineTool({
 
 const defaultDomains = toolDomains;
 
-// Fail at boot, not mid-chat, if two domains ever define the same tool name.
-assertUniqueToolNames([...defaultDomains.flatMap((d) => d.tools), handoffTool]);
+/**
+ * Throws unless every domain module carries a one-line `summary` (≤ 120 chars) —
+ * it is that domain's line in the find_tools catalog, all the model sees of an
+ * unloaded domain.
+ */
+export function assertDomainSummaries(domains) {
+  for (const d of domains) {
+    const { summary } = d;
+    if (typeof summary !== 'string' || !summary.trim()) {
+      throw new Error(`Domain '${d.domain}' is missing a summary`);
+    }
+    if (summary.length > MAX_SUMMARY_CHARS || /[\r\n]/.test(summary)) {
+      throw new Error(`Domain '${d.domain}' summary must be one line of at most ${MAX_SUMMARY_CHARS} characters`);
+    }
+  }
+}
+
+// Fail at boot, not mid-chat, if two domains ever define the same tool name (or shadow find_tools).
+assertUniqueToolNames([...defaultDomains.flatMap((d) => d.tools), handoffTool, { name: FIND_TOOLS_NAME }]);
+assertDomainSummaries(defaultDomains);
 // get_user's profile sections name follow-up tools (personProfile providers' relatedTools);
 // fail at boot if one names a tool the agent does not have.
 assertRelatedToolsExist(defaultDomains.flatMap((d) => d.tools.map((t) => t.name)));
@@ -115,15 +150,50 @@ async function runWithTimeout(fn, timeoutMs) {
 }
 
 /**
+ * find_tools for one user: its description is the catalog of the domains this user
+ * has at least one tool in, and its input only accepts those domain names (1–5, no
+ * repeats). The model-facing schema and the loop's validation are the same Joi schema.
+ */
+function buildFindTools(permittedDomains) {
+  const names = permittedDomains.map((d) => d.domain);
+  const catalog = permittedDomains.map((d) => `- ${d.domain} — ${d.summary}`).join('\n');
+  return defineTool({
+    name: FIND_TOOLS_NAME,
+    domain: 'core',
+    kind: 'read',
+    description:
+      'Loads the tools for one or more domains so you can call them in your next step. Call it before answering ' +
+      'any question about company data, with every domain the question touches. Not needed for greetings or ' +
+      `general-knowledge definitions.\nDomains:\n${catalog}`,
+    input: Joi.object({
+      domains: Joi.array()
+        .items(Joi.string().valid(...names))
+        .min(1)
+        .max(MAX_DOMAINS_PER_FIND)
+        .unique()
+        .required()
+        .description('1 to 5 domain names, no repeats.'),
+    }),
+    access: { note: 'built-in, loads permitted tools only' },
+    execute: async () => {
+      throw new Error(`${FIND_TOOLS_NAME} is handled by the loop`);
+    },
+  });
+}
+
+/**
  * @param {object} user
  * @param {object} [options]
- * @param {Array<{domain:string, instructions:string, tools:Array}>} [options.domains] defaults to every registered domain module
+ * @param {Array<{domain:string, summary:string, instructions:string, tools:Array}>} [options.domains] defaults to every registered domain module
  * @param {object} [options.deps] injected for tests (see toolAccess.js checkAccessRule/guardResultForRule)
- * @returns {Promise<{schemas:Array, instructions:string, execute:Function, render:Function, isHandoff:Function}>}
+ * @param {number} [options.eagerLimit] permitted tools (handoff excluded) above which the registry goes lazy
+ * @returns {Promise<{schemas:Array, instructions:string, lazy:boolean, execute:Function, render:Function,
+ *   isHandoff:Function, isFindTools:Function, domainOfTool:Function, loadDomains:Function, parseFindToolsArgs:Function}>}
  */
-export async function getAgentTools(user, { domains = defaultDomains, deps } = {}) {
+export async function getAgentTools(user, { domains = defaultDomains, deps, eagerLimit = EAGER_TOOL_LIMIT } = {}) {
+  assertDomainSummaries(domains);
   const allTools = [...domains.flatMap((d) => d.tools), handoffTool];
-  assertUniqueToolNames(allTools);
+  assertUniqueToolNames([...allTools, { name: FIND_TOOLS_NAME }]);
 
   const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
 
@@ -134,24 +204,76 @@ export async function getAgentTools(user, { domains = defaultDomains, deps } = {
     if (access.ok) permittedNames.add(tool.name);
   }
 
-  const permittedTools = allTools
-    .filter((tool) => permittedNames.has(tool.name))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const schemas = permittedTools.map(toResponsesSchema);
-
-  const instructions = domains
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const permittedDomains = domains
     .filter((domain) => domain.tools.some((tool) => permittedNames.has(tool.name)))
     .slice()
-    .sort((a, b) => a.domain.localeCompare(b.domain))
-    .map((domain) => domain.instructions)
-    .join('\n\n');
+    .sort((a, b) => a.domain.localeCompare(b.domain));
+
+  function domainBundle(domainList) {
+    const tools = domainList.flatMap((d) => d.tools.filter((t) => permittedNames.has(t.name))).sort(byName);
+    return {
+      schemas: tools.map(toResponsesSchema),
+      instructions: domainList.map((domain) => domain.instructions).join('\n\n'),
+    };
+  }
+
+  const permittedDomainToolCount = permittedDomains.reduce(
+    (n, d) => n + d.tools.filter((t) => permittedNames.has(t.name)).length,
+    0
+  );
+  const findTools = permittedDomains.length ? buildFindTools(permittedDomains) : null;
+  const lazy = !!findTools && permittedDomainToolCount > eagerLimit;
+
+  let schemas;
+  let instructions;
+  if (lazy) {
+    schemas = [findTools, handoffTool].sort(byName).map(toResponsesSchema);
+    instructions = LAZY_INSTRUCTIONS;
+  } else {
+    const permittedTools = allTools.filter((tool) => permittedNames.has(tool.name)).sort(byName);
+    schemas = permittedTools.map(toResponsesSchema);
+    instructions = domainBundle(permittedDomains).instructions;
+  }
+
+  /** Permitted tools of the named domains; unknown or unpermitted names load nothing. */
+  function loadDomains(names) {
+    const wanted = new Set(Array.isArray(names) ? names : []);
+    const picked = permittedDomains.filter((d) => wanted.has(d.domain));
+    return { ...domainBundle(picked), loaded: picked.map((d) => d.domain) };
+  }
+
+  /** find_tools args (JSON string or object) → `{ domains }` or `{ error }`. */
+  function parseFindToolsArgs(rawArgs) {
+    if (!findTools) return { error: 'No domains are available to load.' };
+    let args;
+    try {
+      args = parseRawArgs(rawArgs);
+    } catch (err) {
+      return { error: `Invalid arguments: ${err.message}` };
+    }
+    const { value, error } = findTools.input.validate(args, { abortEarly: false });
+    if (error) return { error: error.details.map((d) => d.message).join('; ') };
+    return { domains: value.domains };
+  }
+
+  // The module's domain (what loadDomains keys on), not the tool's own `domain` field.
+  const domainByToolName = new Map(domains.flatMap((d) => d.tools.map((t) => [t.name, d.domain])));
+  function domainOfTool(name) {
+    return domainByToolName.get(name) ?? null;
+  }
+
+  // Eager registries never offer find_tools, so a hallucinated call to it stays an unknown tool
+  // (same as before lazy loading existed) instead of silently "loading" what is already there.
+  function isFindTools(name) {
+    return lazy && name === FIND_TOOLS_NAME;
+  }
 
   async function execute(name, rawArgs, { requestId } = {}) {
     const startedAt = Date.now();
     let ok = false;
     try {
+      if (isFindTools(name)) return { ok: false, error: `${FIND_TOOLS_NAME} is handled by the loop` };
       const tool = toolsByName.get(name);
       if (!tool) return { ok: false, error: `Unknown tool '${name}'.` };
 
@@ -210,5 +332,16 @@ export async function getAgentTools(user, { domains = defaultDomains, deps } = {
     return name === HANDOFF_TOOL_NAME;
   }
 
-  return { schemas, instructions, execute, render, isHandoff };
+  return {
+    schemas,
+    instructions,
+    lazy,
+    execute,
+    render,
+    isHandoff,
+    isFindTools,
+    domainOfTool,
+    loadDomains,
+    parseFindToolsArgs,
+  };
 }

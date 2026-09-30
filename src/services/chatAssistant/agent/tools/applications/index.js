@@ -14,6 +14,7 @@ const instructions = [
 
 export default {
   domain: 'applications',
+  summary: 'Job applications: how many or which applications, by applicant, job title or status.',
   instructions,
   tools: [countApplications, listApplications],
 };

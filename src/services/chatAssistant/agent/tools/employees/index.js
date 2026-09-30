@@ -31,6 +31,7 @@ const instructions = [
 
 export default {
   domain: 'employees',
+  summary: 'Employee-role profiles: headcount, lists, breakdowns by department/designation/type, who joined or resigned.',
   instructions,
   tools: [countEmployees, listEmployees],
 };

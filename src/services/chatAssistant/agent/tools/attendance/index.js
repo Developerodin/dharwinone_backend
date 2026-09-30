@@ -25,6 +25,7 @@ const instructions = [
 
 export default {
   domain: 'attendance',
+  summary: 'Attendance punches, company attendance summary, leave requests, who is on leave today, backdated requests.',
   instructions,
   tools: [getAttendance, getAttendanceSummary, countLeaveRequests, listLeaveRequests, whoIsOnLeaveToday, listBackdatedRequests],
 };

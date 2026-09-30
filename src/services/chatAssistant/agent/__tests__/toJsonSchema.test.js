@@ -58,6 +58,16 @@ describe('toJsonSchema supported subset', () => {
     });
   });
 
+  it('converts array .min() to minItems and plain .unique() to uniqueItems', () => {
+    assert.deepEqual(toJsonSchema(Joi.array().items(Joi.string()).min(1).max(5).unique()), {
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+      maxItems: 5,
+      uniqueItems: true,
+    });
+  });
+
   it('converts a nested object with required keys and additionalProperties:false', () => {
     const schema = Joi.object({
       name: Joi.string().required(),
@@ -157,6 +167,31 @@ describe('toJsonSchema unsupported features throw at load', () => {
       () => toJsonSchema(schema),
       /Unsupported Joi feature 'array with multiple item schemas' at \(root\)/
     );
+  });
+
+  it('throws on .unique() with a key or function comparator (JSON Schema cannot state it)', () => {
+    const byKey = Joi.array().items(Joi.object({ id: Joi.string() })).unique('id');
+    const byFn = Joi.array().items(Joi.string()).unique((a, b) => a === b);
+    assert.throws(() => toJsonSchema(byKey), /Unsupported Joi feature 'unique with a comparator or options' at \(root\)/);
+    assert.throws(() => toJsonSchema(byFn), /Unsupported Joi feature 'unique with a comparator or options' at \(root\)/);
+  });
+
+  it('.trim() only normalises: the JSON Schema is unchanged', () => {
+    assert.deepEqual(toJsonSchema(Joi.string().trim().max(24)), { type: 'string', maxLength: 24 });
+  });
+
+  it('converts a plain string .pattern() to pattern; flags or invert throw', () => {
+    assert.deepEqual(toJsonSchema(Joi.string().pattern(/^[0-9a-fA-F]{24}$/)), { type: 'string', pattern: '^[0-9a-fA-F]{24}$' });
+    assert.deepEqual(toJsonSchema(Joi.string().pattern(/^a\/b$/, 'slash')), { type: 'string', pattern: '^a\\/b$' });
+    assert.throws(() => toJsonSchema(Joi.string().pattern(/^ab$/i)), /'pattern with flags or invert' at \(root\)/);
+    assert.throws(() => toJsonSchema(Joi.string().pattern(/^ab$/, { invert: true })), /'pattern with flags or invert'/);
+  });
+
+  it('throws on .unique() with a key or function comparator (JSON Schema cannot state it)', () => {
+    const byKey = Joi.array().items(Joi.object({ id: Joi.string() })).unique('id');
+    const byFn = Joi.array().items(Joi.string()).unique((a, b) => a === b);
+    assert.throws(() => toJsonSchema(byKey), /Unsupported Joi feature 'unique with a comparator or options' at \(root\)/);
+    assert.throws(() => toJsonSchema(byFn), /Unsupported Joi feature 'unique with a comparator or options' at \(root\)/);
   });
 
   it('throws on object pattern keys', () => {

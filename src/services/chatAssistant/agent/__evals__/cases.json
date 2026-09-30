@@ -144,7 +144,7 @@
   {
     "id": "handoff-employees-leave",
     "question": "how many employees are on leave today?",
-    "expect": { "handoff": true }
+    "expect": { "tools": ["who_is_on_leave_today"] }
   },
   {
     "id": "greeting-answered",
@@ -232,7 +232,7 @@
       { "calls": [{ "tool": "count_jobs", "args": { "filters": { "search": "react" } }, "total": 6 }] }
     ],
     "question": "what is our notice period?",
-    "expect": { "handoff": true }
+    "expect": { "tools": ["search_knowledge_base"] }
   },
   {
     "id": "employee-headcount-in-window",
@@ -577,7 +577,10 @@
   {
     "id": "r4-who-referred",
     "question": "who referred Khushi Parmar?",
-    "expect": { "tools": ["list_referral_leads"], "args": { "list_referral_leads": { "filters": { "candidate": "Khushi Parmar" } } } }
+    "expect": { "anyOf": [
+      { "tools": ["list_referral_leads"], "args": { "list_referral_leads": { "filters": { "candidate": "Khushi Parmar" } } } },
+      { "tools": ["get_referral"], "args": { "get_referral": { "person": "Khushi Parmar" } } }
+    ] }
   },
   {
     "id": "r4-referrer-count",
