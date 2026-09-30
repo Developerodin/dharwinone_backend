@@ -1,10 +1,13 @@
 import mongoose from 'mongoose';
 import JobModel from '../../../../../models/job.model.js';
+import EmployeeModel from '../../../../../models/employee.model.js';
+import UserModel from '../../../../../models/user.model.js';
 import { searchApplications as realSearchApplications } from '../../../../applicantQuery.service.js';
 import {
   resolveJobVisibilityFilter as realResolveJobVisibilityFilter,
   scopeJobModel,
 } from '../../../queryPlanner/entities/jobRank.js';
+import { ownsProfile } from '../ownsProfile.js';
 
 // applicantQuery.service's applicationScope is the real gate (admin / interviews.manage / recruiter /
 // sales agent / self) — same as the legacy fetch_job_applications, which had no anyOf either.
@@ -26,6 +29,8 @@ export function applicationsDeps(ctx) {
     searchApplications: deps.searchApplications ?? realSearchApplications,
     resolveJobVisibilityFilter: deps.resolveJobVisibilityFilter ?? realResolveJobVisibilityFilter,
     Job: deps.Job ?? JobModel,
+    Employee: deps.Employee ?? EmployeeModel,
+    User: deps.User ?? UserModel,
   };
 }
 
@@ -47,10 +52,24 @@ export async function runApplicationSearch({ filters = {}, limit, user, deps }) 
     if (ids.length === 1) jobId = String(ids[0]); else jobIds = ids.map(String);
   }
 
+  // A user id means that person's own candidate profiles, exactly. Searching by their name instead also hit
+  // namesakes and every job whose title contains the name; a profile a recruiter merely owns is not theirs.
+  let candidateIds = null;
+  if (filters.applicantUserId && !filters.applicantName) {
+    if (!mongoose.Types.ObjectId.isValid(filters.applicantUserId)) {
+      return { notFound: 'applicant', total: 0, records: [], filtersApplied: filters };
+    }
+    const profiles = await deps.Employee.find({ owner: filters.applicantUserId }).select('owner email').lean();
+    const owns = await ownsProfile(profiles, deps);
+    candidateIds = profiles.filter(owns).map((p) => String(p._id));
+    if (!candidateIds.length) return { notFound: 'applicant', total: 0, records: [], filtersApplied: filters };
+  }
+
   const hasApplicant = !!(filters.applicantName || filters.applicantUserId);
   const res = await deps.searchApplications({
     q: filters.applicantName,
-    userId: filters.applicantUserId,
+    userId: candidateIds ? null : filters.applicantUserId,
+    candidateIds,
     status: filters.status,
     jobId,
     jobIds,

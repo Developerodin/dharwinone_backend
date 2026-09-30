@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import EmployeeModel from '../../../../../models/employee.model.js';
 import StudentModel from '../../../../../models/student.model.js';
+import UserModel from '../../../../../models/user.model.js';
 import LeaveRequestModel from '../../../../../models/leaveRequest.model.js';
 import { getGrantingPermissions } from '../../../../../config/permissions.js';
 import attendanceService from '../../../../attendance.service.js';
@@ -12,6 +13,7 @@ import { queryBackdatedAttendanceRequests as realQueryBackdated } from '../../..
 import { getEmployeesOnLeaveToday as realGetEmployeesOnLeaveToday } from '../../../../onLeaveToday.service.js';
 import { aggregateOrgAttendance as realAggregateOrgAttendance } from '../../../attendanceAggregator.js';
 import { dayRange } from '../employees/common.js';
+import { ownsProfile } from '../ownsProfile.js';
 
 export const MAX_LIST_LIMIT = 50;
 export const LEAVE_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'];
@@ -41,7 +43,7 @@ export const windowSchema = Joi.object({
 });
 
 export const personSchema = Joi.string().min(1)
-  .description('A named person (full name, employee id like DBS10, or email). Omit for the signed-in ' +
+  .description('A named person (full name, employee id like DBS10, email, or user id). Omit for the signed-in ' +
     'user\'s own records. NEVER a pronoun — resolve it from the conversation first.');
 
 export function attendanceScope(ctx) {
@@ -57,6 +59,7 @@ export function attendanceDeps(ctx) {
   return {
     Employee: deps.Employee ?? EmployeeModel,
     Student: deps.Student ?? StudentModel,
+    User: deps.User ?? UserModel,
     LeaveRequest: deps.LeaveRequest ?? LeaveRequestModel,
     listByStudent: deps.listByStudent ?? attendanceService.listByStudent,
     listByUser: deps.listByUser ?? attendanceService.listByUser,
@@ -110,11 +113,28 @@ export async function resolvePerson(person, user, deps, { canName = canNameOther
     return { error: 'You can only see your own records here. Ask about "my" attendance or leave instead.' };
   }
   const q = String(person).trim();
+  if (/^[a-f0-9]{24}$/i.test(q)) {
+    // A user id (e.g. from get_user): attendance and leave hang off the login, so no profile hop is needed.
+    const u = await deps.User.findById(q).select('name').lean();
+    if (!u) return { notFound: q };
+    const emp = await deps.Employee.findOne({ owner: q }).select('owner email employeeId').lean();
+    const own = emp && (await ownsProfile([emp], deps))(emp);
+    return {
+      person: {
+        userId: q, name: u.name ?? null, employeeId: own ? emp.employeeId ?? null : null,
+        self: q === selfId, studentIds: await studentIdsFor(q),
+      },
+    };
+  }
   const exact = new RegExp(`^${escapeRegex(q)}$`, 'i');
-  const rows = await deps.Employee.find({
+  const found = await deps.Employee.find({
     owner: { $ne: null },
     $or: [{ fullName: { $regex: escapeRegex(q), $options: 'i' } }, { employeeId: exact }, { email: exact }],
-  }).select('owner fullName employeeId').limit(6).lean();
+  }).select('owner fullName employeeId email').limit(6).lean();
+  // A candidate profile the job creator merely owns is not the creator: resolving through it would show the
+  // recruiter's attendance and leave under the candidate's name.
+  const owns = await ownsProfile(found, deps);
+  const rows = found.filter(owns);
   if (!rows.length) return { notFound: q };
   const exactRows = rows.filter((r) => exact.test(r.fullName || '') || exact.test(r.employeeId || ''));
   let picked = null;

@@ -208,7 +208,7 @@ describe('get_person_360 — full 360', () => {
 
     const args = Object.fromEntries(calls.map((c) => [c.name, c.args]));
     assert.deepEqual(args.get_offer, { candidate: 'priya@x.com' }, 'lookups use the email when known');
-    assert.deepEqual(args.list_applications, { filters: { applicantUserId: U1 }, limit: 50 });
+    assert.deepEqual(args.list_applications, { filters: { applicantUserId: U1 }, limit: 5 });
     assert.deepEqual(args.get_attendance.window, { from: '2026-09-02', to: IST_TODAY }, '30 IST days, today included');
     assert.deepEqual(args.count_tasks.filters, { assigneeUserId: U1 });
     assert.deepEqual(calls.filter((c) => c.name === 'list_activity').map((c) => c.args.filters),
@@ -312,25 +312,32 @@ describe('get_person_360 — full 360', () => {
   });
 
   it('substring lookups never pass off another person’s record as theirs', async () => {
-    const { result } = await run({ person: 'Priya Sharma', sections: ['applications', 'offer', 'placement', 'referral', 'calls'] }, {
+    const { result } = await run({ person: 'Priya Sharma', sections: ['offer', 'placement', 'referral', 'calls'] }, {
       get_user: uniqueUser(['candidate']),
       ...goodResponses(),
       // "priya@x.com" is a substring of "supriya@x.com": a lone hit is still someone else's.
       get_offer: ok({ offerCode: 'OF-9', candidate: 'Supriya Rao', status: 'Sent' }),
       get_placement: ok({ matches: [{ id: 'p9', candidate: 'Supriya Rao', status: 'Pending' }] }),
       get_referral: ok({ total: 1, records: [{ candidate: 'Supriya Rao', referredBy: 'Amit' }] }),
-      list_applications: ok({ total: 2, records: [
-        { applicant: 'Priya Sharma', job: 'Dev', status: 'Applied' },
-        { applicant: 'Priya Sharmaji', job: 'Ops', status: 'Applied' },
-      ] }),
       list_call_records: ok({ total: 2, records: [{ person: 'Priya Sharma Rao', when: '2026-09-01' }] }),
     });
     const s = result.sections;
     assert.equal(s.offer.status, 'notRecorded');
     assert.equal(s.placement.status, 'notRecorded');
     assert.equal(s.referral.status, 'notRecorded');
-    assert.equal(s.applications.summary.total, 1);
     assert.equal(s.calls.status, 'notRecorded');
+  });
+
+  it('callbacks match the profile name too, and attendance / leave get the exact user id', async () => {
+    const user = uniqueUser(['candidate', 'employee'], { profiles: { candidate: { fields: { name: 'Priya R. Sharma' } } } });
+    const { result, calls } = await run({ person: 'Priya Sharma', focus: 'pending' }, {
+      get_user: user,
+      ...goodResponses(),
+      list_call_followups: ok({ total: 1, records: [{ applicant: 'Priya R. Sharma', job: 'Dev', callbackAt: '2026-10-01' }] }),
+    });
+    assert.equal(result.sections.callbacksDue.summary.due + result.sections.callbacksDue.summary.overdue, 2);
+    const leave = calls.find((c) => c.name === 'list_leave_requests');
+    assert.equal(leave.args.filters.person, U1);
   });
 
   it('several records inside a section (duplicate names) → ambiguous summary, not a guess', async () => {
@@ -374,7 +381,7 @@ describe('get_person_360 — focus', () => {
     const args = Object.fromEntries(calls.map((c) => [c.name, c.args]));
     assert.deepEqual(args.get_attendance.window, { from: IST_TODAY, to: IST_TODAY });
     assert.deepEqual(args.list_tasks.filters.dueBetween, { from: IST_TODAY, to: IST_TODAY });
-    assert.deepEqual(args.list_leave_requests.filters, { person: 'priya@x.com', dates: { from: IST_TODAY, to: IST_TODAY }, status: 'approved' });
+    assert.deepEqual(args.list_leave_requests.filters, { person: U1, dates: { from: IST_TODAY, to: IST_TODAY }, status: 'approved' });
     assert.equal(result.sections.meetingsToday.status, 'restricted');
     assert.ok(!names().includes('list_meetings'));
   });

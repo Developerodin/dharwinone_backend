@@ -61,6 +61,29 @@ describe('get_attendance', () => {
     assert.equal(out.person.name, 'Saad Khan');
   });
 
+  it('never resolves a candidate profile to the recruiter who merely owns it; a user id resolves directly', async () => {
+    const REC = '64b7f0c2a1b2c3d4e5f60009';
+    const profiles = [
+      { owner: REC, fullName: 'Kiran Rao', employeeId: null, email: 'kiran@x.com' },
+      { owner: REC, fullName: 'Rec Ruiter', employeeId: 'DBS3', email: 'rec@x.com' },
+    ];
+    const users = {
+      find: () => chain([{ _id: REC, email: 'rec@x.com' }]),
+      findById: () => ({ select: () => ({ lean: async () => ({ _id: REC, name: 'Rec Login' }) }) }),
+    };
+    const base = {
+      // The name search hits only Kiran's profile; the per-owner count sees both.
+      Employee: { find: (q) => chain(q.$or ? [profiles[0]] : profiles), findOne: () => chain(profiles[1]) },
+      User: users,
+      listByStudent: async () => ({ totalResults: 0, results: [] }),
+    };
+    const kiran = await getAttendance.execute({ person: 'Kiran Rao' }, ctxFor(HR, base));
+    assert.equal(kiran.notFound, 'person');
+    const byId = await getAttendance.execute({ person: REC }, ctxFor(HR, base));
+    assert.equal(byId.person.name, 'Rec Login');
+    assert.equal(byId.person.employeeId, 'DBS3');
+  });
+
   it('rejects a malformed day through the shared dayRange validator', async () => {
     await assert.rejects(getAttendance.execute({ window: { from: '2026-13-01', to: '2026-13-02' } }, ctxFor(PLAIN, {
       listByStudent: async () => ({ results: [] }),

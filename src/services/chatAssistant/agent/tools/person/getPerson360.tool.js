@@ -64,9 +64,13 @@ function targetFrom(r, viewer) {
       .filter(Boolean).map((s) => String(s).toLowerCase()),
   );
   const userId = r.identity?.userId != null ? String(r.identity.userId) : null;
+  const name = r.identity?.name ?? null;
+  // Login name plus profile names: rows keyed by a profile's fullName (callbacks) may spell it differently.
+  const profileNames = Object.values(r.profiles || {}).map((p) => p?.fields?.name).filter(Boolean);
   return {
     userId,
-    name: r.identity?.name ?? null,
+    name,
+    names: [...new Set([name, ...profileNames].filter(Boolean))],
     email: r.identity?.email ?? null,
     roles: roleNames(r),
     candidate: slugs.has('candidate'),
@@ -102,7 +106,9 @@ async function resolveTarget(person, viewer, runTool) {
 // section keeps only records under the person's exact name.
 const lookup = (t) => t.email || t.name;
 const personArg = (t) => (t.self ? {} : { person: lookup(t) });
-const leavePerson = (t) => (t.self ? { mine: true } : { person: lookup(t) });
+// Attendance and leave hang off the login, so they get the exact user id rather than a name or email search.
+const loginArg = (t) => (t.self ? {} : { person: t.userId });
+const leavePerson = (t) => (t.self ? { mine: true } : { person: t.userId });
 const assignee = (t) => (t.self ? { assignedToMe: true } : { assigneeUserId: t.userId });
 const needsName = (t) => (t.name && t.name.trim().length >= 2 ? null : notRecorded('No name on record to search by.'));
 
@@ -134,14 +140,10 @@ function referralSection(r, t) {
   return notRecorded('No referral lead on record.');
 }
 
-// list_applications turns applicantUserId back into a name and matches it as a substring of applicant names and
-// job titles, so only rows under this person's exact name are theirs.
-function applicationsSection(r, t) {
+// applicantUserId matches this person's own candidate profiles exactly, so total is theirs.
+function applicationsSection(r) {
   if (r.notFound || !r.total) return notRecorded('No job applications on record.');
-  const rows = exactRows(r, 'applicant', t.name);
-  const cut = scanTruncated(r) ? { scanTruncated: true, note: `Only the first ${(r.records || []).length} name matches were read.` } : {};
-  if (!rows.length) return notRecorded(cut.note ?? 'No job applications on record.');
-  return okSection({ total: rows.length, ...cut }, rows.map((x) => pick(x, ['job', 'status', 'appliedAt'])));
+  return okSection({ total: r.total }, (r.records || []).map((x) => pick(x, ['job', 'status', 'appliedAt'])));
 }
 
 function callsSection([list, metrics], t) {
@@ -325,7 +327,8 @@ function missingDocumentsSection(r) {
 function callbacksSection([due, overdue], t) {
   const verdicts = [due, overdue].map((o) => failedSection(o));
   if (verdicts[0] && verdicts[1]) return verdicts[0];
-  const rowsOf = (o, i, isOverdue) => (verdicts[i] ? [] : exactRows(o.result, 'applicant', t.name)
+  const rowsOf = (o, i, isOverdue) => (verdicts[i] ? [] : (o.result.records || [])
+    .filter((x) => t.names.some((n) => sameName(x.applicant, n)))
     .map((x) => ({ ...pick(x, ['job', 'callbackAt', 'applicationStatus']), overdue: isOverdue })));
   const dueRows = rowsOf(due, 0, false);
   const overdueRows = rowsOf(overdue, 1, true);
@@ -369,8 +372,7 @@ function fullPlan(attendanceWindow) {
       build: one(referralSection),
     },
     applications: {
-      unavailable: needsName,
-      calls: (t) => [{ name: 'list_applications', args: { filters: { applicantUserId: t.userId }, limit: SCAN_LIMIT } }],
+      calls: (t) => [{ name: 'list_applications', args: { filters: { applicantUserId: t.userId }, limit: MAX_ROWS } }],
       build: one(applicationsSection),
     },
     calls: {
@@ -411,7 +413,7 @@ function fullPlan(attendanceWindow) {
     },
     attendance: {
       only: 'employee',
-      calls: (t) => [{ name: 'get_attendance', args: { ...personArg(t), window: attendanceWindow, limit: MAX_ROWS } }],
+      calls: (t) => [{ name: 'get_attendance', args: { ...loginArg(t), window: attendanceWindow, limit: MAX_ROWS } }],
       build: one((r) => attendanceSection(r, `No attendance rows in the last ${ATTENDANCE_DAYS} days.`)),
     },
     leave: {
@@ -450,7 +452,7 @@ function todayPlan(today) {
   return {
     attendanceToday: {
       only: 'employee',
-      calls: (t) => [{ name: 'get_attendance', args: { ...personArg(t), window: day, limit: MAX_ROWS } }],
+      calls: (t) => [{ name: 'get_attendance', args: { ...loginArg(t), window: day, limit: MAX_ROWS } }],
       build: one((r) => attendanceSection(r, 'No attendance row for today yet.')),
     },
     tasksDueToday: {

@@ -419,12 +419,15 @@ const searchApplications = async ({
   status = null,
   jobId = null,
   jobIds = null,
+  candidateIds = null,
   user,
   limit = 50,
   requireApplicantQ = false,
 } = {}) => {
-  const searchQ = await resolveApplicantSearchQ({ q, userId, email });
-  if (requireApplicantQ && !searchQ) {
+  // Exact candidate profiles (e.g. one person's own profiles) replace the name/email/user text search.
+  const exactCandidates = Array.isArray(candidateIds) && candidateIds.length ? candidateIds : null;
+  const searchQ = exactCandidates ? null : await resolveApplicantSearchQ({ q, userId, email });
+  if (requireApplicantQ && !searchQ && !exactCandidates) {
     return {
       total: 0,
       baseTotal: 0,
@@ -441,11 +444,13 @@ const searchApplications = async ({
   if (status) filter.status = status;
   if (jobId) filter.jobId = jobId;
   if (Array.isArray(jobIds) && jobIds.length) filter.jobIds = jobIds;
+  if (exactCandidates) filter.candidateId = { $in: exactCandidates };
 
   const baseFilter = { excludeInternal: true };
   if (searchQ) baseFilter.q = searchQ;
   if (jobId) baseFilter.jobId = jobId;
   if (Array.isArray(jobIds) && jobIds.length) baseFilter.jobIds = jobIds;
+  if (exactCandidates) baseFilter.candidateId = { $in: exactCandidates };
 
   const [result, statusRows] = await Promise.all([
     queryApplicants(filter, { limit, page: 1, sortBy: 'createdAt:desc' }, user),

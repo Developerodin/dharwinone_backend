@@ -1,4 +1,5 @@
 import { OBJECT_ID_RE, idOf, okSet } from './common.js';
+import { ownsProfile } from '../ownsProfile.js';
 
 /*
  * Id kinds the sets use, and the reference field each hop reads:
@@ -21,30 +22,6 @@ import { OBJECT_ID_RE, idOf, okSet } from './common.js';
 
 const lc = (s) => String(s ?? '').trim().toLowerCase();
 const uniq = (xs) => [...new Set(xs.filter(Boolean).map(String))];
-
-/**
- * `(employee) => bool`: does this profile speak for its owner? Yes when it is the owner's only profile, or its
- * email equals the owner's login email. A job creator owning many public-apply candidate profiles is neither.
- */
-async function ownsProfile(emps, deps) {
-  const owners = uniq(emps.map((e) => idOf(e.owner)));
-  const profiles = owners.length
-    ? await deps.Employee.find({ owner: { $in: owners } }).select('owner').lean()
-    : [];
-  const perOwner = new Map();
-  for (const p of profiles) perOwner.set(idOf(p.owner), (perOwner.get(idOf(p.owner)) ?? 0) + 1);
-  const shared = owners.filter((o) => (perOwner.get(o) ?? 1) > 1);
-  const ownerEmail = new Map();
-  if (shared.length) {
-    const users = await deps.User.find({ _id: { $in: shared } }).select('email').lean();
-    for (const u of users) ownerEmail.set(idOf(u), lc(u.email));
-  }
-  return (e) => {
-    const owner = idOf(e.owner);
-    if (!owner) return false;
-    return !shared.includes(owner) || (!!e.email && lc(e.email) === ownerEmail.get(owner));
-  };
-}
 
 export async function employeesToUsers(ids, deps) {
   const wanted = uniq(ids);
