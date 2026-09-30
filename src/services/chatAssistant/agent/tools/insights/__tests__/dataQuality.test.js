@@ -5,7 +5,7 @@ import { CHECK_IDS } from '../qualityChecks.js';
 
 const UID = '64b0000000000000000000a1';
 const viewer = (...perms) => ({ id: UID, _id: UID, name: 'Asha', authContext: { permissions: new Set(perms) } });
-const FULL = viewer('employees.read', 'candidates.read', 'offers.read', 'offers.edit', 'projects.read', 'tasks.read');
+const FULL = viewer('employees.read', 'candidates.read', 'offers.read', 'offers.edit', 'projects.read', 'tasks.read', 'modules.read');
 const NONE = viewer('dashboard.view');
 
 const ok = (result) => ({ status: 'ok', result });
@@ -23,31 +23,36 @@ function query(rows, seen) {
   return q;
 }
 
-const clauseKey = (match) => Object.keys(match.$and?.at(-1) ?? {})[0];
-
 function fakeDeps(over = {}) {
   const seen = { employeeMatches: [], auth: [], scope: [], offerMatches: [], projectFilter: null, runTool: [] };
+  // Two people who own their own profiles, plus recruiter REC who owns their own profile AND a public-apply
+  // candidate's. Every scan returns all four; ownsProfile decides who is who.
   const peopleRows = [
-    { fullName: 'Ravi Kumar', employeeId: 'E1', isProfileCompleted: 60 },
-    { fullName: 'Ravi Kumar', employeeId: 'E2', isProfileCompleted: 40 },
+    { _id: 'e1', owner: 'o1', email: 'ravi1@x.com', fullName: 'Ravi Kumar', employeeId: 'E1', isProfileCompleted: 60 },
+    { _id: 'e2', owner: 'o2', email: 'ravi2@x.com', fullName: 'Ravi Kumar', employeeId: 'E2', isProfileCompleted: 40 },
+    { _id: 'e3', owner: 'REC', email: 'meera@x.com', fullName: 'Meera Iyer', employeeId: null },
+    { _id: 'e4', owner: 'REC', email: 'rec@x.com', fullName: 'Rec Ruiter', employeeId: 'E4' },
   ];
-  const counts = { isProfileCompleted: 12, 'skills.0': 3, 'qualifications.0': 4, 'experiences.0': 5, assignedAgent: 6 };
   const deps = {
     now: () => new Date('2026-09-30T06:00:00.000Z'),
     authorizeEmployeeQuery: (q) => { seen.auth.push(q); return { allowed: true }; },
     applyEmployeeListScope: async (f) => { seen.scope.push(f); return { ...f, scoped: true }; },
-    buildEmployeeListMongoFilter: async (f) => ({ mongoFilter: { role: f.ownerUserRole, scoped: f.scoped } }),
+    buildEmployeeListMongoFilter: async (f) => ({ mongoFilter: { owner: { role: f.ownerUserRole }, scoped: f.scoped } }),
     Employee: {
-      countDocuments: async (m) => { seen.employeeMatches.push(m); return counts[clauseKey(m)] ?? 0; },
-      find: (m) => (m.referredByUserId ? query([{ _id: 'cand1' }]) : query(peopleRows)),
+      find: (m) => {
+        if (m.referredByUserId) return query([{ _id: 'cand1' }]);
+        if (m.owner?.$in) return query(peopleRows.filter((r) => m.owner.$in.includes(r.owner)));
+        seen.employeeMatches.push(m);
+        return query(peopleRows);
+      },
     },
+    User: { find: () => query([{ _id: 'REC', email: 'rec@x.com' }]) },
     JobApplication: {
-      find: (m) => (m._id
-        ? query([
-          { candidate: { fullName: 'Meera Iyer' }, job: { title: 'Nurse' }, status: 'Applied' },
-          { candidate: null, job: { title: 'Nurse' }, status: 'Applied' },
-        ])
-        : query([{ _id: 'a1', candidate: 'cand1' }, { _id: 'a2', candidate: 'cand2' }, { _id: 'a3', candidate: 'ghost' }])),
+      countDocuments: async (m) => { seen.applicationMatch = m; return 2; },
+      find: () => query([
+        { candidate: { fullName: 'Meera Iyer' }, job: { title: 'Nurse' }, status: 'Applied' },
+        { candidate: null, job: { title: 'Nurse' }, status: 'Applied' },
+      ]),
     },
     buildApplicantQuery: async (filter, user) => ({ query: { scopedFor: user.id, excludeInternal: filter.excludeInternal } }),
     Offer: {
@@ -125,9 +130,11 @@ describe('run_data_quality_checks', () => {
       assert.equal(c.status, 'ok', `${c.id}: ${c.error}`);
       assert.ok(c.sample.length <= 5);
     }
-    assert.equal(check('incomplete_employee_profiles').count, 12);
-    assert.equal(check('candidates_no_skills').count, 3);
-    assert.equal(check('employees_no_agent').count, 6);
+    // Employee checks: the recruiter's own profile counts, the applicant they merely own does not.
+    assert.equal(check('incomplete_employee_profiles').count, 3);
+    // Candidate checks: the recruiter-owned applicant is added back.
+    assert.equal(check('candidates_no_skills').count, 4);
+    assert.equal(check('employees_no_agent').count, 3);
     assert.equal(check('employees_no_department').count, 10);
     assert.equal(check('employees_no_group').count, 4);
     assert.equal(check('courses_no_position').count, 2);
@@ -138,9 +145,11 @@ describe('run_data_quality_checks', () => {
 
   it("people checks use the page's own scope + one $and clause, with the right role", async () => {
     const { seen, check } = await run({ checks: ['incomplete_employee_profiles', 'candidates_no_education'] });
-    const [emp, cand] = seen.employeeMatches;
-    assert.deepEqual(emp, { $and: [{ role: 'employee', scoped: true }, { isProfileCompleted: { $not: { $gte: 100 } } }] });
-    assert.deepEqual(cand, { $and: [{ role: 'candidate', scoped: true }, { 'qualifications.0': { $exists: false } }] });
+    const [emp, cand, candNoRole] = seen.employeeMatches;
+    assert.deepEqual(emp, { $and: [{ owner: { role: 'employee' }, scoped: true }, { isProfileCompleted: { $not: { $gte: 100 } } }] });
+    assert.deepEqual(cand, { $and: [{ owner: { role: 'candidate' }, scoped: true }, { 'qualifications.0': { $exists: false } }] });
+    assert.deepEqual(candNoRole, { $and: [{ scoped: true }, { 'qualifications.0': { $exists: false } }] }, 'same scope, role clause dropped');
+    assert.equal(seen.employeeMatches.length, 3, 'employee checks never add recruiter-owned applicants');
     assert.deepEqual(seen.auth.map((a) => a.filters.ownerUserRole).sort(), ['candidate', 'employee']);
     assert.deepEqual(check('incomplete_employee_profiles').sample[0], { name: 'Ravi Kumar', employeeId: 'E1', profileCompletion: 60 });
     assert.match(check('incomplete_employee_profiles').source, /calculateProfileCompletion/);
@@ -148,7 +157,7 @@ describe('run_data_quality_checks', () => {
 
   it('duplicate names in a sample stay as separate rows', async () => {
     const { check } = await run({ checks: ['candidates_no_skills'] });
-    assert.deepEqual(check('candidates_no_skills').sample.map((s) => s.name), ['Ravi Kumar', 'Ravi Kumar']);
+    assert.deepEqual(check('candidates_no_skills').sample.map((s) => s.name).filter((n) => n === 'Ravi Kumar'), ['Ravi Kumar', 'Ravi Kumar']);
   });
 
   it('access denied: a viewer with none of the page permissions gets restricted checks with no data', async () => {
@@ -187,7 +196,7 @@ describe('run_data_quality_checks', () => {
     const c = check('offers_missing_terms');
     assert.equal(c.count, 7);
     assert.deepEqual(c.parts, { missingJoiningDate: 4, missingSalary: 5 });
-    assert.deepEqual(seen.offerMatches[0].$and[1], { status: { $ne: 'Rejected' } });
+    assert.deepEqual(seen.offerMatches[0].$and[1], { status: { $nin: ['Rejected', 'Draft'] } }, 'drafts are still being written');
     assert.equal(c.sample[0].missing, 'joining date, salary');
     assert.equal(c.sample[1].missing, '');
   });
@@ -211,16 +220,9 @@ describe('run_data_quality_checks', () => {
     assert.match(c.source, /not captured in DharwinOne/);
   });
 
-  it('applications with no referral: an empty set is 0 without a second query', async () => {
-    let employeeQueried = false;
-    const { check } = await run({ checks: ['applications_no_referral'] }, FULL, {
-      deps: {
-        JobApplication: { find: () => query([]) },
-        Employee: { find: () => { employeeQueried = true; return query([]); }, countDocuments: async () => 0 },
-      },
-    });
-    assert.equal(check('applications_no_referral').count, 0);
-    assert.equal(employeeQueried, false);
+  it('applications with no referral: counted in Mongo within the page scope, never loading every application', async () => {
+    const { seen } = await run({ checks: ['applications_no_referral'] });
+    assert.deepEqual(seen.applicationMatch, { $and: [{ scopedFor: UID, excludeInternal: true }, { candidate: { $nin: ['cand1'] } }] });
   });
 
   it('duplicates come from find_duplicate_people; an unregistered tool is an error, never another source', async () => {
@@ -255,6 +257,17 @@ describe('run_data_quality_checks', () => {
     const { seen, check } = await run({ checks: ['projects_no_manager'] });
     assert.deepEqual(seen.projectFilter.projectManager, { $in: [null, ''] });
     assert.equal(check('projects_no_manager').scope, 'all');
+  });
+
+  it('courses: without the course list permission (modules / categories / positions read) → restricted', async () => {
+    let read = false;
+    // candidates.read grants positions.read (the Positions roster), so only an employees.read viewer is refused.
+    const recruiter = viewer('employees.read');
+    const { check } = await run({ checks: ['courses_no_position'] }, recruiter, {
+      deps: { TrainingModule: { countDocuments: async () => { read = true; return 0; }, find: () => query([]) } },
+    });
+    assert.equal(check('courses_no_position').status, 'restricted');
+    assert.equal(read, false);
   });
 
   it('courses: the roster gate refuses → restricted and the catalogue is never read', async () => {
@@ -293,14 +306,10 @@ describe('run_data_quality_checks', () => {
   });
 
   it('checks subset and sampleSize 0 → counts only, no sample queries', async () => {
-    let sampled = false;
-    const { out } = await run({ checks: ['candidates_no_experience'], sampleSize: 0 }, FULL, {
-      deps: { Employee: { countDocuments: async () => 3, find: () => { sampled = true; return query([]); } } },
-    });
+    const { out } = await run({ checks: ['candidates_no_experience'], sampleSize: 0 });
     assert.equal(out.checks.length, 1);
-    assert.equal(out.checks[0].count, 3);
+    assert.equal(out.checks[0].count, 4);
     assert.deepEqual(out.checks[0].sample, []);
-    assert.equal(sampled, false);
   });
 
   it('input schema: unknown / duplicate check ids and sampleSize over 5 are rejected', () => {

@@ -1,5 +1,7 @@
 import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
+import { DEFAULT_TIMEZONE } from '../../context.js';
+import { dateStrInTz } from '../../../../../utils/zonedTime.js';
 import { enrichAttendanceSummary } from '../../../attendanceAnalytics.js';
 import {
   ATTENDANCE_SUMMARY_ACCESS, windowSchema, attendanceScope, attendanceDeps, dayKeys, simpleTable,
@@ -32,7 +34,9 @@ export default defineTool({
     if (spanDays > MAX_WINDOW_DAYS) {
       return { error: `Pick a window of at most ${MAX_WINDOW_DAYS} days (asked for ${spanDays}).` };
     }
-    const todayKey = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+    // Day keys are IST days: a UTC "today" called 00:00–05:30 IST today a future date.
+    const now = (ctx?.deps?.now ?? (() => new Date()))();
+    const todayKey = new Date(`${dateStrInTz(now, DEFAULT_TIMEZONE)}T00:00:00.000Z`);
     if (from > todayKey) {
       return { futureDate: true, total: 0, note: 'Attendance is only recorded for days that have already happened.' };
     }

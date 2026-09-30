@@ -112,6 +112,14 @@ describe('get_attendance_summary', () => {
     assert.equal(out.avgDailyPresent, 1.5);
   });
 
+  it('today is the IST day: 02:00 IST on 1 Oct is still 30 Sep in UTC, but 1 Oct is not in the future', async () => {
+    const out = await getAttendanceSummary.execute({ window: { from: '2026-10-01', to: '2026-10-01' } }, ctxFor(HR, {
+      now: () => new Date('2026-09-30T20:30:00.000Z'),
+      aggregateOrgAttendance: async () => ({ total: 0, perDay: [], employees: [] }),
+    }));
+    assert.equal(out.futureDate, undefined);
+  });
+
   it('short-circuits a future window', async () => {
     const out = await getAttendanceSummary.execute({ window: { from: '2999-01-01', to: '2999-01-01' } }, ctxFor(HR));
     assert.equal(out.futureDate, true);

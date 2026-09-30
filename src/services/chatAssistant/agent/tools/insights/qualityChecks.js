@@ -1,6 +1,7 @@
 import JobApplicationModel from '../../../../../models/jobApplication.model.js';
 import OfferModel from '../../../../../models/offer.model.js';
 import TrainingModuleModel from '../../../../../models/trainingModule.model.js';
+import UserModel from '../../../../../models/user.model.js';
 import { toApiFilter } from '../../../../../schemas/employees/employeeQuery.scope.js';
 import { buildApplicantQuery as realBuildApplicantQuery } from '../../../../applicantQuery.service.js';
 import { buildOfferVisibilityClause as realBuildOfferVisibilityClause } from '../../../../offer.service.js';
@@ -10,6 +11,7 @@ import { OFFERS_ACCESS, canSeeOfferCompensation as realCanSeeOfferCompensation }
 import { PROJECTS_ACCESS, projectFilterFor, workDeps } from '../projects/common.js';
 import { APPLICATIONS_PAGE_PERMISSION } from '../calls/followups.js';
 import { NOT_CAPTURED, runSection, sectionFrom } from './common.js';
+import { ownsProfile } from '../ownsProfile.js';
 
 /** Injectable seam — ctx.deps overrides for tests; tests never touch Mongo. */
 export function qualityDeps(ctx) {
@@ -17,6 +19,7 @@ export function qualityDeps(ctx) {
   const work = workDeps(ctx);
   return {
     ...personRecordsDeps(ctx),
+    User: d.User ?? UserModel,
     queryProjects: work.queryProjects,
     isAdmin: work.isAdmin,
     JobApplication: d.JobApplication ?? JobApplicationModel,
@@ -31,10 +34,19 @@ export function qualityDeps(ctx) {
 const allowed = async (rule, env) => (await checkAccessRule(rule, env.user, env.ctx?.deps)).ok;
 const limitFor = (n) => Math.max(1, n);
 
+// Rows one population scan reads; past it the count is a lower bound (atLeast).
+const PEOPLE_SCAN_CAP = 5000;
+
 /**
  * Employees / Candidates page population + one field clause.
  * ponytail: no Wave 1 tool filters on these fields. Same authorize → scope → mongo filter chain as
  * get_allocation's loadPopulation (the page's own list scope), wrapped in $and with the clause.
+ *
+ * The page picks people by their owner LOGIN's role, but a public-apply candidate profile is owned by the job
+ * creator (ownsProfile.js). Such a profile is not the creator — so it never counts as an Employee-role person —
+ * and it is a candidate even though the creator holds no Candidate role, so candidate checks add them back
+ * from the same scope without the role clause. Rows are read (owner + email) to apply that rule, capped at
+ * PEOPLE_SCAN_CAP per scan; upgrade = store an `ownsOwner` flag on Employee and count in Mongo.
  */
 async function peopleCheck(env, ownerUserRole, clause, extraFields = '', row = () => ({})) {
   const { user, deps, sampleSize } = env;
@@ -44,17 +56,29 @@ async function peopleCheck(env, ownerUserRole, clause, extraFields = '', row = (
   if (!auth?.allowed) return { status: 'restricted' };
   const apiFilter = await deps.applyEmployeeListScope(toApiFilter(filters), user, user.authContext);
   const { mongoFilter } = await deps.buildEmployeeListMongoFilter(apiFilter);
-  const match = { $and: [mongoFilter, clause] };
-  const [count, rows] = await Promise.all([
-    deps.Employee.countDocuments(match),
-    sampleSize
-      ? deps.Employee.find(match).select(`fullName employeeId ${extraFields}`.trim()).sort({ fullName: 1 }).limit(sampleSize).lean()
-      : [],
+  const fields = `owner email fullName employeeId ${extraFields}`.trim();
+  const scan = (filter) => deps.Employee.find({ $and: [filter, clause] }).select(fields)
+    .sort({ fullName: 1 }).limit(PEOPLE_SCAN_CAP + 1).lean();
+  // The role clause is mongoFilter.owner only when the viewer's own scope did not already pin owner (self-only).
+  const withoutRole = { ...mongoFilter };
+  delete withoutRole.owner;
+  const [roleRows, applicantRows] = await Promise.all([
+    scan(mongoFilter),
+    ownerUserRole === CANDIDATE && !apiFilter.owner ? scan(withoutRole) : [],
   ]);
+  const owns = await ownsProfile([...roleRows, ...applicantRows], deps);
+  const seen = new Set();
+  const people = [...roleRows.filter(owns), ...applicantRows.filter((e) => !owns(e))]
+    .filter((r) => {
+      const key = r._id != null ? String(r._id) : r;
+      return !seen.has(key) && seen.add(key);
+    });
+  const atLeast = roleRows.length > PEOPLE_SCAN_CAP || applicantRows.length > PEOPLE_SCAN_CAP;
   return {
     status: 'ok',
-    count,
-    sample: rows.map((r) => ({ name: r.fullName ?? null, employeeId: r.employeeId ?? null, ...row(r) })),
+    count: people.length,
+    ...(atLeast ? { atLeast: true, note: `More than ${PEOPLE_SCAN_CAP} profiles matched; this is a lower bound.` } : {}),
+    sample: people.slice(0, sampleSize).map((r) => ({ name: r.fullName ?? null, employeeId: r.employeeId ?? null, ...row(r) })),
   };
 }
 
@@ -81,25 +105,22 @@ async function applicationsNoReferral(env) {
   const { user, deps, sampleSize } = env;
   if (!(await allowed({ anyOf: [APPLICATIONS_PAGE_PERMISSION] }, env))) return { status: 'restricted' };
   const { query } = await deps.buildApplicantQuery({ excludeInternal: true }, user);
-  // ponytail: count_applications / list_applications have no referral filter, and the referral lives on the
-  // candidate (Employee.referredByUserId), not the application. Scope is the Applications page's own
-  // buildApplicantQuery. Loads id + candidate for every application in scope and one Employee distinct;
-  // fine to tens of thousands of applications, past that move it into one $lookup aggregate.
-  const apps = await deps.JobApplication.find(query).select('_id candidate').lean();
-  if (!apps.length) return { status: 'ok', count: 0, sample: [] };
-  const candidateIds = [...new Set(apps.map((a) => String(a.candidate)))];
-  const referred = new Set(
-    (await deps.Employee.find({ _id: { $in: candidateIds }, referredByUserId: { $ne: null } }).distinct('_id')).map(String),
-  );
-  const missing = apps.filter((a) => !referred.has(String(a.candidate)));
-  const ids = missing.slice(0, sampleSize).map((a) => a._id);
-  const rows = ids.length
-    ? await deps.JobApplication.find({ _id: { $in: ids } }).select('candidate job status')
-      .populate({ path: 'candidate', select: 'fullName' }).populate({ path: 'job', select: 'title' }).lean()
-    : [];
+  // count_applications / list_applications have no referral filter, and the referral lives on the candidate
+  // (Employee.referredByUserId), not the application. Scope is the Applications page's own buildApplicantQuery.
+  // ponytail: referred profiles are few (referral leads), so their ids go into one $nin; past ~50k referred
+  // profiles move this into a $lookup aggregate.
+  const referred = await deps.Employee.find({ referredByUserId: { $ne: null } }).distinct('_id');
+  const match = { $and: [query, { candidate: { $nin: referred } }] };
+  const [count, rows] = await Promise.all([
+    deps.JobApplication.countDocuments(match),
+    sampleSize
+      ? deps.JobApplication.find(match).select('candidate job status').sort({ createdAt: -1 }).limit(sampleSize)
+        .populate({ path: 'candidate', select: 'fullName' }).populate({ path: 'job', select: 'title' }).lean()
+      : [],
+  ]);
   return {
     status: 'ok',
-    count: missing.length,
+    count,
     sample: rows.map((r) => ({ applicant: r.candidate?.fullName ?? null, job: r.job?.title ?? null, status: r.status ?? null })),
   };
 }
@@ -119,7 +140,8 @@ async function offersMissingTerms(env) {
   const parts = { missingJoiningDate: 0, missingSalary: showSalary ? 0 : 'restricted' };
   if (vis.blocked) return { status: 'ok', count: 0, parts, sample: [] };
   const scope = vis.orClause ?? (vis.createdBy ? { createdBy: vis.createdBy } : {});
-  const base = { status: { $ne: 'Rejected' } };
+  // Drafts are still being written, so missing terms there are expected, not a data gap.
+  const base = { status: { $nin: ['Rejected', 'Draft'] } };
   const match = (clause) => ({ $and: [scope, base, clause] });
   const either = showSalary ? { $or: [NO_JOINING, NO_SALARY] } : NO_JOINING;
   const [joining, salary, union, rows] = await Promise.all([
@@ -144,8 +166,12 @@ async function offersMissingTerms(env) {
   };
 }
 
+// GET /training/modules (trainingModule.route.js): the course list itself.
+const COURSES_ACCESS = Object.freeze({ anyOf: ['modules.read', 'categories.read', 'positions.read'] });
+
 async function coursesNoPosition(env) {
   const { deps, sampleSize } = env;
+  if (!(await allowed(COURSES_ACCESS, env))) return { status: 'restricted' };
   // The position_map call is the access gate (the Curriculum Setup roster permission) and the source of positions.
   const gate = await toolCheck(env, 'get_training_progress', { mode: 'position_map', limit: 1 }, (r) => ({ positions: r.total ?? null }));
   if (gate.status !== 'ok') return gate;
@@ -248,7 +274,7 @@ export const QUALITY_CHECKS = Object.freeze([
   {
     id: 'offers_missing_terms',
     label: 'Offers missing salary or joining date',
-    source: 'Offers you can see, not Rejected, with no joiningDate or (for paid offers) no gross CTC. The salary part ' +
+    source: 'Offers you can see, not Rejected or Draft, with no joiningDate or (for paid offers) no gross CTC. The salary part ' +
       'needs the Offer Letter Generator permission; without it that part is restricted.',
     run: offersMissingTerms,
   },

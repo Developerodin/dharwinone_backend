@@ -18,6 +18,15 @@ const listPick = (r) => ({
   ...(r.sentDateMissing ? { sentDateMissing: r.sentDateMissing } : {}),
 });
 
+const PENDING_NOTE = 'Reviewers see every pending request (what awaits approval); everyone else sees their own.';
+
+/** The window cut to end yesterday; a window lying wholly in today becomes yesterday. */
+function throughYesterday(window, today) {
+  const yesterday = addDaysToDateStr(today, -1);
+  const to = window.to < today ? window.to : yesterday;
+  return { from: window.from <= to ? window.from : to, to };
+}
+
 function incompletePunchesPick(r) {
   if (r.futureDate) return { status: 'notRecorded', count: null, rows: [], note: r.note };
   const count = (r.perDay || []).reduce((n, d) => n + (d.counts?.Incomplete ?? 0), 0);
@@ -85,20 +94,23 @@ export const DIGEST_ITEMS = Object.freeze([
     tool: 'list_placements', args: ({ limit }) => ({ filters: { readyForBgv: true }, limit }),
   },
   {
-    id: 'incomplete_punches', label: 'Incomplete punches', module: 'hr', severity: 'low',
+    id: 'incomplete_punches', label: 'Incomplete punches (days already over)', module: 'hr', severity: 'low',
     tool: 'get_attendance_summary', windowed: true,
-    args: ({ window }) => ({ window, status: 'Incomplete' }), pick: incompletePunchesPick,
+    // Today everyone still on shift is Incomplete, so the window stops at yesterday (a today-only window reads yesterday).
+    args: ({ window, today }) => ({ window: throughYesterday(window, today), status: 'Incomplete' }), pick: incompletePunchesPick,
   },
   {
     id: 'pending_leave', label: 'Pending leave requests', module: 'hr', severity: 'medium',
-    tool: 'list_leave_requests', mine: true,
-    args: ({ mine, limit }) => ({ filters: { status: 'pending', ...(mine ? { mine: true } : {}) }, limit }),
+    tool: 'list_leave_requests', mine: true, note: PENDING_NOTE,
+    // No `mine` filter even in scope 'mine': the page's own scope already gives reviewers the requests awaiting
+    // them and everyone else their own; `mine` would show a reviewer only what they filed themselves.
+    args: ({ limit }) => ({ filters: { status: 'pending' }, limit }),
     nudge: `The leave nudge flags requests pending over ${SITUATIONS.leave_pending_stale.staleDays} days.`,
   },
   {
     id: 'pending_backdated', label: 'Pending backdated attendance requests', module: 'hr', severity: 'low',
-    tool: 'list_backdated_requests', mine: true,
-    args: ({ mine, limit }) => ({ filters: { status: 'pending', ...(mine ? { mine: true } : {}) }, limit }),
+    tool: 'list_backdated_requests', mine: true, note: PENDING_NOTE,
+    args: ({ limit }) => ({ filters: { status: 'pending' }, limit }),
   },
   {
     id: 'overdue_tasks', label: 'Overdue tasks', module: 'pm', severity: 'medium',

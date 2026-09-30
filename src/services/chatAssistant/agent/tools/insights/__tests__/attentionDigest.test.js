@@ -153,6 +153,16 @@ describe('get_attention_digest', () => {
     assert.equal(item(out, 'incomplete_punches').count, 5);
   });
 
+  it('incomplete punches never count today (everyone on shift is Incomplete until they punch out)', async () => {
+    const windows = [];
+    const { ctx } = ctxWith({
+      get_attendance_summary: (a) => { windows.push(a.window); return ok({ window: a.window, total: 0, perDay: [], employees: [] }); },
+    });
+    await getAttentionDigest.execute({ window: { from: '2026-09-28', to: '2026-09-30' } }, ctx);
+    await getAttentionDigest.execute({}, ctx);
+    assert.deepEqual(windows, [{ from: '2026-09-28', to: '2026-09-29' }, { from: '2026-09-29', to: '2026-09-29' }]);
+  });
+
   it('duplicate names in the rows are kept as separate rows (no merging)', async () => {
     const twins = { total: 2, records: [{ name: 'Ravi Kumar', status: 'Pending' }, { name: 'Ravi Kumar', status: 'Pending' }] };
     const { ctx } = ctxWith({ list_leave_requests: ok(twins) });
@@ -166,8 +176,9 @@ describe('get_attention_digest', () => {
     assert.deepEqual(calls.map((c) => c.name).sort(), ['list_backdated_requests', 'list_call_records', 'list_leave_requests', 'list_tasks']);
     const args = Object.fromEntries(calls.map((c) => [c.name, c.args.filters]));
     assert.equal(args.list_call_records.mine, true);
-    assert.equal(args.list_leave_requests.mine, true);
-    assert.equal(args.list_backdated_requests.mine, true);
+    // Pending approvals: no `mine`; the page scope gives a reviewer what awaits them, others their own.
+    assert.equal(args.list_leave_requests.mine, undefined);
+    assert.equal(args.list_backdated_requests.mine, undefined);
     assert.equal(args.list_tasks.assignedToMe, true);
     assert.ok(out.notScopedToYou.includes('Callbacks overdue'));
     assert.ok(out.notScopedToYou.includes('Employees on no active project'));
@@ -256,7 +267,7 @@ describe('get_operations_summary', () => {
     const out = await getOperationsSummary.execute({ module: 'hr' }, ctx);
     const m = Object.fromEntries(out.metrics.map((x) => [x.id, x]));
     assert.deepEqual(m.employees, { id: 'employees', label: 'Current employees', source: 'count_employees', status: 'restricted' });
-    assert.equal(m.present_today.value, 30);
+    assert.equal(m.present_today.value, 32, 'Present + Incomplete (on shift, not yet punched out)');
     assert.equal(m.on_leave_today.value, 4);
     assert.ok(out.restricted.includes('Current employees'));
   });

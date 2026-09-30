@@ -12,7 +12,9 @@ const groupsToObject = (groups) => Object.fromEntries((groups || []).map((g) => 
 
 function presentToday(r) {
   if (r.futureDate) return { status: 'notRecorded', value: null, note: r.note };
-  return { value: r.perDay?.[0]?.counts?.Present ?? 0, detail: { population: r.total ?? null } };
+  // Someone punched in but not yet out is Incomplete until they punch out — during the day that is everyone on shift.
+  const c = r.perDay?.[0]?.counts || {};
+  return { value: (c.Present ?? 0) + (c.Incomplete ?? 0), detail: { population: r.total ?? null } };
 }
 
 function openTasks(r) {
