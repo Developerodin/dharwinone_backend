@@ -1,0 +1,118 @@
+[
+  {
+    "id": "I-act-schedule-by-application-id",
+    "question": "schedule an interview for application 64a000000000000000000001 on 2026-10-15 at 3 pm",
+    "expect": {
+      "tools": ["schedule_interview"],
+      "args": { "schedule_interview": { "application": "64a000000000000000000001" } }
+    }
+  },
+  {
+    "id": "I-act-schedule-phone-45-min",
+    "question": "set up a 45 minute phone interview for application 64a000000000000000000002 next Monday at 11am",
+    "expect": {
+      "tools": ["schedule_interview"],
+      "args": {
+        "schedule_interview": { "application": "64a000000000000000000002", "durationMinutes": 45, "interviewType": "Phone" }
+      }
+    }
+  },
+  {
+    "id": "I-act-schedule-by-name-with-host",
+    "question": "schedule Ranveer Singh's QA Engineer interview for 2026-10-16 at 10:30 with vik@acme.com as the interviewer",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["list_applications", "schedule_interview"],
+          "args": { "schedule_interview": { "hosts": ["vik@acme.com"] } }
+        }
+      ]
+    }
+  },
+  {
+    "id": "I-act-schedule-question-no-draft",
+    "question": "is Ravi Kumar's interview scheduled yet?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_interviews"] },
+        { "tools": ["get_interview"] }
+      ]
+    }
+  },
+  {
+    "id": "I-act-resend-by-candidate",
+    "question": "resend the interview invite for Ravi Kumar",
+    "expect": {
+      "anyOf": [
+        { "tools": ["resend_interview_invite"], "args": { "resend_interview_invite": { "interview": "Ravi Kumar" } } },
+        { "tools": ["list_interviews", "resend_interview_invite"] },
+        { "tools": ["get_interview", "resend_interview_invite"] }
+      ]
+    }
+  },
+  {
+    "id": "I-act-resend-by-interview-id",
+    "question": "re-send the invitations for interview 64d000000000000000000001",
+    "expect": {
+      "tools": ["resend_interview_invite"],
+      "args": { "resend_interview_invite": { "interview": "64d000000000000000000001" } }
+    }
+  },
+  {
+    "id": "I-act-resend-never-got-email",
+    "question": "Meera Iyer says she never got her interview email, send it to her again",
+    "expect": {
+      "anyOf": [
+        { "tools": ["resend_interview_invite"], "args": { "resend_interview_invite": { "interview": "Meera Iyer" } } },
+        { "tools": ["list_interviews", "resend_interview_invite"] },
+        { "tools": ["get_interview", "resend_interview_invite"] }
+      ]
+    }
+  },
+  {
+    "id": "I-act-resend-question-no-draft",
+    "question": "who was invited to Ravi Kumar's interview?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_interview"] },
+        { "tools": ["list_interviews"] }
+      ]
+    }
+  },
+  {
+    "id": "I-act-booking-link-by-application-id",
+    "question": "send a booking link for application 64a000000000000000000001",
+    "expect": {
+      "tools": ["send_interview_booking_link"],
+      "args": { "send_interview_booking_link": { "application": "64a000000000000000000001" } }
+    }
+  },
+  {
+    "id": "I-act-booking-link-let-candidate-pick",
+    "question": "let Ranveer Singh pick his own interview time for the QA Engineer job",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_applications", "send_interview_booking_link"] }
+      ]
+    }
+  },
+  {
+    "id": "I-act-booking-link-choose-slot",
+    "question": "email the candidate on application 64a000000000000000000003 a link to choose an interview slot",
+    "expect": {
+      "tools": ["send_interview_booking_link"],
+      "args": { "send_interview_booking_link": { "application": "64a000000000000000000003" } }
+    }
+  },
+  {
+    "id": "I-act-booking-link-question-no-draft",
+    "question": "has Ranveer Singh booked an interview for the QA Engineer job yet?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_interviews"] },
+        { "tools": ["get_interview"] },
+        { "tools": ["list_applications"] }
+      ]
+    }
+  }
+]
