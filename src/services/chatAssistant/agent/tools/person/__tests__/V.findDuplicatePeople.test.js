@@ -7,7 +7,7 @@ const userWith = (...perms) => ({ id: 'u1', roleIds: [], authContext: { permissi
 
 const facet = (total, groups) => [{ total: total ? [{ n: total }] : [], groups }];
 const group = (value, size, names) => ({
-  _id: value, size, people: names.map((name, i) => ({ id: `e${value}${i}`, name, userId: `u${value}${i}` })),
+  _id: value, size, people: names.map((name, i) => ({ id: `e${value}${i}`, name, ownerUserId: `u${value}${i}` })),
 });
 
 /** Fake Employees-page scope + aggregate; records every call. */
@@ -118,7 +118,7 @@ describe('find_duplicate_people — results', () => {
     assert.deepEqual(r.byField, { email: 1, phone: 3 });
     assert.equal(r.groups.length, 2);
     assert.deepEqual(r.groups.map((g) => [g.matchedOn, g.value, g.size]), [['phone', '9876543210', 3], ['email', 'a@x.com', 2]]);
-    assert.deepEqual(r.groups[0].people[0], { id: 'e98765432100', name: 'Ravi', userId: 'u98765432100' });
+    assert.deepEqual(r.groups[0].people[0], { id: 'e98765432100', name: 'Ravi', ownerUserId: 'u98765432100' });
     assert.equal(r.truncated, true);
     assert.match(r.emailNote, /unique/);
   });
@@ -129,11 +129,11 @@ describe('find_duplicate_people — results', () => {
   });
 
   it('a group larger than 5 shows its full size and at most the 5 people the pipeline kept', async () => {
-    const big = { _id: '9999999999', size: 12, people: Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, name: `P${i}`, userId: null })) };
+    const big = { _id: '9999999999', size: 12, people: Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, name: `P${i}`, ownerUserId: null })) };
     const r = await exec({ by: 'phone' }, harness({ phone: facet(1, [big]) }));
     assert.equal(r.groups[0].size, 12);
     assert.equal(r.groups[0].people.length, 5);
-    assert.equal(r.groups[0].people[0].userId, null);
+    assert.equal(r.groups[0].people[0].ownerUserId, null);
   });
 
   it('render: one row per group and a duplicate-groups count fact', async () => {

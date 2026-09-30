@@ -43,8 +43,8 @@ function goodResponses() {
         { id: 'i3', candidate: ' priya  sharma ', jobPosition: 'Ops', interviewers: [], scheduledAt: '2026-09-12', status: 'completed', result: 'selected' },
       ],
     }),
-    get_offer: ok({ offerCode: 'OF-1', job: 'Dev', status: 'Sent', sentAt: '2026-09-01', daysPending: 3, compensation: { ctc: 100 } }),
-    get_placement: ok({ status: 'Pending', job: 'Dev', joiningDate: '2026-10-15', firstBlockingStep: 'Background check', holdsEmployeeRole: false, steps: [{}] }),
+    get_offer: ok({ offerCode: 'OF-1', candidate: 'Priya Sharma', job: 'Dev', status: 'Sent', sentAt: '2026-09-01', daysPending: 3, compensation: { ctc: 100 } }),
+    get_placement: ok({ candidate: 'Priya Sharma', status: 'Pending', job: 'Dev', joiningDate: '2026-10-15', firstBlockingStep: 'Background check', holdsEmployeeRole: false, steps: [{}] }),
     list_documents: ok({ candidateId: 'e1', name: 'Priya Sharma', counts: { uploaded: 2 }, documents: [{ type: 'pan', label: 'PAN', status: 'approved', url: 's3://x' }], missing: [{ type: 'aadhaar', label: 'Aadhaar', requestedBy: 'HR', requestedAt: '2026-09-01' }], expiries: [{ expiringSoon: true }] }),
     get_reporting_chain: ok({ mode: 'chain', person: 'Priya Sharma', designation: 'Dev', onChart: true, chain: [{ level: 1, unit: 'Eng', head: 'Ravi' }], reportingManager: 'Ravi' }),
     get_attendance: (args) => ok({ person: 'Priya Sharma', window: args.window, total: 20, statusBreakdown: { present: 20 }, records: [{ date: '2026-09-30', status: 'present', punchIn: '09:00', punchOut: '18:00', hours: 9, ip: '1.2.3.4' }] }),
@@ -207,8 +207,8 @@ describe('get_person_360 — full 360', () => {
     assert.match(s.externalJobs.note, /not captured in DharwinOne/);
 
     const args = Object.fromEntries(calls.map((c) => [c.name, c.args]));
-    assert.deepEqual(args.get_offer, { candidate: 'priya@x.com' }, 'exact-match lookups use the email');
-    assert.deepEqual(args.list_applications, { filters: { applicantUserId: U1 }, limit: 5 });
+    assert.deepEqual(args.get_offer, { candidate: 'priya@x.com' }, 'lookups use the email when known');
+    assert.deepEqual(args.list_applications, { filters: { applicantUserId: U1 }, limit: 50 });
     assert.deepEqual(args.get_attendance.window, { from: '2026-09-02', to: IST_TODAY }, '30 IST days, today included');
     assert.deepEqual(args.count_tasks.filters, { assigneeUserId: U1 });
     assert.deepEqual(calls.filter((c) => c.name === 'list_activity').map((c) => c.args.filters),
@@ -311,6 +311,28 @@ describe('get_person_360 — full 360', () => {
     assert.equal(result.sections.interviews.summary.scanTruncated, true);
   });
 
+  it('substring lookups never pass off another person’s record as theirs', async () => {
+    const { result } = await run({ person: 'Priya Sharma', sections: ['applications', 'offer', 'placement', 'referral', 'calls'] }, {
+      get_user: uniqueUser(['candidate']),
+      ...goodResponses(),
+      // "priya@x.com" is a substring of "supriya@x.com": a lone hit is still someone else's.
+      get_offer: ok({ offerCode: 'OF-9', candidate: 'Supriya Rao', status: 'Sent' }),
+      get_placement: ok({ matches: [{ id: 'p9', candidate: 'Supriya Rao', status: 'Pending' }] }),
+      get_referral: ok({ total: 1, records: [{ candidate: 'Supriya Rao', referredBy: 'Amit' }] }),
+      list_applications: ok({ total: 2, records: [
+        { applicant: 'Priya Sharma', job: 'Dev', status: 'Applied' },
+        { applicant: 'Priya Sharmaji', job: 'Ops', status: 'Applied' },
+      ] }),
+      list_call_records: ok({ total: 2, records: [{ person: 'Priya Sharma Rao', when: '2026-09-01' }] }),
+    });
+    const s = result.sections;
+    assert.equal(s.offer.status, 'notRecorded');
+    assert.equal(s.placement.status, 'notRecorded');
+    assert.equal(s.referral.status, 'notRecorded');
+    assert.equal(s.applications.summary.total, 1);
+    assert.equal(s.calls.status, 'notRecorded');
+  });
+
   it('several records inside a section (duplicate names) → ambiguous summary, not a guess', async () => {
     const matches = [{ id: 'o1', candidate: 'Priya Sharma', status: 'Sent' }, { id: 'o2', candidate: 'Priya Sharma', status: 'Accepted' }];
     const { result } = await run({ person: 'Priya Sharma', sections: ['offer'] }, { get_user: uniqueUser(['candidate']), get_offer: ok({ matches }) });
@@ -382,7 +404,7 @@ describe('get_person_360 — focus', () => {
 
   it('pending: an accepted offer is not pending; a pure employee skips candidate-only items', async () => {
     const accepted = await run({ person: 'Priya Sharma', focus: 'pending' }, {
-      get_user: uniqueUser(['candidate']), ...goodResponses(), get_offer: ok({ offerCode: 'OF-1', status: 'Accepted' }),
+      get_user: uniqueUser(['candidate']), ...goodResponses(), get_offer: ok({ offerCode: 'OF-1', candidate: 'Priya Sharma', status: 'Accepted' }),
     });
     assert.equal(accepted.result.sections.offerPending.status, 'notRecorded');
     const emp = await run({ person: 'Priya Sharma', focus: 'pending' }, { get_user: uniqueUser(['employee']), ...goodResponses() });

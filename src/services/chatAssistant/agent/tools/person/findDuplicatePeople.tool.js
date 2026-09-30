@@ -45,7 +45,7 @@ export function duplicatePipeline(scopedFilter, field, limit) {
     { $match: scopedFilter },
     { $project: { fullName: 1, owner: 1, key: field === 'email' ? EMAIL_KEY : PHONE_KEY } },
     { $match: { key: { $nin: ['', null] } } },
-    { $group: { _id: '$key', size: { $sum: 1 }, people: { $push: { id: '$_id', name: '$fullName', userId: '$owner' } } } },
+    { $group: { _id: '$key', size: { $sum: 1 }, people: { $push: { id: '$_id', name: '$fullName', ownerUserId: '$owner' } } } },
     { $match: { size: { $gt: 1 } } },
     { $sort: { size: -1, _id: 1 } },
     {
@@ -65,7 +65,8 @@ const toGroup = (field) => (g) => ({
   people: (g.people || []).map((p) => ({
     id: String(p.id),
     name: p.name ?? null,
-    userId: p.userId != null ? String(p.userId) : null,
+    // The login that owns the profile — for a public-apply candidate that is the job creator, not the person.
+    ownerUserId: p.ownerUserId != null ? String(p.ownerUserId) : null,
   })),
 });
 
@@ -80,7 +81,9 @@ export default defineTool({
     '(count_candidates / count_employees).',
   measure:
     'Employees page profiles you can see (any employment status), grouped by shared contact value; a group is 2+ ' +
-      'profiles. totalGroups counts every group; groups lists the largest first, at most 5 people each.',
+      'profiles. totalGroups counts every group; groups lists the largest first, at most 5 people each. ownerUserId is ' +
+      'the login that owns the profile; a recruiter owns the public-apply candidates of their jobs, so it is not ' +
+      'always the person — look people up by their profile id.',
   input: Joi.object({
     by: Joi.string().valid(...BY).default('both').description('Which contact field to compare. Default both.'),
     population: Joi.string().valid(...POPULATIONS).default('all')

@@ -760,7 +760,7 @@ function cannedResult(name, args) {
       const fields = by === 'both' ? ['email', 'phone'] : [by];
       const groups = fields.map((f) => ({
         matchedOn: f, value: f === 'email' ? 'priya.sharma@example.com' : '9876543210', size: 2,
-        people: [{ id: 'e1', name: 'Priya Sharma', userId: 'u1' }, { id: 'e2', name: 'Priya S', userId: 'u2' }],
+        people: [{ id: 'e1', name: 'Priya Sharma', ownerUserId: 'u1' }, { id: 'e2', name: 'Priya S', ownerUserId: 'u2' }],
       }));
       return { by, population: args?.population ?? 'all', totalGroups: groups.length,
         byField: Object.fromEntries(fields.map((f) => [f, 1])), groups };

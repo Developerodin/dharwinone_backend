@@ -98,7 +98,8 @@ async function resolveTarget(person, viewer, runTool) {
 
 // ─── Section arguments ───────────────────────────────────────────────────────
 
-// Tools whose person lookup matches an email exactly get the email; the rest get the name.
+// Email when known (narrower than a name), else the name. These lookups are substring searches, so each
+// section keeps only records under the person's exact name.
 const lookup = (t) => t.email || t.name;
 const personArg = (t) => (t.self ? {} : { person: lookup(t) });
 const leavePerson = (t) => (t.self ? { mine: true } : { person: lookup(t) });
@@ -120,9 +121,11 @@ function roleSkip(only, t) {
 const exactRows = (r, field, name) => (r.records || []).filter((x) => sameName(x[field], name));
 const scanTruncated = (r) => (r.total ?? 0) > (r.records || []).length;
 
-function referralSection(r) {
-  if (r.records?.length) {
-    return okSection({ total: r.total }, r.records.map((x) => pick(x, ['referredBy', 'salesAgent', 'channel', 'job', 'referredAt', 'status'])));
+function referralSection(r, t) {
+  // get_referral matches the email or name partially; keep only leads under this person's exact name.
+  const own = (r.records || []).filter((x) => sameName(x.candidate, t.name));
+  if (own.length) {
+    return okSection({ total: own.length }, own.map((x) => pick(x, ['referredBy', 'salesAgent', 'channel', 'job', 'referredAt', 'status'])));
   }
   // Outside the viewer's Refer Leads scope: whether anyone referred them is not theirs to see.
   if (r.referred === null) return restricted();
@@ -131,22 +134,28 @@ function referralSection(r) {
   return notRecorded('No referral lead on record.');
 }
 
-function applicationsSection(r) {
+// list_applications turns applicantUserId back into a name and matches it as a substring of applicant names and
+// job titles, so only rows under this person's exact name are theirs.
+function applicationsSection(r, t) {
   if (r.notFound || !r.total) return notRecorded('No job applications on record.');
-  return okSection({ total: r.total }, (r.records || []).map((x) => pick(x, ['job', 'status', 'appliedAt'])));
+  const rows = exactRows(r, 'applicant', t.name);
+  const cut = scanTruncated(r) ? { scanTruncated: true, note: `Only the first ${(r.records || []).length} name matches were read.` } : {};
+  if (!rows.length) return notRecorded(cut.note ?? 'No job applications on record.');
+  return okSection({ total: rows.length, ...cut }, rows.map((x) => pick(x, ['job', 'status', 'appliedAt'])));
 }
 
-function callsSection([list, metrics]) {
+function callsSection([list, metrics], t) {
   const failed = failedSection(list);
   if (failed) return failed;
   const r = list.result;
-  if (!r.total) return notRecorded('No call records match this name.');
+  const rows = exactRows(r, 'person', t.name);
+  if (!r.total || !rows.length) return notRecorded('No call records under this name.');
   const mf = failedSection(metrics);
   return okSection({
     total: r.total,
     ...(mf ? { metrics: mf.status } : pick(metrics.result, ['answeredCalls', 'answerRate', 'avgDurationSeconds', 'failedCalls'])),
-    matchedBy: 'name, like the Call Records search box',
-  }, (r.records || []).map((x) => pick(x, ['when', 'callType', 'status', 'durationSeconds', 'outcome'])));
+    matchedBy: 'name, like the Call Records search box — total and metrics count every call whose name contains theirs',
+  }, rows.map((x) => pick(x, ['when', 'callType', 'status', 'durationSeconds', 'outcome'])));
 }
 
 function interviewsSection(o, t, empty) {
@@ -159,15 +168,24 @@ function interviewsSection(o, t, empty) {
   return okSection({ total: rows.length, ...cut }, rows.map((x) => pick(x, ['jobPosition', 'scheduledAt', 'status', 'result', 'interviewers'])));
 }
 
-function offerSection(r) {
+// get_offer / get_placement search the email or name as a substring and return a lone hit as THE record,
+// so a hit is this person's only when it carries their exact name.
+function theirMatches(r, t, tool, empty) {
+  const own = r.matches.filter((m) => sameName(m.candidate, t.name));
+  return own.length ? ambiguousSection(own, tool) : notRecorded(empty);
+}
+
+function offerSection(r, t) {
   if (r.notFound) return notRecorded('No offer on record.');
-  if (r.matches) return ambiguousSection(r.matches, 'get_offer');
+  if (r.matches) return theirMatches(r, t, 'get_offer', 'No offer on record.');
+  if (!sameName(r.candidate, t.name)) return notRecorded('No offer on record.');
   return okSection(pick(r, ['offerCode', 'job', 'status', 'sentAt', 'acceptedAt', 'rejectedAt', 'joiningDate', 'daysPending', 'markedSentBy']));
 }
 
-function placementSection(r) {
+function placementSection(r, t) {
   if (r.notFound) return notRecorded('No placement on record.');
-  if (r.matches) return ambiguousSection(r.matches, 'get_placement');
+  if (r.matches) return theirMatches(r, t, 'get_placement', 'No placement on record.');
+  if (!sameName(r.candidate, t.name)) return notRecorded('No placement on record.');
   return okSection(pick(r, ['status', 'job', 'joiningDate', 'firstBlockingStep', 'holdsEmployeeRole', 'department', 'designation']));
 }
 
@@ -323,12 +341,13 @@ function callbacksSection([due, overdue], t) {
   }, [...overdueRows, ...dueRows]);
 }
 
-function offerPendingSection(r) {
+function offerPendingSection(r, t) {
   if (r.notFound) return notRecorded('No offer on record.');
   if (r.matches) {
-    const open = r.matches.filter((m) => PENDING_OFFER_STATUSES.includes(m.status));
+    const open = r.matches.filter((m) => PENDING_OFFER_STATUSES.includes(m.status) && sameName(m.candidate, t.name));
     return open.length ? ambiguousSection(open, 'get_offer') : notRecorded('No offer waiting on the candidate.');
   }
+  if (!sameName(r.candidate, t.name)) return notRecorded('No offer on record.');
   if (!PENDING_OFFER_STATUSES.includes(r.status)) {
     return notRecorded(`No offer waiting on the candidate (latest offer: ${r.status ?? 'unknown status'}).`);
   }
@@ -345,17 +364,19 @@ function fullPlan(attendanceWindow) {
   return {
     referral: {
       only: 'candidate',
+      unavailable: needsName,
       calls: (t) => [{ name: 'get_referral', args: { person: lookup(t), limit: MAX_ROWS } }],
       build: one(referralSection),
     },
     applications: {
-      calls: (t) => [{ name: 'list_applications', args: { filters: { applicantUserId: t.userId }, limit: MAX_ROWS } }],
+      unavailable: needsName,
+      calls: (t) => [{ name: 'list_applications', args: { filters: { applicantUserId: t.userId }, limit: SCAN_LIMIT } }],
       build: one(applicationsSection),
     },
     calls: {
       unavailable: needsName,
       calls: (t) => [
-        { name: 'list_call_records', args: { filters: { person: t.name }, limit: MAX_ROWS } },
+        { name: 'list_call_records', args: { filters: { person: t.name }, limit: SCAN_LIMIT } },
         { name: 'get_call_metrics', args: { filters: { person: t.name } } },
       ],
       build: callsSection,
@@ -367,11 +388,13 @@ function fullPlan(attendanceWindow) {
     },
     offer: {
       only: 'candidate',
+      unavailable: needsName,
       calls: (t) => [{ name: 'get_offer', args: { candidate: lookup(t) } }],
       build: one(offerSection),
     },
     placement: {
       only: 'candidate',
+      unavailable: needsName,
       calls: (t) => [{ name: 'get_placement', args: { candidate: lookup(t) } }],
       build: one(placementSection),
     },
@@ -483,6 +506,7 @@ const PENDING_PLAN = {
   },
   offerPending: {
     only: 'candidate',
+    unavailable: needsName,
     calls: (t) => [{ name: 'get_offer', args: { candidate: lookup(t) } }],
     build: one(offerPendingSection),
   },
