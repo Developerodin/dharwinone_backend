@@ -13,7 +13,8 @@ export default defineTool({
   kind: 'read',
   description:
     'List ATS interviews (never internal meetings), latest slot first: candidate, job position, interviewers, ' +
-    'time, status and result. Use for "interviews today", "<candidate>\'s interview", "who is interviewing ' +
+    'time, status and result. "Any interviews scheduled / upcoming" means status scheduled AND scheduledBetween.from = today. ' +
+    'Use for "interviews today","<candidate>\'s interview", "who is interviewing ' +
     'for <job>", "which interviews have no result yet" (filters.resultMissing), "panel clashes" ' +
     '(filters.overlapping — each row then lists what it clashes with, which can be an interview that started just before the window). total is the full count even when ' +
     'fewer rows come back.',

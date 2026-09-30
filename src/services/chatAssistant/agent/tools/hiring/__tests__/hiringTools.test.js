@@ -77,6 +77,11 @@ describe('count_interviews', () => {
     assert.equal(dates.$lte.toISOString(), '2026-09-30T18:29:59.999Z'); // IST end of 09-30
   });
 
+  it('a doc with no slot is never an interview, even though a missing status reads as scheduled', () => {
+    const f = interviewMongoFilter({ status: 'scheduled' });
+    assert.ok(f.$and.some((c) => c.scheduledAt?.$ne === null));
+  });
+
   it('rejects a malformed day instead of querying', async () => {
     await assert.rejects(
       () => countInterviews.execute({ filters: { scheduledBetween: { from: '09/01/2026' } } }, ctxWith({ queryMeetings: async () => paged(0) })),
