@@ -9,9 +9,9 @@
  * tool is self-scoped.
  * `rowScope: 'person'` — rows are post-filtered to the Employees-page scope.
  * `adminByName` — mirrors a route that also lets an Administrator-by-name user
- * through with no permission grant. No tool currently needs this; kept as a documented
- * escape hatch should a route legitimately
- * need it. Every tool must otherwise pass via `anyOf` or platformSuperUser.
+ * through with no permission grant. Used only where the mirrored route really does that
+ * (list_impersonations ↔ POST /auth/impersonate's requireAdministratorOrPermission);
+ * every other tool must pass via `anyOf` or platformSuperUser.
  */
 import { getGrantingPermissions } from '../../config/permissions.js';
 import { applyEmployeeListScope } from '../../schemas/employees/employeeQuery.scope.js';

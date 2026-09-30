@@ -613,6 +613,9 @@ Per task-3/4 briefs' examples, the instructions string must say, in substance:
 | R13 | `get_user`'s name path prefers a single exact name/email match over the full `matches` disambiguation list, since `queryUsers`' search is partial-match. |
 | R14 | *Retired in R9.* `get_user` used to write a unique result as the conversation subject (`lastEntities.currentEntitySubject`) for follow-ups handed to the legacy pipeline. With the legacy pipeline gone nothing read it, so `get_user` now makes no writes; the agent's tool ledger carries follow-up context. |
 | R15 | **Applies to every domain, not just people.** Every `count_*`/`list_*` tool declares `measure` in `defineTool`: one sentence naming what it counts (ACCOUNTS vs PROFILES vs RECORDS) and its default status scope. The registry appends it to the model-facing description and to every result, so a reply can say which number it is. `toolRegistry.test.js` fails on a count/list tool without one. Added after Sage reported 20 candidate profiles (active/pending accounts) as if it were the Users page's 23 candidate accounts. |
+| R16 | `filters.inactiveDays` / `filters.neverLoggedIn` are Sage-only keys, stripped before `buildUserListMongoFilter` (which spreads unknown keys into Mongo) and added as `$and` clauses on `lastLoginAt`. `lastLoginAt` means last *password* sign-in. |
+| R17 | `what_can_i_do` reads only the caller's own `getMyPermissionsForFrontend` result (the `GET /auth/my-permissions` source), groups it by the Roles-page module catalog, and names modules without access — never data, never another user's access. |
+| R18 | `list_users` keeps its limit (default 10, max 25). The Wave 1 "default 20, max 50" rule covers new list tools only. |
 
 ## Open risks (not resolved by this contract — flagging for awareness)
 
@@ -732,3 +735,50 @@ result directly instead of asking the model to disambiguate. This does not
 change the `>1` result behavior when no result is an exact match, or when
 more than one result matches exactly (e.g. two accounts named "John Smith" —
 still `matches`).
+
+## Addendum (Sage Wave 1, 2026-09-30)
+
+Binding, same as every other ruling here. Adds `what_can_i_do`, two user filters and the domain
+`summary` (`toolRegistry.js` `assertDomainSummaries`: one line, at most 120 characters — the domain's
+line in the `find_tools` catalog). Audit/activity tools live in the separate `audit` domain
+(`agent/tools/audit/`), not here.
+
+**R16 — `inactiveDays` / `neverLoggedIn`.** Both sit on the shared `filters` object, so
+`count_users` and `list_users` accept them identically.
+- `buildUserMongoFilter` destructures both keys out **before** calling `buildUserListMongoFilter`.
+  That service spreads every key it does not know into the Mongo filter (§0), so a leaked
+  `inactiveDays: 30` would filter for a field literally named `inactiveDays` and match nothing.
+- `inactiveDays: N` → `{ $or: [{ lastLoginAt: { $lt: cutoff } }, { lastLoginAt: null, createdAt: { $lt: cutoff } }] }`,
+  with `cutoff = now − N×24h`. "No sign-in in N days" includes accounts that never signed in, but only
+  ones that existed for the whole window, so an account created yesterday is not "inactive for 30 days".
+- `neverLoggedIn: true` → `{ lastLoginAt: null }`; `false` → `{ lastLoginAt: { $ne: null } }`.
+- The clauses are appended to `mongoFilter.$and` (created if absent), never replacing an existing
+  `$and`. That matters because `buildUserListMongoFilter`'s search already uses `$or`.
+- Status still defaults to `active` (R5), so "inactive users" means active accounts that have not
+  signed in, not disabled accounts.
+- **Caveat:** `lastLoginAt` is written only by `POST /auth/login` (password sign-in,
+  `auth.controller.js` `login`). Refresh-token sessions and any other sign-in path do not touch it.
+  It means "last password sign-in", not "last activity", and the domain instructions tell the model
+  to say so. `get_user` does not surface `lastLoginAt`, so "when did X last log in" goes to `list_users`
+  with `filters.search`.
+- `now` comes from `peopleDeps(ctx).now` so tests pin the cutoff.
+
+**R17 — `what_can_i_do` (access `{ note }`, self only).**
+- Reads `permission.service` `getMyPermissionsForFrontend(ctx.user)`, the function behind
+  `GET /auth/my-permissions`. It returns the caller's raw role permissions (`<module>.<area>:<actions>`).
+  No other user can be named.
+- Groups them by the Settings → Roles permission matrix (`permissionCatalog.js`, a mirror of frontend
+  `shared/lib/roles-permissions.ts` `PERMISSION_SECTIONS`; the backend had no copy). Verbs are
+  view / add / edit / delete. The legacy `devTickets.view` maps to Support → Help & Support, like
+  `deriveApiPermissions`.
+- `modulesWithoutAccess` lists **module labels only** for catalog modules where the caller holds nothing.
+  It is empty for a platform super user (`fullAccess: true`). It never includes data, record counts or
+  permission strings.
+- While impersonating, `ctx.user` is the impersonated user, so the answer is that user's access,
+  flagged `impersonating: true`.
+- Page-level row scope (own rows, assigned people) is not derivable from permissions. The result
+  carries a `note` saying pages may still narrow which records are visible.
+
+**R18 — `list_users` limit unchanged.** The Wave 1 brief's "default 20, max 50" applies to new
+list tools (`list_activity`, `list_impersonations`). `list_users` keeps default 10, max 25 (§4); the
+new filters did not require changing it.

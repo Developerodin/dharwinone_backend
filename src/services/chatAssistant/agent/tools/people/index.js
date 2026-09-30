@@ -4,6 +4,7 @@ import getUser from './getUser.tool.js';
 import listRoles from './listRoles.tool.js';
 import getRole from './getRole.tool.js';
 import getMyProfile from './getMyProfile.tool.js';
+import whatCanIDo from './whatCanIDo.tool.js';
 
 const instructions = [
   'People: user accounts (logins) in the Users directory, and the roles those accounts hold.',
@@ -33,10 +34,18 @@ const instructions = [
     'mistake.',
   '- "Tell me about <person>" → get_user.',
   '- The user\'s OWN details ("my profile", "who am I", "my employee id") → get_my_profile, never get_user.',
+  '- Inactive accounts: "not logged in for N days / a month", "inactive users" → count_users/list_users with ' +
+    'filters.inactiveDays (a month = 30). "Never logged in" → filters.neverLoggedIn true. "When did X last log ' +
+    'in" → list_users with filters.search (get_user has no last login). lastLoginAt is the last password ' +
+    'sign-in, not last activity — say so when it matters.',
+  '- The user\'s OWN access ("what can I do", "what access do I have", "what can\'t I see") → what_can_i_do. ' +
+    'For modules without access, name the modules only — never guess what data is in them. Another role\'s ' +
+    'permissions stay on get_role.',
 ].join('\n');
 
 export default {
   domain: 'people',
+  summary: "One person's full profile (role, designation, position), user accounts and logins, roles, and what I can do.",
   instructions,
-  tools: [countUsers, listUsers, getUser, getMyProfile, listRoles, getRole],
+  tools: [countUsers, listUsers, getUser, getMyProfile, whatCanIDo, listRoles, getRole],
 };

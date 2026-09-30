@@ -1,0 +1,57 @@
+[
+  {
+    "id": "A-what-can-i-do-plain",
+    "question": "what can I do in the portal?",
+    "expect": { "tools": ["what_can_i_do"] }
+  },
+  {
+    "id": "A-what-cant-i-see",
+    "question": "which modules can't I see?",
+    "expect": { "tools": ["what_can_i_do"] }
+  },
+  {
+    "id": "A-what-can-i-do-specific",
+    "question": "do I have access to edit jobs?",
+    "expect": { "tools": ["what_can_i_do"] }
+  },
+  {
+    "id": "A-role-permissions-stay-get-role",
+    "question": "what can a Sales Agent do?",
+    "expect": {
+      "tools": ["get_role"],
+      "args": { "get_role": { "name": "Sales Agent" } }
+    }
+  },
+  {
+    "id": "A-count-inactive-30-days",
+    "question": "how many users haven't logged in for 30 days?",
+    "expect": {
+      "tools": ["count_users"],
+      "args": { "count_users": { "filters": { "inactiveDays": 30 } } }
+    }
+  },
+  {
+    "id": "A-count-inactive-a-month",
+    "question": "how many accounts have been inactive for a month?",
+    "expect": {
+      "tools": ["count_users"],
+      "args": { "count_users": { "filters": { "inactiveDays": 30 } } }
+    }
+  },
+  {
+    "id": "A-list-never-logged-in",
+    "question": "which users have never logged in?",
+    "expect": {
+      "tools": ["list_users"],
+      "args": { "list_users": { "filters": { "neverLoggedIn": true } } }
+    }
+  },
+  {
+    "id": "A-list-recruiters-inactive-two-weeks",
+    "question": "show recruiters who haven't logged in for two weeks",
+    "expect": {
+      "tools": ["list_users"],
+      "args": { "list_users": { "filters": { "role": "Recruiter", "inactiveDays": 14 } } }
+    }
+  }
+]

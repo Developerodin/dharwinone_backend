@@ -1,0 +1,71 @@
+[
+  {
+    "id": "A-activity-logins",
+    "question": "who logged in today?",
+    "expect": {
+      "tools": ["list_activity"],
+      "args": { "list_activity": { "filters": { "action": "user.login" } } }
+    }
+  },
+  {
+    "id": "A-activity-by-actor",
+    "question": "what did Priya do in the portal yesterday?",
+    "expect": {
+      "tools": ["list_activity"],
+      "args": { "list_activity": { "filters": { "actor": "Priya" } } }
+    }
+  },
+  {
+    "id": "A-activity-target-role",
+    "question": "who changed the Recruiter role?",
+    "expect": {
+      "tools": ["list_activity"],
+      "args": { "list_activity": { "filters": { "targetType": "Role", "target": "Recruiter" } } }
+    }
+  },
+  {
+    "id": "A-activity-group",
+    "question": "show me recent user and role changes",
+    "expect": {
+      "tools": ["list_activity"],
+      "args": { "list_activity": { "filters": { "actionGroup": "Users & roles" } } }
+    }
+  },
+  {
+    "id": "A-activity-not-last-login",
+    "question": "when did Priya last log in?",
+    "expect": {
+      "tools": ["list_users"],
+      "args": { "list_users": { "filters": { "search": "Priya" } } }
+    }
+  },
+  {
+    "id": "A-impersonations-target",
+    "question": "who impersonated Priya?",
+    "expect": {
+      "tools": ["list_impersonations"],
+      "args": { "list_impersonations": { "filters": { "target": "Priya" } } }
+    }
+  },
+  {
+    "id": "A-impersonations-active",
+    "question": "is anyone impersonating a user right now?",
+    "expect": {
+      "tools": ["list_impersonations"],
+      "args": { "list_impersonations": { "filters": { "noEndRecorded": true } } }
+    }
+  },
+  {
+    "id": "A-impersonations-last-week",
+    "question": "list all login-as sessions from last week",
+    "expect": { "tools": ["list_impersonations"] }
+  },
+  {
+    "id": "A-activity-target-employee-name",
+    "question": "who changed Priya Sharma's employee record?",
+    "expect": {
+      "tools": ["list_activity"],
+      "args": { "list_activity": { "filters": { "targetType": "Employee", "target": "Priya Sharma" } } }
+    }
+  }
+]

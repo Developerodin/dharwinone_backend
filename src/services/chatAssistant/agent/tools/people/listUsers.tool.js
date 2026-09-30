@@ -25,7 +25,8 @@ export default defineTool({
   kind: 'read',
   description:
     'List user accounts in the Users directory, newest first, with the total that match. Returns compact ' +
-    "rows (name, email, roles, status, last login); use get_user for one person's full detail.",
+    "rows (name, email, roles, status, last login); use get_user for one person's full detail. " +
+    'filters.inactiveDays / neverLoggedIn answer "who hasn\'t logged in recently / ever".',
   measure:
     'User ACCOUNTS (logins) in the Users directory, the same measure as the Users page; status active ' +
       'unless filters.status is set.',

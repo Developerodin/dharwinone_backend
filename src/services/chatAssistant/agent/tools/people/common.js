@@ -7,6 +7,7 @@ import {
   queryUsers as realQueryUsers,
 } from '../../../../user.service.js';
 import { queryRoles as realQueryRoles } from '../../../../role.service.js';
+import { getMyPermissionsForFrontend as realGetMyPermissionsForFrontend } from '../../../../permission.service.js';
 import { resolvePersonProfile as realResolvePersonProfile } from '../../../personProfile/index.js';
 import { resolveRowScope as realResolveRowScope } from '../../../toolAccess.js';
 import {
@@ -51,7 +52,26 @@ export function peopleDeps(ctx) {
     viewerSeesHiddenUsers: deps.viewerSeesHiddenUsers ?? realViewerSeesHiddenUsers,
     getDirectoryHiddenUserIds: deps.getDirectoryHiddenUserIds ?? realGetDirectoryHiddenUserIds,
     queryRoles: deps.queryRoles ?? realQueryRoles,
+    getMyPermissionsForFrontend: deps.getMyPermissionsForFrontend ?? realGetMyPermissionsForFrontend,
+    now: deps.now ?? (() => new Date()),
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * inactiveDays / neverLoggedIn → lastLoginAt clauses (CONTRACT.md Ruling R16). lastLoginAt is written
+ * only by password sign-in (auth.controller login), so it is "last password sign-in", not last activity.
+ */
+function loginClauses({ inactiveDays, neverLoggedIn }, now) {
+  const clauses = [];
+  if (inactiveDays) {
+    const cutoff = new Date(now.getTime() - inactiveDays * DAY_MS);
+    clauses.push({ $or: [{ lastLoginAt: { $lt: cutoff } }, { lastLoginAt: null, createdAt: { $lt: cutoff } }] });
+  }
+  if (neverLoggedIn === true) clauses.push({ lastLoginAt: null });
+  if (neverLoggedIn === false) clauses.push({ lastLoginAt: { $ne: null } });
+  return clauses;
 }
 
 /**
@@ -113,7 +133,8 @@ export function peopleCountFacts(kind, total) {
  */
 export async function buildUserMongoFilter(rawFilters, { groupBy, user, deps } = {}) {
   const filtersApplied = withDefaultStatus(rawFilters, { groupBy });
-  const { role, location, domain, education, status, ...rest } = filtersApplied;
+  // inactiveDays/neverLoggedIn must never reach buildUserListMongoFilter: it spreads unknown keys into Mongo.
+  const { role, location, domain, education, status, inactiveDays, neverLoggedIn, ...rest } = filtersApplied;
 
   let roleIds = [];
   if (role) {
@@ -141,5 +162,7 @@ export async function buildUserMongoFilter(rawFilters, { groupBy, user, deps } =
   // Mongoose cast" incident) — count_users' groupBy path would silently match
   // zero documents on a role-filtered aggregate otherwise.
   if (roleIds.length) mongoFilter.roleIds = { $in: roleIds.map((id) => new mongoose.Types.ObjectId(id)) };
+  const logins = loginClauses({ inactiveDays, neverLoggedIn }, (deps.now ?? (() => new Date()))());
+  if (logins.length) mongoFilter.$and = [...(mongoFilter.$and || []), ...logins];
   return { mongoFilter, filtersApplied };
 }

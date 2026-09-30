@@ -18,6 +18,13 @@ export const filters = Joi.object({
   location: Joi.string().min(1).description('Filter by location (partial match).'),
   domain: Joi.string().min(1).description('Filter by domain/specialization (partial match).'),
   education: Joi.string().min(1).description('Filter by education (partial match).'),
+  inactiveDays: Joi.number().integer().min(1).max(3650)
+    .description(
+      'No sign-in in the last N days: last login older than N days, or never signed in on an account older ' +
+        'than N days. E.g. "not logged in for a month" → 30.'
+    ),
+  neverLoggedIn: Joi.boolean()
+    .description('true = accounts with no recorded sign-in at all; false = accounts that have signed in.'),
 }).description('User filters. Omit a key to leave it unfiltered; status defaults to active.');
 
 /**

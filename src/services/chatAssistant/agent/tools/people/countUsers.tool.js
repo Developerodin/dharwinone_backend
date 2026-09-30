@@ -29,7 +29,8 @@ export default defineTool({
   kind: 'read',
   description:
     'Count user accounts in the Users directory (logins, not Employee/Candidate profiles). Use for ' +
-    '"how many users/admins/recruiters…" and for breakdowns: groupBy role or status.',
+    '"how many users/admins/recruiters…", "how many haven\'t logged in for 30 days" (filters.inactiveDays) and ' +
+    'for breakdowns: groupBy role or status.',
   measure:
     'User ACCOUNTS (logins) in the Users directory, the same measure as the Users page; status active ' +
       'unless filters.status is set (a groupBy status covers every status).',
