@@ -59,6 +59,9 @@ export function profileFacts(out) {
   return {
     section,
     name: r.identity?.name ?? null,
+    // Login name and profile names: name-keyed rows from other tools carry the profile's fullName.
+    names: [...new Set([r.identity?.name, emp?.fields?.name, cand?.fields?.name].filter(Boolean).map(normName))],
+    employeeId: emp && !emp.noRecord && !redacted.has('employeeId') ? emp.fields?.employeeId ?? null : null,
     userId: r.identity?.userId ?? null,
     hasEmployeeRole: roleSet.has('employee'),
     hasCandidateRole: roleSet.has('candidate'),
@@ -69,6 +72,15 @@ export function profileFacts(out) {
     outOfScope,
     notPermitted,
   };
+}
+
+/**
+ * A row from a name-searched tool is this person's by employeeId when both carry one, else by an exact
+ * (normalised) name. Tools like get_placement match substrings and return a lone hit as THE record.
+ */
+export function isPerson(row, pf, nameKey = 'name') {
+  if (pf?.employeeId && row?.employeeId) return String(row.employeeId) === String(pf.employeeId);
+  return (pf?.names || []).includes(normName(row?.[nameKey]));
 }
 
 export function resignedRule(pf) {
@@ -87,12 +99,12 @@ export function resignedRule(pf) {
 }
 
 /** who_is_on_leave_today outcome. Its scope may be 'self' / 'referrals', so a miss only proves "not on leave" at scope 'all'. */
-export function leaveRule(out, name) {
+export function leaveRule(out, pf) {
   const text = 'Not on leave today';
   const section = sectionStatus(out);
   if (section.status !== 'ok') return rule(text, SOURCES.leaveToday, null, sectionEvidence(section, 'who is on leave today'));
   const { records = [], total = 0, scope } = out.result;
-  const hits = records.filter((r) => normName(r.name) === normName(name));
+  const hits = records.filter((r) => isPerson(r, pf));
   if (hits.length > 1) return rule(text, SOURCES.leaveToday, null, 'Several people with this name are on leave today.');
   if (hits.length === 1) {
     const h = hits[0];
@@ -108,7 +120,7 @@ export function leaveRule(out, name) {
  * get_allocation list outcomes for the at-capacity buckets (projects_2, projects_3_plus). A miss only proves
  * "under the limit" when no list was truncated.
  */
-export function capacityFromBuckets(outs, name) {
+export function capacityFromBuckets(outs, pf) {
   let hits = [];
   let truncated = false;
   for (const out of outs) {
@@ -116,13 +128,19 @@ export function capacityFromBuckets(outs, name) {
     if (section.status !== 'ok') return rule(CAPACITY_TEXT, SOURCES.capacity, null, sectionEvidence(section, 'project allocation'));
     const recs = out.result.records || [];
     if ((out.result.total ?? 0) > recs.length) truncated = true;
-    hits = hits.concat(recs.filter((r) => normName(r.name) === normName(name)));
+    hits = hits.concat(recs.filter((r) => isPerson(r, pf)));
   }
   if (hits.length > 1) return rule(CAPACITY_TEXT, SOURCES.capacity, null, 'Several people with this name are at the project limit.');
   if (hits.length === 1) {
     return rule(CAPACITY_TEXT, SOURCES.capacity, false, {
       activeProjects: hits[0].activeProjects ?? null, max: MAX_ACTIVE_PROJECTS_PER_ASSIGNEE,
     });
+  }
+  // The allocation lists only hold current employees with a login inside your Employees scope: missing from
+  // them proves nothing about anyone else.
+  if (pf?.outOfScope || !pf?.hasEmployeeRole || !pf?.userId) {
+    return rule(CAPACITY_TEXT, SOURCES.capacity, null,
+      pf?.outOfScope ? 'Their Employee profile is outside your Employees scope.' : 'Not a current employee with a login, so the allocation lists do not cover them.');
   }
   if (truncated) return rule(CAPACITY_TEXT, SOURCES.capacity, null, 'The at-limit list was longer than the rows checked.');
   return rule(CAPACITY_TEXT, SOURCES.capacity, true, `Not on ${MAX_ACTIVE_PROJECTS_PER_ASSIGNEE}+ active projects.`);
@@ -149,16 +167,20 @@ export function capacityFromCanAssign(out) {
   };
 }
 
-/** get_placement outcome → the placement facts the rules read. */
-export function placementFacts(out) {
+/** get_placement outcome → the placement facts the rules read; a hit that is not this person is no placement. */
+export function placementFacts(out, pf) {
   const section = sectionStatus(out);
   if (section.status !== 'ok') {
     const noAccess = out?.status === 'ok' && /do not have access/i.test(out.result?.error || '');
     return { section, noAccess };
   }
   const r = out.result;
-  if (r.matches) return { section, matches: r.matches.slice(0, 10) };
+  if (r.matches) {
+    const own = pf ? r.matches.filter((m) => isPerson(m, pf, 'candidate')) : r.matches;
+    return own.length ? { section, matches: own.slice(0, 10) } : { section, notFound: true };
+  }
   if (r.notFound) return { section, notFound: true };
+  if (pf && !isPerson(r, pf, 'candidate')) return { section, notFound: true };
   const pre = (r.steps || []).find((s) => s.step === 'Pre-boarding') || {};
   return {
     section,

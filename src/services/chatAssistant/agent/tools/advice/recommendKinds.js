@@ -31,6 +31,11 @@ async function runKeyed(env, calls) {
   return { keys, outs, by: Object.fromEntries(keys.map((k, i) => [k, outs[i]])) };
 }
 
+/** meetingScope: interviews.manage sees every interview; interviews.read only the ones the viewer is on. */
+async function seesAllInterviews(env) {
+  return (await checkAccessRule({ anyOf: ['interviews.manage'] }, env.user)).ok;
+}
+
 // ── follow_ups_today ──────────────────────────────────────────────────────────
 const SEVERITY_WEIGHT = Object.freeze({ high: 300, medium: 200, low: 100 });
 
@@ -112,6 +117,7 @@ async function nextCandidateToContact(_args, env) {
         add(r.person, item(r.person, 70, [`AI call outcome ${r.outcome}, no interview`], { calledAt: r.when ?? null, outcome: r.outcome }));
       }
       if (truncated(iv)) notes.push('Your interview list was longer than the rows checked, so tier 3 may include someone with an interview.');
+      if (!(await seesAllInterviews(env))) notes.push('Tier 3 only knows the interviews you are on; another recruiter\'s booking is not seen.');
     }
   } else {
     notes.push('Tier 3 skipped — it needs both the AI call list and your interview list (see sections).');
@@ -145,7 +151,12 @@ async function interviewOrder(_args, env) {
   const notes = [];
   const upcoming = okResult(by.upcoming);
   if (!upcoming) notes.push('Could not check upcoming interviews, so some rows may already have one.');
-  const booked = new Set((upcoming?.records || []).map((m) => normName(m.candidate)));
+  // The verified link is the interview's application id; candidate.name is free text, used only when unlinked.
+  const bookedApps = new Set((upcoming?.records || []).map((m) => m.applicationId).filter(Boolean));
+  const bookedNames = new Set((upcoming?.records || []).filter((m) => !m.applicationId).map((m) => normName(m.candidate)));
+  if (upcoming && !(await seesAllInterviews(env))) {
+    notes.push('Only interviews you are on are visible to you, so someone booked by another recruiter may still be listed.');
+  }
 
   const titleCount = new Map();
   for (const a of apps) if (a.job) titleCount.set(a.job, (titleCount.get(a.job) || 0) + 1);
@@ -162,7 +173,7 @@ async function interviewOrder(_args, env) {
 
   const items = [];
   for (const a of apps) {
-    if (booked.has(normName(a.applicant))) continue;
+    if (bookedApps.has(a.id) || bookedNames.has(normName(a.applicant))) continue;
     const age = daysBetween(a.appliedAt, env.now);
     let score = Math.min(age ?? 0, 30);
     const reasons = [`applied ${age ?? 'unknown'} day(s) ago`];
@@ -283,7 +294,10 @@ async function allocateToProject({ project, designation }, env) {
   }
   const notes = [];
   if (truncated(okResult(s1.by.zero)) || truncated(okResult(s1.by.one))) notes.push(`Only the first ${LIST} people per bucket were ranked.`);
-  return { rules, project, items: scored.filter((it) => !it.excluded), excluded, sections, notes };
+  // Reading allocation needs projects.read; assigning someone is PATCH /projects/:id (projects.manage).
+  const viewerCanAssign = (await checkAccessRule({ anyOf: ['projects.manage'] }, env.user)).ok;
+  if (!viewerCanAssign) notes.push('You can see this ranking but not assign people: that needs projects.manage.');
+  return { rules, project, items: scored.filter((it) => !it.excluded), excluded, sections, notes, viewerCanAssign };
 }
 
 // ── training_before_assignment ────────────────────────────────────────────────
@@ -381,7 +395,8 @@ async function teamTaskPriorities({ team }, env) {
   ];
   const { keys, outs, by } = await runKeyed(env, {
     overdue: call('list_tasks', { filters: { teamName: team, overdue: true }, sort: 'dueDate', limit: LIST }),
-    upcoming: call('list_tasks', { filters: { teamName: team }, sort: 'dueDate', limit: LIST }),
+    // From today on: sorted by due date with no bound, the page is the team's oldest (mostly completed) tasks.
+    upcoming: call('list_tasks', { filters: { teamName: team, dueBetween: { from: todayIst(env.now) } }, sort: 'dueDate', limit: LIST }),
   });
   const sections = statusMap(keys, outs);
   const first = okResult(by.overdue) ?? okResult(by.upcoming);

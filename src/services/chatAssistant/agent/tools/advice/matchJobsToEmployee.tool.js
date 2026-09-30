@@ -82,7 +82,8 @@ export default defineTool({
       return { ...base, jobs: [], total: 0, note: 'No skills or designation on their profile — not captured in DharwinOne.', sections: { profile: 'ok' } };
     }
 
-    const out = await run('list_jobs', { filters: { search: terms }, limit: MAX_LIST_LIMIT }, { timeoutMs: 8000 });
+    // Internal only: external jobs are other companies' mirrored listings, not openings to move someone into.
+    const out = await run('list_jobs', { filters: { search: terms, jobOrigin: 'internal' }, limit: MAX_LIST_LIMIT }, { timeoutMs: 8000 });
     const jobsSection = sectionStatus(out);
     if (jobsSection.status !== 'ok') return { ...base, jobs: [], total: 0, sections: { profile: 'ok', jobs: jobsSection.status } };
     const list = out.result.jobs || [];

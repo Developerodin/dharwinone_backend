@@ -45,6 +45,7 @@ export default defineTool({
           id,
           title: m.title ?? null,
           candidate: m.candidate?.name ?? null,
+          applicationId: m.applicationId ? String(m.applicationId) : null,
           jobPosition: jobTitle(m),
           interviewers: formatInterviewers(m),
           scheduledAt: m.scheduledAt ?? null,

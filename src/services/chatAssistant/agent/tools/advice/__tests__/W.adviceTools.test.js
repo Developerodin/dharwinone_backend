@@ -96,6 +96,21 @@ describe('explain_status', () => {
     for (const r of res.rules) assert.ok(r.source && r.rule);
   });
 
+  it('a placement or allocation miss never stands in for the person', async () => {
+    // get_placement matches substrings: "Ravi Kumar" returns Ravi Kumar Singh's placement as its lone hit.
+    const { ctx } = ctxWith({
+      get_user: candidateUser(),
+      who_is_on_leave_today: leaveList([]),
+      get_allocation: bucket([]),
+      get_placement: ok({ candidate: 'Ravi Kumar Singh', status: 'Pending', steps: [] }),
+    });
+    const res = await explainStatus.execute({ person: 'Ravi', question: 'cannot_move_to_onboarding' }, ctx);
+    assert.equal(byRule(res, 'Placement status may move').met, null);
+    // A Candidate is not in the employee allocation lists, so missing from them proves nothing.
+    const why = await explainStatus.execute({ person: 'Ravi', question: 'why_unavailable' }, ctx);
+    assert.equal(why.rules.find((r) => /project/i.test(r.rule)).met, null);
+  });
+
   it('why_unavailable: on leave and at the project limit are both named', async () => {
     const { ctx } = ctxWith({
       get_user: employeeUser(),
@@ -183,7 +198,7 @@ describe('explain_status', () => {
 
   it('cannot_move_to_onboarding: open required pre-boarding step blocks; bypass right is context', async () => {
     const placement = ok({
-      status: 'Pending', joiningDate: '2026-10-10', firstBlockingStep: { step: 'Pre-boarding', detail: 'Required checklist step not done: ID proof.' },
+      candidate: 'Ravi Kumar', status: 'Pending', joiningDate: '2026-10-10', firstBlockingStep: { step: 'Pre-boarding', detail: 'Required checklist step not done: ID proof.' },
       steps: [{ step: 'Pre-boarding', status: 'In Progress', tasks: [{ title: 'ID proof', required: true, done: false }, { title: 'Photo', required: false, done: false }] }],
     });
     const { ctx } = ctxWith({ get_user: candidateUser(), get_placement: placement }, { user: userWith([...ALL, 'preboarding.override']) });
@@ -204,7 +219,7 @@ describe('explain_status', () => {
   it('not_in_employee_list: a Candidate whose joining day has not arrived; hideFromDirectory is not applied', async () => {
     const { ctx, calls } = ctxWith({
       get_user: candidateUser(),
-      get_placement: ok({ status: 'Onboarding', joiningDate: '2026-10-15', holdsEmployeeRole: false, steps: [] }),
+      get_placement: ok({ candidate: 'Ravi Kumar', status: 'Onboarding', joiningDate: '2026-10-15', holdsEmployeeRole: false, steps: [] }),
     });
     const res = await explainStatus.execute({ person: 'Ravi', question: 'not_in_employee_list' }, ctx);
     assert.equal(byRule(res, 'Their login holds the Employee role').met, false);
@@ -356,6 +371,21 @@ describe('recommend', () => {
     assert.ok(res.items[1].reasons.some((r) => r.includes('several jobs share this title')));
   });
 
+  it('interview_order: an interview linked to the application counts as booked whatever its free-text name', async () => {
+    const { ctx } = ctxWith({
+      list_applications: (a) => ok({
+        total: 1,
+        records: a.filters.status === 'Screening' ? [{ id: 'app1', applicant: 'Meera Iyer', job: 'Dev', status: 'Screening', appliedAt: '2026-09-01T05:00:00Z' }] : [],
+      }),
+      list_interviews: ok({ total: 1, records: [{ candidate: 'Candidate 1', applicationId: 'app1' }] }),
+      list_jobs: ok({ total: 0, jobs: [] }),
+      get_job_stats: ok({ jobs: [] }),
+    });
+    const res = await recommend.execute({ kind: 'interview_order', limit: 20 }, ctx);
+    assert.deepEqual(res.items, []);
+    assert.match(res.notes.join(' '), /another recruiter/, 'interviews.read sees only their own interviews');
+  });
+
   it('joinJobFacts: duplicate titles map to null', () => {
     const m = joinJobFacts([{ jobId: 'a', title: 'X' }, { jobId: 'b', title: 'x ' }, { jobId: 'c', title: 'Y' }], [{ jobId: 'c', vacanciesLeft: 1 }]);
     assert.equal(m.get('x'), null);
@@ -383,6 +413,8 @@ describe('recommend', () => {
     assert.ok(res.items.filter((i) => i.subject === 'Sam').every((i) => i.reasons.some((r) => r.includes('shares a name'))));
     assert.equal(calls.some((c) => c.name === 'get_allocation' && c.args.person === 'Sam'), false);
     assert.equal(calls.some((c) => /assignment/i.test(c.name)), false);
+    assert.equal(res.viewerCanAssign, false, 'assigning is projects.manage; the viewer has projects.read');
+    assert.match(res.notes.join(' '), /projects\.manage/);
 
     const amb = await recommend.execute({ kind: 'allocate_to_project', project: 'Ap', limit: 20 }, ctxWith({
       list_projects: ok({ records: [{ name: 'Apollo' }, { name: 'Apex' }] }), get_allocation: bucket([]),
@@ -438,8 +470,10 @@ describe('recommend', () => {
       { id: 't3', title: 'Done', status: 'completed', priority: 'urgent', dueDate: '2026-09-20T00:00:00Z' },
       { id: 't4', title: 'Undated', status: 'todo', priority: 'high', dueDate: null },
     ];
-    const { ctx } = ctxWith({ list_tasks: (a) => ok({ total: 4, scope: 'mine', records: a.filters.overdue ? [tasks[0]] : tasks }) });
+    const { ctx, calls } = ctxWith({ list_tasks: (a) => ok({ total: 4, scope: 'mine', records: a.filters.overdue ? [tasks[0]] : tasks }) });
     const res = await recommend.execute({ kind: 'team_task_priorities', team: 'Alpha', limit: 20 }, ctx);
+    const upcoming = calls.find((c) => c.name === 'list_tasks' && !c.args.filters.overdue);
+    assert.deepEqual(upcoming.args.filters.dueBetween, { from: '2026-09-30' }, 'from today, not the oldest tasks');
     assert.deepEqual(res.items.map((i) => i.subject), ['Late', 'Urgent soon']);
     assert.equal(res.items[0].score, 105);
     assert.equal(res.items[1].score, 30 + 12);
@@ -521,6 +555,7 @@ describe('match_jobs_to_employee', () => {
     assert.equal(capture.apiFilter.ownerUserRole, 'employee');
     assert.equal(capture.apiFilter.search, 'Priya Shah');
     assert.deepEqual(calls[0].args.filters.search, ['Java', 'Spring', 'SQL', 'Java Developer']);
+    assert.equal(calls[0].args.filters.jobOrigin, 'internal', 'external listings are not openings');
     assert.deepEqual(res.jobs.map((j) => j.jobId), ['j1', 'j2']);
     assert.equal(res.jobs[0].score, Math.round((2 / 3) * 80 + 20));
     assert.deepEqual(res.jobs[0].missingSkills, ['kafka']);
