@@ -19,12 +19,15 @@ removed in R9 (2026-09-29).
 2. `tryAgentTurn` loads the user's `ConversationMemory` row (for the tool ledger) and
    calls `runAgent(...)` (`agent/runAgent.js`) — on every turn, with no routing test.
 3. `runAgent` builds the tool list with `getAgentTools(user)` (`agent/toolRegistry.js`),
-   permission-filtered so the model never sees a tool the user can't call, and loops
-   `llm.step(...)` (`agent/llm.js`) up to `CHATBOT_AGENT_MAX_STEPS` times: each step may
-   return tool calls, which the registry's `execute(name, args)` runs — capped at
-   `MAX_CALLS_PER_STEP = 8` per step; any call beyond the first 8 gets a canned
-   `{"error":"too many calls in one step"}` output instead of actually running — or a
-   final text answer.
+   permission-filtered so the model never sees a tool the user can't call. With at most
+   `EAGER_TOOL_LIMIT` (30) permitted tools, not counting `handoff`, every permitted schema and
+   its domain's instructions go into the prompt as before. Above that the registry is lazy: the
+   model gets only `handoff` + `find_tools` and loads domains on demand (see "Lazy tool loading"
+   below). The loop then calls `llm.step(...)` (`agent/llm.js`) up to `CHATBOT_AGENT_MAX_STEPS`
+   times, passing that turn's active schemas each time: each step may return tool calls, which
+   the registry's `execute(name, args)` runs — capped at `MAX_CALLS_PER_STEP = 8` per step; any
+   call beyond the first 8 gets a canned `{"error":"too many calls in one step"}` output instead
+   of actually running — or a final text answer.
 4. Successful tool results are rendered (`tool.render(result)` → `{ blocks, facts }`),
    the facts are merged and passed to `enforceCounts`, which corrects counts against this
    turn's tool totals. `runAgent` returns `{ reply, blocks, meta, ledgerEntry }`;
@@ -63,14 +66,70 @@ controller --> sendMessage / streamMessage (chatAssistant.service.js)
               the answer, or a fixed reply (SAGE_REPLIES) --> { reply, blocks, meta } envelope
 ```
 
+## Lazy tool loading
+
+- **Threshold.** `getAgentTools` counts the user's permitted domain tools (`handoff` excluded).
+  Up to `EAGER_TOOL_LIMIT = 30` it is eager, exactly as before. Above it `lazy` is `true`: the
+  stable prefix carries `LAZY_INSTRUCTIONS` instead of the domain instructions, and the only
+  schemas are `handoff` and `find_tools`.
+- **`find_tools`.** Its description is a catalog of the domains the user has at least one tool
+  in, one line each as `domain — summary` (the domain module's `summary`); its input accepts only
+  those domain names, 1 to 5, no repeats (`parseFindToolsArgs` enforces the minimum and
+  uniqueness, which `toJsonSchema` cannot express). The loop handles the call itself: the
+  registry's `loadDomains(names)` returns those domains' permitted schemas and instructions, the
+  schemas join the active set for the next step, and the instructions come back as the call's
+  output. Unknown or unpermitted names load nothing.
+- **Compaction.** `find_tools` outputs are the only copy of the loaded domains' rules, so
+  `compactTurnItems` never drops them (`keepTools`).
+- **One free step.** A step whose calls are all `find_tools` does not count against
+  `CHATBOT_AGENT_MAX_STEPS`, once per turn — loading tools is not progress on the answer.
+- **`find_tools` is not an answer.** It returns no company data, so it never satisfies the
+  `untooled_number` check, is never rendered and is never written to the ledger. It is still
+  listed in `meta.toolCalls`.
+- **Ledger preload.** On a lazy turn, the domains of the tools called in the last ledger entry
+  are loaded before step 1 (a follow-up usually stays in the same domains). Their instructions
+  ride in one extra `developer` message after the turn context (`buildAgentInput`'s
+  `preloaded`), not in the stable prefix, so the prompt cache still hits.
+- **Logs and evals.** `[runAgent]` logs `lazy` and `toolsOffered` (the size of the final active
+  schema set). `scripts/sage-agent-evals.js --eager` forces every permitted tool up front for an
+  A/B against the default lazy run; `--check` validates every case file offline (no OpenAI, no
+  DB): JSON, unique ids, every expected tool registered and visible to `FAKE_USER`, and a canned
+  result for every registered tool — cheap enough for CI.
+- **Ceiling.** The catalog grows by one line per domain and sits in every lazy prompt; past a
+  few dozen domains the upgrade is nested domains or embedding-based tool search.
+
 ## Registered domains
 
 ### jobs
 
 The reference domain (`agent/tools/jobs/`): `count_jobs`, `list_jobs`, `get_job`,
-`rank_jobs_by_salary`. Access is `jobs.read`. `filters.jobOrigin: 'external'` plus
+`rank_jobs_by_salary`, `get_job_stats`. Access is `jobs.read`. `filters.jobOrigin: 'external'` plus
 `filters.externalSource` (one feed or an array) answer external / LinkedIn job questions — only
-listings mirrored into the Jobs page, never the raw External Jobs collection.
+listings mirrored into the Jobs page, never the raw External Jobs collection. `get_job` also returns
+`pay` (the Jobs page Salary column; "Not specified" for no range or 0–0), `createdBy`, `recruiter` (null
+= the job creator approves interview times) and `applicationDeadline`; `project` and `workAuthorization`
+are always null (the Job model has neither — not captured in DharwinOne). `get_job_stats` with a jobId or
+title gives one job's page funnel, `interviewed`, hires, openings left, time-to-fill and a close
+suggestion (never an action); without one it ranks every matching job (ceiling 5000, said when hit) by one
+grouped count from `applicantQuery.service` `aggregateApplicationsByJob` — one application per person per
+job, the page's dedupe, under the viewer's scope. Time-to-fill runs from posting to the last hire's
+`Offer.acceptedAt` (fallback `updatedAt` for offer-less hires), only once every opening is filled.
+`hired` counts every hire on the job (the "filled" badge); hire rate counts only rows the viewer can see
+(`hiredBasis`).
+
+### referrals
+
+`agent/tools/referrals/`: `get_referral` — referrer, sales agent, lead and attribution ids, channel,
+date, override, and who issued the link (`ActivityLog` `referral.link.issued`, first 5 matches). "Direct"
+only when no referrer is recorded; a referred person outside the viewer's Refer Leads scope comes back
+`unlisted`, never direct and never with details. `get_referral_stats` — page counts per agent or the
+viewer's own scope (referred, applied, never applied, active, offers, joined, conversion), exact average
+days referral → joining (the basis says how many joined leads had no usable dates), days in stage per open
+stage (`referralLeads.service` `getReferralOpenStageAges`: entry date from the record that put the lead
+there), IST month-over-month. Ranking is org-wide viewers only, one grouped query
+(`getReferralLeadsStatsByAgent`). Access is `candidates.read` with the Refer Leads page scope: a Sales
+Agent's "me" = leads they referred or are the agent for; naming another agent is refused before any lookup.
+WhatsApp shares and link opens are not captured.
 
 ### people
 
@@ -86,6 +145,7 @@ defaults to `active` for user counts/lists unless the caller asks for another st
 | `list_users` | List user accounts (`id`, `name`, `email`, `roles`, `status`, `lastLoginAt`), newest first; `total` is always the full filtered count. | `filters`, `limit` (default 10, max 25) | `users.read` |
 | `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Name resolution excludes the platform-super account (unless the viewer is one) and deleted accounts, and prefers a single exact name/email match over asking to disambiguate. Ambiguous name → `{ matches }`; no match → `{ matches: [] }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
 | `get_my_profile` | The signed-in user's own profile ("my profile", "who am I", "my employee id"). Separate from `get_user` so it needs no `users.read`; self field rules come from `resolvePersonProfile` (impersonation is never self). | none | `{ note }` (self only) |
+| `what_can_i_do` | The signed-in user's own role permissions, by module, and the modules they cannot see (same source as `GET /auth/my-permissions`). Another role's permissions stay on `get_role`. | none | `{ note }` (self only) |
 | `list_roles` | List the roles defined in the system, with how many active users hold each. | `status` (`active`\|`inactive`) | `roles.read` |
 | `get_role` | One role's definition: name, aliases, status, full permission list. Exact match only (name, alias, or a former name) — no partial match. | `name` (required) | `roles.read` |
 
@@ -94,7 +154,9 @@ model reads): "how many admins/recruiters/sales agents" and "who has role X" are
 `count_users`/`list_users` with a `role` filter, **not** `list_roles`; "what can a Sales
 Agent do" / "what permissions does X role have" is `get_role`; a short follow-up that's
 just a person's name is a `get_user` call, not a filter on the previous `count_users`/
-`list_users` call. Full rulings and rationale: `agent/tools/people/CONTRACT.md`.
+`list_users` call. `count_users` / `list_users` also take `filters.inactiveDays` (no password
+sign-in for N days) and `filters.neverLoggedIn`; `list_users` stays at default 10, max 25.
+Full rulings and rationale: `agent/tools/people/CONTRACT.md`.
 
 ### employees
 
@@ -132,24 +194,81 @@ with the viewer, so row scope is the page's; each `access` mirrors that page's G
 
 | Tool | Backed by | Access (route) |
 |---|---|---|
-| `count_interviews` / `list_interviews` | `meeting.service` `queryMeetings` (Interviews page; `meetingScope`: manage = all, read = own). Filter = the page's `buildMeetingsMongoFilter` + interviewer (recruiter or panel agent) + result. Count returns `byStatus` and `byResult`. | `interviews.read` |
-| `count_offers` / `list_offers` | `offer.service` `queryOffers`. Count returns `byStatus`. CTC only for `candidates.manage` / `employees.edit` / `offers.edit` / `offers.manage` (the Offer Letter Generator gate), otherwise `compensationHidden`; never `offerLetterUrl` or `rejectionReason`. | `offer.route.js` `canReadOffers` |
-| `count_placements` / `list_placements` | `placement.service` `queryPlacements`. Cancelled left out unless asked; `stage` = the Pre-boarding / Onboarding queue; `joiningBetween` for "joined this month". | `placement.route.js` `canReadPlacements` |
+| `count_interviews` / `list_interviews` | `meeting.service` `queryMeetings` (Interviews page; `meetingScope`: full interviews access = all, else own). Filter = the page's `buildMeetingsMongoFilter` + interviewer + result. `byStatus` / `byResult` (+ `resultNotSet` for legacy rows). `resultMissing` = status ended + result pending/unset. `overlapping` (needs `scheduledBetween`, max 300 in window) = a shared panel member (id or email) with overlapping time among interviews the viewer can see; the scan starts 8 h early. Job ids shown as titles. Results are pending / selected / rejected only — no "hold". | `interviews.read` |
+| `get_interview` | By id or candidate (+ `jobPosition`): panel, scheduled by / on, attendance (`participantRoster`), history (result changes and invite re-sends from Activity Logs, under that page's gate and grading, else `historyHidden`), recording + playback link, AI summary (`interviews.summary.read`, else `aiSummaryHidden`), evaluations. Fire-and-forget view audits identical to the portal's, tagged `source: 'sage.chat'`; none on notFound / denied. RSVP, invite delivery and reschedule history are not captured. | `interviews.read` |
+| `get_interview_transcript` | `interviewTranscript.service` `getInterviewTranscript` (latest version, `meetingScope`): speakers, time chunks, `includeFullText` ≤ 12,000 chars. Writes the portal's `TranscriptVersion` audit row. | `interviews.transcript.read` (= `GET /meetings/:id/transcript`); by name also `interviews.read` |
+| `count_offers` / `list_offers` | `offer.service` `queryOffers`. Count returns `byStatus`. CTC only for `candidates.manage` / `employees.edit` / `offers.edit` / `offers.manage` (the Offer Letter Generator gate), otherwise `compensationHidden`; never `offerLetterUrl` or `rejectionReason`. `filters.pendingOverDays` → `sentBefore` (Sent / Under Negotiation, marked Sent before the IST day N days ago; `sentDateMissing` = pending with no sentAt, never counted); `acceptedNoPreboarding` → `placementStatus` / `placementPreBoardingStatus` Pending. Exact totals. | `offer.route.js` `canReadOffers` |
+| `get_offer` | One offer by candidate or `offerCode`: prepared by / at, `markedSentBy` / `markedSentAt` (RecruiterActivityLog `offer_sent`), days pending, a `delivery` note (auto notice email; the Outlook letter is not captured), `letter.pdfUrl` and compensation only via `canSeeOfferCompensation`. | `canReadOffers` |
+| `count_placements` / `list_placements` | `placement.service` `queryPlacements`. Cancelled left out unless asked; `stage` = the Pre-boarding / Onboarding queue; `joiningBetween` for "joined this month". `bgvPending` → `bgvStatus`; `readyForBgv` → BGV Pending, not requested, paperwork complete (`PAPERWORK_COMPLETE_MATCH`); `joinDatePassedNotOnboarded` → `joiningTo`. Exact totals. The service itself rewrites drifted joining dates and runs the Employee-role promotion backfill, as the page does. | `placement.route.js` `canReadPlacements` |
+| `get_placement` | One person's placement: steps, first blocking step (IST joining day), agent / department, whether they hold the Employee role; `auditTrail` (`listAuditForPlacementId`, 20 newest) with placement.audit / candidates.manage. | `canReadPlacements` (+ audit route) |
+| `list_documents` | Documents for one `person`, a `cohort` (placement filters, ≤ 500 rows, `scanTruncated`), or the viewer's own: uploaded, missing (requested, not uploaded), pending review, approved, rejected with reason, EAD / visa expiring. Without `userCanViewPreBoardingDocs` a person lookup only resolves a profile you own (no name enumeration). | `employee.route.js` `canReadCandidateDocuments` |
 | `get_hiring_funnel` | `referralLeadsAnalytics.fetchHiringTunnelSnapshot` → `getReferralLeadsStats` (Refer Leads page cards). | `candidates.read` |
 | `list_referral_leads` | `referralLeadsAnalytics.searchReferralLeads` → `listReferralLeads`. Referrer / sales-agent names resolve only among users who hold that role on some referral lead (never the whole user directory); several → `{ matches }` with names only. "me" (or the viewer's own name) needs no lookup; a viewer the page scopes to their own leads cannot name anyone else. Day windows go to the service as IST instants (`referredAtUpperBound` takes a full-instant `to` as-is). | `candidates.read` |
 
-Counts are one `limit: 1` service call per status/result bucket, so every number is the page's own
-count. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those are the `meetings` domain).
+Counts are the page's own service count per status/result bucket. Every day window (`scheduledBetween`, `createdBetween`, `joiningBetween`, `referredBetween`, `claimedBetween`) is bounded by the same `employees/common.js` `dayWindowBounds` as the employee windows. Interviews are never internal meetings (those are the `meetings` domain).
 
 ### meetings
 
-`agent/tools/meetings/`: `count_meetings`, `list_meetings` — internal / team meetings (Communication →
-Meetings, the `InternalMeeting` collection) through `internalMeeting.service`'s `queryInternalMeetings`, so
-row scope is the page's `internalMeetingScope` (all four `meetings.*` = every meeting; otherwise created /
-hosting / invited). Past and upcoming (`filters.when`), `status`, `scheduledBetween` (whole IST days via
-employees' `dayRange`), page search, and `mine` (the page's Mine toggle). Rows carry page-visible fields only —
-no description, no invite emails (`invitedCount` instead). Interviews are a separate domain and never answered
-here.
+`agent/tools/meetings/`: `count_meetings`, `list_meetings`, `get_meeting` — internal meetings
+(`InternalMeeting`) via `internalMeeting.service` `queryInternalMeetings`, so row scope is the page's
+`internalMeetingScope` (all four `meetings.*` = every meeting; otherwise created / hosting / invited).
+`filters.when` upcoming | past | earlier_today (IST midnight → now), `status`, `scheduledBetween` (whole IST
+days), page search, `mine`. `status` "ended" includes meetings auto-ended when their slot passed — never
+proof anyone attended. `list_meetings` defaults to 20 rows of page-visible fields (no description,
+`invitedCount` not emails); `hasRecording` is one batched `Recording.distinct` over the page's room ids
+(status `completed`), null without `meetings.read` / `onboarding.edit` or on lookup failure.
+
+`get_meeting` (id / room id via `getInternalMeetingById`, which 404s outside scope, or title + optional IST
+date; several → `{ matches }`) returns hosts, attendees from `participantRoster` (names, roles, join times),
+a signed expiring recording link, and the AI summary read from `Summary` by room name
+(`InternalMeeting.meetingId`): executive summary, decisions, action items. Only InternalMeeting ids resolve,
+so interview summaries (gated `interviews.summary.read`) never surface here. No portal page shows
+internal-meeting summaries today — Sage is the only reader. Access: `meetings.read` or the
+orientation-meeting permissions.
+
+### communication
+
+`agent/tools/communication/`:
+- `search_my_mailbox` (`emails.read`) — the caller's own Gmail / Outlook accounts only (the client reloads
+  the account by `{ _id, user }`); `threadId` + `accountId` reads one thread to summarise. Outlook's provider
+  searches one quoted phrase, so the tool sends the words and post-filters `person` on from / to / cc. A
+  token refresh may write the account, as the portal does.
+- `search_chat` (`chats.read`) — the caller's 50 most recent conversations, `searchMessages` per
+  conversation (membership re-checked, deleted / hidden excluded, regex escaped); `partial` when cut.
+- `list_email_activity` (Administrator by name, or `activity.delete`) — `EmailLog` platform send attempts
+  via `email.service` `queryEmailLogs` (explicit projection, never metadata): to, person, type, subject,
+  status (sent / failed / suppressed / pending), error, sentAt. "Sent" = accepted by SMTP; bounces and
+  opens are not captured. Mail to directory-hidden users is excluded for non-platform-super viewers.
+
+### audit
+
+`agent/tools/audit/`: `list_activity` reads Activity Logs through the page's own gates —
+`requireActivityLogsListAccess`, then `resolveActivityLogListFilter` (view = own rows, create + edit = own
+rows with filters, delete / manage = everyone), both run inside `execute`, so the access is a `note`.
+Filters dropped by the viewer's access come back as `ignoredFilters`. A person target (Employee) matches rows
+stored as Candidate or Employee, by id or by name. `changes` (array or the older object shape, via
+`normalizeChangesArray`) are `valueHidden` for pay, credentials, identity documents and contact details, and
+for any value that is a link or an email address. `list_impersonations` ("Login as" sessions) needs
+`users.impersonate` or the Administrator role by name, like `POST /auth/impersonate`; below the
+see-everyone Activity Logs tier it returns only the viewer's own sessions (`scope`). The reason for an
+impersonation and the pages viewed during it are not captured.
+
+### calls
+
+`agent/tools/calls/`: `count_call_records`, `list_call_records`, `get_call_record`, `get_call_metrics`,
+`list_call_followups`. Call Records (AI agent + dialer) through `callRecord.service` with the viewer's
+`userId` / `userIsAdmin`, so row scope is the page's. Every filter (IST `calledBetween`, direction, provider,
+`mine` / `placedBy`, candidate id) runs in Mongo: `listCallRecords` for rows, `countCallRecords` /
+`groupCallRecords` / `summarizeCallRecords` for exact counts on the same cast filter. Counts are raw records
+like the page total (a Twilio dialer call may be two legs). A `callType` filter also reports
+`unclassifiedCalls` (older rows with no call type). Transcript / AI fields go through `sanitizeCallRecord`
+(`call-transcripts.read` / `call-ai.read`); recording links need `call-recording.view`. Access is
+`calls.view`. `hangupBy` / `hangupReason` come from Bolna's telephony data (AI agent calls only).
+`list_call_followups` and the applicant metrics also need `candidates.read` and use the Applications page
+scope (`buildApplicantQuery`): callbacks from `JobApplication.verificationCallbackAt` (due / overdue around
+now − 5 min), not-yet-called = open applications with no verification call and no CallRecord for that
+candidate + job (dialer calls carry no candidate/job link, so they don't count as called). Not captured:
+attempt number, hang-up side on dialer calls, salary / joining date / questions / concerns / other offers.
 
 ### knowledge
 
@@ -184,12 +303,28 @@ domain instructions say which is which. "Manager" has three meanings — chart p
 with direct reports (`people_managers`); a bare "how many managers" answers the first two. This
 replaces the legacy `businessConcepts.js` clarification flow.
 
+`get_reporting_chain` (same access) has five modes: `chain` (a person's team lead → supervisor → manager →
+CEO up the chart, plus their `reportingManager` field and workforce team leads), `direct_reports`
+(employees whose `reportingManager` is this person, and chart units they head), `no_reporting_manager` and
+`no_group` (active employees with no reporting manager / in no chart department), and `group_moves`
+(`EmployeeTransfer` records with who approved and when; optional `person` and `movedBetween`, and it needs an
+Employees-page read permission). A null reporting manager or team lead is "not captured", never guessed. When no employee has
+`reportingManager` set (only Onboarding → Edit sets it), `no_reporting_manager` / `direct_reports` say the
+field is not captured rather than presenting it as a finding.
+
 ### training
 
-`agent/tools/training/`: `get_training_progress` — assigned modules with status and % done from
-`studentCourseQuery.service` `queryStudentCourses` (the My Courses page), for the viewer or a named
-person (another person needs `students.read` / `students.manage`, `canReadOtherTraining`). Progress
-exists only on Student profiles; no Student profile returns `noStudentProfile`, never "0 courses".
+`agent/tools/training/`: `get_training_progress` in three modes. `person` (default) — assigned modules
+with status and % done from `studentCourseQuery.service` `queryStudentCourses` (the My Courses page), for
+the viewer or a named person (another person needs `students.read` / `students.manage` /
+`students.courses.read`). `cohort` — a course and/or position's learners, filtered by `progress`,
+`scoreBand` (`gte90`, `lt70`, `custom` with `minScore` / `maxScore`) or `inactiveDays` (whole IST days, today included; unfinished rows with no access or enrolment date
+are counted as `noActivityDate`, not guessed); needs
+`evaluation.read`. `position_map` — which courses each position gets; needs an Employees / Candidates /
+positions read permission. Progress exists only on Student profiles: no Student profile returns
+`noStudentProfile` (person) or lists them in `withoutStudentProfile` (cohort), never "0 courses".
+`overdue` is always null with a note — modules have no due date in DharwinOne — and `atRisk` is offered
+instead.
 
 ### attendance
 
@@ -226,6 +361,13 @@ without `projects.read`/`manage` get My Projects, `mine: true`), `list_teams` (`
 name resolves to an `assignedTo` clause; unknown or ambiguous names return `notFound` / `matches`,
 never an unfiltered count.
 
+`get_allocation` (`projects.read` / `projects.manage`) answers the max-2-active-projects rule. `summary`
+counts people on 0, 1, 2 and 3+ active projects; `list` names one bucket (`projects_0` … `projects_3_plus`,
+`no_active_tasks`, `unallocated`, `overloaded` with `overloadAbove`, optional `designation`); `can_assign`
+says whether a person can join a project and why. The rule lives in `services/projectCapacity.js`
+(`MAX_ACTIVE_PROJECTS_PER_ASSIGNEE = 2`, active = In progress / On hold, `isAtProjectCapacity`), the same
+helper `pmAssistant.service.js` now uses, so the chat and the PM assistant cannot disagree.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the
@@ -242,7 +384,7 @@ import { MY_DOMAIN_ACCESS, myDomainScope } from './common.js';
 
 export default defineTool({
   name: 'count_widgets',           // must match /^[a-z][a-z0-9_]{2,63}$/, unique across ALL domains
-  domain: 'widgets',               // groups instructions + schemas; drives the find_tools/allowed_tools upgrade path (see Known limits below)
+  domain: 'widgets',               // groups instructions + schemas; the unit find_tools loads (see "Lazy tool loading")
   kind: 'read',                    // 'read' runs in the loop; 'write' is refused by the loop (see below)
   description: 'Count widgets the user can see. Use for "how many widgets…".', // the MODEL reads this — be specific about when to call it
   input: Joi.object({
@@ -307,8 +449,18 @@ Notes on each field, from what `defineTool.js` actually enforces (a bad tool thr
 Add the tool to its domain's `agent/tools/<domain>/index.js`:
 
 ```js
-export default { domain: 'widgets', instructions: '<plain-text guidance for this domain>', tools: [countWidgets] };
+export default {
+  domain: 'widgets',
+  summary: 'Widgets on the Widgets page: counts and lists.', // find_tools catalog line
+  instructions: '<plain-text guidance for this domain>',
+  tools: [countWidgets],
+};
 ```
+
+`summary` is required: one line of at most 120 characters. It is the domain's line in the
+`find_tools` catalog — all the model sees of a domain it has not loaded yet — so name what the
+domain answers, not how. `getAgentTools` (and module load) throws if a domain has none
+(`assertDomainSummaries`).
 
 New domain → add one line to `agent/tools/index.js`'s array (see how it already lists `jobs`).
 
@@ -397,7 +549,8 @@ See memory `project_backend_tests_not_versioned` for why this is 3 steps, not 1.
 Per-step model input is `[stable prefix] + [turn context] + [history] + [this turn's tool items]`:
 
 - **Stable prefix** — `runAgent.BASE_INSTRUCTIONS` + the permitted domains' `instructions`
-  + sorted tool schemas — passed as `instructions` to `llm.step`. It must stay identical
+  + sorted tool schemas (lazy mode: `LAZY_INSTRUCTIONS` + `handoff` / `find_tools`) — passed as
+  `instructions` to `llm.step`. It must stay identical
   across users and turns so OpenAI's prompt cache hits; **never put per-user or time-varying
   data here** (that's what turn context is for).
 - **Turn context** — one `developer`-role message built by `context.js`'s
@@ -452,20 +605,18 @@ host `.env` that still sets them boots fine; they are simply ignored and can be 
 
 ## Known limits / upgrade paths
 
-- **~40-tool ceiling.** All permitted tools currently go into the prompt on every step.
-  Every tool already carries `domain`, so the upgrade is a `find_tools(domain|query)`
-  meta-tool that loads a domain's schemas into the next step, or — since our model
-  (checked 2026-09-28) supports the Responses API's `tool_choice: { type: 'allowed_tools' }`
-  — narrowing the *active* tool set per step while keeping the full list in the (cached)
-  prefix, which avoids invalidating the prompt cache the way changing the tool list would.
-  Neither is built yet; revisit when eval pick-accuracy drops or tool count crosses ~40.
+- **Tool-count ceiling.** `find_tools` is built (see "Lazy tool loading"): above 30 permitted
+  tools the model loads domains on demand. Its own ceiling is the catalog, one line per domain
+  in every lazy prompt; the upgrade is nested domains or embedding-based tool search. Loading a
+  domain changes the tool list mid-turn; the Responses API's
+  `tool_choice: { type: 'allowed_tools' }` (supported by our model, checked 2026-09-28) could
+  instead keep the full list in the cached prefix and narrow the active set per step.
 - **No token streaming.** `llm.step` returns the complete `output_text` once the Responses API
   call resolves, so the stream route sends the reply as a single `{ token }` event before
   `{ done }`. Streaming the final step would need `responses.create({ stream: true })` in
   `llm.step` and forwarding its text deltas through `onToken`.
 - **A handoff is a dead end for the user.** With no legacy pipeline behind it, a question no
-  tool covers (e.g. call records, activity logs, documents — the gap list in the R9 plan)
-  gets the fixed "I don't have that in the system" reply. Coverage grows by adding tools.
+  tool covers (e.g. system email delivery logs) gets the fixed "I don't have that in the system" reply. Coverage grows by adding tools.
 - **`meta.kind` is always `'jobs'` on an answered turn** — the value the agent path sent since
   the jobs-only first round. The frontend stores it but does not branch on it; derive it from
   the turn's tool domains if something ever needs it to be right.

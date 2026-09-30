@@ -351,5 +351,18 @@
   "./src/services/chatAssistant/agent/tools/org/__tests__/orgTools.test.js",
   "./src/services/chatAssistant/agent/tools/training/__tests__/trainingTools.test.js",
   "./src/services/chatAssistant/agent/tools/attendance/__tests__/attendanceTools.test.js",
-  "./src/services/chatAssistant/agent/tools/projects/__tests__/projectTools.test.js"
+  "./src/services/chatAssistant/agent/tools/projects/__tests__/projectTools.test.js",
+  "./src/services/chatAssistant/agent/tools/projects/__tests__/projectCapacity.test.js",
+  "./src/services/chatAssistant/agent/tools/calls/__tests__/callTools.test.js",
+  "./src/services/chatAssistant/agent/tools/communication/__tests__/communicationTools.test.js",
+  "./src/services/chatAssistant/agent/tools/audit/__tests__/A.auditTools.test.js",
+  "./src/services/chatAssistant/agent/tools/referrals/__tests__/referralTools.test.js",
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/I.interviewTools.test.js",
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/P.detailTools.test.js",
+  "./src/services/chatAssistant/agent/tools/jobs/__tests__/jobStatsTools.test.js",
+  "./src/services/chatAssistant/agent/tools/people/__tests__/A.inactiveAndAccess.test.js",
+  "./src/services/chatAssistant/agent/tools/calls/__tests__/callRecordServiceFilters.test.js",
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/P.serviceFilters.test.js",
+  "./src/services/chatAssistant/agent/tools/jobs/__tests__/aggregateApplicationsByJob.test.js",
+  "./src/services/chatAssistant/agent/tools/referrals/__tests__/referralGroupedStats.test.js"
 ]

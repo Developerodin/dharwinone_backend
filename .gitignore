@@ -243,6 +243,25 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/agent/tools/projects/__tests__/
 !src/services/chatAssistant/agent/tools/projects/__tests__/projectTools.test.js
 
+# Sage Wave 1 — calls, communication, audit, referrals domains and detail tools.
+!src/services/chatAssistant/agent/tools/calls/__tests__/
+!src/services/chatAssistant/agent/tools/calls/__tests__/callTools.test.js
+!src/services/chatAssistant/agent/tools/communication/__tests__/
+!src/services/chatAssistant/agent/tools/communication/__tests__/communicationTools.test.js
+!src/services/chatAssistant/agent/tools/audit/__tests__/
+!src/services/chatAssistant/agent/tools/audit/__tests__/A.auditTools.test.js
+!src/services/chatAssistant/agent/tools/referrals/__tests__/
+!src/services/chatAssistant/agent/tools/referrals/__tests__/referralTools.test.js
+!src/services/chatAssistant/agent/tools/hiring/__tests__/I.interviewTools.test.js
+!src/services/chatAssistant/agent/tools/hiring/__tests__/P.detailTools.test.js
+!src/services/chatAssistant/agent/tools/jobs/__tests__/jobStatsTools.test.js
+!src/services/chatAssistant/agent/tools/people/__tests__/A.inactiveAndAccess.test.js
+!src/services/chatAssistant/agent/tools/projects/__tests__/projectCapacity.test.js
+!src/services/chatAssistant/agent/tools/calls/__tests__/callRecordServiceFilters.test.js
+!src/services/chatAssistant/agent/tools/hiring/__tests__/P.serviceFilters.test.js
+!src/services/chatAssistant/agent/tools/jobs/__tests__/aggregateApplicationsByJob.test.js
+!src/services/chatAssistant/agent/tools/referrals/__tests__/referralGroupedStats.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js

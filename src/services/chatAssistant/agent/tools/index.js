@@ -11,6 +11,13 @@ import org from './org/index.js';
 import training from './training/index.js';
 import attendance from './attendance/index.js';
 import projects from './projects/index.js';
+import calls from './calls/index.js';
+import communication from './communication/index.js';
+import audit from './audit/index.js';
+import referrals from './referrals/index.js';
 
-// Domain modules for Sage's tool registry (agent/toolRegistry.js); each entry is { domain, instructions, tools }.
-export default [jobs, people, employees, candidates, applications, hiring, meetings, knowledge, schedule, org, training, attendance, projects];
+// Domain modules for Sage's tool registry (agent/toolRegistry.js); each entry is { domain, summary, instructions, tools }.
+export default [
+  jobs, people, employees, candidates, applications, hiring, meetings, knowledge, schedule, org, training, attendance,
+  projects, calls, communication, audit, referrals,
+];
