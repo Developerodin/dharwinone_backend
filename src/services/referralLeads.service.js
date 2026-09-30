@@ -1090,6 +1090,224 @@ export const getReferralLeadsStats = async (req) => {
   };
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/**
+ * Scoped match for the grouped stats below — the exact match getReferralLeadsStats builds, so the
+ * two can never disagree on who is in the population (Sales Agents: own leads only).
+ * @param {import('express').Request} req
+ */
+const scopedReferralLeadsMatch = async (req) => {
+  const canSeeAll = await canUserSeeAllReferralLeads(req);
+  const q = req.query || {};
+  return { ...(await buildReferralLeadsMatch({ user: req.user, canSeeAll, query: q })), ...applyNewFilters(q) };
+};
+
+/**
+ * Refer Leads counts per current sales agent in ONE aggregation (instead of one getReferralLeadsStats
+ * per agent): same scope, filters and effectiveStatus buckets as getReferralLeadsStats, grouped by
+ * Employee.currentSalesAgentUserId (null = unassigned). Each group also carries the exact mean days
+ * from referredAt to joiningDate over its joined leads (joiningDate ≤ now, not before referredAt) —
+ * the population the page's "converted employees" filter shows. Additive; used by Sage.
+ *
+ * @param {import('express').Request} req
+ * @param {{ groupBySalesAgent?: boolean }} [opts] false → one group (salesAgentUserId null) for the whole scope
+ * @returns {Promise<Array<{ salesAgentUserId: string|null, totalReferrals: number, pipelineCounts: object,
+ *   conversionRate: number, avgReferralToJoiningDays: number|null, joinedWithDates: number }>>}
+ */
+export const getReferralLeadsStatsByAgent = async (req, { groupBySalesAgent = true } = {}) => {
+  const q = req.query || {};
+  const match = await scopedReferralLeadsMatch(req);
+  const now = new Date();
+  const joinDays = {
+    $cond: [
+      {
+        $and: [
+          { $eq: [{ $type: '$joiningDate' }, 'date'] },
+          { $lte: ['$joiningDate', now] },
+          { $eq: [{ $type: '$referredAt' }, 'date'] },
+          { $gte: ['$joiningDate', '$referredAt'] },
+        ],
+      },
+      { $divide: [{ $subtract: ['$joiningDate', '$referredAt'] }, DAY_MS] },
+      null,
+    ],
+  };
+  const groups = await Employee.aggregate([
+    { $match: match },
+    ...referralLeadsRequireExistingOwnerStages(),
+    ...buildEffectiveStatusStages(now),
+    ...effectiveStatusMatch(q),
+    ...quickFilterEffectiveStatusMatch(q),
+    {
+      $group: {
+        _id: {
+          agent: groupBySalesAgent ? { $ifNull: ['$currentSalesAgentUserId', null] } : { $literal: null },
+          status: '$effectiveStatus',
+        },
+        c: { $sum: 1 },
+        joinDaysSum: { $sum: joinDays },
+        joinDaysN: { $sum: { $cond: [{ $eq: [joinDays, null] }, 0, 1] } },
+      },
+    },
+  ]);
+
+  const byAgent = new Map();
+  for (const g of groups) {
+    const key = g._id.agent == null ? null : String(g._id.agent);
+    const e = byAgent.get(key) || { salesAgentUserId: key, totalReferrals: 0, pipelineCounts: {}, sum: 0, n: 0 };
+    e.totalReferrals += g.c;
+    e.pipelineCounts[g._id.status] = (e.pipelineCounts[g._id.status] || 0) + g.c;
+    e.sum += g.joinDaysSum || 0;
+    e.n += g.joinDaysN || 0;
+    byAgent.set(key, e);
+  }
+  return [...byAgent.values()].map(({ sum, n, ...e }) => {
+    const converted = CONVERTED_STATUSES.reduce((s, k) => s + (e.pipelineCounts[k] || 0), 0);
+    return {
+      ...e,
+      // Same formula as getReferralLeadsStats conversionRate (the page's conversion card).
+      conversionRate: e.totalReferrals > 0 ? Math.round((converted / e.totalReferrals) * 1000) / 10 : 0,
+      avgReferralToJoiningDays: n > 0 ? round1(sum / n) : null,
+      joinedWithDates: n,
+    };
+  });
+};
+
+const OPEN_OFFER_STATUS_LIST = ['Draft', 'Sent', 'Under Negotiation'];
+/** Open Refer Leads stages whose entry time can be read off an ATS record. */
+export const REFERRAL_OPEN_STAGES = ['applied', 'interview', 'offer', 'preboarding', 'deferred', 'hired'];
+
+const timesOf = (arr, status, field) => ({
+  $map: { input: { $filter: { input: arr, cond: { $eq: ['$$this.status', status] } } }, in: `$$this.${field}` },
+});
+
+/**
+ * How long leads have sat in their current open stage, per stage, in one aggregation. The stage is the
+ * effectiveStatus the page shows; when it was entered is read off the record that put the lead there
+ * (the same records deriveReferralPipelineStatus reads):
+ *   applied → first application still at Applied (JobApplication.createdAt)
+ *   interview → first non-cancelled interview (Meeting.createdAt, matched on candidate.id like the sync)
+ *   offer → first open offer (Offer.createdAt, Draft / Sent / Under Negotiation)
+ *   preboarding → Pending placement created (Placement.createdAt), else offer accepted (Offer.acceptedAt)
+ *   deferred → Placement.deferredAt · hired (onboarding) → Placement.enteredOnboardingAt
+ * A lead whose record carries no such date (legacy data; an interview stage set from the application
+ * status alone) is counted but left out of the day figures — `withDate` says how many had one.
+ * ponytail: the interview lookup matches Meeting.candidate.id by string (no index), like the sync
+ * does; fine to tens of thousands of meetings — past that, match on Meeting.candidateId once backfilled.
+ *
+ * @param {import('express').Request} req
+ * @returns {Promise<Record<string, { count: number, withDate: number, avgDays: number|null, oldestDays: number|null }>>}
+ */
+export const getReferralOpenStageAges = async (req) => {
+  const q = req.query || {};
+  const match = await scopedReferralLeadsMatch(req);
+  const now = new Date();
+  const byCandidate = (coll, project, as) => ({
+    $lookup: {
+      from: coll,
+      let: { c: '$_id' },
+      pipeline: [{ $match: { $expr: { $eq: ['$candidate', '$$c'] } } }, { $project: project }],
+      as,
+    },
+  });
+  const rows = await Employee.aggregate([
+    { $match: match },
+    ...referralLeadsRequireExistingOwnerStages(),
+    ...buildEffectiveStatusStages(now),
+    ...effectiveStatusMatch(q),
+    ...quickFilterEffectiveStatusMatch(q),
+    { $match: { effectiveStatus: { $in: REFERRAL_OPEN_STAGES } } },
+    byCandidate(JobApplication.collection.collectionName, { status: 1, createdAt: 1 }, '_apps'),
+    byCandidate(Offer.collection.collectionName, { status: 1, createdAt: 1, acceptedAt: 1 }, '_offers'),
+    byCandidate(
+      Placement.collection.collectionName,
+      { status: 1, createdAt: 1, deferredAt: 1, enteredOnboardingAt: 1 },
+      '_placements'
+    ),
+    {
+      $lookup: {
+        from: Meeting.collection.collectionName,
+        let: { c: { $toString: '$_id' } },
+        pipeline: [
+          { $match: { $expr: { $and: [{ $eq: ['$candidate.id', '$$c'] }, { $ne: ['$status', 'cancelled'] }] } } },
+          { $project: { createdAt: 1 } },
+        ],
+        as: '_meetings',
+      },
+    },
+    {
+      $set: {
+        _enteredAt: {
+          $switch: {
+            branches: [
+              { case: { $eq: ['$effectiveStatus', 'applied'] }, then: { $min: timesOf('$_apps', 'Applied', 'createdAt') } },
+              { case: { $eq: ['$effectiveStatus', 'interview'] }, then: { $min: '$_meetings.createdAt' } },
+              {
+                case: { $eq: ['$effectiveStatus', 'offer'] },
+                then: {
+                  $min: {
+                    $map: {
+                      input: { $filter: { input: '$_offers', cond: { $in: ['$$this.status', OPEN_OFFER_STATUS_LIST] } } },
+                      in: '$$this.createdAt',
+                    },
+                  },
+                },
+              },
+              {
+                case: { $eq: ['$effectiveStatus', 'preboarding'] },
+                then: {
+                  $ifNull: [
+                    { $min: timesOf('$_placements', 'Pending', 'createdAt') },
+                    { $max: timesOf('$_offers', 'Accepted', 'acceptedAt') },
+                  ],
+                },
+              },
+              { case: { $eq: ['$effectiveStatus', 'deferred'] }, then: { $max: timesOf('$_placements', 'Deferred', 'deferredAt') } },
+              {
+                case: { $eq: ['$effectiveStatus', 'hired'] },
+                then: { $max: timesOf('$_placements', 'Onboarding', 'enteredOnboardingAt') },
+              },
+            ],
+            default: null,
+          },
+        },
+      },
+    },
+    {
+      $set: {
+        _days: {
+          $cond: [
+            { $and: [{ $eq: [{ $type: '$_enteredAt' }, 'date'] }, { $lte: ['$_enteredAt', now] }] },
+            { $divide: [{ $subtract: [now, '$_enteredAt'] }, DAY_MS] },
+            null,
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: '$effectiveStatus',
+        count: { $sum: 1 },
+        withDate: { $sum: { $cond: [{ $eq: ['$_days', null] }, 0, 1] } },
+        avgDays: { $avg: '$_days' },
+        oldestDays: { $max: '$_days' },
+      },
+    },
+  ]);
+  const out = {};
+  for (const r of rows) {
+    out[r._id] = {
+      count: r.count,
+      withDate: r.withDate,
+      avgDays: r.avgDays == null ? null : round1(r.avgDays),
+      oldestDays: r.oldestDays == null ? null : round1(r.oldestDays),
+    };
+  }
+  return out;
+};
+
 const REFERRAL_LEADS_EXPORT_CAP = 5000;
 
 /**

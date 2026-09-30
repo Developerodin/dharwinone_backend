@@ -5,6 +5,7 @@ import countJobs from '../countJobs.tool.js';
 import listJobs from '../listJobs.tool.js';
 import getJob, { MAX_DESCRIPTION_CHARS } from '../getJob.tool.js';
 import rankJobsBySalary from '../rankJobsBySalary.tool.js';
+import getJobStats from '../getJobStats.tool.js';
 import jobsDomain from '../index.js';
 import allDomains from '../../index.js';
 import { buildJobSearchClause, MIRROR_EXTERNAL_OR } from '../../../../../job.service.js';
@@ -338,7 +339,7 @@ describe('rank_jobs_by_salary', () => {
 });
 
 describe('jobs domain module', () => {
-  const tools = [countJobs, listJobs, getJob, rankJobsBySalary];
+  const tools = [countJobs, listJobs, getJob, rankJobsBySalary, getJobStats];
 
   it('every tool was built by defineTool with a JSON schema and jobs.read access', () => {
     for (const tool of tools) {
@@ -349,7 +350,7 @@ describe('jobs domain module', () => {
     }
     assert.deepEqual(
       tools.map((t) => t.name),
-      ['count_jobs', 'list_jobs', 'get_job', 'rank_jobs_by_salary'],
+      ['count_jobs', 'list_jobs', 'get_job', 'rank_jobs_by_salary', 'get_job_stats'],
     );
     assert.deepEqual(countJobs.jsonSchema.properties.groupBy.enum, [
       'jobType', 'status', 'experienceLevel', 'company', 'city', 'country', 'industry', 'origin',

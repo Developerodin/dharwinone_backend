@@ -1,8 +1,9 @@
 import JobModel from '../../../../../models/job.model.js';
 import { mapJobRow } from '../../../jobResult.js';
-import { resolveJobVisibilityFilter } from '../../../queryPlanner/entities/jobRank.js';
+import { resolveJobVisibilityFilter, andMongoFilters } from '../../../queryPlanner/entities/jobRank.js';
 
 export const JOBS_ACCESS = Object.freeze({ anyOf: ['jobs.read'] });
+export const NOT_CAPTURED = 'not captured in DharwinOne';
 
 /**
  * The Job model and the caller's Jobs-page visibility clause for one tool call.
@@ -48,6 +49,27 @@ export function jobRow(doc) {
     applicationDeadline: r.applicationDeadline,
     createdAt: r.createdAt,
     jobOrigin: r.jobOrigin,
+  };
+}
+
+/**
+ * Creator, assigned recruiter and application deadline of one job, read under the same
+ * visibility clause. resolveJobByTitle / fetchJobById select a fixed field list without
+ * these, so this is one extra findOne. createdBy is populated the way job.service getJobById
+ * (GET /jobs/:jobId) does; assignedRecruiter null means the job creator (Job model).
+ * @param {object} Job
+ * @param {object} visibilityFilter
+ * @param {string} jobId
+ */
+export async function fetchJobOwnership(Job, visibilityFilter, jobId) {
+  const doc = await Job.findOne(andMongoFilters({ _id: jobId }, visibilityFilter))
+    .select('createdBy assignedRecruiter applicationDeadline')
+    .populate([{ path: 'createdBy', select: 'name' }, { path: 'assignedRecruiter', select: 'name' }])
+    .lean();
+  return {
+    createdBy: doc?.createdBy?.name ?? null,
+    recruiter: doc?.assignedRecruiter?.name ?? null,
+    applicationDeadline: doc?.applicationDeadline ?? null,
   };
 }
 

@@ -1,0 +1,58 @@
+[
+  {
+    "id": "R-get-referral-who-referred",
+    "question": "who referred Priya Sharma?",
+    "expect": {
+      "tools": ["get_referral"],
+      "args": { "get_referral": { "person": "Priya Sharma" } }
+    }
+  },
+  {
+    "id": "R-get-referral-direct-or-referred",
+    "question": "did Arjun come in through a referral link or apply directly?",
+    "expect": {
+      "tools": ["get_referral"],
+      "args": { "get_referral": { "person": "Arjun" } }
+    }
+  },
+  {
+    "id": "R-referral-stats-per-agent",
+    "question": "how is Neha doing on referrals — how many applied and how many joined?",
+    "expect": {
+      "tools": ["get_referral_stats"],
+      "args": { "get_referral_stats": { "salesAgent": "Neha" } }
+    }
+  },
+  {
+    "id": "R-referral-stats-mine",
+    "question": "how many of my referrals never applied?",
+    "expect": {
+      "tools": ["get_referral_stats"],
+      "args": { "get_referral_stats": { "salesAgent": "me" } }
+    }
+  },
+  {
+    "id": "R-referral-stats-rank-joined",
+    "question": "which sales agent has the most referrals that joined?",
+    "expect": {
+      "tools": ["get_referral_stats"],
+      "args": { "get_referral_stats": { "rankBy": "joined" } }
+    }
+  },
+  {
+    "id": "R-referral-stats-rank-conversion",
+    "question": "rank sales agents by referral conversion rate",
+    "expect": {
+      "tools": ["get_referral_stats"],
+      "args": { "get_referral_stats": { "rankBy": "join_rate" } }
+    }
+  },
+  {
+    "id": "R-referral-stats-days-in-stage",
+    "question": "how long have my referral leads been stuck in each stage?",
+    "expect": {
+      "tools": ["get_referral_stats"],
+      "args": { "get_referral_stats": { "salesAgent": "me" } }
+    }
+  }
+]

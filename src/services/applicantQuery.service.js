@@ -2,6 +2,7 @@ import JobApplication from '../models/jobApplication.model.js';
 import Employee from '../models/employee.model.js';
 import Job from '../models/job.model.js';
 import User from '../models/user.model.js';
+import Meeting from '../models/meeting.model.js';
 import { INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES } from '../constants/atsPipeline.js';
 import { applicationScope } from './visibilityScope.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
@@ -284,6 +285,94 @@ const aggregateApplicantsByStatus = async (filter = {}, currentUser = {}) => {
   return Object.entries(counts).map(([status, count]) => ({ status, count }));
 };
 
+// Stages at or past an interview. Rejected is left out: it does not say how far the applicant got.
+const INTERVIEW_OR_LATER_STATUSES = ['Interview', 'Offered', 'Hired'];
+
+/**
+ * Applications per job in one grouped query, under the same scope and duplicate rule as
+ * countApplicants / aggregateApplicantsByStatus: one row per (job, applicantUser || candidate),
+ * the newest kept, unless `filter.includeDuplicates`. So a job's `total` here equals
+ * countApplicants({ jobId }) for the same viewer.
+ *
+ * `interviewed` counts kept applications that have a non-cancelled interview (Meeting.applicationId)
+ * or sit at Interview / Offered / Hired — a Rejected-after-interview applicant still counts through
+ * the meeting.
+ *
+ * The filter goes through Query#cast because aggregate $match does not auto-cast string ids
+ * (the reason aggregateApplicantsByStatus groups in JS).
+ * ponytail: the interview lookup is one indexed probe per kept application; fine to ~100k applications.
+ *
+ * @param {object} filter - buildApplicantQuery filter (jobIds / jobId / status / includeDuplicates ...)
+ * @param {object} currentUser
+ * @returns {Promise<Array<{ jobId: string, total: number, byStage: Record<string, number>,
+ *   lastAppliedAt: Date|null, interviewed: number }>>}
+ */
+const aggregateApplicationsByJob = async (filter = {}, currentUser = {}) => {
+  const { query } = await buildApplicantQuery(filter, currentUser);
+  if (query?._id?.$in && query._id.$in.length === 0) return [];
+
+  const pipeline = [
+    { $match: JobApplication.find(query).cast() },
+    { $project: { job: 1, candidate: 1, applicantUser: 1, createdAt: 1, status: { $ifNull: ['$status', 'Applied'] } } },
+  ];
+  if (!truthy(filter.includeDuplicates)) {
+    // Same key and tie-break as applyDedupeIfRequested: newest createdAt, then highest _id.
+    pipeline.push(
+      { $sort: { createdAt: -1, _id: -1 } },
+      {
+        $group: {
+          _id: { job: '$job', who: { $ifNull: ['$applicantUser', '$candidate'] } },
+          doc: { $first: '$$ROOT' },
+        },
+      },
+      { $replaceRoot: { newRoot: '$doc' } }
+    );
+  }
+  pipeline.push(
+    {
+      $lookup: {
+        from: Meeting.collection.collectionName,
+        let: { app: '$_id' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$applicationId', '$$app'] }, status: { $ne: 'cancelled' } } },
+          { $limit: 1 },
+          { $project: { _id: 1 } },
+        ],
+        as: '_iv',
+      },
+    },
+    {
+      $group: {
+        _id: { job: '$job', status: '$status' },
+        count: { $sum: 1 },
+        lastAppliedAt: { $max: '$createdAt' },
+        interviewed: {
+          $sum: {
+            $cond: [
+              { $or: [{ $gt: [{ $size: '$_iv' }, 0] }, { $in: ['$status', INTERVIEW_OR_LATER_STATUSES] }] },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    }
+  );
+
+  const rows = await JobApplication.aggregate(pipeline);
+  const byJob = new Map();
+  for (const r of rows) {
+    const jobId = String(r._id.job);
+    const e = byJob.get(jobId) || { jobId, total: 0, byStage: {}, lastAppliedAt: null, interviewed: 0 };
+    e.total += r.count;
+    e.byStage[r._id.status] = (e.byStage[r._id.status] || 0) + r.count;
+    e.interviewed += r.interviewed;
+    if (r.lastAppliedAt && (!e.lastAppliedAt || r.lastAppliedAt > e.lastAppliedAt)) e.lastAppliedAt = r.lastAppliedAt;
+    byJob.set(jobId, e);
+  }
+  return [...byJob.values()];
+};
+
 const STATUS_BREAKDOWN_KEYS = ['Applied', 'Screening', 'Shortlisted', 'Interview', 'Offered', 'Hired', 'Rejected'];
 
 const emptyStatusBreakdown = () =>
@@ -384,6 +473,7 @@ export {
   queryApplicants,
   countApplicants,
   aggregateApplicantsByStatus,
+  aggregateApplicationsByJob,
   resolveApplicantSearchQ,
   searchApplications,
 };
@@ -393,6 +483,7 @@ export default {
   queryApplicants,
   countApplicants,
   aggregateApplicantsByStatus,
+  aggregateApplicationsByJob,
   resolveApplicantSearchQ,
   searchApplications,
 };

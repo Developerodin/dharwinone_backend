@@ -2,6 +2,7 @@ import countJobs from './countJobs.tool.js';
 import listJobs from './listJobs.tool.js';
 import getJob from './getJob.tool.js';
 import rankJobsBySalary from './rankJobsBySalary.tool.js';
+import getJobStats from './getJobStats.tool.js';
 
 const instructions = [
   'Jobs: job postings on the ATS Jobs page, internal openings and mirrored external listings.',
@@ -16,7 +17,13 @@ const instructions = [
     '(e.g. "jobs mentioning both React and Node"). Never answer 0 from the acronym alone.',
   '- Status defaults to Active. "Open" jobs are Active jobs, so pass no status for them. When you did not ' +
     'pass a status, say the numbers are for active jobs.',
-  '- A specific job by id or title → get_job. If it returns matches, ask which one the user meant.',
+  '- A specific job by id or title → get_job. If it returns matches, ask which one the user meant. Who ' +
+    'created a job, its recruiter and its application deadline are on get_job. Jobs have no project or visa / ' +
+    'work-authorization field — say that is not captured in DharwinOne.',
+  '- Applications, stages, hire rate, openings left or time-to-fill for one job → get_job_stats with jobId or ' +
+    'title. "Which jobs have no applications / none in N days / applications but no interviews / the most ' +
+    'applications / are oldest / should be closed" → get_job_stats with rankBy. Present close_candidates as a ' +
+    'suggestion, never as done. Applications per candidate stay on list_applications.',
   '- External / mirrored / LinkedIn jobs → filters.jobOrigin "external"; a named feed (LinkedIn) → also ' +
     'filters.externalSource. The raw External Jobs search page is not visible to you — only mirrored listings.',
   '- Who fits a job / best candidates for a job → match_candidates_to_job, not a job tool.',
@@ -29,6 +36,7 @@ const instructions = [
 
 export default {
   domain: 'jobs',
+  summary: 'Job postings: counts, lists, one job, per-job stats (applications, no interviews, fill time), salary, external jobs.',
   instructions,
-  tools: [countJobs, listJobs, getJob, rankJobsBySalary],
+  tools: [countJobs, listJobs, getJob, rankJobsBySalary, getJobStats],
 };

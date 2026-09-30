@@ -1,0 +1,58 @@
+[
+  {
+    "id": "R-get-job-owner-deadline",
+    "question": "who created the Senior Backend Engineer job, who is the recruiter, and when is the deadline?",
+    "expect": {
+      "tools": ["get_job"],
+      "args": { "get_job": { "title": "senior backend engineer" } }
+    }
+  },
+  {
+    "id": "R-get-job-visa-compensation",
+    "question": "what's the salary and visa requirement for the QA Analyst job?",
+    "expect": {
+      "tools": ["get_job"],
+      "args": { "get_job": { "title": "qa analyst" } }
+    }
+  },
+  {
+    "id": "R-job-stats-single-funnel",
+    "question": "how many applications does the Data Engineer job have and what stages are they in?",
+    "expect": {
+      "tools": ["get_job_stats"],
+      "args": { "get_job_stats": { "title": "data engineer" } }
+    }
+  },
+  {
+    "id": "R-job-stats-zero-applications",
+    "question": "which open jobs have zero applications?",
+    "expect": {
+      "tools": ["get_job_stats"],
+      "args": { "get_job_stats": { "rankBy": "zero_applications" } }
+    }
+  },
+  {
+    "id": "R-job-stats-no-recent",
+    "question": "which jobs haven't received an application in the last 30 days?",
+    "expect": {
+      "tools": ["get_job_stats"],
+      "args": { "get_job_stats": { "rankBy": "no_recent_applications", "noApplicationsInDays": 30 } }
+    }
+  },
+  {
+    "id": "R-job-stats-close-candidates",
+    "question": "which jobs should we close?",
+    "expect": {
+      "tools": ["get_job_stats"],
+      "args": { "get_job_stats": { "rankBy": "close_candidates" } }
+    }
+  },
+  {
+    "id": "R-job-stats-no-interviews",
+    "question": "which jobs have applicants but nobody interviewed yet?",
+    "expect": {
+      "tools": ["get_job_stats"],
+      "args": { "get_job_stats": { "rankBy": "no_interviews" } }
+    }
+  }
+]
