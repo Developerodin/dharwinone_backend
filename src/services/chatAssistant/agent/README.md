@@ -425,6 +425,31 @@ the viewer can see by skill-tag overlap with the employee's profile skills (keyw
 index holds people, not jobs). Sections go through `compose.runTool`; `follow_ups_today` calls
 `get_attention_digest` with scope mine.
 
+### actions
+
+`agent/tools/actions/`: one domain (`actions/index.js`) that merges the tools and instructions of
+`interviews/`, `documents/`, `training/` and `tasks/`. Every tool is `kind: 'write'`: it only drafts a
+confirm card (see "How to add a write tool"), and the write runs only on
+`POST /v1/chat-assistant/actions/:key/confirm`. Every confirm re-checks access and the draft first:
+the interview and document tools re-run `prepare` and refuse unless the card would be identical
+(interviews: targets, every line and payload; documents: payload), the training tools use the default
+target-id check, and `create_task_plan` checks its stored preview.
+
+| Tool | Access | Commit calls | Sends | Dedupe / refusals |
+|---|---|---|---|---|
+| `resend_interview_invite` | allOf `interviews.read`, `interviews.manage` (the resend route plus the `meetingScope` read it runs) | `meeting.service` `resendMeetingInvitations`, then the `interview.invitation.resend` ATS audit row with `metadata.sageAction` = key | Email with calendar invite to every invitation address, plus in-app for recipients with a login | Card lists every recipient with their role. Refuses a cancelled interview, no recipients, or over 50 addresses. A replay of the same key (audit row present) sends nothing. |
+| `schedule_interview` | allOf `interviews.manage` (`POST /meetings`); prepare proves the application is in the viewer's Applications scope | `meeting.service` `createMeeting` with the body `interviewHold` approve builds | Invitation email with calendar invite plus in-app to every invitee; the automatic reminder email before the start | Card says whether the application moves Applied / Screening → Interview or stays, lists the invitees, and warns on panel clashes among interviews the viewer can see. Needs a 24-hex application id, a future time with an explicit offset, visible hosts. An interview for the same application at the exact time → refused at draft, skipped at commit. |
+| `send_interview_booking_link` | allOf `interviews.manage` (no route; gated like scheduling) | `interviewBooking.service` `sendBookingLinkEmail` | Email only, to the candidate profile's email | Refuses when the profile has no email or scheduling is blocked (status, inactive job); warns when the job has no interviewer pool. Each new confirm sends a new link; a replay of the same key sends nothing. |
+| `request_documents` | anyOf `candidates.manage`, `employees.manage`, `pre-boarding.create`, `pre-boarding.manage` (the controller's `canRequestPreBoardingDocs`), and prepare also requires the route's anyOf. `employees.edit` alone passes the route but the controller refuses it, so it is refused here too | `employee.service` `requestDocumentFromCandidate` per document, plus the `employee.document.request` ATS audit row | One notice (in-app and email, type `onboarding_reminder`) to the login whose email is the profile's email; owning the profile alone never makes a login the recipient (a recruiter owns public-apply profiles) | Labels already pending are skipped at draft and again at commit. With nobody to notify the requests are still created and the card says so. The notice lists only what this commit created, so a replay sends nothing. |
+| `remind_pending_documents` | Same as `request_documents` | `notification.service` `notify` / `notifyByEmail` (no document write) | One notice (in-app and email) listing every pending request | Refuses when nothing is pending, nobody can be notified, or a `done` reminder for that profile exists in the last 24 h (SageAction history, checked again at commit). |
+| `assign_training` | allOf `modules.manage` (`PATCH /training/modules/:id`) | `trainingModule.service` `enrollStudentsInModule`: one `$addToSet` per student, never the PATCH full-roster replace | "Course assigned" in-app and email (type `course`) only to students this call actually added | People already on the course, with no Student profile, or with an inactive one are skipped (no profile is created). A replay adds and notifies nobody. |
+| `send_course_reminder` | anyOf `modules.manage`, `students.manage` (without `modules.manage`, published courses only) | `trainingModule.service` `sendCourseReminder` | "Course reminder" in-app and email (type `course`); never says overdue (courses have no due date) | Only enrolled students who have not completed or dropped. Skips anyone reminded about that course in the last 24 h by anyone (`done` rows; at commit also rows still executing). |
+| `create_task_plan` | allOf `projects.manage`, `tasks.manage` (the apply route); the PM service also requires project owner or admin | `pmAssistant.service` `applyTaskBreakdown` with the stored preview and the SageAction key as `idempotencyKey` | Nothing (creates unassigned tasks) | The preview (`previewTaskBreakdown`, one LLM call, `TaskBreakdownPreview` with a 24 h TTL) is the draft. `recheck` requires that preview to still be open, the same project and user, and unexpired; it never generates a second plan. A replay of the key returns the stored response. At most 60 tasks. |
+
+People and documents are named one per entry, never a group ("everyone in a position"); a question
+about the same data (who is enrolled, which documents are missing, is the interview scheduled) is a read
+tool, not a draft. Assignment runs (the PM assistant's people-to-task matching) are out of scope.
+
 ## How to add a tool
 
 This is the part that keeps adding the 41st tool as cheap as the 5th. Follow the

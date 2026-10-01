@@ -283,6 +283,17 @@ attendance-status-backfill.*.journal.json
 !src/services/chatAssistant/agent/tools/advice/__tests__/
 !src/services/chatAssistant/agent/tools/advice/__tests__/W.adviceTools.test.js
 
+# Sage Wave 3 - actions domain (confirm-first drafts).
+!src/services/chatAssistant/agent/tools/actions/interviews/__tests__/
+!src/services/chatAssistant/agent/tools/actions/interviews/__tests__/I.interviewActions.test.js
+!src/services/chatAssistant/agent/tools/actions/documents/__tests__/
+!src/services/chatAssistant/agent/tools/actions/documents/__tests__/D.documentActions.test.js
+!src/services/chatAssistant/agent/tools/actions/training/__tests__/
+!src/services/chatAssistant/agent/tools/actions/training/__tests__/T.trainingActions.test.js
+!src/services/chatAssistant/agent/tools/actions/training/__tests__/T.trainingService.test.js
+!src/services/chatAssistant/agent/tools/actions/tasks/__tests__/
+!src/services/chatAssistant/agent/tools/actions/tasks/__tests__/P.createTaskPlan.test.js
+
 # Sage job result display fixpack (2026-09-25) — id/link, missing fields, salary
 # formatting, status default, pager title, duplicate experience line.
 !src/services/chatAssistant/__tests__/jobResult.test.js

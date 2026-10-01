@@ -182,6 +182,8 @@ const FAKE_USER = Object.freeze({
        'offers.read', 'pre-boarding.read', 'onboarding.read', 'dashboard.view',
        // list_email_activity's gate (EMAIL_ACTIVITY_ACCESS): the Activity Logs delete tier.
        'activity.delete',
+       // The actions domain's write gates (drafts only; execute is faked, so nothing is stored or sent).
+       'interviews.manage', 'pre-boarding.create', 'modules.manage', 'projects.manage', 'tasks.manage',
     ]),
   },
 });
@@ -221,6 +223,18 @@ function evalRoleRow(name, overrides = {}) {
 
 // A tool with no canned result below; `--check` fails on any registered tool that returns it.
 const NO_CANNED_RESULT = Object.freeze({ handoff: true });
+
+/** What registry.execute hands the model for a write tool (sageActions createDraft), minus the stored row. */
+function draftResult(title, lines, targets, confirmLabel) {
+  return {
+    draft: true,
+    key: '00000000-0000-4000-8000-000000000001',
+    summary: { title, lines, targetCount: targets.length, targets, confirmLabel },
+    expiresAt: '2026-09-30T12:15:00.000Z',
+  };
+}
+
+const namesOf = (people, fallback) => (people?.length ? people : [fallback]);
 
 /**
  * A plausible fake result per tool name. Shape matches what the real tool
@@ -920,6 +934,74 @@ function cannedResult(name, args) {
         ],
         sections: { profile: 'ok', jobs: 'ok' },
       };
+    // ─── actions domain: drafts only, shaped like createDraft's result for the call's args ───
+    case 'resend_interview_invite': {
+      const byId = /^[0-9a-f]{24}$/i.test(args?.interview ?? '');
+      const candidate = !args?.interview || byId ? 'Ravi Kumar' : args.interview;
+      return draftResult(`Re-send the invitation for ${candidate}'s interview`, [
+        `Interview: "Interview: ${candidate} — QA Engineer" — ${candidate} · QA Engineer · 2 Oct 2026, 3:00 PM (IST)`,
+        'Channel: email with a calendar invite, plus an in-app notification for recipients who have a DharwinOne login.',
+        'Recipients (2):',
+        '• Asha Rao (host, recruiter) — asha.rao@example.com',
+        `• ${candidate} (candidate) — candidate@example.com`,
+      ], [{ id: byId ? args.interview : '64d000000000000000000001', name: `${candidate} — QA Engineer` }], 'Re-send invitation');
+    }
+    case 'send_interview_booking_link': {
+      const application = args?.application ?? '64a000000000000000000001';
+      return draftResult('Email Ranveer Singh an interview booking link', [
+        "To: Ranveer Singh — ranveer@example.com (the candidate profile's own email)",
+        'Job: QA Engineer · application status Applied',
+        'Channel: email only (no in-app notification).',
+      ], [{ id: application, name: 'Ranveer Singh — QA Engineer' }], 'Send booking link');
+    }
+    case 'schedule_interview': {
+      const application = args?.application ?? '64a000000000000000000001';
+      const hosts = args?.hosts?.length ? args.hosts.join(', ') : 'Eval User';
+      return draftResult("Schedule Ranveer Singh's interview for QA Engineer", [
+        `When: ${args?.scheduledAt ?? '2026-10-15T15:00:00+05:30'} · ${args?.durationMinutes ?? 60} min · ${args?.interviewType ?? 'Video'}`,
+        'Job: QA Engineer',
+        `Panel (hosts): ${hosts}`,
+        'Moves the application from Applied to Interview.',
+        'No clashes found for the panel among interviews you can see.',
+      ], [{ id: application, name: 'Ranveer Singh — QA Engineer' }], 'Schedule interview');
+    }
+    case 'request_documents': {
+      const person = args?.person || 'Priya Sharma';
+      const docs = args?.documents?.length ? args.documents : [{ label: 'Passport' }];
+      return draftResult(`Request ${docs.length} document${docs.length === 1 ? '' : 's'} from ${person}`, [
+        ...docs.map((d) => `Request "${d.label}" (type ${d.type || 'Other'}) from ${person}`),
+        `Notify ${person}: in-app notice and email to their DharwinOne login.`,
+      ], [{ id: 'e1', name: person }], 'Request documents');
+    }
+    case 'remind_pending_documents': {
+      const person = args?.person || 'Priya Sharma';
+      return draftResult(`Remind ${person} about 2 pending documents`, [
+        `Remind ${person} about "Passport", "PAN card".`,
+        `Notify ${person}: in-app notice and email to their DharwinOne login.`,
+      ], [{ id: 'e1', name: person }], 'Send reminder');
+    }
+    case 'assign_training': {
+      const people = namesOf(args?.people, 'Priya Shah');
+      const module = args?.module || 'Java Basics';
+      return draftResult(`Assign "${module}" to ${people.length} ${people.length === 1 ? 'person' : 'people'}`, [
+        `Add to "${module}": ${people.join(', ')}.`,
+        'Channel: in-app notification and email (unless they turned off course updates in their notification settings).',
+        'Nobody already on the course is removed or notified.',
+      ], people.map((name, i) => ({ id: `s${i + 1}`, name })), 'Assign course');
+    }
+    case 'send_course_reminder': {
+      const people = namesOf(args?.people, 'Priya Shah');
+      const module = args?.module || 'React Basics';
+      return draftResult(`Remind ${people.length} ${people.length === 1 ? 'person' : 'people'} about "${module}"`, [
+        `Recipients: ${people.join(', ')}.`,
+        'Channel: in-app notification and email (unless they turned off course updates in their notification settings).',
+      ], people.map((name, i) => ({ id: `s${i + 1}`, name })), 'Send reminder');
+    }
+    case 'create_task_plan': {
+      const project = args?.project || 'Apollo';
+      return draftResult(`Create 3 tasks in ${project}`, ['Define scope and milestones', 'Build the first release', 'Test and launch'],
+        [{ id: 'p1', name: project }], 'Create tasks');
+    }
     default:
       return NO_CANNED_RESULT;
   }
