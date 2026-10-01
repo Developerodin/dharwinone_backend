@@ -17,7 +17,18 @@ const instructions = [
     'mine the viewer gets every request the Leave Requests page shows them.',
   '- "Who took the most leave" / "rank by leave" → count_leave_requests groupBy "employee" with filters.dates; ' +
     'no period given → ask which period. It counts approved leave days unless the user asks for another status.',
-  '- Backdated attendance / attendance corrections / missed-punch requests → list_backdated_requests.',
+  '- "Which department / team took the most leave" or "leave by department / team" → count_leave_requests ' +
+    'groupBy "department" or "team". Department is the employee profile department ("Not set" when blank). ' +
+    'Team is the workforce team. Pass filters.status "approved" when they mean absence that was taken. ' +
+    'groupBy "team" needs teams.read; if the tool says so, tell the user — do not guess team names.',
+  '- "Why was leave rejected / what did the approver say" → list_leave_requests. adminComment is the reviewer ' +
+    'comment the Leave Requests page shows; null means none was recorded. Do not invent a reason.',
+  '- Backdated attendance / attendance corrections / missed-punch requests → list_backdated_requests. ' +
+    '"Why was this correction rejected / what note was left" uses that list: notes is the requester\'s note and ' +
+    'adminComment is the reviewer\'s comment, both null when not recorded.',
+  '- "Which department / team had the highest attendance" → get_attendance_summary groupBy "department" or ' +
+    '"team" (team needs teams.read). Rank by attendancePct. Null attendancePct means that group had no ' +
+    'working days in the window. A person on several teams is counted in each.',
   '- "he", "she", "this person" mean the person from the previous turn — pass their real name, never the pronoun.',
   '- If a result has matches, ask which person they meant. notFound "person" means no such employee, not zero.',
   '- Shifts, week-offs, holidays and the org chart are not these tools — call handoff.',
@@ -25,7 +36,7 @@ const instructions = [
 
 export default {
   domain: 'attendance',
-  summary: 'Attendance punches, company attendance summary, leave requests, who is on leave today, backdated requests.',
+  summary: 'Attendance punches, by department or team, leave comments, who is on leave, backdated corrections.',
   instructions,
   tools: [getAttendance, getAttendanceSummary, countLeaveRequests, listLeaveRequests, whoIsOnLeaveToday, listBackdatedRequests],
 };

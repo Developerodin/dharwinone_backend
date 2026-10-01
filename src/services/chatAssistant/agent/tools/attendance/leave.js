@@ -3,7 +3,11 @@ import { buildLeaveRankingPipeline, decorateRankedRows } from '../../../leaveRan
 import { leaveDatesWindowClause } from '../../../attendanceAnalytics.js';
 import {
   LEAVE_STATUSES, LEAVE_TYPES, windowSchema, personSchema, dayKeys, resolvePerson, personMiss, isoDay,
+  canSeeTeams, textOrNull,
 } from './common.js';
+import {
+  TEAM_GROUP_DENIED, TEAM_GROUP_NOTE, LEAVE_GROUP_METRIC, groupLeaveDocs,
+} from './grouping.js';
 
 export const leaveFilters = Joi.object({
   person: personSchema.description('A named person (full name, employee id like DBS10, or email). NEVER a pronoun — ' +
@@ -72,6 +76,7 @@ async function runLeaveRanking({ filters, built, scope, deps }) {
 export async function runLeaveCount({ filters = {}, groupBy, user, deps }) {
   const built = await buildLeaveMatch(filters, user, deps);
   if (built.miss) return built.miss;
+  if (groupBy === 'team' && !canSeeTeams(user)) return { error: TEAM_GROUP_DENIED };
   const { filter: scope } = await deps.buildLeaveRequestScopeFilter(user);
   if (scope === null) {
     // No Student profile → no leave rows the page would show (never an unfiltered query).
@@ -81,6 +86,21 @@ export async function runLeaveCount({ filters = {}, groupBy, user, deps }) {
 
   const clauses = nonEmpty([scope, ...built.clauses]);
   const match = clauses.length ? { $and: clauses } : {};
+  if (groupBy === 'department' || groupBy === 'team') {
+    // find() casts ids. aggregate() would not — keep this on find so the page scope stays exact.
+    const docs = await deps.LeaveRequest.find(match).select('student dates').lean();
+    const { groups, otherCount } = await groupLeaveDocs(docs, { window: built.window, groupBy, deps });
+    return {
+      total: docs.length,
+      groupBy,
+      metric: LEAVE_GROUP_METRIC,
+      ...(groupBy === 'team' ? { note: TEAM_GROUP_NOTE } : {}),
+      groups,
+      ...(otherCount ? { otherCount } : {}),
+      filtersApplied: filters,
+      person: personOut(built.person),
+    };
+  }
   const field = groupBy === 'leaveType' ? 'leaveType' : 'status';
   const [total, grouped] = await Promise.all([
     deps.LeaveRequest.countDocuments(match),
@@ -114,6 +134,8 @@ export async function runLeaveList({ filters = {}, limit, user, deps }) {
         days: ms.length,
         reviewedBy: r.reviewedBy?.name ?? null,
         requestedAt: r.createdAt ?? null,
+        // Leave Requests page shows adminComment on every card the viewer can see. null = none recorded.
+        adminComment: textOrNull(r.adminComment),
       };
     }),
     filtersApplied: filters,

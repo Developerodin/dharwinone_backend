@@ -1,0 +1,65 @@
+[
+  {
+    "id": "A-w4-why-leave-rejected",
+    "question": "why was Asha Rao's leave rejected?",
+    "expect": { "tools": ["list_leave_requests"], "args": { "list_leave_requests": { "filters": { "person": "Asha Rao" } } } }
+  },
+  {
+    "id": "A-w4-leave-admin-comment",
+    "question": "what comment did the approver leave on the rejected leave requests?",
+    "expect": { "tools": ["list_leave_requests"], "args": { "list_leave_requests": { "filters": { "status": "rejected" } } } }
+  },
+  {
+    "id": "A-w4-why-correction-rejected",
+    "question": "why was Asha Rao's attendance correction rejected?",
+    "expect": { "tools": ["list_backdated_requests"], "args": { "list_backdated_requests": { "filters": { "person": "Asha Rao" } } } }
+  },
+  {
+    "id": "A-w4-correction-note",
+    "question": "what note was left on the pending missed-punch requests?",
+    "expect": { "tools": ["list_backdated_requests"], "args": { "list_backdated_requests": { "filters": { "status": "pending" } } } }
+  },
+  {
+    "id": "A-w4-attendance-by-department",
+    "question": "which department had the highest attendance yesterday?",
+    "expect": { "tools": ["get_attendance_summary"], "args": { "get_attendance_summary": { "groupBy": "department" } } }
+  },
+  {
+    "id": "A-w4-attendance-broken-down-by-department",
+    "question": "break yesterday's company attendance down by department",
+    "expect": { "tools": ["get_attendance_summary"], "args": { "get_attendance_summary": { "groupBy": "department" } } }
+  },
+  {
+    "id": "A-w4-attendance-by-team",
+    "question": "which team had the highest attendance yesterday?",
+    "expect": { "tools": ["get_attendance_summary"], "args": { "get_attendance_summary": { "groupBy": "team" } } }
+  },
+  {
+    "id": "A-w4-attendance-broken-down-by-team",
+    "question": "show company attendance by team for yesterday",
+    "expect": { "tools": ["get_attendance_summary"], "args": { "get_attendance_summary": { "groupBy": "team" } } }
+  },
+  {
+    "id": "A-w4-leave-by-department",
+    "question": "which department filed the most leave requests?",
+    "expect": { "tools": ["count_leave_requests"], "args": { "count_leave_requests": { "groupBy": "department" } } }
+  },
+  {
+    "id": "A-w4-leave-broken-down-by-department",
+    "question": "break leave requests down by department",
+    "expect": { "tools": ["count_leave_requests"], "args": { "count_leave_requests": { "groupBy": "department" } } }
+  },
+  {
+    "id": "A-w4-leave-by-team",
+    "question": "which team has the most absence?",
+    "expect": {
+      "tools": ["count_leave_requests"],
+      "args": { "count_leave_requests": { "groupBy": "team", "filters": { "status": "approved" } } }
+    }
+  },
+  {
+    "id": "A-w4-leave-requests-by-team",
+    "question": "how many leave requests does each team have?",
+    "expect": { "tools": ["count_leave_requests"], "args": { "count_leave_requests": { "groupBy": "team" } } }
+  }
+]

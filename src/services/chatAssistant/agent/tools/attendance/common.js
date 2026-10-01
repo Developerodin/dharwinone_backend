@@ -3,6 +3,8 @@ import EmployeeModel from '../../../../../models/employee.model.js';
 import StudentModel from '../../../../../models/student.model.js';
 import UserModel from '../../../../../models/user.model.js';
 import LeaveRequestModel from '../../../../../models/leaveRequest.model.js';
+import TeamMemberModel from '../../../../../models/team.model.js';
+import TeamModel from '../../../../../models/teamGroup.model.js';
 import { getGrantingPermissions } from '../../../../../config/permissions.js';
 import attendanceService from '../../../../attendance.service.js';
 import {
@@ -36,6 +38,8 @@ const OTHER_PERSON_PERMISSIONS = ['students.read', 'students.manage', 'candidate
   'employees.read', 'attendance.assign'];
 // requireAttendanceAccess / requireUserAttendanceView: another person's attendance rows.
 const OTHER_ATTENDANCE_PERMISSIONS = ['students.read', 'students.manage', 'candidates.read', 'candidates.manage'];
+// Teams page list route (team.route.js GET /): teams.read. Manage does not grant the list.
+const TEAMS_READ_PERMISSIONS = ['teams.read'];
 
 export const windowSchema = Joi.object({
   from: Joi.string().min(10).max(10).required().description('First day, YYYY-MM-DD (inclusive).'),
@@ -61,6 +65,8 @@ export function attendanceDeps(ctx) {
     Student: deps.Student ?? StudentModel,
     User: deps.User ?? UserModel,
     LeaveRequest: deps.LeaveRequest ?? LeaveRequestModel,
+    TeamMember: deps.TeamMember ?? TeamMemberModel,
+    Team: deps.Team ?? TeamModel,
     listByStudent: deps.listByStudent ?? attendanceService.listByStudent,
     listByUser: deps.listByUser ?? attendanceService.listByUser,
     buildLeaveRequestScopeFilter: deps.buildLeaveRequestScopeFilter ?? realBuildLeaveRequestScopeFilter,
@@ -81,6 +87,14 @@ function hasAnyGranting(user, required) {
 
 export const canNameOthers = (user) => hasAnyGranting(user, OTHER_PERSON_PERMISSIONS);
 export const canViewOthersAttendance = (user) => hasAnyGranting(user, OTHER_ATTENDANCE_PERMISSIONS);
+export const canSeeTeams = (user) => hasAnyGranting(user, TEAMS_READ_PERMISSIONS);
+
+/** Page text: blank and whitespace render as nothing, so the tool returns null rather than "". */
+export function textOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  return s || null;
+}
 
 /**
  * { from, to } (YYYY-MM-DD) → UTC-midnight Date keys. dayRange (employees/common.js) is the shared

@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import {
   BACKDATED_ACCESS, LEAVE_STATUSES, MAX_LIST_LIMIT, windowSchema, attendanceScope, attendanceDeps, dayKeys,
-  resolvePerson, personMiss, countFacts, simpleTable, isoDay,
+  resolvePerson, personMiss, countFacts, simpleTable, isoDay, textOrNull,
 } from './common.js';
 
 const STATUSES = LEAVE_STATUSES; // same four as BackdatedAttendanceRequest.status
@@ -26,8 +26,10 @@ export default defineTool({
   kind: 'read',
   description:
     'List backdated attendance requests (attendance corrections / missed-punch requests), newest first, with a ' +
-    'per-status breakdown. Use for "pending attendance corrections", "DBS10\'s missed punch requests", ' +
-    '"my backdated requests". filters.dates matches the DAYS being corrected, not the filing date.',
+    'per-status breakdown. Each row includes notes (the requester\'s note) and adminComment (the reviewer\'s ' +
+    'comment) — the same fields the Backdated Attendance page shows; null when none was recorded. Use for ' +
+    '"pending attendance corrections", "DBS10\'s missed punch requests", "my backdated requests", ' +
+    '"why was this correction rejected". filters.dates matches the DAYS being corrected, not the filing date.',
   measure:
     'Backdated attendance REQUEST records you can see on the Backdated Attendance page (reviewers: all; ' +
       'everyone else: their own), every status unless filters.status is set.',
@@ -76,6 +78,8 @@ export default defineTool({
           to: days[days.length - 1] ?? null,
           reviewedBy: r.reviewedBy?.name ?? null,
           requestedAt: r.createdAt ?? null,
+          notes: textOrNull(r.notes),
+          adminComment: textOrNull(r.adminComment),
         };
       }),
       filtersApplied: filters,
@@ -87,7 +91,8 @@ export default defineTool({
     const blocks = result.records.length ? [simpleTable({
       id: 'backdated-request-list',
       title: `Backdated attendance requests (${result.total})`,
-      columns: [['person', 'Person'], ['status', 'Status'], ['from', 'From'], ['to', 'To'], ['days', 'Days', 'secondary']],
+      columns: [['person', 'Person'], ['status', 'Status'], ['from', 'From'], ['to', 'To'], ['days', 'Days', 'secondary'],
+        ['notes', 'Notes', 'secondary'], ['adminComment', 'Admin comment', 'secondary']],
       rows: result.records.map((r) => ({ ...r, days: String(r.days) })),
     })] : [];
     return { blocks, facts: countFacts('list_backdated_requests', 'backdated requests', result.total) };
