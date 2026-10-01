@@ -1,0 +1,49 @@
+[
+  {
+    "id": "C-candidate-skills",
+    "question": "What skills does Priya Sharma have?",
+    "expect": { "tools": ["get_user"], "args": { "get_user": { "name": "Priya Sharma" } } }
+  },
+  {
+    "id": "C-candidate-qualifications",
+    "question": "What are Amit Verma's qualifications?",
+    "expect": { "tools": ["get_user"], "args": { "get_user": { "name": "Amit Verma" } } }
+  },
+  {
+    "id": "C-candidate-experience",
+    "question": "How many years of experience does Neha Kapoor have, and can you summarize her resume?",
+    "expect": { "tools": ["get_user"], "args": { "get_user": { "name": "Neha Kapoor" } } }
+  },
+  {
+    "id": "C-days-in-status-list",
+    "question": "Which applications have been in their current status for more than 14 days?",
+    "expect": {
+      "tools": ["list_applications"],
+      "args": { "list_applications": { "filters": { "inStatusOverDays": 14 } } }
+    }
+  },
+  {
+    "id": "C-days-in-status-count",
+    "question": "How many applications have been stuck in the same status for over 7 days?",
+    "expect": {
+      "tools": ["count_applications"],
+      "args": { "count_applications": { "filters": { "inStatusOverDays": 7 } } }
+    }
+  },
+  {
+    "id": "C-screened-never-interviewed-list",
+    "question": "Which candidates were screened but never interviewed?",
+    "expect": {
+      "tools": ["list_applications"],
+      "args": { "list_applications": { "filters": { "screenedNeverInterviewed": true } } }
+    }
+  },
+  {
+    "id": "C-screened-never-interviewed-count",
+    "question": "How many applications were successfully screened but never got an interview?",
+    "expect": {
+      "tools": ["count_applications"],
+      "args": { "count_applications": { "filters": { "screenedNeverInterviewed": true } } }
+    }
+  }
+]

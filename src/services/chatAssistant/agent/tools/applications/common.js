@@ -8,6 +8,7 @@ import {
   scopeJobModel,
 } from '../../../queryPlanner/entities/jobRank.js';
 import { ownsProfile } from '../ownsProfile.js';
+import { AGING_SCAN_LIMIT, applicationAge, keptForAging } from './aging.js';
 
 // applicantQuery.service's applicationScope is the real gate (admin / interviews.manage / recruiter /
 // sales agent / self) — same as the legacy fetch_job_applications, which had no anyOf either.
@@ -31,7 +32,35 @@ export function applicationsDeps(ctx) {
     Job: deps.Job ?? JobModel,
     Employee: deps.Employee ?? EmployeeModel,
     User: deps.User ?? UserModel,
+    now: deps.now ?? (() => new Date()),
   };
+}
+
+function mapApplicationRow(r, now) {
+  const age = applicationAge(r, now);
+  return {
+    id: String(r._id ?? r.id ?? ''),
+    applicant: r.candidate?.fullName ?? r.applicantUser?.name ?? null,
+    job: r.job?.title ?? null,
+    status: r.status ?? null,
+    appliedAt: r.createdAt ?? null,
+    daysInStatus: age.daysInStatus,
+    statusSince: age.statusSince,
+    statusChangedAt: age.statusChangedAt,
+    stageDateBasis: age.stageDateBasis,
+    daysToScreening: age.daysToScreening,
+    daysScreeningToInterview: age.daysScreeningToInterview,
+    screening: age.screening,
+  };
+}
+
+function statusBreakdown(rows) {
+  const breakdown = {};
+  for (const row of rows) {
+    const status = row.status || 'Applied';
+    breakdown[status] = (breakdown[status] || 0) + 1;
+  }
+  return breakdown;
 }
 
 /**
@@ -66,29 +95,55 @@ export async function runApplicationSearch({ filters = {}, limit, user, deps }) 
   }
 
   const hasApplicant = !!(filters.applicantName || filters.applicantUserId);
-  const res = await deps.searchApplications({
-    q: filters.applicantName,
-    userId: candidateIds ? null : filters.applicantUserId,
-    candidateIds,
-    status: filters.status,
-    jobId,
-    jobIds,
-    user,
-    limit,
-    requireApplicantQ: hasApplicant,
-  });
+  const aging = filters.inStatusOverDays != null || filters.screenedNeverInterviewed === true;
+  let res;
+  try {
+    res = await deps.searchApplications({
+      q: filters.applicantName,
+      userId: candidateIds ? null : filters.applicantUserId,
+      candidateIds,
+      status: filters.status,
+      jobId,
+      jobIds,
+      user,
+      // Aging filters need the history on each row, which searchApplications already returns.
+      // ponytail: capped at AGING_SCAN_LIMIT; a bigger cohort must move into the applicant query.
+      limit: aging ? AGING_SCAN_LIMIT : limit,
+      requireApplicantQ: hasApplicant,
+    });
+  } catch (err) {
+    if (err?.statusCode === 403) {
+      return { error: 'You do not have access to job applications.', total: 0, records: [], filtersApplied: filters };
+    }
+    throw err;
+  }
   if (res?.notFound) return { notFound: 'applicant', total: 0, records: [], filtersApplied: filters };
+
+  const now = deps.now();
+  const loaded = res.records || [];
+  if (!aging) {
+    return {
+      total: res.total ?? 0,
+      baseTotal: res.baseTotal ?? res.total ?? 0,
+      breakdown: res.breakdown ?? null,
+      records: loaded.map((r) => mapApplicationRow(r, now)),
+      filtersApplied: filters,
+    };
+  }
+
+  const aged = loaded.map((r) => mapApplicationRow(r, now));
+  const matched = aged.filter((row) => keptForAging(row, filters));
+  const statusAgeUnknown = aged.filter((row) => row.daysInStatus == null).length;
+  const screeningUnknown = aged.filter((row) => row.screening === 'unknown').length;
+  const truncated = (res.total ?? 0) > loaded.length;
   return {
-    total: res.total ?? 0,
-    baseTotal: res.baseTotal ?? res.total ?? 0,
-    breakdown: res.breakdown ?? null,
-    records: (res.records || []).map((r) => ({
-      id: String(r._id ?? r.id ?? ''),
-      applicant: r.candidate?.fullName ?? r.applicantUser?.name ?? null,
-      job: r.job?.title ?? null,
-      status: r.status ?? null,
-      appliedAt: r.createdAt ?? null,
-    })),
+    total: matched.length,
+    baseTotal: res.total ?? loaded.length,
+    breakdown: statusBreakdown(matched),
+    ...(filters.inStatusOverDays != null ? { statusAgeUnknown } : {}),
+    ...(filters.screenedNeverInterviewed === true ? { screeningUnknown } : {}),
+    ...(truncated ? { truncated: true, scanCap: AGING_SCAN_LIMIT } : {}),
+    records: matched.slice(0, limit),
     filtersApplied: filters,
   };
 }

@@ -4,6 +4,7 @@ import { buildProfileTableBlock } from '../../../personProfile/profileTableBlock
 import {
   OBJECT_ID_RE, PEOPLE_PROFILE_ACCESS, peopleScope, peopleDeps, peopleCountFacts,
 } from './common.js';
+import { canSeeCandidateResume, mergeCandidateResume, redactCandidateResume } from './candidateResume.js';
 
 const MAX_NAME_MATCHES = 10;
 
@@ -38,7 +39,9 @@ export default defineTool({
   description:
     "One person's full profile: their user account plus every role-specific profile they hold " +
     '(Employee, Candidate, Student, Mentor, Recruiter, Agent, Administrator), by id or name. A name ' +
-    'that fits several people returns { matches } to ask which one.',
+    'that fits several people returns { matches } to ask which one. A candidate profile also includes ' +
+    'skills, qualifications, experiences, years of experience and a resume summary — the same fields the ' +
+    'Candidates page shows. Anything not on the profile is missing, not guessed.',
   input: Joi.object({
     id: Joi.string().description('User id (id/userId from an earlier list_users row).'),
     name: Joi.string().min(1).description("Person's name, email, or part of it."),
@@ -157,6 +160,20 @@ export default defineTool({
       // wasn't stripped.
       if (profileNote) {
         availableSections = [...new Set(Object.values(profiles).flatMap((p) => p?.sections || []))];
+      }
+    }
+
+    // Résumé fields only for a candidate profile this viewer is still allowed to see
+    // (row scope already dropped employee/candidate sections they cannot open).
+    if (profiles?.candidate && !profiles.candidate.error && !profiles.candidate.noRecord) {
+      if (!canSeeCandidateResume(user, identity.userId)) {
+        profiles = { ...profiles, candidate: redactCandidateResume(profiles.candidate) };
+      } else {
+        const doc = await deps.Employee.findOne({ owner: identity.userId })
+          .select('skills qualifications experiences')
+          .lean();
+        profiles = { ...profiles, candidate: mergeCandidateResume(profiles.candidate, doc, deps.now()) };
+        availableSections = [...new Set([...(availableSections || []), ...(profiles.candidate.sections || [])])];
       }
     }
 

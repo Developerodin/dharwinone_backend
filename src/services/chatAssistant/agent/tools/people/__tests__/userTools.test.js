@@ -622,6 +622,142 @@ describe('get_user', () => {
     assert.equal(out.kind, 'unique');
   });
 
+  it('candidate profile includes skills, qualifications, experience and a resume summary without employees.read', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Candidate', slug: 'candidate', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    let queried;
+    const ctx = ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Candidate'], roleSlugs: ['candidate'] },
+        profiles: { candidate: { fields: { name: 'Priya' }, visibleFields: ['name'], missing: [], sections: ['identity'] } },
+        availableSections: ['identity'],
+      }),
+      resolveRowScope: async () => null,
+      Employee: {
+        findOne: (q) => {
+          queried = q;
+          return chainable({
+            skills: [{ name: 'React', level: 'Advanced' }],
+            qualifications: [{ degree: 'B.Tech', institute: 'IIT', endYear: 2018 }],
+            experiences: [{ role: 'Engineer', company: 'Example', startDate: '2022-01-01', endDate: '2024-01-01' }],
+          });
+        },
+      },
+    });
+    ctx.user = { id: 'viewer-1', roleIds: [], authContext: { permissions: new Set(['candidates.read']) } };
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal(String(queried.owner), '64b7f0c2a1b2c3d4e5f60718');
+    assert.equal(out.profiles.candidate.fields.skills, 'React (Advanced)');
+    assert.equal(out.profiles.candidate.fields.qualifications, 'B.Tech at IIT at (2018)');
+    assert.equal(out.profiles.candidate.fields.experiences, 'Engineer at Example');
+    assert.equal(out.profiles.candidate.fields.yearsOfExperience, 2);
+    assert.match(out.profiles.candidate.fields.resumeSummary, /Skills: React \(Advanced\)/);
+    assert.ok(out.availableSections.includes('skills'));
+    assert.equal(out.profiles.candidate.fields.salaryRange, undefined);
+  });
+
+  it('a candidate with no skills, qualifications or experience reports them missing, not invented', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Candidate', slug: 'candidate', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    const ctx = ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Candidate'], roleSlugs: ['candidate'] },
+        profiles: { candidate: { fields: {}, visibleFields: [], missing: [], sections: [] } },
+        availableSections: [],
+      }),
+      resolveRowScope: async () => null,
+      Employee: { findOne: () => chainable({ skills: [], qualifications: [], experiences: [] }) },
+    });
+    ctx.user = { id: 'viewer-1', roleIds: [], authContext: { permissions: new Set(['candidates.read']) } };
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    const c = out.profiles.candidate;
+    for (const key of ['skills', 'qualifications', 'experiences', 'yearsOfExperience', 'resumeSummary']) {
+      assert.equal(c.fields[key], undefined);
+      assert.ok(c.missing.includes(key));
+    }
+  });
+
+  it('a viewer who cannot open the Candidates page does not receive resume fields', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Candidate', slug: 'candidate', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    let read = false;
+    const ctx = ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Candidate'], roleSlugs: ['candidate'] },
+        profiles: { candidate: { fields: { name: 'Priya' }, visibleFields: ['name'], sections: ['identity'] } },
+        availableSections: ['identity'],
+      }),
+      resolveRowScope: async () => null,
+      Employee: { findOne: () => { read = true; return chainable({ skills: [{ name: 'Secret' }] }); } },
+    });
+    ctx.user = { id: 'viewer-1', roleIds: [], authContext: { permissions: new Set(['users.read']) } };
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal(read, false);
+    assert.equal(out.profiles.candidate.fields.skills, undefined);
+    assert.ok(out.profiles.candidate.redacted.includes('skills'));
+    assert.ok(out.profiles.candidate.redacted.includes('resumeSummary'));
+  });
+
+  it('the candidate themself sees resume fields without candidates.read', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Candidate', slug: 'candidate', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    const ctx = ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Candidate'], roleSlugs: ['candidate'] },
+        profiles: { candidate: { fields: {}, visibleFields: [], missing: [], sections: [] } },
+        availableSections: [],
+      }),
+      resolveRowScope: async () => null,
+      Employee: { findOne: () => chainable({ skills: [{ name: 'React', level: 'Advanced' }], qualifications: [], experiences: [] }) },
+    });
+    ctx.user = { id: '64b7f0c2a1b2c3d4e5f60718', roleIds: [], authContext: { permissions: new Set() } };
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctx);
+    assert.equal(out.profiles.candidate.fields.skills, 'React (Advanced)');
+  });
+
+  it('an out-of-scope candidate profile is not enriched and the Employee document is not read', async () => {
+    const { Role } = fakeRole([{ _id: ROLE_ID_1, name: 'Candidate', slug: 'candidate', aliases: [], status: 'active', permissions: [] }]);
+    const { User } = fakeUser();
+    User.findById = () => chainable({ roleIds: [ROLE_ID_1] });
+    let read = false;
+    const out = await getUser.execute({ id: '64b7f0c2a1b2c3d4e5f60718' }, ctxFor({
+      User,
+      Role,
+      getUserByIdForRequester: async (id) => ({ _id: id, name: 'Priya' }),
+      resolvePersonProfile: async () => ({
+        kind: 'unique',
+        identity: { userId: '64b7f0c2a1b2c3d4e5f60718', name: 'Priya', roles: ['Candidate'], roleSlugs: ['candidate'] },
+        profiles: { candidate: { fields: { name: 'Priya' }, visibleFields: ['name'], sections: ['identity'] } },
+        availableSections: ['identity'],
+      }),
+      resolveRowScope: async () => new Set(['someone-else']),
+      Employee: { findOne: () => { read = true; return chainable({ skills: [{ name: 'Secret' }] }); } },
+    }));
+    assert.equal(read, false);
+    assert.equal('candidate' in out.profiles, false);
+    assert.equal(out.profileNote, 'employee/candidate profile not visible to you');
+  });
+
   it('has users.read + person row-scope access', () => {
     assert.deepEqual(getUser.access, PEOPLE_PROFILE_ACCESS);
   });

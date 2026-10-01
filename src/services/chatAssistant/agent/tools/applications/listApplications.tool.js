@@ -11,8 +11,10 @@ export default defineTool({
   domain: 'applications',
   kind: 'read',
   description:
-    'List job applications with applicant, job title and status. Use for "which jobs has X applied to", ' +
-    '"who applied to job Y". total is the full count even when fewer rows come back.',
+    'List job applications with applicant, job title, status and daysInStatus. Use for "which jobs has X applied to", ' +
+    '"who applied to job Y", "in the current status more than N days" (filters.inStatusOverDays) and ' +
+    '"screened but never interviewed" (filters.screenedNeverInterviewed). daysInStatus is null when status ' +
+    'history is missing — never the apply date. total is the full count even when fewer rows come back.',
   measure:
     'Job application RECORDS (one per applicant per job) you are allowed to see, every application ' +
       'status unless filters.status is set; internal relay/test applicants excluded.',
@@ -37,8 +39,14 @@ export default defineTool({
         { key: 'applicant', label: 'Applicant', priority: 'primary' },
         { key: 'job', label: 'Job', priority: 'primary' },
         { key: 'status', label: 'Status', priority: 'primary' },
+        { key: 'daysInStatus', label: 'Days in status', priority: 'secondary' },
       ],
-      rows: result.records.map((r) => ({ applicant: r.applicant ?? '—', job: r.job ?? '—', status: r.status ?? '—' })),
+      rows: result.records.map((r) => ({
+        applicant: r.applicant ?? '—',
+        job: r.job ?? '—',
+        status: r.status ?? '—',
+        daysInStatus: r.daysInStatus == null ? '—' : r.daysInStatus,
+      })),
       layout: 'auto',
     }] : [];
     return { blocks, facts: applicationCountFacts('list_applications', result.total) };

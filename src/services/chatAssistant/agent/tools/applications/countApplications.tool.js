@@ -11,7 +11,10 @@ export default defineTool({
   kind: 'read',
   description:
     'Count job applications, optionally for one applicant, one job, or one status. Also returns a ' +
-    'breakdown by status. Use for "how many jobs has X applied to", "how many applications for job Y".',
+    'breakdown by status. Use for "how many jobs has X applied to", "how many applications for job Y", ' +
+    '"how many have been in this status more than N days" (filters.inStatusOverDays; statusAgeUnknown has ' +
+    'no status history and is not counted) and "how many were screened but never interviewed" ' +
+    '(filters.screenedNeverInterviewed; screeningUnknown is neither screened nor not screened).',
   measure:
     'Job application RECORDS (one per applicant per job) you are allowed to see, every application ' +
       'status unless filters.status is set; internal relay/test applicants excluded.',

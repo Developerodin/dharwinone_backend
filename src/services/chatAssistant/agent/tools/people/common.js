@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import UserModel from '../../../../../models/user.model.js';
 import RoleModel, { slugifyRole } from '../../../../../models/role.model.js';
+import EmployeeModel from '../../../../../models/employee.model.js';
 import {
   buildUserListMongoFilter as realBuildUserListMongoFilter,
   getUserByIdForRequester as realGetUserByIdForRequester,
@@ -44,6 +45,7 @@ export function peopleDeps(ctx) {
   return {
     User: deps.User ?? UserModel,
     Role: deps.Role ?? RoleModel,
+    Employee: deps.Employee ?? EmployeeModel,
     buildUserListMongoFilter: deps.buildUserListMongoFilter ?? realBuildUserListMongoFilter,
     getUserByIdForRequester: deps.getUserByIdForRequester ?? realGetUserByIdForRequester,
     queryUsers: deps.queryUsers ?? realQueryUsers,

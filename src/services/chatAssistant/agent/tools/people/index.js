@@ -33,6 +33,9 @@ const instructions = [
     'count_users/list_users filter, even right after a users answer — the name would land in search by ' +
     'mistake.',
   '- "Tell me about <person>" → get_user.',
+  '- A candidate\'s skills, qualifications, experience, years of experience and resume summary are on ' +
+    'get_user, from the same Candidate profile the Candidates page shows. A missing value is not recorded ' +
+    'in DharwinOne — say so. Do not guess from the employee profile rules, and do not invent years from a blank list.',
   '- The user\'s OWN details ("my profile", "who am I", "my employee id") → get_my_profile, never get_user.',
   '- Inactive accounts: "not logged in for N days / a month", "inactive users" → count_users/list_users with ' +
     'filters.inactiveDays (a month = 30). "Never logged in" → filters.neverLoggedIn true. "When did X last log ' +
