@@ -1,0 +1,122 @@
+[
+  {
+    "id": "W-allocate-two-people",
+    "question": "allocate Priya Shah and Ravi Kumar to the Apollo project",
+    "expect": {
+      "tools": ["allocate_to_project"],
+      "args": { "allocate_to_project": { "people": ["Priya Shah", "Ravi Kumar"], "project": "Apollo" } }
+    }
+  },
+  {
+    "id": "W-allocate-one-person",
+    "question": "put Meera Iyer on project Apollo",
+    "expect": {
+      "tools": ["allocate_to_project"],
+      "args": { "allocate_to_project": { "people": ["Meera Iyer"], "project": "Apollo" } }
+    }
+  },
+  {
+    "id": "W-allocate-by-project-id",
+    "question": "assign Priya Shah to project 64c000000000000000000001",
+    "expect": {
+      "tools": ["allocate_to_project"],
+      "args": {
+        "allocate_to_project": { "people": ["Priya Shah"], "project": "64c000000000000000000001" }
+      }
+    }
+  },
+  {
+    "id": "W-allocate-question-no-draft",
+    "question": "Can Priya Shah be added to the Apollo project?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_allocation"], "args": { "get_allocation": { "mode": "can_assign" } } },
+        { "tools": ["explain_status"] }
+      ]
+    }
+  },
+  {
+    "id": "W-reminder-by-candidate",
+    "question": "send a reminder for Ravi Kumar's interview",
+    "expect": {
+      "anyOf": [
+        { "tools": ["send_interview_reminder"], "args": { "send_interview_reminder": { "interview": "Ravi Kumar" } } },
+        { "tools": ["list_interviews", "send_interview_reminder"] },
+        { "tools": ["get_interview", "send_interview_reminder"] }
+      ]
+    }
+  },
+  {
+    "id": "W-reminder-by-id",
+    "question": "send the interview reminder for interview 64d000000000000000000001",
+    "expect": {
+      "tools": ["send_interview_reminder"],
+      "args": { "send_interview_reminder": { "interview": "64d000000000000000000001" } }
+    }
+  },
+  {
+    "id": "W-reminder-panel",
+    "question": "remind the panel about Meera Iyer's interview",
+    "expect": {
+      "anyOf": [
+        { "tools": ["send_interview_reminder"], "args": { "send_interview_reminder": { "interview": "Meera Iyer" } } },
+        { "tools": ["list_interviews", "send_interview_reminder"] },
+        { "tools": ["get_interview", "send_interview_reminder"] }
+      ]
+    }
+  },
+  {
+    "id": "W-reminder-question-no-draft",
+    "question": "Was a reminder sent for Ravi Kumar's interview?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_interview"] },
+        { "tools": ["list_interviews"] }
+      ]
+    }
+  },
+  {
+    "id": "W-leave-approve-by-name",
+    "question": "approve Priya Shah's leave request",
+    "expect": {
+      "anyOf": [
+        { "tools": ["decide_leave_request"], "args": { "decide_leave_request": { "request": "Priya Shah", "decision": "approve" } } },
+        { "tools": ["list_leave_requests", "decide_leave_request"] }
+      ]
+    }
+  },
+  {
+    "id": "W-leave-reject-with-comment",
+    "question": "reject leave request 64e000000000000000000001 because the dates clash",
+    "expect": {
+      "tools": ["decide_leave_request"],
+      "args": {
+        "decide_leave_request": {
+          "request": "64e000000000000000000001",
+          "decision": "reject",
+          "comment": "the dates clash"
+        }
+      }
+    }
+  },
+  {
+    "id": "W-leave-approve-by-id",
+    "question": "approve leave request 64e000000000000000000001",
+    "expect": {
+      "tools": ["decide_leave_request"],
+      "args": {
+        "decide_leave_request": { "request": "64e000000000000000000001", "decision": "approve" }
+      }
+    }
+  },
+  {
+    "id": "W-leave-question-no-draft",
+    "question": "Is Priya Shah's leave approved?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_leave_requests"] },
+        { "tools": ["count_leave_requests"] }
+      ]
+    }
+  }
+]
