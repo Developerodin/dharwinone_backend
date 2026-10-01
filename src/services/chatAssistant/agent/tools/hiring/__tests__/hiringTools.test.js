@@ -168,7 +168,52 @@ describe('list_offers — B1 compensation gate', () => {
   });
 });
 
+describe('list_offers — candidate display name', () => {
+  const shown = async (offer) => {
+    const out = await listOffers.execute({}, ctxWith({ queryOffers: async () => paged(1, [offer]) }));
+    return {
+      record: out.records[0].candidate,
+      card: listOffers.render(out).blocks[0].rows[0].candidate,
+    };
+  };
+
+  it('uses Employee.fullName and ignores letterFullName', async () => {
+    const { record, card } = await shown({
+      _id: 'o1', candidate: { fullName: 'Ravi Kumar' }, letterFullName: 'Harsh Bansal',
+    });
+    assert.equal(record, 'Ravi Kumar');
+    assert.equal(card, 'Ravi Kumar');
+  });
+
+  it('uses letterFullName when Employee.fullName is null', async () => {
+    const { record, card } = await shown({
+      _id: 'o1', candidate: { fullName: null }, letterFullName: 'Harsh Bansal',
+    });
+    assert.equal(record, 'Harsh Bansal');
+    assert.equal(card, 'Harsh Bansal');
+  });
+
+  it('uses letterFullName when Employee.fullName is blank', async () => {
+    const { record, card } = await shown({
+      _id: 'o1', candidate: { fullName: '   ' }, letterFullName: 'Harsh Bansal',
+    });
+    assert.equal(record, 'Harsh Bansal');
+    assert.equal(card, 'Harsh Bansal');
+  });
+
+  it('keeps the em dash when both names are empty', async () => {
+    const { record, card } = await shown({
+      _id: 'o1', candidate: { fullName: null }, letterFullName: '   ',
+    });
+    assert.equal(record, null);
+    assert.equal(card, '—');
+  });
+});
+
 describe('count_placements', () => {
+  // The registry copies measure onto the result; that object is what Sage reads.
+  const sageReads = (out) => ({ ...out, measure: countPlacements.measure });
+
   it('leaves Cancelled out of the total by default but shows it in the breakdown', async () => {
     const seen = [];
     const out = await countPlacements.execute(
@@ -176,7 +221,12 @@ describe('count_placements', () => {
       ctxWith({ queryPlacements: async (filter) => { seen.push(filter); return paged(3); } }),
     );
     assert.equal(seen[0].status, 'Pending,Onboarding,Joined,Deferred');
+    assert.equal(out.total, 3);
     assert.ok('Cancelled' in out.byStatus);
+    assert.match(
+      sageReads(out).measure,
+      /every status EXCEPT Cancelled unless filters\.status or filters\.stage is set/,
+    );
   });
 
   it('only breaks a stage queue down by the statuses that queue narrows by', async () => {
@@ -184,7 +234,48 @@ describe('count_placements', () => {
       { filters: { stage: 'preBoarding' } },
       ctxWith({ queryPlacements: async () => paged(1) }),
     );
+    assert.equal(out.total, 1);
     assert.deepEqual(Object.keys(out.byStatus), ['Pending', 'Deferred', 'Cancelled']);
+    assert.match(
+      sageReads(out).measure,
+      /every status EXCEPT Cancelled unless filters\.status or filters\.stage is set/,
+    );
+  });
+
+  it('a status filter with only that bucket does not invite a second queue total', async () => {
+    const out = await countPlacements.execute(
+      { filters: { status: 'Onboarding' } },
+      ctxWith({
+        queryPlacements: async (filter) => paged(filter.status === 'Onboarding' ? 68 : 0),
+      }),
+    );
+    const sage = sageReads(out);
+    assert.equal(sage.total, 68);
+    assert.deepEqual(sage.byStatus, { Onboarding: 68 });
+    assert.match(sage.measure, /State total; mention another status only when its count is above zero/);
+    assert.match(sage.measure, /Do not restate total as a second queue total/);
+  });
+
+  it('keeps a non-zero other status visible so it can be mentioned once', async () => {
+    const out = await countPlacements.execute(
+      { filters: { status: 'Onboarding' } },
+      ctxWith({
+        queryPlacements: async (filter) => {
+          if (filter.status === 'Onboarding') return paged(68);
+          if (filter.status === 'Joined') return paged(10);
+          return paged(0);
+        },
+      }),
+    );
+    const sage = sageReads(out);
+    assert.equal(sage.total, 68);
+    assert.equal(sage.byStatus.Onboarding, 68);
+    assert.equal(sage.byStatus.Joined, 10);
+    assert.equal(sage.byStatus.Pending, undefined);
+    assert.equal(sage.byStatus.Deferred, undefined);
+    assert.equal(sage.byStatus.Cancelled, undefined);
+    assert.match(sage.measure, /mention another status only when its count is above zero/);
+    assert.match(sage.measure, /Do not restate total/);
   });
 
   it('counts "joined this month" as status Joined with a joining-date window', async () => {
