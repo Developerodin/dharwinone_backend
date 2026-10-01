@@ -12,6 +12,20 @@ import {
 } from '../services/project.service.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 
+/**
+ * Global toJSON deletes createdAt/updatedAt. The project overview reads those
+ * keys from GET /projects/:id and from the PATCH body it stores after a save.
+ * Read them off the document first; toJSON will not put them back.
+ */
+const projectJsonWithTimestamps = (project) => {
+  const createdAt = project.createdAt;
+  const updatedAt = project.updatedAt;
+  const json = project.toJSON();
+  if (createdAt != null) json.createdAt = createdAt;
+  if (updatedAt != null) json.updatedAt = updatedAt;
+  return json;
+};
+
 const create = catchAsync(async (req, res) => {
   const createdById = req.user.id || req.user._id;
   const project = await createProject(createdById, req.body);
@@ -47,12 +61,12 @@ const get = catchAsync(async (req, res) => {
     }
   }
 
-  res.send(project);
+  res.send(projectJsonWithTimestamps(project));
 });
 
 const update = catchAsync(async (req, res) => {
   const project = await updateProjectById(req.params.projectId, req.body, req.user);
-  res.send(project);
+  res.send(projectJsonWithTimestamps(project));
 });
 
 const remove = catchAsync(async (req, res) => {
@@ -60,4 +74,4 @@ const remove = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
-export { create, list, get, update, remove };
+export { create, list, get, update, remove, projectJsonWithTimestamps };
