@@ -651,6 +651,14 @@ const createStandaloneApplicationForOfferLetter = async (payload, userId) => {
 };
 
 /**
+ * recordStatusChange returned changed:false. Already Offered is success; any other
+ * current status means the offer and the application diverged.
+ */
+export function offerCreateStatusMismatch(statusResult) {
+  return Boolean(statusResult && statusResult.changed === false && statusResult.from !== 'Offered');
+}
+
+/**
  * Create an offer for an existing job application.
  */
 const createOfferCore = async (applicationId, payload, userId) => {
@@ -738,7 +746,16 @@ const createOfferCore = async (applicationId, payload, userId) => {
 
   const applicationStatusBefore = application.status;
 
-  await recordStatusChange({ applicationId: application._id }, 'Offered', { by: userId, source: 'offer_created' });
+  const statusResult = await recordStatusChange({ applicationId: application._id }, 'Offered', { by: userId, source: 'offer_created' });
+  // changed:false because the application is already Offered keeps today's success path.
+  // changed:false for any other reason is a silent mismatch — drop the offer we just inserted.
+  if (offerCreateStatusMismatch(statusResult)) {
+    await Offer.findByIdAndDelete(offer._id);
+    throw new ApiError(
+      httpStatus.CONFLICT,
+      `The application is ${statusResult.from ?? 'missing'}, so it was not moved to Offered. The offer was not kept.`
+    );
+  }
   await syncReferralPipelineStatusForCandidate(candRefId);
 
   writeAtsAudit(

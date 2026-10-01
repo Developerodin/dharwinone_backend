@@ -6,7 +6,7 @@ import { syncReferralPipelineAfterApplicationWithdrawal, syncReferralPipelineSta
 import ApiError from '../utils/ApiError.js';
 import { APPLICATION_STATUSES, getManualApplicationTransitionBlockReason, isManualApplicationTransition } from '../constants/atsPipeline.js';
 import { queryApplicants as queryApplicantsScoped } from './applicantQuery.service.js';
-import { applyStatusChange, initialStatusFields } from './applicationStatusHistory.js';
+import { applyStatusChange, initialStatusFields, omitStaleStatusFields } from './applicationStatusHistory.js';
 
 const STATUS_VALUES = APPLICATION_STATUSES;
 
@@ -131,6 +131,8 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
   }
 
   const { status, notes, coverLetter, job: jobId, candidate: candidateId } = updateBody;
+  let wroteStatus = false;
+  let persisted = application;
 
   if (jobId != null && jobId !== undefined) {
     const newJob = await getJobById(jobId);
@@ -176,41 +178,51 @@ const updateJobApplicationStatus = async (id, updateBody, currentUser) => {
           `Cannot move an application from ${fromStatus} to ${status}.`
         );
       }
+      // Stale-save failure: reload so statusHistory is not the copy from the start of
+      // this request. A recordStatusChange (offer) since then must not be erased.
+      const fresh = await JobApplication.findById(application._id);
+      const target = fresh || application;
+      if (jobId != null) target.job = application.job;
+      if (candidateId != null) target.candidate = application.candidate;
+      applyStatusChange(target, status, { by: currentUser?.id ?? currentUser?._id, source: 'manual' });
+      persisted = target;
+      wroteStatus = true;
     }
-    applyStatusChange(application, status, { by: currentUser?.id ?? currentUser?._id, source: 'manual' });
   }
   if (notes !== undefined) {
-    application.notes = notes;
+    persisted.notes = notes;
   }
   if (coverLetter !== undefined) {
-    application.coverLetter = coverLetter;
+    persisted.coverLetter = coverLetter;
   }
 
-  await application.save();
-  await syncReferralPipelineStatusForCandidate(application.candidate);
-  await application.populate([
+  // Notes-only save: do not write status/statusHistory from this document (stale-save failure).
+  if (!wroteStatus) omitStaleStatusFields(persisted);
+  await persisted.save();
+  await syncReferralPipelineStatusForCandidate(persisted.candidate);
+  await persisted.populate([
     { path: 'job', select: 'title organisation status' },
     { path: 'candidate', select: 'fullName email phoneNumber' },
     { path: 'appliedBy', select: 'name email' },
   ]);
 
-  if (status != null && status !== undefined && application.candidate?.email) {
+  if (status != null && status !== undefined && persisted.candidate?.email) {
     const { notifyByEmail, plainTextEmailBody } = await import('./notification.service.js');
-    const jobTitle = application.job?.title || 'Job';
-    const msg = `Your application for "${jobTitle}" is now ${application.status}.`;
-    notifyByEmail(application.candidate.email, {
+    const jobTitle = persisted.job?.title || 'Job';
+    const msg = `Your application for "${jobTitle}" is now ${persisted.status}.`;
+    notifyByEmail(persisted.candidate.email, {
       type: 'job_application',
-      title: `Application status: ${application.status}`,
+      title: `Application status: ${persisted.status}`,
       message: msg,
       link: '/ats/my-applications',
       email: {
-        subject: `Application status: ${application.status} — ${jobTitle}`,
+        subject: `Application status: ${persisted.status} — ${jobTitle}`,
         text: plainTextEmailBody(msg, '/ats/my-applications'),
       },
     }).catch(() => {});
   }
 
-  return application;
+  return persisted;
 };
 
 /**

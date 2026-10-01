@@ -437,6 +437,12 @@ const interviewApplicationRequired = () =>
 const INTERVIEW_FULL_ACCESS = ['interviews.read', 'interviews.create', 'interviews.edit', 'interviews.delete'];
 
 const transitionApplicationToInterview = async (application, userId, meeting, jobObjId, candId) => {
+  if (!application?._id) return;
+  // Stale-save failure: this document was loaded before scheduling. Saving its statusHistory
+  // would erase an offer transition recordStatusChange appended after the load (that update
+  // bumps __v, but the earlier array still replaces the field). Reload so only the current
+  // history is written.
+  application = await JobApplication.findById(application._id);
   if (!application || !['Applied', 'Screening'].includes(application.status)) {
     return;
   }
@@ -1540,9 +1546,14 @@ const transferEmployeeInternally = async (id, userId, body = {}, currentUser = n
   // System action: mark the application Hired directly (the manual transition guard only applies to the
   // recruiter dropdown; pipeline-driving system actions set status directly, like interview scheduling).
   if (application.status !== 'Hired') {
-    applyStatusChange(application, 'Hired', { by: userId, source: 'internal_transfer' });
-    await application.save();
-    queueJobOwnerVacancyFilledNotify(jobId);
+    // Stale-save failure: same as transitionApplicationToInterview — reload before writing status.
+    const fresh = await JobApplication.findById(application._id);
+    const target = fresh || application;
+    if (target.status !== 'Hired') {
+      applyStatusChange(target, 'Hired', { by: userId, source: 'internal_transfer' });
+      await target.save();
+      queueJobOwnerVacancyFilledNotify(jobId);
+    }
   }
   await syncReferralPipelineStatusForCandidate(candidateObjId);
 
