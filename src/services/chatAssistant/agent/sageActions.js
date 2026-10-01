@@ -184,7 +184,7 @@ export async function confirmAction({ key, user, impersonating = false, req = nu
   const claimedAt = now();
   const row = await SageAction.findOneAndUpdate(
     { key, userId, status: 'pending', expiresAt: { $gt: claimedAt } },
-    { $set: { status: 'executing', confirmedAt: claimedAt } },
+    { $set: { status: 'executing', confirmedAt: claimedAt, expiresAt: later(claimedAt, RESULT_TTL_MS) } },
     { new: true }
   ).lean();
   if (!row) return explainUnclaimed(key, userId, claimedAt);
@@ -220,9 +220,10 @@ export async function confirmAction({ key, user, impersonating = false, req = nu
   const failWith = (message, outcome, code = httpStatus.CONFLICT) => finish('failed', { ok: false, message }, outcome, code);
 
   // ponytail: a thrown error anywhere below ends the row failed, never executing. A process
-  // crash mid-commit still leaves it executing: the TTL removes it after the draft's 15 min
-  // and a later confirm reports not found, so whether the write landed is unknown — acceptable
-  // today; the upgrade is a sweeper that marks stale executing rows failed/unknown.
+  // crash mid-commit still leaves it executing. The claim bumps expiresAt to now+24h (same as
+  // the terminal bump) so the TTL index cannot delete the row mid-commit. A later confirm
+  // reports it executing until that window ends — whether the write landed is unknown;
+  // the upgrade is a sweeper that marks stale executing rows failed/unknown.
   let committed;
   try {
     const tool = await findTool(row.tool);
@@ -265,9 +266,20 @@ export async function confirmAction({ key, user, impersonating = false, req = nu
 }
 
 /** POST /actions/:key/cancel — pending → cancelled, same ownership rules; cancelling twice is a no-op. */
-export async function cancelAction({ key, user }, { now = () => new Date() } = {}) {
+export async function cancelAction({ key, user }, { now = () => new Date(), findTool = defaultFindTool } = {}) {
   const userId = userIdOf(user);
   if (!userId) return reply(httpStatus.NOT_FOUND, 'not_found', NOT_FOUND_MESSAGE);
+  const pending = await SageAction.findOne({ key, userId, status: 'pending' }).lean();
+  if (pending) {
+    const tool = await Promise.resolve()
+      .then(() => findTool(pending.tool))
+      .catch(() => null);
+    if (typeof tool?.onCancel === 'function') {
+      // Void linked drafts (task-plan preview) before the row leaves pending, so a failed
+      // void can be retried. A cancelled row must not stay applicable.
+      await tool.onCancel(pending, { user });
+    }
+  }
   const cancelled = await SageAction.findOneAndUpdate(
     { key, userId, status: 'pending' },
     { $set: { status: 'cancelled', result: { ok: false, message: CANCELLED_MESSAGE }, expiresAt: later(now(), RESULT_TTL_MS) } },

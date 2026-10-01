@@ -115,6 +115,16 @@ export default defineTool({
       payload: { projectId, previewId: preview.previewId, tasks },
     };
   },
+  // Cancel voids the preview so a later apply cannot claim it. state leaves `open`.
+  async onCancel(row, ctx) {
+    const deps = planDeps(ctx || {});
+    const previewId = row?.payload?.previewId;
+    if (!previewId) return;
+    await deps.TaskBreakdownPreview.updateOne(
+      { previewId, state: 'open' },
+      { $set: { state: 'superseded' } }
+    );
+  },
   // Never re-run the preview on confirm: it is a fresh LLM call that would produce a different plan.
   async recheck({ payload }, ctx) {
     const user = workScope(ctx);

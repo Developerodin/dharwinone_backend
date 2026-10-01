@@ -517,10 +517,13 @@ export async function applyTaskBreakdown(projectId, user, { tasks, idempotencyKe
       { $set: { state: 'applied' } }
     );
     if (upd.matchedCount === 0) {
-      logger.warn('[PM Assistant] applyTaskBreakdown: previewId did not match an open snapshot', {
-        previewId: previewIdRaw,
-        projectId: String(projectOid),
-      });
+      // A missed claim must not insert. Callers: pmAssistant.controller applyTaskBreakdown,
+      // create_task_plan commit, bootstrapSmartTeamForProject. A successful apply already
+      // holds the preview (matchedCount > 0) and continues below.
+      throw new ApiError(
+        httpStatus.CONFLICT,
+        'This task plan is no longer available — ask Sage for a new one.'
+      );
     }
   }
   if (previewIdRaw) {

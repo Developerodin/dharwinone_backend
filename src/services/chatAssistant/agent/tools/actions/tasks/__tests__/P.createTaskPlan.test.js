@@ -308,4 +308,16 @@ describe('create_task_plan through draft and confirm', () => {
     assert.equal(res.code, 403);
     assert.equal(apply.mock.callCount(), 0);
   });
+
+  it('onCancel marks an open preview superseded so it cannot be applied', async () => {
+    const updates = [];
+    await tool.onCancel(
+      { payload: { previewId: 'prev-1' } },
+      { deps: { TaskBreakdownPreview: { updateOne: async (filter, update) => { updates.push({ filter, update }); } } } }
+    );
+    assert.deepEqual(updates, [{
+      filter: { previewId: 'prev-1', state: 'open' },
+      update: { $set: { state: 'superseded' } },
+    }]);
+  });
 });

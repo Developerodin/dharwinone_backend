@@ -31,7 +31,7 @@ function isValidAccess(access) {
   return access.anyOf !== undefined || access.allOf !== undefined || hasNote;
 }
 
-function checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets }) {
+function checkWriteShape(name, { execute, prepare, commit, recheck, onCancel, maxTargets }) {
   if (execute !== undefined) {
     fail(name, 'write tools define prepare(value, ctx) and commit(draft, ctx), not execute');
   }
@@ -39,6 +39,9 @@ function checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets }
   if (typeof commit !== 'function') fail(name, 'write tools require commit(draft, ctx)');
   if (recheck !== undefined && typeof recheck !== 'function') {
     fail(name, 'recheck must be a function when present');
+  }
+  if (onCancel !== undefined && typeof onCancel !== 'function') {
+    fail(name, 'onCancel must be a function when present');
   }
   if (maxTargets !== undefined && !(Number.isInteger(maxTargets) && maxTargets > 0 && maxTargets <= MAX_TARGETS)) {
     fail(name, `maxTargets must be an integer from 1 to ${MAX_TARGETS} when present`);
@@ -68,7 +71,7 @@ function checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets }
  */
 export function defineTool(def) {
   const {
-    name, domain, kind, description, measure, input, access, execute, prepare, commit, recheck, maxTargets, render, timeoutMs,
+    name, domain, kind, description, measure, input, access, execute, prepare, commit, recheck, onCancel, maxTargets, render, timeoutMs,
   } = def || {};
 
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
@@ -93,7 +96,7 @@ export function defineTool(def) {
     fail(name, "access must be { anyOf: [...] } and/or { allOf: [...] } (non-empty) or { note: '...' } (see toolAccess.js)");
   }
   if (kind === 'write') {
-    checkWriteShape(name, { execute, prepare, commit, recheck, maxTargets });
+    checkWriteShape(name, { execute, prepare, commit, recheck, onCancel, maxTargets });
   } else if (typeof execute !== 'function') {
     fail(name, 'execute must be a function');
   }
@@ -113,7 +116,7 @@ export function defineTool(def) {
 
   if (kind === 'write') {
     return Object.freeze({
-      name, domain, kind, description, measure, input, access, prepare, commit, recheck,
+      name, domain, kind, description, measure, input, access, prepare, commit, recheck, onCancel,
       maxTargets: maxTargets ?? MAX_TARGETS, render, timeoutMs, jsonSchema,
     });
   }
