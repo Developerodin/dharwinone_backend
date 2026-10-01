@@ -14,13 +14,14 @@ export default defineTool({
   domain: 'training',
   kind: 'write',
   description:
-    'Draft a reminder to named people to continue one training course (module). Only drafts: the user must ' +
+    'Draft a reminder to people the user named, to continue one training course (module). Only drafts: the user must ' +
     'press Confirm. Only people enrolled and not finished get it; completed, not enrolled and anyone reminded ' +
-    'about this course in the last 24 hours are skipped. People must be named one by one (name or email). ' +
-    'Courses have no due date, so never call it "overdue".',
+    'about this course in the last 24 hours are skipped. Each person must be named by the user (name or email). ' +
+    'Do not call this for everyone, a position, or whoever has not started: look those up, ask which people, and ' +
+    'do not copy names from that lookup into this tool. Courses have no due date, so never call it "overdue".',
   input: Joi.object({
     people: Joi.array().items(Joi.string().min(1).max(120)).min(1).max(MAX_PEOPLE).required()
-      .description('Names or email addresses of the people to remind, one per entry.'),
+      .description('People the user named in this request, one name or email per entry. Not a whole cohort.'),
     module: Joi.string().min(1).max(120).required().description('Course (module) name.'),
   }),
   access: REMINDER_ACCESS,

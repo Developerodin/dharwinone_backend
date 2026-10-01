@@ -106,7 +106,7 @@
   },
   {
     "id": "I-act-booking-link-question-no-draft",
-    "question": "has Ranveer Singh booked an interview for the QA Engineer job yet?",
+    "question": "has Ravi Kumar booked an interview for the QA Engineer job yet?",
     "expect": {
       "anyOf": [
         { "tools": ["list_interviews"] },

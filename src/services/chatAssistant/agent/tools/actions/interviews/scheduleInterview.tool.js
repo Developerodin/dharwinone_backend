@@ -147,13 +147,14 @@ export default defineTool({
   domain: DOMAIN,
   kind: 'write',
   description:
-    'Draft scheduling ONE ATS interview for one job application at a fixed time (the Interviews page ' +
-    '"Schedule interview" form). Creates the interview, moves an Applied / Screening application to Interview ' +
-    'and emails every invitee. Only drafts: the user must press Confirm. Resolve the application id with ' +
-    'list_applications first. To let the candidate pick the time use send_interview_booking_link.',
+    'Draft scheduling one ATS interview for one job application at a fixed time (the Interviews page ' +
+    '"Schedule interview" form). Only drafts: nothing is created and nobody is emailed until the user presses Confirm. ' +
+    'If the user already gave the application id, pass that id and do not call list_applications. ' +
+    'Call list_applications only when you have a candidate and job but no application id. ' +
+    'To let the candidate pick the time, use send_interview_booking_link.',
   input: Joi.object({
     application: Joi.string().pattern(HEX_ID_RE).required()
-      .description('Job application id from list_applications.'),
+      .description('Application id the user gave, or from list_applications when they did not.'),
     scheduledAt: Joi.string().pattern(ISO_WITH_OFFSET_RE).required()
       .description('Start, ISO 8601 with an explicit offset, e.g. 2026-10-02T15:00:00+05:30 for 3 PM IST. Must be in the future.'),
     durationMinutes: ROUTE_BODY.extract('durationMinutes').description('Length in minutes (default 60).'),

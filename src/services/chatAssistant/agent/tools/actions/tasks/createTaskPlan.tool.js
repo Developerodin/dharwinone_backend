@@ -55,8 +55,8 @@ export default defineTool({
   description:
     'Draft a task plan for one project with the PM assistant: it generates new tasks and shows them to the ' +
     'user, and nothing is created until the user presses Confirm. Use for "break project X into tasks", "plan ' +
-    'the tasks for X", "create a task list for project X". Only the project creator or an admin can use it. ' +
-    'Not for listing existing tasks, adding one specific task, or assigning people to tasks.',
+    'the tasks for X", "generate a task list for project X". Call it once per request. Only the project creator ' +
+    'or an admin can use it. Not for listing existing tasks, adding one specific task, or assigning people to tasks.',
   input: Joi.object({
     project: Joi.string().min(1).max(200).required().description('The project name or id, as the user said it.'),
     brief: Joi.string()
