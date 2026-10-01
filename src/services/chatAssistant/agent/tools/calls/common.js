@@ -304,7 +304,8 @@ function aiInsights(record) {
     questions: null,
     concerns: null,
     otherOffers: null,
-    notCaptured: ['salary', 'joiningDate', 'questions', 'concerns', 'otherOffers'],
+    notCaptured: [],
+    takeaways: 'Salary, notice period, joining date, questions, concerns and other offers come from get_call_takeaways when a transcript exists.',
   };
 }
 

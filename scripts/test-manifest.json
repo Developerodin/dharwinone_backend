@@ -381,5 +381,10 @@
   "./src/services/chatAssistant/agent/tools/actions/documents/__tests__/D.documentActions.test.js",
   "./src/services/chatAssistant/agent/tools/actions/training/__tests__/T.trainingActions.test.js",
   "./src/services/chatAssistant/agent/tools/actions/training/__tests__/T.trainingService.test.js",
-  "./src/services/chatAssistant/agent/tools/actions/tasks/__tests__/P.createTaskPlan.test.js"
+  "./src/services/chatAssistant/agent/tools/actions/tasks/__tests__/P.createTaskPlan.test.js",
+  "./src/services/chatAssistant/agent/tools/files/__tests__/filesTools.test.js",
+  "./src/services/chatAssistant/agent/tools/calls/__tests__/G.getCallTakeaways.test.js",
+  "./src/services/chatAssistant/agent/tools/projects/__tests__/P.taskProjectDetail.test.js",
+  "./src/services/chatAssistant/agent/tools/hiring/__tests__/H.schedulingReads.test.js",
+  "./src/services/chatAssistant/agent/tools/actions/more/__tests__/W.moreActions.test.js"
 ]

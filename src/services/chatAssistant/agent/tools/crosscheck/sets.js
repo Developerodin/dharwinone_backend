@@ -104,7 +104,7 @@ export const openTaskClause = () => ({ status: { $in: OPEN_TASK_STATUSES } });
 
 /**
  * Training → Evaluation rows (active, non-resigned students) grouped per person, Student → User.
- * info: { courses: [{ course, status, completion, quizScore }] }.
+ * info: { courses: [{ course, status, completion, quizScore, position }] }.
  */
 export async function trainingSet(e, { label = 'Training evaluation' } = {}) {
   const { user, deps } = env(e);
@@ -120,6 +120,7 @@ export async function trainingSet(e, { label = 'Training evaluation' } = {}) {
       status: r.displayStatus ?? null,
       completion: r.completionRate ?? 0,
       quizScore: r.quizScore ?? null,
+      position: r.positionName ?? null,
     });
     byStudent.set(sid, cur);
   }

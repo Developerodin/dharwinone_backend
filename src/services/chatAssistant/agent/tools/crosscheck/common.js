@@ -23,6 +23,7 @@ import { buildLeaveRequestScopeFilter as realLeaveScope } from '../../../../leav
 import { buildTree as realBuildTree } from '../../../../orgStructure.service.js';
 import { countActiveProjectsByAssignee as realCountActiveProjects } from '../../../../projectCapacity.js';
 import evaluationService from '../../../../evaluation.service.js';
+import { getPositionRoster as realGetPositionRoster } from '../../../../position.service.js';
 import { buildAccessibleTaskFilter as realBuildAccessibleTaskFilter } from '../../../taskAccess.js';
 import { resolveJobVisibilityFilter as realJobVisibility } from '../../../queryPlanner/entities/jobRank.js';
 import { checkAccessRule } from '../../../toolAccess.js';
@@ -77,6 +78,7 @@ export function crosscheckDeps(ctx) {
     buildTree: d.buildTree ?? realBuildTree,
     countActiveProjects: d.countActiveProjects ?? realCountActiveProjects,
     getEvaluationData: d.getEvaluationData ?? evaluationService.getEvaluationData,
+    getPositionRoster: d.getPositionRoster ?? realGetPositionRoster,
     buildAccessibleTaskFilter: d.buildAccessibleTaskFilter ?? realBuildAccessibleTaskFilter,
     resolveJobVisibilityFilter: d.resolveJobVisibilityFilter ?? realJobVisibility,
     canSeeAllReferralLeads: d.canSeeAllReferralLeads ?? hiringDeps(ctx).canSeeAllReferralLeads,

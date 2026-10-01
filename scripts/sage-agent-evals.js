@@ -184,6 +184,7 @@ const FAKE_USER = Object.freeze({
        'activity.delete',
        // The actions domain's write gates (drafts only; execute is faked, so nothing is stored or sent).
        'interviews.manage', 'pre-boarding.create', 'modules.manage', 'projects.manage', 'tasks.manage',
+       'files-storage.read',
     ]),
   },
 });
@@ -321,8 +322,19 @@ function cannedResult(name, args) {
         kind: 'unique',
         identity: { userId: 'eval-user-1', name: args?.name || 'Eval Person', email: 'eval.person@example.com' },
         roles: [{ name: 'Recruiter', slug: 'recruiter', aliases: [], status: 'active', permissions: [] }],
-        profiles: {},
-        availableSections: [],
+        profiles: {
+          candidate: {
+            fields: {
+              skills: 'React, Node',
+              qualifications: 'B.Tech',
+              experiences: 'QA Engineer at Acme (2022–2026)',
+              yearsOfExperience: 4,
+              resumeSummary: 'Skills: React, Node. Qualifications: B.Tech. Experience: QA Engineer at Acme (2022–2026). Years of experience: 4',
+            },
+            sections: ['skills', 'education', 'experience'],
+          },
+        },
+        availableSections: ['skills', 'education', 'experience'],
       };
     case 'list_roles':
       if (args?.status === 'inactive') return { roles: [evalRoleRow('Legacy Intern', { status: 'inactive', userCount: 0 })] };
@@ -351,23 +363,68 @@ function cannedResult(name, args) {
       return { total: 17, filtersApplied: args?.filters ?? {} };
     case 'list_candidates':
       return { total: 1, page: 1, hasNextPage: false, records: [{ id: 'c1', name: 'Ravi Kumar', designation: 'QA' }] };
-    case 'count_applications':
-      return { total: 3, baseTotal: 3, breakdown: { Applied: 2, Interview: 1 }, filtersApplied: args?.filters ?? {} };
-    case 'list_applications':
+    case 'count_applications': {
+      const f = args?.filters ?? {};
+      const aging = f.inStatusOverDays != null || f.screenedNeverInterviewed === true;
+      return {
+        total: aging ? 1 : 3,
+        baseTotal: 3,
+        breakdown: aging ? { Screening: 1 } : { Applied: 2, Interview: 1 },
+        filtersApplied: f,
+        ...(f.inStatusOverDays != null ? { statusAgeUnknown: 0 } : {}),
+        ...(f.screenedNeverInterviewed === true ? { screeningUnknown: 0 } : {}),
+      };
+    }
+    case 'list_applications': {
+      const f = args?.filters ?? {};
+      const ageFields = (status, screening) => ({
+        appliedAt: '2026-09-01T00:00:00.000Z',
+        daysInStatus: f.inStatusOverDays != null ? f.inStatusOverDays + 1 : 10,
+        statusSince: '2026-09-01',
+        statusChangedAt: '2026-09-01T00:00:00.000Z',
+        stageDateBasis: 'statusHistory',
+        daysToScreening: 2,
+        daysScreeningToInterview: status === 'Interview' ? 4 : null,
+        screening,
+      });
+      if (f.inStatusOverDays != null || f.screenedNeverInterviewed === true) {
+        return {
+          total: 1,
+          records: [{
+            id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer',
+            status: f.screenedNeverInterviewed ? 'Screening' : 'Applied',
+            ...ageFields(f.screenedNeverInterviewed ? 'Screening' : 'Applied', f.screenedNeverInterviewed ? 'screened_never_interviewed' : null),
+          }],
+          filtersApplied: f,
+          ...(f.inStatusOverDays != null ? { statusAgeUnknown: 0 } : {}),
+          ...(f.screenedNeverInterviewed === true ? { screeningUnknown: 0 } : {}),
+        };
+      }
       return { total: 2, records: [
-        { id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer', status: 'Applied' },
-        { id: 'a2', applicant: 'Ranveer Singh', job: 'QA Engineer', status: 'Interview' },
-      ] };
+        { id: 'a1', applicant: 'Ranveer Singh', job: 'React Developer', status: 'Applied', ...ageFields('Applied', null) },
+        { id: 'a2', applicant: 'Ranveer Singh', job: 'QA Engineer', status: 'Interview', ...ageFields('Interview', null) },
+      ], filtersApplied: f };
+    }
     case 'count_projects':
       return { total: 6, scope: 'all', filtersApplied: args?.filters ?? {} };
     case 'list_projects':
-      return { total: 1, scope: 'all', records: [{ id: 'p1', name: 'Portal Revamp', status: 'Inprogress', priority: 'high', teams: ['Alpha'] }] };
+      return { total: 1, scope: 'all', records: [{
+        id: 'p1', name: 'Portal Revamp', status: 'Inprogress', priority: 'high', teams: ['Alpha'],
+        createdBy: 'Asha Rao', description: 'Rebuild the client portal.', members: ['Asha Rao', 'Vikram Shah'],
+        lastActivityAt: '2026-09-28T10:00:00.000Z',
+      }] };
     case 'list_teams':
       return { total: 2, records: [{ id: 't1', name: 'Alpha', memberCount: 4 }, { id: 't2', name: 'Beta', memberCount: 3 }] };
     case 'count_tasks':
       return { total: 12, scope: 'all', groupBy: args?.groupBy, groups: [{ value: 'in_review', count: 3 }], overdue: 2, blocked: 1, filtersApplied: args?.filters ?? {} };
     case 'list_tasks':
-      return { total: 1, scope: 'mine', records: [{ id: 'k1', code: 'T-1', title: 'Fix login', status: 'todo', assignees: ['Eval Self'] }] };
+      return { total: 1, scope: 'mine', records: [{
+        id: 'k1', code: 'T-1', title: 'Fix login', status: 'todo', assignees: ['Eval Self'],
+        createdBy: 'Ravi Kumar', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-20T00:00:00.000Z',
+        commentsCount: 1, comments: 1,
+        lastComment: { by: 'Asha Rao', at: '2026-09-20T10:00:00.000Z', text: 'Blocked on review' },
+        attachmentsCount: 0,
+      }] };
     case 'get_workload':
       return { metric: args?.metric ?? 'most_tasks', rows: [{ name: 'Asha Rao', openCount: 9, totalCount: 14 }] };
     case 'get_my_profile':
@@ -481,6 +538,16 @@ function cannedResult(name, args) {
         { name: 'Ops Manager', type: 'manager', headName: 'Ravi Kumar' },
       ] };
     case 'get_training_progress':
+      if (args?.lowestCompletion) {
+        return {
+          mode: 'cohort', lowestCompletion: true, position: args.position ?? null, course: args.course ?? null,
+          total: 2, records: [
+            { course: 'Java 101', studentsAssigned: 8, completedCount: 2, completionRate: 25, avgCompletion: 30, atRiskCount: 3 },
+            { course: args.course || 'React Basics', studentsAssigned: 10, completedCount: 4, completionRate: 40, avgCompletion: 55, atRiskCount: 1 },
+          ],
+          note: 'Ranked by completion rate (completed assignments / assignments), lowest first. Courses have no due date.',
+        };
+      }
       if (args?.mode === 'cohort' && args.scoreBand) {
         const quizScore = args.scoreBand === 'gte90' ? 94 : args.scoreBand === 'lt70' ? 58 : (args.minScore ?? 75);
         return { mode: 'cohort', course: args.course ?? null, position: args.position ?? null, total: 1, students: 1, records: [
@@ -507,9 +574,19 @@ function cannedResult(name, args) {
           { position: args.position || 'Java Developer', department: 'Engineering', courses: ['Java 101', 'Spring'], courseCount: 2, folders: ['Backend'], employeeCount: 6, studentCount: 5 },
         ] };
       }
-      return { person: args?.person || 'Eval Self', self: !args?.person, total: 2, courses: [
-        { module: 'React Basics', status: 'completed', percentage: 100 }, { module: 'Node APIs', status: 'in-progress', percentage: 40 },
-      ] };
+      return {
+        person: args?.person || 'Eval Self', self: !args?.person, total: 2,
+        position: 'React Developer',
+        courses: [
+          { module: 'React Basics', status: 'completed', percentage: 100, lastAccessedAt: '2026-09-20T10:00:00.000Z', score: 88 },
+          { module: 'Node APIs', status: 'in-progress', percentage: 40, lastAccessedAt: '2026-09-18T10:00:00.000Z', score: null },
+        ],
+        requiredCourses: [
+          { course: 'React Basics', enrolled: true, status: 'completed', percentage: 100, score: 88, lastAccessedAt: '2026-09-20T10:00:00.000Z' },
+        ],
+        allRequiredComplete: false,
+        requiredCoursesNote: 'There is no mandatory flag on courses. requiredCourses are the courses mapped to this person\'s position in Curriculum Setup.',
+      };
     case 'get_attendance':
       return { person: { name: 'Eval Self', employeeId: 'DBS001', self: !args?.person }, window: args?.window ?? { from: '2026-09-01', to: '2026-09-29' },
         total: 2, statusBreakdown: { Present: 1, Leave: 1 }, records: [
@@ -517,6 +594,15 @@ function cannedResult(name, args) {
           { date: '2026-09-26', status: 'Leave', leaveType: 'sick' },
         ] };
     case 'get_attendance_summary':
+      if (args?.groupBy) {
+        const groups = args.groupBy === 'team'
+          ? [{ value: 'Alpha', people: 20, present: 18, absent: 1, leave: 1, incomplete: 0, holiday: 0, weekOff: 0, attendancePct: 90 }]
+          : [{ value: 'Engineering', people: 22, present: 20, absent: 1, leave: 1, incomplete: 0, holiday: 0, weekOff: 0, attendancePct: 91 }];
+        return {
+          window: args?.window, total: 40, avgDailyPresent: 34, daysCounted: 1, groupBy: args.groupBy, groups,
+          perDay: [{ date: args?.window?.from ?? '2026-09-28', counts: { Present: 34, Absent: 3, Leave: 3, Holiday: 0, WeekOff: 0, Incomplete: 0 } }],
+        };
+      }
       return { window: args?.window, total: 40, avgDailyPresent: 34, daysCounted: 1,
         perDay: [{ date: args?.window?.from ?? '2026-09-28', counts: { Present: 34, Absent: 3, Leave: 3, Holiday: 0, WeekOff: 0, Incomplete: 0 } }] };
     case 'count_leave_requests':
@@ -525,14 +611,25 @@ function cannedResult(name, args) {
           { rank: 1, name: 'Asha Rao', leaveDays: 4, requestCount: 2 }, { rank: 2, name: 'Vikram Shah', leaveDays: 2, requestCount: 1 },
         ] };
       }
+      if (args?.groupBy === 'department' || args?.groupBy === 'team') {
+        return {
+          groupBy: args.groupBy, total: 2, groups: args.groupBy === 'team'
+            ? [{ value: 'Alpha', count: 2, leaveDays: 4 }, { value: 'Not set', count: 1, leaveDays: 1 }]
+            : [{ value: 'Engineering', count: 2, leaveDays: 4 }, { value: 'Not set', count: 1, leaveDays: 1 }],
+          filtersApplied: args?.filters ?? {},
+        };
+      }
       return { total: 5, groupBy: 'status', breakdown: { pending: 3, approved: 2, rejected: 0, cancelled: 0 }, filtersApplied: args?.filters ?? {} };
     case 'list_leave_requests':
-      return { total: 1, records: [{ id: 'l1', person: 'Asha Rao', leaveType: 'sick', status: 'pending', from: '2026-09-30', to: '2026-10-01', days: 2 }] };
+      return { total: 1, records: [{
+        id: 'l1', person: 'Asha Rao', leaveType: 'sick', status: 'pending', from: '2026-09-30', to: '2026-10-01', days: 2,
+        adminComment: null,
+      }] };
     case 'who_is_on_leave_today':
       return { total: 1, scope: 'all', records: [{ name: 'Vikram Shah', employeeId: 'DBS007', leaveType: 'casual', from: '2026-09-29', to: '2026-09-29' }] };
     case 'list_backdated_requests':
       return { total: 1, breakdown: { pending: 1, approved: 0, rejected: 0, cancelled: 0 }, records: [
-        { id: 'b1', person: 'Asha Rao', status: 'pending', days: 1, from: '2026-09-25', to: '2026-09-25' },
+        { id: 'b1', person: 'Asha Rao', status: 'pending', days: 1, from: '2026-09-25', to: '2026-09-25', notes: null, adminComment: null },
       ] };
     // ─── Wave 1 tools: minimal skeletons of each real execute's happy-path shape ───
     // Wave 1 canned results echo the call's filters / groupBy: a row that contradicts the filter the model
@@ -585,7 +682,8 @@ function cannedResult(name, args) {
       return {
         interview: { id: 'm1', candidate: args?.candidate || 'Ravi Kumar', jobPosition: args?.jobPosition || 'QA Engineer', status: 'ended',
           result: 'selected', scheduledAt: '2026-09-28T09:00:00.000Z', scheduledBy: 'Asha Rao', interviewers: 'Asha Rao, Vikram Shah',
-          panel: [{ name: 'Asha Rao', role: 'recruiter' }, { name: 'Vikram Shah', role: 'interviewer' }] },
+          panel: [{ name: 'Asha Rao', role: 'recruiter' }, { name: 'Vikram Shah', role: 'interviewer' }],
+          reminderAt: '2026-10-08T03:30:00.000Z', reminderSent: false, reminderSentAt: null },
         recording: { recorded: true, recordingCount: 1 },
         aiSummary: { executiveSummary: 'Strong test automation answers.', decisions: ['Move to offer'], nextSteps: ['Share offer'] },
         evaluations: [{ evaluator: 'Vikram Shah', weightedScore: 4.2, isComplete: true }],
@@ -1001,6 +1099,71 @@ function cannedResult(name, args) {
       const project = args?.project || 'Apollo';
       return draftResult(`Create 3 tasks in ${project}`, ['Define scope and milestones', 'Build the first release', 'Test and launch'],
         [{ id: 'p1', name: project }], 'Create tasks');
+    }
+    case 'list_my_files':
+      return {
+        ok: true, scope: 'self', total: 1,
+        files: [{
+          key: 'file-storage/eval-user/Projects/project-brd.pdf',
+          name: 'project-brd.pdf', originalName: 'Project BRD.pdf', folder: args?.folder || 'Projects',
+          size: 24000, lastModified: '2026-09-29T10:00:00.000Z', uploadedBy: null,
+        }],
+        folders: [{ name: 'Projects', folder: 'Projects' }],
+        truncated: false,
+        filtersApplied: { folder: args?.folder ?? null, search: args?.search ?? null },
+      };
+    case 'get_file_link':
+      return { ok: true, url: 'https://files.example.com/project-brd.pdf?expires=600', key: args?.key || 'file-storage/eval-user/Projects/project-brd.pdf' };
+    case 'get_call_takeaways':
+      return {
+        call: { id: 'cr1', when: '2026-09-29T10:00:00.000Z', person: args?.call || 'Priya Shah' },
+        takeaways: {
+          expectedSalary: { quote: 'I am expecting 12 LPA', timestamp: '00:40', statement: 'On 2026-09-29 the candidate said "I am expecting 12 LPA"' },
+          noticePeriod: { quote: 'I have a 30 day notice', timestamp: '00:55', statement: 'On 2026-09-29 the candidate said "I have a 30 day notice"' },
+          joiningDate: null, questions: [], concerns: [], otherOffers: [], callbackRequest: null, whyDeclined: null, visa: null, followUps: [],
+        },
+        attribution: 'Each takeaway is a quote from the transcript. Use the statement ("the candidate said" or "the agent said"). These are not verified facts.',
+      };
+    case 'get_interviewer_availability':
+      return {
+        displayTimezone: 'Asia/Kolkata', slotMinutes: 60, leadHours: 4,
+        window: { from: '2026-10-02T04:00:00.000Z', to: '2026-10-09T04:00:00.000Z' },
+        interviewers: [{
+          id: 'u1', name: args?.interviewers?.[0] || 'Eval Self', self: !args?.interviewers, availabilitySet: true,
+          freeSlots: [{ start: '2026-10-02T09:00:00.000Z', spoken: '2 Oct 2026, 2:30 PM IST' }],
+        }],
+        commonFree: (args?.interviewers?.length ?? 0) >= 2
+          ? [{ start: '2026-10-02T09:00:00.000Z', spoken: '2 Oct 2026, 2:30 PM IST' }]
+          : null,
+      };
+    case 'list_awaiting_availability':
+      return { total: 1, records: [{
+        applicationId: 'a1', candidate: 'Ranveer Singh', job: 'QA Engineer', status: 'Applied',
+        linkSentAt: '2026-09-20T10:00:00.000Z', ageDays: 11,
+      }], scanTruncated: false };
+    case 'allocate_to_project': {
+      const people = namesOf(args?.people, 'Priya Shah');
+      const project = args?.project || 'Portal Revamp';
+      return draftResult(`Add ${people.length} ${people.length === 1 ? 'person' : 'people'} to ${project}`, [
+        ...people.map((name) => `Add ${name} to ${project}`),
+        'Someone already on 2 other active projects is refused.',
+      ], people.map((name, i) => ({ id: `e${i + 1}`, name })), 'Allocate');
+    }
+    case 'send_interview_reminder': {
+      const interview = args?.interview || 'Ravi Kumar';
+      return draftResult(`Send a reminder for ${interview}'s interview`, [
+        `Interview: ${interview}`,
+        'Nothing is sent until you confirm.',
+      ], [{ id: 'm1', name: interview }], 'Send reminder');
+    }
+    case 'decide_leave_request': {
+      const person = args?.request || 'Priya Shah';
+      const decision = args?.decision || 'approve';
+      return draftResult(`${decision === 'reject' ? 'Reject' : 'Approve'} ${person}'s leave request`, [
+        `Request: ${person}`,
+        `Decision: ${decision}`,
+        'A request that is not pending cannot be decided.',
+      ], [{ id: 'l1', name: person }], decision === 'reject' ? 'Reject leave' : 'Approve leave');
     }
     default:
       return NO_CANNED_RESULT;

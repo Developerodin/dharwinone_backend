@@ -12,6 +12,7 @@ const instructions = [
   '- Conversion rates, where candidates drop off, the slowest stage, time to hire / onboard, recruiter ' +
     'workload, this month vs last month → get_recruitment_funnel (compareTo "previous" for the comparison).',
   '- Report total; when atLeast is true say "at least N". Say the definition in plain words.',
+  '- "Completed all mandatory training" means every course mapped to the person\'s position, via that query, and courses have no due date.',
   '- A restricted check or section: name what the user lacks access to, never guess its data.',
   '- Funnel: give each rate with its numerator and denominator, and say the basis (how many applications ' +
     'used status history vs interview / offer dates). Screening is only measured on history-basis rows.',

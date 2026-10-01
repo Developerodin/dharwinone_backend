@@ -143,7 +143,7 @@ defaults to `active` for user counts/lists unless the caller asks for another st
 |---|---|---|---|
 | `count_users` | Count user accounts, optionally grouped by `role` or `status`. With `groupBy:'role'`, `total` is a distinct-user count (never the sum of the groups — a user with 2 roles counts in both groups, so the raw sum is kept separately as `assignmentCount`); with `groupBy:'status'` the sum is the correct total, since status is exclusive. | `filters` (search/status/role/location/domain/education), `groupBy` (`role`\|`status`) | `users.read` |
 | `list_users` | List user accounts (`id`, `name`, `email`, `roles`, `status`, `lastLoginAt`), newest first; `total` is always the full filtered count. | `filters`, `limit` (default 10, max 25) | `users.read` |
-| `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Name resolution excludes the platform-super account (unless the viewer is one) and deleted accounts, and prefers a single exact name/email match over asking to disambiguate. Ambiguous name → `{ matches }`; no match → `{ matches: [] }`. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
+| `get_user` | One person's full profile (user account + every role-specific profile they hold), by id or name. Name resolution excludes the platform-super account (unless the viewer is one) and deleted accounts, and prefers a single exact name/email match over asking to disambiguate. Ambiguous name → `{ matches }`; no match → `{ matches: [] }`. A candidate profile the viewer can open also includes `skills`, `qualifications`, `experiences`, `yearsOfExperience` and `resumeSummary` (the Candidates page fields); a missing value is null. | `id` or `name` (one required) | `users.read`, `rowScope: 'person'` |
 | `get_my_profile` | The signed-in user's own profile ("my profile", "who am I", "my employee id"). Separate from `get_user` so it needs no `users.read`; self field rules come from `resolvePersonProfile` (impersonation is never self). | none | `{ note }` (self only) |
 | `what_can_i_do` | The signed-in user's own role permissions, by module, and the modules they cannot see (same source as `GET /auth/my-permissions`). Another role's permissions stay on `get_role`. | none | `{ note }` (self only) |
 | `list_roles` | List the roles defined in the system, with how many active users hold each. | `status` (`active`\|`inactive`) | `roles.read` |
@@ -185,7 +185,12 @@ similarity + skill overlap, then role and row scope through `buildEmployeeListMo
 `agent/tools/applications/`: `count_applications`, `list_applications` — job applications by
 applicant, job title/id or status, via `applicantQuery.service`'s `searchApplications`. Access
 is delegated to its `applicationScope` (admin / recruiter / sales agent / self), so the tools
-declare an access note rather than an `anyOf`.
+declare an access note rather than an `anyOf`. `filters.inStatusOverDays` keeps applications
+in the current status for more than N whole IST days. `daysInStatus` counts from the last
+status-history entry and is null when that history is missing (`statusAgeUnknown`); applied
+date is not a substitute. `filters.screenedNeverInterviewed` keeps applications whose status
+history contains Screening and never an interview; `screeningUnknown` is no history at all.
+`daysToScreening` and `daysScreeningToInterview` are set only when `stageDateBasis` is `history`.
 
 ### hiring
 
@@ -195,7 +200,9 @@ with the viewer, so row scope is the page's; each `access` mirrors that page's G
 | Tool | Backed by | Access (route) |
 |---|---|---|
 | `count_interviews` / `list_interviews` | `meeting.service` `queryMeetings` (Interviews page; `meetingScope`: full interviews access = all, else own). Filter = the page's `buildMeetingsMongoFilter` + interviewer + result. `byStatus` / `byResult` (+ `resultNotSet` for legacy rows). `resultMissing` = status ended + result pending/unset. `overlapping` (needs `scheduledBetween`, max 300 in window) = a shared panel member (id or email) with overlapping time among interviews the viewer can see; the scan starts 8 h early. Job ids shown as titles. Results are pending / selected / rejected only — no "hold". | `interviews.read` |
-| `get_interview` | By id or candidate (+ `jobPosition`): panel, scheduled by / on, attendance (`participantRoster`), history (result changes and invite re-sends from Activity Logs, under that page's gate and grading, else `historyHidden`), recording + playback link, AI summary (`interviews.summary.read`, else `aiSummaryHidden`), evaluations. Fire-and-forget view audits identical to the portal's, tagged `source: 'sage.chat'`; none on notFound / denied. RSVP, invite delivery and reschedule history are not captured. | `interviews.read` |
+| `get_interview` | By id or candidate (+ `jobPosition`): panel, scheduled by / on, attendance (`participantRoster`), history (result changes and invite re-sends from Activity Logs, under that page's gate and grading, else `historyHidden`), recording + playback link, AI summary (`interviews.summary.read`, else `aiSummaryHidden`), evaluations, `reminderAt` / `reminderSent` / `reminderSentAt` (null means not stored). Fire-and-forget view audits identical to the portal's, tagged `source: 'sage.chat'`; none on notFound / denied. RSVP, invite delivery and reschedule history are not captured. | `interviews.read` |
+| `get_interviewer_availability` | Stored weekly hours for the viewer or named interviewers. With `interviews.manage`, open 60-minute IST slots (existing interviews, internal meetings and active holds removed) and `commonFree` when two or more are named. No hours stored → `availabilitySet` false. | own hours: `interview-availability.read` or `interviews.manage`; another person's open slots: `interviews.manage` |
+| `list_awaiting_availability` | Applications this viewer can see that were sent a booking link and have no current hold (`held` / `approving` / `approved`). Each row has `linkSentAt` and `ageDays`. Rejected, expired or cancelled holds are not a pick. | Applications-page `applicationScope` |
 | `get_interview_transcript` | `interviewTranscript.service` `getInterviewTranscript` (latest version, `meetingScope`): speakers, time chunks, `includeFullText` ≤ 12,000 chars. Writes the portal's `TranscriptVersion` audit row. | `interviews.transcript.read` (= `GET /meetings/:id/transcript`); by name also `interviews.read` |
 | `count_offers` / `list_offers` | `offer.service` `queryOffers`. Count returns `byStatus`. CTC only for `candidates.manage` / `employees.edit` / `offers.edit` / `offers.manage` (the Offer Letter Generator gate), otherwise `compensationHidden`; never `offerLetterUrl` or `rejectionReason`. `filters.pendingOverDays` → `sentBefore` (Sent / Under Negotiation, marked Sent before the IST day N days ago; `sentDateMissing` = pending with no sentAt, never counted); `acceptedNoPreboarding` → `placementStatus` / `placementPreBoardingStatus` Pending. Exact totals. | `offer.route.js` `canReadOffers` |
 | `get_offer` | One offer by candidate or `offerCode`: prepared by / at, `markedSentBy` / `markedSentAt` (RecruiterActivityLog `offer_sent`), days pending, a `delivery` note (auto notice email; the Outlook letter is not captured), `letter.pdfUrl` and compensation only via `canSeeOfferCompensation`. | `canReadOffers` |
@@ -255,8 +262,8 @@ impersonation and the pages viewed during it are not captured.
 
 ### calls
 
-`agent/tools/calls/`: `count_call_records`, `list_call_records`, `get_call_record`, `get_call_metrics`,
-`list_call_followups`. Call Records (AI agent + dialer) through `callRecord.service` with the viewer's
+`agent/tools/calls/`: `count_call_records`, `list_call_records`, `get_call_record`, `get_call_takeaways`,
+`get_call_metrics`, `list_call_followups`. Call Records (AI agent + dialer) through `callRecord.service` with the viewer's
 `userId` / `userIsAdmin`, so row scope is the page's. Every filter (IST `calledBetween`, direction, provider,
 `mine` / `placedBy`, candidate id) runs in Mongo: `listCallRecords` for rows, `countCallRecords` /
 `groupCallRecords` / `summarizeCallRecords` for exact counts on the same cast filter. Counts are raw records
@@ -267,8 +274,11 @@ like the page total (a Twilio dialer call may be two legs). A `callType` filter 
 `list_call_followups` and the applicant metrics also need `candidates.read` and use the Applications page
 scope (`buildApplicantQuery`): callbacks from `JobApplication.verificationCallbackAt` (due / overdue around
 now − 5 min), not-yet-called = open applications with no verification call and no CallRecord for that
-candidate + job (dialer calls carry no candidate/job link, so they don't count as called). Not captured:
-attempt number, hang-up side on dialer calls, salary / joining date / questions / concerns / other offers.
+candidate + job (dialer calls carry no candidate/job link, so they don't count as called). `get_call_takeaways`
+quotes expected salary, notice period, joining date, questions, concerns, other offers, a callback asked for
+on that call, why they declined and a visa mention from the transcript (each with the quote and timestamp);
+a missing transcript leaves those null. Hangup fields stay on `get_call_record`. Not captured:
+attempt number and hang-up side on dialer calls.
 
 ### knowledge
 
@@ -278,6 +288,16 @@ tool did — a creator pointer in a single-company deployment, not the one-level
 at `MAX_ANSWER_CHARS`; a KB miss, no configured KB or a KB error come back as `found: false`.
 
 Single-person lookups for any of these stay on `get_user`.
+
+### files
+
+`agent/tools/files/`: `list_my_files`, `get_file_link` — the signed-in user's own File Storage
+(Communication → File Storage), the `file-storage/{their user id}/` prefix only. `list_my_files`
+returns name, folder, size, `lastModified`, and `originalName` / `uploadedBy` from S3 metadata when
+the upload recorded them (null otherwise). `search` matches stored file and folder names, not words
+inside a file. `get_file_link` is a download link of about 10 minutes for a key from that list; a key
+outside this user's storage is refused. Access is `files-storage.read`. File contents, older versions
+and who else can open a file are not captured.
 
 ### schedule
 
@@ -324,7 +344,10 @@ are counted as `noActivityDate`, not guessed); needs
 positions read permission. Progress exists only on Student profiles: no Student profile returns
 `noStudentProfile` (person) or lists them in `withoutStudentProfile` (cohort), never "0 courses".
 `overdue` is always null with a note — modules have no due date in DharwinOne — and `atRisk` is offered
-instead.
+instead. `lowestCompletion` (cohort) ranks courses by completed assignments / assignments, lowest first.
+Person rows include `lastAccessedAt` and `score` (null when there is no graded quiz). `requiredCourses`
+are the courses mapped to that person's one position in Curriculum Setup; there is no mandatory flag.
+No map, an unlinked title, or more than one position leaves `requiredCourses` null and says why.
 
 ### attendance
 
@@ -338,11 +361,11 @@ on top.
 | Tool | Backend | Access |
 |---|---|---|
 | `get_attendance` | `attendance.service` `listByStudent` / `listByUser` (same source choice as `/attendance/candidate/:id`) | self always; another person needs `students.*` / `candidates.*` (`requireAttendanceAccess`) |
-| `get_attendance_summary` | `attendanceAggregator.aggregateOrgAttendance` + `enrichAttendanceSummary`; window ≤ 92 days | `students.manage` (Attendance → Track) |
-| `count_leave_requests` | `buildLeaveRequestScopeFilter` + count / group; `groupBy:'employee'` ranks leave days via `leaveRanking.js` (approved unless `filters.status`) | `note` — service scope |
-| `list_leave_requests` | `leaveRequest.service.queryLeaveRequests` | `note` — service scope |
+| `get_attendance_summary` | `attendanceAggregator.aggregateOrgAttendance` + `enrichAttendanceSummary`; window ≤ 92 days. `groupBy` `department` or `team` (team needs `teams.read`); without `groupBy` the per-day counts stay as they were. A single-day employee row includes `owner` and `department`. | `students.manage` (Attendance → Track) |
+| `count_leave_requests` | `buildLeaveRequestScopeFilter` + count / group; `groupBy:'employee'` ranks leave days via `leaveRanking.js` (approved unless `filters.status`). `groupBy` `department` or `team` counts requests and leave days (`teams.read` for team). | `note` — service scope |
+| `list_leave_requests` | `leaveRequest.service.queryLeaveRequests`. Each row includes `adminComment` (the reviewer comment; null when none was recorded). | `note` — service scope |
 | `who_is_on_leave_today` | `onLeaveToday.service.getEmployeesOnLeaveToday` (dashboard grading) | `note` — service scope |
-| `list_backdated_requests` | `backdatedAttendanceRequest.service.queryBackdatedAttendanceRequests`, plus per-status totals | `note` — service scope |
+| `list_backdated_requests` | `backdatedAttendanceRequest.service.queryBackdatedAttendanceRequests`, plus per-status totals. Each row includes `notes` (the requester) and `adminComment` (the reviewer); null when not recorded. | `note` — service scope |
 
 Day windows are `{ from, to }` `YYYY-MM-DD`, validated by `employees/common.js`'s `dayRange` and
 turned into UTC-midnight day keys (`dayKeys`), because `Attendance.date`, `LeaveRequest.dates`
@@ -359,7 +382,11 @@ without `projects.read`/`manage` get My Projects, `mine: true`), `list_teams` (`
 `task.route.js`), and `get_workload` (`workloadAnalytics.fetchWorkloadAnalytics`, `projects.read`).
 `count_tasks` `groupBy: 'status'` is the stage breakdown plus overdue and blocked counts. An assignee
 name resolves to an `assignedTo` clause; unknown or ambiguous names return `notFound` / `matches`,
-never an unfiltered count.
+never an unfiltered count. `list_projects` rows include the creator's name, a description clipped to 300
+characters, `members` (people in `assignedTo`) and `lastActivityAt` (latest task `updatedAt`; null means
+no task update is stored). `list_tasks` rows include the creator, `createdAt`, `updatedAt`,
+`commentsCount` and `lastComment` (`{ by, at, text }`, text at most 200 characters) when the viewer can
+read Task Board comments (`tasks.read` or `kanban.read`); otherwise `lastComment` is null.
 
 `get_allocation` (`projects.read` / `projects.manage`) answers the max-2-active-projects rule. `summary`
 counts people on 0, 1, 2 and 3+ active projects; `list` names one bucket (`projects_0` … `projects_3_plus`,
@@ -428,7 +455,7 @@ index holds people, not jobs). Sections go through `compose.runTool`; `follow_up
 ### actions
 
 `agent/tools/actions/`: one domain (`actions/index.js`) that merges the tools and instructions of
-`interviews/`, `documents/`, `training/` and `tasks/`. Every tool is `kind: 'write'`: it only drafts a
+`interviews/`, `documents/`, `training/`, `tasks/` and `more/`. Every tool is `kind: 'write'`: it only drafts a
 confirm card (see "How to add a write tool"), and the write runs only on
 `POST /v1/chat-assistant/actions/:key/confirm`. Every confirm re-checks access and the draft first:
 the interview and document tools re-run `prepare` and refuse unless the card would be identical
@@ -445,6 +472,9 @@ target-id check, and `create_task_plan` checks its stored preview.
 | `assign_training` | allOf `modules.manage` (`PATCH /training/modules/:id`) | `trainingModule.service` `enrollStudentsInModule`: one `$addToSet` per student, never the PATCH full-roster replace | "Course assigned" in-app and email (type `course`) only to students this call actually added | People already on the course, with no Student profile, or with an inactive one are skipped (no profile is created). A replay adds and notifies nobody. |
 | `send_course_reminder` | anyOf `modules.manage`, `students.manage` (without `modules.manage`, published courses only) | `trainingModule.service` `sendCourseReminder` | "Course reminder" in-app and email (type `course`); never says overdue (courses have no due date) | Only enrolled students who have not completed or dropped. Skips anyone reminded about that course in the last 24 h by anyone (`done` rows; at commit also rows still executing). |
 | `create_task_plan` | allOf `projects.manage`, `tasks.manage` (the apply route); the PM service also requires project owner or admin | `pmAssistant.service` `applyTaskBreakdown` with the stored preview and the SageAction key as `idempotencyKey` | Nothing (creates unassigned tasks) | The preview (`previewTaskBreakdown`, one LLM call, `TaskBreakdownPreview` with a 24 h TTL) is the draft. `recheck` requires that preview to still be open, the same project and user, and unexpired; it never generates a second plan. A replay of the key returns the stored response. At most 60 tasks. |
+| `allocate_to_project` | allOf `projects.manage` | Adds the named people to the project after confirm | Nothing until confirm | Named people only (at most 10), never a whole team. Someone already on 2 other active projects is refused and named. A question about who is free or whether someone can be added is `get_allocation`, not a draft. |
+| `send_interview_reminder` | allOf `interviews.read`, `interviews.manage` | Sends the reminder for one interview after confirm | The reminder, only after confirm | One interview (id or candidate name). A cancelled or past interview is refused. Whether a reminder was already sent is `get_interview` (`reminderAt` / `reminderSent`), not a draft. |
+| `decide_leave_request` | allOf `students.manage` | Approves or rejects one leave request after confirm | Nothing until confirm | Only a pending request. A question about leave is `list_leave_requests` or `count_leave_requests`, not a draft. |
 
 People and documents are named one per entry, never a group ("everyone in a position"); a question
 about the same data (who is enrolled, which documents are missing, is the interview scheduled) is a read

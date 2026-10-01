@@ -195,6 +195,8 @@ export async function aggregateOrgAttendance({ adminId, from, to, statusFilter }
           name: u?.name || profile.fullName,
           email: u?.email || null,
           designation: profile.designation || null,
+          owner: ownerKey,
+          department: profile.department ? String(profile.department).trim() : null,
           status,
           punchIn: formatPunchIST(earliest),
           punchOut: formatPunchIST(latest),

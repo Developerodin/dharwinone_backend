@@ -12,8 +12,9 @@ export default defineTool({
     'attributed statements — only with the Call AI toggle; the transcript only with the Call Transcripts ' +
     'toggle; recording playback links only with the Call Recording toggle. Use for "what did Priya say on ' +
     'her last call", "summary of call <id>", "is there a recording of the call with Rahul", "who hung up". ' +
-    'hangupBy / hangupReason come from the telephony provider on AI agent calls only. Salary, joining ' +
-    'date, questions, concerns and other offers are not captured in DharwinOne.',
+    'hangupBy / hangupReason come from the telephony provider on AI agent calls only. Hangup fields stay ' +
+    'as they are, and salary, notice period, joining date, questions, concerns, other offers, why they ' +
+    'declined, and a visa mention are get_call_takeaways, not this tool.',
   input: Joi.object({
     id: Joi.string().min(1).max(100).description('Call id (execution id) from list_call_records.'),
     person: Joi.string().min(2).max(100)

@@ -1,6 +1,8 @@
 import countInterviews from './countInterviews.tool.js';
 import listInterviews from './listInterviews.tool.js';
 import getInterview from './getInterview.tool.js';
+import getInterviewerAvailability from './getInterviewerAvailability.tool.js';
+import listAwaitingAvailability from './listAwaitingAvailability.tool.js';
 import getInterviewTranscript from './getInterviewTranscript.tool.js';
 import countOffers from './countOffers.tool.js';
 import listOffers from './listOffers.tool.js';
@@ -32,6 +34,14 @@ const instructions = [
     'rejected; there is no "hold" result. Panel clashes / double-booked interviewers → filters.overlapping with ' +
     'scheduledBetween; it only compares interviews the user can see. Cancelled interviews → filters.status ' +
     '"cancelled".',
+  '- Interviewer free time ("when is <interviewer> free", "common free time") → get_interviewer_availability. ' +
+    'Open slots (hours minus interviews, meetings and holds) need interviews.manage; otherwise these are the ' +
+    'stored weekly hours only. Common free time needs at least two interviewers. availabilitySet false means ' +
+    'no hours are stored — never guess a slot.',
+  '- "Who hasn\'t chosen a time", "booking link sent but no slot" → list_awaiting_availability. A hold that ' +
+    'is held, approving or approved means they picked a time. Rejected, expired or cancelled holds are not a pick.',
+  '- When a reminder will send, and whether it already went → get_interview reminderAt, reminderSent and ' +
+    'reminderSentAt. reminderAt null means no reminder time is stored — never invent one.',
   '- Not captured in DharwinOne: RSVP (get_interview attendance only says who joined the video room), ' +
     'invitation email delivery, reschedule history. Who set a result and when is get_interview history. Say ' +
     'so — never guess.',
@@ -81,7 +91,8 @@ export default {
   summary: 'Hiring after applying: interviews, offers, placements/onboarding/BGV, candidate documents, funnel, referral leads.',
   instructions,
   tools: [
-    countInterviews, listInterviews, getInterview, getInterviewTranscript, countOffers, listOffers, getOffer,
+    countInterviews, listInterviews, getInterview, getInterviewerAvailability, listAwaitingAvailability,
+    getInterviewTranscript, countOffers, listOffers, getOffer,
     countPlacements, listPlacements, getPlacement, listDocuments, getHiringFunnel, listReferralLeads,
   ],
 };

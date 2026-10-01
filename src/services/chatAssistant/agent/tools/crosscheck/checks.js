@@ -2,6 +2,7 @@ import { overdueTaskClause } from '../../../taskAccess.js';
 import { CLOSED_APPLICATION_STATUSES } from '../../../../../constants/atsPipeline.js';
 import { lastStatusChangeAt, unchangedSinceFilter } from '../../../../applicationStatusHistory.js';
 import { REFERRAL_LEADS_ACCESS, isSelfReference, resolveLeadPerson } from '../hiring/common.js';
+import { ROSTER_ACCESS } from '../training/common.js';
 import { documentCounts } from '../hiring/placementDetail.js';
 import {
   OBJECT_ID_RE, QUERY_MAX_MS, idOf, allowed, okSet, restrictedSet, guardSet, composedFailure,
@@ -18,6 +19,58 @@ const lc = (s) => String(s ?? '').trim().toLowerCase();
 const validIds = (ids) => [...ids].map(String).filter((id) => OBJECT_ID_RE.test(id));
 const today = (e) => todayIst(e.deps.now());
 const completed = (courses) => courses.filter((c) => c.status === 'Completed');
+
+/**
+ * People on exactly one linked Curriculum Setup position who finished every course mapped to it.
+ * No map, an unlinked title, more than one position, or more than one employee profile: not counted.
+ * There is no mandatory flag. Courses have no due date.
+ */
+async function positionCompleteSet(e, training) {
+  if (training.status !== 'ok') return training;
+  if (!(await allowed(ROSTER_ACCESS, e.user, e.deps))) {
+    return restrictedSet('Position course map', `Requires one of: ${ROSTER_ACCESS.anyOf.join(', ')}.`);
+  }
+  const roster = (await e.deps.getPositionRoster({}, {}))?.results || [];
+  const byEmployee = new Map();
+  for (const row of roster) {
+    for (const emp of row.assignedEmployees || []) {
+      const id = idOf(emp?.id ?? emp);
+      if (!id) continue;
+      const list = byEmployee.get(id) || [];
+      list.push(row);
+      byEmployee.set(id, list);
+    }
+  }
+  const userIds = [...training.ids].filter((id) => OBJECT_ID_RE.test(id));
+  const emps = userIds.length
+    ? await e.deps.Employee.find({ owner: { $in: userIds } }).select('_id owner').lean()
+    : [];
+  const byOwner = new Map();
+  for (const emp of emps || []) {
+    const owner = idOf(emp.owner);
+    if (!owner) continue;
+    const list = byOwner.get(owner) || [];
+    list.push(emp);
+    byOwner.set(owner, list);
+  }
+  return filterSet(training, (v, userId) => {
+    const owned = byOwner.get(userId) || [];
+    if (owned.length !== 1) return null;
+    const hits = byEmployee.get(idOf(owned[0])) || [];
+    if (hits.length !== 1) return null;
+    const row = hits[0];
+    if (row.unlinked) return null;
+    const mapped = (row.assignedModules || []).map((m) => m?.name).filter(Boolean);
+    if (!mapped.length) return null;
+    const done = new Set(completed(v.courses).map((c) => lc(c.course)));
+    if (!mapped.every((name) => done.has(lc(name)))) return null;
+    return {
+      position: row.name ?? null,
+      courses: mapped.map((name) => ({ course: name, status: 'Completed' })),
+    };
+  }, 'Every course mapped to their one position is completed');
+}
+
 const titles = (courses) => courses.slice(0, 3).map((c) => c.course).filter(Boolean);
 const ascBy = (field) => (a) => (x, y) => String(a.info.get(x)?.[field] ?? '9999').localeCompare(String(a.info.get(y)?.[field] ?? '9999'));
 
@@ -268,19 +321,24 @@ export const CHECKS = {
   },
 
   no_project_all_training_complete: {
-    summary: 'on no active project whose assigned training is all completed',
+    summary: 'on no active project who completed every course mapped to their one position',
     async run(args, e) {
       const [a, t] = await Promise.all([
         guardSet('Projects', () => allocationSet(e, { maxProjects: 0, label: 'On no active project' })),
         guardSet('Training evaluation', () => trainingSet(e)),
       ]);
-      const b = filterSet(t, (v) => v.courses.length > 0 && completed(v.courses).length === v.courses.length,
-        'All assigned courses completed');
+      const b = await guardSet('Position course map', () => positionCompleteSet(e, t));
       return {
-        definition: 'Current employees on no active project who have at least one assigned course and have ' +
-          'completed every one (training has no due date in DharwinOne).',
+        definition: 'Current employees on no active project who have exactly one linked position and have ' +
+          'completed every course mapped to that position. There is no mandatory flag, and courses have no ' +
+          'due date. People with no map, an unlinked title, or more than one position are not counted.',
         op: 'intersect', a, b,
-        row: (id, ai, bi) => ({ designation: ai.designation, coursesCompleted: bi.courses.length, courses: titles(bi.courses) }),
+        row: (id, ai, bi) => ({
+          designation: ai.designation,
+          position: bi.position,
+          coursesCompleted: bi.courses.length,
+          courses: titles(bi.courses),
+        }),
       };
     },
   },
