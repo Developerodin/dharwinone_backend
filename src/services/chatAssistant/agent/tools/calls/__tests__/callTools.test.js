@@ -5,11 +5,12 @@ import listCallRecords from '../listCallRecords.tool.js';
 import getCallRecord from '../getCallRecord.tool.js';
 import getCallMetrics from '../getCallMetrics.tool.js';
 import listCallFollowups from '../listCallFollowups.tool.js';
+import getCallTakeaways from '../getCallTakeaways.tool.js';
 import callsDomain from '../index.js';
 import { CALLBACK_GRACE_MS } from '../followups.js';
 import { checkAccessRule } from '../../../../toolAccess.js';
 
-const ALL_TOOLS = [countCallRecords, listCallRecords, getCallRecord, getCallMetrics, listCallFollowups];
+const ALL_TOOLS = [countCallRecords, listCallRecords, getCallRecord, getCallTakeaways, getCallMetrics, listCallFollowups];
 const UID = '64b0000000000000000000a1';
 const OTHER = '64b0000000000000000000b2';
 const CAND = '64b0000000000000000000c3';
@@ -62,10 +63,10 @@ function fakeQuery(result) {
 }
 
 describe('calls domain', () => {
-  it('exports a one-line summary and all five tools', () => {
+  it('exports a one-line summary and all six tools', () => {
     assert.ok(callsDomain.summary.length <= 120 && !/\n/.test(callsDomain.summary));
     assert.deepEqual(callsDomain.tools.map((t) => t.name), [
-      'count_call_records', 'list_call_records', 'get_call_record', 'get_call_metrics', 'list_call_followups',
+      'count_call_records', 'list_call_records', 'get_call_record', 'get_call_takeaways', 'get_call_metrics', 'list_call_followups',
     ]);
   });
 

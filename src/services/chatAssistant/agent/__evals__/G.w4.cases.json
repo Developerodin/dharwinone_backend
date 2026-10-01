@@ -1,0 +1,82 @@
+[
+  {
+    "id": "G-salary",
+    "question": "what salary did Priya Shah mention on her last call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "G-notice-period",
+    "question": "what notice period did Rahul Verma give on the call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "G-joining-date",
+    "question": "when did Priya Shah say she can join, on her last call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "G-questions",
+    "question": "what questions were asked on the call with Priya Shah?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "G-concerns",
+    "question": "what concerns did Rahul Verma raise on his last call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "G-other-offers",
+    "question": "did Priya Shah mention any other offers on the call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "G-why-declined",
+    "question": "why did Rahul Verma decline on his last call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "G-visa",
+    "question": "did Priya Shah mention a visa on the call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  },
+  {
+    "id": "G-callback-on-call",
+    "question": "did Rahul Verma ask us to call him back during his last call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Rahul Verma" } }
+    }
+  },
+  {
+    "id": "G-follow-up",
+    "question": "what follow-up did Priya Shah ask for on the call?",
+    "expect": {
+      "tools": ["get_call_takeaways"],
+      "args": { "get_call_takeaways": { "call": "Priya Shah" } }
+    }
+  }
+]
