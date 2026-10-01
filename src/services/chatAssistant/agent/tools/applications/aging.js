@@ -86,7 +86,9 @@ export function applicationAge(app, now = new Date()) {
     statusChangedAt: recordedChange && Number.isFinite(recordedChange.getTime())
       ? recordedChange.toISOString()
       : null,
-    stageDateBasis: history.length ? (entry.basis === 'history' ? 'history' : 'partial') : 'none',
+    stageDateBasis: !history.length
+      ? 'none'
+      : (entry.basis === 'history' && history[0]?.from == null ? 'history' : 'partial'),
     daysToScreening,
     daysScreeningToInterview,
     screening,

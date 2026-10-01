@@ -152,8 +152,7 @@ jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 // P3: tenant-safe compound indexes for scoped list/count/search queries.
 jobApplicationSchema.index({ tenantId: 1, candidate: 1 });
 jobApplicationSchema.index({ tenantId: 1, appliedBy: 1 });
-// Stage aging / "unchanged for N days". autoIndex is OFF in production (config.js): needs
-// MONGOOSE_AUTO_INDEX=1 once on deploy. Correctness does not depend on it, only latency.
+// Production autoIndex is false — create { statusChangedAt: 1 } on the server; shipping this file does not.
 jobApplicationSchema.index({ statusChangedAt: 1 });
 
 // toJSON.plugin strips the raw `createdAt` from serialized output, so the UI never sees the

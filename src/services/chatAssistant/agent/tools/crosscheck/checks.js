@@ -491,7 +491,7 @@ export const CHECKS = {
         clause: { $and: [{ status: { $nin: [...CLOSED_APPLICATION_STATUSES] } }, unchangedSinceFilter(cutoff)] },
         sort: { updatedAt: 1 }, label: 'Open applications unchanged',
       }));
-      const basis = { statusChangedAt: 0, updatedAt: 0 };
+      const basis = { statusChangedAt: 0, createdAt: 0 };
       const last = new Map();
       if (a.status === 'ok') {
         for (const [id, v] of a.info) {
@@ -503,7 +503,7 @@ export const CHECKS = {
       return {
         definition: `Open applications (not ${CLOSED_APPLICATION_STATUSES.join(' / ')}) with no status change on any ` +
           `of the last ${businessDays} business days (Mon–Fri IST${holidaysOk ? ', company holidays skipped' : ''}) or today: ` +
-          `last change before ${firstDay}. Uses statusChangedAt when recorded, else updatedAt (any edit).`,
+          `last change before ${firstDay}. Uses statusChangedAt when recorded, else createdAt (a notes edit is not a status change).`,
         op: 'only', a,
         notes: holidaysOk ? [] : ['Company holidays were not skipped (seeing them needs students.read).'],
         extra: { businessDays, noChangeSince: firstDay, basis, holidaysSkipped: holidaysOk ? holidays.size : null },

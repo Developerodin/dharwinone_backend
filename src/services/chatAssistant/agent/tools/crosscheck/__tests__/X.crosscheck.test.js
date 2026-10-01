@@ -398,7 +398,9 @@ describe('run_cross_check — set logic edge cases', () => {
   it('a truncated set makes the answer "at least"; unchanged applications report their date basis', async () => {
     const many = Array.from({ length: SET_CAP + 1 }, (_, i) => ({
       _id: id(50000 + i).slice(-24), job: id(9001), status: 'Applied',
-      ...(i % 2 ? {} : { statusChangedAt: new Date('2026-09-01T00:00:00Z') }), updatedAt: new Date('2026-09-02T00:00:00Z'),
+      ...(i % 2 ? {} : { statusChangedAt: new Date('2026-09-01T00:00:00Z') }),
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      updatedAt: new Date('2026-09-02T00:00:00Z'),
     }));
     let seenCutoff = null;
     const c = ctxFor(ALL, {
@@ -426,8 +428,8 @@ describe('run_cross_check — set logic edge cases', () => {
     assert.equal(res.noChangeSince, '2026-09-22');
     assert.equal(res.holidaysSkipped, 1);
     assert.equal(seenCutoff.toISOString(), '2026-09-21T18:29:59.999Z');
-    assert.deepEqual(res.basis, { statusChangedAt: 2500, updatedAt: 2500 });
-    assert.ok(res.rows.every((r) => ['statusChangedAt', 'updatedAt'].includes(r.lastChangeBasis)));
+    assert.deepEqual(res.basis, { statusChangedAt: 2500, createdAt: 2500 });
+    assert.ok(res.rows.every((r) => ['statusChangedAt', 'createdAt'].includes(r.lastChangeBasis)));
     assert.match(runCrossCheck.render(res).blocks[0].title, /at least 5000/);
   });
 

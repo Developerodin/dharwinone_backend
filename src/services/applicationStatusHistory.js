@@ -12,7 +12,7 @@
  *   applyStatusChange    — a loaded document the caller is about to save()
  *
  * Readers (Sage funnel / "unchanged for N days") use stageEntryDates, lastStatusChangeAt and
- * unchangedSinceFilter, which fall back to derived dates / updatedAt when there is no history.
+ * unchangedSinceFilter, which fall back to derived dates / createdAt when there is no history.
  */
 import JobApplication from '../models/jobApplication.model.js';
 import logger from '../config/logger.js';
@@ -68,6 +68,9 @@ export const recordStatusChange = async (target, to, { by = null, source, sessio
       {
         $set: { status: to, statusChangedAt: when },
         $push: { statusHistory: statusEntry({ from, to, at: when, by, source }) },
+        // Bump __v so a JobApplication loaded earlier fails its save() version check instead of
+        // writing a stale statusHistory over this transition (stale-save failure).
+        $inc: { __v: 1 },
       },
       opts
     );
@@ -103,6 +106,7 @@ export const recordStatusChangeMany = async (filter, to, { by = null, source, se
           update: {
             $set: { status: to, statusChangedAt: when },
             $push: { statusHistory: statusEntry({ from, to, at: when, by, source }) },
+            $inc: { __v: 1 },
           },
         },
       };
@@ -135,15 +139,32 @@ export const applyStatusChange = (doc, to, { by = null, source, at = new Date() 
   return true;
 };
 
+/**
+ * A later save() of a JobApplication loaded before recordStatusChange must not write `status`
+ * or `statusHistory`. That update bumps __v, but a save of the earlier copy still replaces the
+ * array and erases an offer transition that landed in between (stale-save failure). Unmark the
+ * paths so mongoose leaves the database copy alone.
+ */
+export const omitStaleStatusFields = (doc) => {
+  if (!doc || typeof doc.unmarkModified !== 'function') return doc;
+  doc.unmarkModified('status');
+  doc.unmarkModified('statusChangedAt');
+  doc.unmarkModified('statusHistory');
+  return doc;
+};
+
 // ─── Readers ────────────────────────────────────────────────────────────────────────────────
 
 /**
- * History usable for stage dates: it must start at creation (first entry has no `from`). An
- * application changed after deploy but before the backfill has live entries only — those fall
- * back to derived dates instead of reporting a truncated timeline.
+ * History that records at least one stage. A first entry with `from` is partial (no creation
+ * row) but still usable for the stages it names. Empty / missing history is not.
  */
+export const hasUsableStatusHistory = (app) =>
+  Array.isArray(app?.statusHistory) && app.statusHistory.some((e) => e?.to && e.at);
+
+/** @deprecated use hasUsableStatusHistory — full means the first entry has no `from`. */
 export const hasFullStatusHistory = (app) =>
-  Array.isArray(app?.statusHistory) && app.statusHistory.length > 0 && app.statusHistory[0]?.from == null;
+  hasUsableStatusHistory(app) && app.statusHistory[0]?.from == null;
 
 /**
  * When an application first entered each stage.
@@ -156,16 +177,24 @@ export const hasFullStatusHistory = (app) =>
  * @returns {{ basis: 'history'|'derived'|'none', approximate: boolean, stages: Record<string, Date> }}
  */
 export const stageEntryDates = (app, derived = {}) => {
-  if (hasFullStatusHistory(app)) {
+  if (hasUsableStatusHistory(app)) {
     const stages = {};
     let approximate = false;
     for (const e of app.statusHistory) {
-      if (stages[e.to] == null && e.at) {
-        stages[e.to] = e.at;
-        if (e.approximate) approximate = true;
-      }
+      if (!e?.to || !e.at || stages[e.to] != null) continue;
+      stages[e.to] = e.at;
+      if (e.approximate) approximate = true;
     }
-    return { basis: 'history', approximate, stages };
+    // No invented creation row. Dates used here came from history, so basis stays history.
+    // A missing start (first entry has `from`) is approximate, not a reason to drop the row.
+    const startMissing = app.statusHistory[0]?.from != null;
+    if (startMissing) approximate = true;
+    return {
+      basis: 'history',
+      approximate,
+      ...(startMissing ? { note: 'Status history does not start at creation; earlier stages are not recorded.' } : {}),
+      stages,
+    };
   }
   const stages = {};
   for (const [stage, at] of Object.entries(derived || {})) if (at) stages[stage] = at;
@@ -185,15 +214,15 @@ export const tallyBasis = (results) =>
     { history: 0, derived: 0, none: 0, approximate: 0 }
   );
 
-/** Time of the last status change: statusChangedAt when present, else updatedAt (any edit). */
+/** Time of the last status change: statusChangedAt when present, else createdAt (a notes edit moves updatedAt and is not a status change). */
 export const lastStatusChangeAt = (app) =>
   app?.statusChangedAt
     ? { at: app.statusChangedAt, basis: 'statusChangedAt' }
-    : { at: app?.updatedAt ?? null, basis: 'updatedAt' };
+    : { at: app?.createdAt ?? null, basis: 'createdAt' };
 
-/** Mongo clause (for a page's own filter via $and): status unchanged since `cutoff`. */
+/** Mongo clause (for a page's own filter via $and): status unchanged since `cutoff`. statusChangedAt after the cutoff does not match. */
 export const unchangedSinceFilter = (cutoff) => ({
-  $or: [{ statusChangedAt: { $lte: cutoff } }, { statusChangedAt: null, updatedAt: { $lte: cutoff } }],
+  $or: [{ statusChangedAt: { $lte: cutoff } }, { statusChangedAt: null, createdAt: { $lte: cutoff } }],
 });
 
 // ─── Backfill (scripts/backfill-application-status-history.js) ────────────────────────────────

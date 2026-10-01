@@ -27,13 +27,17 @@ export const STAGES = [
   { key: 'application', status: 'Applied' },
   { key: 'screening', status: 'Screening' },
   { key: 'interview', status: 'Interview' },
+  // APPLICATION_STATUSES order: Screening, Interview, Shortlisted, Offered.
+  // Shortlisted is its own stage after Interview so a shortlisted application that
+  // already has a meeting is not aged as if it were still only in interview.
+  { key: 'shortlisted', status: 'Shortlisted' },
   { key: 'offer', status: 'Offered' },
   { key: 'accepted', status: 'Hired' },
   { key: 'onboarding' },
   { key: 'hired' },
 ];
 const IDX = Object.fromEntries(STAGES.map((s, i) => [s.key, i]));
-const STATUS_LEVEL = { Applied: 0, Screening: 1, Shortlisted: 1, Interview: 2, Offered: 3, Hired: 4, Rejected: 0 };
+const STATUS_LEVEL = { Applied: 0, Screening: 1, Interview: 2, Shortlisted: 3, Offered: 4, Hired: 5, Rejected: 0 };
 const OPEN_OFFER_STATUSES = ['Draft', 'Sent', 'Under Negotiation'];
 const DAY_MS = 86400000;
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -172,6 +176,7 @@ export function dateApplication(app) {
   const dates = {
     application: toDate(entry.stages?.Applied ?? app.createdAt),
     screening: entry.basis === 'history' ? toDate(entry.stages?.Screening) : null,
+    shortlisted: entry.basis === 'history' ? toDate(entry.stages?.Shortlisted) : null,
     interview: toDate(entry.stages?.Interview),
     offer: toDate(entry.stages?.Offered),
     accepted: toDate(entry.stages?.Hired),

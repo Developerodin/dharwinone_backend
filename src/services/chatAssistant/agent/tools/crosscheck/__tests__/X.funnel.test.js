@@ -108,8 +108,39 @@ describe('dateApplication (uses applicationStatusHistory.stageEntryDates)', () =
     const r = dateApplication({ ...APPS[1], _firstInterviewAt: d('2026-09-06'), _firstOfferAt: d('2026-09-20'), _offer: { status: 'Sent' } });
     assert.equal(r.entry.basis, 'derived');
     assert.equal(r.dates.screening, null);
-    assert.equal(r.level, 3);
+    assert.equal(r.level, 4);
     assert.equal(r.open, true);
+  });
+  it('Shortlisted is its own stage after Interview, so a meeting does not age it as interview', () => {
+    const app = {
+      status: 'Shortlisted',
+      createdAt: d('2026-09-01'),
+      statusHistory: [
+        { from: null, to: 'Applied', at: d('2026-09-01') },
+        { from: 'Applied', to: 'Screening', at: d('2026-09-02') },
+        { from: 'Screening', to: 'Interview', at: d('2026-09-04') },
+        { from: 'Interview', to: 'Shortlisted', at: d('2026-09-08') },
+      ],
+      _firstInterviewAt: d('2026-09-04'),
+    };
+    const r = dateApplication(app);
+    assert.equal(r.level, 3);
+    assert.equal(r.dates.shortlisted.toISOString(), d('2026-09-08').toISOString());
+    const aging = computeFunnel([app], NOW).stageAging.find((s) => s.stage === 'shortlisted');
+    assert.equal(aging.open, 1);
+    assert.equal(computeFunnel([app], NOW).stageAging.some((s) => s.stage === 'interview'), false);
+  });
+  it('a partial history still counts a current Screening application', () => {
+    const f = computeFunnel([{
+      status: 'Screening',
+      createdAt: d('2026-09-01'),
+      statusHistory: [{ from: 'Applied', to: 'Screening', at: d('2026-09-03') }],
+    }], NOW);
+    const screening = f.stages.find((s) => s.stage === 'screening');
+    assert.equal(screening.reached, 1);
+    assert.equal(screening.notCaptured, 0);
+    assert.equal(f.basis.history, 1);
+    assert.equal(f.basis.approximate, 1);
   });
   it('no history and no records → basis none, only the application date', () => {
     const r = dateApplication(APPS[2]);

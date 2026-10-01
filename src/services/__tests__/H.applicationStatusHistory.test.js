@@ -79,6 +79,7 @@ test('recordStatusChange: sets status, statusChangedAt and pushes the entry in O
   assert.deepEqual(update.$push.statusHistory, {
     from: 'Interview', to: 'Offered', at, by: USER, source: 'offer_created', approximate: false,
   });
+  assert.equal(update.$inc.__v, 1, 'version bump stops a later save of a stale statusHistory');
 });
 
 test('recordStatusChange: no-op (no update) when the status is already the target', async () => {
@@ -208,26 +209,40 @@ test('stageEntryDates: full history → basis history, first entry per status, a
   assert.deepEqual(r.stages.Offered, d('10'));
 });
 
-test('stageEntryDates: no history → derived dates; nothing → none; partial live-only history → derived', async () => {
+test('stageEntryDates: no history → derived dates; nothing → none; partial history keeps the stages it records', async () => {
   const h = await load(makeModel({}).model);
   const derived = h.stageEntryDates({ createdAt: d('01') }, { Interview: d('04'), Offered: null });
   assert.deepEqual(derived, { basis: 'derived', approximate: false, stages: { Interview: d('04'), Applied: d('01') } });
   assert.equal(h.stageEntryDates({ createdAt: d('01') }).basis, 'none');
-  const partial = { createdAt: d('01'), statusHistory: [{ from: 'Interview', to: 'Offered', at: d('09') }] };
-  assert.equal(h.stageEntryDates(partial, { Interview: d('04') }).basis, 'derived');
+  const partial = { createdAt: d('01'), status: 'Screening', statusHistory: [{ from: 'Applied', to: 'Screening', at: d('03') }] };
+  const r = h.stageEntryDates(partial, { Interview: d('04') });
+  assert.equal(r.basis, 'history');
+  assert.equal(r.approximate, true);
+  assert.match(r.note, /does not start at creation/);
+  assert.deepEqual(r.stages.Screening, d('03'));
+  assert.equal(r.stages.Applied, undefined, 'no invented creation entry');
+  assert.equal(r.stages.Interview, undefined, 'derived dates are not mixed into partial history');
   assert.deepEqual(
     h.tallyBasis([{ basis: 'history', approximate: true }, { basis: 'derived' }, { basis: 'none' }, { basis: 'history' }]),
     { history: 2, derived: 1, none: 1, approximate: 1 }
   );
 });
 
-test('lastStatusChangeAt / unchangedSinceFilter: statusChangedAt when present, else updatedAt', async () => {
+test('lastStatusChangeAt / unchangedSinceFilter: statusChangedAt when present, else createdAt (a notes edit is not a status change)', async () => {
   const h = await load(makeModel({}).model);
   assert.deepEqual(h.lastStatusChangeAt({ statusChangedAt: d('03'), updatedAt: d('20') }), { at: d('03'), basis: 'statusChangedAt' });
-  assert.deepEqual(h.lastStatusChangeAt({ updatedAt: d('20') }), { at: d('20'), basis: 'updatedAt' });
+  assert.deepEqual(h.lastStatusChangeAt({ createdAt: d('01'), updatedAt: d('20') }), { at: d('01'), basis: 'createdAt' });
   assert.deepEqual(h.unchangedSinceFilter(d('10')), {
-    $or: [{ statusChangedAt: { $lte: d('10') } }, { statusChangedAt: null, updatedAt: { $lte: d('10') } }],
+    $or: [{ statusChangedAt: { $lte: d('10') } }, { statusChangedAt: null, createdAt: { $lte: d('10') } }],
   });
+});
+
+test('omitStaleStatusFields unmarks status paths so a later save cannot erase an offer transition', async () => {
+  const h = await load(makeModel({}).model);
+  const unmarked = [];
+  const doc = { unmarkModified: (path) => unmarked.push(path) };
+  h.omitStaleStatusFields(doc);
+  assert.deepEqual(unmarked.sort(), ['status', 'statusChangedAt', 'statusHistory']);
 });
 
 // ─── Backfill builder ───────────────────────────────────────────────────────────────────────
