@@ -19,7 +19,7 @@ const instructions = [
 
 export default {
   domain: 'advice',
-  summary: 'Why can\'t X join / onboard / show up, who to call or interview first, who to allocate, jobs that suit X',
+  summary: 'Why X is missing/stuck, follow-ups today, who to call/interview/train/allocate first, X\'s skill gap, jobs for X',
   instructions,
   tools: [explainStatus, recommend, matchJobsToEmployee],
 };
