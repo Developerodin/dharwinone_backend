@@ -1,0 +1,105 @@
+[
+  {
+    "id": "f-w4-list-my-files",
+    "question": "what files do I have in my file storage?",
+    "expect": { "tools": ["list_my_files"] }
+  },
+  {
+    "id": "f-w4-search-brd",
+    "question": "find the file named project BRD in my file storage",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "project brd" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "brd" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "project BRD" } } }
+      ]
+    }
+  },
+  {
+    "id": "f-w4-search-invoice",
+    "question": "search my file storage for a file named invoice",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "invoice" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "invoice.xlsx" } } }
+      ]
+    }
+  },
+  {
+    "id": "f-w4-folder-projects",
+    "question": "show the files in my Projects folder in file storage",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "folder": "projects" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "folder": "projects/" } } }
+      ]
+    }
+  },
+  {
+    "id": "f-w4-folder-hr",
+    "question": "open the HR folder in my file storage",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "folder": "hr" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "folder": "hr/" } } }
+      ]
+    }
+  },
+  {
+    "id": "f-w4-uploaded-today",
+    "question": "which of my file storage files were uploaded today?",
+    "expect": { "tools": ["list_my_files"] }
+  },
+  {
+    "id": "f-w4-link-by-key",
+    "question": "give me a download link for file-storage/eval-user-0000000000000001/Projects/brd.pdf in my file storage",
+    "expect": {
+      "tools": ["get_file_link"],
+      "args": {
+        "get_file_link": { "key": "file-storage/eval-user-0000000000000001/Projects/brd.pdf" }
+      }
+    }
+  },
+  {
+    "id": "f-w4-link-from-history",
+    "history": [
+      { "role": "user", "content": "what files are in my file storage?" },
+      {
+        "role": "assistant",
+        "content": "You have brd.pdf at key file-storage/eval-user-0000000000000001/Projects/brd.pdf."
+      }
+    ],
+    "question": "give me a download link for that file",
+    "expect": {
+      "tools": ["get_file_link"],
+      "args": {
+        "get_file_link": { "key": "file-storage/eval-user-0000000000000001/Projects/brd.pdf" }
+      }
+    }
+  },
+  {
+    "id": "f-w4-download-named-file",
+    "question": "I need to download the project BRD from my file storage",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "brd" } } },
+        { "tools": ["list_my_files"], "args": { "list_my_files": { "search": "project brd" } } },
+        {
+          "tools": ["list_my_files", "get_file_link"],
+          "maxCalls": 2,
+          "args": { "list_my_files": { "search": "brd" } }
+        },
+        {
+          "tools": ["list_my_files", "get_file_link"],
+          "maxCalls": 2,
+          "args": { "list_my_files": { "search": "project brd" } }
+        }
+      ]
+    }
+  },
+  {
+    "id": "f-w4-not-someone-elses-files",
+    "question": "show me Priya's files in file storage",
+    "expect": { "tools": [], "answer": true }
+  }
+]
