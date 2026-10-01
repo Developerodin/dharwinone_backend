@@ -127,6 +127,23 @@ function mergeCountFacts(factsList) {
  * @param {{step?:Function, getAgentTools?:Function, resolveViewerRoleNames?:Function, now?:Function}} [args.deps]
  * @returns {Promise<null | {reply:string, blocks:Array, meta:{steps:number, toolCalls:string[], ms:number}, ledgerEntry:object}>}
  */
+/** Call args as a key-order-independent string, so `{a,b}` and `{b,a}` are the same call. */
+function stableArgs(raw) {
+  let value;
+  try {
+    value = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw ?? {};
+  } catch {
+    return String(raw);
+  }
+  const sort = (v) =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])]))
+        : v;
+  return JSON.stringify(sort(value));
+}
+
 export async function runAgent({ client, user, history, memDoc, requestId, onOutcome = () => {}, deps = {} }) {
   const {
     step = llmStep,
@@ -146,6 +163,22 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
   try {
     const registry = await getAgentTools(user);
     const isFindTools = (name) => !!registry.isFindTools?.(name);
+    // A write tool only drafts. The model sometimes repeats the exact same call (in parallel or a step
+    // later); each run would store another SageAction and show another confirm card for one action.
+    // So an identical call (same tool, same args in any key order) reuses the first call's draft.
+    // Reads still run again: only a result with `draft: true` is reused.
+    const firstCalls = new Map();
+    const executeOnce = (c) => {
+      const key = `${c.name}:${stableArgs(c.arguments)}`;
+      const run = () => registry.execute(c.name, c.arguments, { requestId });
+      const first = firstCalls.get(key);
+      if (!first) {
+        const p = run();
+        firstCalls.set(key, p);
+        return p;
+      }
+      return first.then((r) => (r?.ok && r.result?.draft ? r : run()), run);
+    };
     lazy = !!registry.lazy;
     activeSchemas = registry.schemas;
     const roleNames = await resolveViewerRoleNames(user);
@@ -239,9 +272,7 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
       const allowed = res.toolCalls.slice(0, MAX_CALLS_PER_STEP);
       // eslint-disable-next-line no-await-in-loop
       const settled = await Promise.allSettled(
-        allowed.map((c) =>
-          isFindTools(c.name) ? runFindTools(c.arguments) : registry.execute(c.name, c.arguments, { requestId })
-        )
+        allowed.map((c) => (isFindTools(c.name) ? runFindTools(c.arguments) : executeOnce(c)))
       );
 
       // A tool counts at most one failure per step: parallel failures of one tool
@@ -300,7 +331,9 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
       if (!rendered) continue;
       // A draft's confirm block is the only way to run it, so it is kept, never replaced.
       const confirms = (rendered.blocks ?? []).filter((b) => b?.type === 'confirm');
-      if (confirms.length) confirmBlocks.push(...confirms);
+      if (confirms.length) {
+        for (const b of confirms) if (!confirmBlocks.some((x) => x.key === b.key)) confirmBlocks.push(b);
+      }
       // Only a render WITH blocks replaces them: a plain count renders `blocks: []`
       // and must not wipe a list shown by an earlier call ("how many ML jobs, show them").
       else if (rendered.blocks?.length) blocks = rendered.blocks;

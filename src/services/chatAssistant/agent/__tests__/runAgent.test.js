@@ -373,6 +373,43 @@ describe('runAgent', () => {
     assert.deepEqual(out.blocks, [{ type: 'list', id: 'job-list' }, { type: 'confirm', key: 'k1' }]);
   });
 
+  it('an identical repeat of a draft call in one turn reuses the draft: one stored draft, one confirm card', async () => {
+    let drafted = 0;
+    const registry = fakeRegistry({
+      schedule_interview: () => {
+        drafted += 1;
+        return { ok: true, result: { draft: true, key: `k${drafted}` } };
+      },
+    });
+    registry.render = (name, result) => (name === 'schedule_interview' ? { blocks: [{ type: 'confirm', key: result.key }] } : null);
+    const args = { application: 'a1', scheduledAt: '2026-10-05T11:00:00+05:30', durationMinutes: 45 };
+    // Same step (parallel) and a later step, with keys in a different order.
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'schedule_interview', args), call('b', 'schedule_interview', args)] }),
+      stepResult({ toolCalls: [call('c', 'schedule_interview', { durationMinutes: 45, scheduledAt: args.scheduledAt, application: 'a1' })] }),
+      stepResult({ text: 'Drafted. Press Confirm to schedule it.' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(drafted, 1);
+    assert.deepEqual(out.blocks, [{ type: 'confirm', key: 'k1' }]);
+  });
+
+  it('a repeated read call still runs again (only drafts are reused)', async () => {
+    let reads = 0;
+    const registry = fakeRegistry({
+      count_jobs: () => {
+        reads += 1;
+        return { ok: true, result: { total: reads } };
+      },
+    });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('a', 'count_jobs', { search: 'ml' }), call('b', 'count_jobs', { search: 'ml' })] }),
+      stepResult({ text: 'There are 2 ML jobs.' }),
+    ]);
+    await runAgent({ client, user, history, memDoc: null, requestId: 'r', deps: baseDeps(step, registry) });
+    assert.equal(reads, 2);
+  });
+
   it('empty-text retry does not replay that response\'s output items', async () => {
     const registry = fakeRegistry();
     const emptyWithReasoning = { ...stepResult({ text: '' }), outputItems: [{ type: 'reasoning', id: 'rs_lone' }] };
