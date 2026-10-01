@@ -153,7 +153,14 @@ function buildFindTools(permittedDomains) {
     description:
       'Loads the tools for one or more domains so you can call them in your next step. Call it before answering ' +
       'any question about company data, with every domain the question touches. Not needed for greetings or ' +
-      `general-knowledge definitions.\nDomains:\n${catalog}`,
+      'general-knowledge definitions. "Offer accepted but no pre-boarding" and "joining date passed but not ' +
+      'onboarded" are hiring only: count_offers or list_offers with filters.acceptedNoPreboarding, and ' +
+      'list_placements or count_placements with filters.joinDatePassedNotOnboarded — do not load crosscheck. ' +
+      'A question whose two conditions come from DIFFERENT modules ("X but not Y", "X who also have Y", e.g. ' +
+      'on leave with a meeting, trained but on no project, referred but never interviewed) → also load ' +
+      'crosscheck: one call answers it. "Why is X not …", "what should I follow up", "who first", "skill gap", ' +
+      '"jobs that suit X" → also ' +
+      `load advice.\nDomains:\n${catalog}`,
     input: Joi.object({
       domains: Joi.array()
         .items(Joi.string().valid(...names))
