@@ -5,6 +5,8 @@ import { dateStrInTz, addDaysToDateStr } from '../../../../../utils/zonedTime.js
 
 const MAX_COURSES_PER_POSITION = 30;
 const PROGRESS_STATUS = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' };
+export const NO_MANDATORY_FLAG_NOTE =
+  'There is no mandatory flag on courses. requiredCourses are the courses mapped to this person\'s position in Curriculum Setup.';
 export const OVERDUE_NOTE =
   'Training modules have no due date in DharwinOne, so "overdue" is not captured. atRisk (not started or no ' +
   'activity for 14+ days, the Evaluation page rule) is the closest signal.';
@@ -81,6 +83,100 @@ async function employeesWithoutStudentProfile(rosterRows, limit, deps) {
   return { total: missing.length, records: missing.slice(0, limit) };
 }
 
+
+/**
+ * Courses on the Curriculum Setup roster for this login's employee (getPositionRoster).
+ * courseNames null means the map is not recorded. There is no mandatory flag.
+ * ponytail: one employee lookup and one roster read per person; not a directory scan.
+ */
+export async function requiredCoursesForUser(userId, deps) {
+  const emps = await deps.Employee.find({ owner: userId }).select('_id').limit(2).lean();
+  if (!emps?.length) {
+    return {
+      position: null,
+      courseNames: null,
+      requiredCoursesNote: 'No employee profile is linked to this login, so the position-to-course map is not captured in DharwinOne.',
+    };
+  }
+  if (emps.length > 1) {
+    return {
+      position: null,
+      courseNames: null,
+      requiredCoursesNote: 'More than one employee profile is linked to this login, so the position is ambiguous.',
+    };
+  }
+  const roster = (await deps.getPositionRoster({}, {}))?.results || [];
+  const empId = String(emps[0]._id);
+  const hits = roster.filter((r) => (r.assignedEmployees || []).some((e) => String(e.id) === empId));
+  if (!hits.length) {
+    return {
+      position: null,
+      courseNames: null,
+      requiredCoursesNote: 'This person is not on the Curriculum Setup roster, so no position-to-course map is recorded.',
+    };
+  }
+  if (hits.length > 1) {
+    return {
+      position: null,
+      courseNames: null,
+      ambiguousPositions: hits.map((h) => h.name).filter(Boolean).slice(0, 10),
+      requiredCoursesNote: 'This person is listed on more than one position, so required courses are ambiguous.',
+    };
+  }
+  const row = hits[0];
+  const names = (row.assignedModules || []).map((m) => m.name).filter(Boolean);
+  if (row.unlinked) {
+    return {
+      position: row.name ?? null,
+      positionUnlinked: true,
+      courseNames: [],
+      requiredCoursesNote: 'This job title is not linked to a Position record, so no courses are mapped. There is no mandatory flag.',
+    };
+  }
+  if (!names.length) {
+    return {
+      position: row.name ?? null,
+      courseNames: [],
+      requiredCoursesNote: 'This position has no courses mapped. There is no mandatory flag, so this is not "all mandatory training complete".',
+    };
+  }
+  const shown = names.slice(0, MAX_COURSES_PER_POSITION);
+  return {
+    position: row.name ?? null,
+    courseNames: shown,
+    courseCount: names.length,
+    requiredCoursesNote: names.length > shown.length
+      ? `${NO_MANDATORY_FLAG_NOTE} ${names.length - shown.length} more mapped courses are not listed.`
+      : NO_MANDATORY_FLAG_NOTE,
+  };
+}
+
+/** Completion rate = completed assignments / assignments (same ratio as the cohort summary). Lowest first. */
+export function rankCoursesByCompletion(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.courseId ?? `name:${lc(r.courseName)}`;
+    const g = map.get(key) || { course: r.courseName ?? null, assigned: 0, completed: 0, sum: 0, atRisk: 0 };
+    g.assigned += 1;
+    if (r.displayStatus === 'Completed') g.completed += 1;
+    g.sum += r.completionRate ?? 0;
+    if (r.atRisk) g.atRisk += 1;
+    map.set(key, g);
+  }
+  return [...map.values()]
+    .map((g) => ({
+      course: g.course,
+      studentsAssigned: g.assigned,
+      completedCount: g.completed,
+      completionRate: pct(g.completed, g.assigned),
+      avgCompletion: g.assigned ? Math.round(g.sum / g.assigned) : null,
+      atRiskCount: g.atRisk,
+    }))
+    .sort((a, b) => (a.completionRate ?? 0) - (b.completionRate ?? 0)
+      || (a.avgCompletion ?? 0) - (b.avgCompletion ?? 0)
+      || String(a.course).localeCompare(String(b.course)));
+}
+
 /** Cohort mode: the Training → Evaluation page rows (getEvaluationData), narrowed in memory. */
 export async function runCohort(args, user, deps) {
   const { course, position, progress, inactiveDays, overdue, limit = 20 } = args;
@@ -90,7 +186,7 @@ export async function runCohort(args, user, deps) {
   const roster = canRoster ? (await deps.getPositionRoster({}, {}))?.results || [] : null;
 
   let courseHit = null;
-  if (course) {
+  if (course && !args.lowestCompletion) {
     const pick = pickByName(distinctBy(rows, 'courseId', 'courseName'), course);
     if (pick.kind === 'notFound') {
       return { mode: 'cohort', notFound: 'course', searchedFor: course,
@@ -115,6 +211,21 @@ export async function runCohort(args, user, deps) {
     }
     positionName = pick.items[0].name;
     rows = rows.filter((r) => lc(r.positionName) === lc(positionName));
+  }
+
+  if (args.lowestCompletion) {
+    const ranked = rankCoursesByCompletion(rows);
+    return {
+      mode: 'cohort',
+      lowestCompletion: true,
+      position: positionName,
+      total: ranked.length,
+      records: ranked.slice(0, limit),
+      note: 'Ranked by completion rate (completed assignments / assignments), lowest first. avgCompletion is the ' +
+        'mean progress % on the Training Evaluation course view. A course with nobody assigned is not listed. ' +
+        'Courses have no due date.',
+      ...(overdue ? { overdue: null, overdueNote: OVERDUE_NOTE } : {}),
+    };
   }
 
   const cohort = summarize(rows);

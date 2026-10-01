@@ -1,0 +1,58 @@
+[
+  {
+    "id": "T-w4-lowest-completion",
+    "question": "which course has the lowest completion rate?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "cohort", "lowestCompletion": true } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "lowestCompletion": true } } }
+      ]
+    }
+  },
+  {
+    "id": "T-w4-lowest-completion-position",
+    "question": "which course has the lowest completion among Java Developers?",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "position": "java developer", "lowestCompletion": true } }
+    }
+  },
+  {
+    "id": "T-w4-lowest-completion-rank",
+    "question": "rank our courses from the lowest completion rate to the highest",
+    "expect": {
+      "tools": ["get_training_progress"],
+      "args": { "get_training_progress": { "mode": "cohort", "lowestCompletion": true } }
+    }
+  },
+  {
+    "id": "T-w4-person-last-access-score",
+    "question": "when did Priya last open her courses and what quiz scores does she have?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "person", "person": "Priya" } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "person": "Priya" } } }
+      ]
+    }
+  },
+  {
+    "id": "T-w4-required-courses",
+    "question": "what courses are required for Priya's position?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "person", "person": "Priya" } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "person": "Priya" } } }
+      ]
+    }
+  },
+  {
+    "id": "T-w4-mandatory-one-person",
+    "question": "has Priya completed all mandatory training?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "mode": "person", "person": "Priya" } } },
+        { "tools": ["get_training_progress"], "args": { "get_training_progress": { "person": "Priya" } } }
+      ]
+    }
+  }
+]

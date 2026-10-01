@@ -68,6 +68,9 @@ describe('get_training_progress', () => {
         canReadOtherTraining: async () => true,
         Student: Student({ [OTHER]: { _id: 'st2' } }),
         queryStudentCourses: async () => COURSES,
+        // students.read satisfies positions.read via alias, so the roster lookup runs.
+        Employee: { find: () => chain([]) },
+        getPositionRoster: async () => ({ results: [] }),
       },
     });
     assert.equal(res.self, false);
@@ -219,5 +222,195 @@ describe('get_training_progress position_map mode', () => {
       position: 'Java Developer', department: 'Tech', courses: ['React Basics', 'Node Advanced'], courseCount: 2,
       folders: ['Frontend', 'Backend'], employeeCount: 3, studentCount: 2,
     });
+  });
+});
+
+describe('get_training_progress person last access, score, required courses', () => {
+  const PERSON_COURSES = {
+    totalResults: 3,
+    results: [
+      {
+        module: { moduleName: 'React Basics' }, status: 'completed',
+        progress: { percentage: 100, lastAccessedAt: '2026-09-28T10:00:00.000Z' },
+        quizScores: { completedQuizzes: 2, averageScore: 91 },
+        enrolledAt: '2026-08-01T00:00:00.000Z', completedAt: '2026-09-20T00:00:00.000Z',
+      },
+      {
+        module: { moduleName: 'Excel' }, status: 'in-progress',
+        progress: { percentage: 10, lastAccessedAt: null },
+        quizScores: { completedQuizzes: 0, averageScore: 0 },
+        enrolledAt: '2026-09-01T00:00:00.000Z',
+      },
+      {
+        module: { moduleName: 'Zero Quiz' }, status: 'in-progress',
+        progress: { percentage: 5 },
+        quizScores: { completedQuizzes: 1, averageScore: 0 },
+        enrolledAt: '2026-09-02T00:00:00.000Z',
+      },
+    ],
+  };
+
+  function personDeps(extraDeps = {}) {
+    return {
+      Student: Student({ [SELF]: { _id: 'st1' } }),
+      Employee: { find: () => chain([{ _id: 'e1' }]) },
+      getPositionRoster: async () => ROSTER,
+      queryStudentCourses: async () => PERSON_COURSES,
+      ...extraDeps,
+    };
+  }
+
+  it('adds lastAccessedAt and quiz score; a default 0 with no graded quiz is null', async () => {
+    const res = await getTrainingProgress.execute({}, {
+      user: viewer('students.courses.read', 'positions.read'),
+      deps: personDeps(),
+    });
+    const byName = Object.fromEntries(res.courses.map((c) => [c.module, c]));
+    assert.equal(byName['React Basics'].lastAccessedAt, '2026-09-28T10:00:00.000Z');
+    assert.equal(byName['React Basics'].score, 91);
+    assert.equal(byName.Excel.lastAccessedAt, null);
+    assert.equal(byName.Excel.score, null);
+    assert.notEqual(byName.Excel.lastAccessedAt, byName.Excel.enrolledAt);
+    assert.equal(byName['Zero Quiz'].score, 0);
+    assert.equal(res.position, 'Java Developer');
+    assert.equal('mandatoryFlag' in res, false);
+    assert.match(res.requiredCoursesNote, /no mandatory flag/);
+    assert.deepEqual(res.requiredCourses.map((c) => c.course), ['React Basics', 'Node Advanced']);
+    assert.equal(res.requiredCourses.find((c) => c.course === 'Excel'), undefined);
+    assert.deepEqual(res.requiredCourses.find((c) => c.course === 'Node Advanced'), {
+      course: 'Node Advanced', enrolled: false, status: null, percentage: null, score: null, lastAccessedAt: null,
+    });
+    assert.equal(res.allRequiredComplete, false);
+    const table = getTrainingProgress.render(res).blocks[0].rows;
+    assert.equal(table.find((r) => r.module === 'React Basics').score, '91%');
+    assert.equal(table.find((r) => r.module === 'Excel').lastAccessedAt, '\u2014');
+  });
+
+  it('matches required courses against every assigned course, not the status-filtered page', async () => {
+    const calls = [];
+    const node = {
+      module: { moduleName: 'Node Advanced' }, status: 'in-progress',
+      progress: { percentage: 40, lastAccessedAt: '2026-09-10T00:00:00.000Z' },
+      quizScores: { completedQuizzes: 1, averageScore: 70 },
+      enrolledAt: '2026-08-02T00:00:00.000Z',
+    };
+    const res = await getTrainingProgress.execute({ status: 'completed' }, {
+      user: viewer('students.courses.read', 'positions.read'),
+      deps: personDeps({
+        queryStudentCourses: async (_id, filter) => {
+          calls.push(filter);
+          if (filter.status === 'completed') {
+            return { totalResults: 1, results: [PERSON_COURSES.results[0]] };
+          }
+          return { totalResults: 4, results: [...PERSON_COURSES.results, node] };
+        },
+      }),
+    });
+    assert.deepEqual(calls, [{ status: 'completed' }, {}]);
+    assert.deepEqual(res.courses.map((c) => c.module), ['React Basics']);
+    const mapped = res.requiredCourses.find((c) => c.course === 'Node Advanced');
+    assert.equal(mapped.enrolled, true);
+    assert.equal(mapped.status, 'in-progress');
+    assert.equal(mapped.score, 70);
+    assert.equal(res.allRequiredComplete, false);
+  });
+
+  it('hides the position map from a viewer the Curriculum Setup roster would hide it from', async () => {
+    let calls = 0;
+    const res = await getTrainingProgress.execute({}, {
+      user: viewer('students.courses.read'),
+      deps: personDeps({
+        queryStudentCourses: async () => { calls += 1; return PERSON_COURSES; },
+        getPositionRoster: async () => { throw new Error('roster must not be read'); },
+      }),
+    });
+    assert.equal(calls, 1);
+    assert.equal(res.requiredCourses, null);
+    assert.match(res.requiredCoursesNote, /positions\.read/);
+  });
+
+  it('a position with no mapped courses is not "all mandatory training complete"', async () => {
+    const res = await getTrainingProgress.execute({}, {
+      user: viewer('students.courses.read', 'positions.read'),
+      deps: personDeps({ Employee: { find: () => chain([{ _id: 'e4' }]) } }),
+    });
+    assert.equal(res.position, 'Data Analyst');
+    assert.deepEqual(res.requiredCourses, []);
+    assert.equal(res.allRequiredComplete, null);
+    assert.match(res.requiredCoursesNote, /no courses mapped/);
+    assert.match(res.requiredCoursesNote, /no mandatory flag/);
+  });
+
+  it('no Student profile still returns the position map and does not invent 0% progress', async () => {
+    const res = await getTrainingProgress.execute({}, {
+      user: viewer('students.courses.read', 'employees.read'),
+      deps: personDeps({ Student: Student({}) }),
+    });
+    assert.equal(res.noStudentProfile, true);
+    assert.equal(res.courses, undefined);
+    assert.equal(res.requiredCourses.length, 2);
+    assert.equal(res.requiredCourses.every((c) => c.enrolled === false), true);
+    assert.equal(res.allRequiredComplete, false);
+    assert.equal(getTrainingProgress.render(res), null);
+  });
+
+  it('someone not on the roster has no required courses, not an empty list', async () => {
+    const res = await getTrainingProgress.execute({}, {
+      user: viewer('students.read', 'positions.read'),
+      deps: personDeps({ Employee: { find: () => chain([{ _id: 'e9' }]) } }),
+    });
+    assert.equal(res.requiredCourses, null);
+    assert.match(res.requiredCoursesNote, /not on the Curriculum Setup roster/);
+  });
+});
+
+describe('get_training_progress lowest completion', () => {
+  it('needs evaluation.read', async () => {
+    const res = await getTrainingProgress.execute({ lowestCompletion: true }, {
+      user: viewer('students.courses.read'), deps: cohortDeps(),
+    });
+    assert.match(res.error, /evaluation\.read/);
+  });
+
+  it('ranks courses by completion rate, lowest first, and leaves out courses the evaluation page does not return', async () => {
+    const res = await getTrainingProgress.execute({ mode: 'cohort', lowestCompletion: true, course: 'React', progress: 'completed' }, {
+      user: viewer('evaluation.read'), deps: cohortDeps(),
+    });
+    assert.deepEqual(res.records.map((r) => r.course), ['Node Advanced', 'React Basics']);
+    assert.equal(res.records[0].completionRate, 0);
+    assert.equal(res.records[0].avgCompletion, 10);
+    assert.equal(res.records[0].completedCount, 0);
+    assert.equal(res.records[0].studentsAssigned, 1);
+    assert.equal(res.records[1].completionRate, 33);
+    assert.equal(res.records[1].studentsAssigned, 3);
+    assert.equal(res.records[1].completedCount, 1);
+    assert.equal(res.records.some((r) => r.course === 'Secret Course'), false);
+    assert.equal(res.records[0].dueDate, undefined);
+    const view = getTrainingProgress.render(res);
+    assert.equal(view.blocks[0].rows[0].course, 'Node Advanced');
+    assert.equal(view.facts.counts[0].label, 'courses');
+    assert.equal(view.facts.counts[0].total, 2);
+  });
+
+  it('can be limited to one position', async () => {
+    const res = await getTrainingProgress.execute({ mode: 'cohort', position: 'java developer', lowestCompletion: true }, {
+      user: viewer('evaluation.read'), deps: cohortDeps(),
+    });
+    assert.equal(res.position, 'Java Developer');
+    assert.equal(res.records[0].course, 'Node Advanced');
+    assert.equal(res.records[0].completionRate, 0);
+    assert.equal(res.records[1].course, 'React Basics');
+    assert.equal(res.records[1].completionRate, 50);
+    assert.equal(res.records[1].studentsAssigned, 2);
+  });
+
+  it('overdue stays null: courses have no due date', async () => {
+    const res = await getTrainingProgress.execute({ mode: 'cohort', lowestCompletion: true, overdue: true }, {
+      user: viewer('evaluation.read'), deps: cohortDeps(),
+    });
+    assert.equal(res.overdue, null);
+    assert.match(res.overdueNote, /no due date/);
+    assert.match(res.note, /no due date/);
+    assert.equal(res.lowestCompletion, true);
   });
 });
