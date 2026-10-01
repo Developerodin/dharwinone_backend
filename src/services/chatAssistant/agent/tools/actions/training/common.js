@@ -10,6 +10,7 @@ import {
   sendCourseReminder,
 } from '../../../../../trainingModule.service.js';
 import { escapeRegex, pickByName } from '../../training/common.js';
+import { resolveRowScope as realResolveRowScope } from '../../../../toolAccess.js';
 
 export const MAX_PEOPLE = 50;
 export const REMINDER_TOOL = 'send_course_reminder';
@@ -33,6 +34,7 @@ export function actionDeps(ctx) {
     enrollStudentsInModule: deps.enrollStudentsInModule ?? enrollStudentsInModule,
     sendCourseReminder: deps.sendCourseReminder ?? sendCourseReminder,
     courseReminderEligibility: deps.courseReminderEligibility ?? courseReminderEligibility,
+    resolveRowScope: deps.resolveRowScope ?? realResolveRowScope,
     now: deps.now ?? Date.now,
   };
 }
@@ -75,7 +77,7 @@ export async function resolveModule(query, { publishedOnly = false } = {}, deps)
  * super accounts are invisible. Any name that is missing or ambiguous refuses the whole draft,
  * naming only what was asked. People with no Student profile come back in `noProfile`, non-active ones in `inactive`;
  * a profile is never created.
- * @returns {Promise<{ error: string } | { students: {studentId, userId, name}[], noProfile: {userId, name}[], inactive: {userId, name}[] }>}
+ * @returns {Promise<{ error: string } | { students: {studentId, userId, name}[], noProfile: {userId, name}[], inactive: {userId, name}[], outOfScope: {userId, name}[] }>}
  */
 export async function resolvePeople(people, viewer, deps) {
   const tokens = [...new Map(people.map((p) => [String(p).trim().toLowerCase(), String(p).trim()])).values()].filter(
@@ -112,12 +114,26 @@ export async function resolvePeople(people, viewer, deps) {
   }
 
   const users = [...new Map(found.map((f) => [String(f.pick.items[0]._id), f.pick.items[0]])).values()];
-  const students = await deps.Student.find({ user: { $in: users.map((u) => u._id) } })
-    .select('_id user status')
-    .lean();
-  const studentByUser = new Map(students.map((s) => [String(s.user), s]));
-  const out = { students: [], noProfile: [], inactive: [] };
+  // Same row scope get_training_progress's person lookup sits inside for a scoped viewer
+  // (resolveRowScope). students.manage does not widen it: a user this viewer cannot see
+  // is out of scope, never addressed.
+  const scope = await deps.resolveRowScope(viewer);
+  const visibleUsers = [];
+  const outOfScope = [];
   for (const u of users) {
+    const userId = String(u._id);
+    const name = u.name ?? u.email ?? 'Unnamed';
+    if (scope && !scope.has(userId)) outOfScope.push({ userId, name });
+    else visibleUsers.push(u);
+  }
+  const students = visibleUsers.length
+    ? await deps.Student.find({ user: { $in: visibleUsers.map((u) => u._id) } })
+      .select('_id user status')
+      .lean()
+    : [];
+  const studentByUser = new Map(students.map((s) => [String(s.user), s]));
+  const out = { students: [], noProfile: [], inactive: [], outOfScope };
+  for (const u of visibleUsers) {
     const userId = String(u._id);
     const name = u.name ?? u.email ?? 'Unnamed';
     const student = studentByUser.get(userId);
@@ -131,12 +147,14 @@ export async function resolvePeople(people, viewer, deps) {
 
 /**
  * Student ids already reminded about this module within the last 24 h, from SageAction history
- * (terminal rows live 24 h, so the window is still on file). `done` rows count what commit
- * actually sent; `executing` rows (another confirm mid-send) count their whole payload.
- * `excludeKey` leaves out the confirm doing the asking. Across every sender, not just this user.
- * ponytail: two confirms claimed in the same instant can both send — each sees the other only
- * once it is executing; the upgrade is a unique (moduleId, studentId, day) reminder ledger.
+ * (terminal rows live 24 h, so the window is still on file). `sent` is only what a done row
+ * recorded in remindedStudentIds — an executing row has not sent anything, so its payload
+ * is `inProgress`, never reported as sent. `excludeKey` leaves out the confirm doing the
+ * asking. Across every sender, not just this user.
+ * ponytail: two confirms claimed in the same instant can both see the other as in progress
+ * and both skip the overlap; the upgrade is a unique (moduleId, studentId, day) reminder ledger.
  * No index on tool / payload.moduleId: fine while the collection holds ~a day of drafts.
+ * @returns {Promise<{ sent: Set<string>, inProgress: Set<string> }>}
  */
 export async function recentlyReminded(moduleId, deps, { includeExecuting = false, excludeKey = null } = {}) {
   const since = new Date(deps.now() - REMINDER_WINDOW_MS);
@@ -149,10 +167,16 @@ export async function recentlyReminded(moduleId, deps, { includeExecuting = fals
   })
     .select('status payload result')
     .lean();
-  const ids = new Set();
+  const sent = new Set();
+  const inProgress = new Set();
   for (const row of rows) {
-    const sent = (row.status === 'done' && row.result?.details?.remindedStudentIds) || row.payload?.studentIds;
-    for (const id of sent ?? []) ids.add(String(id));
+    if (row.status === 'executing') {
+      for (const id of row.payload?.studentIds ?? []) inProgress.add(String(id));
+      continue;
+    }
+    const reminded = row.result?.details?.remindedStudentIds;
+    if (!Array.isArray(reminded)) continue;
+    for (const id of reminded) sent.add(String(id));
   }
-  return ids;
+  return { sent, inProgress };
 }

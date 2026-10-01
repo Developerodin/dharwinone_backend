@@ -54,9 +54,13 @@ const FakeUser = {
   find: ({ _id }) => query(users.filter((u) => _id.$in.includes(u._id))),
 };
 const FakeSageAction = {
-  findOne: mock.fn((f) => one(sageRows.find((r) =>
-    r.tool === f.tool && r.status === f.status && r.summary.targets.some((t) => t.id === f['summary.targets.id'])
-    && r.confirmedAt >= f.confirmedAt.$gte))),
+  findOne: mock.fn((f) => one(sageRows.find((r) => {
+    const statusOk = f.status?.$in ? f.status.$in.includes(r.status) : r.status === f.status;
+    const keyOk = !f.key?.$ne || r.key !== f.key.$ne;
+    return r.tool === f.tool && statusOk && keyOk
+      && r.summary.targets.some((t) => t.id === f['summary.targets.id'])
+      && r.confirmedAt >= f.confirmedAt.$gte;
+  }))),
 };
 
 beforeEach(() => {
@@ -254,7 +258,23 @@ describe('request_documents', () => {
       action: 'employee.document.request', entityType: 'Employee', entityId: 'p1', metadata: { documentType: 'Passport' },
     });
     assert.equal(req.headers['x-audit-source'], 'ats/sage');
-    assert.deepEqual(out.details, { profileId: 'p1', created: ['Passport', 'PAN card'], skipped: [], failed: 0, notified: true });
+    assert.deepEqual(out.details, { profileId: 'p1', created: ['Passport', 'PAN card'], skipped: [], failed: [], notified: true });
+  });
+
+  it('a partial create is failed and names what was created and what failed', async () => {
+    const args = validArgs(requestDocuments, { person: 'Priya Sharma', documents: [{ label: 'Passport' }, { label: 'PAN card' }] });
+    const res = await requestDocuments.prepare(args, ctxFor());
+    deps.requestDocumentFromCandidate = mock.fn(async (id, payload) => {
+      if (payload.label === 'PAN card') throw new Error('storage down');
+      return { ...payload, status: 'pending' };
+    });
+    const out = await requestDocuments.commit(draftOf(requestDocuments, args, res), ctxFor());
+    assert.equal(out.ok, false);
+    assert.deepEqual(out.details.created, ['Passport']);
+    assert.deepEqual(out.details.failed, ['PAN card (storage down)']);
+    assert.match(out.message, /Requested "Passport"/);
+    assert.match(out.message, /Failed: PAN card \(storage down\)/);
+    assert.doesNotMatch(out.message, /Requested "Passport", "PAN card"/);
   });
 
   it('a replayed commit creates nothing and sends no second notice', async () => {
@@ -339,11 +359,25 @@ describe('remind_pending_documents', () => {
     assert.equal(FakeEmployee.findById.mock.calls.at(-1).arguments[0], 'p1');
 
     // confirmAction marks the row done; a replay of the same draft then finds it and stops.
-    sageRows.push({ tool: 'remind_pending_documents', status: 'done', summary: draft.summary, confirmedAt: NOW });
+    sageRows.push({ tool: 'remind_pending_documents', status: 'done', summary: draft.summary, confirmedAt: NOW, key: 'done-1' });
     const again = await remindPendingDocuments.commit(draft, ctxFor());
-    assert.equal(again.ok, true);
+    assert.equal(again.ok, false);
+    assert.equal(again.details.sent, false);
     assert.equal(again.details.skipped, 'reminded_recently');
+    assert.match(again.message, /Nothing sent/);
     assert.equal(deps.notify.mock.callCount(), 1);
+  });
+
+  it('an executing reminder for the same profile sends nothing', async () => {
+    const res = await remindPendingDocuments.prepare({ person: 'Priya Sharma' }, ctxFor());
+    sageRows.push({
+      key: 'other', tool: 'remind_pending_documents', status: 'executing', summary: res.summary, confirmedAt: NOW,
+    });
+    const out = await remindPendingDocuments.commit(draftOf(remindPendingDocuments, { person: 'Priya Sharma' }, res), ctxFor());
+    assert.equal(out.ok, false);
+    assert.equal(out.details.skipped, 'reminder_in_progress');
+    assert.equal(deps.notify.mock.callCount(), 0);
+    assert.match(out.message, /in progress/);
   });
 
   it('reminds the person behind a recruiter-owned profile by their own email', async () => {

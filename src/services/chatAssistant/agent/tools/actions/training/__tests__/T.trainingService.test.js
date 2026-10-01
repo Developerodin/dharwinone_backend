@@ -104,6 +104,15 @@ describe('sendCourseReminder', () => {
     assert.doesNotMatch(JSON.stringify(payload), /overdue/i);
   });
 
+  it('does not email a student whose user id is outside visibleUserIds', async () => {
+    modules.get('m1').students = ['s1', 's2'];
+    const res = await svc.sendCourseReminder('m1', ['s1', 's2'], {}, { visibleUserIds: new Set(['u1']) });
+    assert.deepEqual(res.reminded, ['s1']);
+    assert.deepEqual(res.outOfScope, ['s2']);
+    assert.equal(notify.mock.callCount(), 1);
+    assert.equal(notify.mock.calls[0].arguments[0], 'u1');
+  });
+
   it('a student with no progress row yet counts as enrolled', async () => {
     const res = await svc.courseReminderEligibility('m1', ['s2']);
     assert.deepEqual(res.remind, ['s2']);

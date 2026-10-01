@@ -15,19 +15,20 @@ const noticeMessage = (user, labels) =>
   `${requesterName(user)} is reminding you to upload: ${labels.join(', ')}.`;
 
 /**
- * A reminder for this profile confirmed (by anyone) in the last 24 h. Reads SageAction history: terminal rows
- * live 24 h after they finish, so the window is always covered. ponytail: no index on tool / summary.targets.id;
- * fine while the collection holds a day of drafts — add { tool: 1, 'summary.targets.id': 1 } if it grows.
- * Two drafts for the same profile confirmed at the same instant can both send (neither is done yet).
+ * A reminder for this profile that is done within 24 h, or still executing. An executing row has not
+ * finished sending, so it still blocks a second confirm — otherwise both send. `excludeKey` leaves
+ * out the confirm doing the asking. ponytail: no index on tool / summary.targets.id; fine while the
+ * collection holds a day of drafts — add { tool: 1, 'summary.targets.id': 1 } if it grows.
  */
-async function remindedRecently(profileId, deps) {
+async function remindedRecently(profileId, deps, { excludeKey = null } = {}) {
   const since = new Date(deps.now().getTime() - DEDUPE_MS);
   return deps.SageAction.findOne({
     tool: NAME,
-    status: 'done',
+    status: { $in: ['done', 'executing'] },
     'summary.targets.id': profileId,
     confirmedAt: { $gte: since },
-  }).select('_id').lean();
+    ...(excludeKey ? { key: { $ne: excludeKey } } : {}),
+  }).select('_id status').lean();
 }
 
 async function prepare({ person }, ctx) {
@@ -43,7 +44,11 @@ async function prepare({ person }, ctx) {
 
   const pending = pendingRequests(emp);
   if (!pending.length) return { ok: false, error: `${name} has no pending document requests to remind them about.` };
-  if (await remindedRecently(profileId, deps)) {
+  const prior = await remindedRecently(profileId, deps);
+  if (prior?.status === 'executing') {
+    return { ok: false, error: `${name} already has a document reminder in progress.` };
+  }
+  if (prior) {
     return { ok: false, error: `${name} was already reminded about pending documents in the last 24 hours.` };
   }
   const recipient = await resolveRecipient(emp, deps);
@@ -86,18 +91,23 @@ export default defineTool({
   maxTargets: 1,
   prepare,
   recheck: (draft, ctx) => recheckByPrepare(prepare, draft, ctx),
-  async commit({ summary, payload }, ctx) {
+  async commit({ key, summary, payload }, ctx) {
     const user = documentActionScope(ctx);
     const deps = documentActionDeps(ctx);
     const { profileId, pendingIndexes, recipient } = payload;
     const name = summary?.targets?.[0]?.name ?? 'this person';
 
-    // Replay-safe: once this (or any) reminder for the profile is done, a second commit sends nothing.
-    if (await remindedRecently(profileId, deps)) {
+    // Another confirm for this profile that is executing, or done within 24 h, means this one
+    // sends nothing. ok:false so the row is not stored done.
+    const prior = await remindedRecently(profileId, deps, { excludeKey: key });
+    if (prior) {
+      const why = prior.status === 'executing'
+        ? `${name} already has a reminder in progress.`
+        : `${name} was already reminded in the last 24 hours.`;
       return {
-        ok: true,
-        message: `Skipped: ${name} was already reminded in the last 24 hours.`,
-        details: { profileId, sent: false, skipped: 'reminded_recently' },
+        ok: false,
+        message: `Nothing sent: ${why}`,
+        details: { profileId, sent: false, skipped: prior.status === 'executing' ? 'reminder_in_progress' : 'reminded_recently' },
       };
     }
     const emp = await deps.Employee.findById(profileId).select(PROFILE_FIELDS).lean();

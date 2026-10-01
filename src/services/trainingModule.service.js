@@ -1040,12 +1040,28 @@ const courseReminderEligibility = async (moduleId, studentIds) => {
  * @param {string} moduleId
  * @param {string[]} studentIds
  * @param {object} [_currentUser]
- * @returns {Promise<{ reminded: string[], completed: string[], dropped: string[], notEnrolled: string[] }>}
+ * @param {{ visibleUserIds?: Set<string>|null }} [scope] user ids the caller can already see
+ *   (get_training_progress / resolveRowScope). When set, anyone else is returned and not emailed.
+ * @returns {Promise<{ reminded: string[], completed: string[], dropped: string[], notEnrolled: string[], outOfScope?: string[] }>}
  */
-const sendCourseReminder = async (moduleId, studentIds, _currentUser) => {
+const sendCourseReminder = async (moduleId, studentIds, _currentUser, { visibleUserIds = null } = {}) => {
   const standing = await courseReminderEligibility(moduleId, studentIds);
-  const students = standing.remind.length
-    ? await Student.find({ _id: { $in: standing.remind } }).select('_id user').lean()
+  let remind = standing.remind;
+  const outOfScope = [];
+  if (visibleUserIds) {
+    const linked = remind.length
+      ? await Student.find({ _id: { $in: remind } }).select('_id user').lean()
+      : [];
+    const userOf = new Map(linked.map((s) => [String(s._id), s.user ? String(s.user) : '']));
+    const kept = [];
+    for (const id of remind) {
+      if (visibleUserIds.has(userOf.get(id))) kept.push(id);
+      else outOfScope.push(id);
+    }
+    remind = kept;
+  }
+  const students = remind.length
+    ? await Student.find({ _id: { $in: remind } }).select('_id user').lean()
     : [];
   const notice = courseReminderNotice(standing.module.moduleName || 'Training module');
   const { notify, plainTextEmailBody } = await import('./notification.service.js');
@@ -1061,6 +1077,7 @@ const sendCourseReminder = async (moduleId, studentIds, _currentUser) => {
     completed: standing.completed,
     dropped: standing.dropped,
     notEnrolled: standing.notEnrolled,
+    ...(visibleUserIds ? { outOfScope } : {}),
   };
 };
 

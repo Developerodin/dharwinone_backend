@@ -47,8 +47,13 @@ function fakeUser() {
   };
 }
 function fakeStudent() {
+  const rowsFor = (ids, field) => ids.filter((id) => (field === 'user' ? STUDENT_OF[id] : Object.values(STUDENT_OF).includes(id))).map((id) => {
+    const user = field === 'user' ? id : Object.entries(STUDENT_OF).find(([, s]) => s === id)?.[0];
+    const studentId = field === 'user' ? STUDENT_OF[id] : id;
+    return { _id: studentId, user, status: INACTIVE_STUDENTS.has(studentId) ? 'inactive' : 'active' };
+  });
   return {
-    find: mock.fn(({ user }) => q(user.$in.filter((id) => STUDENT_OF[id]).map((id) => ({ _id: STUDENT_OF[id], user: id, status: INACTIVE_STUDENTS.has(STUDENT_OF[id]) ? 'inactive' : 'active' })))),
+    find: mock.fn((f) => q(f.user?.$in ? rowsFor(f.user.$in, 'user') : rowsFor(f._id?.$in || [], '_id'))),
   };
 }
 function fakeModules(rosters = {}) {
@@ -80,6 +85,7 @@ function deps(overrides = {}) {
     TrainingModule: fakeModules(),
     SageAction: fakeSageAction(),
     now: () => NOW,
+    resolveRowScope: async () => null,
     ...overrides,
   };
 }
@@ -277,7 +283,7 @@ describe('send_course_reminder', () => {
   it('commit calls sendCourseReminder with exactly the payload ids', async () => {
     const send = mock.fn(async (_m, ids) => ({ reminded: ids, completed: [], dropped: [], notEnrolled: [] }));
     const user = viewer('students.manage');
-    const res = await sendCourseReminder.commit({ key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } }, { user, deps: { SageAction: fakeSageAction(), sendCourseReminder: send, now: () => NOW } });
+    const res = await sendCourseReminder.commit({ key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } }, { user, deps: { SageAction: fakeSageAction(), sendCourseReminder: send, now: () => NOW, resolveRowScope: async () => null } });
     assert.deepEqual(send.mock.calls[0].arguments, ['m1', ['s1', 's2'], user]);
     assert.deepEqual(res.details.remindedStudentIds, ['s1', 's2']);
     assert.equal(res.ok, true);
@@ -286,15 +292,17 @@ describe('send_course_reminder', () => {
   it('commit is safe on replay: a second run within 24 h sends nothing', async () => {
     const sage = fakeSageAction();
     const send = mock.fn(async (_m, ids) => ({ reminded: ids, completed: [], dropped: [], notEnrolled: [] }));
-    const ctx = { user: viewer('students.manage'), deps: { SageAction: sage, sendCourseReminder: send, now: () => NOW } };
-    const draft = { key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } };
+    const ctx = { user: viewer('students.manage'), deps: { SageAction: sage, sendCourseReminder: send, now: () => NOW, resolveRowScope: async () => null } };
+    const draft = { key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] }, summary: { targets: [{ id: 's1', name: 'Priya Shah' }, { id: 's2', name: 'Ravi Kumar' }] } };
     const first = await sendCourseReminder.commit(draft, ctx);
     sage.rows.push({ key: 'k1', tool: 'send_course_reminder', status: 'done', confirmedAt: HOURS(0), payload: draft.payload, result: { details: first.details } });
 
     const replay = await sendCourseReminder.commit({ ...draft, key: 'k2' }, ctx);
     assert.equal(send.mock.callCount(), 1);
+    assert.equal(replay.ok, false);
     assert.deepEqual(replay.details.remindedStudentIds, []);
-    assert.match(replay.message, /Nothing sent/);
+    assert.match(replay.message, /Nothing sent|already reminded/);
+    assert.doesNotMatch(replay.message, /Sent the reminder/);
   });
 
   it('commit skips people another confirm is reminding right now, but never its own row', async () => {
@@ -303,7 +311,56 @@ describe('send_course_reminder', () => {
       { key: 'k1', tool: 'send_course_reminder', status: 'executing', confirmedAt: HOURS(0), payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } },
     ]);
     const send = mock.fn(async (_m, ids) => ({ reminded: ids, completed: [], dropped: [], notEnrolled: [] }));
-    await sendCourseReminder.commit({ key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } }, { user: viewer('students.manage'), deps: { SageAction: sage, sendCourseReminder: send, now: () => NOW } });
+    const res = await sendCourseReminder.commit(
+      { key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] }, summary: { targets: [{ id: 's1', name: 'Priya Shah' }, { id: 's2', name: 'Ravi Kumar' }] } },
+      { user: viewer('students.manage'), deps: { SageAction: sage, sendCourseReminder: send, now: () => NOW, resolveRowScope: async () => null } }
+    );
     assert.deepEqual(send.mock.calls[0].arguments[1], ['s1']);
+    assert.deepEqual(res.details.remindedStudentIds, ['s1']);
+    assert.deepEqual(res.details.inProgressStudentIds, ['s2']);
+    assert.match(res.message, /already in progress: Ravi Kumar/);
+    assert.equal(res.ok, true);
+  });
+
+  it('two in-flight confirms that cover everyone send nothing and do not claim success', async () => {
+    const sage = fakeSageAction([
+      { key: 'other', tool: 'send_course_reminder', status: 'executing', confirmedAt: HOURS(0), payload: { moduleId: 'm1', studentIds: ['s1', 's2'] } },
+    ]);
+    const send = mock.fn(async () => ({ reminded: [], completed: [], dropped: [], notEnrolled: [] }));
+    const res = await sendCourseReminder.commit(
+      { key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] }, summary: { targets: [{ id: 's1', name: 'Priya Shah' }, { id: 's2', name: 'Ravi Kumar' }] } },
+      { user: viewer('students.manage'), deps: { SageAction: sage, sendCourseReminder: send, now: () => NOW, resolveRowScope: async () => null } }
+    );
+    assert.equal(send.mock.callCount(), 0);
+    assert.equal(res.ok, false);
+    assert.deepEqual(res.details.remindedStudentIds, []);
+    assert.match(res.message, /already in progress/);
+    assert.doesNotMatch(res.message, /Sent the reminder/);
+  });
+
+  it('students.manage does not remind a user outside the training row scope', async () => {
+    const d = deps({
+      resolveRowScope: async () => new Set(['u1']),
+      courseReminderEligibility: eligibility(ENROLLED),
+    });
+    const prepared = await sendCourseReminder.prepare(
+      { people: ['Priya Shah', 'Ravi Kumar'], module: 'Java Basics' },
+      { user: viewer('students.manage'), deps: d }
+    );
+    assert.equal(prepared.ok, true, prepared.error);
+    assert.deepEqual(prepared.payload.studentIds, ['s1']);
+    assert.match(text(prepared), /outside the students you can see: Ravi Kumar/);
+  });
+
+  it('commit re-checks scope and does not email someone the viewer can no longer see', async () => {
+    const send = mock.fn(async (_m, ids) => ({ reminded: ids, completed: [], dropped: [], notEnrolled: [] }));
+    const res = await sendCourseReminder.commit(
+      { key: 'k1', payload: { moduleId: 'm1', studentIds: ['s1', 's2'] }, summary: { targets: [{ id: 's1', name: 'Priya Shah' }, { id: 's2', name: 'Ravi Kumar' }] } },
+      { user: viewer('students.manage'), deps: { ...deps(), sendCourseReminder: send, resolveRowScope: async () => new Set(['u1']) } }
+    );
+    assert.deepEqual(send.mock.calls[0].arguments[1], ['s1']);
+    assert.equal(send.mock.calls[0].arguments[3].visibleUserIds.has('u1'), true);
+    assert.match(res.message, /outside the students you can see: Ravi Kumar/);
+    assert.deepEqual(res.details.outOfScopeStudentIds, ['s2']);
   });
 });
