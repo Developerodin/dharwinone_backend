@@ -154,13 +154,26 @@ export async function canSeeOfferCompensation(user) {
   return (await checkAccessRule(OFFER_COMPENSATION_RULE, user)).ok;
 }
 
+/**
+ * Sage card label only. Employee.fullName wins. A null or blank fullName falls back to the
+ * letter's printed name (already on the offer row). Both empty keeps today's fullName ?? null.
+ * Does not read Meeting.candidate.name and does not write Employee.
+ */
+function offerCandidateLabel(o) {
+  const fullName = o?.candidate?.fullName;
+  if (typeof fullName === 'string' && fullName.trim()) return fullName;
+  const letter = typeof o?.letterFullName === 'string' ? o.letterFullName.trim() : '';
+  if (letter) return letter;
+  return fullName ?? null;
+}
+
 /** Offers-page list columns only; CTC only when showCtc. Never offerLetterUrl or rejectionReason. */
 export function offerRow(o, { showCtc }) {
   const gross = o.ctcBreakdown?.gross;
   return {
     id: String(o.id ?? o._id ?? ''),
     offerCode: o.offerCode ?? null,
-    candidate: o.candidate?.fullName ?? null,
+    candidate: offerCandidateLabel(o),
     job: o.job?.title ?? null,
     position: o.positionTitle ?? null,
     status: o.status ?? null,
