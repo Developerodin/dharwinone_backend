@@ -1,0 +1,74 @@
+[
+  {
+    "id": "H-w4-own-availability",
+    "question": "What is my interview availability?",
+    "expect": {
+      "tools": ["get_interviewer_availability"]
+    }
+  },
+  {
+    "id": "H-w4-free-wednesday",
+    "question": "When is Priya Shah free for interviews next Wednesday?",
+    "expect": {
+      "tools": ["get_interviewer_availability"],
+      "args": {
+        "get_interviewer_availability": { "interviewers": ["Priya Shah"] }
+      }
+    }
+  },
+  {
+    "id": "H-w4-common-free",
+    "question": "What time are both Priya Shah and Vikram Shah free for a panel this week?",
+    "expect": {
+      "anyOf": [
+        {
+          "tools": ["get_interviewer_availability"],
+          "args": { "get_interviewer_availability": { "interviewers": ["Priya Shah", "Vikram Shah"] } }
+        }
+      ]
+    }
+  },
+  {
+    "id": "H-w4-not-picked",
+    "question": "Which candidates were sent a booking link but have not picked an interview slot?",
+    "expect": {
+      "tools": ["list_awaiting_availability"]
+    }
+  },
+  {
+    "id": "H-w4-waiting-how-long",
+    "question": "How long have candidates been waiting to choose an interview time?",
+    "expect": {
+      "tools": ["list_awaiting_availability"]
+    }
+  },
+  {
+    "id": "H-w4-no-availability-given",
+    "question": "Which candidates have not chosen an interview time yet?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_awaiting_availability"] }
+      ]
+    }
+  },
+  {
+    "id": "H-w4-reminder-when",
+    "question": "When will the reminder go out for Ravi Kumar's interview?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_interview"], "args": { "get_interview": { "candidate": "Ravi Kumar" } } },
+        { "tools": ["list_interviews", "get_interview"] }
+      ]
+    }
+  },
+  {
+    "id": "H-w4-reminder-sent",
+    "question": "Was the interview reminder sent for Ravi Kumar?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["get_interview"], "args": { "get_interview": { "candidate": "Ravi Kumar" } } },
+        { "tools": ["get_interview"] }
+      ]
+    }
+  }
+]

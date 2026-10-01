@@ -34,9 +34,11 @@ export default defineTool({
     'Full detail of ONE ATS interview by id or candidate name (+ optional job position): slot and timezone, panel, ' +
     'who scheduled it, job, status, result, who changed the result and when (history, if you can see activity ' +
     'logs), who joined the video room (attendance), whether it was recorded (with a temporary playback link), ' +
-    'the AI summary (when you may see summaries), interviewer evaluations, and resultMissing / feedbackMissing ' +
-    'flags. Use for "how did <candidate>\'s interview go", "who is on the panel for <candidate>", "was it ' +
-    'recorded", "who marked <candidate> selected". Several interviews fit → { matches } to ask which one.',
+    'the AI summary (when you may see summaries), interviewer evaluations, when the reminder will send ' +
+    '(reminderAt) and whether it already went (reminderSent), and resultMissing / feedbackMissing flags. ' +
+    'Use for "how did <candidate>\'s interview go", "who is on the panel for <candidate>", "was it recorded", ' +
+    '"who marked <candidate> selected", "when is the reminder". Several interviews fit → { matches } to ask ' +
+    'which one. reminderAt null means no reminder time is stored — never invent one.',
   input: Joi.object({
     id: lookupText('Interview id from an earlier list_interviews / get_interview result.'),
     candidate: lookupText('Candidate (person interviewed) name, partial match.'),
@@ -97,7 +99,12 @@ export default defineTool({
         status: m.status ?? null,
         result: m.interviewResult ?? null,
         completedAt: m.interviewCompletedAt ?? null,
+        reminderAt: m.remindAt ?? null,
         reminderSentAt: m.reminderSentAt ?? null,
+        reminderSent: Boolean(m.reminderSentAt),
+        ...(m.remindAt ? {} : {
+          reminderNote: 'No reminder time is stored for this interview (booked inside the lead time, or the field was never set).',
+        }),
         scheduledBy: m.createdBy?.name ?? null,
         scheduledOn: createdAtOf(m),
         interviewers: formatInterviewers(m),
@@ -126,6 +133,8 @@ export default defineTool({
       { label: 'Timezone', value: iv.timezone ?? '—' },
       { label: 'Interviewers', value: iv.interviewers ?? '—' },
       { label: 'Scheduled by', value: iv.scheduledBy ?? '—' },
+      { label: 'Reminder at', value: iv.reminderAt ? new Date(iv.reminderAt).toISOString() : '—' },
+      { label: 'Reminder sent', value: iv.reminderSent ? 'Yes' : 'No' },
       { label: 'Status', value: iv.status ?? '—' },
       { label: 'Result', value: iv.result ?? '—', ...(result.resultMissing ? { tone: 'warn' } : {}) },
       { label: 'Recorded', value: result.recording?.recorded ? 'Yes' : 'No' },
