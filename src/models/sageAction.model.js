@@ -30,13 +30,8 @@ const sageActionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/**
- * New indexes: { key: 1 } unique and { expiresAt: 1 } TTL.
- * autoIndex is OFF in production (config.js), so shipping this file does NOT build them
- * there — create them deliberately on deploy. Without them prod still behaves correctly
- * (every query filters on expiresAt), but confirm scans the collection and rows never expire.
- */
 sageActionSchema.index({ key: 1 }, { unique: true });
+// Production autoIndex is false — create the { expiresAt: 1 } TTL index on the server; shipping this file does not.
 sageActionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const SageAction = mongoose.model('SageAction', sageActionSchema);

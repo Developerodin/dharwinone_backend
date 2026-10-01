@@ -5,6 +5,7 @@ import { defineTool } from '../defineTool.js';
 
 // In-memory SageAction: every write in this file lands here, never in Mongo.
 const rows = new Map();
+const claimSets = [];
 
 const matches = (row, filter) =>
   Object.entries(filter).every(([k, v]) => {
@@ -27,6 +28,7 @@ const FakeSageAction = {
   findOne: (filter) => chain(() => find(filter)),
   findOneAndUpdate: (filter, update) =>
     chain(() => {
+      if (update.$set?.status === 'executing') claimSets.push({ ...update.$set });
       const row = find(filter);
       if (row) Object.assign(row, update.$set);
       return row;
@@ -131,6 +133,7 @@ async function draft(name = 'close_widgets', args = { ids: ['w1', 'w2'] }, user 
 
 beforeEach(() => {
   rows.clear();
+  claimSets.length = 0;
   audits = [];
   widgets = new Map([
     ['w1', { id: 'w1', name: 'Alpha', open: true }],
@@ -233,6 +236,8 @@ describe('confirmAction', () => {
 
     const row = rows.get(key);
     assert.equal(row.status, 'done');
+    assert.equal(claimSets[0].status, 'executing');
+    assert.ok(claimSets[0].expiresAt.getTime() - before >= 24 * 60 * 60 * 1000 - 1000, 'claim bumps expiresAt to ~24 h');
     assert.ok(row.confirmedAt instanceof Date);
     assert.deepEqual(row.result, { ok: true, message: 'Closed 2 widgets.', details: { closed: ['w1', 'w2'] } });
     assert.ok(row.expiresAt.getTime() - before >= 24 * 60 * 60 * 1000 - 1000, 'expiresAt bumped to ~24 h');
