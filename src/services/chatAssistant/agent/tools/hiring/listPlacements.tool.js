@@ -3,7 +3,7 @@ import { defineTool } from '../../defineTool.js';
 import {
   PLACEMENTS_ACCESS, MAX_LIST_LIMIT, hiringScope, placementRow, hiringCountFacts,
 } from './common.js';
-import { placementListFilters, detailDeps, placementPlan } from './placementDetail.js';
+import { placementListFilters, detailDeps, placementPlan, listJoinFacts } from './placementDetail.js';
 
 const SORT = 'joiningDate:desc';
 
@@ -15,12 +15,14 @@ export default defineTool({
     'List placements, latest joining date first: candidate, job, status, pre-boarding status, joining date, ' +
     'BGV status. Use for "who joined this month" (status Joined + joiningBetween), "who is joining next week", ' +
     '"<candidate>\'s placement", "BGV pending" (filters.bgvPending), "ready for BGV" (filters.readyForBgv), ' +
-    '"joining date passed but not onboarded" (filters.joinDatePassedNotOnboarded). total is the full count ' +
+    '"joining date passed but not onboarded" (filters.joinDatePassedNotOnboarded), "in onboarding who haven\'t ' +
+    'joined" (filters.onboardingNotJoined — joining date today or later). total is the full count ' +
     'even when fewer rows come back. One person\'s steps and what is blocking them → get_placement.',
   measure:
     'Placement RECORDS (one per accepted offer) you are allowed to see on the Pre-boarding/Onboarding pages; ' +
       'every status EXCEPT Cancelled unless filters.status or filters.stage is set (bgvPending / readyForBgv / ' +
-      'joinDatePassedNotOnboarded default to Pending + Onboarding).',
+      'joinDatePassedNotOnboarded default to Pending + Onboarding; onboardingNotJoined is status Onboarding ' +
+      'with joining date today or later).',
   input: Joi.object({
     filters: placementListFilters,
     page: Joi.number().integer().min(1).default(1),
@@ -33,11 +35,13 @@ export default defineTool({
     const plan = placementPlan(filters, deps.now());
     if (plan.empty) return { total: 0, page, totalPages: 0, records: [], filtersApplied: filters };
     const res = await deps.queryPlacements(plan.query, { page, limit, sortBy: SORT }, user);
+    const raw = res?.results || [];
+    const extras = await listJoinFacts(raw, ctx);
     return {
       total: res?.totalResults ?? 0,
       page: res?.page ?? page,
       totalPages: res?.totalPages ?? 0,
-      records: (res?.results || []).map(placementRow),
+      records: raw.map((p, i) => ({ ...placementRow(p), ...extras[i] })),
       filtersApplied: filters,
     };
   },

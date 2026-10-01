@@ -69,7 +69,13 @@ const instructions = [
     'employee yet → get_placement. "BGV pending" → filters.bgvPending; "ready for BGV" → filters.readyForBgv; ' +
     '"joining date passed but not onboarded" → filters.joinDatePassedNotOnboarded. "Who changed X\'s placement ' +
     'status" → get_placement auditTrail (placement audit access only; no auditTrail key = not allowed, never ' +
-    'say "no changes").',
+    'say "no changes"). "In onboarding who haven\'t joined" → filters.onboardingNotJoined (status Onboarding, ' +
+    'joining date today or later — not Cancelled, Deferred, Joined, or people who already joined). ' +
+    'notJoinedReason date_ahead: still Onboarding or pre-boarding Pending and the joining date is ahead, so ' +
+    'not joined yet. cancelled or deferred: not joined; someone set that status — name queue (onboarding or ' +
+    'preBoarding). Date passed, hasUserAccount, status still Onboarding or Pending: joined is true even though ' +
+    'status was not moved to Joined; role does not matter. notJoinedReason no_account: the date passed and ' +
+    'there is no user account, so not joined. Status Joined is joined.',
   '- Documents (uploaded, missing, pending review, approved, rejected and why, EAD / visa expiring) → ' +
     'list_documents: person for one person, cohort (placement filters) for a group, neither for "my documents". ' +
     '"Missing" means requested by staff and not uploaded yet. list_documents cohort: if scanTruncated, say the ' +
@@ -82,6 +88,7 @@ const instructions = [
     'refer" → filters.referrer; "assigned to sales agent Y" → filters.salesAgent. "My referrals / leads I ' +
     'referred" → filters.referrer "me". A pronoun ("her", "him") means the person from the previous turn — ' +
     'pass their real name.',
+  '- Move to Offer: if offerReady is true, the application can move to the offer letter page because a non-cancelled round is Selected; if false, it cannot, and say why from offerReadyReason. Other rounds do not all have to be Selected. When offerReady is present, do not guess from a single row\'s result.',
   '- A result with notFound means that person or record was not found — say so, not "0". A result with ' +
     'matches means the name fits several people: list them and ask which one.',
 ].join('\n');

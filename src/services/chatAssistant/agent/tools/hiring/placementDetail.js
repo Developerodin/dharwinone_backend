@@ -6,6 +6,7 @@
  */
 import Joi from 'joi';
 import config from '../../../../../config/config.js';
+import { PLACEMENT_STATUSES } from '../../../../../constants/atsPipeline.js';
 import RecruiterActivityLogModel from '../../../../../models/recruiterActivityLog.model.js';
 import { userHasEmployeeRole as realUserHasEmployeeRole } from '../../../../../utils/roleHelpers.js';
 import { dateStrInTz, addDaysToDateStr } from '../../../../../utils/zonedTime.js';
@@ -56,6 +57,9 @@ export const placementListFilters = placementFilters.keys({
   joinDatePassedNotOnboarded: Joi.boolean().valid(true)
     .description('Only placements whose joining date is before today and that are still Pending or Onboarding ' +
       '(never marked Joined, not deferred or cancelled).'),
+  onboardingNotJoined: Joi.boolean().valid(true)
+    .description('Status Onboarding whose joining date is today or later (IST): in onboarding and not joined yet. ' +
+      'Not Cancelled, Deferred, Joined, or Onboarding rows whose joining date has already passed.'),
 });
 
 export const NOT_CAPTURED = 'not captured in DharwinOne';
@@ -163,12 +167,15 @@ export const PAPERWORK_COMPLETE_MATCH = Object.freeze({
 /** queryPlacements filter for the placement filters, and the statuses a count splits by (null = page default). */
 export function placementPlan(filters, now) {
   const query = placementQueryFilter(filters);
-  const { bgvPending, readyForBgv, joinDatePassedNotOnboarded } = filters;
-  if (!bgvPending && !readyForBgv && !joinDatePassedNotOnboarded) return { query, statuses: null };
+  const { bgvPending, readyForBgv, joinDatePassedNotOnboarded, onboardingNotJoined } = filters;
+  if (onboardingNotJoined && (bgvPending || readyForBgv || joinDatePassedNotOnboarded)) return { empty: true };
+  if (!bgvPending && !readyForBgv && !joinDatePassedNotOnboarded && !onboardingNotJoined) return { query, statuses: null };
 
-  let statuses = joinDatePassedNotOnboarded
-    ? narrow(filters.status, ACTIVE_PLACEMENT_STATUSES)
-    : (filters.status ? [filters.status] : ACTIVE_PLACEMENT_STATUSES);
+  let statuses = onboardingNotJoined
+    ? narrow(filters.status, ['Onboarding'])
+    : joinDatePassedNotOnboarded
+      ? narrow(filters.status, ACTIVE_PLACEMENT_STATUSES)
+      : (filters.status ? [filters.status] : ACTIVE_PLACEMENT_STATUSES);
   // A stage queue narrows by one status only (placement.service applyStageFilter); the intersection is one.
   if (filters.stage) statuses = statuses.filter((s) => STAGE_QUEUE_STATUSES[filters.stage].includes(s));
   if (!statuses.length) return { empty: true };
@@ -178,6 +185,12 @@ export function placementPlan(filters, now) {
     const cutoff = new Date(Date.parse(istDayStart(now)) - 1).toISOString();
     if (!query.joiningTo || query.joiningTo > cutoff) query.joiningTo = cutoff;
     if (query.joiningFrom && query.joiningFrom > query.joiningTo) return { empty: true };
+  }
+  if (onboardingNotJoined) {
+    // Today or later. A passed joining day cannot match, with or without an account.
+    const from = istDayStart(now);
+    if (!query.joiningFrom || query.joiningFrom < from) query.joiningFrom = from;
+    if (query.joiningTo && query.joiningFrom > query.joiningTo) return { empty: true };
   }
   if (readyForBgv) {
     // Ready for BGV implies BGV not started, so it wins over bgvPending.
@@ -260,6 +273,162 @@ export function firstBlockingStep(p, now) {
     return { step: 'Mark as Joined', detail: `Joining date ${joinDay} has passed; not marked Joined.` };
   }
   return null;
+}
+
+/** Joining calendar day is before today's IST day. Same day is not passed (IST-midnight rows included). */
+export function joiningDateHasPassed(joiningDate, now) {
+  if (!joiningDate) return false;
+  const d = new Date(joiningDate);
+  if (Number.isNaN(d.getTime())) return false;
+  return istDay(d) < istDay(now);
+}
+
+/**
+ * Which queue a placement status sits in. Pre-boarding's in-progress status is Pending
+ * (PRE_BOARDING_QUEUE_STATUSES minus Deferred/Cancelled). Onboarding's is Onboarding.
+ * Deferred and Cancelled are in the pre-boarding queue until enteredOnboardingAt is set,
+ * then in the onboarding queue (placement.service applyStageFilter).
+ */
+export function placementQueue(status, enteredOnboardingAt) {
+  if (status === 'Onboarding' || status === 'Joined') return 'onboarding';
+  if (status === 'Pending') return 'preBoarding';
+  return enteredOnboardingAt ? 'onboarding' : 'preBoarding';
+}
+
+const IN_PROGRESS = new Set(['Onboarding', 'Pending']);
+
+/**
+ * joined: status Joined, or still in progress (Onboarding or pre-boarding Pending) with the joining
+ * day passed and a user account. Role is not read. Cancelled and Deferred are never joined.
+ * notJoinedReason is null when joined.
+ */
+export function joinFacts({ status, enteredOnboardingAt, joiningDate, now, hasUserAccount }) {
+  const joiningDatePassed = joiningDateHasPassed(joiningDate, now);
+  const account = !!hasUserAccount;
+  const queue = placementQueue(status, enteredOnboardingAt);
+  const base = {
+    joiningDate: joiningDate ?? null,
+    joiningDatePassed,
+    hasUserAccount: account,
+    queue,
+  };
+  if (status === 'Joined') return { ...base, joined: true, notJoinedReason: null };
+  if (status === 'Cancelled') return { ...base, joined: false, notJoinedReason: 'cancelled' };
+  if (status === 'Deferred') return { ...base, joined: false, notJoinedReason: 'deferred' };
+  if (IN_PROGRESS.has(status) && !joiningDatePassed) {
+    return { ...base, joined: false, notJoinedReason: 'date_ahead' };
+  }
+  if (IN_PROGRESS.has(status) && joiningDatePassed && account) {
+    return { ...base, joined: true, notJoinedReason: null };
+  }
+  if (IN_PROGRESS.has(status) && joiningDatePassed && !account) {
+    return { ...base, joined: false, notJoinedReason: 'no_account' };
+  }
+  return { ...base, joined: false, notJoinedReason: null };
+}
+
+/** The candidate's login, if one exists. null = no user account. Role is not read. */
+export async function loadLogin(email, deps) {
+  if (!email) return null;
+  const login = await deps.User.findOne({ email: String(email).toLowerCase() }).select('_id roleIds').lean();
+  return login || null;
+}
+
+/** One placement the detail tool already loaded. */
+export async function placementJoin(p, email, ctx) {
+  const deps = detailDeps(ctx);
+  const login = await loadLogin(email, deps);
+  return {
+    login,
+    facts: joinFacts({
+      status: p.status,
+      enteredOnboardingAt: p.enteredOnboardingAt,
+      joiningDate: p.joiningDate,
+      now: deps.now(),
+      hasUserAccount: !!login,
+    }),
+  };
+}
+
+async function emailsForRows(rawRows, deps) {
+  const emailByIndex = new Map();
+  const needProfile = [];
+  rawRows.forEach((p, i) => {
+    const onRow = p.candidate?.email;
+    if (onRow) emailByIndex.set(i, String(onRow).toLowerCase());
+    else if (idOf(p.candidate)) needProfile.push(i);
+  });
+  if (needProfile.length) {
+    const ids = needProfile.map((i) => idOf(rawRows[i].candidate));
+    const emps = await deps.Employee.find({ _id: { $in: ids } }).select('_id email').lean();
+    const byId = new Map((emps || []).map((e) => [idOf(e), e.email ? String(e.email).toLowerCase() : null]));
+    for (const i of needProfile) {
+      const email = byId.get(idOf(rawRows[i].candidate));
+      if (email) emailByIndex.set(i, email);
+    }
+  }
+  return emailByIndex;
+}
+
+/**
+ * joiningDatePassed / hasUserAccount / joined on each list row. One profile lookup and one user
+ * lookup per page (limit 50). Past that, the page size is the ceiling — don't scan the directory.
+ */
+export async function listJoinFacts(rawRows, ctx) {
+  const deps = detailDeps(ctx);
+  const now = deps.now();
+  if (!rawRows.length) return [];
+  const emailByIndex = await emailsForRows(rawRows, deps);
+  const uniqueEmails = [...new Set(emailByIndex.values())];
+  const users = uniqueEmails.length
+    ? await deps.User.find({ email: { $in: uniqueEmails } }).select('_id email').lean()
+    : [];
+  const have = new Set((users || []).filter((u) => u.email).map((u) => String(u.email).toLowerCase()));
+  return rawRows.map((p, i) => joinFacts({
+    status: p.status,
+    enteredOnboardingAt: p.enteredOnboardingAt,
+    joiningDate: p.joiningDate,
+    now,
+    hasUserAccount: have.has(emailByIndex.get(i)),
+  }));
+}
+
+function placementEmail(p) {
+  return p?.candidate?.email ? String(p.candidate.email).toLowerCase() : '';
+}
+
+/** Placement whose candidate email is this account. Other people's rows are not used. */
+function ownPlacement(rows, email) {
+  const wanted = email ? String(email).toLowerCase() : '';
+  const mine = (rows || []).filter((p) => placementEmail(p) === wanted);
+  return mine.find((p) => p.status !== 'Cancelled') || mine[0] || null;
+}
+
+/**
+ * A user account Sage already opened. hasUserAccount is true. joiningDate comes from a placement
+ * this viewer can see for that email (the placement list's own query). No placement → date not passed.
+ * Ceiling: one placement page of 6. Role is not consulted.
+ */
+export async function joinFactsForKnownAccount({ email, viewer, ctx }) {
+  const deps = detailDeps(ctx);
+  let joiningDate = null;
+  if (email) {
+    const res = await deps.queryPlacements(
+      { search: email, status: PLACEMENT_STATUSES.join(',') },
+      { page: 1, limit: 6, sortBy: 'joiningDate:desc' },
+      viewer,
+    );
+    const row = ownPlacement(res?.results, email);
+    joiningDate = row?.joiningDate ?? null;
+    return joinFacts({
+      status: row?.status,
+      enteredOnboardingAt: row?.enteredOnboardingAt,
+      joiningDate,
+      now: deps.now(),
+      hasUserAccount: true,
+    });
+  }
+  return joinFacts({ joiningDate, now: deps.now(), hasUserAccount: true });
 }
 
 // ─── Candidate documents ────────────────────────────────────────────────────

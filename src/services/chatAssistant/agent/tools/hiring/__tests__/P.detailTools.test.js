@@ -22,7 +22,15 @@ const chain = (value) => {
 // No sent-by log on record unless a test says so (the real model would wait on Mongo).
 const NO_LOGS = { findOne: () => chain(null) };
 const ctxWith = (deps, user = viewer('offers.read')) => ({
-  user, requestId: 'r', deps: { now: () => NOW, RecruiterActivityLog: NO_LOGS, ...deps },
+  user, requestId: 'r', deps: {
+    now: () => NOW,
+    RecruiterActivityLog: NO_LOGS,
+    // Joining-date-passed rows look up the login's roles. Defaults keep existing tests off Mongo.
+    Role: model({ find: () => [] }),
+    Employee: model({ find: () => [], findById: () => null, findOne: () => null }),
+    User: model({ find: () => [], findById: () => null, findOne: () => null }),
+    ...deps,
+  },
 });
 const paged = (totalResults, results = []) => ({ totalResults, results, page: 1, totalPages: 1 });
 const forbidden = () => Object.assign(new Error('Forbidden'), { statusCode: 403 });
@@ -482,6 +490,141 @@ describe('get_placement', () => {
     assert.equal(seen.u.id, 'v1');
     assert.match(seen.f.status, /Cancelled/);
     assert.equal(out.matches.length, 2);
+  });
+});
+
+// ─── joined / not joined ────────────────────────────────────────────────────
+
+const PAST_JOIN = '2026-08-25T00:00:00.000Z'; // 25 Aug 2026 IST
+const FUTURE_JOIN = '2026-10-15T00:00:00.000Z';
+
+function joinPlacement({ status, joiningDate, enteredOnboardingAt, email = 'dipesh@x.com' } = {}) {
+  return {
+    ...placementDoc,
+    status,
+    joiningDate,
+    ...(enteredOnboardingAt !== undefined ? { enteredOnboardingAt } : {}),
+    candidate: { ...placementDoc.candidate, fullName: 'Dipesh Limbachiya', email },
+  };
+}
+
+function joinCtx({ status, joiningDate, enteredOnboardingAt, account = true, email = 'dipesh@x.com' } = {}) {
+  const p = joinPlacement({ status, joiningDate, enteredOnboardingAt, email });
+  const login = account ? { _id: '64b0000000000000000000aa', email, roleIds: ['admin-role'] } : null;
+  return ctxWith({
+    getPlacementById: async () => p,
+    Employee: model({
+      findById: () => ({ _id: 'c1', email }),
+      find: () => [{ _id: 'c1', email }],
+    }),
+    User: model({
+      findById: () => ({ name: 'Agent Neha' }),
+      findOne: () => login,
+      find: () => (login ? [login] : []),
+    }),
+    userHasEmployeeRole: async () => false,
+    queryPlacements: async (f) => {
+      joinCtx.lastFilter = f;
+      return paged(1, [p]);
+    },
+  });
+}
+
+describe('joined / not joined', () => {
+  it('in progress with a future joining date is not joined, and onboardingNotJoined includes only that set', async () => {
+    for (const [status, queue] of [['Onboarding', 'onboarding'], ['Pending', 'preBoarding']]) {
+      const ctx = joinCtx({ status, joiningDate: FUTURE_JOIN, account: true });
+      const out = await getPlacement.execute({ id: placementDoc._id }, ctx);
+      assert.equal(out.joined, false, status);
+      assert.equal(out.notJoinedReason, 'date_ahead', status);
+      assert.equal(out.joiningDatePassed, false, status);
+      assert.equal(out.queue, queue, status);
+    }
+
+    const ctx = joinCtx({ status: 'Onboarding', joiningDate: FUTURE_JOIN });
+    const counted = await countPlacements.execute({ filters: { onboardingNotJoined: true } }, ctx);
+    const filter = joinCtx.lastFilter;
+    assert.equal(filter.status, 'Onboarding');
+    assert.equal(filter.joiningFrom, '2026-09-29T18:30:00.000Z');
+    assert.ok(new Date(PAST_JOIN) < new Date(filter.joiningFrom));
+    assert.equal(counted.total, 1);
+    assert.deepEqual(counted.byStatus, { Onboarding: 1 });
+
+    const listed = await listPlacements.execute(
+      { filters: { onboardingNotJoined: true }, page: 1, limit: 20 },
+      ctx,
+    );
+    assert.equal(listed.records[0].joined, false);
+    assert.equal(listed.records[0].notJoinedReason, 'date_ahead');
+    assert.equal(listed.records[0].status, 'Onboarding');
+  });
+
+  it('Cancelled is not joined in onboarding or pre-boarding, even with an account and a passed date', async () => {
+    const onboarding = await getPlacement.execute(
+      { id: placementDoc._id },
+      joinCtx({ status: 'Cancelled', joiningDate: PAST_JOIN, enteredOnboardingAt: '2026-08-01T00:00:00.000Z', account: true }),
+    );
+    assert.equal(onboarding.joined, false);
+    assert.equal(onboarding.notJoinedReason, 'cancelled');
+    assert.equal(onboarding.queue, 'onboarding');
+
+    const pre = await getPlacement.execute(
+      { id: placementDoc._id },
+      joinCtx({ status: 'Cancelled', joiningDate: PAST_JOIN, enteredOnboardingAt: null, account: true }),
+    );
+    assert.equal(pre.joined, false);
+    assert.equal(pre.notJoinedReason, 'cancelled');
+    assert.equal(pre.queue, 'preBoarding');
+  });
+
+  it('Deferred is not joined in onboarding or pre-boarding', async () => {
+    const onboarding = await getPlacement.execute(
+      { id: placementDoc._id },
+      joinCtx({ status: 'Deferred', joiningDate: FUTURE_JOIN, enteredOnboardingAt: '2026-08-01T00:00:00.000Z' }),
+    );
+    assert.equal(onboarding.joined, false);
+    assert.equal(onboarding.notJoinedReason, 'deferred');
+    assert.equal(onboarding.queue, 'onboarding');
+
+    const pre = await getPlacement.execute(
+      { id: placementDoc._id },
+      joinCtx({ status: 'Deferred', joiningDate: PAST_JOIN, enteredOnboardingAt: null, account: true }),
+    );
+    assert.equal(pre.joined, false);
+    assert.equal(pre.notJoinedReason, 'deferred');
+    assert.equal(pre.queue, 'preBoarding');
+  });
+
+  it('date passed, account exists, still in progress → joined, role ignored, excluded from onboardingNotJoined', async () => {
+    for (const [status, queue] of [['Onboarding', 'onboarding'], ['Pending', 'preBoarding']]) {
+      const out = await getPlacement.execute(
+        { id: placementDoc._id },
+        joinCtx({ status, joiningDate: PAST_JOIN, account: true }),
+      );
+      assert.equal(out.joined, true, status);
+      assert.equal(out.notJoinedReason, null, status);
+      assert.equal(out.hasUserAccount, true, status);
+      assert.equal(out.joiningDatePassed, true, status);
+      assert.equal(out.queue, queue, status);
+      assert.equal(out.roles, undefined);
+    }
+    const ctx = joinCtx({ status: 'Onboarding', joiningDate: PAST_JOIN });
+    await countPlacements.execute({ filters: { onboardingNotJoined: true } }, ctx);
+    assert.ok(new Date(PAST_JOIN) < new Date(joinCtx.lastFilter.joiningFrom));
+    assert.equal(joinCtx.lastFilter.status, 'Onboarding');
+  });
+
+  it('date passed and no user account is not joined', async () => {
+    for (const status of ['Onboarding', 'Pending']) {
+      const out = await getPlacement.execute(
+        { id: placementDoc._id },
+        joinCtx({ status, joiningDate: PAST_JOIN, account: false }),
+      );
+      assert.equal(out.joined, false, status);
+      assert.equal(out.notJoinedReason, 'no_account', status);
+      assert.equal(out.hasUserAccount, false, status);
+      assert.equal(out.joiningDatePassed, true, status);
+    }
   });
 });
 

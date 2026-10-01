@@ -5,6 +5,7 @@ import { checkAccessRule } from '../../../toolAccess.js';
 import { PLACEMENTS_ACCESS, hiringScope } from './common.js';
 import {
   detailDeps, placementSteps, firstBlockingStep, serviceMiss, idOf, NOT_CAPTURED, PLACEMENT_AUDIT_ACCESS,
+  placementJoin,
 } from './placementDetail.js';
 
 const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
@@ -57,9 +58,7 @@ async function resolvePlacementId(candidate, user, deps) {
 }
 
 /** Whether the candidate's own login (User with the profile's email) now holds the Employee role. */
-async function holdsEmployeeRole(email, deps) {
-  if (!email) return null;
-  const login = await deps.User.findOne({ email: String(email).toLowerCase() }).select('_id roleIds').lean();
+async function holdsEmployeeRole(login, deps) {
   return login ? !!(await deps.userHasEmployeeRole(login)) : null;
 }
 
@@ -107,11 +106,13 @@ export default defineTool({
       ? await deps.Employee.findById(candidateId).select('assignedAgent email').lean()
       : null;
     const agentId = idOf(profile?.assignedAgent);
-    const [agent, employeeRole, audit] = await Promise.all([
+    const email = profile?.email ?? p.candidate?.email ?? null;
+    const [{ login, facts }, agent, audit] = await Promise.all([
+      placementJoin(p, email, ctx),
       agentId ? deps.User.findById(agentId).select('name').lean() : null,
-      holdsEmployeeRole(profile?.email ?? p.candidate?.email, deps),
       auditTrail(placementId, user, deps),
     ]);
+    const employeeRole = await holdsEmployeeRole(login, deps);
     const now = deps.now();
 
     return {
@@ -121,7 +122,7 @@ export default defineTool({
       job: p.job?.title ?? null,
       offerCode: p.offer?.offerCode ?? null,
       status: p.status ?? null,
-      joiningDate: p.joiningDate ?? null,
+      ...facts,
       department: p.candidate?.department ?? null,
       designation: p.candidate?.designation ?? null,
       agentAssigned: agent?.name ?? null,
