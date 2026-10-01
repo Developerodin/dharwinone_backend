@@ -45,6 +45,7 @@ export default defineTool({
       ['dropped the course', named(standing.dropped)],
       ['not enrolled on the course', named(standing.notEnrolled)],
       ['no training profile', found.noProfile],
+      ['training profile not active', found.inactive],
       ['already reminded about this course in the last 24 hours', named(standing.remind.filter((id) => recent.has(id)))],
     ];
     const skipped = skipGroups.filter(([, list]) => list.length).map(([why, list]) => `Skipped — ${why}: ${nameList(list)}.`);

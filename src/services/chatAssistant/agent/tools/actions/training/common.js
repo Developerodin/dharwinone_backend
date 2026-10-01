@@ -49,13 +49,17 @@ export const nameList = (items) => items.map((i) => i.name).join(', ');
  */
 export async function resolveModule(query, { publishedOnly = false } = {}, deps) {
   const q = String(query).trim();
-  const rows = await deps.TrainingModule.find({
-    moduleName: { $regex: escapeRegex(q), $options: 'i' },
-    ...(publishedOnly ? { status: 'published' } : {}),
-  })
-    .select('moduleName status')
-    .limit(10)
-    .lean();
+  const find = (rx) =>
+    deps.TrainingModule.find({
+      moduleName: { $regex: rx, $options: 'i' },
+      ...(publishedOnly ? { status: 'published' } : {}),
+    })
+      .select('moduleName status')
+      .limit(10)
+      .lean();
+  // Exact name first: an unsorted partial match capped at 10 can miss it.
+  let rows = await find(`^${escapeRegex(q)}$`);
+  if (!rows.length) rows = await find(escapeRegex(q));
   const pick = pickByName(rows, q, (m) => m.moduleName);
   if (pick.kind === 'notFound') return { error: `No course matches "${q}".` };
   if (pick.items.length > 1) {
@@ -69,9 +73,9 @@ export async function resolveModule(query, { publishedOnly = false } = {}, deps)
  * Explicit people only (names or emails, never a group), resolved the way get_training_progress
  * resolves a person: deleted accounts and, for anyone but a platform super user, platform
  * super accounts are invisible. Any name that is missing or ambiguous refuses the whole draft,
- * naming only what was asked. People with no Student profile come back in `noProfile`;
+ * naming only what was asked. People with no Student profile come back in `noProfile`, non-active ones in `inactive`;
  * a profile is never created.
- * @returns {Promise<{ error: string } | { students: {studentId, userId, name}[], noProfile: {userId, name}[] }>}
+ * @returns {Promise<{ error: string } | { students: {studentId, userId, name}[], noProfile: {userId, name}[], inactive: {userId, name}[] }>}
  */
 export async function resolvePeople(people, viewer, deps) {
   const tokens = [...new Map(people.map((p) => [String(p).trim().toLowerCase(), String(p).trim()])).values()].filter(
@@ -109,16 +113,18 @@ export async function resolvePeople(people, viewer, deps) {
 
   const users = [...new Map(found.map((f) => [String(f.pick.items[0]._id), f.pick.items[0]])).values()];
   const students = await deps.Student.find({ user: { $in: users.map((u) => u._id) } })
-    .select('_id user')
+    .select('_id user status')
     .lean();
-  const studentByUser = new Map(students.map((s) => [String(s.user), String(s._id)]));
-  const out = { students: [], noProfile: [] };
+  const studentByUser = new Map(students.map((s) => [String(s.user), s]));
+  const out = { students: [], noProfile: [], inactive: [] };
   for (const u of users) {
     const userId = String(u._id);
     const name = u.name ?? u.email ?? 'Unnamed';
-    const studentId = studentByUser.get(userId);
-    if (studentId) out.students.push({ studentId, userId, name });
-    else out.noProfile.push({ userId, name });
+    const student = studentByUser.get(userId);
+    if (!student) out.noProfile.push({ userId, name });
+    // The course pages only list active students (trainingModule.service queryEmployeesForModule).
+    else if (student.status !== 'active') out.inactive.push({ userId, name });
+    else out.students.push({ studentId: String(student._id), userId, name });
   }
   return out;
 }

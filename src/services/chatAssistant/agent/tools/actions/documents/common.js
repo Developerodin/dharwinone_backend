@@ -16,7 +16,6 @@ import { writeAtsAudit as realWriteAtsAudit } from '../../../../../atsAudit.serv
 import { checkAccessRule } from '../../../../toolAccess.js';
 import { STALE_MESSAGE } from '../../../sageActions.js';
 import { personRecordsScope, personRecordsDeps } from '../../employees/common.js';
-import { ownsProfile } from '../../ownsProfile.js';
 
 // employee.controller.js canRequestPreBoardingDocs — the check requestDocument actually enforces. The route
 // (employee.route.js canRequestDocument) also lets employees.edit in, but the controller then refuses it.
@@ -97,21 +96,19 @@ export async function resolveVisibleProfile(person, user, deps) {
 }
 
 /**
- * Who the notice reaches. The owner login only when the profile speaks for it (ownsProfile); otherwise
- * the login whose email is the profile's own email (what notifyByEmail looks up). A recruiter who merely
- * owns a public-apply profile is never the recipient. null = no way to notify them.
+ * Who the notice reaches: the login whose email is the profile's own email (what notifyByEmail looks
+ * up). It counts as the owner channel only when that login is also the profile's owner. Owning the
+ * profile alone is never enough: a recruiter who owns a single public-apply profile would otherwise
+ * get the candidate's notice. ponytail: a profile whose email differs from its owner's login email
+ * gets no notice (null) — the safe miss; matching on role instead is the upgrade if that bites.
+ * null = no way to notify them.
  * @returns {Promise<{ channel: 'owner'|'email', userId: string }|null>}
  */
 export async function resolveRecipient(emp, deps) {
-  const speaks = (await ownsProfile([emp], deps))(emp);
-  let login = null;
-  if (speaks) {
-    login = await deps.User.findById(emp.owner).select('_id status').lean();
-  } else if (emp.email) {
-    login = await deps.User.findOne({ email: lc(emp.email) }).select('_id status').lean();
-  }
+  if (!emp.email) return null;
+  const login = await deps.User.findOne({ email: lc(emp.email) }).select('_id status').lean();
   if (!login || !NOTIFIABLE_STATUSES.includes(login.status)) return null;
-  return { channel: speaks ? 'owner' : 'email', userId: idOf(login) };
+  return { channel: idOf(login) === idOf(emp.owner) ? 'owner' : 'email', userId: idOf(login) };
 }
 
 /** The summary line naming the channel, or why nobody will be told. */

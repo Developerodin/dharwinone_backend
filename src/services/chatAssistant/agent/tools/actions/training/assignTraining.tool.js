@@ -40,6 +40,7 @@ export default defineTool({
     if (found.noProfile.length) {
       skipped.push(`Skipped — no training profile (none will be created): ${nameList(found.noProfile)}.`);
     }
+    if (found.inactive.length) skipped.push(`Skipped — training profile not active: ${nameList(found.inactive)}.`);
     if (!toAdd.length) return { ok: false, error: `Nobody to add to "${mod.module.name}". ${skipped.join(' ')}` };
 
     const notice = courseAssignedNotice(mod.module.name);
