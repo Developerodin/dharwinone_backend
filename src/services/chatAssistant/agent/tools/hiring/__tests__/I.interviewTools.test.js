@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import Meeting from '../../../../../../models/meeting.model.js';
+import hiringDomain from '../index.js';
 import getInterview from '../getInterview.tool.js';
 import getInterviewTranscript from '../getInterviewTranscript.tool.js';
 import listInterviews from '../listInterviews.tool.js';
@@ -437,5 +439,160 @@ describe('list_interviews / count_interviews — new filters', () => {
       },
     }));
     assert.equal(out.resultNotSet, 4);
+  });
+});
+
+const C1 = '64c0000000000000000000c1';
+const C2 = '64c0000000000000000000c2';
+const APP1 = '64a0000000000000000000a1';
+const APP2 = '64a0000000000000000000a2';
+const JOB = '64b000000000000000000001';
+const READY = 'At least one interview round is Selected and not cancelled';
+const NOT_READY = 'No non-cancelled round is Selected';
+
+function round(over = {}) {
+  return {
+    id: 'm-sel',
+    candidate: { id: C1, name: 'Ravi Kumar' },
+    applicationId: APP1,
+    jobId: JOB,
+    jobPosition: JOB,
+    status: 'ended',
+    interviewResult: 'pending',
+    scheduledAt: new Date('2026-09-29T05:00:00.000Z'),
+    round: { label: 'Technical' },
+    title: 'Round',
+    ...over,
+  };
+}
+
+/** Meeting.find stands in for the portal query. Cancelled rows stay in `stored` and drop out via status $ne. */
+function stubMeetingFind(t, stored) {
+  t.mock.method(Meeting, 'find', (query) => ({
+    select() {
+      return {
+        lean: async () => {
+          const candidateId = String(query['candidate.id'] ?? '');
+          const excluded = query?.status?.$ne;
+          return stored.filter((m) => {
+            if (candidateId && String(m.candidate?.id ?? '') !== candidateId) return false;
+            if (excluded != null && m.status === excluded) return false;
+            return true;
+          });
+        },
+      };
+    },
+  }));
+}
+
+function listCtx(rows) {
+  return ctxWith({
+    queryMeetings: async () => paged(rows.length, rows),
+    resolveJobTitle: async () => 'QA Engineer',
+  });
+}
+
+describe('offerReady — applicationHasSelectedInterview', () => {
+  it('hiring instructions quote offerReady and do not guess from one row', () => {
+    assert.match(hiringDomain.instructions, /if offerReady is true, the application can move to the offer letter page/);
+    assert.match(hiringDomain.instructions, /When offerReady is present, do not guess from a single row's result/);
+  });
+
+  it('one selected non-cancelled round and another pending is offerReady', async (t) => {
+    const rows = [
+      round({ id: 'm1', interviewResult: 'selected' }),
+      round({ id: 'm2', interviewResult: 'pending', round: { label: 'HR' } }),
+    ];
+    stubMeetingFind(t, rows);
+    const out = await listInterviews.execute({}, listCtx(rows));
+    assert.equal(out.offerReady, true);
+    assert.equal(out.offerReadyReason, READY);
+    assert.equal(out.records[0].result, 'selected');
+    assert.equal(out.records[1].result, 'pending');
+    assert.equal(out.records[0].offerReady, undefined);
+    assert.equal(Meeting.find.mock.calls.length, 1);
+    assert.equal(Meeting.find.mock.calls[0].arguments[0]['candidate.id'], C1);
+    assert.deepEqual(Meeting.find.mock.calls[0].arguments[0].status, { $ne: 'cancelled' });
+  });
+
+  it('a cancelled round still marked selected is not offerReady', async (t) => {
+    const rows = [round({ id: 'm1', status: 'cancelled', interviewResult: 'selected' })];
+    stubMeetingFind(t, rows);
+    const out = await listInterviews.execute({}, listCtx(rows));
+    assert.equal(out.records[0].result, 'selected');
+    assert.equal(out.records[0].status, 'cancelled');
+    assert.equal(out.offerReady, false);
+    assert.equal(out.offerReadyReason, NOT_READY);
+  });
+
+  it('pending and rejected rounds are not offerReady', async (t) => {
+    const rows = [
+      round({ id: 'm1', interviewResult: 'pending' }),
+      round({ id: 'm2', interviewResult: 'rejected' }),
+    ];
+    stubMeetingFind(t, rows);
+    const out = await listInterviews.execute({}, listCtx(rows));
+    assert.equal(out.offerReady, false);
+    assert.equal(out.offerReadyReason, NOT_READY);
+  });
+
+  it('a mixed list marks only the application with a selected round offerReady', async (t) => {
+    const rows = [
+      round({ id: 'm1', interviewResult: 'selected', candidate: { id: C1, name: 'Ravi Kumar' } }),
+      round({
+        id: 'm2', interviewResult: 'pending', applicationId: APP2,
+        candidate: { id: C2, name: 'Meera Shah' },
+      }),
+    ];
+    stubMeetingFind(t, rows);
+    const out = await listInterviews.execute({}, listCtx(rows));
+    assert.equal(out.offerReady, undefined);
+    assert.equal(out.records[0].candidate, 'Ravi Kumar');
+    assert.equal(out.records[0].result, 'selected');
+    assert.equal(out.records[0].offerReady, true);
+    assert.equal(out.records[0].offerReadyReason, READY);
+    assert.equal(out.records[1].candidate, 'Meera Shah');
+    assert.equal(out.records[1].result, 'pending');
+    assert.equal(out.records[1].offerReady, false);
+    assert.equal(out.records[1].offerReadyReason, NOT_READY);
+    const queried = Meeting.find.mock.calls.map((c) => c.arguments[0]['candidate.id']).sort();
+    assert.deepEqual(queried, [C1, C2]);
+  });
+
+  it('offerReady is true when the selected round is not on this page', async (t) => {
+    const pending = round({ id: 'm-page', interviewResult: 'pending' });
+    stubMeetingFind(t, [pending, round({ id: 'm-off', interviewResult: 'selected' })]);
+    const out = await listInterviews.execute({}, listCtx([pending]));
+    assert.equal(out.records[0].result, 'pending');
+    assert.equal(out.offerReady, true);
+    assert.equal(out.offerReadyReason, READY);
+  });
+
+  it('get_interview matches include each result and one offerReady for that application', async (t) => {
+    const rows = [
+      round({ id: 'm1', interviewResult: 'selected', round: { label: 'Technical' } }),
+      round({ id: 'm2', interviewResult: 'pending', round: { label: 'HR' } }),
+    ];
+    stubMeetingFind(t, rows);
+    const out = await getInterview.execute({ candidate: 'Ravi' }, ctxWith(detailDeps({
+      queryMeetings: async () => paged(2, rows),
+      getMeetingById: () => assert.fail('must not load one'),
+    })));
+    assert.deepEqual(out.matches.map((m) => m.result), ['selected', 'pending']);
+    assert.equal(out.offerReady, true);
+    assert.equal(out.offerReadyReason, READY);
+    assert.equal(out.matches[0].offerReady, undefined);
+  });
+
+  it('get_interview offerReady is false when the only selected round is cancelled', async (t) => {
+    const row = round({ status: 'cancelled', interviewResult: 'selected' });
+    stubMeetingFind(t, [row]);
+    const out = await getInterview.execute({ id: row.id }, ctxWith(detailDeps({
+      getMeetingById: async () => row,
+    })));
+    assert.equal(out.interview.result, 'selected');
+    assert.equal(out.interview.status, 'cancelled');
+    assert.equal(out.offerReady, false);
+    assert.equal(out.offerReadyReason, NOT_READY);
   });
 });

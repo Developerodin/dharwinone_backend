@@ -3,7 +3,7 @@ import { defineTool } from '../../defineTool.js';
 import { ActivityActions, EntityTypes } from '../../../../../config/activityLog.js';
 import { INTERVIEWS_ACCESS, hiringScope, formatInterviewers } from './common.js';
 import {
-  NOT_CAPTURED, interviewDetailDeps, resolveInterview, jobTitleFor, listRecordingsSafe, loadAiSummary,
+  NOT_CAPTURED, interviewDetailDeps, resolveInterview, offerReadyByMeeting, jobTitleFor, listRecordingsSafe, loadAiSummary,
   evaluationRow, legacyScorecard, panelOf, attendanceOf, loadInterviewHistory, auditView, idOf, createdAtOf,
 } from './interviewDetail.js';
 
@@ -38,7 +38,8 @@ export default defineTool({
     '(reminderAt) and whether it already went (reminderSent), and resultMissing / feedbackMissing flags. ' +
     'Use for "how did <candidate>\'s interview go", "who is on the panel for <candidate>", "was it recorded", ' +
     '"who marked <candidate> selected", "when is the reminder". Several interviews fit → { matches } to ask ' +
-    'which one. reminderAt null means no reminder time is stored — never invent one.',
+    'which one, each with its result. offerReady / offerReadyReason are the Move to Offer gate for this application ' +
+    '(one offerReady when the rounds are the same application). reminderAt null means no reminder time is stored — never invent one.',
   input: Joi.object({
     id: lookupText('Interview id from an earlier list_interviews / get_interview result.'),
     candidate: lookupText('Candidate (person interviewed) name, partial match.'),
@@ -48,7 +49,7 @@ export default defineTool({
   async execute(args = {}, ctx) {
     const user = hiringScope(ctx);
     const deps = interviewDetailDeps(ctx);
-    const found = await resolveInterview(args, user, deps);
+    const found = await resolveInterview(args, user, deps, { offerReady: true });
     if (!found.meeting) return found;
     const m = found.meeting;
     const id = idOf(m);
@@ -64,6 +65,7 @@ export default defineTool({
     const scorecard = legacyScorecard(m);
     const ended = String(m.status || '').toLowerCase() === 'ended';
     const recording = recordingSummary(recordings);
+    const offer = (await offerReadyByMeeting([m])).shared;
 
     // Same rows as meeting.controller getRecordings / interviewTranscript.controller getSummary, written only
     // for content this answer actually carries.
@@ -110,6 +112,8 @@ export default defineTool({
         interviewers: formatInterviewers(m),
         panel: panelOf(m),
       },
+      offerReady: offer.offerReady,
+      offerReadyReason: offer.offerReadyReason,
       attendance: attendanceOf(m),
       history: history.hidden ? null : history,
       ...(history.hidden ? { historyHidden: true } : {}),

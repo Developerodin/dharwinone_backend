@@ -5,6 +5,7 @@ import {
 } from './common.js';
 import {
   interviewDetailFilters, interviewDetailDeps, interviewExtraClauses, detailInterviewFilter, conflictsFor, jobTitlesFor,
+  withOfferReady,
 } from './interviewDetail.js';
 
 export default defineTool({
@@ -17,7 +18,8 @@ export default defineTool({
     'Use for "interviews today","<candidate>\'s interview", "who is interviewing ' +
     'for <job>", "which interviews have no result yet" (filters.resultMissing), "panel clashes" ' +
     '(filters.overlapping — each row then lists what it clashes with, which can be an interview that started just before the window). total is the full count even when ' +
-    'fewer rows come back.',
+    'fewer rows come back. offerReady / offerReadyReason are the Move to Offer gate for that application ' +
+    '(on this result when every row is one application; on each row when the list mixes applications).',
   measure:
     'Interview RECORDS (one per scheduled interview round) you are allowed to see on the Interviews page ' +
       '(interviews manage = all, read = your own); every status and result unless filtered.',
@@ -34,18 +36,22 @@ export default defineTool({
     const res = await deps.queryMeetings(
       detailInterviewFilter(filters, clauses), { page, limit, sortBy: 'scheduledAt:desc' }, user,
     );
-    const jobTitle = await jobTitlesFor(res?.results, deps);
-    return {
+    const rows = res?.results || [];
+    const jobTitle = await jobTitlesFor(rows, deps);
+    return withOfferReady({
       total: res?.totalResults ?? 0,
       page: res?.page ?? page,
       totalPages: res?.totalPages ?? 0,
-      records: (res?.results || []).map((m) => {
+      records: rows.map((m) => {
         const id = String(m.id ?? m._id ?? '');
         const conflicts = conflictsFor(overlaps, id);
         return {
           id,
           title: m.title ?? null,
           candidate: m.candidate?.name ?? null,
+          candidateId: m.candidateId
+            ? String(m.candidateId)
+            : (m.candidate?.id ? String(m.candidate.id) : null),
           applicationId: m.applicationId ? String(m.applicationId) : null,
           jobPosition: jobTitle(m),
           interviewers: formatInterviewers(m),
@@ -58,7 +64,7 @@ export default defineTool({
         };
       }),
       filtersApplied: filters,
-    };
+    }, rows, 'records');
   },
   render(result) {
     if (!result || result.error) return null;

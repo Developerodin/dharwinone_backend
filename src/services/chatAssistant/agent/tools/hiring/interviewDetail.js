@@ -14,6 +14,7 @@ import { interviewFilters } from './filters.js';
 import { hiringDeps, interviewMongoFilter } from './common.js';
 import { dayWindowBounds } from '../employees/common.js';
 import { auditDeps, passesGate, activityTier } from '../audit/common.js';
+import { applicationHasSelectedInterview } from '../../../../offerInterviewBypass.service.js';
 
 // meeting.route.js GET /:id/transcript (interviewTranscript.controller getTranscript): this permission, then
 // getInterviewTranscript -> getMeetingById (meetingScope) — an interview outside the viewer's scope is a 404.
@@ -237,11 +238,102 @@ export async function jobTitlesFor(rows, deps) {
   };
 }
 
+const OFFER_READY_REASON = 'At least one interview round is Selected and not cancelled';
+const OFFER_NOT_READY_REASON = 'No non-cancelled round is Selected';
+
+function meetingCandidateId(m) {
+  const raw = m?.candidate?.id ?? m?.candidate?._id ?? m?.candidateId ?? '';
+  return raw ? String(raw) : '';
+}
+
+function meetingApplicationId(m) {
+  return m?.applicationId ? String(m.applicationId) : '';
+}
+
+function meetingJobId(m) {
+  const fromJob = m?.jobId ? String(m.jobId) : '';
+  if (HEX_ID_RE.test(fromJob)) return fromJob;
+  const pos = String(m?.jobPosition || '').trim();
+  return HEX_ID_RE.test(pos) ? pos : '';
+}
+
+/** Application id when the round is linked; otherwise candidate + job, so two applications are not one fact. */
+function interviewApplicationKey(m) {
+  const applicationId = meetingApplicationId(m);
+  if (applicationId) return `app:${applicationId}`;
+  const candidateId = meetingCandidateId(m);
+  const jobId = meetingJobId(m);
+  const jobPos = String(m?.jobPosition || '').trim();
+  if (candidateId && (jobId || jobPos)) return `cj:${candidateId}:${jobId || jobPos}`;
+  return `row:${idOf(m) || 'unknown'}`;
+}
+
+/** The application shape applicationHasSelectedInterview reads (candidate, job, application id). */
+function applicationArgFromMeeting(m) {
+  const candidateId = meetingCandidateId(m);
+  const applicationId = meetingApplicationId(m);
+  const jobId = meetingJobId(m);
+  return {
+    ...(applicationId ? { _id: applicationId } : {}),
+    ...(candidateId ? { candidate: { _id: candidateId } } : {}),
+    ...(jobId ? { job: { _id: jobId } } : {}),
+  };
+}
+
+function offerReadyFact(ready) {
+  return {
+    offerReady: ready === true,
+    offerReadyReason: ready ? OFFER_READY_REASON : OFFER_NOT_READY_REASON,
+  };
+}
+
+/**
+ * Move to Offer's gate, once per application. Calls applicationHasSelectedInterview, which re-reads
+ * that candidate's non-cancelled meetings. The rows here only identify the application: a selected
+ * round that is not on this page still counts, and a cancelled round still does not.
+ *
+ * Failure: Meeting.find throws and this tool fails. Guessing from the page would hide that.
+ * Ceiling: one query per distinct application on the page (list cap 50).
+ */
+export async function offerReadyByMeeting(meetings) {
+  const list = meetings || [];
+  const keys = list.map(interviewApplicationKey);
+  const unique = [...new Set(keys)];
+  const factByKey = new Map();
+  await Promise.all(unique.map(async (key) => {
+    const sample = list[keys.indexOf(key)];
+    const ready = await applicationHasSelectedInterview(applicationArgFromMeeting(sample));
+    factByKey.set(key, offerReadyFact(ready));
+  }));
+  return {
+    shared: unique.length === 1 ? factByKey.get(unique[0]) : null,
+    facts: keys.map((key) => factByKey.get(key)),
+  };
+}
+
+/** One application: offerReady on the result. Mixed applications: offerReady on each row. */
+export async function withOfferReady(result, meetings, listKey) {
+  if (!meetings?.length) return result;
+  const { shared, facts } = await offerReadyByMeeting(meetings);
+  if (shared) {
+    return { ...result, offerReady: shared.offerReady, offerReadyReason: shared.offerReadyReason };
+  }
+  return {
+    ...result,
+    [listKey]: result[listKey].map((row, i) => ({
+      ...row,
+      offerReady: facts[i].offerReady,
+      offerReadyReason: facts[i].offerReadyReason,
+    })),
+  };
+}
+
 /**
  * By id (Mongo id or meetingId) through getMeetingById (meetingScope; out of scope = 404 = notFound), or by
  * candidate name (+ job position) through the Interviews page query. Several rounds → { matches }.
+ * options.offerReady (get_interview only) adds each match's result and the application's offerReady.
  */
-export async function resolveInterview({ id, candidate, jobPosition } = {}, user, deps) {
+export async function resolveInterview({ id, candidate, jobPosition } = {}, user, deps, options = {}) {
   if (id) {
     try {
       const meeting = await deps.getMeetingById(String(id), user);
@@ -260,17 +352,18 @@ export async function resolveInterview({ id, candidate, jobPosition } = {}, user
   if (!rows.length) return { notFound: true };
   if (rows.length === 1) return { meeting: rows[0] };
   const title = await jobTitlesFor(rows, deps);
-  return {
-    total: res?.totalResults ?? rows.length,
-    matches: rows.map((m) => ({
-      id: idOf(m),
-      candidate: m.candidate?.name ?? null,
-      jobPosition: title(m),
-      round: m.round?.label ?? null,
-      scheduledAt: m.scheduledAt ?? null,
-      status: m.status ?? null,
-    })),
-  };
+  const matches = rows.map((m) => ({
+    id: idOf(m),
+    candidate: m.candidate?.name ?? null,
+    jobPosition: title(m),
+    round: m.round?.label ?? null,
+    scheduledAt: m.scheduledAt ?? null,
+    status: m.status ?? null,
+    ...(options.offerReady ? { result: m.interviewResult ?? null } : {}),
+  }));
+  const body = { total: res?.totalResults ?? rows.length, matches };
+  if (!options.offerReady) return body;
+  return withOfferReady(body, rows, 'matches');
 }
 
 export function interviewBrief(m, jobTitle) {
