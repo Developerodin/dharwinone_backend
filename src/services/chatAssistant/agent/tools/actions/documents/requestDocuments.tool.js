@@ -159,9 +159,11 @@ export default defineTool({
       ...(failed.length ? [`Failed: ${failed.join('; ')}.`] : []),
     ];
     return {
-      ok: created.length > 0 || failed.length === 0,
+      // A partial create is a failed action: the row must not be stored done, and the
+      // message lists only what was created plus what failed.
+      ok: failed.length === 0,
       message: parts.join(' '),
-      details: { profileId, created, skipped, failed: failed.length, notified },
+      details: { profileId, created, skipped, failed, notified },
     };
   },
 });
