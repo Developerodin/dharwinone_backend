@@ -336,8 +336,60 @@ describe('get_person_360 — full 360', () => {
       list_call_followups: ok({ total: 1, records: [{ applicant: 'Priya R. Sharma', job: 'Dev', callbackAt: '2026-10-01' }] }),
     });
     assert.equal(result.sections.callbacksDue.summary.due + result.sections.callbacksDue.summary.overdue, 2);
+    const followups = calls.filter((c) => c.name === 'list_call_followups');
+    assert.ok(followups.every((c) => c.args.applicantUserId === U1));
     const leave = calls.find((c) => c.name === 'list_leave_requests');
     assert.equal(leave.args.filters.person, U1);
+  });
+
+  it('a truncated callback scan that missed the person is truncated, not no callbacks', async () => {
+    const { result } = await run({ person: 'Priya Sharma', focus: 'pending' }, {
+      get_user: uniqueUser(['candidate']),
+      list_call_followups: ok({ total: 80, records: [{ applicant: 'Someone Else', job: 'QA', callbackAt: '2026-10-02' }] }),
+    });
+    assert.equal(result.sections.callbacksDue.status, 'truncated');
+    assert.match(result.sections.callbacksDue.note, /Only the first 50/);
+    assert.notEqual(result.sections.callbacksDue.status, 'notRecorded');
+  });
+
+  it('interviews and offers do not merge two people who share a name when ids differ', async () => {
+    const profileId = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+    const { result } = await run({ person: 'Priya Sharma', sections: ['interviews', 'offer', 'calls'] }, {
+      get_user: uniqueUser(['candidate'], { profiles: { candidate: { profileId, fields: { name: 'Priya Sharma' } } } }),
+      list_interviews: ok({
+        total: 2,
+        records: [
+          { id: 'i1', candidate: 'Priya Sharma', candidateId: profileId, jobPosition: 'Dev' },
+          { id: 'i2', candidate: 'Priya Sharma', candidateId: 'cccccccccccccccccccccccc', jobPosition: 'QA' },
+        ],
+      }),
+      get_offer: ok({ offerCode: 'OF-2', candidate: 'Priya Sharma', candidateId: 'cccccccccccccccccccccccc', status: 'Sent' }),
+      list_call_records: ok({
+        total: 2,
+        records: [
+          { id: 'c1', person: 'Priya Sharma', candidateId: profileId, when: '2026-09-01' },
+          { id: 'c2', person: 'Priya Sharma', candidateId: 'cccccccccccccccccccccccc', when: '2026-09-02' },
+        ],
+      }),
+      get_call_metrics: ok({ answeredCalls: 1 }),
+    });
+    assert.deepEqual(result.sections.interviews.rows.map((r) => r.jobPosition), ['Dev']);
+    assert.equal(result.sections.offer.status, 'notRecorded');
+    assert.equal(result.sections.calls.rows.length, 1);
+  });
+
+  it('name-only rows for two different person ids stop as ambiguous', async () => {
+    const { result } = await run({ person: 'Priya Sharma', sections: ['interviews'] }, {
+      get_user: uniqueUser(['candidate']),
+      list_interviews: ok({
+        total: 2,
+        records: [
+          { id: 'i1', candidate: 'Priya Sharma', candidateId: 'bbbbbbbbbbbbbbbbbbbbbbbb', jobPosition: 'Dev' },
+          { id: 'i2', candidate: 'Priya Sharma', candidateId: 'cccccccccccccccccccccccc', jobPosition: 'QA' },
+        ],
+      }),
+    });
+    assert.equal(result.sections.interviews.summary.ambiguous, true);
   });
 
   it('several records inside a section (duplicate names) → ambiguous summary, not a guess', async () => {

@@ -28,18 +28,24 @@ export default defineTool({
   input: Joi.object({
     kind: Joi.string().valid(...FOLLOWUP_KINDS).required(),
     jobId: Joi.string().pattern(/^[a-fA-F0-9]{24}$/).description('Job id from a jobs tool, to limit to one job.'),
+    applicantUserId: Joi.string().pattern(/^[a-fA-F0-9]{24}$/)
+      .description('Applicant user id. Limits callbacks to that person instead of the first page of everyone.'),
     appliedBetween: Joi.object({ from: isoDay, to: isoDay })
       .description('Application date window, inclusive whole days (IST).'),
     limit: Joi.number().integer().min(1).max(MAX_LIST_LIMIT).default(20),
   }),
   access: CALLS_ACCESS,
-  async execute({ kind, jobId, appliedBetween, limit } = {}, ctx) {
+  async execute({ kind, jobId, appliedBetween, applicantUserId, limit } = {}, ctx) {
     const user = callsScope(ctx);
     // Applications page gate (job-application routes: requirePermissions('candidates.read')).
     if (!viewerCan(user, APPLICATIONS_PAGE_PERMISSION)) {
       return { forbidden: true, error: `Needs the Applications page permission (${APPLICATIONS_PAGE_PERMISSION}).` };
     }
-    const filters = { ...(jobId ? { jobId } : {}), ...(appliedBetween ? { appliedBetween } : {}) };
+    const filters = {
+      ...(jobId ? { jobId } : {}),
+      ...(appliedBetween ? { appliedBetween } : {}),
+      ...(applicantUserId ? { applicantUserId } : {}),
+    };
     const out = await runFollowups(kind, filters, user, callsDeps(ctx), { limit: Math.min(limit || 20, MAX_LIST_LIMIT) });
     return { kind, ...out, filtersApplied: filters };
   },

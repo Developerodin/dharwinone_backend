@@ -184,6 +184,7 @@ export function toCallRow(r) {
     id: r.executionId != null ? String(r.executionId) : null,
     when: r.createdAt ?? null,
     person: r.displayName ?? r.businessName ?? null,
+    candidateId: r.candidate ? String(r.candidate?._id ?? r.candidate) : null,
     category: r.displayCategory ?? null,
     toNumber: r.toPhoneNumber || r.recipientPhoneNumber || r.phone || null,
     fromNumber: r.fromPhoneNumber || r.userNumber || null,

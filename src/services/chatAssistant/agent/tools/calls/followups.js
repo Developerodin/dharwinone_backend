@@ -27,14 +27,15 @@ export function followupDeps(deps = {}) {
 
 const isEmptyScope = (q) => Array.isArray(q?._id?.$in) && q._id.$in.length === 0;
 
-async function scopedApplications({ jobId, appliedBetween }, user, deps) {
+async function scopedApplications({ jobId, appliedBetween, applicantUserId }, user, deps) {
   const { from, to } = dayWindowBounds(appliedBetween);
   const filter = { excludeInternal: true };
   if (jobId) filter.jobId = jobId;
   if (from) filter.dateFrom = from;
   if (to) filter.dateTo = to;
   const { query } = await deps.buildApplicantQuery(filter, user);
-  return query;
+  if (!applicantUserId) return query;
+  return { $and: [query, { applicantUser: applicantUserId }] };
 }
 
 function toFollowupRow(app) {
@@ -109,7 +110,7 @@ async function notYetCalled(scope, deps, limit) {
 
 /**
  * @param {'callbackRequested'|'callbackOverdue'|'notYetCalled'} kind
- * @param {{ jobId?: string, appliedBetween?: { from?: string, to?: string } }} filters
+ * @param {{ jobId?: string, appliedBetween?: { from?: string, to?: string }, applicantUserId?: string }} filters
  * @returns {Promise<{ total: number, records: object[], byVerificationStatus?: object }>}
  */
 export async function runFollowups(kind, filters, user, deps, { limit = 20, now = new Date() } = {}) {

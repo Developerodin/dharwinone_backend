@@ -92,6 +92,7 @@ export default defineTool({
       id: idOf(o),
       offerCode: o.offerCode ?? null,
       candidate: o.candidate?.fullName ?? null,
+      candidateId: o.candidate ? idOf(o.candidate) : null,
       job: o.job?.title ?? null,
       position: o.positionTitle || o.job?.title || null,
       status: o.status ?? null,

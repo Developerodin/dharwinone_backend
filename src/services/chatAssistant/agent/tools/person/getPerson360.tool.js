@@ -67,8 +67,11 @@ function targetFrom(r, viewer) {
   const name = r.identity?.name ?? null;
   // Login name plus profile names: rows keyed by a profile's fullName (callbacks) may spell it differently.
   const profileNames = Object.values(r.profiles || {}).map((p) => p?.fields?.name).filter(Boolean);
+  const profileIds = Object.values(r.profiles || {}).map((p) => p?.profileId).filter(Boolean).map(String);
   return {
     userId,
+    profileIds,
+    ids: new Set([userId, ...profileIds].filter(Boolean)),
     name,
     names: [...new Set([name, ...profileNames].filter(Boolean))],
     email: r.identity?.email ?? null,
@@ -124,8 +127,29 @@ function roleSkip(only, t) {
 
 // ─── Section builders (one tool result → { status, summary, rows ≤ 5 }) ─────
 
-const exactRows = (r, field, name) => (r.records || []).filter((x) => sameName(x[field], name));
 const scanTruncated = (r) => (r.total ?? 0) > (r.records || []).length;
+
+/** Person id on a child row: user, profile, or candidate. Offer/interview ids are not person ids. */
+function rowPersonId(row) {
+  const id = row?.userId || row?.applicantUserId || row?.candidateId || row?.profileId;
+  return id ? String(id) : null;
+}
+
+/**
+ * Keep rows that are this person. An id on the row wins over a shared name.
+ * Name-only rows that belong to more than one person id, and we cannot pick, stop as ambiguous.
+ */
+function rowsForPerson(records, t, nameField) {
+  const names = t.names?.length ? t.names : [t.name].filter(Boolean);
+  const named = (records || []).filter((row) => names.some((n) => sameName(row[nameField], n)));
+  const known = t.ids instanceof Set ? t.ids : new Set();
+  const ids = [...new Set(named.map(rowPersonId).filter(Boolean))];
+  if (ids.length > 1 && !ids.some((id) => known.has(id))) return { ambiguous: true, rows: named };
+  if (ids.some((id) => known.size && !known.has(id))) {
+    return { rows: named.filter((row) => known.has(rowPersonId(row))) };
+  }
+  return { rows: named };
+}
 
 function referralSection(r, t) {
   // get_referral matches the email or name partially; keep only leads under this person's exact name.
@@ -150,7 +174,9 @@ function callsSection([list, metrics], t) {
   const failed = failedSection(list);
   if (failed) return failed;
   const r = list.result;
-  const rows = exactRows(r, 'person', t.name);
+  const picked = rowsForPerson(r.records, t, 'person');
+  if (picked.ambiguous) return ambiguousSection(picked.rows, 'list_call_records');
+  const rows = picked.rows;
   if (!r.total || !rows.length) return notRecorded('No call records under this name.');
   const mf = failedSection(metrics);
   return okSection({
@@ -164,7 +190,9 @@ function interviewsSection(o, t, empty) {
   const failed = failedSection(o);
   if (failed) return failed;
   const r = o.result;
-  const rows = exactRows(r, 'candidate', t.name);
+  const picked = rowsForPerson(r.records, t, 'candidate');
+  if (picked.ambiguous) return ambiguousSection(picked.rows, 'list_interviews');
+  const rows = picked.rows;
   const cut = scanTruncated(r) ? { scanTruncated: true, note: `Only the first ${(r.records || []).length} name matches were read.` } : {};
   if (!rows.length) return notRecorded(cut.note ?? empty);
   return okSection({ total: rows.length, ...cut }, rows.map((x) => pick(x, ['jobPosition', 'scheduledAt', 'status', 'result', 'interviewers'])));
@@ -173,21 +201,27 @@ function interviewsSection(o, t, empty) {
 // get_offer / get_placement search the email or name as a substring and return a lone hit as THE record,
 // so a hit is this person's only when it carries their exact name.
 function theirMatches(r, t, tool, empty) {
-  const own = r.matches.filter((m) => sameName(m.candidate, t.name));
-  return own.length ? ambiguousSection(own, tool) : notRecorded(empty);
+  const picked = rowsForPerson(r.matches, t, 'candidate');
+  if (picked.ambiguous || picked.rows.length > 1) return ambiguousSection(picked.rows, tool);
+  if (picked.rows.length === 1) return okSection(pick(picked.rows[0], ['id', 'offerCode', 'candidate', 'job', 'status']));
+  return notRecorded(empty);
 }
 
 function offerSection(r, t) {
   if (r.notFound) return notRecorded('No offer on record.');
   if (r.matches) return theirMatches(r, t, 'get_offer', 'No offer on record.');
-  if (!sameName(r.candidate, t.name)) return notRecorded('No offer on record.');
+  const offerId = rowPersonId(r);
+  if (offerId && t.ids?.size && !t.ids.has(offerId)) return notRecorded('No offer on record.');
+  if (!sameName(r.candidate, t.name) && !(offerId && t.ids?.has(offerId))) return notRecorded('No offer on record.');
   return okSection(pick(r, ['offerCode', 'job', 'status', 'sentAt', 'acceptedAt', 'rejectedAt', 'joiningDate', 'daysPending', 'markedSentBy']));
 }
 
 function placementSection(r, t) {
   if (r.notFound) return notRecorded('No placement on record.');
   if (r.matches) return theirMatches(r, t, 'get_placement', 'No placement on record.');
-  if (!sameName(r.candidate, t.name)) return notRecorded('No placement on record.');
+  const placementId = rowPersonId(r);
+  if (placementId && t.ids?.size && !t.ids.has(placementId)) return notRecorded('No placement on record.');
+  if (!sameName(r.candidate, t.name) && !(placementId && t.ids?.has(placementId))) return notRecorded('No placement on record.');
   return okSection(pick(r, ['status', 'job', 'joiningDate', 'firstBlockingStep', 'holdsEmployeeRole', 'department', 'designation']));
 }
 
@@ -320,21 +354,29 @@ function missingDocumentsSection(r) {
 }
 
 /**
- * list_call_followups has no person filter, so the person's rows are picked out of the first SCAN_LIMIT
- * callbacks by exact applicant name. ponytail: past SCAN_LIMIT open callbacks in the viewer's scope the
- * answer says it only read that many; upgrade = an applicant filter on list_call_followups.
+ * list_call_followups accepts applicantUserId. A truncated page that does not contain this
+ * person is not "no callbacks".
  */
 function callbacksSection([due, overdue], t) {
   const verdicts = [due, overdue].map((o) => failedSection(o));
   if (verdicts[0] && verdicts[1]) return verdicts[0];
-  const rowsOf = (o, i, isOverdue) => (verdicts[i] ? [] : (o.result.records || [])
-    .filter((x) => t.names.some((n) => sameName(x.applicant, n)))
-    .map((x) => ({ ...pick(x, ['job', 'callbackAt', 'applicationStatus']), overdue: isOverdue })));
+  const rowsOf = (o, i, isOverdue) => {
+    if (verdicts[i]) return [];
+    const picked = rowsForPerson(o.result.records, t, 'applicant');
+    if (picked.ambiguous) return picked.rows.map((x) => ({ ...x, overdue: isOverdue, ambiguous: true }));
+    return picked.rows.map((x) => ({ ...pick(x, ['job', 'callbackAt', 'applicationStatus']), overdue: isOverdue }));
+  };
   const dueRows = rowsOf(due, 0, false);
   const overdueRows = rowsOf(overdue, 1, true);
+  if ([...dueRows, ...overdueRows].some((x) => x.ambiguous)) {
+    return ambiguousSection([...overdueRows, ...dueRows], 'list_call_followups');
+  }
   const truncated = [due, overdue].some((o, i) => !verdicts[i] && scanTruncated(o.result));
   const cut = truncated ? { scanTruncated: true, note: `Only the first ${SCAN_LIMIT} callbacks of each kind were read.` } : {};
-  if (!dueRows.length && !overdueRows.length) return notRecorded(cut.note ?? 'No callbacks due.');
+  if (!dueRows.length && !overdueRows.length) {
+    if (truncated) return { status: 'truncated', note: cut.note };
+    return notRecorded('No callbacks due.');
+  }
   return okSection({
     due: dueRows.length,
     overdue: overdueRows.length,
@@ -347,10 +389,15 @@ function callbacksSection([due, overdue], t) {
 function offerPendingSection(r, t) {
   if (r.notFound) return notRecorded('No offer on record.');
   if (r.matches) {
-    const open = r.matches.filter((m) => PENDING_OFFER_STATUSES.includes(m.status) && sameName(m.candidate, t.name));
-    return open.length ? ambiguousSection(open, 'get_offer') : notRecorded('No offer waiting on the candidate.');
+    const open = r.matches.filter((m) => PENDING_OFFER_STATUSES.includes(m.status));
+    const picked = rowsForPerson(open, t, 'candidate');
+    if (picked.ambiguous || picked.rows.length > 1) return ambiguousSection(picked.rows, 'get_offer');
+    if (picked.rows.length === 1) return okSection(pick(picked.rows[0], ['id', 'candidate', 'job', 'status']));
+    return notRecorded('No offer waiting on the candidate.');
   }
-  if (!sameName(r.candidate, t.name)) return notRecorded('No offer on record.');
+  const pendingId = rowPersonId(r);
+  if (pendingId && t.ids?.size && !t.ids.has(pendingId)) return notRecorded('No offer on record.');
+  if (!sameName(r.candidate, t.name) && !(pendingId && t.ids?.has(pendingId))) return notRecorded('No offer on record.');
   if (!PENDING_OFFER_STATUSES.includes(r.status)) {
     return notRecorded(`No offer waiting on the candidate (latest offer: ${r.status ?? 'unknown status'}).`);
   }
@@ -495,9 +542,9 @@ const PENDING_PLAN = {
   },
   callbacksDue: {
     unavailable: needsName,
-    calls: () => [
-      { name: 'list_call_followups', args: { kind: 'callbackRequested', limit: SCAN_LIMIT } },
-      { name: 'list_call_followups', args: { kind: 'callbackOverdue', limit: SCAN_LIMIT } },
+    calls: (t) => [
+      { name: 'list_call_followups', args: { kind: 'callbackRequested', ...(t.userId ? { applicantUserId: t.userId } : {}), limit: SCAN_LIMIT } },
+      { name: 'list_call_followups', args: { kind: 'callbackOverdue', ...(t.userId ? { applicantUserId: t.userId } : {}), limit: SCAN_LIMIT } },
     ],
     build: callbacksSection,
   },
