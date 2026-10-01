@@ -108,7 +108,10 @@ describe('list_tasks', () => {
     assert.deepEqual(out.records[0], {
       id: 't1', code: 'T-1', title: 'Fix login', status: 'todo', priority: null, dueDate: null,
       project: 'Portal', sprint: null, assignees: ['Me'], blocked: true,
+      createdBy: null, createdAt: null, updatedAt: null,
+      commentsCount: 0, lastComment: null, attachmentsCount: 0,
     });
+    assert.equal(out.commentsVisible, true);
     assert.equal(out.scope, 'mine');
   });
 

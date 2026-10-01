@@ -2,7 +2,8 @@ import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import { projectFilters } from './filters.js';
 import {
-  PROJECTS_ACCESS, MAX_LIST_LIMIT, workScope, workDeps, projectFilterFor, projectRow, countFacts,
+  PROJECTS_ACCESS, MAX_LIST_LIMIT, workScope, workDeps, projectFilterFor, projectRow,
+  activityForProjects, idOf, countFacts,
 } from './common.js';
 
 export default defineTool({
@@ -10,8 +11,10 @@ export default defineTool({
   domain: 'projects',
   kind: 'read',
   description:
-    'List projects with status, priority, dates, project manager and assigned workforce teams, newest first. ' +
-    'Use for "list projects", "which team is on project X", "projects without a team". total is the full count.',
+    'List projects with status, priority, dates, project manager, creator name, description, members ' +
+    '(people assigned to the project), workforce teams and lastActivityAt (latest task update). Use for ' +
+    '"list projects", "who created project X", "what is project X about", "who is on project X", ' +
+    '"projects with no activity in N days". total is the full count.',
   measure:
     'PROJECT records visible on the Projects page (My Projects only without projects.read), every status ' +
       'unless filters.status is set.',
@@ -23,12 +26,14 @@ export default defineTool({
   async execute({ filters = {}, limit = 20 } = {}, ctx) {
     const user = workScope(ctx);
     const deps = workDeps(ctx);
-    const { filter, scope } = await projectFilterFor(user, filters, deps);
+    const { filter, scope, activityById } = await projectFilterFor(user, filters, deps);
     const res = await deps.queryProjects(filter, { limit, sortBy: 'createdAt:desc' });
+    const results = res?.results || [];
+    const activity = activityById || await activityForProjects(results.map(idOf), deps);
     return {
       total: res?.totalResults ?? 0,
       scope,
-      records: (res?.results || []).map(projectRow),
+      records: results.map((p) => projectRow(p, activity.get(String(idOf(p))) ?? null)),
       filtersApplied: filters,
     };
   },

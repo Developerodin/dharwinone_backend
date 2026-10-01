@@ -1,0 +1,97 @@
+[
+  {
+    "id": "P-w4-task-creator",
+    "question": "who created task DHRW-101?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "search": "DHRW-101" } } } }
+  },
+  {
+    "id": "P-w4-task-last-comment",
+    "question": "what was the last comment on task DHRW-101?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "search": "DHRW-101" } } } }
+  },
+  {
+    "id": "P-w4-why-overdue",
+    "question": "why is task DHRW-101 overdue?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "search": "DHRW-101" } } } },
+        { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "search": "DHRW-101", "overdue": true } } } }
+      ]
+    }
+  },
+  {
+    "id": "P-w4-created-by-list",
+    "question": "which tasks did Ravi Kumar create?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "createdBy": "Ravi Kumar" } } } }
+  },
+  {
+    "id": "P-w4-created-by-count",
+    "question": "how many tasks did Ravi Kumar create?",
+    "expect": { "tools": ["count_tasks"], "args": { "count_tasks": { "filters": { "createdBy": "Ravi Kumar" } } } }
+  },
+  {
+    "id": "P-w4-updated-since-list",
+    "question": "which tasks were updated on or after 2026-10-01?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "updatedSince": "2026-10-01" } } } }
+  },
+  {
+    "id": "P-w4-updated-since-count",
+    "question": "how many tasks were updated since 2026-09-01?",
+    "expect": { "tools": ["count_tasks"], "args": { "count_tasks": { "filters": { "updatedSince": "2026-09-01" } } } }
+  },
+  {
+    "id": "P-w4-today-activity",
+    "question": "what task activity happened today?",
+    "expect": {
+      "anyOf": [
+        { "tools": ["list_tasks"] },
+        { "tools": ["count_tasks"] }
+      ]
+    }
+  },
+  {
+    "id": "P-w4-no-update-7",
+    "question": "which tasks have had no updates in 7 days?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "noUpdateDays": 7 } } } }
+  },
+  {
+    "id": "P-w4-no-update-14",
+    "question": "how many tasks have had no update in 14 days?",
+    "expect": { "tools": ["count_tasks"], "args": { "count_tasks": { "filters": { "noUpdateDays": 14 } } } }
+  },
+  {
+    "id": "P-w4-has-comments",
+    "question": "which tasks have comments?",
+    "expect": { "tools": ["list_tasks"], "args": { "list_tasks": { "filters": { "hasComments": true } } } }
+  },
+  {
+    "id": "P-w4-no-comments",
+    "question": "how many tasks have no comments?",
+    "expect": { "tools": ["count_tasks"], "args": { "count_tasks": { "filters": { "hasComments": false } } } }
+  },
+  {
+    "id": "P-w4-project-creator",
+    "question": "who created the Portal Revamp project?",
+    "expect": { "tools": ["list_projects"], "args": { "list_projects": { "filters": { "search": "Portal Revamp" } } } }
+  },
+  {
+    "id": "P-w4-project-about",
+    "question": "what is the Portal Revamp project about?",
+    "expect": { "tools": ["list_projects"], "args": { "list_projects": { "filters": { "search": "Portal Revamp" } } } }
+  },
+  {
+    "id": "P-w4-project-members",
+    "question": "who are the members of the Portal Revamp project?",
+    "expect": { "tools": ["list_projects"], "args": { "list_projects": { "filters": { "search": "Portal Revamp" } } } }
+  },
+  {
+    "id": "P-w4-inactive-7",
+    "question": "which projects have had no activity in 7 days?",
+    "expect": { "tools": ["list_projects"], "args": { "list_projects": { "filters": { "inactiveDays": 7 } } } }
+  },
+  {
+    "id": "P-w4-inactive-30",
+    "question": "list projects that have been inactive for 30 days",
+    "expect": { "tools": ["list_projects"], "args": { "list_projects": { "filters": { "inactiveDays": 30 } } } }
+  }
+]

@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { defineTool } from '../../defineTool.js';
 import { taskFilters } from './filters.js';
 import {
-  TASKS_ACCESS, MAX_LIST_LIMIT, workScope, workDeps, buildTaskFilter, taskRow, countFacts,
+  TASKS_ACCESS, MAX_LIST_LIMIT, workScope, workDeps, buildTaskFilter, mapTaskRows, countFacts,
 } from './common.js';
 
 const SORTS = { newest: '-createdAt', dueDate: 'dueDate:asc,_id:asc' };
@@ -12,8 +12,11 @@ export default defineTool({
   domain: 'projects',
   kind: 'read',
   description:
-    'List Task Board tasks with code, title, stage, priority, due date, project, sprint and assignees. Use for ' +
-    '"my tasks", "tasks for project X", "which tasks are overdue", "what is X working on". total is the full count.',
+    'List Task Board tasks: code, title, stage, priority, due date, project, sprint, assignees, creator name, ' +
+    'created and last-updated times, comment count, attachment count, and the latest comment when this viewer ' +
+    'can open Task Board comments. Use for "my tasks", "tasks for project X", "which tasks are overdue", ' +
+    '"who created this task", "last comment", "why is this overdue", "no updates in N days", ' +
+    '"today\'s task activity", "tasks with comments". total is the full count. There is no overdue-reason field.',
   measure:
     'TASK records visible on the Task Board (only your own tasks without tasks.read), every stage unless ' +
       'filters.status is set; tasks whose project was deleted are excluded.',
@@ -32,10 +35,12 @@ export default defineTool({
     // Mongo sorts a missing dueDate first on an ascending sort — keep the undated backlog out.
     const filter = sort === 'dueDate' && !f.dueDate && !f.noDueDate && !f.overdue ? { ...f, hasDueDate: true } : f;
     const res = await deps.queryTasks(filter, { limit, sortBy: SORTS[sort] });
+    const mapped = await mapTaskRows(res?.results || [], user, deps);
     return {
       total: res?.totalResults ?? 0,
       scope: built.scope,
-      records: (res?.results || []).map(taskRow),
+      commentsVisible: mapped.commentsVisible,
+      records: mapped.records,
       filtersApplied: filters,
     };
   },

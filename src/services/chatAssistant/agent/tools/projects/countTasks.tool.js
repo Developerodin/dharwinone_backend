@@ -10,8 +10,9 @@ export default defineTool({
   kind: 'read',
   description:
     'Count Task Board tasks. groupBy "status" returns the stage breakdown (new / todo / on_going / in_review / ' +
-    'completed) plus overdue and blocked counts. Use for "how many tasks are in review / blocked / overdue", ' +
-    '"how many tasks does X have", "how many of my tasks are done".',
+    'completed) plus overdue and blocked counts. Same filters as list_tasks, including createdBy, updatedSince ' +
+    '(today\'s activity), noUpdateDays and hasComments. Use for "how many tasks are in review / blocked / ' +
+    'overdue", "how many tasks does X have", "how many have no updates in 7 days".',
   measure:
     'TASK records visible on the Task Board (only your own tasks without tasks.read), every stage unless ' +
       'filters.status is set; tasks whose project was deleted are excluded.',

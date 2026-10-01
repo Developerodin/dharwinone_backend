@@ -9,6 +9,8 @@ export const projectFilters = Joi.object({
   status: Joi.string().valid(...PROJECT_STATUSES).description('"active" / "in progress" = Inprogress.'),
   priority: Joi.string().valid(...PRIORITIES),
   teamAssignment: Joi.string().valid('assigned', 'unassigned').description('Projects with / without a workforce team.'),
+  inactiveDays: Joi.number().integer().min(1).max(365)
+    .description('No task update in this many IST days ("no activity in 7 days" = 7). A project with no tasks counts as inactive.'),
 }).description('Project filters (Projects page).');
 
 export const taskFilters = Joi.object({
@@ -32,4 +34,11 @@ export const taskFilters = Joi.object({
     to: Joi.string().min(10).max(10).description('YYYY-MM-DD, inclusive'),
   }).description('Due date window ("due this week").'),
   search: Joi.string().min(1).description('Task title, description, task code or tag.'),
+  createdBy: Joi.string().min(1)
+    .description('Creator\'s real name or user id ("tasks created by X"). Never a pronoun.'),
+  updatedSince: Joi.string().min(10).max(10)
+    .description('YYYY-MM-DD. Tasks updated on or after this IST day. Today\'s task activity = today\'s date.'),
+  noUpdateDays: Joi.number().integer().min(1).max(365)
+    .description('No update since the start of the IST day this many days ago ("no updates in 7 days" = 7).'),
+  hasComments: Joi.boolean().description('true = tasks with comments; false = tasks with none.'),
 }).description('Task filters (Task Board).');
