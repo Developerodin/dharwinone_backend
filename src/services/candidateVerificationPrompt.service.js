@@ -1,7 +1,7 @@
 import Job from '../models/job.model.js';
 import InterviewerAvailability from '../models/interviewerAvailability.model.js';
 import { guessCandidateTimezone, tzSpokenLabel } from './interviewBooking.service.js';
-import { signApplicationRef } from './interviewSlot.service.js';
+import { signApplicationRef, APPLICATION_REF_TTL_MS } from './interviewSlot.service.js';
 import { emailToSpokenForm } from '../utils/emailToSpokenForm.js';
 
 // ---------------------------------------------------------------------------
@@ -293,7 +293,9 @@ export async function buildCandidateVerificationPromptContext({
   // 'none' (not '') so missingTemplateVars() does not treat an absent application as a bug.
   // Signed ref (`<id>.<sig>`) — the tools reject raw/forged ids, so prompt injection can't target
   // another candidate's application.
-  promptContext.application_id = application?._id ? signApplicationRef(String(application._id)) : 'none';
+  promptContext.application_id = application?._id
+    ? signApplicationRef(String(application._id), { ttlMs: APPLICATION_REF_TTL_MS })
+    : 'none';
   promptContext.candidate_timezone = guessCandidateTimezone(formattedPhone);
   promptContext.candidate_timezone_spoken = tzSpokenLabel(promptContext.candidate_timezone);
   promptContext.interview_scheduling_enabled =
@@ -484,12 +486,12 @@ Say: "Our team will be in touch if something suitable comes up. Have a great day
 // ---------------------------------------------------------------------------
 //
 // The template below remains the single source of truth for call instructions.
-// Candidate flow renders it per call from buildCandidateAgentTemplateVars(), then
-// PATCHes that rendered copy (with a unique render token) before dialing.
-// The same vars still travel in user_data for extraction/audit context.
+// Candidate flow renders it per call from buildCandidateAgentTemplateVars() and
+// puts that rendered copy on a NEW agent (POST /v2/agent). It does not PATCH the
+// shared template agent. The same vars still travel in user_data for extraction.
 //
-// buildCandidateAgentPromptTemplate() -> the static {...} template (render then PATCH).
-// buildCandidateAgentTemplateVars(ctx) -> the rendered values to pass in user_data.
+// buildCandidateAgentPromptTemplate() -> the static {...} template.
+// buildCandidateAgentTemplateVars(ctx) -> values rendered onto the per-call agent.
 
 /**
  * True when the job's interviewerPool has at least one user with weekly availability set.
@@ -513,8 +515,8 @@ async function jobHasBookableInterviewer(job) {
 
 /**
  * Per-call values for the candidate prompt.
- * Candidate verification renders these into the system prompt and PATCHes that copy
- * before each dial. The same values also travel in `user_data`.
+ * Candidate verification renders these into the per-call agent's system prompt.
+ * The same values also travel in `user_data`.
  *
  * @param {Record<string, string|number>} ctx - from buildCandidateVerificationPromptContext
  * @param {{ greetingOverride?: string, extraSystemInstructions?: string, interviewSlotOptions?: string }} [opts]

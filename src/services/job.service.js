@@ -1887,6 +1887,12 @@ const publicApplyToJobService = async (jobId, applicationData, files, options = 
                       relatedJob: job._id,
                       relatedCandidate: candidate._id,
                       status: 'initiated',
+                      agentId: result.agentId,
+                      candidateId: result.candidateId || candidate._id,
+                      candidateName: result.candidateName || fullName,
+                      promptRenderToken: result.promptRenderToken,
+                      promptHash: result.promptHash,
+                      question1: result.question1,
                     })
                     .catch((err) => {
                       logger.error('Failed to create call record:', err);

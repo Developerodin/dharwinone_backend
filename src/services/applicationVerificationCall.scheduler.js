@@ -189,6 +189,12 @@ async function dialApplication(application, phone, { isCallback = false } = {}) 
         relatedJob: job._id,
         relatedCandidate: candidate._id,
         status: 'initiated',
+        agentId: result.agentId,
+        candidateId: result.candidateId || candidate._id,
+        candidateName: result.candidateName || candidate.fullName,
+        promptRenderToken: result.promptRenderToken,
+        promptHash: result.promptHash,
+        question1: result.question1,
       });
 
       logger.info(

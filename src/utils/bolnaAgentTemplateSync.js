@@ -114,10 +114,12 @@ export async function ensureAgentPrompt(deps, agentId, template, welcomeTemplate
 }
 
 /**
- * One final read-back immediately before dial. Another writer may have PATCHed
- * between our poll loop and initiateCall even when we hold the Mongo lease.
+ * One final read-back of the agent document before dial. Another writer may have
+ * PATCHed between our poll loop and initiateCall even when we hold the Mongo lease.
+ * A match only means the stored document contains the token. It is not proof the
+ * voice runtime will speak that text.
  */
-export async function verifyAgentPromptLive(deps, agentId, renderToken) {
+export async function verifyAgentPromptPersisted(deps, agentId, renderToken) {
   const id = String(agentId || '').trim();
   const token = String(renderToken || '').trim();
   if (!id) return { ok: false, error: 'agentId is required.' };
@@ -191,7 +193,7 @@ export async function prepareAgentPromptForCall(
       const lostAfterSync = lease.unhealthyResult();
       if (lostAfterSync) return lostAfterSync;
 
-      const live = await verifyAgentPromptLive(deps, id, sync.renderToken);
+      const live = await verifyAgentPromptPersisted(deps, id, sync.renderToken);
       if (!live.ok) {
         return { ok: false, error: live.error || 'Agent prompt was not live immediately before dial.' };
       }

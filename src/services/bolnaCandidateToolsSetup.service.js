@@ -91,7 +91,8 @@ export function buildCandidateApiTools(apiToken = `Bearer ${config.bolna.toolTok
   };
 }
 
-const TOOL_NAMES = ['get_interview_slots', 'hold_interview_slot', 'schedule_callback'];
+export const CANDIDATE_TOOL_NAMES = ['get_interview_slots', 'hold_interview_slot', 'schedule_callback'];
+const TOOL_NAMES = CANDIDATE_TOOL_NAMES;
 
 function nonEmptyTasks(value) {
   return Array.isArray(value) && value.length ? value : null;
@@ -136,17 +137,77 @@ function mergeApiTools(existing, incoming) {
   };
 }
 
+/** True when the conversation task has llm, voice, and telephony to copy onto a new agent. */
+export function agentCanHostInterviewTools(agent) {
+  const tasks = agentTasks(agent);
+  if (!tasks.length) return false;
+  return taskHasRoundTripMedia(schedulingTask(tasks));
+}
+
+/**
+ * Voice, language, and telephony copied onto a clone. Empty strings mean the
+ * template cannot be cloned: we must not POST tasks: [].
+ */
+export function conversationMedia(agent) {
+  const tasks = agentTasks(agent);
+  const task = schedulingTask(tasks);
+  const tools = task?.tools_config && typeof task.tools_config === 'object' ? task.tools_config : {};
+  const synth = tools.synthesizer && typeof tools.synthesizer === 'object' ? tools.synthesizer : {};
+  const pc = synth.provider_config && typeof synth.provider_config === 'object' ? synth.provider_config : {};
+  return {
+    tasks,
+    voice: String(pc.voice_id || pc.voice || synth.voice_id || synth.voice || '').trim(),
+    language: String(tools.transcriber?.language || synth.language || pc.language || '').trim(),
+    input: String(tools.input?.provider || '').trim(),
+    output: String(tools.output?.provider || '').trim(),
+    synthesizer: String(synth.provider || '').trim(),
+    llm: Boolean(tools.llm_agent),
+    toolNames: (tools.api_tools?.tools || []).map((t) => t?.name).filter(Boolean),
+  };
+}
+
+/** Template is usable as a clone source. Empty tasks are a hard stop. */
+export function templateCanBeCloned(agent) {
+  const media = conversationMedia(agent);
+  if (!media.tasks.length) {
+    return { ok: false, error: 'Bolna template agent has no conversation task. Refusing to send tasks: [].' };
+  }
+  if (!media.llm || !media.synthesizer || !media.input || !media.output) {
+    return {
+      ok: false,
+      error: 'Bolna template agent is missing llm, voice/synthesizer, or telephony input/output.',
+    };
+  }
+  if (!media.voice || !media.language) {
+    return { ok: false, error: 'Bolna template agent is missing a synthesizer voice or a language.' };
+  }
+  return { ok: true, media };
+}
+
+function promptsWithSystemPrompt(agentPrompts, systemPrompt) {
+  const copy =
+    agentPrompts && typeof agentPrompts === 'object' ? JSON.parse(JSON.stringify(agentPrompts)) : {};
+  if (!copy.task_1 || typeof copy.task_1 !== 'object') copy.task_1 = {};
+  copy.task_1.system_prompt = systemPrompt;
+  return copy;
+}
+
 /**
  * PUT body Bolna documents for replacing tasks. `apiTools` is nested at
  * tasks[].tools_config.api_tools. agent_prompts is copied from GET so the PUT
- * does not blank the system prompt; the caller PATCHes the per-call prompt after.
+ * does not blank the system prompt.
+ *
+ * `overrides.systemPrompt` replaces task_1.system_prompt on the RETURNED body
+ * only (used when creating an isolated per-call agent). It does not write the
+ * source agent.
  * @param {Object} agent - GET /v2/agent response
- * @param {Object} apiTools - buildCandidateApiTools() (live token)
+ * @param {Object|null} apiTools - buildCandidateApiTools() (live token), or null to leave tools as copied
+ * @param {{ systemPrompt?: string, agentWelcomeMessage?: string, agentName?: string }} [overrides]
  */
-export function buildCandidateToolsPutBody(agent, apiTools) {
+export function buildCandidateToolsPutBody(agent, apiTools, overrides = {}) {
   const tasks = JSON.parse(JSON.stringify(agentTasks(agent)));
   const task = schedulingTask(tasks);
-  if (task) {
+  if (task && apiTools) {
     task.tools_config = {
       ...(task.tools_config || {}),
       api_tools: mergeApiTools(task.tools_config?.api_tools, apiTools),
@@ -154,7 +215,7 @@ export function buildCandidateToolsPutBody(agent, apiTools) {
   }
   const source = agent?.agent_config ? { ...agent, ...agent.agent_config } : agent || {};
   const agentConfig = {
-    agent_name: source.agent_name,
+    agent_name: overrides.agentName || source.agent_name,
     tasks,
   };
   for (const key of [
@@ -167,9 +228,13 @@ export function buildCandidateToolsPutBody(agent, apiTools) {
   ]) {
     if (source[key] !== undefined) agentConfig[key] = source[key];
   }
+  if (overrides.agentWelcomeMessage) {
+    agentConfig.agent_welcome_message = overrides.agentWelcomeMessage;
+  }
+  const prompts = agent?.agent_prompts ?? agent?.agent_config?.agent_prompts;
   return {
     agent_config: agentConfig,
-    agent_prompts: agent?.agent_prompts ?? agent?.agent_config?.agent_prompts,
+    agent_prompts: overrides.systemPrompt ? promptsWithSystemPrompt(prompts, overrides.systemPrompt) : prompts,
   };
 }
 

@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import bolnaService from './bolna.service.js';
+import config from '../config/config.js';
 import logger from '../config/logger.js';
 import {
   assertQ2LineMatchesJobTitle,
@@ -6,7 +8,6 @@ import {
   bolnaJobAndCandidateAgentsCollide,
   missingTemplateVars,
 } from '../utils/bolnaAgentConfig.js';
-import { prepareAgentPromptForCall } from '../utils/bolnaAgentTemplateSync.js';
 import { getBolnaCandidateAgentSettingsForPrompt } from './bolnaCandidateAgentSettings.service.js';
 import {
   buildCandidateAgentPromptTemplate,
@@ -17,11 +18,39 @@ import {
 } from './candidateVerificationPrompt.service.js';
 import { getKbPromptContextForExternalAgent } from './kbQuery.service.js';
 import { buildSlotOffer } from './interviewSlot.service.js';
-import { ensureCandidateInterviewTools } from './bolnaCandidateToolsSetup.service.js';
+import {
+  buildCandidateApiTools,
+  buildCandidateToolsPutBody,
+  CANDIDATE_TOOL_NAMES,
+  conversationMedia,
+  templateCanBeCloned,
+} from './bolnaCandidateToolsSetup.service.js';
+import { ensureCandidateVerificationExtractions } from './bolnaCandidateExtractionSetup.service.js';
+import {
+  CANDIDATE_VERIFICATION_CATEGORY,
+  CANDIDATE_VERIFICATION_FIELD_NAMES,
+} from '../config/candidateVerificationDispositions.js';
+import { registerOwnedCloneAgent, unregisterOwnedCloneAgent } from './bolnaOwnedAgents.js';
+import { candidateVerificationSeedBody, seedCandidateVerificationCall } from './candidateVerificationCallSeed.js';
+
+/** Immediate re-reads. Sleep is not readiness. state "created" and HTTP 201 are not either. */
+const CLONE_READY_ATTEMPTS = 3;
 
 function bolnaEntityId(doc) {
   if (!doc) return '';
   return String(doc._id ?? doc.id ?? '').trim();
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(String(text)).digest('hex');
+}
+
+function systemPromptOf(agent) {
+  return (
+    agent?.agent_prompts?.task_1?.system_prompt ||
+    agent?.agent_config?.agent_prompts?.task_1?.system_prompt ||
+    ''
+  );
 }
 
 /**
@@ -44,34 +73,114 @@ function formatBakedSlotOptions(offer, tzSpoken) {
 }
 
 /**
- * Render and PATCH the candidate prompt for THIS call, then place the call with
- * matching per-call values in `user_data`.
- * @param {Object} p
- * @param {string} p.agentId
- * @param {string} p.formattedPhone - E.164
- * @param {Object} p.candidate
- * @param {Object} p.job
- * @param {Object} [p.application]
- * @param {string} [p.jobTitleOverride]
- * @param {Object} [p.initiateExtras] - passed to bolnaService.initiateCall (e.g. fromPhoneNumber)
+ * GET verifies the agent object POST /call will reference. It does not prove
+ * what the runtime will speak. Do not treat state "created" or HTTP 201 as ready.
  */
-export async function initiateCandidateVerificationCall({
+function cloneGetMatches(agent, expected) {
+  const prompt = systemPromptOf(agent);
+  if (sha256(prompt) !== expected.promptHash) return { ok: false, reason: 'prompt_hash' };
+  if (!expected.promptRenderToken || !prompt.includes(expected.promptRenderToken)) {
+    return { ok: false, reason: 'render_token' };
+  }
+  const media = conversationMedia(agent);
+  if (!media.voice || media.voice !== expected.media.voice) return { ok: false, reason: 'voice' };
+  if (!media.language || media.language !== expected.media.language) return { ok: false, reason: 'language' };
+  if (!media.input || !media.output || media.input !== expected.media.input || media.output !== expected.media.output) {
+    return { ok: false, reason: 'telephony' };
+  }
+  if (!media.synthesizer || media.synthesizer !== expected.media.synthesizer) {
+    return { ok: false, reason: 'synthesizer' };
+  }
+  const names = new Set(media.toolNames);
+  const missing = CANDIDATE_TOOL_NAMES.filter((name) => !names.has(name));
+  if (missing.length) return { ok: false, reason: `missing ${missing.join(', ')}` };
+  return { ok: true };
+}
+
+async function pollCloneReady(cloneId, expected) {
+  let lastReason = 'not read';
+  for (let attempt = 1; attempt <= CLONE_READY_ATTEMPTS; attempt += 1) {
+    const read = await bolnaService.getAgent(cloneId);
+    if (!read?.success || !read.agent) {
+      lastReason = read?.error || 'GET failed';
+      continue;
+    }
+    const match = cloneGetMatches(read.agent, expected);
+    if (match.ok) return { ok: true };
+    lastReason = match.reason;
+  }
+  return { ok: false, error: `Clone agent was not ready after ${CLONE_READY_ATTEMPTS} reads (${lastReason}).` };
+}
+
+async function extractionsReady(cloneId) {
+  const ensured = await ensureCandidateVerificationExtractions(cloneId);
+  if (!ensured.success) return { ok: false, error: ensured.error || 'disposition setup failed' };
+  if (typeof bolnaService.listDispositions !== 'function') {
+    return { ok: false, error: 'Bolna client is missing listDispositions' };
+  }
+  const listed = await bolnaService.listDispositions(cloneId);
+  if (!listed.success) return { ok: false, error: listed.error || 'disposition read-back failed' };
+  const names = new Set(
+    (listed.dispositions || [])
+      .filter((row) => row.category === CANDIDATE_VERIFICATION_CATEGORY)
+      .map((row) => row.name)
+  );
+  const missing = CANDIDATE_VERIFICATION_FIELD_NAMES.filter((name) => !names.has(name));
+  if (missing.length) return { ok: false, error: `clone dispositions missing: ${missing.join(', ')}` };
+  return { ok: true };
+}
+
+async function safeDeleteAgent(cloneId, templateId) {
+  if (!cloneId || cloneId === templateId) {
+    return { success: false, error: 'refusing to delete the template agent' };
+  }
+  unregisterOwnedCloneAgent(cloneId);
+  if (typeof bolnaService.deleteAgent !== 'function') {
+    return { success: false, error: 'Bolna client is missing deleteAgent' };
+  }
+  return bolnaService.deleteAgent(cloneId);
+}
+
+/**
+ * Read the template agent, POST a clone with this candidate's rendered prompt
+ * and tools, and poll GET until the clone object matches. Does not dial.
+ * Does not PATCH or PUT the template.
+ *
+ * @param {Object} p
+ * @param {string} p.agentId - template agent (BOLNA_CANDIDATE_AGENT_ID). Not dialed.
+ */
+export async function prepareCandidateVerificationAgent({
   agentId,
   formattedPhone,
   candidate,
   job,
   application,
   jobTitleOverride,
-  initiateExtras = {},
 }) {
   if (bolnaJobAndCandidateAgentsCollide()) {
     const errMsg =
       'Bolna is misconfigured: BOLNA_CANDIDATE_AGENT_ID must be a different agent than BOLNA_AGENT_ID. ' +
-      'Applicant calls PATCH the agent system prompt; sharing the job-posting agent makes recruiter and applicant scripts conflict. ' +
+      'Applicant calls use a short-lived clone of the candidate template; sharing the job-posting agent makes recruiter and applicant scripts conflict. ' +
       'Add a second agent in Bolna and set BOLNA_CANDIDATE_AGENT_ID in .env.';
     logger.error(`[Bolna] ${errMsg}`);
     return { success: false, error: errMsg };
   }
+  if (!config.bolna.toolToken) {
+    return { success: false, error: 'BOLNA_TOOL_TOKEN is not configured.' };
+  }
+  if (typeof bolnaService.getAgent !== 'function') {
+    return { success: false, error: 'Bolna client is missing getAgent; cannot copy the template agent.' };
+  }
+
+  const templateRead = await bolnaService.getAgent(agentId);
+  if (!templateRead.success || !templateRead.agent) {
+    return {
+      success: false,
+      error: `Bolna template agent could not be read: ${templateRead.error || 'missing agent'}`,
+    };
+  }
+  const usable = templateCanBeCloned(templateRead.agent);
+  if (!usable.ok) return { success: false, error: usable.error };
 
   const settings = await getBolnaCandidateAgentSettingsForPrompt();
   const promptContext = await buildCandidateVerificationPromptContext({
@@ -85,25 +194,17 @@ export async function initiateCandidateVerificationCall({
   let extra = settings.extraSystemInstructions || '';
   try {
     const kbCtx = await getKbPromptContextForExternalAgent(agentId);
-    if (kbCtx) {
-      extra = extra ? `${extra}\n\n${kbCtx}` : kbCtx;
-    }
+    if (kbCtx) extra = extra ? `${extra}\n\n${kbCtx}` : kbCtx;
   } catch (e) {
     logger.warn(`[KB] prompt context skipped: ${e.message}`);
   }
 
   const schedulingEnabled = promptContext.interview_scheduling_enabled === 'yes';
-  // Times are filled in under the prompt lock, and only after tool setup persists.
-  // Until then the placeholder is the email-a-link line, which is also what we PATCH
-  // when setup throws, the agent GET fails, or the PUT read-back does not show the tools.
   const systemPromptTemplate = buildCandidateAgentPromptTemplate();
   const templateVars = buildCandidateAgentTemplateVars(promptContext, {
     greetingOverride: settings.greetingOverride,
     extraSystemInstructions: extra,
   });
-
-  // additional_instructions is blank whenever no admin extras and no KB context exist,
-  // which is the normal case — everything else rendering empty is a bug.
   const missing = missingTemplateVars(systemPromptTemplate, templateVars, {
     allowEmpty: ['candidate_verification_additional_instructions'],
   });
@@ -113,10 +214,7 @@ export async function initiateCandidateVerificationCall({
     return { success: false, error: errMsg };
   }
 
-  const welcomeTemplate = resolveCandidateAgentGreeting(promptContext, settings.greetingOverride, {
-    raw: true,
-  });
-
+  const welcomeTemplate = resolveCandidateAgentGreeting(promptContext, settings.greetingOverride, { raw: true });
   const welcomeMissing = missingTemplateVars(welcomeTemplate, templateVars, {
     allowEmpty: ['candidate_verification_additional_instructions'],
   });
@@ -125,8 +223,6 @@ export async function initiateCandidateVerificationCall({
     logger.error(`[Bolna] ${errMsg}`);
     return { success: false, error: errMsg };
   }
-  const systemPrompt = renderPromptTemplateWithVars(systemPromptTemplate, templateVars);
-  const welcomeMessage = renderPromptTemplateWithVars(welcomeTemplate, templateVars);
 
   const userData = {
     candidate_verification_applicant_name: promptContext.candidate_name,
@@ -140,18 +236,13 @@ export async function initiateCandidateVerificationCall({
     application_date: promptContext.application_date,
     matched_jobs_count: promptContext.matched_jobs_count ?? 0,
     matched_jobs_spoken: promptContext.matched_jobs_spoken || '',
-    // AI interview scheduling (Bolna custom functions bind %(application_id)s from here).
     application_id: promptContext.application_id,
     candidate_timezone: promptContext.candidate_timezone,
     candidate_timezone_spoken: promptContext.candidate_timezone_spoken,
     interview_scheduling_enabled: promptContext.interview_scheduling_enabled,
-    // Legacy Bolna keys (initiateCall + remote disposition specs may still bind these).
-    // Canonical prompt/extraction fields use candidate_verification_* above and in templateVars.
     candidate_name: promptContext.candidate_name,
     job_title: promptContext.job_title,
     company_name: promptContext.company_name,
-    // last: templateVars carry empty-value fallbacks (e.g. company -> 'our company')
-    // and must not be overwritten by a blank ctx field.
     ...templateVars,
   };
 
@@ -161,118 +252,178 @@ export async function initiateCandidateVerificationCall({
     return { success: false, error: payloadCheck.error };
   }
 
-  const dialLogContext = {
-    candidateId: bolnaEntityId(candidate),
-    applicationId: bolnaEntityId(application),
-    jobId: bolnaEntityId(job),
-    canonicalJobTitle: promptContext.job_title,
-    agentId,
-    userDataBytes: payloadCheck.bytes,
-  };
-
   const jobTitleCheck = assertQ2LineMatchesJobTitle({
     canonicalJobTitle: promptContext.job_title,
     q2Line: templateVars.candidate_verification_q2_line,
     userDataJobTitle: userData.candidate_verification_job_title,
   });
   if (!jobTitleCheck.ok) {
-    logger.error(`[Bolna] ${jobTitleCheck.error}`, dialLogContext);
+    logger.error(`[Bolna] ${jobTitleCheck.error}`);
     return { success: false, error: jobTitleCheck.error };
   }
 
-  logger.info('[Bolna] candidate verification pre-dial checks passed', dialLogContext);
-
-  const prepared = await prepareAgentPromptForCall(
-    bolnaService,
-    agentId,
-    systemPrompt,
-    welcomeMessage,
-    {
-      // Same lock as the prompt PATCH and the dial. Tool setup runs first. Concrete times
-      // are baked only when the PUT read-back shows the three tools on the agent.
-      // createHold is not called. It is one candidate-picked approval per application
-      // (recruiter notice, 24h expiry), so it cannot reserve every offered slot id and
-      // would record a pick the candidate has not made. A later call can still be offered
-      // the same free slots until one of them is held.
-      beforePromptPatch: async () => {
-        if (!schedulingEnabled) return;
-        let toolsReady = false;
-        try {
-          const tools = await ensureCandidateInterviewTools(agentId);
-          toolsReady = tools?.success === true && tools.persisted === true;
-          if (!toolsReady) {
-            logger.warn(
-              `[Bolna] candidate interview tools not ready agent=${agentId} error=${tools?.error || tools?.putError || 'not persisted'}`
-            );
-          }
-        } catch (err) {
-          logger.warn(`[Bolna] candidate interview tools setup failed agent=${agentId}: ${err?.message || err}`);
-        }
-        if (!toolsReady || !application?._id) return;
-
-        let offer;
-        try {
-          offer = await buildSlotOffer(
-            String(application._id),
-            promptContext.candidate_timezone || 'Asia/Kolkata'
-          );
-        } catch (err) {
-          logger.warn(`[Bolna] interview slot offer skipped: ${err?.message || err}`);
-          return;
-        }
-        const interviewSlotOptions = formatBakedSlotOptions(
-          offer,
-          promptContext.candidate_timezone_spoken || 'India time'
-        );
-        if (!interviewSlotOptions) return;
-
-        const bakedVars = buildCandidateAgentTemplateVars(promptContext, {
-          greetingOverride: settings.greetingOverride,
-          extraSystemInstructions: extra,
-          interviewSlotOptions,
-        });
-        userData.interview_slot_options = bakedVars.interview_slot_options;
-        const bakedPayload = assertUserDataWithinLimit(userData);
-        if (!bakedPayload.ok) {
-          logger.error(`[Bolna] ${bakedPayload.error}`);
-          return { ok: false, error: bakedPayload.error };
-        }
-        dialLogContext.userDataBytes = bakedPayload.bytes;
-        return { systemPrompt: renderPromptTemplateWithVars(systemPromptTemplate, bakedVars) };
-      },
-    },
-    async ({ renderToken }) => {
-      logger.info('[Bolna] candidate verification dialing', {
-        ...dialLogContext,
-        promptToken: renderToken,
-      });
-      return bolnaService.initiateCall({
-        phone: formattedPhone,
-        // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
-        // `candidate_name` on user_data, and providers commonly bind a generic `name` key to
-        // the assistant's own identity. promptContext.candidate_name has already been through
-        // promptSafe(); passing candidate.fullName here would put the raw value back.
-        candidateName: promptContext.candidate_name,
-        agentId,
-        jobTitle: promptContext.job_title,
-        organisation: promptContext.company_name,
-        userData,
-        ...initiateExtras,
-      });
+  let varsForPrompt = templateVars;
+  if (schedulingEnabled && application?._id) {
+    let offer;
+    try {
+      offer = await buildSlotOffer(String(application._id), promptContext.candidate_timezone || 'Asia/Kolkata');
+    } catch (err) {
+      logger.warn(`[Bolna] interview slot offer skipped: ${err?.message || err}`);
     }
-  );
-  if (!prepared.ok) {
-    // Never dial on an unverified prompt: the agent may still be resolving a previous
-    // candidate, so the call would reach the right person and read out the wrong data.
-    return { success: false, error: `Bolna agent could not be prepared before the call: ${prepared.error}` };
+    const interviewSlotOptions = formatBakedSlotOptions(offer, promptContext.candidate_timezone_spoken || 'India time');
+    if (interviewSlotOptions) {
+      varsForPrompt = buildCandidateAgentTemplateVars(promptContext, {
+        greetingOverride: settings.greetingOverride,
+        extraSystemInstructions: extra,
+        interviewSlotOptions,
+      });
+      userData.interview_slot_options = varsForPrompt.interview_slot_options;
+      const bakedPayload = assertUserDataWithinLimit(userData);
+      if (!bakedPayload.ok) {
+        logger.error(`[Bolna] ${bakedPayload.error}`);
+        return { success: false, error: bakedPayload.error };
+      }
+    }
   }
 
-  const executionId = prepared.dialResult?.executionId;
-  logger.info('[Bolna] candidate verification dial completed', {
-    ...dialLogContext,
-    promptToken: prepared.renderToken,
-    executionId: executionId ? String(executionId) : undefined,
+  const renderedPrompt = renderPromptTemplateWithVars(systemPromptTemplate, varsForPrompt);
+  const welcomeMessage = renderPromptTemplateWithVars(welcomeTemplate, varsForPrompt);
+  const promptRenderToken = `render-${crypto.randomUUID()}`;
+  const exactPrompt = `${renderedPrompt}\n\n<!-- ${promptRenderToken} -->`;
+  const promptHash = sha256(exactPrompt);
+  const question1 = varsForPrompt.candidate_verification_q1_line;
+  const templateName =
+    templateRead.agent.agent_name || templateRead.agent.agent_config?.agent_name || 'Candidate verification';
+
+  const createBody = buildCandidateToolsPutBody(templateRead.agent, buildCandidateApiTools(), {
+    systemPrompt: exactPrompt,
+    agentWelcomeMessage: welcomeMessage,
+    agentName: `${templateName} ${promptRenderToken}`,
+  });
+  if (!createBody.agent_config?.tasks?.length) {
+    return { success: false, error: 'Refusing to create a clone with tasks: [].' };
+  }
+  if (createBody.agent_prompts?.task_1?.system_prompt !== exactPrompt) {
+    return { success: false, error: 'Per-call prompt was not placed on the clone body.' };
+  }
+
+  if (typeof bolnaService.createAgent !== 'function') {
+    return { success: false, error: 'Bolna client is missing createAgent; cannot dial on an isolated agent.' };
+  }
+  const created = await bolnaService.createAgent(createBody);
+  if (!created.success || !created.agentId) {
+    return { success: false, error: created.error || 'Bolna did not return an agent_id for this call.' };
+  }
+  if (created.agentId === agentId) {
+    return {
+      success: false,
+      error: 'Bolna create agent returned the template agent id; refusing to dial the shared agent.',
+    };
+  }
+
+  const expectedMedia = conversationMedia({ tasks: createBody.agent_config.tasks });
+  const ready = await pollCloneReady(created.agentId, {
+    promptHash,
+    promptRenderToken,
+    media: expectedMedia,
+  });
+  if (!ready.ok) {
+    await safeDeleteAgent(created.agentId, agentId);
+    return { success: false, error: ready.error };
+  }
+
+  const extractions = await extractionsReady(created.agentId);
+  if (!extractions.ok) {
+    await safeDeleteAgent(created.agentId, agentId);
+    return { success: false, error: extractions.error };
+  }
+
+  registerOwnedCloneAgent(created.agentId);
+
+  return {
+    success: true,
+    agentId: created.agentId,
+    templateAgentId: agentId,
+    userData,
+    promptContext,
+    promptRenderToken,
+    promptHash,
+    question1,
+    candidateId: bolnaEntityId(candidate),
+    candidateName: promptContext.candidate_name,
+  };
+}
+
+/**
+ * Place a candidate verification call on a clone of BOLNA_CANDIDATE_AGENT_ID.
+ * The template agent is read-only. POST /call uses the clone id only.
+ * A failed verify deletes the clone and does not dial.
+ */
+export async function initiateCandidateVerificationCall({
+  agentId,
+  formattedPhone,
+  candidate,
+  job,
+  application,
+  jobTitleOverride,
+  initiateExtras = {},
+}) {
+  const prepared = await prepareCandidateVerificationAgent({
+    agentId,
+    formattedPhone,
+    candidate,
+    job,
+    application,
+    jobTitleOverride,
+  });
+  if (!prepared.success) return prepared;
+
+  const dialResult = await bolnaService.initiateCall({
+    phone: formattedPhone,
+    candidateName: prepared.promptContext.candidate_name,
+    agentId: prepared.agentId,
+    jobTitle: prepared.promptContext.job_title,
+    organisation: prepared.promptContext.company_name,
+    userData: prepared.userData,
+    ...initiateExtras,
   });
 
-  return prepared.dialResult;
+  if (!dialResult?.success || !dialResult.executionId) {
+    await safeDeleteAgent(prepared.agentId, agentId);
+    return {
+      success: false,
+      error: dialResult?.error || 'Bolna did not start the call.',
+      agentId: prepared.agentId,
+    };
+  }
+
+  const seeded = {
+    ...dialResult,
+    agentId: prepared.agentId,
+    templateAgentId: agentId,
+    candidateId: prepared.candidateId,
+    candidateName: prepared.candidateName,
+    promptRenderToken: prepared.promptRenderToken,
+    promptHash: prepared.promptHash,
+    question1: prepared.question1,
+  };
+
+  try {
+    await seedCandidateVerificationCall(
+      candidateVerificationSeedBody(seeded, {
+        candidateId: prepared.candidateId,
+        jobId: bolnaEntityId(job),
+        recipientPhone: formattedPhone,
+        businessName: prepared.candidateName,
+      })
+    );
+  } catch (err) {
+    // The call is already placed. Deleting the clone now would drop a live call.
+    // Terminal webhook/poll still deletes it while this process remembers the id.
+    logger.error(
+      `[Bolna] CallRecord seed failed after dial clone=${prepared.agentId} execution=${dialResult.executionId}: ${err?.message || err}`
+    );
+  }
+
+  return seeded;
 }

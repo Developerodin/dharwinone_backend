@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   ensureAgentPrompt,
   prepareAgentPromptForCall,
-  verifyAgentPromptLive,
+  verifyAgentPromptPersisted,
 } from '../bolnaAgentTemplateSync.js';
 import { resetBolnaAgentPromptLocks } from '../bolnaAgentPromptLock.js';
 import { resetBolnaAgentRunSerialization } from '../bolnaAgentRunSerialized.js';
@@ -123,12 +123,12 @@ test('refuses when deps.updateAgentPrompt is missing instead of throwing', async
   assert.match(res.error, /updateAgentPrompt/i);
 });
 
-test('verifyAgentPromptLive refuses when the token is no longer on the agent', async () => {
+test('verifyAgentPromptPersisted refuses when the token is no longer on the agent document', async () => {
   const a = fakeBolna({ goesLiveOnAttempt: 1 });
   const sync = await ensureAgentPrompt(a.deps, 'agent-1', TEMPLATE, WELCOME);
   a.state.stored = 'SOMEONE ELSE PATCHED OVER US';
 
-  const res = await verifyAgentPromptLive(a.deps, 'agent-1', sync.renderToken);
+  const res = await verifyAgentPromptPersisted(a.deps, 'agent-1', sync.renderToken);
   assert.equal(res.ok, false);
   assert.match(res.error, /changed before dial/i);
 });

@@ -549,6 +549,117 @@ async function putAgent(agentId, body) {
 }
 
 /**
+ * Create an agent (POST /v2/agent).
+ *
+ * Bolna's Make Call API does not accept a per-execution system prompt. The
+ * public docs also have no copy/clone endpoint — "Import agent" is a dashboard
+ * action. A per-call agent is therefore a new agent: caller copies agent_config
+ * from a template GET and sends this call's rendered prompt in agent_prompts.
+ * Response is HTTP 201 `{ agent_id, state: "created", version_id }`.
+ * Not verified against live Bolna.
+ *
+ * @param {Object} body - AgentRequestV2 (`agent_config` + `agent_prompts`)
+ * @returns {Promise<{ success: boolean, agentId?: string, versionId?: string, error?: string }>}
+ */
+async function createAgent(body) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) {
+    return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  }
+  if (!body) {
+    return { success: false, error: 'body is required.' };
+  }
+
+  try {
+    const { res, text } = await bolnaFetch(`${apiBase}/v2/agent`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error || data.detail)) || text || res.statusText;
+      logger.error(`Bolna POST /v2/agent error (${res.status}): ${message}`);
+      return { success: false, error: message };
+    }
+
+    const agentId = data.agent_id ?? data.id ?? data.agentId;
+    if (!agentId) {
+      return { success: false, error: 'Bolna create agent did not return an agent_id.' };
+    }
+    return {
+      success: true,
+      agentId: String(agentId),
+      versionId: data.version_id ? String(data.version_id) : undefined,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Bolna POST /v2/agent exception: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Delete an agent (DELETE /v2/agent/{agent_id}).
+ *
+ * Public docs: https://www.bolna.ai/docs/api-reference/agent/v2/delete
+ * Success body is `{ message: "success", state: "deleted" }`.
+ * This removes the agent and its batches, executions, and configuration.
+ * Not verified against live Bolna.
+ *
+ * @param {string} agentId
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+async function deleteAgent(agentId) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) {
+    return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  }
+  if (!agentId) {
+    return { success: false, error: 'agentId is required.' };
+  }
+
+  try {
+    const { res, text } = await bolnaFetch(`${apiBase}/v2/agent/${agentId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error || data.detail)) || text || res.statusText;
+      logger.error(`Bolna DELETE /v2/agent error (${res.status}): ${message}`);
+      return { success: false, error: message };
+    }
+
+    logger.info(`Bolna agent deleted ${agentId}`);
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Bolna DELETE /v2/agent exception: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Verify a Bolna executionId actually exists upstream before persisting it.
  *
  * Returns:
@@ -657,6 +768,8 @@ export default {
   getAgent,
   updateAgentPrompt,
   putAgent,
+  createAgent,
+  deleteAgent,
   verifyExecutionExistsInBolna,
   listDispositions,
   createDisposition,

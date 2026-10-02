@@ -8,6 +8,7 @@ import { normalizePhone } from '../utils/phone.js';
 import { CALL_SOURCES, UI_CALL_SOURCES, classifyCallSource } from '../utils/callSource.js';
 import { deriveCallInsights } from '../utils/candidateExtraction.js';
 import ApiError from '../utils/ApiError.js';
+import { initiateCallRecordDoc } from '../utils/initiateCallRecordDoc.js';
 
 const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -893,16 +894,10 @@ async function updateFromExecutionDetails(executionId, details, options = {}) {
  * Seed a call row after initiating a Bolna call (applicant flow). Maps legacy related* keys to schema refs.
  */
 async function createRecord(body) {
-  if (!body?.executionId) return null;
+  const seeded = initiateCallRecordDoc(body);
+  if (!seeded) return null;
   const doc = {
-    executionId: String(body.executionId),
-    recipientPhoneNumber: body.recipientPhone ? String(body.recipientPhone) : undefined,
-    toPhoneNumber: body.recipientPhone ? String(body.recipientPhone) : undefined,
-    phone: body.recipientPhone ? String(body.recipientPhone) : undefined,
-    businessName: body.recipientName ? String(body.recipientName).trim() : undefined,
-    purpose: body.purpose ? String(body.purpose).trim() : undefined,
-    job: body.relatedJob || undefined,
-    candidate: body.relatedCandidate || undefined,
+    ...seeded,
     status: body.status ? normalizeStatus(body.status) : 'initiated',
   };
   const existing = await CallRecord.findOne({ executionId: doc.executionId }).lean();

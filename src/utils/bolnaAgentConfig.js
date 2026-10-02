@@ -106,7 +106,7 @@ export function logBolnaAgentConfigHealth() {
   if (bolnaJobAndCandidateAgentsCollide()) {
     logger.error(
       '[Bolna] BOLNA_AGENT_ID and BOLNA_CANDIDATE_AGENT_ID are identical. ' +
-        'Job posting verification uses the job agent without patching; applicant verification PATCHes the full system prompt on the candidate agent. ' +
+        'Job posting verification uses the job agent; applicant verification clones a per-call agent from the candidate template. ' +
         'Sharing one agent makes recruiter and applicant calls use the wrong script. ' +
         'Create a second agent in Bolna, set BOLNA_CANDIDATE_AGENT_ID (see docs/BOLNA.md). ' +
         'Applicant verification calls are rejected until the IDs differ.'

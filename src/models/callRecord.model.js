@@ -232,7 +232,21 @@ const callRecordSchema = mongoose.Schema(
     /** Set once at least one recording source has been mirrored to S3. */
     recordingArchivedAt: { type: Date, default: null },
     purpose: { type: String, trim: true, default: null },
-    agentId: { type: String, trim: true, default: null },
+    agentId: { type: String, trim: true, default: null, index: true },
+    /**
+     * True when agentId is a per-call clone this app created. Webhooks for that id
+     * are ours. Never set on the shared template agent.
+     */
+    ownedClone: { type: Boolean, default: false },
+    /** Candidate verification audit. Optional. `candidate` above stays the Employee ref. */
+    candidateId: { type: String, trim: true, default: null },
+    candidateName: { type: String, trim: true, default: null },
+    /** Token appended to the per-call agent prompt. Not proof of what the runtime spoke. */
+    promptRenderToken: { type: String, trim: true, default: null },
+    /** sha256 of the exact system prompt sent on the isolated agent. */
+    promptHash: { type: String, trim: true, default: null },
+    /** Q1 line we intended this call to speak. */
+    question1: { type: String, default: null },
     candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
     job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
     /** Free-text agent notes added during/after the call (Batch B — manual annotation). */

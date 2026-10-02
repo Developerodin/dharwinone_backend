@@ -5,6 +5,7 @@ import ApiError from '../utils/ApiError.js';
 import { userIsAdmin } from '../utils/roleHelpers.js';
 import bolnaService from '../services/bolna.service.js';
 import { initiateCandidateVerificationCall } from '../services/bolnaCandidateVerification.service.js';
+import { candidateVerificationSeedBody } from '../services/candidateVerificationCallSeed.js';
 import { initiateJobPostingVerificationCall } from '../services/bolnaJobPostingVerification.service.js';
 import callRecordService from '../services/callRecord.service.js';
 import callSyncService from '../services/callSync.service.js';
@@ -181,18 +182,17 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     throw new ApiError(isClientPhone ? httpStatus.BAD_REQUEST : httpStatus.BAD_GATEWAY, msg);
   }
 
-  // Seed CallRecord via the single chokepoint — race-safe vs webhook arriving first.
-  await callSyncService.seedRecord({
-    executionId: result.executionId,
-    candidate: candidateId,
-    job: jobId,
-    purpose: 'job_application_verification',
-    agentId: candidateAgentId,
-    recipientPhone: formattedPhone,
-    businessName: candidate.fullName,
-    createdBy: req.user?._id || req.user?.id || null,
-    requestId: req.id || req.headers?.['x-request-id'] || null,
-  });
+  // Seed uses the clone id from the dial. candidateAgentId is the template and is not stored.
+  await callSyncService.seedRecord(
+    candidateVerificationSeedBody(result, {
+      candidateId,
+      jobId,
+      recipientPhone: formattedPhone,
+      businessName: candidate.fullName,
+      createdBy: req.user?._id || req.user?.id || null,
+      requestId: req.id || req.headers?.['x-request-id'] || null,
+    })
+  );
 
   // Update JobApplication with call details
   await JobApplication.updateOne(

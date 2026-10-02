@@ -56,26 +56,49 @@ export const encodeSlotId = ({ applicationId, start }) => {
   return `${Buffer.from(String(ms)).toString('base64url')}.${slotSig(String(applicationId), ms)}`;
 };
 
-const appRefSig = (applicationId) =>
+/** Same window as aiTools loadContext (RECENT_CALL_MS). Do not widen that lookup. */
+export const APPLICATION_REF_TTL_MS = 2 * 60 * 60 * 1000;
+
+const appRefSig = (applicationId, exp) =>
   crypto
     .createHmac('sha256', String(config.jwt.secret))
-    .update(`ai-tool-app:${applicationId}`)
+    .update(exp == null ? `ai-tool-app:${applicationId}` : `ai-tool-app:${applicationId}:${exp}`)
     .digest('base64url')
     .slice(0, 16);
 
 /**
- * Signed application reference baked into ONE call's prompt (`<id>.<sig>`). The Bolna tools only
- * accept this, so a candidate who talks the agent into using another application's raw id gets
- * nothing — they never see a valid signature for any application but their own.
+ * Signed application reference baked into ONE call's prompt.
+ * Legacy shape is `<id>.<sig>`. New calls use `<id>.<sig>.<expMs>` so an abandoned
+ * clone cannot reuse the ref after this execution's window. The signature covers exp,
+ * so the timestamp cannot be extended without invalidating the HMAC.
+ *
+ * @param {string} applicationId
+ * @param {{ expiresAt?: number, ttlMs?: number, expiring?: boolean }} [opts]
  */
-export const signApplicationRef = (applicationId) => `${applicationId}.${appRefSig(String(applicationId))}`;
+export const signApplicationRef = (applicationId, opts = {}) => {
+  const id = String(applicationId);
+  const withExpiry = opts.expiring === true || opts.expiresAt != null || opts.ttlMs != null;
+  if (!withExpiry) return `${id}.${appRefSig(id)}`;
+  const exp = opts.expiresAt != null ? Number(opts.expiresAt) : Date.now() + Number(opts.ttlMs ?? APPLICATION_REF_TTL_MS);
+  return `${id}.${appRefSig(id, exp)}.${exp}`;
+};
 
-/** Returns the application id, or null when the ref is malformed or its signature is wrong. */
-export const verifyApplicationRef = (ref) => {
+/**
+ * Returns the application id, or null when the ref is malformed, expired, or the signature is wrong.
+ * Legacy two-part refs stay valid here. They are still limited to the existing 2-hour
+ * CallRecord window inside loadContext. Do not widen that query.
+ * @param {string} ref
+ * @param {number} [now]
+ */
+export const verifyApplicationRef = (ref, now = Date.now()) => {
   if (!ref || typeof ref !== 'string') return null;
-  const [id, sig] = ref.split('.');
+  const parts = ref.split('.');
+  if (parts.length !== 2 && parts.length !== 3) return null;
+  const [id, sig, expRaw] = parts;
   if (!/^[a-f0-9]{24}$/i.test(id || '') || !sig) return null;
-  const expected = appRefSig(id);
+  const exp = parts.length === 3 ? Number(expRaw) : null;
+  if (parts.length === 3 && (!Number.isFinite(exp) || exp <= now)) return null;
+  const expected = appRefSig(id, exp);
   if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
   return id;
 };

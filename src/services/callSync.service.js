@@ -28,6 +28,11 @@ import CallRecord, {
 } from '../models/callRecord.model.js';
 import CallEvent from '../models/callEvent.model.js';
 import callRecordService from './callRecord.service.js';
+import {
+  isRegisteredCloneAgent,
+  registerOwnedCloneAgent,
+  unregisterOwnedCloneAgent,
+} from './bolnaOwnedAgents.js';
 
 /**
  * AI interview scheduling hook, run after a verification is written. Fire-and-forget, never throws.
@@ -183,9 +188,10 @@ export function resolveAgentId(payload, norm = {}) {
  */
 export function isOwnAgent(payload, norm = {}) {
   const ours = Array.isArray(config.bolna?.allAgentIds) ? config.bolna.allAgentIds : [];
-  if (!ours.length) return true;
   const agentId = resolveAgentId(payload, norm);
   if (!agentId) return true;
+  if (isRegisteredCloneAgent(agentId)) return true;
+  if (!ours.length) return true;
   return ours.includes(agentId);
 }
 
@@ -230,6 +236,34 @@ export function shouldAcceptExecutionContext(payload, norm = {}) {
 }
 
 /**
+ * Delete a per-call clone once the call is terminal.
+ * Never deletes a configured template agent. DELETE is documented at
+ * https://www.bolna.ai/docs/api-reference/agent/v2/delete
+ */
+async function retireOwnedClone(record) {
+  const agentId = String(record?.agentId || '').trim();
+  if (!agentId) return;
+  const templates = new Set(
+    [config.bolna?.agentId, config.bolna?.candidateAgentId, ...(config.bolna?.allAgentIds || [])]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  if (templates.has(agentId)) return;
+  if (record.ownedClone !== true && !isRegisteredCloneAgent(agentId)) return;
+  const bolnaService = (await import('./bolna.service.js')).default;
+  if (typeof bolnaService.deleteAgent !== 'function') {
+    logger.error(`[Bolna] cannot delete candidate clone ${agentId}: deleteAgent is missing`);
+    return;
+  }
+  const deleted = await bolnaService.deleteAgent(agentId);
+  if (!deleted?.success) {
+    logger.error(`[Bolna] failed to delete candidate clone ${agentId}: ${deleted?.error || 'unknown'}`);
+    return;
+  }
+  unregisterOwnedCloneAgent(agentId);
+}
+
+/**
  * Apply a Bolna state change to CallRecord.
  *
  * @param {object} payload Raw Bolna payload (webhook body OR /execution/:id response)
@@ -258,10 +292,17 @@ export async function applyEvent(payload, source, meta = {}) {
   // URL pointed at the wrong environment writes another environment's calls straight into
   // this database. Drop anything that is not one of OUR agents.
   if (!isOwnAgent(payload, norm)) {
-    logger.warn(
-      `[callSync] rejecting event for foreign agent=${resolveAgentId(payload, norm) || 'unknown'} executionId=${executionId} source=${source}`
-    );
-    return { record: null, applied: false, reason: 'foreign_agent' };
+    const agentId = resolveAgentId(payload, norm);
+    // Durable ownership: a clone registered on a previous process is ours only
+    // when a CallRecord marks that agentId. Unknown agents stay foreign.
+    const ownedRow = agentId ? await CallRecord.exists({ agentId, ownedClone: true }) : null;
+    if (!ownedRow) {
+      logger.warn(
+        `[callSync] rejecting event for foreign agent=${agentId || 'unknown'} executionId=${executionId} source=${source}`
+      );
+      return { record: null, applied: false, reason: 'foreign_agent' };
+    }
+    registerOwnedCloneAgent(agentId);
   }
 
   const contextGate = shouldAcceptExecutionContext(payload, norm);
@@ -377,6 +418,11 @@ export async function applyEvent(payload, source, meta = {}) {
       `[callSync] applied ${eventId} → ${status} (rank=${incomingRank}, source=${source}) for ${executionId}`
     );
     emitUpdate(record);
+    if (isTerminal(status)) {
+      retireOwnedClone(record).catch((err) =>
+        logger.error(`[Bolna] clone cleanup failed for ${record.agentId || 'unknown'}: ${err?.message || err}`)
+      );
+    }
     if (set.verification) {
       scheduleInterviewFollowUp(record).catch((err) =>
         logger.warn(`[callSync] interview follow-up failed for ${executionId}: ${err?.message || err}`)
@@ -506,6 +552,12 @@ export async function seedRecord({
   businessName,
   createdBy,
   requestId,
+  candidateId,
+  candidateName,
+  promptRenderToken,
+  promptHash,
+  question1,
+  ownedClone,
 }) {
   if (!executionId) throw new Error('seedRecord: executionId required');
 
@@ -531,6 +583,12 @@ export async function seedRecord({
     createdBy: createdBy || null,
     requestId: requestId || null,
     bolnaVerifiedAt: new Date(),
+    ...(candidateId ? { candidateId: String(candidateId) } : {}),
+    ...(candidateName ? { candidateName: String(candidateName).trim() } : {}),
+    ...(promptRenderToken ? { promptRenderToken: String(promptRenderToken) } : {}),
+    ...(promptHash ? { promptHash: String(promptHash) } : {}),
+    ...(question1 ? { question1: String(question1) } : {}),
+    ...(ownedClone ? { ownedClone: true } : {}),
   };
 
   // Upsert by executionId, only set on insert. Existing rows untouched.
@@ -541,7 +599,18 @@ export async function seedRecord({
   ).lean();
 
   // Fill app-owned nulls (case: stub created by webhook-before-seed lacks links)
-  const appFields = { candidate, job, purpose, agentId, businessName };
+  const appFields = {
+    candidate,
+    job,
+    purpose,
+    agentId,
+    businessName,
+    candidateId,
+    candidateName,
+    promptRenderToken,
+    promptHash,
+    question1,
+  };
   const patch = {};
   const filter = { executionId: onInsert.executionId };
   for (const [k, v] of Object.entries(appFields)) {
@@ -550,6 +619,9 @@ export async function seedRecord({
       patch[k] = v;
       filter[k] = { $in: [null, undefined, ''] };
     }
+  }
+  if (ownedClone && record.ownedClone !== true) {
+    patch.ownedClone = true;
   }
   if (Object.keys(patch).length) {
     await CallRecord.updateOne(filter, { $set: patch }).catch((err) => {
