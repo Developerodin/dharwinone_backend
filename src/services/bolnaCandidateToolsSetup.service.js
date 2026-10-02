@@ -4,12 +4,17 @@ import logger from '../config/logger.js';
 
 /**
  * Push the three AI interview-scheduling custom functions onto the Bolna candidate agent.
- * Mirrors bolnaCandidateExtractionSetup.service.js.
  *
- * Bolna has been seen to 200 a task_config PATCH without persisting it, so we ALWAYS read the
- * agent back and report `persisted`. The `apiTools` JSON is returned either way (token masked)
- * so a human can paste it into the Bolna dashboard. `%(application_id)s` param mapping is
- * spike-verified-later.
+ * PATCH only accepts a whitelist (name, welcome, webhook, voice, prompts). `agent_config.tasks`
+ * is not on that list, so a PATCH of tasks returns 200 and persists nothing. Rewriting tasks
+ * is PUT /v2/agent/{id} with `agent_config.tasks[].tools_config.api_tools` plus the current
+ * `agent_prompts` (both required). We round-trip the GET tasks so llm/voice/telephony stay,
+ * then read the agent back. `persisted` is that read, not the PUT status.
+ *
+ * The `apiTools` JSON is returned either way (token masked) so a human can paste it into the
+ * Bolna dashboard. The PUT merges these three tools into any custom tools already on that
+ * task. An empty top-level `tasks` array is not a task list. If the conversation task is
+ * missing llm, voice, or telephony, we do not PUT.
  */
 
 function resolveCandidateAgentId(agentId) {
@@ -88,11 +93,84 @@ export function buildCandidateApiTools(apiToken = `Bearer ${config.bolna.toolTok
 
 const TOOL_NAMES = ['get_interview_slots', 'hold_interview_slot', 'schedule_callback'];
 
+function nonEmptyTasks(value) {
+  return Array.isArray(value) && value.length ? value : null;
+}
+
+/** Top-level `tasks: []` is not a task list. Use agent_config.tasks when the top level is empty. */
+function agentTasks(agent) {
+  return nonEmptyTasks(agent?.tasks) || nonEmptyTasks(agent?.agent_config?.tasks) || [];
+}
+
+/** Conversation task is the one whose tools the LLM sees. Fall back to the first task. */
+function schedulingTask(tasks) {
+  return tasks.find((t) => t?.task_type === 'conversation') || tasks[0] || null;
+}
+
 function toolsPersisted(agent) {
-  const tasks = agent?.tasks || agent?.agent_config?.tasks || [];
-  const apiTools = tasks[0]?.tools_config?.api_tools;
+  const apiTools = schedulingTask(agentTasks(agent))?.tools_config?.api_tools;
   const names = new Set((apiTools?.tools || []).map((t) => t?.name));
   return TOOL_NAMES.every((n) => names.has(n));
+}
+
+/** Present means we can copy llm, voice, and telephony back. A missing field is not a round-trip. */
+function taskHasRoundTripMedia(task) {
+  const tools = task?.tools_config;
+  if (!tools || typeof tools !== 'object') return false;
+  return Boolean(tools.llm_agent && tools.synthesizer && tools.input && tools.output);
+}
+
+function mergeApiTools(existing, incoming) {
+  const prevTools = Array.isArray(existing?.tools) ? existing.tools : [];
+  const nextTools = Array.isArray(incoming?.tools) ? incoming.tools : [];
+  const nextNames = new Set(nextTools.map((t) => t?.name).filter(Boolean));
+  const kept = prevTools.filter((t) => t?.name && !nextNames.has(t.name));
+  return {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    ...incoming,
+    tools: [...kept, ...nextTools],
+    tools_params: {
+      ...(existing?.tools_params && typeof existing.tools_params === 'object' ? existing.tools_params : {}),
+      ...(incoming?.tools_params || {}),
+    },
+  };
+}
+
+/**
+ * PUT body Bolna documents for replacing tasks. `apiTools` is nested at
+ * tasks[].tools_config.api_tools. agent_prompts is copied from GET so the PUT
+ * does not blank the system prompt; the caller PATCHes the per-call prompt after.
+ * @param {Object} agent - GET /v2/agent response
+ * @param {Object} apiTools - buildCandidateApiTools() (live token)
+ */
+export function buildCandidateToolsPutBody(agent, apiTools) {
+  const tasks = JSON.parse(JSON.stringify(agentTasks(agent)));
+  const task = schedulingTask(tasks);
+  if (task) {
+    task.tools_config = {
+      ...(task.tools_config || {}),
+      api_tools: mergeApiTools(task.tools_config?.api_tools, apiTools),
+    };
+  }
+  const source = agent?.agent_config ? { ...agent, ...agent.agent_config } : agent || {};
+  const agentConfig = {
+    agent_name: source.agent_name,
+    tasks,
+  };
+  for (const key of [
+    'agent_welcome_message',
+    'webhook_url',
+    'agent_type',
+    'ingest_source_config',
+    'calling_guardrails',
+    'call_summary_enabled',
+  ]) {
+    if (source[key] !== undefined) agentConfig[key] = source[key];
+  }
+  return {
+    agent_config: agentConfig,
+    agent_prompts: agent?.agent_prompts ?? agent?.agent_config?.agent_prompts,
+  };
 }
 
 export async function ensureCandidateInterviewTools(agentId) {
@@ -108,7 +186,7 @@ export async function ensureCandidateInterviewTools(agentId) {
     return { success: true, agentId: resolvedAgentId, alreadyConfigured: true, persisted: true, apiTools };
   }
 
-  const tasks = JSON.parse(JSON.stringify(current.agent?.tasks || current.agent?.agent_config?.tasks || []));
+  const tasks = agentTasks(current.agent);
   if (!tasks.length) {
     return {
       success: true,
@@ -118,33 +196,47 @@ export async function ensureCandidateInterviewTools(agentId) {
       note: 'Agent has no tasks; paste apiTools into the Bolna dashboard.',
     };
   }
-  tasks[0].tools_config = { ...(tasks[0].tools_config || {}), api_tools: buildCandidateApiTools() };
 
-  const { apiKey, apiBase } = bolnaService.getConfig();
-  let patchError = null;
-  try {
-    const res = await fetch(`${apiBase}/v2/agent/${resolvedAgentId}`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_config: { tasks } }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) patchError = `${res.status} ${(await res.text().catch(() => '')).slice(0, 300)}`;
-  } catch (err) {
-    patchError = err?.message || String(err);
+  if (!taskHasRoundTripMedia(schedulingTask(tasks))) {
+    return {
+      success: false,
+      agentId: resolvedAgentId,
+      persisted: false,
+      apiTools,
+      error: 'Bolna agent is missing llm, voice, or telephony fields; refusing to PUT tasks.',
+    };
+  }
+
+  const body = buildCandidateToolsPutBody(current.agent, buildCandidateApiTools());
+  if (!body.agent_config?.agent_name || !body.agent_prompts) {
+    return {
+      success: false,
+      agentId: resolvedAgentId,
+      persisted: false,
+      apiTools,
+      error: 'Bolna agent is missing agent_name or agent_prompts; refusing to PUT tasks.',
+    };
+  }
+
+  let putError = null;
+  if (typeof bolnaService.putAgent !== 'function') {
+    putError = 'Bolna client is missing putAgent.';
+  } else {
+    const put = await bolnaService.putAgent(resolvedAgentId, body);
+    if (!put.success) putError = put.error || 'PUT failed';
   }
 
   const after = await bolnaService.getAgent(resolvedAgentId);
   const persisted = after.success && toolsPersisted(after.agent);
   if (!persisted) {
-    logger.warn(`[Bolna] candidate interview tools NOT persisted agent=${resolvedAgentId} patchError=${patchError || 'none'}`);
+    logger.warn(`[Bolna] candidate interview tools NOT persisted agent=${resolvedAgentId} putError=${putError || 'none'}`);
   }
   return {
     success: true,
     agentId: resolvedAgentId,
     alreadyConfigured: false,
     persisted,
-    patchError,
+    putError,
     apiTools,
     ...(persisted ? {} : { note: 'Bolna did not persist tools via API; paste apiTools into the agent dashboard (Tools tab).' }),
   };

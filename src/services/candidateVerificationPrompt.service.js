@@ -512,11 +512,12 @@ async function jobHasBookableInterviewer(job) {
 }
 
 /**
- * Render the per-call values that fill the static prompt template.
- * These are sent to Bolna in `user_data` (NOT baked into the shared prompt).
+ * Per-call values for the candidate prompt.
+ * Candidate verification renders these into the system prompt and PATCHes that copy
+ * before each dial. The same values also travel in `user_data`.
  *
  * @param {Record<string, string|number>} ctx - from buildCandidateVerificationPromptContext
- * @param {{ greetingOverride?: string, extraSystemInstructions?: string }} [opts]
+ * @param {{ greetingOverride?: string, extraSystemInstructions?: string, interviewSlotOptions?: string }} [opts]
  * @returns {Record<string, string>} keys map 1:1 to {placeholders} in the template
  */
 export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
@@ -550,6 +551,12 @@ export function buildCandidateAgentTemplateVars(ctx, opts = {}) {
     candidate_timezone: ctx.candidate_timezone || 'Asia/Kolkata',
     candidate_timezone_spoken: ctx.candidate_timezone_spoken || 'India time',
     interview_scheduling_enabled: ctx.interview_scheduling_enabled === 'yes' ? 'yes' : 'no',
+    // Spoken slot lines for this call, or a no-times instruction. Never empty: an empty
+    // placeholder renders blank and missingTemplateVars() would refuse to dial.
+    interview_slot_options:
+      opts.interviewSlotOptions && String(opts.interviewSlotOptions).trim()
+        ? String(opts.interviewSlotOptions).trim()
+        : 'No interview times are listed for this call. Do not invent times. Say you will email a link to choose a time.',
     candidate_verification_email_spoken: ctx.candidate_email_spoken || 'not available on this call',
     candidate_verification_callback_enabled:
       ctx.application_id && ctx.application_id !== 'none' ? 'yes' : 'no',
@@ -702,15 +709,16 @@ If it is "yes":
 1. Ask: "Are you still interested in moving forward with this role?"
    - If not interested: "Understood. Thank you for letting us know." Go to the CLOSING.
 2. If interested, say: "Great. Let us pick a time for your interview."
-3. Confirm time zone. Say: "Should I share times in {candidate_timezone_spoken}?"
-   - If they name a different time zone, use that IANA time zone as tz in the functions below.
-   - Otherwise use tz {candidate_timezone}.
-4. Call the function get_interview_slots with application_id {application_id} and tz.
-5. Read out the options from the function's message. Offer no more than three options.
-6. When the candidate picks one, call hold_interview_slot with application_id {application_id}, the chosen slot_id, and tz.
-7. Speak the function's message. On success say: "Your time is reserved. You will get a confirmation by email once our team confirms it."
-   - If the function offers new options, read them and repeat step 6 once.
-8. If the candidate cannot pick, or any function fails, say: "No problem. We will email you a link to choose a time."
+3. Confirm the time zone before you offer any time. Say: "Should I share times in {candidate_timezone_spoken}?"
+   - The listed times below are in the guessed time zone, {candidate_timezone_spoken}. Do not speak them as if they were already confirmed in another zone.
+   - If the candidate agrees, offer only those listed times. Use tz {candidate_timezone}.
+   - If they name a different time zone, ignore the listed times. Call get_interview_slots with application_id {application_id} and the new tz. Offer only that result's times and slot_ids. Do not keep the listed times.
+4. Speak only the time. Never read the id aloud. Offer no more than three. Do not invent times.
+{interview_slot_options}
+5. When they pick option N, call hold_interview_slot with that option's slot_id and the application_id already in the prompt. Pass tz as well.
+6. Speak the function's message. On success say: "Your time is reserved. You will get a confirmation by email once our team confirms it."
+   - If the function offers new options, read only those new options and repeat step 5 once. Do not add the listed times as well.
+7. If no times are listed above, or the candidate cannot pick, or any function fails, say: "No problem. We will email you a link to choose a time."
 Then move to the CLOSING.
 
 ---

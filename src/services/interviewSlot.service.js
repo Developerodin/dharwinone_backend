@@ -10,6 +10,7 @@ import InternalMeeting from '../models/internalMeeting.model.js';
 import InterviewHold from '../models/interviewHold.model.js';
 import InterviewerAvailability from '../models/interviewerAvailability.model.js';
 import { zonedWallTimeToUtc, dateStrInTz, dayOfWeekOfDateStr, addDaysToDateStr } from '../utils/zonedTime.js';
+import { formatSpoken } from './interviewBooking.service.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -270,3 +271,27 @@ export const getFreeSlots = async ({ applicationId, from, to, limit = 3, tz = 'A
     interviewerIds: map.get(t),
   }));
 };
+
+/** Spoken when there is nothing to offer. Shared with the mid-call tool so the prompt cannot drift. */
+export const INTERVIEW_SLOT_FALLBACK = "I'll email you a link to choose a time.";
+
+const joinSpoken = (parts) =>
+  parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')}, or ${parts[parts.length - 1]}`;
+
+/**
+ * Up to three spoken slot options for this application, in `tz`.
+ * Same lines the mid-call get_interview_slots tool speaks. Empty slots do not invent times.
+ */
+export async function buildSlotOffer(applicationId, tz) {
+  const slots = await getFreeSlots({ applicationId, limit: 3, tz });
+  if (!slots.length) return { ok: false, slots: [], message: INTERVIEW_SLOT_FALLBACK };
+  const out = slots.map((s) => ({
+    slot_id: encodeSlotId({ applicationId, start: s.start }),
+    spoken: formatSpoken(new Date(s.start), tz),
+  }));
+  // Period, not a colon: the candidate prompt forbids colons in speech. Slot selection is unchanged.
+  const message = `I have ${out.length === 1 ? 'one option' : `${out.length} options`}. ${joinSpoken(
+    out.map((s, i) => `option ${i + 1}, ${s.spoken}`)
+  )}. Which works best for you?`;
+  return { ok: true, slots: out, message };
+}

@@ -1,7 +1,12 @@
 import JobApplication from '../models/jobApplication.model.js';
 import CallRecord from '../models/callRecord.model.js';
 import logger from '../config/logger.js';
-import { getFreeSlots, encodeSlotId, decodeSlotId, verifyApplicationRef } from '../services/interviewSlot.service.js';
+import {
+  buildSlotOffer,
+  decodeSlotId,
+  verifyApplicationRef,
+  INTERVIEW_SLOT_FALLBACK,
+} from '../services/interviewSlot.service.js';
 import { createHold } from '../services/interviewHold.service.js';
 import { formatSpoken, guessCandidateTimezone } from '../services/interviewBooking.service.js';
 import { isValidTimeZone } from '../utils/zonedTime.js';
@@ -15,7 +20,7 @@ import { CLOSED_APPLICATION_STATUSES } from '../constants/atsPipeline.js';
  */
 const BUDGET_MS = 3000;
 const RECENT_CALL_MS = 2 * 60 * 60 * 1000;
-const FALLBACK = "I'll email you a link to choose a time.";
+const FALLBACK = INTERVIEW_SLOT_FALLBACK;
 
 const param = (req, key) => {
   const v = req.body?.[key] ?? req.query?.[key];
@@ -51,22 +56,6 @@ async function loadContext(applicationId) {
     .lean();
   if (!callRecord) return null;
   return { application, callRecord };
-}
-
-const joinSpoken = (parts) =>
-  parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')}, or ${parts[parts.length - 1]}`;
-
-async function buildSlotOffer(applicationId, tz) {
-  const slots = await getFreeSlots({ applicationId, limit: 3, tz });
-  if (!slots.length) return { ok: false, slots: [], message: FALLBACK };
-  const out = slots.map((s) => ({
-    slot_id: encodeSlotId({ applicationId, start: s.start }),
-    spoken: formatSpoken(new Date(s.start), tz),
-  }));
-  const message = `I have ${out.length === 1 ? 'one option' : `${out.length} options`}: ${joinSpoken(
-    out.map((s, i) => `option ${i + 1}, ${s.spoken}`)
-  )}. Which works best for you?`;
-  return { ok: true, slots: out, message };
 }
 
 async function interviewSlotsImpl(req) {

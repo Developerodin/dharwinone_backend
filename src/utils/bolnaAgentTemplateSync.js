@@ -151,6 +151,9 @@ export async function verifyAgentPromptLive(deps, agentId, renderToken) {
  * @param {string} template
  * @param {string} [welcomeTemplate]
  * @param {Object} [lockOpts]
+ * @param {() => Promise<void|{ ok?: boolean, error?: string, systemPrompt?: string, welcomeMessage?: string }>} [lockOpts.beforePromptPatch]
+ *   Runs under the lock, before the prompt PATCH. A returned `systemPrompt` or `welcomeMessage`
+ *   replaces the arguments for this call. `{ ok: false }` aborts before PATCH and dial.
  * @param {(ctx: { renderToken: string }) => Promise<*>} [dialFn]
  */
 export async function prepareAgentPromptForCall(
@@ -166,7 +169,23 @@ export async function prepareAgentPromptForCall(
 
   return runSerializedForBolnaAgent(id, async () => {
     const locked = await withBolnaAgentPromptLock(id, async (lease) => {
-      const sync = await ensureAgentPrompt(deps, id, template, welcomeTemplate);
+      let systemPrompt = template;
+      let welcomeMessage = welcomeTemplate;
+      if (typeof lockOpts.beforePromptPatch === 'function') {
+        const prepared = await lockOpts.beforePromptPatch();
+        if (prepared && typeof prepared === 'object') {
+          if (prepared.ok === false) {
+            return { ok: false, error: prepared.error || 'Bolna agent could not be prepared before the call.' };
+          }
+          if (typeof prepared.systemPrompt === 'string' && prepared.systemPrompt) {
+            systemPrompt = prepared.systemPrompt;
+          }
+          if (typeof prepared.welcomeMessage === 'string' && prepared.welcomeMessage) {
+            welcomeMessage = prepared.welcomeMessage;
+          }
+        }
+      }
+      const sync = await ensureAgentPrompt(deps, id, systemPrompt, welcomeMessage);
       if (!sync.ok) return sync;
 
       const lostAfterSync = lease.unhealthyResult();

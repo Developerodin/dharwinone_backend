@@ -500,6 +500,55 @@ async function updateAgentPrompt(agentId, systemPrompt, options = {}) {
 }
 
 /**
+ * Replace an agent's tasks and prompts (PUT /v2/agent/:id).
+ * PATCH cannot write task tools. The body must be a full AgentRequestV2
+ * (`agent_config` including `tasks`, plus `agent_prompts`).
+ * @param {string} agentId
+ * @param {Object} body
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+async function putAgent(agentId, body) {
+  const { apiKey, apiBase } = getConfig();
+  if (!apiKey) {
+    return { success: false, error: 'BOLNA_API_KEY is not set.' };
+  }
+  if (!agentId || !body) {
+    return { success: false, error: 'agentId and body are required.' };
+  }
+
+  try {
+    const { res, text } = await bolnaFetch(`${apiBase}/v2/agent/${agentId}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
+
+    if (!res.ok) {
+      const message = (data && (data.message || data.error)) || text || res.statusText;
+      logger.error(`Bolna PUT agent error (${res.status}): ${message}`);
+      return { success: false, error: message };
+    }
+
+    logger.info(`Bolna agent updated for ${agentId}`);
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Bolna PUT agent exception: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Verify a Bolna executionId actually exists upstream before persisting it.
  *
  * Returns:
@@ -607,6 +656,7 @@ export default {
   getConfig,
   getAgent,
   updateAgentPrompt,
+  putAgent,
   verifyExecutionExistsInBolna,
   listDispositions,
   createDisposition,
