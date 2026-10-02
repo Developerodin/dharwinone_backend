@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import Job from '../../models/job.model.js';
 import config from '../../config/config.js';
 import { buildJobRankingMongoFilter } from './queryPlanner/entities/jobRank.js';
+import { htmlToReadable } from './htmlText.js';
 
 const JOB_SELECT =
   'title jobType location status salaryRange experienceLevel minExperience maxExperience skillTags skillRequirements organisation jobOrigin externalRef externalPlatformUrl jobDescription vacancies applicationDeadline createdAt assignedRecruiter';
@@ -51,7 +52,7 @@ export function mapJobRow(row) {
     _origin: origin === 'external' ? 'External (mirrored)' : 'Internal',
     externalPlatformUrl: row.externalPlatformUrl || null,
     externalRef: row.externalRef || null,
-    jobDescription: row.jobDescription || null,
+    jobDescription: htmlToReadable(row.jobDescription) || null,
     recruiterName,
   };
 }

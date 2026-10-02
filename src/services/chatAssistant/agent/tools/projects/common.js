@@ -166,7 +166,13 @@ export async function projectFilterFor(user, filters = {}, deps) {
   return { filter, scope: orgWide ? 'all' : 'mine', activityById };
 }
 
+const CREATED_AT_UNAVAILABLE = 'Creation date is not stored on this record.';
+
 export function projectRow(p, lastActivityAt = null) {
+  // createdAt is the document timestamp. lastActivityAt is the latest task
+  // update and must not fill this field. toJSON drops createdAt on API JSON;
+  // this row is built from the document before that.
+  const createdAt = iso(p.createdAt);
   return {
     id: idOf(p),
     name: p.name ?? null,
@@ -179,6 +185,8 @@ export function projectRow(p, lastActivityAt = null) {
     createdBy: personName(p.createdBy),
     description: clipHtml(p.description, 300),
     members: (p.assignedTo || []).map(personName).filter(Boolean),
+    createdAt,
+    ...(createdAt ? {} : { createdAtUnavailable: CREATED_AT_UNAVAILABLE }),
     lastActivityAt: lastActivityAt ?? null,
   };
 }
@@ -392,8 +400,33 @@ async function commentAuthorMap(tasks, deps) {
   return authors;
 }
 
+/**
+ * queryTasks serializes through toJSON, which deletes createdAt. When the row
+ * has none, read createdAt off the task document. Never copy updatedAt into it.
+ * One find for the page. A document with no createdAt stays unavailable.
+ */
+async function attachMissingTaskCreatedAt(tasks, deps) {
+  const need = [];
+  for (const t of tasks || []) {
+    if (!t || iso(t.createdAt)) continue;
+    if (hexId(t.id ?? t._id)) need.push(t);
+  }
+  if (!need.length || typeof deps.Task?.find !== 'function') return;
+  const ids = [...new Set(need.map((t) => hexId(t.id ?? t._id)))].map((id) => new mongoose.Types.ObjectId(id));
+  const docs = await deps.Task.find({ _id: { $in: ids } }).select('createdAt').lean();
+  const byId = new Map((docs || []).map((d) => [String(d._id), d]));
+  for (const t of need) {
+    const id = hexId(t.id ?? t._id);
+    const doc = byId.get(id);
+    const createdAt = doc ? iso(doc.createdAt) : null;
+    if (createdAt) t.createdAt = createdAt;
+    else t.createdAtUnavailable = CREATED_AT_UNAVAILABLE;
+  }
+}
+
 export function taskRow(t, { commentsVisible = false, authors = new Map() } = {}) {
   const createdBy = personName(t.createdBy) || personName(authors.get(hexId(t.createdBy)));
+  const createdAt = iso(t.createdAt);
   return {
     id: idOf(t),
     code: t.taskCode ?? null,
@@ -406,7 +439,8 @@ export function taskRow(t, { commentsVisible = false, authors = new Map() } = {}
     assignees: (t.assignedTo || []).map(nameOf).filter(Boolean),
     blocked: (t.tags || []).some((tag) => /^blocked$/i.test(String(tag || '').trim())),
     createdBy,
-    createdAt: iso(t.createdAt),
+    createdAt,
+    ...(createdAt ? {} : { createdAtUnavailable: t.createdAtUnavailable || CREATED_AT_UNAVAILABLE }),
     updatedAt: iso(t.updatedAt),
     commentsCount: Number.isFinite(t.commentsCount) ? t.commentsCount : 0,
     // Comment text, author names and emails stay off the row unless the comment API would return them.
@@ -434,6 +468,7 @@ async function creatorNameMap(tasks, deps, authors) {
 
 export async function mapTaskRows(tasks, user, deps) {
   const list = tasks || [];
+  await attachMissingTaskCreatedAt(list, deps);
   const commentsVisible = viewerCanReadTaskComments(user);
   const authors = commentsVisible ? await commentAuthorMap(list, deps) : new Map();
   await creatorNameMap(list, deps, authors);

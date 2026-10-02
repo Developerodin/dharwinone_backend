@@ -1,4 +1,5 @@
 import { addDaysToDateStr } from '../../../../../utils/zonedTime.js';
+import { OVERDUE_NOTE } from '../training/cohort.js';
 import { SITUATIONS } from '../../../../../constants/smartNudge.situations.js';
 import {
   SECTION_TIMEOUT_MS, istToday, resolveWindow, previousWindow, runSections, sectionFrom, trimRows,
@@ -123,7 +124,7 @@ export const DIGEST_ITEMS = Object.freeze([
   },
   {
     id: 'overdue_courses', label: 'Overdue training courses', module: 'hr', severity: 'low',
-    notCaptured: 'Training modules have no due date in DharwinOne, so overdue training is not captured.',
+    unavailable: OVERDUE_NOTE,
   },
 ]);
 
@@ -179,8 +180,12 @@ export async function runDigest({ scope = 'all', module = 'all', window, compare
       ? { now: item.count, before: prev.count, delta: item.count - prev.count }
       : { now: item.count, before: null, delta: null, beforeStatus: prev.status };
   });
-  for (const i of kept.filter((x) => x.notCaptured)) {
-    items.push({ id: i.id, label: i.label, module: i.module, severity: i.severity, source: null, status: 'notCaptured', count: null, rows: [], note: i.notCaptured });
+  for (const i of kept.filter((x) => x.notCaptured || x.unavailable)) {
+    const status = i.unavailable ? 'unavailable' : 'notCaptured';
+    items.push({
+      id: i.id, label: i.label, module: i.module, severity: i.severity, source: null,
+      status, count: null, rows: [], note: i.unavailable || i.notCaptured,
+    });
   }
   items.sort(byUrgency);
 

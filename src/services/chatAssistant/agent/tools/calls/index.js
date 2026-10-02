@@ -16,11 +16,18 @@ const instructions = [
     'say", a summary, transcript, recording or who hung up → get_call_record (id from a list, or person for their latest call).',
   '- Expected salary, notice period, joining date, questions asked, concerns, other offers, a callback asked for ' +
     'on that call, why they declined, a visa mention, or another follow-up they stated → get_call_takeaways ' +
-    '(call id, or the person\'s name for their latest call). Each item includes the quote it came from and that ' +
-    'line\'s timestamp; null means it was not said. A takeaway without a quote is not an answer. Say "the candidate ' +
-    'said" (or "the agent said" when the statement says so) and quote it — never as a verified fact. Do not answer ' +
-    'these from get_call_record. If the result says the caller cannot see transcripts, or names the Call Transcripts ' +
-    'or Call AI toggle, say that. Not semantic search and not topic clustering.',
+    '(call id, or the person\'s name for their latest call). The result includes the transcript when one was ' +
+    'loaded. Answer from that transcript, not from a null takeaway and not from an earlier reply. basis ' +
+    '"explicit" means the quote is in the transcript. A null basis means the extractor returned null — read ' +
+    'the transcript; that is not absent. Say absent only after checking that the words are not there. If you ' +
+    'go beyond those words, say inferred. "no_transcript" means no transcript was loaded. Never say the ' +
+    'transcript did not capture something when transcriptAvailable is true unless you checked the transcript. ' +
+    'A follow-up about that call is checked against the same transcript, reloaded by call id. ' +
+    'An earlier reply and a quote the user typed are not evidence. ' +
+    'transcriptAvailable true means the transcript is not missing. Never invent a quote. A takeaway ' +
+    'without a quote is not an answer. Say "the candidate said" (or "the agent said" when the statement says so). ' +
+    'Do not answer these from get_call_record. If the result says the caller cannot see transcripts, or names ' +
+    'the Call Transcripts or Call AI toggle, say that. Not semantic search and not topic clustering.',
   '- Answer rate, average duration, failed count, interest-confirmed rate, how many applicants are not yet called, ' +
     'how many callbacks are due / overdue → get_call_metrics with calledBetween.',
   '- WHO asked for a callback / whose callback is overdue / which applicants were never called → list_call_followups ' +
@@ -35,8 +42,9 @@ const instructions = [
     'those are not included.',
   '- Not captured in DharwinOne: per-call attempt number, and who hung up on dialer calls — say so instead of estimating. ' +
     'Salary, notice period, joining date, questions, concerns, other offers, why they declined, a visa mention and ' +
-    'a callback they asked for on the call are captured only as transcript quotes from get_call_takeaways. If that ' +
-    'call has no transcript, those are not captured for that call.',
+    'a callback they asked for on the call come from the transcript on get_call_takeaways. If transcriptAvailable ' +
+    'is false, the transcript is absent for that call. A null takeaway with transcriptAvailable true is not a ' +
+    'missing transcript.',
   '- Not for semantic search over transcripts, interviews (hiring) or internal meetings (meetings).',
 ].join('\n');
 

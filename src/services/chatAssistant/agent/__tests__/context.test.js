@@ -349,6 +349,26 @@ describe('summarizeCalls', () => {
     ]);
   });
 
+  it('stores a call id and not the transcript body', () => {
+    const transcript = 'user: I can join on 1 November.';
+    const entry = summarizeCalls([{
+      name: 'get_call_takeaways',
+      args: { call: 'exec-1' },
+      output: { call: { id: 'exec-1' }, transcriptAvailable: true, transcript },
+    }]);
+    assert.equal(entry.calls[0].callId, 'exec-1');
+    assert.equal(entry.calls[0].transcriptLoaded, true);
+    assert.equal(JSON.stringify(entry).includes('I can join'), false);
+    const { input } = buildAgentInput({
+      instructions: 'x',
+      user: { name: 'Asha' },
+      history: [{ role: 'user', content: 'What exactly did he say?' }],
+      ledger: [entry],
+    });
+    assert.equal(input[0].content.includes('I can join'), false);
+    assert.match(input[0].content, /get_call_takeaways/);
+  });
+
   it('caps very large args to ~300 chars instead of storing the full object', () => {
     const hugeArgs = { search: 'x'.repeat(500) };
     const entry = summarizeCalls([{ name: 'count_jobs', args: hugeArgs, output: { total: 1 } }]);

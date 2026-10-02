@@ -10,8 +10,9 @@ const instructions = [
   '- "Recruitment / HR / PM / bench summary or report" -> get_operations_summary with that module.',
   '- "Data quality", "missing data", "incomplete records", "duplicates" -> run_data_quality_checks.',
   '- Each section has a status. Name restricted sections only, never their data, and never fill one from ' +
-    'another tool. notCaptured -> say it is not captured in DharwinOne. Backlog items are the current state; ' +
-    'only windowed items follow the window.',
+    'another tool. notCaptured -> say it is not captured in DharwinOne. unavailable -> say the note and do not ' +
+    'invent a count. Overdue training is unavailable because no due date is stored; last access and enrollment ' +
+    'are not overdue. Backlog items are the current state; only windowed items follow the window.',
   '- One number in one module (e.g. "how many offers") is that domain\'s count tool, not insights.',
 ].join('\n');
 

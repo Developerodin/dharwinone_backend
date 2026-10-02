@@ -184,7 +184,7 @@ export default defineTool({
     inactiveDays: Joi.number().integer().min(1).max(365)
       .description('mode cohort: unfinished courses not opened (or never opened since enrolment) on any of the ' +
         'last N whole IST days, today included.'),
-    overdue: Joi.boolean().description('mode cohort: asked for overdue training. Not captured — see the result note.'),
+    overdue: Joi.boolean().description('mode cohort: asked for overdue training. Unavailable unless a due date is stored — see overdueNote.'),
     lowestCompletion: Joi.boolean().description('mode cohort: rank courses by completion rate, lowest first. Ignores course, progress, scoreBand and inactiveDays.'),
     limit: Joi.number().integer().min(1).max(MAX_LIST_LIMIT).default(20),
   }),

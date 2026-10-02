@@ -12,6 +12,7 @@
 // stay usable from Task 5's loop without a dependency cycle.
 
 import ConversationMemory from '../../../models/conversationMemory.model.js';
+import { transcriptLedgerFields } from '../quoteGrounding.js';
 
 // The timezone the model is told "today" in; day-window tools bound their days in it too.
 export const DEFAULT_TIMEZONE = 'Asia/Kolkata';
@@ -254,7 +255,7 @@ function capArgs(args) {
  * Build one ledger entry from this turn's tool calls.
  *
  * @param {Array<{name:string, args:object, output:*}>} calls
- * @returns {{at:Date, calls:Array<{tool:string, args:*, total:number|null}>}}
+ * @returns {{at:Date, calls:Array<{tool:string, args:*, total:number|null, callId?:string, transcriptLoaded?:boolean}>}}
  */
 export function summarizeCalls(calls) {
   const list = Array.isArray(calls) ? calls : [];
@@ -263,10 +264,13 @@ export function summarizeCalls(calls) {
     calls: list.map((c) => {
       const output = c?.output && typeof c.output === 'object' ? c.output : {};
       const total = output.total ?? output.jobs?.length ?? null;
+      const ref = transcriptLedgerFields(output);
       return {
         tool: c?.name,
         args: capArgs(c?.args),
         total,
+        // call id only. The transcript body stays on the call record.
+        ...(ref ? { callId: ref.callId, transcriptLoaded: ref.transcriptLoaded } : {}),
       };
     }),
   };

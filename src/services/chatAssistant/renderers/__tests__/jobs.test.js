@@ -43,6 +43,16 @@ describe('renderJobs — single job detail (kv block)', () => {
     assert.equal(jobLinkPair.value, 'http://localhost:3001/ats/jobs?view=job1');
   });
 
+  it('shows a job description as text, not raw HTML', () => {
+    const html = '<p>Build APIs</p><h3>Requirements</h3><ul><li>Node</li></ul><script>alert(1)</script>';
+    const { block } = renderJobs({ records: [job({ jobDescription: html })], wantDetail: true }, { listIntent: false }, null);
+    const description = block.pairs.find((p) => p.label === 'Description').value;
+    assert.equal(description.includes('<'), false);
+    assert.match(description, /### Requirements/);
+    assert.match(description, /- Node/);
+    assert.equal(description.includes('alert'), false);
+  });
+
   it('shows Openings, Deadline and Posted (issue 2)', () => {
     const { block } = renderJobs({ records: [job()] }, { listIntent: false }, null);
     assert.equal(block.pairs.find((p) => p.label === 'Openings').value, '3');

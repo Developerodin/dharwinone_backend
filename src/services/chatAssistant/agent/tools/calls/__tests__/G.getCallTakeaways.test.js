@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import config from '../../../../../../config/config.js';
 import getCallTakeaways from '../getCallTakeaways.tool.js';
 import { checkAccessRule } from '../../../../toolAccess.js';
-import { EXTRACT_REQUEST_MS, groundTakeaways, locateQuote } from '../takeaways.js';
+import { EXTRACT_REQUEST_MS, groundTakeaways, loadCallTranscript, locateQuote } from '../takeaways.js';
+import { groundCallReply, quoteOccurs, speechBasis } from '../../../../quoteGrounding.js';
 
 const UID = '64b0000000000000000000a1';
 const CAND = '64b0000000000000000000c3';
@@ -138,7 +139,10 @@ describe('get_call_takeaways', () => {
     assert.equal(t.visa.quote, 'I will need visa sponsorship.');
     assert.equal(t.followUps[0].quote, 'Please email me the job description.');
     assert.match(out.attribution, /not verified facts/);
-    assert.equal('transcript' in out, false);
+    assert.equal(out.transcriptAvailable, true);
+    assert.equal(out.basis.joiningDate, 'explicit');
+    assert.match(out.transcript, /I can join on 1 November/);
+    assert.match(out.reading, /Never invent a quote/);
     assert.equal(seen[0].opts.timeout, EXTRACT_REQUEST_MS);
     assert.equal(seen[0].opts.maxRetries, 0);
     assert.equal(seen[0].body.temperature, 0);
@@ -275,11 +279,31 @@ describe('get_call_takeaways', () => {
     assert.equal(listed[0].search, undefined);
   });
 
+  it('a null takeaway still returns the transcript and does not call it missing', async () => {
+    const line = 'user: I can start in six months.';
+    const out = await getCallTakeaways.execute(
+      { call: 'exec-1' },
+      ctx(FULL, { openai: fakeAi({ joiningDate: null }) }, doc({ transcript: line })),
+    );
+    assert.equal(out.transcriptAvailable, true);
+    assert.equal(out.transcriptMissing, undefined);
+    assert.equal(out.takeaways.joiningDate, null);
+    assert.equal(out.basis.joiningDate, null);
+    assert.notEqual(out.basis.joiningDate, 'absent');
+    assert.notEqual(out.transcriptState, 'no_transcript');
+    assert.equal(out.transcript, line);
+    assert.match(out.reading, /read `transcript`/);
+  });
+
   it('returns nulls and does not call the model when the call has no transcript', async () => {
     const out = await getCallTakeaways.execute({ call: 'exec-1' }, ctx(FULL, {
       openai: fakeAi(() => { throw new Error('must not call the model'); }),
     }, doc({ transcript: '  ', conversationTranscript: null })));
+    assert.equal(out.transcriptAvailable, false);
     assert.equal(out.transcriptMissing, true);
+    assert.equal(out.transcriptState, 'no_transcript');
+    assert.equal(out.basis.expectedSalary, 'no_transcript');
+    assert.equal(out.transcript, undefined);
     assert.equal(out.takeaways.expectedSalary, null);
     assert.equal(out.takeaways.questions, null);
     assert.equal(out.takeaways.concerns, null);
@@ -326,5 +350,119 @@ describe('get_call_takeaways', () => {
     assert.equal(out.transcriptTruncated, true);
     assert.equal(out.takeaways.expectedSalary, null);
     assert.equal(seen[0].body.messages[1].content.includes('12 LPA'), false);
+  });
+});
+
+describe('call quote grounding', () => {
+  const loaded = [{ transcriptAvailable: true, transcript: TRANSCRIPT }];
+  const missing = [{ transcriptAvailable: false, transcriptState: 'no_transcript', transcript: '' }];
+
+  it('keeps an explicit quote and labels it explicit', () => {
+    const claim = 'I can join on 1 November';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'explicit');
+    const reply = groundCallReply(`The candidate said "${claim}".`, loaded);
+    assert.match(reply, /I can join on 1 November/);
+  });
+
+  it('labels a checked miss as absent and strips the invented quote', () => {
+    assert.equal(speechBasis({
+      transcriptAvailable: true, transcript: TRANSCRIPT, claim: 'I want forty lakhs',
+    }), 'absent');
+    const reply = groundCallReply('The candidate said "I want forty lakhs".', loaded);
+    assert.equal(reply.includes('forty lakhs'), false);
+    assert.equal(reply.includes('did not capture'), false);
+    assert.equal(reply.includes('missing'), false);
+  });
+
+  it('labels words beyond the transcript as inferred, not explicit', () => {
+    const claim = 'My notice period is 30 days and I can join on 1 November next year';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'inferred');
+    assert.notEqual(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'explicit');
+    assert.notEqual(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'absent');
+  });
+
+  it('labels a missing transcript as no_transcript and does not say the words were checked', () => {
+    assert.equal(speechBasis({ transcriptAvailable: false, transcript: '', claim: 'I can join on 1 November' }), 'no_transcript');
+    const reply = groundCallReply(
+      'The transcript did not capture I can join on 1 November. The candidate said "I can join on 1 November".',
+      missing,
+    );
+    assert.equal(reply.includes('did not capture'), false);
+    assert.equal(reply.includes('I can join on 1 November'), false);
+  });
+
+  it('a follow-up quote that is not in the loaded transcript is rejected', () => {
+    const followUp = 'On the call the candidate said "Please transfer my visa to the new employer."';
+    const reply = groundCallReply(followUp, loaded);
+    assert.equal(reply.includes('transfer my visa'), false);
+    const kept = groundCallReply('The candidate said "I will need visa sponsorship."', loaded);
+    assert.match(kept, /I will need visa sponsorship/);
+  });
+
+  it('does not treat a user-supplied quote as evidence', () => {
+    const reply = groundCallReply(
+      'Yes, he said he could join immediately.',
+      loaded,
+      { userText: 'I think he said he could join immediately' },
+    );
+    assert.equal(reply.includes('immediately'), false);
+    assert.equal(reply.includes('Yes'), false);
+  });
+
+  it('does not present an inferred claim as an exact quote', () => {
+    const claim = 'My notice period is 30 days and I can join on 1 November next year';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'inferred');
+    const reply = groundCallReply(`The candidate said "${claim}".`, loaded);
+    assert.equal(reply.includes('next year'), false);
+    assert.equal(reply.includes(`"${claim}"`), false);
+  });
+
+  it('keeps analysis that does not attribute words', () => {
+    const reply = groundCallReply('A November start fits a short notice.', loaded, {
+      userText: 'What exactly did he say?',
+    });
+    assert.equal(reply, 'A November start fits a short notice.');
+  });
+
+  it('replaces a false denial with the transcript line, not the previous wording', () => {
+    const reply = groundCallReply('He did not mention joining.', loaded);
+    assert.match(reply, /I can join on 1 November/);
+    assert.equal(reply.includes('did not mention'), false);
+  });
+
+  it('keeps an absent denial and drops an invented Monday quote', () => {
+    const claim = 'I can join on Monday';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'absent');
+    const reply = groundCallReply('The candidate said "I can join on Monday". He did not say he could join on Monday.', loaded);
+    assert.equal(reply.includes('Monday'), true);
+    assert.equal(reply.includes('"I can join on Monday"'), false);
+    assert.match(reply, /did not say he could join on Monday/);
+    assert.equal(reply.includes('did not capture'), false);
+  });
+
+  it('says no transcript is available instead of claiming the transcript missed something', () => {
+    const reply = groundCallReply('The transcript says he could join immediately.', missing);
+    assert.equal(reply.includes('immediately'), false);
+    assert.match(reply, /No transcript is available/);
+    assert.equal(reply.includes('did not capture'), false);
+    assert.equal(reply.includes("didn't capture"), false);
+  });
+});
+
+describe('loadCallTranscript', () => {
+  it('reloads the rendered transcript for a call id without the extraction model or a write', async () => {
+    const out = await loadCallTranscript({ callId: 'exec-1', user: FULL, deps: ctx(FULL).deps });
+    assert.equal(out.transcriptAvailable, true);
+    assert.match(out.transcript, /I can join on 1 November/);
+    assert.equal(out.transcript.includes('twelve lakhs'), false);
+  });
+
+  it('renders a turn array the same way takeaways does', async () => {
+    const record = doc({
+      transcript: [{ role: 'user', text: 'I can join on 1 November.', startMs: 65000 }],
+    });
+    const out = await loadCallTranscript({ callId: 'exec-1', user: FULL, deps: ctx(FULL, {}, record).deps });
+    assert.match(out.transcript, /I can join on 1 November/);
+    assert.equal(quoteOccurs(out.transcript, 'I can join on 1 November'), true);
   });
 });

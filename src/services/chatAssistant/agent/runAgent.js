@@ -13,7 +13,13 @@ import { step as llmStep } from './llm.js';
 import { getAgentTools as defaultGetAgentTools, FIND_TOOLS_NAME } from './toolRegistry.js';
 import { buildAgentInput, compactTurnItems, summarizeCalls, readAgentLedger } from './context.js';
 import Role from '../../../models/role.model.js';
-import { enforceCounts } from '../responseValidator.js';
+import { enforceCounts, suppressDuplicateRecordNarration } from '../responseValidator.js';
+import {
+  collectTranscriptContexts,
+  groundCallReply,
+  latestCallTranscriptRef,
+  speechFollowUp,
+} from '../quoteGrounding.js';
 
 /**
  * The viewer's active role NAMES (all of them, not a collapsed tier) for the turn
@@ -62,6 +68,7 @@ export const BASE_INSTRUCTIONS = [
   'A write tool only drafts. Tell the user what the draft will do and that they must press Confirm. Never say it is done.',
   'Greetings, thanks and small talk ("hi", "thanks"): reply briefly and warmly with no tool call, and offer help. Never put a number in such a reply.',
   'Reply in plain, concise markdown.',
+  'When employees, projects, tasks or jobs are shown as cards, do not repeat those rows: no bullet list and no markdown table. One sentence of count or scope is enough. The cards are the only row list, and they use the tool\'s field names.',
 ].join('\n');
 
 function parseArgsForLedger(raw) {
@@ -85,6 +92,39 @@ function ledgerDomains(ledger, registry) {
   const calls = Array.isArray(ledger) ? ledger.at(-1)?.calls : null;
   if (!Array.isArray(calls)) return [];
   return [...new Set(calls.map((c) => registry.domainOfTool(c?.tool)).filter(Boolean))];
+}
+
+/**
+ * Follow-up quote check. History does not keep tool results, and the ledger
+ * keeps the call id rather than the transcript. Reload that call here. A
+ * failed read is no transcript: do not leave an unverified quote in place.
+ * Ceiling: a turn whose ledger has no call id cannot be re-checked unless
+ * this turn loads the transcript again.
+ */
+async function defaultLoadCallTranscript(callId, user) {
+  const { callsDeps } = await import('./tools/calls/common.js');
+  const { loadCallTranscript } = await import('./tools/calls/takeaways.js');
+  return loadCallTranscript({ callId, user, deps: callsDeps({ user }) });
+}
+
+async function priorTranscriptContexts({
+  loadCallTranscript, ledger, user, reply, userText, thisTurnResults,
+}) {
+  if (collectTranscriptContexts(thisTurnResults).length) return [];
+  // Interview transcripts stay off this reload path; only a stored call id is reloaded.
+  if (!speechFollowUp(userText, reply)) return [];
+  const ref = latestCallTranscriptRef(ledger);
+  if (!ref?.callId) return [];
+  const loader = loadCallTranscript || ((id) => defaultLoadCallTranscript(id, user));
+  try {
+    const loaded = await loader(ref.callId);
+    if (loaded?.transcriptAvailable && typeof loaded.transcript === 'string' && loaded.transcript.trim()) {
+      return [{ transcriptAvailable: true, transcript: loaded.transcript }];
+    }
+  } catch {
+    // The record could not be read. Fall through to no transcript.
+  }
+  return [{ transcriptAvailable: false, transcript: '', transcriptState: 'no_transcript' }];
 }
 
 function addUsage(totals, usage) {
@@ -124,7 +164,7 @@ function mergeCountFacts(factsList) {
  * @param {string} [args.requestId]
  * @param {(outcome:string) => void} [args.onOutcome] called once with the turn's outcome
  *   ('answer', 'handoff', 'untooled_number', 'empty', 'deadline', 'repeated_tool_failure', 'error')
- * @param {{step?:Function, getAgentTools?:Function, resolveViewerRoleNames?:Function, now?:Function}} [args.deps]
+ * @param {{step?:Function, getAgentTools?:Function, resolveViewerRoleNames?:Function, now?:Function, loadCallTranscript?:Function}} [args.deps]
  * @returns {Promise<null | {reply:string, blocks:Array, meta:{steps:number, toolCalls:string[], ms:number}, ledgerEntry:object}>}
  */
 /** Call args as a key-order-independent string, so `{a,b}` and `{b,a}` are the same call. */
@@ -150,6 +190,7 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     getAgentTools = defaultGetAgentTools,
     resolveViewerRoleNames = defaultResolveViewerRoleNames,
     now = () => new Date(),
+    loadCallTranscript,
   } = deps;
 
   const startedAt = Date.now();
@@ -318,7 +359,21 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     // sends a fixed reply instead. Digit-free replies (definitions) still ship.
     // find_tools only loads tools; it returns no company data, so it never counts as the answer.
     const successful = executed.filter((c) => c.ok && !isFindTools(c.name));
-    if (!successful.length && /\d/.test(text)) {
+    const thisTurnResults = successful.map((c) => c.result);
+    const userText = [...(Array.isArray(history) ? history : [])].reverse().find((m) => m?.role === 'user')?.content || '';
+    // A date inside a transcript quote ("1 November") is not a company count.
+    // The quote check below is what keeps or drops it. A digit with no transcript
+    // in play is still an unchecked number.
+    const prior = await priorTranscriptContexts({
+      loadCallTranscript,
+      ledger,
+      user,
+      reply: text,
+      userText,
+      thisTurnResults,
+    });
+    const transcriptInPlay = collectTranscriptContexts([...thisTurnResults, ...prior]).length > 0;
+    if (!successful.length && /\d/.test(text) && !transcriptInPlay) {
       outcome = 'untooled_number';
       return null;
     }
@@ -341,7 +396,14 @@ export async function runAgent({ client, user, history, memDoc, requestId, onOut
     }
     blocks = [...blocks, ...confirmBlocks];
     const facts = mergeCountFacts(factsList);
-    const reply = facts.counts.length ? enforceCounts(text, facts).reply : text;
+    const counted = facts.counts.length ? enforceCounts(text, facts).reply : text;
+    // Cards already render these rows. A markdown table becomes a second card
+    // stack in the client, and a bullet list repeats the same records.
+    const reply = groundCallReply(
+      suppressDuplicateRecordNarration(counted, blocks),
+      [...thisTurnResults, ...prior],
+      { userText },
+    );
 
     outcome = 'answer';
     return {

@@ -12,7 +12,8 @@ const instructions = [
   '- "Which courses / folders does position X get" -> mode position_map.',
   '- noStudentProfile (person) and withoutStudentProfile (cohort) mean no Student profile, so no training data: ' +
     'say that and name them, never "0%" or "0 courses".',
-  '- "Overdue" training is not captured (courses have no due date): say so and offer atRisk instead.',
+  '- "Overdue" training is unavailable: courses store no due or expiry date, so do not invent a count and do not ' +
+    'call last access, enrollment, or inactivity overdue. Say that no due date is stored.',
 ].join('\n');
 
 export default {

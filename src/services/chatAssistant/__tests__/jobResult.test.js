@@ -53,6 +53,19 @@ describe('mapJobRow', () => {
     assert.equal(out.jobUrl, 'http://localhost:3001/ats/jobs?view=job1');
   });
 
+  it('converts description HTML to text and strips unsafe tags', () => {
+    const out = mapJobRow({
+      ...baseRow,
+      jobDescription: '<p>Build APIs</p><h3>Requirements</h3><ul><li>Node</li><li>SQL</li></ul><script>alert(1)</script>',
+    });
+    assert.equal(out.jobDescription.includes('<'), false);
+    assert.match(out.jobDescription, /Build APIs/);
+    assert.match(out.jobDescription, /### Requirements/);
+    assert.match(out.jobDescription, /- Node/);
+    assert.match(out.jobDescription, /- SQL/);
+    assert.equal(out.jobDescription.includes('alert'), false);
+  });
+
   it('keeps vacancies, applicationDeadline and createdAt (issue 2)', () => {
     const out = mapJobRow(baseRow);
     assert.equal(out.vacancies, 2);

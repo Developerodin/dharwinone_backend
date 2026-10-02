@@ -11,8 +11,10 @@ export default defineTool({
   domain: 'projects',
   kind: 'read',
   description:
-    'List projects with status, priority, dates, project manager, creator name, description, members ' +
-    '(people assigned to the project), workforce teams and lastActivityAt (latest task update). Use for ' +
+    'List projects with status, priority, createdAt (when the project record was created — never ' +
+    'lastActivityAt or updatedAt; if createdAt is null, say the creation date is unavailable), project ' +
+    'manager, creator name, description, members (people assigned to the project), workforce teams and ' +
+    'lastActivityAt (latest task update, not the creation date). Use for ' +
     '"list projects", "who created project X", "what is project X about", "who is on project X", ' +
     '"projects with no activity in N days". total is the full count.',
   measure:
@@ -48,10 +50,15 @@ export default defineTool({
         { key: 'name', label: 'Project', priority: 'primary' },
         { key: 'status', label: 'Status', priority: 'primary' },
         { key: 'priority', label: 'Priority', priority: 'secondary' },
+        { key: 'createdAt', label: 'Created', priority: 'secondary', format: 'date' },
         { key: 'teams', label: 'Teams', priority: 'secondary' },
       ],
       rows: result.records.map((r) => ({
-        name: r.name ?? '—', status: r.status ?? '—', priority: r.priority ?? '—', teams: r.teams.join(', ') || '—',
+        name: r.name ?? '—',
+        status: r.status ?? '—',
+        priority: r.priority ?? '—',
+        createdAt: r.createdAt ?? 'unavailable',
+        teams: r.teams.join(', ') || '—',
       })),
       layout: 'auto',
     }] : [];

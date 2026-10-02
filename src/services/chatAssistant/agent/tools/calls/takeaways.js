@@ -24,6 +24,26 @@ const LINE_TS = /^(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]|\((\d{1,2}:\d{2}(?::\d{2})?)
 export const ATTRIBUTION =
   'Each takeaway is a quote from the transcript. Use the statement ("the candidate said" or "the agent said"). These are not verified facts.';
 
+export const TRANSCRIPT_READING =
+  'Answer what was said only from `transcript`. basis "explicit" means that quote is in the transcript. ' +
+  'A null basis means the extractor returned null — read `transcript` before answering. That is not "absent". ' +
+  'If the words are in `transcript`, quote them and say explicit. If you go beyond those words, say inferred. ' +
+  'Say absent only after you checked and the words are not in `transcript`. Never say the transcript did not ' +
+  'capture something when transcriptAvailable is true unless you checked. Never say the transcript is missing ' +
+  'when transcriptAvailable is true. basis "no_transcript" means no transcript was loaded. Never invent a quote.';
+
+const TRANSCRIPT_ABSENT =
+  'The transcript is absent for this call. Do not invent what was said.';
+
+function basisOf(takeaways, transcriptAvailable) {
+  const basis = {};
+  for (const key of [...SCALAR_KEYS, ...LIST_KEYS]) {
+    if (!transcriptAvailable) basis[key] = 'no_transcript';
+    else basis[key] = takeaways?.[key] ? 'explicit' : null;
+  }
+  return basis;
+}
+
 const SYSTEM = [
   'You extract takeaways from one phone-call transcript. Reply with one JSON object and nothing else.',
   'Keys: expectedSalary, noticePeriod, joiningDate, questions, concerns, otherOffers, callbackRequest, whyDeclined, visa, followUps.',
@@ -330,6 +350,32 @@ function openaiClient() {
 }
 
 /**
+ * The transcript get_call_takeaways grounded against, without the extraction model.
+ * Same access gate and renderTranscript as that tool. No write.
+ * A missing or unreadable call returns null. Callers treat that as no transcript
+ * for the quote check; they do not keep an unverified quote.
+ */
+export async function loadCallTranscript({ callId, user, deps }) {
+  const q = String(callId ?? '').trim();
+  if (!q) return null;
+  const viewer = await viewerOf(user, deps);
+  const gate = await gateCall(q, viewer, deps);
+  if (!gate.ok) return null;
+  if (toggleRefusal(fieldAccess(user))) {
+    return { transcriptAvailable: false, transcript: '', transcriptState: 'no_transcript' };
+  }
+  const raw = await deps.CallRecord.findOne({ executionId: q }).lean();
+  if (!raw) return null;
+  const record = sanitizeCallRecord(raw, fieldAccess(user));
+  const rendered = renderTranscript(record.transcript || record.conversationTranscript);
+  if (!rendered) {
+    return { transcriptAvailable: false, transcript: '', transcriptState: 'no_transcript' };
+  }
+  const transcript = rendered.length > MAX_TRANSCRIPT_CHARS ? rendered.slice(0, MAX_TRANSCRIPT_CHARS) : rendered;
+  return { transcriptAvailable: true, transcript };
+}
+
+/**
  * One call's transcript takeaways. No write.
  * ponytail: every ask re-runs the extraction. The upgrade is storing the grounded
  * takeaways on CallRecord so a repeat question reads them instead of calling the model.
@@ -357,32 +403,49 @@ export async function runCallTakeaways({ call, user, deps }) {
     person: resolved.person ?? record.businessName ?? record.displayName ?? null,
   };
   if (!rendered) {
-    return { call: callRow, takeaways: blankTakeaways(), transcriptMissing: true };
+    return {
+      call: callRow,
+      takeaways: blankTakeaways(),
+      transcriptAvailable: false,
+      transcriptMissing: true,
+      transcriptState: 'no_transcript',
+      basis: basisOf(blankTakeaways(), false),
+      reading: TRANSCRIPT_ABSENT,
+    };
   }
 
-  const transcript = rendered.length > MAX_TRANSCRIPT_CHARS ? rendered.slice(0, MAX_TRANSCRIPT_CHARS) : rendered;
+  const truncated = rendered.length > MAX_TRANSCRIPT_CHARS;
+  const transcript = truncated ? rendered.slice(0, MAX_TRANSCRIPT_CHARS) : rendered;
+  const loaded = {
+    transcriptAvailable: true,
+    transcript,
+    reading: TRANSCRIPT_READING,
+    ...(truncated ? { transcriptTruncated: true } : {}),
+  };
   const client = deps.openai ?? openaiClient();
   if (!client) {
-    return { call: callRow, error: 'Call takeaways need the AI service, and it is not configured.' };
+    return { call: callRow, error: 'Call takeaways need the AI service, and it is not configured.', ...loaded };
   }
 
   let parsed;
   try {
     parsed = await requestTakeaways(client, transcript);
   } catch {
-    return { call: callRow, error: 'Could not read takeaways from this call right now.' };
+    return { call: callRow, error: 'Could not read takeaways from this call right now.', ...loaded };
   }
   if (!parsed || typeof parsed !== 'object') {
-    return { call: callRow, error: 'Could not read takeaways from this call right now.' };
+    return { call: callRow, error: 'Could not read takeaways from this call right now.', ...loaded };
   }
 
+  const takeaways = groundTakeaways(parsed, transcript, {
+    day: istDay(record.completedAt || record.createdAt),
+    fallback: speakerFallback(record),
+  });
   return {
     call: callRow,
-    takeaways: groundTakeaways(parsed, transcript, {
-      day: istDay(record.completedAt || record.createdAt),
-      fallback: speakerFallback(record),
-    }),
+    takeaways,
+    basis: basisOf(takeaways, true),
     attribution: ATTRIBUTION,
-    ...(rendered.length > MAX_TRANSCRIPT_CHARS ? { transcriptTruncated: true } : {}),
+    ...loaded,
   };
 }

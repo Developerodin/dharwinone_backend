@@ -109,10 +109,26 @@ describe('list_tasks', () => {
       id: 't1', code: 'T-1', title: 'Fix login', status: 'todo', priority: null, dueDate: null,
       project: 'Portal', sprint: null, assignees: ['Me'], blocked: true,
       createdBy: null, createdAt: null, updatedAt: null,
+      createdAtUnavailable: 'Creation date is not stored on this record.',
       commentsCount: 0, lastComment: null, attachmentsCount: 0,
     });
     assert.equal(out.commentsVisible, true);
     assert.equal(out.scope, 'mine');
+  });
+
+  it('renders one card schema: Task, Stage, Due, Assignees; project stays off the card', () => {
+    const rendered = listTasks.render({
+      total: 1,
+      records: [{
+        code: 'T-1', title: 'Fix login', status: 'todo', dueDate: '2026-04-01T00:00:00.000Z',
+        assignees: ['Me'], project: 'Portal',
+      }],
+    });
+    const labels = rendered.blocks[0].columns.map((c) => c.label);
+    assert.deepEqual(labels, ['Code', 'Task', 'Stage', 'Due', 'Assignees']);
+    assert.equal(rendered.blocks[0].rows[0].project, undefined);
+    assert.equal(rendered.blocks[0].rows[0].title, 'Fix login');
+    assert.equal(rendered.blocks[0].rows[0].status, 'todo');
   });
 
   it('a due window becomes a whole-day dueDate range', async () => {

@@ -10,6 +10,7 @@ import {
   jobMatchesOrigin,
 } from '../jobResult.js';
 import { formatSalaryRange } from '../jobFieldMap.js';
+import { htmlToReadable } from '../htmlText.js';
 
 const cell = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
@@ -130,7 +131,8 @@ export function renderJobs(data, ctx = {}, fact) {
       if (preferred.length) pairs.push({ label: 'Preferred skills', value: preferred.join(', ') });
     }
     if (r.jobDescription) {
-      pairs.push({ label: 'Description', value: String(r.jobDescription).replace(/\s+/g, ' ').slice(0, 480) });
+      const text = htmlToReadable(r.jobDescription).slice(0, 480);
+      if (text) pairs.push({ label: 'Description', value: text });
     }
     if (r.jobUrl) {
       pairs.push({ label: 'Job link', value: r.jobUrl });

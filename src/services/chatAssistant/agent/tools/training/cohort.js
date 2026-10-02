@@ -7,9 +7,12 @@ const MAX_COURSES_PER_POSITION = 30;
 const PROGRESS_STATUS = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' };
 export const NO_MANDATORY_FLAG_NOTE =
   'There is no mandatory flag on courses. requiredCourses are the courses mapped to this person\'s position in Curriculum Setup.';
+// TrainingModule, StudentCourseProgress, course notes and quiz attempts have no dueDate,
+// expiryDate, expiresAt, completionDeadline, deadline, validUntil or endDate.
+// Student.endDate is education or work history. Mentor.expiryDate is a credential date.
+// None of those is a course due date, so overdue stays unavailable.
 export const OVERDUE_NOTE =
-  'Training modules have no due date in DharwinOne, so "overdue" is not captured. atRisk (not started or no ' +
-  'activity for 14+ days, the Evaluation page rule) is the closest signal.';
+  'Unavailable because no due date is stored on training courses. Last access, enrollment, and at-risk flags are not overdue.';
 
 const lc = (s) => String(s ?? '').trim().toLowerCase();
 const pct = (n, d) => (d ? Math.round((n / d) * 100) : null);

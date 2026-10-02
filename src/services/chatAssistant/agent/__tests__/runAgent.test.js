@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import Joi from 'joi';
 import config from '../../../../config/config.js';
 import { runAgent } from '../runAgent.js';
+import { speechBasis } from '../../quoteGrounding.js';
 import { defineTool } from '../defineTool.js';
 import { getAgentTools } from '../toolRegistry.js';
 
@@ -131,6 +132,57 @@ describe('runAgent', () => {
     const fcoIndex = second.input.findIndex((i) => i.type === 'function_call_output' && i.call_id === 'c1');
     assert.ok(fcIndex >= 0 && fcoIndex > fcIndex, 'output items then outputs are appended in order');
     assert.deepEqual(JSON.parse(second.input[fcoIndex].output), { total: 12 });
+  });
+
+  it('keeps task cards and drops a second markdown table of the same rows', async () => {
+    const registry = fakeRegistry({
+      list_tasks: () => ({ ok: true, result: { total: 2 } }),
+    });
+    const block = {
+      type: 'table',
+      tableType: 'task-list',
+      title: 'Tasks (2)',
+      rows: [{ title: 'Alpha setup', status: 'new' }, { title: 'Beta review', status: 'todo' }],
+    };
+    registry.render = () => ({ blocks: [block], facts: { counts: [], primary: null } });
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('c1', 'list_tasks', {})] }),
+      stepResult({
+        text: [
+          'There are 2 open tasks.',
+          '',
+          '| Task | Status |',
+          '| --- | --- |',
+          '| Alpha setup | new |',
+          '| Beta review | todo |',
+        ].join('\n'),
+      }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r-tasks', deps: baseDeps(step, registry) });
+    assert.equal(out.reply, 'There are 2 open tasks.');
+    assert.equal(out.blocks[0], block);
+  });
+
+  it('strips a follow-up quote that is not in the loaded transcript', async () => {
+    const registry = fakeRegistry({
+      get_call_takeaways: () => ({
+        ok: true,
+        result: {
+          transcriptAvailable: true,
+          transcript: 'user: I can join on 1 November.',
+          takeaways: { joiningDate: null },
+        },
+      }),
+    });
+    registry.render = () => null;
+    const step = scriptedStep([
+      stepResult({ toolCalls: [call('c1', 'get_call_takeaways', { call: 'exec-1' })] }),
+      stepResult({ text: 'The candidate said "I want forty lakhs".' }),
+    ]);
+    const out = await runAgent({ client, user, history, memDoc: null, requestId: 'r-quote', deps: baseDeps(step, registry) });
+    assert.ok(out);
+    assert.equal(out.reply.includes('forty lakhs'), false);
+    assert.equal(out.reply.includes('did not capture'), false);
   });
 
   it('instructions = domain-neutral base + registry instructions; turn context in input', async () => {
@@ -807,5 +859,249 @@ describe('runAgent — lazy tool loading', () => {
     assert.deepEqual(names(first), ['count_jobs', 'handoff', 'list_tasks', 'who_is_on_leave_today']);
     assert.match(first.instructions, /JOBS INSTRUCTIONS\n\nLEAVE INSTRUCTIONS\n\nTASKS INSTRUCTIONS$/);
     assert.equal(first.input.filter((i) => i.role === 'developer').length, 1);
+  });
+});
+
+describe('transcript follow-up grounding', () => {
+  let original;
+  beforeEach(() => {
+    original = { ...config.chatbot.agent };
+    config.chatbot.agent.maxSteps = 5;
+    config.chatbot.agent.inputBudget = 60000;
+    config.chatbot.agent.stepTimeoutMs = 20000;
+    config.chatbot.agent.turnTimeoutMs = 30000;
+  });
+  afterEach(() => {
+    Object.assign(config.chatbot.agent, original);
+  });
+
+  const TRANSCRIPT = [
+    '[00:40] agent: What salary are you expecting?',
+    '[01:05] user: I can join on 1 November.',
+  ].join('\n');
+
+  function callsRegistry() {
+    const registry = fakeRegistry({
+      get_call_takeaways: () => ({
+        ok: true,
+        result: {
+          call: { id: 'exec-1' },
+          transcriptAvailable: true,
+          transcript: TRANSCRIPT,
+          takeaways: { joiningDate: null },
+        },
+      }),
+    });
+    registry.render = () => null;
+    return registry;
+  }
+
+  async function ask({ history, memDoc, text, toolCalls, transcript = TRANSCRIPT, available = true }) {
+    const loads = [];
+    const registry = callsRegistry();
+    const step = scriptedStep([
+      toolCalls
+        ? stepResult({ toolCalls })
+        : null,
+      stepResult({ text }),
+    ].filter(Boolean));
+    const out = await runAgent({
+      client,
+      user,
+      history,
+      memDoc,
+      requestId: 'r-transcript',
+      deps: {
+        ...baseDeps(step, registry),
+        loadCallTranscript: async (id) => {
+          loads.push(id);
+          return available
+            ? { transcriptAvailable: true, transcript }
+            : { transcriptAvailable: false, transcript: '' };
+        },
+      },
+    });
+    return { out, loads, registry };
+  }
+
+  it('loads the transcript, answers, and records the call id without the transcript body', async () => {
+    const history = [{ role: 'user', content: 'What did he say about joining?' }];
+    const { out, loads } = await ask({
+      history,
+      memDoc: null,
+      toolCalls: [call('c1', 'get_call_takeaways', { call: 'exec-1' })],
+      text: 'The candidate said "I can join on 1 November."',
+    });
+    assert.match(out.reply, /I can join on 1 November/);
+    assert.equal(out.ledgerEntry.calls[0].callId, 'exec-1');
+    assert.equal(out.ledgerEntry.calls[0].transcriptLoaded, true);
+    assert.equal(JSON.stringify(out.ledgerEntry).includes('What salary'), false);
+    assert.deepEqual(loads, []);
+    return out.ledgerEntry;
+  });
+
+  async function opened() {
+    const first = await ask({
+      history: [{ role: 'user', content: 'What did he say about joining?' }],
+      memDoc: null,
+      toolCalls: [call('c1', 'get_call_takeaways', { call: 'exec-1' })],
+      text: 'The candidate said "I can join on 1 November."',
+    });
+    return {
+      memDoc: { agentLedger: [first.out.ledgerEntry] },
+      priorReply: first.out.reply,
+    };
+  }
+
+  it('keeps an exact follow-up quote without the user pasting the transcript or another tool call', async () => {
+    const { memDoc } = await opened();
+    const history = [
+      { role: 'user', content: 'What did he say about joining?' },
+      { role: 'assistant', content: 'The candidate said "I can join on 1 November."' },
+      { role: 'user', content: 'What exactly did he say?' },
+    ];
+    const { out, loads, registry } = await ask({
+      history,
+      memDoc,
+      text: 'The candidate said "I can join on 1 November."',
+    });
+    assert.deepEqual(loads, ['exec-1']);
+    assert.equal(registry.executed.length, 0);
+    assert.equal(history.some((m) => m.role === 'user' && m.content.includes('What salary')), false);
+    assert.match(out.reply, /I can join on 1 November/);
+    assert.equal(speechBasis({
+      transcriptAvailable: true, transcript: TRANSCRIPT, claim: 'I can join on 1 November',
+    }), 'explicit');
+  });
+
+  it('does not agree with a user quote the transcript does not contain', async () => {
+    const { memDoc } = await opened();
+    const history = [
+      { role: 'user', content: 'What did he say about joining?' },
+      { role: 'assistant', content: 'The candidate said "I can join on 1 November."' },
+      { role: 'user', content: 'I think he said he could join immediately' },
+    ];
+    const { out, loads } = await ask({
+      history,
+      memDoc,
+      text: 'Yes, he said he could join immediately.',
+    });
+    assert.deepEqual(loads, ['exec-1']);
+    assert.equal(out.reply.includes('immediately'), false);
+    assert.equal(out.reply.includes('Yes'), false);
+  });
+
+  it('keeps the exact sentence when it is in the reloaded transcript', async () => {
+    const { memDoc } = await opened();
+    const { out } = await ask({
+      history: [{ role: 'user', content: 'Give me the exact sentence.' }],
+      memDoc,
+      text: 'The candidate said "I can join on 1 November."',
+    });
+    assert.match(out.reply, /"I can join on 1 November."/);
+  });
+
+  it('marks a Monday join as absent and drops the invented quote', async () => {
+    const { memDoc } = await opened();
+    const claim = 'I can join on Monday';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'absent');
+    const { out } = await ask({
+      history: [{ role: 'user', content: 'Did he say he could join on Monday?' }],
+      memDoc,
+      text: 'The candidate said "I can join on Monday."',
+    });
+    assert.equal(out.reply.includes('"I can join on Monday."'), false);
+    assert.equal(out.reply.includes('did not capture'), false);
+    assert.equal(out.reply.includes("didn't capture"), false);
+  });
+
+  it('does not present an inferred sentence as an exact quote', async () => {
+    const { memDoc } = await opened();
+    const claim = 'I can join on 1 November next year';
+    assert.equal(speechBasis({ transcriptAvailable: true, transcript: TRANSCRIPT, claim }), 'inferred');
+    const { out } = await ask({
+      history: [{ role: 'user', content: 'Give me the exact sentence about joining.' }],
+      memDoc,
+      text: `The candidate said "${claim}."`,
+    });
+    assert.equal(out.reply.includes('next year'), false);
+    assert.equal(out.reply.includes(`"${claim}"`), false);
+  });
+
+  it('does not say the transcript failed to capture something when none is available', async () => {
+    const { memDoc } = await opened();
+    const { out } = await ask({
+      history: [{ role: 'user', content: 'What exactly did he say?' }],
+      memDoc,
+      available: false,
+      text: 'The transcript did not capture a joining date. The candidate said "I can join on 1 November."',
+    });
+    assert.equal(out.reply.includes('did not capture'), false);
+    assert.equal(out.reply.includes('I can join on 1 November'), false);
+    assert.match(out.reply, /No transcript is available/);
+    assert.equal(speechBasis({ transcriptAvailable: false, transcript: '', claim: 'I can join on 1 November' }), 'no_transcript');
+  });
+
+  it('follows the reloaded transcript when the previous assistant line was wrong', async () => {
+    const { memDoc } = await opened();
+    const history = [
+      { role: 'user', content: 'Did he mention joining?' },
+      { role: 'assistant', content: 'He did not mention joining.' },
+      { role: 'user', content: 'That is wrong. What did he say?' },
+    ];
+    const { out, loads } = await ask({
+      history,
+      memDoc,
+      text: 'He did not mention joining.',
+    });
+    assert.deepEqual(loads, ['exec-1']);
+    assert.match(out.reply, /I can join on 1 November/);
+    assert.equal(out.reply.includes('did not mention'), false);
+    assert.equal(history[1].content.includes('I can join on 1 November'), false);
+  });
+
+  it('does not reload a transcript for a question that is not about what was said', async () => {
+    const { memDoc } = await opened();
+    const { out, loads } = await ask({
+      history: [{ role: 'user', content: 'Thanks, that helps.' }],
+      memDoc,
+      text: 'Glad to help.',
+    });
+    assert.deepEqual(loads, []);
+    assert.equal(out.reply, 'Glad to help.');
+  });
+
+  const TRANSCRIPT_QUESTIONS = [
+    'What was his joining date?',
+    'Did he mention when he could join?',
+    'What did he say about joining?',
+    'Was immediate joining discussed?',
+    'Did he agree to Monday?',
+    'Can you show me his exact words about availability?',
+    'What did the candidate say regarding relocation?',
+    'Was relocation discussed?',
+  ];
+
+  for (const question of TRANSCRIPT_QUESTIONS) {
+    it(`reloads the prior call before grounding: ${question}`, async () => {
+      const { memDoc } = await opened();
+      const { loads } = await ask({
+        history: [{ role: 'user', content: question }],
+        memDoc,
+        text: 'Checking the call.',
+      });
+      assert.deepEqual(loads, ['exec-1']);
+    });
+  }
+
+  it('does not reload the prior call when the question lists employees', async () => {
+    const { memDoc } = await opened();
+    const { out, loads } = await ask({
+      history: [{ role: 'user', content: 'List employees' }],
+      memDoc,
+      text: 'He said the roster is ready.',
+    });
+    assert.deepEqual(loads, []);
+    assert.equal(out.reply, 'He said the roster is ready.');
   });
 });

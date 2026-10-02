@@ -188,6 +188,8 @@ describe('get_training_progress cohort mode', () => {
     });
     assert.equal(res.overdue, null);
     assert.match(res.overdueNote, /no due date/);
+    assert.match(res.overdueNote, /Unavailable/);
+    assert.doesNotMatch(res.overdueNote, /atRisk/);
   });
 
   it('unknown course is notFound', async () => {
@@ -410,6 +412,8 @@ describe('get_training_progress lowest completion', () => {
     });
     assert.equal(res.overdue, null);
     assert.match(res.overdueNote, /no due date/);
+    assert.match(res.overdueNote, /Unavailable/);
+    assert.doesNotMatch(res.overdueNote, /atRisk/);
     assert.match(res.note, /no due date/);
     assert.equal(res.lowestCompletion, true);
   });

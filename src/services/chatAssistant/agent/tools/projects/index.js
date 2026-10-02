@@ -15,6 +15,10 @@ const instructions = [
     'summary") → count_tasks, with groupBy "status" for a breakdown. "Which tasks…" → list_tasks.',
   '- "My tasks" → filters.assignedToMe. "His / her / their tasks" → filters.assigneeName with that person\'s ' +
     'real name from the conversation, never the pronoun; if no person was discussed, ask who.',
+  '- Task cards use one schema: Task, Stage, Due, Assignees. Do not emit a second table or list with other ' +
+    'headers (Due date, Status, Assigned, Project). createdAt on a list_tasks row is when the task was ' +
+    'created. If createdAt is null, say the creation date is unavailable. updatedAt is the last update, ' +
+    'not the creation date.',
   '- Each list_tasks row includes the creator\'s name, createdAt, updatedAt, commentsCount and attachmentsCount. ' +
     'lastComment is { by, at, text } (text at most 200 characters) only when commentsVisible is true — that is ' +
     'the Task Board comment API (tasks.read or kanban.read). When commentsVisible is false, lastComment is null: ' +
@@ -26,10 +30,12 @@ const instructions = [
   '- "Tasks created by X" → filters.createdBy with that person\'s real name (list_tasks or count_tasks). ' +
     '"No updates in 7 days" → filters.noUpdateDays 7. "Today\'s task activity" → filters.updatedSince set to ' +
     'today\'s date (YYYY-MM-DD). "Tasks with / without comments" → filters.hasComments true or false.',
-  '- Each list_projects row includes the creator\'s name, description (at most 300 characters), members ' +
-    '(names of people in assignedTo) and lastActivityAt (latest task updatedAt in that project). A null ' +
-    'description, creator name or lastActivityAt is not captured — lastActivityAt null means no task update ' +
-    'is stored. "Projects with no activity in N days" → list_projects filters.inactiveDays N. Who joined or ' +
+  '- Each list_projects row includes createdAt (the project record\'s creation time), the creator\'s name, ' +
+    'description (at most 300 characters), members (names of people in assignedTo) and lastActivityAt ' +
+    '(latest task updatedAt in that project). createdAt is never lastActivityAt or updatedAt. If createdAt ' +
+    'is null, say the creation date is unavailable — do not substitute another date. A null description, ' +
+    'creator name or lastActivityAt is not captured — lastActivityAt null means no task update is stored. ' +
+    '"Projects with no activity in N days" → list_projects filters.inactiveDays N. Who joined or ' +
     'left a project is not captured.',
   '- "Who has the most tasks", team workload / utilization → get_workload. "Who has more than N open tasks" ' +
     '(an explicit threshold) → get_allocation mode list, bucket "overloaded", overloadAbove N.',

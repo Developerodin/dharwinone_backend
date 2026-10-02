@@ -89,13 +89,15 @@ describe('get_attention_digest', () => {
     assert.deepEqual(out.failed, []);
   });
 
-  it('overdue courses are notCaptured (training has no due date) and call no tool', async () => {
+  it('overdue courses are unavailable when no due date is stored, and call no tool', async () => {
     const { ctx, calls } = ctxWith();
     const out = await getAttentionDigest.execute({ module: 'hr' }, ctx);
     const courses = item(out, 'overdue_courses');
-    assert.equal(courses.status, 'notCaptured');
+    assert.equal(courses.status, 'unavailable');
     assert.equal(courses.count, null);
     assert.match(courses.note, /no due date/);
+    assert.match(courses.note, /not overdue/);
+    assert.equal(getAttentionDigest.render(out).blocks[0].rows.find((r) => r.label === 'Overdue training courses').count, 'unavailable');
     assert.ok(!calls.some((c) => /training/.test(c.name)));
   });
 
@@ -183,7 +185,8 @@ describe('get_attention_digest', () => {
     assert.ok(out.notScopedToYou.includes('Callbacks overdue'));
     assert.ok(out.notScopedToYou.includes('Employees on no active project'));
     assert.ok(!out.notScopedToYou.includes('Overdue training courses'));
-    assert.equal(item(out, 'overdue_courses').status, 'notCaptured');
+    assert.equal(item(out, 'overdue_courses').status, 'unavailable');
+    assert.equal(item(out, 'overdue_courses').count, null);
   });
 
   it("compareTo 'previous' re-runs only windowed items for the previous equal window → { now, before, delta }", async () => {

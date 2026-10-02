@@ -14,7 +14,10 @@ export default defineTool({
     'Takeaways from one call\'s transcript, each with the quote it came from and that line\'s timestamp: ' +
     'expected salary, notice period, joining date, questions asked, concerns, other offers, a callback ' +
     'request, why they declined, a visa mention, and other follow-ups they asked for. Anything not said ' +
-    'is null. A takeaway without a quote from the transcript is not an answer. Wording is attributed ' +
+    'is null. The result includes the transcript when one was loaded (transcriptAvailable). A null field means ' +
+    'the extractor returned null, not that the words are absent and not that the transcript is missing — read ' +
+    '`transcript` before answering, and do not invent a quote. Say absent only when the words are not in the ' +
+    'transcript. A takeaway without a quote from the transcript is not an answer. Wording is attributed ' +
     '("the candidate said" or "the agent said"), never a verified fact. Use for "what salary did Priya ' +
     'mention", "what notice period did he give", "what concerns did she raise", "did he mention another ' +
     'offer", "what questions were asked", "when can they join", "why did they decline on the call", ' +

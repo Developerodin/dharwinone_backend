@@ -192,10 +192,97 @@ describe('task rows', () => {
     const row = out.records[0];
     assert.equal(row.createdBy, null);
     assert.equal(row.createdAt, null);
+    assert.match(row.createdAtUnavailable, /not stored/);
     assert.equal(row.updatedAt, null);
     assert.equal(row.lastComment, null);
     assert.equal(row.commentsCount, 0);
     assert.equal(row.attachmentsCount, 0);
+  });
+});
+
+describe('task createdAt', () => {
+  it('reads createdAt from the task document and does not use updatedAt', async () => {
+    const id = '64b000000000000000000010';
+    const ctx = ctxFor(['tasks.read'], {
+      queryTasks: async () => ({
+        totalResults: 1,
+        results: [{ _id: id, title: 'Setup', status: 'new', updatedAt: '2026-09-15T00:00:00.000Z' }],
+      }),
+      Task: {
+        aggregate: async () => [],
+        find: () => ({
+          select: () => ({
+            lean: async () => [{
+              _id: id,
+              createdAt: new Date('2026-01-02T00:00:00.000Z'),
+              updatedAt: new Date('2026-09-15T00:00:00.000Z'),
+            }],
+          }),
+        }),
+      },
+    });
+    const row = (await listTasks.execute({}, ctx)).records[0];
+    assert.equal(row.createdAt, '2026-01-02T00:00:00.000Z');
+    assert.equal(row.updatedAt, '2026-09-15T00:00:00.000Z');
+    assert.equal(row.createdAtUnavailable, undefined);
+  });
+
+  it('says the creation date is unavailable when the document has no createdAt', async () => {
+    const id = '64b000000000000000000011';
+    const ctx = ctxFor(['tasks.read'], {
+      queryTasks: async () => ({
+        totalResults: 1,
+        results: [{ _id: id, title: 'Setup', updatedAt: '2026-09-15T00:00:00.000Z' }],
+      }),
+      Task: {
+        aggregate: async () => [],
+        find: () => ({
+          select: () => ({
+            lean: async () => [{ _id: id, createdAt: null, updatedAt: new Date('2026-09-15T00:00:00.000Z') }],
+          }),
+        }),
+      },
+    });
+    const row = (await listTasks.execute({}, ctx)).records[0];
+    assert.equal(row.createdAt, null);
+    assert.match(row.createdAtUnavailable, /not stored/);
+    assert.equal(row.updatedAt, '2026-09-15T00:00:00.000Z');
+  });
+
+  it('keeps createdAt distinct from updatedAt, last activity and due date, and ignores a mismatched id', async () => {
+    const id = '64b000000000000000000010';
+    const other = '64b000000000000000000099';
+    const ctx = ctxFor(['tasks.read'], {
+      queryTasks: async () => ({
+        results: [{
+          _id: id,
+          title: 'Setup',
+          status: 'new',
+          dueDate: '2026-10-01T00:00:00.000Z',
+          updatedAt: '2026-09-15T00:00:00.000Z',
+        }],
+      }),
+      Task: {
+        find: () => ({
+          select: () => ({
+            lean: async () => [
+              { _id: other, createdAt: new Date('2026-09-15T00:00:00.000Z'), updatedAt: new Date('2026-09-15T00:00:00.000Z') },
+              {
+                _id: id,
+                createdAt: new Date('2026-01-02T00:00:00.000Z'),
+                updatedAt: new Date('2026-09-15T00:00:00.000Z'),
+              },
+            ],
+          }),
+        }),
+      },
+    });
+    const row = (await listTasks.execute({}, ctx)).records[0];
+    assert.equal(row.createdAt, '2026-01-02T00:00:00.000Z');
+    assert.equal(row.updatedAt, '2026-09-15T00:00:00.000Z');
+    assert.equal(row.dueDate, '2026-10-01T00:00:00.000Z');
+    assert.notEqual(row.createdAt, row.updatedAt);
+    assert.notEqual(row.createdAt, row.dueDate);
   });
 });
 
@@ -313,6 +400,42 @@ describe('project rows', () => {
     assert.equal(out.records[0].description, null);
     assert.deepEqual(out.records[0].members, []);
     assert.equal(out.records[0].lastActivityAt, null);
+    assert.equal(out.records[0].createdAt, null);
+    assert.match(out.records[0].createdAtUnavailable, /not stored/);
+    assert.equal(listProjects.render(out).blocks[0].rows[0].createdAt, 'unavailable');
+  });
+
+  it('uses the document createdAt and does not substitute lastActivityAt', async () => {
+    const pid = STALE;
+    const ctx = ctxFor(['projects.read'], {
+      Task: {
+        aggregate: async () => [
+          { _id: new mongoose.Types.ObjectId(pid), lastActivityAt: new Date('2026-09-15T00:00:00.000Z') },
+        ],
+      },
+      queryProjects: async () => ({
+        totalResults: 1,
+        results: [{
+          _id: pid,
+          name: 'Portal',
+          status: 'Inprogress',
+          createdAt: new Date('2026-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-15T00:00:00.000Z'),
+          endDate: new Date('2026-12-01T00:00:00.000Z'),
+          assignedTeams: [],
+        }],
+      }),
+    });
+    const out = await listProjects.execute({}, ctx);
+    const row = out.records[0];
+    assert.equal(row.createdAt, '2026-01-02T00:00:00.000Z');
+    assert.equal(row.lastActivityAt, '2026-09-15T00:00:00.000Z');
+    assert.notEqual(row.createdAt, row.lastActivityAt);
+    assert.equal(row.endDate.toISOString(), '2026-12-01T00:00:00.000Z');
+    assert.notEqual(row.createdAt, row.endDate.toISOString());
+    assert.notEqual(row.createdAt, '2026-09-15T00:00:00.000Z');
+    assert.equal(listProjects.render(out).blocks[0].rows[0].createdAt, '2026-01-02T00:00:00.000Z');
+    assert.equal(listProjects.render(out).blocks[0].columns.find((c) => c.key === 'createdAt').label, 'Created');
   });
 
   it('inactiveDays excludes projects with a task update inside the window, using one aggregation', async () => {
