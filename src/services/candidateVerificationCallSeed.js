@@ -2,7 +2,7 @@ import { seedRecord } from './callSync.service.js';
 
 /**
  * Args for CallRecord seeding after a candidate verification dial.
- * agentId is the clone. Never the template id.
+ * agentId is BOLNA_CANDIDATE_AGENT_ID (shared template agent).
  */
 export function candidateVerificationSeedBody(result, extras = {}) {
   return {
@@ -10,7 +10,7 @@ export function candidateVerificationSeedBody(result, extras = {}) {
     candidate: extras.candidateId || result?.candidateId || null,
     job: extras.jobId || null,
     purpose: 'job_application_verification',
-    agentId: result?.agentId,
+    agentId: result?.agentId || extras.agentId,
     recipientPhone: extras.recipientPhone,
     businessName: extras.businessName || result?.candidateName,
     createdBy: extras.createdBy || null,
@@ -20,7 +20,6 @@ export function candidateVerificationSeedBody(result, extras = {}) {
     promptRenderToken: result?.promptRenderToken,
     promptHash: result?.promptHash,
     question1: result?.question1,
-    ownedClone: true,
   };
 }
 

@@ -182,9 +182,9 @@ const initiateCandidateCall = catchAsync(async (req, res) => {
     throw new ApiError(isClientPhone ? httpStatus.BAD_REQUEST : httpStatus.BAD_GATEWAY, msg);
   }
 
-  // Seed uses the clone id from the dial. candidateAgentId is the template and is not stored.
   await callSyncService.seedRecord(
     candidateVerificationSeedBody(result, {
+      agentId: candidateAgentId,
       candidateId,
       jobId,
       recipientPhone: formattedPhone,

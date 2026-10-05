@@ -16,6 +16,7 @@ import { generateVerifyEmailToken } from './token.service.js';
 import { sendVerificationEmail } from './email.service.js';
 import { getShiftById } from './shift.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { refreshEmployeeListProfilePictures } from '../utils/profilePicture.util.js';
 import config from '../config/config.js';
 import ApiError from '../utils/ApiError.js';
 import logger from '../config/logger.js';
@@ -1370,17 +1371,12 @@ const queryCandidates = async (filter, options = {}) => {
       return candidateObj;
     });
 
-    // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
     if (!skipPresign) {
-      await Promise.all(candidatesWithEmailStatus.map(async (c) => {
-        if (c.profilePicture?.key) {
-          try {
-            c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
-          } catch (e) {
-            logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
-          }
-        }
-      }));
+      try {
+        await refreshEmployeeListProfilePictures(candidatesWithEmailStatus);
+      } catch (e) {
+        logger.warn('Failed to regenerate profile picture URLs in list:', e?.message);
+      }
     }
 
     if (wantOpenSop && candidatesWithEmailStatus.length > 0) {
@@ -1486,17 +1482,12 @@ const queryCandidates = async (filter, options = {}) => {
         return candidateObj;
       });
 
-      // Regenerate presigned URLs for profile pictures (stored URLs expire after 7 days)
       if (!skipPresign) {
-        await Promise.all(result.results.map(async (c) => {
-          if (c.profilePicture?.key) {
-            try {
-              c.profilePicture.url = await generatePresignedDownloadUrl(c.profilePicture.key, 7 * 24 * 3600);
-            } catch (e) {
-              logger.warn('Failed to regenerate profile picture URL in list:', e?.message);
-            }
-          }
-        }));
+        try {
+          await refreshEmployeeListProfilePictures(result.results);
+        } catch (e) {
+          logger.warn('Failed to regenerate profile picture URLs in list:', e?.message);
+        }
       }
 
       if (wantOpenSop && result.results.length > 0) {

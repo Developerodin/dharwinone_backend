@@ -152,8 +152,12 @@ jobApplicationSchema.index({ job: 1, candidate: 1 }, { unique: true });
 // P3: tenant-safe compound indexes for scoped list/count/search queries.
 jobApplicationSchema.index({ tenantId: 1, candidate: 1 });
 jobApplicationSchema.index({ tenantId: 1, appliedBy: 1 });
-// Production autoIndex is false — create { statusChangedAt: 1 } on the server; shipping this file does not.
+// Production autoIndex is false — create these on the server; shipping this file does not.
 jobApplicationSchema.index({ statusChangedAt: 1 });
+// Default GET /job-applications sort (createdAt:desc) and dedupe tie-break.
+jobApplicationSchema.index({ createdAt: -1 });
+jobApplicationSchema.index({ status: 1, createdAt: -1 });
+jobApplicationSchema.index({ candidate: 1, createdAt: -1 });
 
 // toJSON.plugin strips the raw `createdAt` from serialized output, so the UI never sees the
 // application date. Expose it via a virtual (read from createdAt) that survives the strip.

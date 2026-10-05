@@ -13,6 +13,7 @@
   "./src/__tests__/eadExtract.test.js",
   "./src/__tests__/visaExtract.test.js",
   "./src/utils/__tests__/playlistSummary.util.test.js",
+  "./src/utils/__tests__/profilePicture.util.test.js",
   "./src/__tests__/employee.controller.helpers.test.js",
   "./src/__tests__/permission.service.employees.test.js",
   "./src/__tests__/permissionMatrix.enforcement.test.js",

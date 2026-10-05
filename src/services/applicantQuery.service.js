@@ -6,6 +6,7 @@ import Meeting from '../models/meeting.model.js';
 import { INTERVIEW_SCHEDULE_ELIGIBLE_STATUSES } from '../constants/atsPipeline.js';
 import { applicationScope } from './visibilityScope.service.js';
 import { generatePresignedDownloadUrl } from '../config/s3.js';
+import { refreshApplicationCandidateProfilePictures } from '../utils/profilePicture.util.js';
 
 const RELAY_EMAIL_RE = /(\.noreply@dharwin\.offers\.local$)|(\.(local|internal|invalid)$)/i;
 
@@ -25,6 +26,116 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const emptyPaginated = (options = {}) => {
   const limit = Number(options.limit) || 10;
   return { results: [], page: 1, limit, totalPages: 0, totalResults: 0 };
+};
+
+/** List GET /job-applications — omit detail-only blobs (statusHistory, round plan, Bolna fields). */
+const APPLICANT_LIST_SELECT =
+  '-statusHistory -roundPlanSnapshot -notes -coverLetter -verificationCallExecutionId -verificationCallInitiatedAt -verificationCallStatus -verificationCallbackAt -verificationCallbackCount -roundCounter';
+
+const APPLICANT_LIST_POPULATE = [
+  { path: 'job', select: 'title organisation status' },
+  {
+    path: 'candidate',
+    select:
+      'fullName email phoneNumber countryCode isActive address department designation documents profilePicture owner employeeId referralPipelineStatus',
+    populate: { path: 'owner', select: 'name email' },
+  },
+  { path: 'applicantUser', select: 'name email' },
+  { path: 'appliedBy', select: 'name email' },
+];
+
+const parsePaginateOptions = (options = {}) => {
+  const limit = options.limit && parseInt(options.limit, 10) > 0 ? parseInt(options.limit, 10) : 10;
+  const page = options.page && parseInt(options.page, 10) > 0 ? parseInt(options.page, 10) : 1;
+  const sortBy = options.sortBy || 'createdAt:desc';
+  const sort = {};
+  sortBy.split(',').forEach((sortOption) => {
+    const [key, order] = sortOption.split(':');
+    sort[key] = order === 'asc' ? 1 : -1;
+  });
+  if (sort._id == null) {
+    sort._id = sort.createdAt != null ? sort.createdAt : -1;
+  }
+  return { limit, page, skip: (page - 1) * limit, sortBy, sort };
+};
+
+const presignApplicationDocuments = async (apps) => {
+  const resign = async (holder, urlField) => {
+    if (!holder?.key) return;
+    try {
+      holder[urlField] = await generatePresignedDownloadUrl(holder.key, 7 * 24 * 3600);
+    } catch (_) {
+      /* keep stale url if presigning fails */
+    }
+  };
+
+  await Promise.all(
+    (apps || []).map(async (app) => {
+      const docs = app.candidate?.documents;
+      await Promise.all([
+        resign(app.submittedResume, 'documentUrl'),
+        resign(app.submittedCoverLetter, 'documentUrl'),
+        ...(Array.isArray(docs) ? docs.map((doc) => resign(doc, 'url')) : []),
+      ]);
+    })
+  );
+  await refreshApplicationCandidateProfilePictures(apps);
+};
+
+const dedupeGroupId = (filter = {}) => {
+  const dedupeByCandidateOnly = truthy(filter.distinctCandidates) && truthy(filter.scheduleEligible);
+  if (dedupeByCandidateOnly) {
+    return { who: { $ifNull: ['$applicantUser', '$candidate'] } };
+  }
+  return { job: '$job', who: { $ifNull: ['$applicantUser', '$candidate'] } };
+};
+
+/**
+ * Paginate with the same dedupe rule as applyDedupeIfRequested, without loading every row into Node.
+ * Sort + tie-break match applyDedupeIfRequested (newest createdAt, then highest _id).
+ */
+const paginateDedupedApplicants = async (query, filter = {}, options = {}) => {
+  const { limit, page, skip, sort } = parsePaginateOptions(options);
+  const groupId = dedupeGroupId(filter);
+
+  const pipeline = [
+    { $match: JobApplication.find(query).cast() },
+    { $sort: sort },
+    {
+      $group: {
+        _id: groupId,
+        docId: { $first: '$_id' },
+        createdAt: { $first: '$createdAt' },
+      },
+    },
+    { $sort: { createdAt: sort.createdAt ?? -1, docId: sort._id ?? -1 } },
+    {
+      $facet: {
+        meta: [{ $count: 'totalResults' }],
+        ids: [{ $skip: skip }, { $limit: limit }, { $project: { _id: '$docId' } }],
+      },
+    },
+  ];
+
+  const [facetResult] = await JobApplication.aggregate(pipeline);
+  const totalResults = facetResult?.meta?.[0]?.totalResults ?? 0;
+  const ids = (facetResult?.ids ?? []).map((row) => row._id);
+  if (!ids.length) {
+    return { results: [], page, limit, totalPages: 0, totalResults };
+  }
+
+  const docs = await JobApplication.find({ _id: { $in: ids } })
+    .select(APPLICANT_LIST_SELECT)
+    .populate(APPLICANT_LIST_POPULATE)
+    .lean();
+
+  const order = new Map(ids.map((id, index) => [String(id), index]));
+  docs.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0));
+
+  await presignApplicationDocuments(docs);
+
+  const totalPages = Math.ceil(totalResults / limit) || 0;
+  return { results: docs, page, limit, totalPages, totalResults };
 };
 
 const mergeScopedQuery = (scopeFilter = {}, query = {}) => {
@@ -209,52 +320,23 @@ const applyDedupeIfRequested = async (query, filter = {}) => {
 const queryApplicants = async (filter = {}, options = {}, currentUser = {}) => {
   const { query, scopeDebug } = await buildApplicantQuery(filter, currentUser);
   if (query?._id?.$in && query._id.$in.length === 0) return emptyPaginated(options);
-  const finalQuery = await applyDedupeIfRequested(query, filter);
-  if (finalQuery?._id?.$in && finalQuery._id.$in.length === 0) return emptyPaginated(options);
 
-  const result = await JobApplication.paginate(finalQuery, {
+  if (!truthy(filter.includeDuplicates)) {
+    const deduped = await paginateDedupedApplicants(query, filter, options);
+    if (scopeDebug && options.debug) deduped._scopeDebug = scopeDebug;
+    return deduped;
+  }
+
+  const result = await JobApplication.paginate(query, {
     ...options,
     sortBy: options.sortBy || 'createdAt:desc',
-    populate: [
-      { path: 'job', select: 'title organisation status' },
-      {
-        path: 'candidate',
-        select:
-          'fullName email phoneNumber countryCode isActive address department designation documents profilePicture owner employeeId referralPipelineStatus',
-        populate: { path: 'owner', select: 'name email' },
-      },
-      { path: 'applicantUser', select: 'name email' },
-      { path: 'appliedBy', select: 'name email' },
-    ],
+    lean: true,
+    select: APPLICANT_LIST_SELECT,
+    populate: APPLICANT_LIST_POPULATE,
     _scopeDebug: scopeDebug,
   });
 
-  // Stored document `url`s are presigned at upload with a short TTL, so resumes opened days later
-  // 403 with "Request has expired". Re-sign each candidate document from its `key` (7-day TTL),
-  // mirroring employee.service.js. Best-effort: keep the stale url if presigning fails.
-  //
-  // The submitted resume / cover letter snapshots carry the SAME expired urls and are what the
-  // applications list actually links to, so they are re-signed on the same pass. Without this the
-  // recruiter's link 403s on every application older than the original TTL.
-  const resign = async (holder, urlField) => {
-    if (!holder?.key) return;
-    try {
-      holder[urlField] = await generatePresignedDownloadUrl(holder.key, 7 * 24 * 3600);
-    } catch (_) {
-      /* keep stale url if presigning fails */
-    }
-  };
-
-  await Promise.all(
-    (result?.results || []).map(async (app) => {
-      const docs = app.candidate?.documents;
-      await Promise.all([
-        resign(app.submittedResume, 'documentUrl'),
-        resign(app.submittedCoverLetter, 'documentUrl'),
-        ...(Array.isArray(docs) ? docs.map((doc) => resign(doc, 'url')) : []),
-      ]);
-    })
-  );
+  await presignApplicationDocuments(result?.results);
 
   return result;
 };

@@ -60,13 +60,29 @@ const generatePresignedUploadUrl = async (key, contentType, expiresIn = 3600) =>
   return getSignedUrl(s3Client, command, { expiresIn });
 };
 
-// Generate presigned URL for downloading/viewing
-const generatePresignedDownloadUrl = async (key, expiresIn = 3600) => {
-  const command = new GetObjectCommand({
+/**
+ * Generate presigned URL for downloading/viewing.
+ * @param {string} key
+ * @param {number} [expiresIn=3600]
+ * @param {{ responseCacheControl?: string }} [options]
+ *   Optional ResponseCacheControl on the signed GET (browser cache TTL for the object bytes).
+ *   Does not replace object metadata on the bucket; pair with bucket Cache-Control for CDN.
+ */
+const generatePresignedDownloadUrl = async (key, expiresIn = 3600, options = {}) => {
+  const commandInput = {
     Bucket: config.aws.bucketName,
     Key: key,
-  });
+  };
+  const cacheControl = options.responseCacheControl;
+  if (cacheControl && typeof cacheControl === 'string') {
+    commandInput.ResponseCacheControl = cacheControl;
+  }
 
+  const command = new GetObjectCommand(commandInput);
+
+  // Infra note: presigned ResponseCacheControl only affects browser/CDN caching of GET responses.
+  // For durable cache headers on every access (non-presigned URLs), set Cache-Control on PutObject
+  // and/or add a bucket policy / CloudFront cache policy for the uploads prefix.
   return getSignedUrl(s3Client, command, { expiresIn });
 };
 
