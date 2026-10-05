@@ -21,6 +21,7 @@ const emptyPage = { results: [], page: 1, limit: 12, totalPages: 0, totalResults
 let capturedFilter = null;
 let queryJobs;
 let buildJobSearchClause;
+let buildJobToolbarSearchClause;
 
 before(async () => {
   mock.module('../../models/job.model.js', {
@@ -41,7 +42,7 @@ before(async () => {
     defaultExport: { warn: () => {}, info: () => {}, error: () => {} },
   });
 
-  ({ queryJobs, buildJobSearchClause } = await import('../job.service.js'));
+  ({ queryJobs, buildJobSearchClause, buildJobToolbarSearchClause } = await import('../job.service.js'));
 });
 
 function getSearchClause(filter) {
@@ -66,6 +67,25 @@ test('buildJobListFilter: search stays a plain substring (Jobs page behaviour, u
   assert.equal(titleField.source, 'AI');
   assert.ok(titleField.test('Maintenance jobs'), 'substring "ai" inside another word should still match');
   assert.equal('searchWholeWord' in capturedFilter, false);
+});
+
+test('buildJobListFilter: searchFields=toolbar matches title/company/location only (ATS quick search)', async () => {
+  capturedFilter = null;
+  await queryJobs({ forCandidates: true, search: 'test', searchFields: 'toolbar' }, {});
+  const clause = getSearchClause(capturedFilter);
+  assert.ok(Array.isArray(clause));
+  assert.equal(clause.length, 3);
+  assert.ok(clause[0].title);
+  assert.ok(clause[1]['organisation.name']);
+  assert.ok(clause[2].location);
+  assert.equal(clause.some((c) => c.jobDescription), false);
+});
+
+test('buildJobToolbarSearchClause: does not match "latest" via description-only substring', () => {
+  const clause = buildJobToolbarSearchClause('test');
+  const titleField = clause.$or[0].title;
+  assert.ok(!titleField.test('Prompt Engineer'));
+  assert.ok(titleField.test('Odin test job2'));
 });
 
 test('buildJobSearchClause: substring by default', () => {

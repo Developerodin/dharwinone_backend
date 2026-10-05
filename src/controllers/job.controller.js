@@ -132,6 +132,7 @@ const list = catchAsync(async (req, res) => {
     'postingDate',
     'createdBy',
     'search',
+    'searchFields',
     'forCandidates',
     'jobOrigin',
     'salaryMin',
@@ -232,6 +233,7 @@ const exportExcel = catchAsync(async (req, res) => {
   const filter = pick(req.body, [
     'status',
     'search',
+    'searchFields',
     'titles',
     'companies',
     'locations',

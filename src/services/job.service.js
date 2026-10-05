@@ -270,6 +270,18 @@ const buildJobSearchClause = (term, wholeWord = false) => {
   };
 };
 
+/** ATS toolbar quick-search: same fields as `/jobs/filter-options/facet` (no description/skillTags). */
+const buildJobToolbarSearchClause = (term) => {
+  const searchRegex = new RegExp(escapeRegex(term), 'i');
+  return {
+    $or: [
+      { title: searchRegex },
+      { 'organisation.name': searchRegex },
+      { location: searchRegex },
+    ],
+  };
+};
+
 const applyJobSalaryQueryFilters = (filter, salaryOpts = {}) => {
   const notSpecified =
     salaryOpts.salaryNotSpecified === true || salaryOpts.salaryNotSpecified === 'true';
@@ -515,12 +527,18 @@ const buildJobListFilter = async (filter) => {
   }
 
   const searchTerm = filter.search != null ? String(filter.search).trim() : '';
+  const searchFields = filter.searchFields === 'toolbar' ? 'toolbar' : 'full';
   const locationTerm = filter.location != null ? String(filter.location).trim() : '';
   delete filter.search;
+  delete filter.searchFields;
   delete filter.location;
 
   if (searchTerm) {
-    appendFilterClause(filter, buildJobSearchClause(searchTerm));
+    const clause =
+      searchFields === 'toolbar'
+        ? buildJobToolbarSearchClause(searchTerm)
+        : buildJobSearchClause(searchTerm);
+    appendFilterClause(filter, clause);
   }
 
   if (locationTerm) {
@@ -2346,6 +2364,7 @@ export {
   queryJobs,
   buildJobListFilter,
   buildJobSearchClause,
+  buildJobToolbarSearchClause,
   applyJobListFacetFilters,
   applyJobSalaryQueryFilters,
   applyJobExperienceQueryFilters,

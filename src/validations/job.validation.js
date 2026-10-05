@@ -213,6 +213,7 @@ const getJobs = {
       .optional(),
     createdBy: Joi.string().custom(objectId).optional(),
     search: Joi.string().optional(),
+    searchFields: Joi.string().valid('toolbar', 'full').optional(),
     forCandidates: Joi.boolean().optional(),
     jobOrigin: Joi.string().valid('internal', 'external').optional().allow('', null),
     salaryMin: Joi.number().min(0).optional(),
