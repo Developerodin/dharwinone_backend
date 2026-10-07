@@ -7,7 +7,8 @@ import {
 } from '../config/candidateVerificationDispositions.js';
 
 function resolveCandidateAgentId(agentId) {
-  return agentId || config.bolna.candidateAgentId || config.bolna.agentId || '';
+  // Never fall back to BOLNA_AGENT_ID — job-verification and candidate-verification agents must differ.
+  return agentId || config.bolna.candidateAgentId || '';
 }
 
 /**
@@ -23,7 +24,12 @@ export async function ensureCandidateVerificationExtractions(agentId) {
   const specs = getCandidateVerificationDispositionSpecs();
   const listed = await bolnaService.listDispositions(resolvedAgentId);
   if (!listed.success) {
-    return { success: false, error: listed.error || 'Failed to list Bolna dispositions' };
+    return {
+      success: false,
+      agentId: resolvedAgentId,
+      bolnaStatus: listed.status,
+      error: listed.error || 'Failed to list Bolna dispositions',
+    };
   }
 
   const existing = (listed.dispositions || []).filter(
@@ -47,7 +53,12 @@ export async function ensureCandidateVerificationExtractions(agentId) {
   if (missing.length === specs.length) {
     const bulk = await bolnaService.bulkCreateDispositions(resolvedAgentId, missing);
     if (!bulk.success) {
-      return { success: false, error: bulk.error || 'Bulk disposition create failed' };
+      return {
+        success: false,
+        agentId: resolvedAgentId,
+        bolnaStatus: bulk.status,
+        error: bulk.error || 'Bulk disposition create failed',
+      };
     }
     return {
       success: true,
@@ -67,6 +78,8 @@ export async function ensureCandidateVerificationExtractions(agentId) {
     if (!created.success) {
       return {
         success: false,
+        agentId: resolvedAgentId,
+        bolnaStatus: created.status,
         error: created.error || `Failed to create disposition "${spec.name}"`,
         partialCreatedIds: createdIds,
       };

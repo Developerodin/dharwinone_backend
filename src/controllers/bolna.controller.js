@@ -490,7 +490,17 @@ const getCallRecord = catchAsync(async (req, res) => {
 const setupCandidateVerificationExtractions = catchAsync(async (req, res) => {
   const result = await ensureCandidateVerificationExtractions(req.body?.agentId);
   if (!result.success) {
-    throw new ApiError(httpStatus.BAD_GATEWAY, result.error || 'Bolna disposition setup failed');
+    const errMsg = result.error || 'Bolna disposition setup failed';
+    const isConfig =
+      /BOLNA_CANDIDATE_AGENT_ID|BOLNA_API_KEY|not configured|is not set/i.test(String(errMsg));
+    logger.error(
+      `[Bolna] setup-extractions failed agent=${result.agentId || req.body?.agentId || '-'} ` +
+        `bolnaStatus=${result.bolnaStatus ?? '-'} error=${errMsg}`
+    );
+    throw new ApiError(
+      isConfig ? httpStatus.SERVICE_UNAVAILABLE : httpStatus.BAD_GATEWAY,
+      errMsg
+    );
   }
   logger.info(
     `[Bolna] Candidate verification extractions ${result.alreadyConfigured ? 'already present' : 'created'} ` +

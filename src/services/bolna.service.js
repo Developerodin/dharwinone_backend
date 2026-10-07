@@ -711,7 +711,13 @@ async function bolnaApiRequest(method, path, body) {
       /* ignore */
     }
     if (!res.ok) {
-      const message = (data && (data.message || data.error || data.detail)) || text || res.statusText;
+      const message =
+        (data &&
+          (data.message ||
+            (typeof data.error === 'string' ? data.error : null) ||
+            data.detail)) ||
+        text ||
+        res.statusText;
       return { success: false, error: message, status: res.status };
     }
     return { success: true, data, status: res.status };
@@ -726,7 +732,7 @@ async function bolnaApiRequest(method, path, body) {
  */
 async function listDispositions(agentId) {
   const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
-  const result = await bolnaApiRequest('GET', `/dispositions${q}`);
+  const result = await bolnaApiRequest('GET', `/dispositions/${q}`);
   if (!result.success) return result;
   const raw = result.data;
   const dispositions = Array.isArray(raw) ? raw : raw.data || raw.dispositions || [];
