@@ -659,6 +659,21 @@ const config = {
     executionContext: String(
       envVars.BOLNA_EXECUTION_CONTEXT || (envVars.NODE_ENV === 'production' ? 'production' : 'staging')
     ).trim(),
+    cloneLifecycle: {
+      retentionHours: envVars.BOLNA_CLONE_RETENTION_HOURS,
+      snapshotMaxAttempts: envVars.BOLNA_CLONE_SNAPSHOT_MAX_ATTEMPTS,
+      snapshotBackoffBaseSeconds: envVars.BOLNA_CLONE_SNAPSHOT_BACKOFF_BASE_SECONDS,
+      snapshotBackoffMaxSeconds: envVars.BOLNA_CLONE_SNAPSHOT_BACKOFF_MAX_SECONDS,
+      cleanupMaxAttempts: envVars.BOLNA_CLONE_CLEANUP_MAX_ATTEMPTS,
+      cleanupBackoffBaseSeconds: envVars.BOLNA_CLONE_CLEANUP_BACKOFF_BASE_SECONDS,
+      cleanupBackoffMaxSeconds: envVars.BOLNA_CLONE_CLEANUP_BACKOFF_MAX_SECONDS,
+      tickSnapshotBatchSize: envVars.BOLNA_CLONE_TICK_SNAPSHOT_BATCH_SIZE,
+      tickCleanupBatchSize: envVars.BOLNA_CLONE_TICK_CLEANUP_BATCH_SIZE,
+      staleRepairBatchSize: envVars.BOLNA_CLONE_REPAIR_BATCH_SIZE,
+      staleCleanupRetryResetMinutes: envVars.BOLNA_CLONE_STALE_CLEANUP_RESET_MINUTES,
+      allowCleanupOnSnapshotExhausted: envVars.BOLNA_CLONE_ALLOW_CLEANUP_ON_SNAPSHOT_EXHAUSTED,
+      workerLeaseSeconds: envVars.BOLNA_CLONE_WORKER_LEASE_SECONDS,
+    },
   },
   plivo: {
     authId: envVars.PLIVO_AUTH_ID || '',

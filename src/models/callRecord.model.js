@@ -288,6 +288,23 @@ callRecordSchema.pre('save', function setCallSource(next) {
 
 callRecordSchema.index({ status: 1, createdAt: -1 });
 callRecordSchema.index({ statusRank: 1, statusUpdatedAt: -1 });
+/**
+ * Bolna clone lifecycle repair scan (repairMissingLifecycleRows): owned-clone rows at or
+ * before the repair cutoff, oldest first. Partial filter matches the aggregation $match.
+ *
+ * autoIndex is OFF in production (config.js), so shipping this file does NOT build it.
+ * Create on deploy when hardening repair tick latency; correctness does not depend on it.
+ */
+callRecordSchema.index(
+  { ownedClone: 1, createdAt: 1, _id: 1 },
+  {
+    partialFilterExpression: {
+      ownedClone: true,
+      executionId: { $type: 'string', $gt: '' },
+      agentId: { $type: 'string', $gt: '' },
+    },
+  }
+);
 
 callRecordSchema.plugin(toJSON);
 

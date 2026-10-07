@@ -31,8 +31,11 @@ import callRecordService from './callRecord.service.js';
 import {
   isRegisteredCloneAgent,
   registerOwnedCloneAgent,
-  unregisterOwnedCloneAgent,
 } from './bolnaOwnedAgents.js';
+import {
+  markCloneTerminalEvent,
+  upsertCloneLifecycleFromSeed,
+} from './bolnaCloneLifecycle.service.js';
 
 /**
  * AI interview scheduling hook, run after a verification is written. Fire-and-forget, never throws.
@@ -236,34 +239,6 @@ export function shouldAcceptExecutionContext(payload, norm = {}) {
 }
 
 /**
- * Delete a per-call clone once the call is terminal.
- * Never deletes a configured template agent. DELETE is documented at
- * https://www.bolna.ai/docs/api-reference/agent/v2/delete
- */
-async function retireOwnedClone(record) {
-  const agentId = String(record?.agentId || '').trim();
-  if (!agentId) return;
-  const templates = new Set(
-    [config.bolna?.agentId, config.bolna?.candidateAgentId, ...(config.bolna?.allAgentIds || [])]
-      .map((id) => String(id || '').trim())
-      .filter(Boolean)
-  );
-  if (templates.has(agentId)) return;
-  if (record.ownedClone !== true && !isRegisteredCloneAgent(agentId)) return;
-  const bolnaService = (await import('./bolna.service.js')).default;
-  if (typeof bolnaService.deleteAgent !== 'function') {
-    logger.error(`[Bolna] cannot delete candidate clone ${agentId}: deleteAgent is missing`);
-    return;
-  }
-  const deleted = await bolnaService.deleteAgent(agentId);
-  if (!deleted?.success) {
-    logger.error(`[Bolna] failed to delete candidate clone ${agentId}: ${deleted?.error || 'unknown'}`);
-    return;
-  }
-  unregisterOwnedCloneAgent(agentId);
-}
-
-/**
  * Apply a Bolna state change to CallRecord.
  *
  * @param {object} payload Raw Bolna payload (webhook body OR /execution/:id response)
@@ -419,9 +394,24 @@ export async function applyEvent(payload, source, meta = {}) {
     );
     emitUpdate(record);
     if (isTerminal(status)) {
-      retireOwnedClone(record).catch((err) =>
-        logger.error(`[Bolna] clone cleanup failed for ${record.agentId || 'unknown'}: ${err?.message || err}`)
-      );
+      const shouldTrackCloneLifecycle = record.ownedClone === true || isRegisteredCloneAgent(record.agentId);
+      if (shouldTrackCloneLifecycle) {
+        const lifecycleAgentId = String(record.agentId || norm.agentId || resolveAgentId(payload, norm) || '').trim();
+        markCloneTerminalEvent({
+          executionId: record.executionId,
+          cloneAgentId: lifecycleAgentId,
+          status,
+          smartStatus: payload.smart_status ?? payload.data?.smart_status ?? null,
+          errorMessage: set.errorMessage ?? null,
+          eventId,
+          eventTs,
+          callRecordId: record._id || null,
+        }).catch((err) =>
+          logger.error(
+            `[Bolna] lifecycle terminal mark failed executionId=${record.executionId} agent=${record.agentId || 'unknown'} err=${err?.message || err}`
+          )
+        );
+      }
     }
     if (set.verification) {
       scheduleInterviewFollowUp(record).catch((err) =>
@@ -558,6 +548,9 @@ export async function seedRecord({
   promptHash,
   question1,
   ownedClone,
+  agentVersionId,
+  promptTextSnapshot,
+  cloneRequestSnapshot,
 }) {
   if (!executionId) throw new Error('seedRecord: executionId required');
 
@@ -644,6 +637,28 @@ export async function seedRecord({
   });
 
   emitUpdate(record);
+  if (ownedClone && agentId) {
+    try {
+      await upsertCloneLifecycleFromSeed({
+        executionId: onInsert.executionId,
+        cloneAgentId: String(agentId),
+        cloneAgentVersionId: agentVersionId ? String(agentVersionId) : null,
+        callRecordId: record?._id || null,
+        currentStatus: record?.status || onInsert.status,
+        currentErrorMessage: record?.errorMessage || null,
+        statusUpdatedAt: record?.statusUpdatedAt || onInsert.statusUpdatedAt,
+        promptRenderToken,
+        promptHash,
+        question1,
+        promptTextSnapshot,
+        cloneRequestSnapshot,
+      });
+    } catch (err) {
+      logger.warn(
+        `[callSync] clone lifecycle seed failed executionId=${onInsert.executionId} agent=${agentId}: ${err?.message || err}`
+      );
+    }
+  }
   return record;
 }
 

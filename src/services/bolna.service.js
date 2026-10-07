@@ -645,6 +645,10 @@ async function deleteAgent(agentId) {
     }
 
     if (!res.ok) {
+      if (res.status === 404) {
+        logger.info(`Bolna agent already deleted ${agentId}`);
+        return { success: true, notFound: true };
+      }
       const message = (data && (data.message || data.error || data.detail)) || text || res.statusText;
       logger.error(`Bolna DELETE /v2/agent error (${res.status}): ${message}`);
       return { success: false, error: message };

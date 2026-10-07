@@ -114,6 +114,11 @@ function toolsPersisted(agent) {
   return TOOL_NAMES.every((n) => names.has(n));
 }
 
+/** True when all three interview-scheduling custom functions are on the conversation task. */
+export function interviewSchedulingToolsVerified(agent) {
+  return toolsPersisted(agent);
+}
+
 /** Present means we can copy llm, voice, and telephony back. A missing field is not a round-trip. */
 function taskHasRoundTripMedia(task) {
   const tools = task?.tools_config;

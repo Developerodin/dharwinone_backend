@@ -20,9 +20,11 @@ import { buildSlotOffer } from './interviewSlot.service.js';
 import {
   buildCandidateToolsPutBody,
   ensureCandidateInterviewTools,
+  interviewSchedulingToolsVerified,
   templateCanBeCloned,
 } from './bolnaCandidateToolsSetup.service.js';
 import { registerOwnedCloneAgent, unregisterOwnedCloneAgent } from './bolnaOwnedAgents.js';
+import { registerFailedCloneInitiation } from './bolnaCloneLifecycle.service.js';
 
 function bolnaEntityId(doc) {
   if (!doc) return '';
@@ -191,19 +193,28 @@ export async function initiateCandidateVerificationCall({
   let effectiveTemplateVars = templateVars;
   if (schedulingEnabled) {
     let toolsReady = false;
+    let toolsError = 'not persisted';
     try {
       const tools = await ensureCandidateInterviewTools(resolvedAgentId);
       toolsReady = tools?.success === true && tools.persisted === true;
+      toolsError = tools?.error || tools?.putError || tools?.note || toolsError;
       if (!toolsReady) {
-        logger.warn(
-          `[Bolna] candidate interview tools not ready agent=${resolvedAgentId} error=${tools?.error || tools?.putError || 'not persisted'}`
-        );
+        logger.warn(`[Bolna] candidate interview tools not ready agent=${resolvedAgentId} error=${toolsError}`);
       }
     } catch (err) {
-      logger.warn(`[Bolna] candidate interview tools setup failed agent=${resolvedAgentId}: ${err?.message || err}`);
+      toolsError = err?.message || String(err);
+      logger.warn(`[Bolna] candidate interview tools setup failed agent=${resolvedAgentId}: ${toolsError}`);
     }
 
-    if (toolsReady && application?._id) {
+    if (!toolsReady) {
+      const errMsg =
+        'Interview scheduling is enabled for this application but Bolna interview tools are not verified on the candidate agent. ' +
+        'Run candidate agent tool setup or disable scheduling for this job before dialing.';
+      logger.error(`[Bolna] ${errMsg}`, { ...dialLogContext, toolsError });
+      return { success: false, error: errMsg };
+    }
+
+    if (application?._id) {
       let offer;
       try {
         offer = await buildSlotOffer(
@@ -258,6 +269,13 @@ export async function initiateCandidateVerificationCall({
     agentWelcomeMessage: renderedWelcome,
     agentName: `candidate-verification-${Date.now()}`,
   });
+  if (schedulingEnabled && !interviewSchedulingToolsVerified({ tasks: cloneBody.agent_config?.tasks })) {
+    return {
+      success: false,
+      error:
+        'Interview scheduling is enabled but the per-call clone is missing verified interview tools. Refusing to dial.',
+    };
+  }
   if (!cloneBody.agent_config?.agent_name || !cloneBody.agent_prompts) {
     return {
       success: false,
@@ -273,12 +291,14 @@ export async function initiateCandidateVerificationCall({
     };
   }
   const cloneAgentId = String(clone.agentId);
+  const cloneAgentVersionId = clone.versionId ? String(clone.versionId) : null;
   registerOwnedCloneAgent(cloneAgentId);
 
   logger.info('[Bolna] candidate verification dialing', {
     ...dialLogContext,
     promptToken: promptRenderToken,
     cloneAgentId,
+    cloneAgentVersionId: cloneAgentVersionId || undefined,
   });
 
   const dialResult = await bolnaService.initiateCall({
@@ -296,8 +316,54 @@ export async function initiateCandidateVerificationCall({
   });
 
   if (!dialResult.success) {
-    const deleted = await bolnaService.deleteAgent(cloneAgentId);
-    if (deleted?.success) unregisterOwnedCloneAgent(cloneAgentId);
+    const failedInitiationLifecycle = {
+      cloneAgentId,
+      cloneAgentVersionId,
+      errorMessage: dialResult.error || 'initiate_call_failed',
+      promptRenderToken,
+      promptHash,
+      question1: effectiveTemplateVars.candidate_verification_q1_line,
+      promptTextSnapshot: promptToDial,
+      cloneRequestSnapshot: cloneBody,
+    };
+    try {
+      await registerFailedCloneInitiation(failedInitiationLifecycle);
+    } catch (err) {
+      logger.warn(
+        `[Bolna] failed clone-initiation lifecycle register agent=${cloneAgentId}: ${err?.message || err}`
+      );
+      let deleteOk = false;
+      let deleteFailure = null;
+      try {
+        const delResult = await bolnaService.deleteAgent(cloneAgentId);
+        if (delResult?.success) {
+          deleteOk = true;
+        } else {
+          deleteFailure = delResult?.error || 'delete_failed';
+          logger.error(
+            `[Bolna] failed clone orphan cleanup delete unsuccessful agent=${cloneAgentId}: ${deleteFailure}`
+          );
+        }
+      } catch (delErr) {
+        deleteFailure = delErr?.message || delErr;
+        logger.error(
+          `[Bolna] failed clone orphan cleanup delete agent=${cloneAgentId}: ${deleteFailure}`
+        );
+      }
+      if (!deleteOk) {
+        try {
+          await registerFailedCloneInitiation({
+            ...failedInitiationLifecycle,
+            errorMessage: `${failedInitiationLifecycle.errorMessage}; orphan_delete_failed:${deleteFailure || 'unknown'}`,
+          });
+        } catch (followUpErr) {
+          logger.error(
+            `[Bolna] orphan lifecycle follow-up register failed agent=${cloneAgentId}: ${followUpErr?.message || followUpErr}`
+          );
+        }
+      }
+    }
+    unregisterOwnedCloneAgent(cloneAgentId);
     return dialResult;
   }
 
@@ -306,6 +372,7 @@ export async function initiateCandidateVerificationCall({
     ...dialLogContext,
     promptToken: promptRenderToken,
     cloneAgentId,
+    cloneAgentVersionId: cloneAgentVersionId || undefined,
     executionId: executionId ? String(executionId) : undefined,
   });
 

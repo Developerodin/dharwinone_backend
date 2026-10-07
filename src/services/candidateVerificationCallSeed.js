@@ -20,6 +20,10 @@ export function candidateVerificationSeedBody(result, extras = {}) {
     promptRenderToken: result?.promptRenderToken,
     promptHash: result?.promptHash,
     question1: result?.question1,
+    ownedClone: result?.ownedClone === true,
+    agentVersionId: result?.agentVersionId || null,
+    promptTextSnapshot: result?.promptTextSnapshot || null,
+    cloneRequestSnapshot: result?.cloneRequestSnapshot || null,
   };
 }
 

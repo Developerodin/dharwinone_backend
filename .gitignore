@@ -96,6 +96,16 @@ src/services/__tests__/helpers/
 !src/services/__tests__/chat.unreadScopes.test.js
 # Guards per-call Bolna clone payload shaping for wrong-candidate isolation.
 !src/services/__tests__/bolnaCandidateCloneBody.test.js
+!src/services/__tests__/bolnaCandidateSchedulingTools.guard.test.js
+!src/services/__tests__/bolnaDeleteAgent.idempotent.test.js
+!src/services/__tests__/bolnaCandidateVerification.failedCloneInitiation.test.js
+!src/services/__tests__/bolnaCloneLifecycle.upsertRace.test.js
+!src/services/__tests__/bolnaCloneLifecycle.repairSelection.test.js
+!src/services/__tests__/bolnaCloneLifecycle.adversarialFixes.test.js
+!src/models/__tests__/bolnaCloneLifecycle.model.test.js
+!src/services/__tests__/callSync.cloneLifecycleHooks.test.js
+!src/services/__tests__/bolnaCloneLifecycle.stateMachine.test.js
+!src/services/__tests__/candidateVerificationCallSeed.test.js
 !scripts/migrations/
 scripts/migrations/*
 !scripts/migrations/__tests__/

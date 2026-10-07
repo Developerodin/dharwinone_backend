@@ -19,6 +19,7 @@ import CallRecord, { TERMINAL_STATUSES } from '../models/callRecord.model.js';
 import callRecordService from './callRecord.service.js';
 import { expireStaleCalls } from './chatCall.service.js';
 import bolnaService from './bolna.service.js';
+import { runBolnaCloneLifecycleTick } from './bolnaCloneLifecycle.service.js';
 
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
 const RECONCILE_LOOKBACK_DAYS = 30;
@@ -253,6 +254,7 @@ export async function runCallHistorySync() {
     const backfill = await reconcileBackfillFromAgentList();
     const chat = await reconcileChatCalls();
     const ghosts = await cleanupGhostCalls();
+    const cloneLifecycle = await runBolnaCloneLifecycleTick();
     const twilioDedupe = await callRecordService.consolidateTwilioDialerDuplicates();
     if (
       reconcile.reconciled ||
@@ -265,6 +267,12 @@ export async function runCallHistorySync() {
       ghosts.expiredStubs ||
       ghosts.expiredNotFound ||
       ghosts.errors ||
+      cloneLifecycle.repaired.inserted ||
+      cloneLifecycle.snapshots.attempted ||
+      cloneLifecycle.cleanup.attempted ||
+      cloneLifecycle.staleCleanupReset.reset ||
+      cloneLifecycle.snapshots.errors ||
+      cloneLifecycle.cleanup.errors ||
       twilioDedupe.groupsMerged ||
       twilioDedupe.deleted
     ) {
@@ -273,6 +281,8 @@ export async function runCallHistorySync() {
           `backfill=${backfill.scanned}/applied=${backfill.applied}/err=${backfill.errors} ` +
           `chat=ring${chat.ringExpired}/ongoing${chat.ongoingExpired} ` +
           `ghost=del${ghosts.deletedNull}/expStub${ghosts.expiredStubs}/exp404${ghosts.expiredNotFound}/ver${ghosts.verifiedStubs} ` +
+          `cloneLifecycle=repair${cloneLifecycle.repaired.inserted}/snap${cloneLifecycle.snapshots.attempted}:ok${cloneLifecycle.snapshots.completed}:ex${cloneLifecycle.snapshots.exhausted}:err${cloneLifecycle.snapshots.errors}/` +
+          `cleanup${cloneLifecycle.cleanup.attempted}:done${cloneLifecycle.cleanup.cleaned}:retry${cloneLifecycle.cleanup.retried}:err${cloneLifecycle.cleanup.errors} ` +
           `twilioDedupe=groups${twilioDedupe.groupsMerged}/del${twilioDedupe.deleted}`
       );
     }
