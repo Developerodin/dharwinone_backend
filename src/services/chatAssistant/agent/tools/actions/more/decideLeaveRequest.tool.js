@@ -8,14 +8,14 @@ import {
   approveLeaveRequest as realApproveLeaveRequest,
   rejectLeaveRequest as realRejectLeaveRequest,
 } from '../../../../../leaveRequest.service.js';
-import { userIsAdminOrAgent as realIsAdminOrAgent } from '../../../../../../utils/roleHelpers.js';
+import { userHasStrictAttendanceAssign as realUserHasStrictAttendanceAssign } from '../../../../../../utils/attendanceAssignAccess.js';
 import { HEX_ID_RE, actorOf, escapeRegex, recheckSameDraft } from './common.js';
 
-// leaveRequest.route.js PATCH /:requestId/approve and /reject — requirePermissions('students.manage').
-// approveLeaveRequest / rejectLeaveRequest also require Administrator or Agent (userIsAdminOrAgent).
-export const LEAVE_DECISION_ACCESS = Object.freeze({ allOf: ['students.manage'] });
+// leaveRequest.route.js PATCH /:requestId/approve and /reject — requirePermissions('attendance.assign').
+export const LEAVE_DECISION_ACCESS = Object.freeze({ anyOf: ['attendance.assign'] });
 
-const NOT_ADMIN = 'Only an Administrator or Agent can approve or reject leave requests.';
+const NOT_ASSIGNED =
+  'You need attendance.assign (students.manage or attendance.manage) to approve or reject leave requests.';
 const LEAVE_POPULATE = [
   { path: 'student', select: 'user', populate: { path: 'user', select: 'name email' } },
 ];
@@ -29,7 +29,8 @@ function leaveDeps(ctx) {
     buildLeaveRequestScopeFilter: d.buildLeaveRequestScopeFilter ?? realBuildLeaveRequestScopeFilter,
     approveLeaveRequest: d.approveLeaveRequest ?? realApproveLeaveRequest,
     rejectLeaveRequest: d.rejectLeaveRequest ?? realRejectLeaveRequest,
-    isAdminOrAgent: d.isAdminOrAgent ?? realIsAdminOrAgent,
+    userHasStrictAttendanceAssign:
+      d.userHasStrictAttendanceAssign ?? d.userHasAttendanceAssign ?? realUserHasStrictAttendanceAssign,
   };
 }
 
@@ -114,7 +115,7 @@ async function resolveByName(name, scope, deps) {
 async function prepare({ request, decision, comment }, ctx) {
   const { user } = actorOf(ctx);
   const deps = leaveDeps(ctx);
-  if (!(await deps.isAdminOrAgent(user))) return { ok: false, error: NOT_ADMIN };
+  if (!(await deps.userHasStrictAttendanceAssign(user))) return { ok: false, error: NOT_ASSIGNED };
 
   const { filter: scope } = await deps.buildLeaveRequestScopeFilter(user);
   if (scope === null) return { ok: false, error: 'No leave requests are visible to you.' };
@@ -168,7 +169,7 @@ async function prepare({ request, decision, comment }, ctx) {
 async function commit(draft, ctx) {
   const { user } = actorOf(ctx);
   const deps = leaveDeps(ctx);
-  if (!(await deps.isAdminOrAgent(user))) return { ok: false, message: NOT_ADMIN };
+  if (!(await deps.userHasStrictAttendanceAssign(user))) return { ok: false, message: NOT_ASSIGNED };
   const decision = draft.args?.decision;
   if (decision !== 'approve' && decision !== 'reject') {
     return { ok: false, message: 'Decision must be approve or reject.' };

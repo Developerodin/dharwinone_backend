@@ -20,7 +20,7 @@ router
   .route('/:requestId/approve')
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(leaveRequestValidation.approveLeaveRequest),
     leaveRequestController.approve
   );
@@ -29,7 +29,7 @@ router
   .route('/:requestId/reject')
   .patch(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(leaveRequestValidation.rejectLeaveRequest),
     leaveRequestController.reject
   );

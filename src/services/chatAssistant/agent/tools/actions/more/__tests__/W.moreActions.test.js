@@ -378,7 +378,7 @@ function leaveCtx(overrides = {}) {
     buildLeaveRequestScopeFilter: overrides.buildLeaveRequestScopeFilter ?? (async () => ({ filter: {} })),
     approveLeaveRequest,
     rejectLeaveRequest,
-    isAdminOrAgent: overrides.isAdminOrAgent ?? (async () => true),
+    userHasAttendanceAssign: overrides.userHasAttendanceAssign ?? (async () => true),
   };
   return {
     ctx: { user: overrides.user ?? viewer('students.manage'), deps },
@@ -449,17 +449,28 @@ describe('decide_leave_request', () => {
     assert.doesNotMatch(prepared.error, /Priya/);
   });
 
-  it('refuses someone who is not an Administrator or Agent', async () => {
-    const { ctx, findOne } = leaveCtx({ isAdminOrAgent: async () => false });
+  it('refuses someone without attendance.assign', async () => {
+    const { ctx, findOne } = leaveCtx({ userHasAttendanceAssign: async () => false });
     const prepared = await decideLeaveRequest.prepare({ request: RID, decision: 'approve' }, ctx);
     assert.equal(prepared.ok, false);
-    assert.match(prepared.error, /Administrator or Agent/);
+    assert.match(prepared.error, /attendance\.assign/);
     assert.equal(findOne.mock.calls.length, 0);
   });
 
+  it('prepares when attendance.manage is allowed via attendance.assign', async () => {
+    const { ctx } = leaveCtx({
+      user: viewer('attendance.manage'),
+      userHasAttendanceAssign: async () => true,
+    });
+    const prepared = await decideLeaveRequest.prepare({ request: RID, decision: 'approve' }, ctx);
+    assert.equal(prepared.ok, true);
+    assert.equal(prepared.payload.requestId, RID);
+  });
+
   it('access is students.manage (the approve and reject routes)', async () => {
-    assert.deepEqual(LEAVE_DECISION_ACCESS, { allOf: ['students.manage'] });
+    assert.deepEqual(LEAVE_DECISION_ACCESS, { anyOf: ['attendance.assign'] });
     assert.equal((await checkAccessRule(LEAVE_DECISION_ACCESS, viewer('students.read'))).ok, false);
+    assert.equal((await checkAccessRule(LEAVE_DECISION_ACCESS, viewer('attendance.manage'))).ok, true);
     assert.equal((await checkAccessRule(LEAVE_DECISION_ACCESS, viewer('students.manage'))).ok, true);
   });
 

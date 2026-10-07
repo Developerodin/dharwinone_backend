@@ -4,12 +4,7 @@ import LeaveRequest from '../models/leaveRequest.model.js';
 import Student from '../models/student.model.js';
 import attendanceService from './attendance.service.js';
 import pick from '../utils/pick.js';
-import { userIsAdminOrAgent } from '../utils/roleHelpers.js';
-
-/** Async: user can manage leave requests (Administrator or Agent via roleIds) */
-const isAdminUser = async (user) => {
-  return userIsAdminOrAgent(user);
-};
+import { userHasAttendanceAssign } from '../utils/attendanceAssignAccess.js';
 
 /**
  * Create a leave request
@@ -26,7 +21,7 @@ const createLeaveRequest = async (studentId, dates, leaveType, notes, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (!(await isAdminUser(user)) && String(student.user?._id || student.user) !== String(user.id)) {
+  if (!(await userHasAttendanceAssign(user)) && String(student.user?._id || student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only create leave requests for yourself');
   }
 
@@ -108,7 +103,7 @@ const createLeaveRequest = async (studentId, dates, leaveType, notes, user) => {
  *   an empty result, never an unfiltered query.
  */
 const buildLeaveRequestScopeFilter = async (user, { forceSelf = false } = {}) => {
-  if (!forceSelf && (await isAdminUser(user))) return { scope: 'all', filter: {} };
+  if (!forceSelf && (await userHasAttendanceAssign(user))) return { scope: 'all', filter: {} };
 
   const actorId = user?.id ?? user?._id ?? null;
   if (!actorId) return { scope: 'mine', filter: null };
@@ -164,7 +159,7 @@ const getLeaveRequestById = async (id, user) => {
   }
 
   const studentUserId = leaveRequest.student?.user?._id || leaveRequest.student?.user;
-  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
+  if (!(await userHasAttendanceAssign(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 
@@ -175,8 +170,8 @@ const getLeaveRequestById = async (id, user) => {
  * Approve leave request and assign leave via attendance service
  */
 const approveLeaveRequest = async (requestId, adminComment, user) => {
-  if (!(await isAdminUser(user))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can approve leave requests');
+  if (!(await userHasAttendanceAssign(user))) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to approve leave requests');
   }
 
   const leaveRequest = await LeaveRequest.findById(requestId).populate('student', 'user');
@@ -244,8 +239,8 @@ const approveLeaveRequest = async (requestId, adminComment, user) => {
  * Reject leave request
  */
 const rejectLeaveRequest = async (requestId, adminComment, user) => {
-  if (!(await isAdminUser(user))) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Only admin can reject leave requests');
+  if (!(await userHasAttendanceAssign(user))) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'You do not have permission to reject leave requests');
   }
 
   const leaveRequest = await LeaveRequest.findById(requestId);
@@ -300,7 +295,7 @@ const cancelLeaveRequest = async (requestId, user) => {
   }
 
   const studentUserId = leaveRequest.student?.user?._id ?? leaveRequest.student?.user;
-  if (!(await isAdminUser(user)) && String(studentUserId) !== String(user.id)) {
+  if (!(await userHasAttendanceAssign(user)) && String(studentUserId) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'You can only cancel your own leave requests');
   }
 
@@ -334,7 +329,7 @@ const getLeaveRequestsByStudentId = async (studentId, options = {}, user) => {
     throw new ApiError(httpStatus.NOT_FOUND, 'Student not found');
   }
 
-  if (!(await isAdminUser(user)) && String(student.user) !== String(user.id)) {
+  if (!(await userHasAttendanceAssign(user)) && String(student.user) !== String(user.id)) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
 

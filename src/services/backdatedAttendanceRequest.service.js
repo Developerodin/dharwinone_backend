@@ -5,9 +5,7 @@ import Student from '../models/student.model.js';
 import Attendance from '../models/attendance.model.js';
 import User from '../models/user.model.js';
 import pick from '../utils/pick.js';
-import { userIsAdminOrAgent } from '../utils/roleHelpers.js';
-import { getGrantingPermissions } from '../config/permissions.js';
-import { getUserPermissionContext } from './permission.service.js';
+import { userHasAttendanceAssign } from '../utils/attendanceAssignAccess.js';
 import { findBlockedAttendanceDays } from './attendancePolicy.service.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -32,12 +30,7 @@ const MAX_ENTRIES_PER_REQUEST = 62;
  * everywhere; the role check stays as a fallback so nobody with a sparse role matrix loses
  * access they had before.
  */
-const canReviewRequests = async (user) => {
-  if (user?.platformSuperUser) return true;
-  const { permissions } = await getUserPermissionContext(user);
-  if (getGrantingPermissions('attendance.assign').some((p) => permissions.has(p))) return true;
-  return userIsAdminOrAgent(user);
-};
+const canReviewRequests = userHasAttendanceAssign;
 
 /**
  * Legacy-data guard:

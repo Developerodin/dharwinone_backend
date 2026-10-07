@@ -76,7 +76,7 @@ router
   .route('/assign-shift')
   .post(
     auth(),
-    requirePermissions('students.manage'),
+    requirePermissions('attendance.assign'),
     validate(studentValidation.assignShift),
     studentController.assignShift
   );
