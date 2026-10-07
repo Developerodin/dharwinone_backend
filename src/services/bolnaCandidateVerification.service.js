@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import bolnaService from './bolna.service.js';
 import logger from '../config/logger.js';
 import {
@@ -6,7 +7,6 @@ import {
   bolnaJobAndCandidateAgentsCollide,
   missingTemplateVars,
 } from '../utils/bolnaAgentConfig.js';
-import { prepareAgentPromptForCall } from '../utils/bolnaAgentTemplateSync.js';
 import { getBolnaCandidateAgentSettingsForPrompt } from './bolnaCandidateAgentSettings.service.js';
 import {
   buildCandidateAgentPromptTemplate,
@@ -17,7 +17,12 @@ import {
 } from './candidateVerificationPrompt.service.js';
 import { getKbPromptContextForExternalAgent } from './kbQuery.service.js';
 import { buildSlotOffer } from './interviewSlot.service.js';
-import { ensureCandidateInterviewTools } from './bolnaCandidateToolsSetup.service.js';
+import {
+  buildCandidateToolsPutBody,
+  ensureCandidateInterviewTools,
+  templateCanBeCloned,
+} from './bolnaCandidateToolsSetup.service.js';
+import { registerOwnedCloneAgent, unregisterOwnedCloneAgent } from './bolnaOwnedAgents.js';
 
 function bolnaEntityId(doc) {
   if (!doc) return '';
@@ -44,8 +49,8 @@ function formatBakedSlotOptions(offer, tzSpoken) {
 }
 
 /**
- * Render and PATCH the candidate prompt for THIS call, then place the call with
- * matching per-call values in `user_data`.
+ * PATCH the static candidate prompt template, then place the call with this
+ * call's name/title/question lines in `user_data`.
  * @param {Object} p
  * @param {string} p.agentId
  * @param {string} p.formattedPhone - E.164
@@ -129,9 +134,6 @@ export async function initiateCandidateVerificationCall({
     logger.error(`[Bolna] ${errMsg}`);
     return { success: false, error: errMsg };
   }
-  const systemPrompt = renderPromptTemplateWithVars(systemPromptTemplate, templateVars);
-  const welcomeMessage = renderPromptTemplateWithVars(welcomeTemplate, templateVars);
-
   const userData = {
     candidate_verification_applicant_name: promptContext.candidate_name,
     candidate_verification_job_title: promptContext.job_title,
@@ -186,97 +188,135 @@ export async function initiateCandidateVerificationCall({
 
   logger.info('[Bolna] candidate verification pre-dial checks passed', dialLogContext);
 
-  const prepared = await prepareAgentPromptForCall(
-    bolnaService,
-    resolvedAgentId,
-    systemPrompt,
-    welcomeMessage,
-    {
-      // Same lock as the prompt PATCH and the dial. Tool setup runs first. Concrete times
-      // are baked only when the PUT read-back shows the three tools on the agent.
-      // createHold is not called. It is one candidate-picked approval per application
-      // (recruiter notice, 24h expiry), so it cannot reserve every offered slot id and
-      // would record a pick the candidate has not made. A later call can still be offered
-      // the same free slots until one of them is held.
-      beforePromptPatch: async () => {
-        if (!schedulingEnabled) return;
-        let toolsReady = false;
-        try {
-          const tools = await ensureCandidateInterviewTools(resolvedAgentId);
-          toolsReady = tools?.success === true && tools.persisted === true;
-          if (!toolsReady) {
-            logger.warn(
-              `[Bolna] candidate interview tools not ready agent=${resolvedAgentId} error=${tools?.error || tools?.putError || 'not persisted'}`
-            );
-          }
-        } catch (err) {
-          logger.warn(`[Bolna] candidate interview tools setup failed agent=${resolvedAgentId}: ${err?.message || err}`);
-        }
-        if (!toolsReady || !application?._id) return;
-
-        let offer;
-        try {
-          offer = await buildSlotOffer(
-            String(application._id),
-            promptContext.candidate_timezone || 'Asia/Kolkata'
-          );
-        } catch (err) {
-          logger.warn(`[Bolna] interview slot offer skipped: ${err?.message || err}`);
-          return;
-        }
-        const interviewSlotOptions = formatBakedSlotOptions(
-          offer,
-          promptContext.candidate_timezone_spoken || 'India time'
+  let effectiveTemplateVars = templateVars;
+  if (schedulingEnabled) {
+    let toolsReady = false;
+    try {
+      const tools = await ensureCandidateInterviewTools(resolvedAgentId);
+      toolsReady = tools?.success === true && tools.persisted === true;
+      if (!toolsReady) {
+        logger.warn(
+          `[Bolna] candidate interview tools not ready agent=${resolvedAgentId} error=${tools?.error || tools?.putError || 'not persisted'}`
         );
-        if (!interviewSlotOptions) return;
+      }
+    } catch (err) {
+      logger.warn(`[Bolna] candidate interview tools setup failed agent=${resolvedAgentId}: ${err?.message || err}`);
+    }
 
-        const bakedVars = buildCandidateAgentTemplateVars(promptContext, {
+    if (toolsReady && application?._id) {
+      let offer;
+      try {
+        offer = await buildSlotOffer(
+          String(application._id),
+          promptContext.candidate_timezone || 'Asia/Kolkata'
+        );
+      } catch (err) {
+        logger.warn(`[Bolna] interview slot offer skipped: ${err?.message || err}`);
+      }
+
+      const interviewSlotOptions = formatBakedSlotOptions(
+        offer,
+        promptContext.candidate_timezone_spoken || 'India time'
+      );
+      if (interviewSlotOptions) {
+        effectiveTemplateVars = buildCandidateAgentTemplateVars(promptContext, {
           greetingOverride: settings.greetingOverride,
           extraSystemInstructions: extra,
           interviewSlotOptions,
         });
-        userData.interview_slot_options = bakedVars.interview_slot_options;
+        Object.assign(userData, effectiveTemplateVars);
         const bakedPayload = assertUserDataWithinLimit(userData);
         if (!bakedPayload.ok) {
           logger.error(`[Bolna] ${bakedPayload.error}`);
-          return { ok: false, error: bakedPayload.error };
+          return { success: false, error: bakedPayload.error };
         }
         dialLogContext.userDataBytes = bakedPayload.bytes;
-        return { systemPrompt: renderPromptTemplateWithVars(systemPromptTemplate, bakedVars) };
-      },
-    },
-    async ({ renderToken }) => {
-      logger.info('[Bolna] candidate verification dialing', {
-        ...dialLogContext,
-        promptToken: renderToken,
-      });
-      return bolnaService.initiateCall({
-        phone: formattedPhone,
-        // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
-        // `candidate_name` on user_data, and providers commonly bind a generic `name` key to
-        // the assistant's own identity. promptContext.candidate_name has already been through
-        // promptSafe(); passing candidate.fullName here would put the raw value back.
-        candidateName: promptContext.candidate_name,
-        agentId: resolvedAgentId,
-        jobTitle: promptContext.job_title,
-        organisation: promptContext.company_name,
-        userData,
-        ...initiateExtras,
-      });
+      }
     }
-  );
-  if (!prepared.ok) {
-    // Never dial on an unverified prompt: the agent may still be resolving a previous
-    // candidate, so the call would reach the right person and read out the wrong data.
-    return { success: false, error: `Bolna agent could not be prepared before the call: ${prepared.error}` };
   }
 
-  const executionId = prepared.dialResult?.executionId;
+  const renderedPrompt = renderPromptTemplateWithVars(systemPromptTemplate, effectiveTemplateVars);
+  const renderedWelcome = renderPromptTemplateWithVars(welcomeTemplate, effectiveTemplateVars);
+  const promptRenderToken = `render-${crypto.randomUUID()}`;
+  const promptToDial = `${renderedPrompt}\n\n<!-- ${promptRenderToken} -->`;
+  const promptHash = crypto.createHash('sha256').update(promptToDial).digest('hex');
+
+  const templateAgent = await bolnaService.getAgent(resolvedAgentId);
+  if (!templateAgent.success || !templateAgent.agent) {
+    return {
+      success: false,
+      error: `Bolna candidate template agent could not be loaded: ${templateAgent.error || 'unknown error'}`,
+    };
+  }
+  const cloneReady = templateCanBeCloned(templateAgent.agent);
+  if (!cloneReady.ok) {
+    return { success: false, error: cloneReady.error };
+  }
+
+  const cloneBody = buildCandidateToolsPutBody(templateAgent.agent, null, {
+    systemPrompt: promptToDial,
+    agentWelcomeMessage: renderedWelcome,
+    agentName: `candidate-verification-${Date.now()}`,
+  });
+  if (!cloneBody.agent_config?.agent_name || !cloneBody.agent_prompts) {
+    return {
+      success: false,
+      error: 'Bolna candidate template is missing agent_name or agent_prompts; refusing to create per-call clone.',
+    };
+  }
+
+  const clone = await bolnaService.createAgent(cloneBody);
+  if (!clone.success || !clone.agentId) {
+    return {
+      success: false,
+      error: `Bolna per-call clone agent creation failed: ${clone.error || 'unknown error'}`,
+    };
+  }
+  const cloneAgentId = String(clone.agentId);
+  registerOwnedCloneAgent(cloneAgentId);
+
+  logger.info('[Bolna] candidate verification dialing', {
+    ...dialLogContext,
+    promptToken: promptRenderToken,
+    cloneAgentId,
+  });
+
+  const dialResult = await bolnaService.initiateCall({
+    phone: formattedPhone,
+    // Sanitised, not the raw doc field: initiateCall copies this into BOTH `name` and
+    // `candidate_name` on user_data, and providers commonly bind a generic `name` key to
+    // the assistant's own identity. promptContext.candidate_name has already been through
+    // promptSafe(); passing candidate.fullName here would put the raw value back.
+    candidateName: promptContext.candidate_name,
+    agentId: cloneAgentId,
+    jobTitle: promptContext.job_title,
+    organisation: promptContext.company_name,
+    userData,
+    ...initiateExtras,
+  });
+
+  if (!dialResult.success) {
+    const deleted = await bolnaService.deleteAgent(cloneAgentId);
+    if (deleted?.success) unregisterOwnedCloneAgent(cloneAgentId);
+    return dialResult;
+  }
+
+  const executionId = dialResult?.executionId;
   logger.info('[Bolna] candidate verification dial completed', {
     ...dialLogContext,
-    promptToken: prepared.renderToken,
+    promptToken: promptRenderToken,
+    cloneAgentId,
     executionId: executionId ? String(executionId) : undefined,
   });
 
-  return prepared.dialResult;
+  return {
+    ...dialResult,
+    agentId: cloneAgentId,
+    candidateId: bolnaEntityId(candidate),
+    candidateName: promptContext.candidate_name,
+    promptRenderToken,
+    promptHash,
+    question1: effectiveTemplateVars.candidate_verification_q1_line,
+    ownedClone: true,
+  };
 }
